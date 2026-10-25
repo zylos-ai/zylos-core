@@ -305,7 +305,7 @@ async function switchRuntime(target, flags) {
 
   // Step 3: Check auth for target runtime unless explicitly skipped.
   // A confirmed unauthenticated switch leaves the system unreachable via IM.
-  const adapter = getSessionAdapter(target, cfg);
+  const adapter = getSessionAdapter(target);
   await checkRuntimeAuthGate(target, adapter, parsed);
 
   // Step 4: Persist new runtime in config.

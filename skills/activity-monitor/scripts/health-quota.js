@@ -51,3 +51,17 @@ export function readHealthQuota({identity,zylosDir=runtimeRoot(),nowMs=Date.now(
     return sanitizeHealthQuota(JSON.parse(fs.readFileSync(file,'utf8')),{identity,nowMs,maxAgeMs});
   } catch {return null;}
 }
+
+/** Read the current group's F5 directly; no separate quota snapshot or cross-group fallback. */
+export function readScopedHealthQuota({runDir,runId,identity,nowMs=Date.now(),maxAgeMs=HEALTH_QUOTA_MAX_AGE_MS}={}) {
+  if(!validIdentity(identity) || typeof runDir!=='string' || !path.isAbsolute(runDir) || typeof runId!=='string' || !runId)return null;
+  try {
+    const file=path.join(runDir,'statusline.json'),stat=fs.lstatSync(file);
+    if(!stat.isFile() || stat.size>1024*1024)return null;
+    const sample=JSON.parse(fs.readFileSync(file,'utf8'));
+    if(sample?.session_id!==identity.session_id || sample.zylos?.v!==1 || sample.zylos.runId!==runId)return null;
+    // F5 identifies its producing run/session; the supplied process identity is
+    // the caller's independently observed current scene, not a PID inferred here.
+    return sanitizeHealthQuota({schema_version:1,source:'statusline',...Object.fromEntries(scopeKeys.map(key=>[key,identity[key]])),observed_at:sample.zylos.capturedAt,rate_limits:sample.rate_limits},{identity,nowMs,maxAgeMs});
+  } catch {return null;}
+}

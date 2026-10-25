@@ -1,0 +1,2738 @@
+Running 19 Node test files
+✔ upgrade keeps a deployed port while regenerating all other route settings (3.543076ms)
+✔ new path inherits a single old port; multiple old ports keep matched paths only (1.525343ms)
+✔ invalid ports, ambiguous paths, and unsupported targets use declared defaults (0.532763ms)
+✔ unpaired or interleaved markers fail, while formatting and component prefixes are exact (0.266298ms)
+✔ preflight is independent of Caddy availability and does not mutate the file (0.605746ms)
+✔ upgrade rejects malformed markers before stopping the service or changing files (80.948923ms)
+✖ install and uninstall reject malformed markers before changing component files (143.581035ms)
+✔ paired duplicate blocks merge, conflicting ports fall back, removal clears only the target (0.738488ms)
+✔ alternating component upgrades do not accumulate blank lines (3.292015ms)
+✔ unavailable Caddy still gives a manual snippet with the old port (1.200574ms)
+✔ missing Caddyfile gives a manual snippet without a misleading read warning (0.410602ms)
+✔ old generated formats and consecutive upgrades retain the same port (0.680242ms)
+✔ upgrade without declared routes removes only the component’s old managed blocks (0.801852ms)
+✔ upgrade without declared routes asks for manual removal when Caddy is unavailable (1.016674ms)
+✔ invalid new route metadata does not delete existing managed routes (0.233581ms)
+✔ route removal validation failure leaves the Caddyfile intact and is non-fatal (0.36711ms)
+✔ a Caddyfile read failure after inspection is reported during route retirement (0.394559ms)
+✔ validation failure while retiring routes does not fail the upgrade or stop its service (115.841734ms)
+✔ upgrade route step catches parser and application exceptions without returning failed (0.322058ms)
+✔ a route generation error does not leave a running service stopped after upgrade (90.578206ms)
+✔ upgrade reply carries the Caddy route notice (0.856714ms)
+✔ route generation errors and validation failures remain non-fatal to the route step (0.525341ms)
+▶ strict runtime readers
+  ✔ shares CONFIG_UNREADABLE with the original cause and only defaults missing F1 (209.146318ms)
+  ✖ defaults a missing runtime but rejects malformed F1 at the CLI boundary (143.854361ms)
+  ✔ applies the missing-key runtime and statusNotices matrix from one snapshot (275.598999ms)
+✖ strict runtime readers (630.318515ms)
+▶ production config writers
+  ✖ routes config CLI updates through the locked writer and reserves session_mode (156.17089ms)
+  ✔ migrates only the explicitly supplied target and preserves falsey keys (60.948261ms)
+  ✔ refuses to overwrite malformed F1 during migration (57.759227ms)
+  ✖ rolls back a protocol write through the locked writer when Caddy validation fails (154.854366ms)
+  ✔ keeps fresh-install and re-init defaults idempotent through real production writers (490.18014ms)
+  ✔ has no legacy writer references or standalone F1 overwrite implementation (1.266916ms)
+✖ production config writers (923.147854ms)
+▶ instruction migration classification and conservation
+  ✔ strips only complete managed blocks and matches their historical baseline (23.214729ms)
+  ✔ requires an ordered occurrence-preserving interleave (0.892686ms)
+  ✔ allows C content to use an empty baseline only when all occurrences remain user-owned (0.768191ms)
+  ✔ uses authoritative provenance for B and never promotes the same pure-add candidate without it (0.396878ms)
+  ✔ keeps nested and lookalike managed markers in the candidate (0.271652ms)
+✔ instruction migration classification and conservation (27.75509ms)
+▶ shared migration apply engine and prompt
+  ✔ uses the conservation match, closes the prompt, writes v2 before A3 and returns structured success (51.412062ms)
+  ✔ keeps F1 fatal and F2 nonfatal while preserving F2 evidence (56.979657ms)
+  ✔ treats prompt cleanup, version write and A3 faults as post-commit pending work (32.144781ms)
+  ✔ writes the C prompt atomically with system template path and leaves no partial temp on failure (18.778351ms)
+  ✔ throws when systemTemplatePath is missing (0.494344ms)
+✔ shared migration apply engine and prompt (160.479539ms)
+▶ instruction baseline exporter
+  ✔ is idempotent, sees both paths and branch-only history, and preserves prior entries (143.333995ms)
+✔ instruction baseline exporter (143.566976ms)
+▶ assembler A3 topology
+  ✔ converges missing/drift while preserving duplicate foreign-only groups byte-for-byte (2.451681ms)
+  ✔ refuses schema, manual, duplicate and misplaced anomalies before mutation (1.690369ms)
+  ✔ treats absent hooks arrays as missing and exact objects independent of key insertion order (5.781981ms)
+  ✔ classifies projection-only drift separately from projection-external manual edits (1.858537ms)
+  ✔ reports precise schema paths and catches assembler keys in every noncanonical matcher (1.841589ms)
+✔ assembler A3 topology (14.054653ms)
+▶ migrate-instructions command
+  ✔ backfills active v2 metadata and cleans stale prompts only on --apply (28.229576ms)
+  ✔ leaves an active future-format tree byte-identical before residue recovery or cleanup (22.208542ms)
+  ✔ leaves an inactive A-class future-format tree byte-identical before migration apply (13.668386ms)
+  ✔ continues A3 when active version backfill and prompt cleanup fail (14.226533ms)
+  ✔ keeps C-class dry-run byte-identical and returns a reportable success (8.623847ms)
+  ✔ accepts empty user content for C-class without conservation refusal (38.115911ms)
+  ✔ migrates a known A baseline, writes durable backup and converges A3 in one command (41.270341ms)
+  ✔ returns partial success when A3 refuses after the instruction commit (33.053803ms)
+  ✔ does not mask the primary F2 fault when failure-report enrichment also fails (26.450611ms)
+  ✔ preserves an enriched F2 report and durable backup across recovery retry (71.160764ms)
+  ✔ cleans F1 partial backup and leaves live files byte-identical (21.562029ms)
+  ✔ reports committed cleanup residue in dry-run and recovers it before active apply (50.836128ms)
+  ✔ combines cleanup residue with A3 refusal as partial success (30.013371ms)
+  ✔ keeps active dry-run anomaly reporting on stdout with zero writes (49.990102ms)
+  ✔ keeps settings old bytes on handled atomic-write failure and converges on retry (49.087968ms)
+  ✔ preserves a 0600 live instruction file through the migration transaction (42.586174ms)
+  ✔ preserves a 0600 settings file through A3 atomic convergence (48.313633ms)
+  ✖ dispatches the real CLI and rejects unknown flags (121.917124ms)
+  ✔ runs the authoritative-provenance B path end to end (34.600355ms)
+  ✔ accepts C with complete user occurrences and refuses omitted or reordered duplicates (54.235267ms)
+  ✔ migrates an unreachable mixed-edit C baseline only when the owner keeps every occurrence (41.363583ms)
+  ✔ covers every migrated transaction entry stage and rename rollback with successful retry (993.771993ms)
+  ✔ combines cleanup residue with handled A3 I/O error (35.242924ms)
+  ✔ maps active settings read failures to A4 partial success (38.250073ms)
+  ✔ keeps settings old-or-new across SIGKILL on both sides of atomic rename (206.090428ms)
+✖ migrate-instructions command (2116.986003ms)
+▶ zylos add local source E2E
+  ✖ installs an explicit relative directory through the complete add pipeline (154.177346ms)
+  ✖ uses an absolute local path in --check confirmation output (147.360411ms)
+  ✖ does not let a cwd directory hijack a bare component name (122.787226ms)
+  ✖ installs a local tarball and records its VERSION metadata (142.116989ms)
+  ✖ keeps the GitHub release acquisition path working (134.983216ms)
+  ✖ rejects upgrade checks for locally installed components with reinstall guidance (126.362122ms)
+  ✖ fails the upgrade --all JSON aggregate for a local-only install (123.137854ms)
+  ✖ fails the upgrade --all JSON aggregate while preserving remote updates (109.866124ms)
+✖ zylos add local source E2E (1064.191127ms)
+▶ zylos add --file official delivery E2E
+  ✖ installs an official component from a verified tarball with zero network (170.424332ms)
+  ✖ fails closed with no residue when the target version mismatches the archive (123.562569ms)
+  ✖ fails closed before unpacking when the sha256 does not match (154.498199ms)
+  ✖ leaves the installed component on the normal upgrade path (146.862231ms)
+  ✖ records an unverified install with --trust-file and warns in list output (129.811892ms)
+  ✖ rejects --file without --sha256 or --trust-file (114.440746ms)
+  ✖ rejects --file combined with --branch (112.132548ms)
+  ✖ rejects a component name missing from the offline registry (110.960063ms)
+  ✖ shows offline component info with verification status in --check mode (102.444923ms)
+✖ zylos add --file official delivery E2E (1167.171226ms)
+▶ upgrade --all exit-code contract (#706): JSON and non-JSON agree
+  ✖ all checks pass → exit 0 in both modes (167.325072ms)
+  ✖ partial failure (one check fails, one update available) → exit 1 in both modes (145.722045ms)
+  ✖ all checks fail → exit 1 in both modes (136.990432ms)
+✖ upgrade --all exit-code contract (#706): JSON and non-JSON agree (451.609542ms)
+✖ unmarked malformed history cannot stop ordinary database writes or startup (484.746337ms)
+✔ unmarked missing history cannot stop ordinary database writes or startup (364.536124ms)
+✔ unmarked oversized history cannot stop ordinary database writes or startup (362.556764ms)
+✔ unmarked unknown-entry history cannot stop ordinary database writes or startup (341.737921ms)
+✔ unmarked dangling-backup history cannot stop ordinary database writes or startup (355.747252ms)
+✔ active READY ignores unrelated corrupt history, allows real writes, and still suppresses PM2 save (348.966682ms)
+✔ explicit active preparing prevents actual owner writes (122.721134ms)
+✔ explicit active stopping prevents actual owner writes (108.628477ms)
+✔ explicit active offline prevents actual owner writes (120.6225ms)
+✔ explicit active installing prevents actual owner writes (121.544353ms)
+✔ explicit active restoring prevents actual owner writes (99.065155ms)
+✔ explicit active recovery_required prevents actual owner writes (110.696887ms)
+✔ malformed active journal stays blocked while abandoned unmarked preparation permits daily use but rejects upgrade (43.605414ms)
+✔ unchanged database transaction resumes installed code without database inspection (1745.629071ms)
+✔ unchanged database transaction restores code and preserves live database files (1771.56675ms)
+✔ unchanged database transaction aborts before install without database inspection (939.084418ms)
+✔ ready journal requires snapshot identity even with unchanged database versions (1015.697393ms)
+✔ protected same-version snapshot is verified before install (1721.212974ms)
+✔ protected same-version snapshot verification failure aborts before install (1750.401611ms)
+✖ completed upgrade permits ordinary owners after retained materials become group-writable (1153.877458ms)
+✖ completed upgrade permits ordinary owners after retained materials become backup-alias (1150.241784ms)
+✔ interrupted data-ready upgrade resumes while retaining an extra column (1054.803474ms)
+✔ A12/A14/A15: complete compensation restores old code/data, preserves rescue, removes sidecars and retains terminal materials (1655.326069ms)
+✔ rescue staging platform sync failure prevents publication and preserves retry evidence (1635.592967ms)
+✔ restore staging platform sync failure prevents publication and preserves retry evidence (1670.385711ms)
+✔ A14/A28: damaged snapshot is rejected before rescue or replacement (935.478496ms)
+✔ A26: crash after physical DB rename but before done journal resumes existing intent without recapturing rescue (2058.762458ms)
+✔ A26: partial rescue resumes recorded generation and refuses changed rescue evidence (953.986619ms)
+✔ A16/A27: new_data_ready resumes validation and retains valid normal writes (909.857368ms)
+✔ A16/A27: restored_data_ready resumes validation and retains valid normal writes (881.352081ms)
+✔ A16/A27: new_verifying resumes validation and retains valid normal writes (913.710631ms)
+✔ A16/A27: restored_verifying resumes validation and retains valid normal writes (919.732957ms)
+✔ A27: restored verification failure isolates without a second database replacement (866.62831ms)
+✔ A28: unconfirmed finalizer exit keeps current generation isolated (842.771508ms)
+✔ A24/A29: trusted preinstall abort verifies original data without snapshot restore (888.602162ms)
+✔ R3: group-writable original npm CLI root permits verified preinstall abort (887.300579ms)
+✔ A25: interrupted original service restart only resumes verified abort cleanup (991.081254ms)
+✔ A13: failed stop verification refuses physical replacement and service start (842.999381ms)
+✔ A29: initial journal without descriptor or snapshots aborts through trusted original readonly worker (879.61213ms)
+✔ A25: abort terminal-write interruption stays isolated then continues without replacement (1050.810794ms)
+✔ A25: abort marker-remove interruption stays isolated then continues without replacement (971.556549ms)
+✔ A26: partial core restore skips verified completed members after interruption (1537.164588ms)
+✔ A27: failed new-code validation isolates then compensates once (1755.633532ms)
+✔ A28: live finalizer blocks compensation until the process group has exited (1721.989858ms)
+✔ A28: interrupted finalizer launch without a PID preserves current data (847.974031ms)
+✔ A28: missing trusted finalizer helper preserves isolation and current data (886.620154ms)
+✔ unknown phase with installationIntent=true never restores or aborts (802.254921ms)
+✔ unknown phase with installationIntent=false never restores or aborts (809.954819ms)
+✔ ecosystem copy fsync failure cannot publish completed restore and retry is durable (876.739372ms)
+✔ verified abort reentry allows legitimate original-service writes after partial restart (1060.127698ms)
+✔ originally missing ecosystem is removed only with durable matching creation provenance (791.840107ms)
+✔ unknown or changed new ecosystem provenance preserves file (changed=false) (783.840009ms)
+✔ unknown or changed new ecosystem provenance preserves file (changed=true) (782.097129ms)
+✔ A21: default protected pipeline compensates when actual old-finalizer child rejects v2 state after npm starts (2498.636594ms)
+✔ explicit new-finalizer failure after data-ready compensates instead of revalidating new data (2767.810774ms)
+✔ protected upgrade restores all three databases after C4 migration succeeds and scheduler migration fails (3007.381658ms)
+✔ early abort refuses altered original CLI tree before service restart or database writes (857.604611ms)
+✔ orphan installer blocks compensation until its process group has exited (1757.333363ms)
+✔ original CLI live symlink prevents preinstall abort provenance (914.868923ms)
+✔ original CLI dangling symlink prevents preinstall abort provenance (893.178769ms)
+✔ resume uses phase durably changed before controller acquisition instead of stale pre-lock journal (948.545884ms)
+✔ journal deployment identity changed before acquisition is rejected without writing or starting services (872.293688ms)
+✔ resume through deployment root alias validates canonical journal identity under lock (922.296516ms)
+✔ restored WAL-mode snapshot remains resumable after readonly preflight and interrupted READY publication (2172.425019ms)
+✔ preinstall readonly verification still includes committed uncheckpointed original WAL data (1028.728521ms)
+✔ new_data_ready: terminal marker clear failure retries without replacing committed data (1010.697729ms)
+✔ restored_data_ready: terminal marker clear failure retries without replacing committed data (1032.77277ms)
+✔ terminal marker unlink followed by fsync interruption recreates the marker and resumes in place (1058.024123ms)
+✔ new_data_ready: terminal journal write failure resumes verification without compensation (1282.465222ms)
+✔ restored_data_ready: terminal journal write failure resumes verification without compensation (1340.8068ms)
+✔ terminal marker is removed only after original services and durable terminal journal validate (980.935278ms)
+✔ terminal directory remains in place and explicit repeat resume performs no service or DB work (985.808725ms)
+✔ verified terminal with stopped services retries startup without database compensation (1143.36921ms)
+﹣ Mac production recovery aborts preinstall failure through held frozen ownership (0.09199ms) # SKIP
+✔ successful cleanup deletes only code copies and unlinks nested symlinks without following them (1052.709393ms)
+✔ restored_data_ready terminal retains code copies (951.928578ms)
+✔ preparing terminal retains code copies (1241.33596ms)
+✔ durable installerExitUnconfirmed prevents cleanup despite stale caller (935.168776ms)
+✔ durable finalizerExitUnconfirmed prevents cleanup despite stale caller (833.222758ms)
+✔ durable terminalServicesStopped prevents cleanup despite stale caller (847.340837ms)
+✔ durable installerStarted prevents cleanup despite stale caller (853.357222ms)
+✔ durable finalizerStarted prevents cleanup despite stale caller (785.438502ms)
+✔ partial code removal failure retries without compensation or service restart and preserves new writes (1069.979581ms)
+✔ code root symlink is refused (target exists=true) (919.206745ms)
+✔ code root symlink is refused (target exists=false) (893.052319ms)
+✔ code cleanup resumes after directory-sync failure with code already absent (1061.462675ms)
+✔ code cleanup resumes after completion-journal failure with code already absent (1561.855145ms)
+✖ CLI saved routing covers remote registry, real add pipeline, component/self checks and upgrade (170.862617ms)
+✖ CLI operation freezes profile while later processes read the new local generation (137.79132ms)
+✖ CLI status and help do not fetch missing remote profiles; forced refresh fails (142.276871ms)
+✖ CLI direct baseline keeps official URLs and creates no upstream files; blocked-direct control fails (276.578004ms)
+✖ successful CLI init source flags are temporary with absent or existing settings (116.040899ms)
+✖ init environment source applies only to that process and preserves saved settings (112.449914ms)
+✖ CLI unified source selects URL, file and direct and preserves local trust (108.960576ms)
+✖ CLI rejects invalid and removed sources before doing any network work (244.191098ms)
+✖ CLI explicit set/clear and temporary overrides round-trip without deleting owned artifacts (106.220523ms)
+file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+import { getActiveAdapter } from '../lib/runtime/index.js';
+         ^^^^^^^^^^^^^^^^
+SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+    at async node:internal/modules/esm/loader:647:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.21.0
+✔ persistent deployment environment reaches real npm lifecycle through clean launch specs (778.040244ms)
+✔ removing any upstream inherit directive is detected, absent values stay absent (3.048783ms)
+✔ runtime preflight probes the configured npm registry when official npm is blocked (436.806212ms)
+✖ persistent source environment reaches CLI through real clean launcher across fresh sessions (149.266325ms)
+▶ remote profile CLI obeys HTTPS_PROXY and NO_PROXY with real curl and verified TLS
+  ✖ positive control: authenticated CONNECT retrieves HTTPS profile without origin credentials (131.556522ms)
+  ✖ TLS negative control: proxy access without the test CA cannot trust the profile (143.630076ms)
+  ✖ negative control: no proxy cannot resolve the profile and creates no cache (150.16388ms)
+  ✖ NO_PROXY bypasses an otherwise working HTTPS_PROXY (150.959609ms)
+✖ remote profile CLI obeys HTTPS_PROXY and NO_PROXY with real curl and verified TLS (701.194011ms)
+▶ c4-control enqueue
+  ✔ basic enqueue returns OK and id (177.607509ms)
+  ✔ enqueue with --priority (241.423688ms)
+  ✔ enqueue with --ack-deadline (239.7645ms)
+  ✔ enqueue with --available-in (254.062396ms)
+  ✔ enqueue with --block-queue-until-idle (166.436322ms)
+  ✔ enqueue still accepts legacy --require-idle (143.371642ms)
+  ✔ enqueue with --bypass-state (156.512824ms)
+  ✔ enqueue with --no-ack-suffix (145.508233ms)
+  ✔ enqueue auto-appends ack suffix to content (128.700553ms)
+  ✖ new equivalent enqueue leaves only the newest record pending (240.593361ms)
+✖ c4-control enqueue (1896.443163ms)
+▶ c4-control enqueue validation
+  ✔ missing --content exits 1 with error (56.446583ms)
+  ✔ invalid --priority exits 1 (56.551568ms)
+  ✔ invalid --ack-deadline exits 1 (56.77219ms)
+✔ c4-control enqueue validation (170.085645ms)
+▶ c4-control get
+  ✔ returns status for existing id (221.639544ms)
+  ✔ errors on non-existent id (136.85246ms)
+  ✔ errors on missing --id (58.339368ms)
+✔ c4-control get (417.089853ms)
+▶ c4-control ack
+  ✔ marks control as done (233.678629ms)
+  ✔ idempotent ack on already-done control (267.657755ms)
+  ✔ errors on not-found id (108.885106ms)
+✔ c4-control ack (610.446273ms)
+▶ c4-control help
+  ✔ --help shows usage and exits 0 (31.572772ms)
+  ✔ -h shows usage and exits 0 (25.754875ms)
+✔ c4-control help (57.476778ms)
+▶ emitC4Conversations budget packing (message-boundary, newest-first)
+  ✖ drops the oldest whole messages when the char budget overflows (188.444619ms)
+  ✖ drops the oldest whole messages when the token budget overflows (CJK) (165.768774ms)
+  ✖ is byte-identical to the legacy path when everything fits (149.231842ms)
+  ✖ never drops below one message — the newest stays even if it alone overflows (134.168583ms)
+  ✖ emits a sub-threshold message in full even when it alone overflows a tiny budget (130.515898ms)
+  ✖ emits messages over the per-message delivery threshold in FULL when the shard budget fits them (#724) (133.962873ms)
+  ✖ packs whole original long messages newest-first when several exceed the dispatch threshold (130.881498ms)
+  ✖ keeps the legacy no-budget path byte-identical: per-message spill still applies (119.496249ms)
+  ✖ keeps the ACTION REQUIRED sync instruction while packing above the threshold (110.131987ms)
+  ✖ registry closure passes the shard budget: shard-mode output always fits inline (139.915295ms)
+✖ emitC4Conversations budget packing (message-boundary, newest-first) (1405.050165ms)
+file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/c4-dispatcher.js?1792943056291-d718c3dc3d7c5:21
+  incrementRetryCount,
+  ^^^^^^^^^^^^^^^^^^^
+SyntaxError: The requested module './c4-db.js' does not provide an export named 'incrementRetryCount'
+    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+    at async node:internal/modules/esm/loader:647:26
+    at async file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-dispatcher-pure.test.js:22:13
+
+Node.js v24.21.0
+✖ skills/comm-bridge/scripts/__tests__/c4-dispatcher-pure.test.js (95.596722ms)
+▶ c4-receive basic intake
+  ✖ queues a message with --no-reply and --content (179.170194ms)
+  ✖ --json outputs { ok: true } (163.845202ms)
+  ✖ inserts a record into the conversations table (142.74337ms)
+  ✖ queues with a real channel when skill dir exists (130.741165ms)
+  ✖ stores long inbound content in full without writing an attachment preview (149.558712ms)
+  ✖ accepts --block-queue-until-idle (128.817014ms)
+  ✖ still accepts legacy --require-idle (124.936021ms)
+✖ c4-receive basic intake (1021.88409ms)
+▶ c4-receive --no-reply
+  ✖ auto-assigns system channel when --channel is omitted (122.983385ms)
+  ✖ content does not contain "reply via" suffix (106.846587ms)
+  ✖ does not store endpoint when --no-reply is set (128.081303ms)
+✖ c4-receive --no-reply (358.247141ms)
+▶ c4-receive validation
+  ✔ errors when --channel is missing and --no-reply is not set (59.999613ms)
+  ✔ errors when --content is missing (64.78254ms)
+  ✔ errors on invalid --priority (57.725114ms)
+  ✔ errors when channel skill directory does not exist (55.870576ms)
+✔ c4-receive validation (238.772437ms)
+▶ c4-receive health gating
+  ✖ passes when health is ok (113.546419ms)
+  ✖ fallback records rejected no-reply unhealthy messages failed without error (134.187293ms)
+  ✖ fallback normalizes legacy unhealthy status and exits zero (119.213325ms)
+  ✖ returns an error if unhealthy status delivery fails (128.997423ms)
+  ✔ does not write pending-channels.jsonl on fallback unhealthy route (144.291216ms)
+  ✖ fallback suppresses repeated status notices by normalized endpoint and public health (138.751938ms)
+  ✖ fallback reserves status notice cooldown before sending so concurrent receives suppress duplicates (2007.346881ms)
+  ✖ prunes expired status notice cooldown entries when recording a notification (105.029149ms)
+✖ c4-receive health gating (2892.259667ms)
+▶ c4-receive MessageRouter IPC route
+  ✖ queues pending when router returns recovered=true (112.709541ms)
+  ✖ uses router userMessage for unhealthy delivery (127.277354ms)
+  ✖ suppresses repeated router unhealthy status notices (109.94131ms)
+  ✖ accepts unhealthy no-reply router decisions without userMessage (90.614304ms)
+✖ c4-receive MessageRouter IPC route (441.132951ms)
+▶ c4-receive fail-open
+  ✖ passes when status file is missing (95.55066ms)
+  ✖ passes when status file contains malformed JSON (105.481408ms)
+✖ c4-receive fail-open (201.193301ms)
+▶ c4-send basic
+  ✔ sends message via mock channel with endpoint (258.951328ms)
+  ✔ sends message via mock channel without endpoint (broadcast) (228.704319ms)
+✔ c4-send basic (488.913214ms)
+▶ c4-send validation
+  ✔ errors with no arguments (65.544299ms)
+  ✔ errors with only channel (no message) (78.618281ms)
+  ✔ errors when channel script not found (187.925177ms)
+✔ c4-send validation (332.559174ms)
+▶ c4-send void channel
+  ✖ records the message in c4.db and exits 0 without a skill directory (119.773689ms)
+  ✖ does not spawn a channel send script even if one exists (122.059234ms)
+  ✖ supports stdin/heredoc message input (124.038966ms)
+  ✔ rejects a void send without an endpoint (176.081063ms)
+✖ c4-send void channel (542.640937ms)
+▶ c4-send failed channel
+  ✔ reports failure when channel script exits non-zero (164.140777ms)
+✔ c4-send failed channel (164.274166ms)
+▶ c4-session-init
+  ✖ reports no new conversations on fresh DB (265.468696ms)
+  ✖ outputs last checkpoint summary (487.556333ms)
+  ✖ emits a fallback block when the last checkpoint has no summary (394.193173ms)
+  ✖ shows recent conversations when under threshold (402.670338ms)
+  ✖ adds reply routing for inbound endpoint messages (250.042671ms)
+  ✖ does not add reply routing for no-reply messages (239.918368ms)
+  ✖ does not add reply routing for no-reply messages even when endpoint was provided (256.883213ms)
+  ✖ does not duplicate legacy stored reply routing (250.872668ms)
+  ✖ triggers Memory Sync instruction when over threshold (2025.85489ms)
+✖ c4-session-init (4576.957906ms)
+✖ malformed F1 leaves receive/send/checkpoint/fetch usable and messages persisted (165.517192ms)
+✔ c4-config constants import without loading Core or reading F1 (41.963579ms)
+✖ dispatcher initialization rejects malformed F1 before delivery and permits missing keys (73.89201ms)
+✖ dispatcher refuses queued delivery if F1 becomes malformed after initialization (162.783973ms)
+✖ dispatcher never resolves Core without ZYLOS_PACKAGE_ROOT and keeps F1 reads fresh (64.493041ms)
+ℹ tests 281
+ℹ suites 27
+ℹ pass 186
+ℹ fail 94
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 86373.311584
+
+✖ failing tests:
+
+test at cli/lib/__tests__/caddy-port-preservation.test.js:110:1
+✖ install and uninstall reject malformed markers before changing component files (143.581035ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /invalid_caddy_markers/. Input:
+
+  ''
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/caddy-port-preservation.test.js:127:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '',
+    expected: /invalid_caddy_markers/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/config-readers.test.js:47:3
+✖ defaults a missing runtime but rejects malformed F1 at the CLI boundary (143.854361ms)
+  AssertionError [ERR_ASSERTION]: file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/config-readers.test.js:49:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/config-writers.test.js:24:3
+✖ routes config CLI updates through the locked writer and reserves session_mode (156.17089ms)
+  AssertionError [ERR_ASSERTION]: file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/config-writers.test.js:26:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/config-writers.test.js:60:3
+✖ rolls back a protocol write through the locked writer when Caddy validation fails (154.854366ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Config reverted/. Input:
+
+  'file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\n' +
+    "import { getActiveAdapter } from '../lib/runtime/index.js';\n" +
+    '         ^^^^^^^^^^^^^^^^\n' +
+    "SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n" +
+    '    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n' +
+    '    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n' +
+    '    at async node:internal/modules/esm/loader:647:26\n' +
+    '    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n' +
+    '\n' +
+    'Node.js v24.21.0\n'
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/config-writers.test.js:74:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\nimport { getActiveAdapter } from '../lib/runtime/index.js';\n         ^^^^^^^^^^^^^^^^\nSyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n",
+    expected: /Config reverted/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/instruction-migration.test.js:820:3
+✖ dispatches the real CLI and rejects unknown flags (121.917124ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Unknown flag: --wat/. Input:
+
+  'file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\n' +
+    "import { getActiveAdapter } from '../lib/runtime/index.js';\n" +
+    '         ^^^^^^^^^^^^^^^^\n' +
+    "SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n" +
+    '    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n' +
+    '    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n' +
+    '    at async node:internal/modules/esm/loader:647:26\n' +
+    '    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n' +
+    '\n' +
+    'Node.js v24.21.0\n'
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/instruction-migration.test.js:828:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\nimport { getActiveAdapter } from '../lib/runtime/index.js';\n         ^^^^^^^^^^^^^^^^\nSyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n",
+    expected: /Unknown flag: --wat/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/local-source.e2e.test.js:64:3
+✖ installs an explicit relative directory through the complete add pipeline (154.177346ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at runAdd (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:44:10)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:69:20)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3)
+      at node:internal/per_context/primordials:504:9 {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/local-source.e2e.test.js:81:3
+✖ uses an absolute local path in --check confirmation output (147.360411ms)
+  AssertionError [ERR_ASSERTION]: file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:89:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/local-source.e2e.test.js:96:3
+✖ does not let a cwd directory hijack a bare component name (122.787226ms)
+  SyntaxError: Unexpected end of JSON input
+      at JSON.parse (<anonymous>)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:103:25)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at cli/lib/__tests__/local-source.e2e.test.js:108:3
+✖ installs a local tarball and records its VERSION metadata (142.116989ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at runAdd (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:44:10)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:116:20)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/local-source.e2e.test.js:128:3
+✖ keeps the GitHub release acquisition path working (134.983216ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at runAdd (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:44:10)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:153:20)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/local-source.e2e.test.js:178:3
+✖ rejects upgrade checks for locally installed components with reinstall guidance (126.362122ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at runAdd (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:44:10)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:182:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/local-source.e2e.test.js:205:3
+✖ fails the upgrade --all JSON aggregate for a local-only install (123.137854ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at runAdd (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:44:10)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:209:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/local-source.e2e.test.js:242:3
+✖ fails the upgrade --all JSON aggregate while preserving remote updates (109.866124ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at runAdd (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:44:10)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/local-source.e2e.test.js:246:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:102:3
+✖ installs an official component from a verified tarball with zero network (170.424332ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:112:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3)
+      at node:internal/per_context/primordials:504:9
+      at Array.map (<anonymous>) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:139:3
+✖ fails closed with no residue when the target version mismatches the archive (123.562569ms)
+  SyntaxError: Unexpected end of JSON input
+      at JSON.parse (<anonymous>)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:150:25)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:157:3
+✖ fails closed before unpacking when the sha256 does not match (154.498199ms)
+  SyntaxError: Unexpected end of JSON input
+      at JSON.parse (<anonymous>)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:168:25)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:174:3
+✖ leaves the installed component on the normal upgrade path (146.862231ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:183:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:215:3
+✖ records an unverified install with --trust-file and warns in list output (129.811892ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:225:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:236:3
+✖ rejects --file without --sha256 or --trust-file (114.440746ms)
+  SyntaxError: Unexpected end of JSON input
+      at JSON.parse (<anonymous>)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:247:23)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:252:3
+✖ rejects --file combined with --branch (112.132548ms)
+  SyntaxError: Unexpected end of JSON input
+      at JSON.parse (<anonymous>)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:263:23)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:268:3
+✖ rejects a component name missing from the offline registry (110.960063ms)
+  SyntaxError: Unexpected end of JSON input
+      at JSON.parse (<anonymous>)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:279:23)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at cli/lib/__tests__/official-file-delivery.e2e.test.js:284:3
+✖ shows offline component info with verification status in --check mode (102.444923ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/official-file-delivery.e2e.test.js:294:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js:99:3
+✖ all checks pass → exit 0 in both modes (167.325072ms)
+  AssertionError [ERR_ASSERTION]: file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js:105:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3)
+      at node:internal/per_context/primordials:504:9
+      at Array.map (<anonymous>) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js:115:3
+✖ partial failure (one check fails, one update available) → exit 1 in both modes (145.722045ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at installLocalComponent (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js:66:10)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js:117:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js:134:3
+✖ all checks fail → exit 1 in both modes (136.990432ms)
+  AssertionError [ERR_ASSERTION]: add failed
+  stdout:
+
+  stderr:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at installLocalComponent (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js:66:10)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js:136:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upgrade-daily-availability.test.js:33:91
+✖ unmarked malformed history cannot stop ordinary database writes or startup (484.746337ms)
+  AssertionError [ERR_ASSERTION]: TypeError: getLastCheckpoint is not a function
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/c4-session-init.js:117:24
+      at withC4Db (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/c4-session-init.js:99:26)
+      at async initC4Session (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/c4-session-init.js:223:23)
+      at async file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/c4-session-init.js:237:28
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upgrade-daily-availability.test.js:46:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upgrade-recovery.test.js:180:55
+✖ completed upgrade permits ordinary owners after retained materials become group-writable (1153.877458ms)
+  AssertionError [ERR_ASSERTION]: TypeError: getLastCheckpoint is not a function
+      at file:///tmp/upgrade-recovery-7B8LPv/.claude/skills/comm-bridge/scripts/c4-session-init.js:117:24
+      at withC4Db (file:///tmp/upgrade-recovery-7B8LPv/.claude/skills/comm-bridge/scripts/c4-session-init.js:99:26)
+      at async initC4Session (file:///tmp/upgrade-recovery-7B8LPv/.claude/skills/comm-bridge/scripts/c4-session-init.js:223:23)
+      at async file:///tmp/upgrade-recovery-7B8LPv/.claude/skills/comm-bridge/scripts/c4-session-init.js:237:28
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upgrade-recovery.test.js:215:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upgrade-recovery.test.js:180:55
+✖ completed upgrade permits ordinary owners after retained materials become backup-alias (1150.241784ms)
+  AssertionError [ERR_ASSERTION]: TypeError: getLastCheckpoint is not a function
+      at file:///tmp/upgrade-recovery-nFRt7x/.claude/skills/comm-bridge/scripts/c4-session-init.js:117:24
+      at withC4Db (file:///tmp/upgrade-recovery-nFRt7x/.claude/skills/comm-bridge/scripts/c4-session-init.js:99:26)
+      at async initC4Session (file:///tmp/upgrade-recovery-nFRt7x/.claude/skills/comm-bridge/scripts/c4-session-init.js:223:23)
+      at async file:///tmp/upgrade-recovery-nFRt7x/.claude/skills/comm-bridge/scripts/c4-session-init.js:237:28
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upgrade-recovery.test.js:215:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:80:1
+✖ CLI saved routing covers remote registry, real add pipeline, component/self checks and upgrade (170.862617ms)
+  AssertionError [ERR_ASSERTION]:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at Object.success (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:76:38)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:84:18)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:103:1
+✖ CLI operation freezes profile while later processes read the new local generation (137.79132ms)
+  AssertionError [ERR_ASSERTION]:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at Object.success (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:76:38)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:109:29)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:117:1
+✖ CLI status and help do not fetch missing remote profiles; forced refresh fails (142.276871ms)
+  AssertionError [ERR_ASSERTION]:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at Object.success (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:76:38)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:120:35)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:131:1
+✖ CLI direct baseline keeps official URLs and creates no upstream files; blocked-direct control fails (276.578004ms)
+  AssertionError [ERR_ASSERTION]:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at Object.success (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:76:38)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:135:18)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:142:1
+✖ successful CLI init source flags are temporary with absent or existing settings (116.040899ms)
+  AssertionError [ERR_ASSERTION]:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at Object.success (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:76:38)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:152:9)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:162:1
+✖ init environment source applies only to that process and preserves saved settings (112.449914ms)
+  AssertionError [ERR_ASSERTION]:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at Object.success (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:76:38)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:173:33)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:190:1
+✖ CLI unified source selects URL, file and direct and preserves local trust (108.960576ms)
+  AssertionError [ERR_ASSERTION]:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at Object.success (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:76:38)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:201:32)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:218:1
+✖ CLI rejects invalid and removed sources before doing any network work (244.191098ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /require|Invalid upstream URL/. Input:
+
+  'file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\n' +
+    "import { getActiveAdapter } from '../lib/runtime/index.js';\n" +
+    '         ^^^^^^^^^^^^^^^^\n' +
+    "SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n" +
+    '    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n' +
+    '    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n' +
+    '    at async node:internal/modules/esm/loader:647:26\n' +
+    '    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n' +
+    '\n' +
+    'Node.js v24.21.0\n'
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:223:14)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\nimport { getActiveAdapter } from '../lib/runtime/index.js';\n         ^^^^^^^^^^^^^^^^\nSyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n",
+    expected: /require|Invalid upstream URL/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-cli.e2e.test.js:244:1
+✖ CLI explicit set/clear and temporary overrides round-trip without deleting owned artifacts (106.220523ms)
+  AssertionError [ERR_ASSERTION]:
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at Object.success (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:76:38)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-cli.e2e.test.js:246:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-npm-env.test.js:104:1
+✖ persistent source environment reaches CLI through real clean launcher across fresh sessions (149.266325ms)
+  Error: Command failed: /home/evanow/.nvm/versions/node/v24.21.0/bin/node <workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/runtime/tmux-launcher.js /tmp/.zylos-launch-2949243-1792943057446.json
+  file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+      at genericNodeError (node:internal/errors:986:15)
+      at wrappedFn (node:internal/errors:540:14)
+      at checkExecSyncError (node:child_process:942:11)
+      at execFileSync (node:child_process:978:15)
+      at launch (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-npm-env.test.js:117:25)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-npm-env.test.js:126:20)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19) {
+    status: 1,
+    signal: null,
+    output: [ null, '', "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\nimport { getActiveAdapter } from '../lib/runtime/index.js';\n         ^^^^^^^^^^^^^^^^\nSyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n" ],
+    pid: 2951451,
+    stdout: '',
+    stderr: "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\nimport { getActiveAdapter } from '../lib/runtime/index.js';\n         ^^^^^^^^^^^^^^^^\nSyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n"
+  }
+
+test at cli/lib/__tests__/upstream-profile-proxy.test.js:108:11
+✖ positive control: authenticated CONNECT retrieves HTTPS profile without origin credentials (131.556522ms)
+  AssertionError [ERR_ASSERTION]: file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7
+  import { getActiveAdapter } from '../lib/runtime/index.js';
+           ^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-profile-proxy.test.js:110:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-profile-proxy.test.js:108:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-profile-proxy.test.js:122:11
+✖ TLS negative control: proxy access without the test CA cannot trust the profile (143.630076ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Upstream refresh failed/. Input:
+
+  'file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\n' +
+    "import { getActiveAdapter } from '../lib/runtime/index.js';\n" +
+    '         ^^^^^^^^^^^^^^^^\n' +
+    "SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n" +
+    '    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n' +
+    '    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n' +
+    '    at async node:internal/modules/esm/loader:647:26\n' +
+    '    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n' +
+    '\n' +
+    'Node.js v24.21.0\n'
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-profile-proxy.test.js:126:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-profile-proxy.test.js:122:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\nimport { getActiveAdapter } from '../lib/runtime/index.js';\n         ^^^^^^^^^^^^^^^^\nSyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n",
+    expected: /Upstream refresh failed/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-profile-proxy.test.js:132:11
+✖ negative control: no proxy cannot resolve the profile and creates no cache (150.16388ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Upstream refresh failed/. Input:
+
+  'file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\n' +
+    "import { getActiveAdapter } from '../lib/runtime/index.js';\n" +
+    '         ^^^^^^^^^^^^^^^^\n' +
+    "SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n" +
+    '    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n' +
+    '    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n' +
+    '    at async node:internal/modules/esm/loader:647:26\n' +
+    '    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n' +
+    '\n' +
+    'Node.js v24.21.0\n'
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-profile-proxy.test.js:136:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-profile-proxy.test.js:132:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\nimport { getActiveAdapter } from '../lib/runtime/index.js';\n         ^^^^^^^^^^^^^^^^\nSyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n",
+    expected: /Upstream refresh failed/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/upstream-profile-proxy.test.js:141:11
+✖ NO_PROXY bypasses an otherwise working HTTPS_PROXY (150.959609ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Upstream refresh failed/. Input:
+
+  'file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\n' +
+    "import { getActiveAdapter } from '../lib/runtime/index.js';\n" +
+    '         ^^^^^^^^^^^^^^^^\n' +
+    "SyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n" +
+    '    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n' +
+    '    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n' +
+    '    at async node:internal/modules/esm/loader:647:26\n' +
+    '    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n' +
+    '\n' +
+    'Node.js v24.21.0\n'
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-profile-proxy.test.js:145:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/lib/__tests__/upstream-profile-proxy.test.js:141:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/cli/commands/attach.js:7\nimport { getActiveAdapter } from '../lib/runtime/index.js';\n         ^^^^^^^^^^^^^^^^\nSyntaxError: The requested module '../lib/runtime/index.js' does not provide an export named 'getActiveAdapter'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n",
+    expected: /Upstream refresh failed/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-control-cli.test.js:152:3
+✖ new equivalent enqueue leaves only the newest record pending (240.593361ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  null !== 0
+
+      at getControlRow (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-control-cli.test.js:46:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-control-cli.test.js:162:24
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-control-cli.test.js:23:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-control-cli.test.js:153:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:71:3
+✖ drops the oldest whole messages when the char budget overflows (188.444619ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:73:36
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:72:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:107:3
+✖ drops the oldest whole messages when the token budget overflows (CJK) (165.768774ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:113:36
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:108:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:123:3
+✖ is byte-identical to the legacy path when everything fits (149.231842ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:125:36
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:124:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:136:3
+✖ never drops below one message — the newest stays even if it alone overflows (134.168583ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:140:7
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:137:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:155:3
+✖ emits a sub-threshold message in full even when it alone overflows a tiny budget (130.515898ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:162:7
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:156:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:171:3
+✖ emits messages over the per-message delivery threshold in FULL when the shard budget fits them (#724) (133.962873ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:176:7
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:172:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:190:3
+✖ packs whole original long messages newest-first when several exceed the dispatch threshold (130.881498ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:194:36
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:191:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:206:3
+✖ keeps the legacy no-budget path byte-identical: per-message spill still applies (119.496249ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:209:7
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:207:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:219:3
+✖ keeps the ACTION REQUIRED sync instruction while packing above the threshold (110.131987ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:223:37
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:220:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:235:3
+✖ registry closure passes the shard budget: shard-mode output always fits inline (139.915295ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at receive (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:52:10)
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:240:36
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:59:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js:236:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-dispatcher-pure.test.js:1:1
+✖ skills/comm-bridge/scripts/__tests__/c4-dispatcher-pure.test.js (95.596722ms)
+  'test failed'
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:158:3
+✖ queues a message with --no-reply and --content (179.170194ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:161:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:159:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:166:3
+✖ --json outputs { ok: true } (163.845202ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:169:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:167:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:177:3
+✖ inserts a record into the conversations table (142.74337ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:180:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:178:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:195:3
+✖ queues with a real channel when skill dir exists (130.741165ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:199:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:196:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:212:3
+✖ stores long inbound content in full without writing an attachment preview (149.558712ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:217:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:213:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:230:3
+✖ accepts --block-queue-until-idle (128.817014ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:233:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:231:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:244:3
+✖ still accepts legacy --require-idle (124.936021ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:247:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:245:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:263:3
+✖ auto-assigns system channel when --channel is omitted (122.983385ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:266:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:264:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:276:3
+✖ content does not contain "reply via" suffix (106.846587ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:279:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:277:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:289:3
+✖ does not store endpoint when --no-reply is set (128.081303ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:299:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:290:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:363:3
+✖ passes when health is ok (113.546419ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:370:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:364:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:376:3
+✖ fallback records rejected no-reply unhealthy messages failed without error (134.187293ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:381:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:377:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:395:3
+✖ fallback normalizes legacy unhealthy status and exits zero (119.213325ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:401:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:396:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:422:3
+✖ returns an error if unhealthy status delivery fails (128.997423ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'INTERNAL_ERROR'
+  - 'UNHEALTHY_NOTIFY_UNCERTAIN'
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:431:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:423:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'INTERNAL_ERROR',
+    expected: 'UNHEALTHY_NOTIFY_UNCERTAIN',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:446:3
+✖ fallback suppresses repeated status notices by normalized endpoint and public health (138.751938ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:457:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:447:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:490:3
+✖ fallback reserves status notice cooldown before sending so concurrent receives suppress duplicates (2007.346881ms)
+  Error: Timed out waiting for /tmp/c4-receive-0nyQkg/test-chan-send-started
+      at waitForFile (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:112:9)
+      at async file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:509:7
+      at async withTmpDirAsync (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:54:12)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:491:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:536:3
+✖ prunes expired status notice cooldown entries when recording a notification (105.029149ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:540:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:537:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:569:3
+✖ queues pending when router returns recovered=true (112.709541ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:579:16
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withRouteServer (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:133:12)
+      at async file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:572:7
+      at async withTmpDirAsync (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:54:12)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:570:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:593:3
+✖ uses router userMessage for unhealthy delivery (127.277354ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:605:16
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withRouteServer (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:133:12)
+      at async file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:596:7
+      at async withTmpDirAsync (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:54:12)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:594:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:621:3
+✖ suppresses repeated router unhealthy status notices (109.94131ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:638:16
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withRouteServer (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:133:12)
+      at async file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:624:7
+      at async withTmpDirAsync (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:54:12)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:622:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:669:3
+✖ accepts unhealthy no-reply router decisions without userMessage (90.614304ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:679:16
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withRouteServer (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:133:12)
+      at async file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:671:7
+      at async withTmpDirAsync (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:54:12)
+      at async TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:670:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:698:3
+✖ passes when status file is missing (95.55066ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:701:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:699:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-receive.test.js:707:3
+✖ passes when status file contains malformed JSON (105.481408ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:714:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:43:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-receive.test.js:708:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:128:3
+✖ records the message in c4.db and exits 0 without a skill directory (119.773689ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:131:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:37:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:129:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:145:3
+✖ does not spawn a channel send script even if one exists (122.059234ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:150:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:37:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:146:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:155:3
+✖ supports stdin/heredoc message input (124.038966ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:159:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:37:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js:156:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:50:3
+✖ reports no new conversations on fresh DB (265.468696ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:53:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:51:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:58:3
+✖ outputs last checkpoint summary (487.556333ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:65:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:59:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1905:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:73:3
+✖ emits a fallback block when the last checkpoint has no summary (394.193173ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:81:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:74:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:90:3
+✖ shows recent conversations when under threshold (402.670338ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:97:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:91:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:108:3
+✖ adds reply routing for inbound endpoint messages (250.042671ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:114:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:109:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:120:3
+✖ does not add reply routing for no-reply messages (239.918368ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:125:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:121:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:131:3
+✖ does not add reply routing for no-reply messages even when endpoint was provided (256.883213ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:137:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:132:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:143:3
+✖ does not duplicate legacy stored reply routing (250.872668ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:153:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:144:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:158:3
+✖ triggers Memory Sync instruction when over threshold (2025.85489ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:166:14
+      at withTmpDir (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:41:12)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js:159:5)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:28:1
+✖ malformed F1 leaves receive/send/checkpoint/fetch usable and messages persisted (165.517192ms)
+  AssertionError [ERR_ASSERTION]: Error: failed to queue message: Expected message options
+
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:31:10
+      at fixture (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:24:9)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:28:95)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:55:1
+✖ dispatcher initialization rejects malformed F1 before delivery and permits missing keys (73.89201ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /CONFIG_UNREADABLE/. Input:
+
+  'file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/c4-dispatcher.js:21\n' +
+    '  incrementRetryCount,\n' +
+    '  ^^^^^^^^^^^^^^^^^^^\n' +
+    "SyntaxError: The requested module './c4-db.js' does not provide an export named 'incrementRetryCount'\n" +
+    '    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n' +
+    '    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n' +
+    '    at async node:internal/modules/esm/loader:647:26\n' +
+    '    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n' +
+    '\n' +
+    'Node.js v24.21.0\n'
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:59:10
+      at fixture (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:24:9)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:55:103)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/c4-dispatcher.js:21\n  incrementRetryCount,\n  ^^^^^^^^^^^^^^^^^^^\nSyntaxError: The requested module './c4-db.js' does not provide an export named 'incrementRetryCount'\n    at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)\n    at async node:internal/modules/esm/loader:647:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v24.21.0\n",
+    expected: /CONFIG_UNREADABLE/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:66:1
+✖ dispatcher refuses queued delivery if F1 becomes malformed after initialization (162.783973ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:68:10
+      at fixture (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:24:9)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:66:95)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:78:1
+✖ dispatcher never resolves Core without ZYLOS_PACKAGE_ROOT and keeps F1 reads fresh (64.493041ms)
+  AssertionError [ERR_ASSERTION]: file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/c4-dispatcher.js:21
+    incrementRetryCount,
+    ^^^^^^^^^^^^^^^^^^^
+  SyntaxError: The requested module './c4-db.js' does not provide an export named 'incrementRetryCount'
+      at #asyncInstantiate (node:internal/modules/esm/module_job:455:21)
+      at async ModuleJob.run (node:internal/modules/esm/module_job:553:5)
+      at async node:internal/modules/esm/loader:647:26
+      at async file://<workspace>/p05-evidence-2646/baseline-b-03d511a/[eval1]:5:15
+
+  Node.js v24.21.0
+
+
+  1 !== 0
+
+      at file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:96:10
+      at fixture (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:24:9)
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2646/baseline-b-03d511a/skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js:78:98)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

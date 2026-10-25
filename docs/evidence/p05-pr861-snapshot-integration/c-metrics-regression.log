@@ -1,0 +1,34 @@
+Running 1 Node test files
+✔ T01 assembly: restore health before admission; no-launch empty round executes (6.213192ms)
+✔ DM-54 assembly: damaged F9 retained while existing lifecycle loop stays scheduled (1.209694ms)
+✔ IF-31 assembly: unwritable diagnostic output cannot block completed authentication recovery (22.646694ms)
+✔ T01/T02 assembly: one failed probe poll cannot starve another runtime or auth recovery (20.73092ms)
+✔ T01/IB-41 assembly: config reclaim resolves mode at admission, after F1 cutover (0.630679ms)
+✔ T02/T08 assembly: stopped, unknown, or no-longer-ready processes cannot refresh F4 (2.059522ms)
+✔ T02/T08 assembly: hooks and status share the round sample; replacement identity blocks publication (0.854464ms)
+✔ T01 shutdown: accepted lifecycle mutation finishes before Supervisor stop resolves (4.331466ms)
+✔ T01 shutdown: detached route auth and accepted health writes drain before return (1.114012ms)
+✖ T08 assembly: metrics reuses scene and fence snapshots and excludes stopped entries (1.046859ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 9
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 140.216393
+
+✖ failing tests:
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-assembly.test.js:135:1
+✖ T08 assembly: metrics reuses scene and fence snapshots and excludes stopped entries (1.046859ms)
+  TypeError [ERR_INVALID_ARG_TYPE]: The "path" argument must be of type string. Received undefined
+      at Object.join (node:path:1339:7)
+      at file://<workspace>/p05-c-2635/skills/activity-monitor/scripts/supervisor.js:121:112
+      at Array.map (<anonymous>)
+      at Object.writeMetricsAndMaintain (file://<workspace>/p05-c-2635/skills/activity-monitor/scripts/supervisor.js:121:100)
+      at async TestContext.<anonymous> (file://<workspace>/p05-c-2635/skills/activity-monitor/scripts/__tests__/supervisor-assembly.test.js:143:2)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    code: 'ERR_INVALID_ARG_TYPE'
+  }
