@@ -11,11 +11,12 @@ function fixture() {
   return {guard,alerts,advance:ms=>now+=ms,
     success:()=>guard.observeSuccess(),fail:()=>guard.observeFailure({error:failure('timeout')})};
 }
-test('T02 unavailable alerts at 60 seconds then every ten minutes, and remains unknown indefinitely', async () => {
+test('T02 unavailable alerts at 60 seconds then every thirty minutes, and remains unknown indefinitely', async () => {
   const f = fixture();
   f.fail(); f.advance(59999); await f.guard.advance(); assert.equal(f.alerts.length,0);
   f.advance(1); await f.guard.advance(); await f.guard.advance(); assert.equal(f.alerts.length,1);
-  f.advance(599999); await f.guard.advance(); assert.equal(f.alerts.length,1);
+  f.advance(600000); await f.guard.advance(); assert.equal(f.alerts.length,1);
+  f.advance(1199999); await f.guard.advance(); assert.equal(f.alerts.length,1);
   f.advance(1); assert.deepEqual(await f.guard.advance(),{status:'unavailable'}); assert.equal(f.alerts.length,2);
   f.advance(24*60*60000); assert.deepEqual(await f.guard.advance(),{status:'unavailable'}); assert.equal(f.alerts.length,3);
   for (const alert of f.alerts) assert.match(alert.message,/Sessions remain unconfirmed/);
@@ -32,7 +33,7 @@ test('T02 failed configured alert falls back to Web Console once per interval, i
   f.fail(); f.advance(60000);
   await Promise.all([f.guard.advance(),f.guard.advance()]);
   assert.deepEqual(f.alerts.map(item=>item.target.channel),['fake','web-console']);
-  f.advance(600000); await f.guard.advance();
+  f.advance(1800000); await f.guard.advance();
   assert.deepEqual(f.alerts.map(item=>item.target.channel),['fake','web-console','fake','web-console']);
 });
 test('T02 absent alert target uses Web Console and a failed Web Console target is not duplicated', async () => {
