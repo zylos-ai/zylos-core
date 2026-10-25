@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Upgrade Claude Code Script (C4-integrated)
- * Enqueues /exit via control queue, waits for exit, upgrades, activity-monitor restarts
+ * Uses Supervisor restart admission in multi/transition; retains single exit ordering.
  * Usage: node upgrade.js
  *
  * IMPORTANT: Run with nohup and redirect output to log file:
@@ -11,6 +11,11 @@
 import { execSync, execFileSync } from 'child_process';
 import path from 'path';
 import os from 'os';
+import { pathToFileURL } from 'node:url';
+import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
+import { getModeTransition } from '../../comm-bridge/scripts/c4-db.js';
+const { requestRuntimeRestart } = await loadCoreModule('request-runtime-restart.js');
+const { readSessionMode } = await loadCoreModule('config.js');
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
@@ -45,7 +50,7 @@ function enqueueExit() {
     return controlId;
   } catch (err) {
     logError(`Failed to enqueue /exit: ${err.message}`);
-    process.exit(1);
+    throw err;
   }
 }
 
@@ -97,7 +102,7 @@ function upgradeClaudeCode() {
     log('Upgrade completed successfully');
   } catch (err) {
     logError(`ERROR: Upgrade failed! ${err.message}`);
-    process.exit(1);
+    throw err;
   }
 
   try {
@@ -110,23 +115,32 @@ function upgradeClaudeCode() {
   }
 }
 
-function main() {
-  log('Starting upgrade process');
-
-  // Step 1: Enqueue /exit via control queue (dispatcher handles idle detection)
-  const controlId = enqueueExit();
-
-  // Step 2: Wait for Claude to exit
-  if (!waitForClaudeExit()) {
-    cancelExit(controlId);
-    process.exit(1);
+export async function upgradeRuntime({ readMode = readSessionMode, readTransition = getModeTransition,
+  install = upgradeClaudeCode, requestRestart = requestRuntimeRestart,
+  enqueue = enqueueExit, waitForExit = waitForClaudeExit, cancel = cancelExit } = {}) {
+  const mode = await readMode();
+  const transition = await readTransition();
+  if (mode.mode === 'multi' || transition) {
+    // Runtime installers must preserve existing running processes. Validate this
+    // property for each supported installer before enabling a production upgrade.
+    await install();
+    return requestRestart();
   }
-
-  // Step 3: Upgrade Claude Code
-  upgradeClaudeCode();
-
-  // Done - activity-monitor will restart Claude automatically
-  log('Upgrade complete, activity-monitor will restart Claude');
+  const controlId = await enqueue();
+  if (!await waitForExit()) {
+    await cancel(controlId);
+    throw Object.assign(new Error('Runtime did not exit before upgrade deadline'), {code:'EXIT_UNCONFIRMED'});
+  }
+  await install();
+  return {ok:true,data:{result:'installed_after_exit'}};
 }
 
-main();
+async function main() {
+  log('Starting upgrade process');
+  const result = await upgradeRuntime();
+  if (!result.ok) throw Object.assign(new Error(result.error.message), {code:result.error.code});
+  log(`Upgrade result: ${result.data.result}; replacement sessions are started by the dispatcher`);
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error=>{
+  logError(`ERROR [${error.code ?? 'UPGRADE_FAILED'}]: ${error.message}`);process.exitCode=1;
+});

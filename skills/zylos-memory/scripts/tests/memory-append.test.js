@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { memoryScope, withMemoryLock } from '../sync-lock.js';
 import { appendInbox, appendSession } from '../memory-append.js';
 const fixture = group => ({ ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'memory-append-')), ZYLOS_RUN_ID: 'run-1', ...(group ? { ZYLOS_SESSION_GROUP: group } : {}) });
 
@@ -40,19 +41,35 @@ test('IB-52 invalid records do not write; partial write rolls back under F8', as
   assert.deepEqual(fs.readFileSync(result.path), before);
 });
 
-// P07 §4 residual-risk control: a writer bypassing F8 can append after the
-// consumer read the renamed segment; that text is outside the guarantee.
-test('unlocked open-before-rotation control demonstrates the documented loss window', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-unlocked-control-'));
-  const inbox = path.join(root, 'inbox.md'); const segment = path.join(root, 'inbox.segment.md');
-  fs.writeFileSync(inbox, 'before\n');
-  const fd = fs.openSync(inbox, 'a');
-  try {
-    fs.renameSync(inbox, segment);
-    const consumed = fs.readFileSync(segment, 'utf8');
-    fs.writeSync(fd, 'late-unlocked-record\n');
-    fs.unlinkSync(segment);
-    assert.equal(consumed, 'before\n');
-    assert.equal(fs.existsSync(inbox), false); assert.equal(fs.existsSync(segment), false);
-  } finally { fs.closeSync(fd); }
+
+// A P2-1 / DM F8: legacy and single writers of global memory share origin F8.
+test('legacy global append contends on the same origin memory lock as single Sync', async () => {
+  const env = fixture();
+  const single = await memoryScope(env);
+  const legacyEnv = { ZYLOS_DIR: env.ZYLOS_DIR };
+  const legacy = await memoryScope(legacyEnv);
+  assert.equal(legacy.runDir, single.runDir);
+  assert.equal(legacy.memoryDir, single.memoryDir);
+  await withMemoryLock(single.runDir, async () => {
+    await assert.rejects(appendInbox({ kind: 'fact', content: 'blocked', env: legacyEnv, waitMs: 50 }), { code: 'LOCK_TIMEOUT' });
+  });
+  assert.equal(fs.existsSync(path.join(legacy.memoryDir, 'inbox.md')), false);
+  await appendInbox({ kind: 'fact', content: 'after release', env: legacyEnv });
+});
+
+// IB-52: session append needs only the final byte, not the entire daily log.
+test('session append reads one trailing byte and preserves a missing newline', async () => {
+  const env = fixture();
+  const now = () => new Date('2026-10-10T12:00:00Z');
+  const first = await appendSession({ content: 'first', env }, { now });
+  fs.writeFileSync(first.path, 'older text');
+  let reads = 0;
+  const io = { ...fs, readFileSync() { assert.fail('must not read full session'); },
+    readSync(fd, buffer, offset, length, position) {
+      reads++; assert.equal(length, 1); assert.equal(position, 9);
+      return fs.readSync(fd, buffer, offset, length, position);
+    } };
+  await appendSession({ content: 'next', env }, { now, io });
+  assert.equal(reads, 1);
+  assert.equal(fs.readFileSync(first.path, 'utf8'), 'older text\nnext\n');
 });

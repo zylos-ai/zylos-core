@@ -1,2 +1,3 @@
 #!/usr/bin/env node
-import './monitor.js';
+import { main } from './monitor.js';
+await main();

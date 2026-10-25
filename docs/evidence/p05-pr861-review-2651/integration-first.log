@@ -1,0 +1,47 @@
+Running 4 Node test files
+✔ T01 assembly: restore health before admission; no-launch empty round executes (7.019023ms)
+✔ DM-54 assembly: damaged F9 retained while existing lifecycle loop stays scheduled (1.714583ms)
+✔ IF-31 assembly: unwritable diagnostic output cannot block completed authentication recovery (31.619562ms)
+✔ T01/T02 assembly: one failed probe poll cannot starve another runtime or auth recovery (33.691234ms)
+✔ T01/IB-41 assembly: config reclaim resolves mode at admission, after F1 cutover (0.887864ms)
+✔ T02/T08 assembly: stopped, unknown, or no-longer-ready processes cannot refresh F4 (2.865561ms)
+✔ T02/T08 assembly: hooks and status share the round sample; replacement identity blocks publication (1.125354ms)
+✔ T01 shutdown: accepted lifecycle mutation finishes before Supervisor stop resolves (5.637076ms)
+✔ T01 shutdown: detached route auth and accepted health writes drain before return (1.521704ms)
+✔ T08 assembly: metrics reuses scene and fence snapshots and excludes stopped entries (1.390288ms)
+✔ T08 assembly: health stop removes the run from subsequent round metrics (1.589258ms)
+✔ T08 assembly: exit stop removes the run from subsequent round metrics (0.969433ms)
+✔ T08 assembly: single auth null scope invalidates only its matching Origin run (0.418174ms)
+✔ C3 each unavailable dependency logs once while unrelated failures remain visible (0.585555ms)
+✔ T01 actual entry restores before Sock admission and shuts down with a partial-line peer (95.560654ms)
+✔ T01 duplicate entry preserves the original listener; non-socket paths remain intact (182.19763ms)
+✔ T01 bad startup F1 keeps Sock closed to mutations; restore failure cleans up listener (163.564936ms)
+✔ T01 copied installed skills resolve the separate Core package and serve actual Sock requests (123.512483ms)
+✔ T02 entry freezes first-failure notice synchronously with correct single/multi SQL scope (214.142437ms)
+✔ T01 legacy F1 opens actual entry as single and reports unavailable automatic migration separately (182.412147ms)
+✔ C4 monitor signal handler reports stop rejection and exits unsuccessfully (0.771787ms)
+✔ bad F1 does not open admission or schedule (2.460303ms)
+✔ restore precedes admission and lifecycle shares one scene sample (0.817202ms)
+✔ group failure preserves other observations and next tick (0.481123ms)
+✔ transition suppresses new lifecycle producers (0.326634ms)
+✔ overlap joins one round and read failure schedules recovery (5.146479ms)
+✔ T01 hook wakeups keep one timer and deferred server maintenance runs on failed observations (0.593961ms)
+✔ T01 missing pool/Sync dependencies preserve independent metrics and observation work (0.391965ms)
+✔ T01/P10 F1 cutover refreshes mode before lifecycle actions; unreadable F1 does not reuse stale mode (0.444985ms)
+✔ T01 legacy migration failure does not stop observation; accepted transition suppresses lifecycle producers (0.416315ms)
+✔ round shares one serialized snapshot and checks manual fences once (0.672302ms)
+✔ unreadable F9 is reported while the same snapshot still advances existing reclaim (0.361557ms)
+✔ completed transition precedes serial work and keeps transition-round restrictions (0.269512ms)
+✔ IF-17 all machine notices select Origin in multi and NULL single without fallback (1.325758ms)
+✔ T07 daily maintenance runs at preserved hours and records success only after child finishes (28.489787ms)
+✔ T07 health and daily upgrade preserve gates; refusal does not mark delivered or retry without scope (32.610936ms)
+✔ T08 per-runtime account tasks remain single flight and read sampler rather than global usage files (34.563884ms)
+✔ C2 quiet ticks skip Origin observation until maintenance or usage is due (24.487416ms)
+ℹ tests 38
+ℹ suites 0
+ℹ pass 38
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1072.823474

@@ -1,0 +1,41 @@
+Running 1 Node test files
+✔ IF-31: reader finishes old inode, intermediate rotations, then current exactly once (3.404325ms)
+✔ IF-31: incomplete lines wait, malformed complete lines warn, future fields survive (0.775328ms)
+✔ IF-31: directory disappearance drains retained fd without fabricating events (0.812015ms)
+✔ DM-38: append and rename preserve complete long records and monotonic names (2.614758ms)
+✖ DM-38: two real writers each append 200 complete lines during rotations (143.270608ms)
+✔ DM-38 regression: maintenance never treats current filename as rotation timestamp zero (1.117638ms)
+✔ T08 recovery: backward UTF-8 chunk scan stops at boundary and resumes partial/current rotation once (2.839436ms)
+✔ DM-38: next read drains a late append on the renamed inode exactly once (0.783914ms)
+✔ DM-38: partial old-inode write can finish before the next read without warning (0.728966ms)
+✔ DM-38: abandoned partial line warns only at next-read final drain (0.702251ms)
+✔ DM-38: close releases current and deferred old descriptors (0.845179ms)
+✔ DM-38: appendEvent surfaces a real write failure and later complete writes remain readable (0.530742ms)
+✔ DM-38: next read drains every deferred rotation and closes all old descriptors (1.107779ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 12
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 213.558636
+
+✖ failing tests:
+
+test at cli/lib/__tests__/event-log.test.js:31:1
+✖ DM-38: two real writers each append 200 complete lines during rotations (143.270608ms)
+  AssertionError [ERR_ASSERTION]: [{"name":"events.1792944054081.jsonl","size":8399650},{"name":"events.1792944054091.jsonl","size":11165415},{"name":"events.1792944054102.jsonl","size":10653335},{"name":"events.1792944054111.jsonl","size":10755780}]
+
+  348 !== 400
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2649/mutant-split-write/cli/lib/__tests__/event-log.test.js:50:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 348,
+    expected: 400,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
