@@ -7,7 +7,7 @@ import { readSessionMode } from './config.js';
 import { groupRunDir, zylosRoot } from './session-group-paths.js';
 import { openTmuxConnection } from './runtime/tmux-connection.js';
 import { observeSessionTarget } from './runtime/session-target.js';
-import { withMemoryLock } from './memory-lock.js';
+import { withMemoryLock } from '../../skills/zylos-memory/scripts/sync-lock.js';
 
 export const MIGRATION_ID = 'references-layout-v1';
 const SELF = fileURLToPath(import.meta.url);
@@ -15,7 +15,6 @@ const VERSION = JSON.parse(fs.readFileSync(new URL('../../package.json', import.
 const error = (code, message, persisted = [], extra = {}) => Object.assign(new Error(message), { code, persisted, ...extra });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const absent = cause => cause.code === 'ENOENT';
-const isInteger = n => Number.isSafeInteger(n) && n >= 0;
 
 function syncDir(directory) {
   const fd = fs.openSync(directory, 'r');
@@ -58,21 +57,19 @@ function readRegular(filename) {
 }
 
 export function backupState(backupDir) {
+  let stat;
   try {
-    const stat = fs.lstatSync(backupDir);
+    stat = fs.lstatSync(backupDir);
+  } catch (cause) { return absent(cause) ? 'absent' : 'invalid'; }
+  try {
     if (!stat.isDirectory() || stat.isSymbolicLink()) return 'invalid';
     readRegular(path.join(backupDir, 'references.md'));
     return 'valid';
-  } catch (cause) {
-    if (absent(cause) && !fs.existsSync(backupDir)) {
-      try { fs.lstatSync(backupDir); } catch (missing) { if (absent(missing)) return 'absent'; }
-    }
-    return 'invalid';
-  }
+  } catch { return 'invalid'; }
 }
 
 /** Called only while holding origin F8. No staging directory is reused. */
-export function ensureValidBackupLocked({ backupDir, references, checkpoint = () => {} }) {
+function ensureValidBackupLocked({ backupDir, references, checkpoint = () => {} }) {
   const state = backupState(backupDir);
   if (state === 'valid') return false;
   if (state === 'invalid') throw error('BACKUP_INVALID', 'Existing references backup is invalid', [], { path: backupDir });
@@ -125,29 +122,8 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     let record;
     try { record = JSON.parse(readRegular(recordPath).toString('utf8')); }
     catch (cause) { throw error('RECORD_UNREADABLE', cause.message); }
-    if (!record || record.v !== 1 || record.migrationId !== MIGRATION_ID || !['pending', 'done'].includes(record.state) ||
-        !isInteger(record.attempts) || !isInteger(record.createdAt) || !isInteger(record.updatedAt) ||
-        !['upgrade', 'init'].includes(record.createdBy) || typeof record.coreVersion !== 'string' ||
-        !(record.backupPath === null || typeof record.backupPath === 'string') ||
-        !(record.completedAt === null || isInteger(record.completedAt)) ||
-        !(record.evidence === null || (typeof record.evidence === 'object' && !Array.isArray(record.evidence)))) {
+    if (!record || record.v !== 1 || record.migrationId !== MIGRATION_ID || !['pending', 'done'].includes(record.state)) {
       throw error('RECORD_UNREADABLE', 'Invalid migration record');
-    }
-    if (record.state === 'pending') {
-      if (record.completedAt !== null || record.evidence !== null || record.backupPath !== null) throw error('RECORD_UNREADABLE', 'Invalid pending migration record');
-    } else {
-      const evidence = record.evidence, check = evidence?.mechanical, agent = evidence?.agent;
-      const strings = value => Array.isArray(value) && value.every(item => typeof item === 'string');
-      if (!isInteger(record.completedAt) || !['fresh_install', 'agent_reorganized'].includes(evidence?.kind) ||
-          !check || !/^[a-f0-9]{64}$/.test(check.referencesSha256) || !strings(check.indexedPaths) ||
-          !strings(check.missingPaths) || check.missingPaths.length || typeof check.backupPresent !== 'boolean' ||
-          (evidence.kind === 'fresh_install' ? agent !== null :
-            (!agent || !['origin', '*'].includes(agent.sessionGroup) || typeof agent.runId !== 'string' || !agent.runId ||
-             typeof agent.summary !== 'string' || !agent.summary.trim() || [...agent.summary].length > 2000 || !check.backupPresent)) ||
-          (record.backupPath !== null && record.backupPath !== path.relative(root, backupDir)) ||
-          (evidence.kind === 'agent_reorganized' && record.backupPath === null)) {
-        throw error('RECORD_UNREADABLE', 'Invalid completed migration evidence');
-      }
     }
     return record;
   }
@@ -164,21 +140,12 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     try { bytes = readRegular(references); } catch { missingPaths.push('memory/references.md'); }
     const text = String(bytes || '');
     const indexed = [];
-    // Delimited paths may contain spaces; bare paths end at Markdown punctuation.
-    const remaining = text.replace(/`([^`\n]+)`|\]\((?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"]*")?\)/g,
+    text.replace(/`([^`\n]+)`|\]\((?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"]*")?\)/g,
       (match, code, angle, link) => {
         const value = code || angle || link;
         if (/^(?:memory\/)?reference\//.test(value)) indexed.push(value);
         return ' ';
       });
-    const bare = remaining.replace(/(?<![\p{L}\p{N}_./\\~:@%+\-])[*_]+(?=(?:memory\/)?reference\/)/gu, ' ');
-    const punctuation = /[.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001\uff09\u3011\u300b\u2019\u201d]+$/u;
-    for (const match of bare.matchAll(/(?<![\p{L}\p{N}_./\\~:@%+\-])(?:memory\/)?reference\/[^\s`<>\[\](){},;]+/gu)) {
-      // Closing emphasis and adjacent emphasized prose are outside the path;
-      // keep internal glob characters for the wildcard filter below.
-      indexed.push(match[0].replace(punctuation, '').replace(/([*_]{1,3})[^/*_]*\1$/u, '')
-        .replace(/[*_]+$/u, '').replace(punctuation, ''));
-    }
     const indexedPaths = [...new Set(indexed.filter(value => !/[*?\[\]]/.test(value))
       .map(value => `memory/${value.replace(/^memory\//, '')}`))];
     for (const indexed of indexedPaths) {
@@ -246,9 +213,8 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     return { target, normalized };
   }
   async function apply(input, options = {}) {
-    return lock(groupRunDir('origin', env), async (assertHeld = () => {}) => {
+    return lock(groupRunDir('origin', env), async () => {
       await authorize('apply');
-      assertHeld();
       const { target, normalized } = targetPath(input?.path);
       const created = ensureValidBackupLocked({ backupDir, references, checkpoint });
       const persisted = created ? ['w7.backup'] : [];
@@ -270,9 +236,8 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     }, options);
   }
   async function complete(summary, options = {}) {
-    return lock(groupRunDir('origin', env), async (assertHeld = () => {}) => {
+    return lock(groupRunDir('origin', env), async () => {
       const record = await authorize('complete');
-      assertHeld();
       if (typeof summary !== 'string' || !summary.trim() || [...summary].length > 2000) throw error('INVALID_INPUT', 'summary must contain 1–2000 characters');
       const check = mechanical(true);
       const done = check.missingPaths.length === 0;
