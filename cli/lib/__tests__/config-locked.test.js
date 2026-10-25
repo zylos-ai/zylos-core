@@ -338,11 +338,14 @@ describe('config locking', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { untouched: true, a: 1 });
   });
 
-  it('classifies a lost helper result as unknown and never as pre-rename', () => {
+  for (const [title, stdout] of [
+    ['classifies a lost helper result as unknown and never as pre-rename', ''],
+    ['classifies an invalid helper envelope as an unknown commit result', '{}'],
+  ]) it(title, () => {
     write({ untouched: true });
     assert.throws(() => updateConfigWithLock({ configFile, lockFile, update: { set: { a: 1 } } }, {
       capability: { backend: 'linux-flock', executable: '/usr/bin/flock' },
-      spawn: () => ({ status: 0, signal: null, stdout: '', stderr: '' }),
+      spawn: () => ({ status: 0, signal: null, stdout, stderr: '' }),
     }), error => error.code === 'CONFIG_WRITE_UNKNOWN' && error.phase === 'unknown' && error.persisted === null);
   });
 
@@ -368,15 +371,6 @@ describe('config locking', () => {
       && error.phase === 'unknown'
       && error.persisted === null);
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')), { untouched: true, committed: true });
-  });
-
-  it('classifies an invalid helper envelope as an unknown commit result', () => {
-    assert.throws(() => updateConfigWithLock({ configFile, lockFile, update: { set: { a: 1 } } }, {
-      capability: { backend: 'linux-flock', executable: '/usr/bin/flock' },
-      spawn: () => ({ status: 0, signal: null, stdout: '{}', stderr: '' }),
-    }), error => error.code === 'CONFIG_WRITE_UNKNOWN'
-      && error.phase === 'unknown'
-      && error.persisted === null);
   });
 
   it('keeps unknown commit semantics at the public API when the real helper exceeds spawnSync output limits', async () => {

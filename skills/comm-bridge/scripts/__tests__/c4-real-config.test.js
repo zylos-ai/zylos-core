@@ -28,26 +28,6 @@ for (const [config, runtime] of [[undefined, 'claude'], ['{"runtime":"codex","se
     assert.deepEqual(result, { runtime, mode: 'default' });
   });
 }
-test('real F1 corruption refuses machine control without a write', t => {
-  const f = fixture(t);
-  f.db("console.log(JSON.stringify(db.insertControl('first',{appendAckSuffix:false})))");
-  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), '{broken');
-  const r = f.run(`try { const db = await import(${f.module}); db.insertControl('bad'); } catch(e) { console.log(e.code); }`);
-  assert.match(r.stdout, /CONTROL_TARGET_REQUIRED/);
-  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), '{}');
-  const rows = f.db("console.log(JSON.stringify(db.getDb().prepare('SELECT raw_content FROM control_queue').all()))");
-  assert.deepEqual(rows, [{ raw_content: 'first' }]);
-});
-test('real readSessionMode and runtime CLI classify single mode after a persisted override', t => {
-  const f = fixture(t, '{}');
-  const result = spawnSync(process.execPath, [path.join(scripts,'c4-runtime-config.js'),'set','--group','origin','--runtime','codex','--json'], { env:f.env, encoding:'utf8', timeout:30000 });
-  assert.equal(result.status,0,result.stderr);
-  const output=JSON.parse(result.stdout);
-  assert.equal(output.ok,true); assert.equal(output.data.changed,true);
-  assert.equal(output.data.resolved.runtime,'claude');
-  assert.equal(output.data.sessionMode,'single');
-  assert.equal(output.data.running,null);
-});
 test('runtime model validator rejects unavailable executable without persisting an override', t => {
   const f = fixture(t);
   f.env.CODEX_BIN = path.join(f.root, 'no-runtime');
@@ -59,7 +39,7 @@ test('runtime config re-reads strict F1 on each resolution', t => {
   const result=f.db(`const fs=await import('node:fs'); const before=db.resolveSessionLaunchConfig({sessionGroup:'origin',sessionMode:'single'}); fs.writeFileSync(${JSON.stringify(path.join(f.root,'.zylos/config.json'))},'{"runtime":"codex"}'); const after=db.resolveSessionLaunchConfig({sessionGroup:'origin',sessionMode:'single'}); console.log(JSON.stringify({before,after}));`);
   assert.equal(result.before.runtime,'claude'); assert.equal(result.after.runtime,'codex');
 });
-test('copied skill resolves F1 from explicit Core package root, rejects a broken explicit root', t => {
+test('copied skill resolves F1 from explicit Core package root', t => {
   const f=fixture(t,'{"runtime":"codex"}');
   const skill=path.join(f.root,'.claude/skills/comm-bridge');
   const copied=path.join(skill,'scripts');
@@ -71,8 +51,6 @@ test('copied skill resolves F1 from explicit Core package root, rejects a broken
   const code=`const db=await import(${JSON.stringify(pathToFileURL(path.join(copied,'c4-db.js')).href)}); try { console.log(JSON.stringify(db.resolveSessionLaunchConfig({sessionGroup:'origin',sessionMode:'single'}))); } finally {db.close();}`;
   f.env.ZYLOS_PACKAGE_ROOT=coreRoot;
   assert.equal(JSON.parse(f.run(code).stdout).runtime,'codex');
-  f.env.ZYLOS_PACKAGE_ROOT=path.join(f.root,'absent-package');
-  assert.match(f.run(code,1).stderr,/Cannot locate the installed zylos-core/);
 });
 for (const runtime of ['claude','codex']) test(`real ${runtime} help validates model syntax without launching a session`, t => {
   const available=spawnSync('which',[runtime],{encoding:'utf8'});

@@ -1,13 +1,8 @@
+import {readyTmuxTarget} from '../../../../test/helpers/ready-tmux-target.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawnSync } from 'node:child_process';
-import Database from 'better-sqlite3';
-import * as schema from '../c4-schema.js';
-import { guardDatabase } from '../sqlite-schema.js';
+import { spawnSync } from 'node:child_process';
 
 const cliPath = fileURLToPath(new URL('../c4-control.js', import.meta.url));
 const packageRoot = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -15,38 +10,9 @@ const packageRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 // IF-16 process fallback integration: real consumer/resolver, tmux and process
 // tree, but a named sleeping executable, NOT a real Claude runtime launch.
 function fixture(t, mode, recognized) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-fallback-'));
-  const env = { PATH: process.env.PATH, HOME: root, ZYLOS_DIR: root,
-    ZYLOS_PACKAGE_ROOT: packageRoot, TMUX_TMPDIR: root, LANG: 'en_US.UTF-8' };
-  const tmux = (...args) => execFileSync('tmux', args, {
-    env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
-  }).trim();
-  let db;
-  t.after(() => {
-    try { tmux('kill-server'); } catch {}
-    db?.close();
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-  fs.mkdirSync(path.join(root, '.zylos'));
-  // Deliberately different from the named fixture: fallback must use observed
-  // process identity rather than the configured default runtime.
-  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'codex', session_mode: mode }));
-  fs.mkdirSync(path.join(root, 'comm-bridge'));
-  db = new Database(path.join(root, 'comm-bridge/c4.db'));
-  guardDatabase(db, schema);
-  db.pragma('journal_mode=WAL');
-  const readyPath = path.join(root, 'activity-monitor/session-groups/origin/current-session.json');
-  fs.mkdirSync(path.dirname(readyPath), { recursive: true });
-  fs.writeFileSync(readyPath, JSON.stringify({ runId: 'fixture-run', sessionId: 'fixture-session', ts: 1, startupControlIds: [] }));
-  let executable = '/bin/sleep';
-  if (recognized) {
-    executable = path.join(root, 'claude');
-    fs.writeFileSync(path.join(root, 'fixture.c'), '#include <unistd.h>\nint main(void) { sleep(120); return 0; }\n');
-    execFileSync('cc', [path.join(root, 'fixture.c'), '-o', executable], { env, timeout: 20000 });
-  }
-  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'zylos-group-origin',
-    '-e', 'ZYLOS_RUN_ID=fixture-run', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"codex","mode":"default"}',
-    ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), executable, '120');
+  // F1 intentionally differs from the observed named process.
+  const {tmux,db,env}=readyTmuxTarget(t,{prefix:'c4-fallback-',mode,runtime:'codex',
+    runId:'fixture-run',sessionId:'fixture-session',runtimeProcess:recognized,packageRoot});
   tmux('set-environment', '-u', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG');
   assert.doesNotMatch(tmux('show-environment', '-t', '=zylos-group-origin'), /^ZYLOS_MODEL_CONFIG=/m);
   const rows = () => db.prepare('SELECT * FROM control_queue ORDER BY id').all();

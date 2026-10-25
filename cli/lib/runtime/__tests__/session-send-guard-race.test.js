@@ -1,9 +1,8 @@
+import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { openTmuxConnection } from '../tmux-connection.js';
 import { resolveSessionTarget, revalidateSessionTarget } from '../session-target.js';
 import { SessionAdapter } from '../session-adapter.js';
@@ -22,19 +21,10 @@ async function waitFor(read, predicate) {
 }
 
 async function fixture(t) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-send-race-'));
-  const socketPath = path.join(dir, 'socket');
+  let connection;
+  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'p02-send-race-',socketName:'socket',tmuxArgs:['-u'],beforeCleanup:()=>connection?.close()});
   const input = path.join(dir, 'input');
   const ready = path.join(dir, 'ready');
-  const tmux = (...args) => execFileSync(binary, ['-u', '-S', socketPath, ...args], {
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 3000,
-  }).trim();
-  let connection;
-  t.after(async () => {
-    connection?.close();
-    try { tmux('kill-server'); } catch {}
-    await fs.rm(dir, { recursive: true, force: true });
-  });
   const start = async () => {
     // kill-server can exit before its socket is released. Wait for a successful
     // new server; this never connects to the host's default socket.

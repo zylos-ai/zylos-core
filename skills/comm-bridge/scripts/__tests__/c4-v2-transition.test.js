@@ -1,3 +1,4 @@
+import { fixture as storeFixture, modifiedStore, startHeldWriter } from './c4-v2-test-helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
@@ -7,14 +8,12 @@ import { createStore } from '../c4-v2-store.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 function fixture(t, filename = ':memory:') {
-  const db = new Database(filename); t.after(() => { if (db.open) db.close(); }); guardDatabase(db, owner);
-  const store = createStore(db, { validateComponent: () => true });
+  const { db, store } = storeFixture(t, {}, filename);
   const state = () => ({ transitions: db.prepare('SELECT * FROM mode_transitions ORDER BY rowid').all(), messages: db.prepare('SELECT * FROM conversations ORDER BY id').all(), checkpoints: db.prepare('SELECT * FROM checkpoints ORDER BY id').all(), fences: db.prepare('SELECT * FROM drain_fences ORDER BY session_group').all() });
   return { db, store, state };
 }
@@ -106,19 +105,10 @@ for (const obstacle of ['extra-fence', 'manual-global', 'phase-write-fails', 'no
   else { assert.throws(() => store.setModeTransitionPhase(runId, 'complete'), { code: obstacle === 'phase-write-fails' ? 'DB_WRITE_FAILED' : 'TRANSITION_PRECONDITION' }); assert.deepEqual(state(), before); }
 });
 test('calibration: atomicity assertion detects split transaction mutant', async t => {
-  const { readFileSync } = await import('node:fs');
-  const absolutize = (source, base) => source.replace(/from '(\.\/[^']+)'/g, (_, path) => `from '${new URL(path, base).href}'`);
-  const transitionURL = new URL('../c4-store-transition.js', import.meta.url);
-  const source = readFileSync(transitionURL, 'utf8');
   const needle = '      run(c, "UPDATE mode_transitions SET cutoff=';
-  assert.ok(source.includes(needle), 'mutation anchor must exist');
-  // Intentionally commit D1 first: rollback of the later D9 failure can no
-  // longer undo absorption. Dynamic modules keep the live source untouched.
-  const badSource = source.replace(needle, '      c.exec("COMMIT; BEGIN IMMEDIATE");\n' + needle);
-  const mutant = 'data:text/javascript;base64,' + Buffer.from(absolutize(badSource, transitionURL)).toString('base64');
-  const storeURL = new URL('../c4-v2-store.js', import.meta.url);
-  const storeSource = absolutize(readFileSync(storeURL, 'utf8'), storeURL).replace(transitionURL.href, mutant);
-  const { createStore: mutatedCreateStore } = await import('data:text/javascript;base64,' + Buffer.from(storeSource).toString('base64'));
+  // Commit D1 first so rollback of the later D9 failure cannot undo absorption.
+  const mutatedCreateStore = await modifiedStore('c4-store-transition.js', needle,
+    '      c.exec("COMMIT; BEGIN IMMEDIATE");\n' + needle);
   for (const create of [createStore, mutatedCreateStore]) {
     const { db, state } = fixture(t); const store = create(db, { validateComponent: () => true });
     store.insertConversation('in', 'foo', 'e', 'pending'); const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); const before = state();
@@ -171,18 +161,6 @@ test('getLastCompletedModeTransition: empty/open null, updated_at/created_at/row
   checkCompletedOrdering(t);
 });
 
-async function modifiedStore(moduleName, before, after) {
-  const moduleURL = new URL(`../${moduleName}`, import.meta.url);
-  const absoluteImports = (source, base) => source.replace(/from '(\.\/[^']+)'/g, (_, path) => `from '${new URL(path, base).href}'`);
-  const source = readFileSync(moduleURL, 'utf8');
-  assert.ok(source.includes(before), 'mutation anchor must exist');
-  const mutated = absoluteImports(source.replace(before, after), moduleURL);
-  const uri = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-  const storeURL = new URL('../c4-v2-store.js', import.meta.url);
-  const storeSource = moduleName === 'c4-v2-store.js' ? mutated
-    : absoluteImports(readFileSync(storeURL, 'utf8'), storeURL).replace(moduleURL.href, uri(mutated));
-  return (await import(uri(storeSource))).createStore;
-}
 for (const order of ['created_at DESC', 'updated_at DESC,rowid DESC', 'updated_at DESC,created_at DESC,rowid ASC']) {
   test(`getLastCompletedModeTransition calibration rejects ordering mutant: ${order}`, async t => {
     const mutant = await modifiedStore('c4-store-transition.js', 'updated_at DESC,created_at DESC,rowid DESC', order);
@@ -214,16 +192,10 @@ test('getLastCompletedModeTransition: NORMAL WAL reads committed row while write
   const seed = new Database(filename); guardDatabase(seed, owner);
   assert.equal(seed.pragma('journal_mode=WAL', { simple: true }), 'wal');
   completedRows(seed)('committed', 10, 20); seed.close();
-  const source = `import Database from ${JSON.stringify(require.resolve('better-sqlite3'))};
-    const db = new Database(process.argv[1]);
-    db.exec("BEGIN IMMEDIATE; UPDATE mode_transitions SET reason='new-committed'");
-    process.send({ mode: db.pragma('locking_mode', { simple: true }), journal: db.pragma('journal_mode', { simple: true }), inTransaction: db.inTransaction });
-    process.on('message', () => { db.exec('COMMIT'); db.close(); process.exit(0); });`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', source, filename], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-  let stderr = ''; child.stderr.on('data', data => { stderr += data; });
-  const exited = once(child, 'exit');
+  const writer = startHeldWriter(filename, "UPDATE mode_transitions SET reason='new-committed'");
+  const { child, exited } = writer;
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await exited; } });
-  const [locked] = await Promise.race([once(child, 'message'), exited.then(() => { throw new Error(`writer exited before barrier: ${stderr}`); })]);
+  const [locked] = await writer.held;
   assert.deepEqual(locked, { mode: 'normal', journal: 'wal', inTransaction: true });
   const reader = new Database(filename, { readonly: true, fileMustExist: true });
   try {
@@ -235,7 +207,7 @@ test('getLastCompletedModeTransition: NORMAL WAL reads committed row while write
     assert.deepEqual(allTables(reader), before);
     assert.equal(reader.prepare('SELECT total_changes() AS n').get().n, changes);
     child.send('commit'); const [code, signal] = await exited;
-    assert.equal(code, 0, stderr); assert.equal(signal, null);
+    assert.equal(code, 0, writer.stderr()); assert.equal(signal, null);
     assert.deepEqual(store.getLastCompletedModeTransition(), { ...old, reason: 'new-committed' });
   } finally { reader.close(); }
 });

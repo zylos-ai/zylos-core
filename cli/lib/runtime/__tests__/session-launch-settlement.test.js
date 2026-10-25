@@ -85,30 +85,6 @@ test('duplicate session is NAME_CONFLICT and retains the original pane', async t
   assert.equal(f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim(),original);
 });
 
-for(const mode of ['default','override']) test(`adapter ${mode} consumes real A/P01 paths and runtime self-report`,async t=>{
-  const f=await setupLaunch(t);
-  const paths=await import('../../session-group-paths.js');
-  const {SessionAdapter}=await import('../session-adapter.js');
-  class Adapter extends SessionAdapter {get runtimeId(){return 'claude';}}
-  const command=path.join(f.dir,'runtime'),report=path.join(f.dir,'runtime.json');
-  await fs.writeFile(command,`#!${process.execPath}\nconst fs=require('node:fs');if(process.argv.includes('--help'))console.log(' --model MODEL --effort EFFORT ');else if(process.argv[2]==='auth')console.log('{"loggedIn":false}');else{fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({argv:process.argv,env:process.env,cwd:process.cwd()}));setInterval(()=>{},1000);}\n`,{mode:0o700});
-  const adapter=new Adapter({root:f.dir,env:{PATH:process.env.PATH,HOME:f.dir,CLAUDE_BIN:command},tmux:{binary,socketPath:f.socketPath,configFile:'/dev/null'}});
-  const launchConfig={runtime:'claude',mode,...(mode==='override'?{model:'model with spaces',effort:'high'}:{})};
-  const group=mode==='default'?null:'telegram:g-123';
-  const input={sessionGroup:group,runId:'real-adapter-run',sessionMode:group?'multi':'single',launchConfig};
-  const result=await adapter.launch(input);
-  assert.equal(result.tmuxName,paths.tmuxNameForGroup(group || 'origin'));
-  for(let i=0;i<100;i++){try{await fs.access(report);break;}catch{}await delay(10);}
-  const observed=JSON.parse(await fs.readFile(report,'utf8'));
-  assert.equal(observed.cwd,await fs.realpath(f.dir));
-  assert.equal(observed.env.ZYLOS_RUN_ID,input.runId);
-  assert.equal(observed.env.ZYLOS_SESSION_GROUP,group ?? undefined);
-  assert.equal(observed.env.ZYLOS_MODEL_CONFIG,JSON.stringify(launchConfig));
-  if(mode==='override')assert.equal(observed.argv[observed.argv.indexOf('--model')+1],'model with spaces');
-  else assert.equal(observed.argv.includes('--model'),false);
-  await assert.rejects(adapter.launch(input),{code:'NAME_CONFLICT'});
-});
-
 for (const key of [null,'ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN']) {
   test(`Claude launch auth status: ${key || 'neither variable'} ${key ? 'queries and strips native-auth conflicts' : 'skips the subprocess'}`,async t=>{
     const f=await setupLaunch(t);

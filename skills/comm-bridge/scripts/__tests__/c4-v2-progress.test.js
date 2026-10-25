@@ -1,3 +1,4 @@
+import { fixture as storeFixture, modifiedStore } from './c4-v2-test-helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
@@ -5,8 +6,7 @@ import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
 function fixture(t) {
-  const db = new Database(':memory:'); t.after(() => db.close()); guardDatabase(db, owner);
-  const store = createStore(db, { validateComponent: () => true });
+  const { db, store } = storeFixture(t);
   const seed = (id, group = 'foo', status = 'delivered', direction = 'in') => db.prepare('INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,?,?,?,?,?)').run(id, direction, group, `message ${id}`, status, group);
   const cps = () => db.prepare('SELECT * FROM checkpoints ORDER BY id').all();
   return { db, store, seed, cps };
@@ -92,16 +92,8 @@ test('Origin cursor rejection and trigger failure leave both cursor columns unch
   assert.throws(() => store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id }), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(read(), before);
 });
 test('calibration: DM-22 assertion detects a mutant that blocks on failed input', async t => {
-  const { readFileSync } = await import('node:fs');
-  const absolutize = (source, base) => source.replace(/from '(\.\/[^']+)'/g, (_, path) => `from '${new URL(path, base).href}'`);
-  const progressURL = new URL('../c4-store-progress.js', import.meta.url);
-  const source = readFileSync(progressURL, 'utf8');
-  const needle = "status NOT IN ('delivered','failed','switch_absorbed')";
-  assert.ok(source.includes(needle), 'mutation anchor must exist');
-  const mutant = 'data:text/javascript;base64,' + Buffer.from(absolutize(source.replace(needle, "status NOT IN ('delivered','switch_absorbed')"), progressURL)).toString('base64');
-  const storeURL = new URL('../c4-v2-store.js', import.meta.url);
-  const storeSource = absolutize(readFileSync(storeURL, 'utf8'), storeURL).replace(progressURL.href, mutant);
-  const { createStore: mutatedCreateStore } = await import('data:text/javascript;base64,' + Buffer.from(storeSource).toString('base64'));
+  const mutatedCreateStore = await modifiedStore('c4-store-progress.js',
+    "status NOT IN ('delivered','failed','switch_absorbed')", "status NOT IN ('delivered','switch_absorbed')");
   const { db, store, seed } = fixture(t); seed(9); store.createCheckpoint('foo', 9, 'coverage'); seed(10, 'foo', 'failed'); seed(11);
   const acceptance = candidate => assert.equal(candidate.getDeliveredFrontier('foo'), 11);
   acceptance(store);

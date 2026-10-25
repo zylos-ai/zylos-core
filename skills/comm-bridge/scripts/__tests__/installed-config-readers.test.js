@@ -76,6 +76,8 @@ test('installed read-only consumers work without Core, never invoke npm, and ret
       ['runtime-delivery', 'm.readDeliveryIdentity()'],
       ['status-notice-templates', 'm.messageForStatus({health:"auth_failed"})'],
     ]) {
+      const imported = evaluate(fx, 'await import(' + JSON.stringify(urls[name]) + ');');
+      assert.equal(imported.status, 0, imported.stderr);
       const result = evaluate(fx, 'const m=await import(' + JSON.stringify(urls[name]) + ');' + action);
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /CONFIG_UNREADABLE/);

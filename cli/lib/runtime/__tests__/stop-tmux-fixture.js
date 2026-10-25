@@ -1,7 +1,7 @@
+import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import {execFileSync,spawn} from 'node:child_process';
+import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import assert from 'node:assert/strict';
 import {SessionAdapter} from '../session-adapter.js';
@@ -17,17 +17,21 @@ export async function until(read,check) {
   assert.fail(`Fixture observation did not become ready: ${JSON.stringify(value)}`);
 }
 export async function fixture(t,{origin=true}={}) {
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-tmux-stop-')),socketPath=path.join(dir,'s'),cleanup=[];
-  const binary=process.env.TEST_TMUX_BIN || 'tmux';
-  const command=(...args)=>execFileSync(binary,['-S',socketPath,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:3000}).trim();
-  t.after(async()=>{
-    try { for(const close of cleanup)await close(); }
-    finally { try{command('kill-server')}catch{}await fs.rm(dir,{recursive:true,force:true}); }
-  });
+  const cleanup=[];
+  const {dir,socketPath,binary,tmux:command}=isolatedTmux(t,{prefix:'p02-tmux-stop-',
+    beforeCleanup:async()=>{for(const close of cleanup)await close();}});
   if(origin)command('-f','/dev/null','new-session','-d','-s','origin','-e','ZYLOS_RUN_ID=outside-origin','sleep 60');
   const snapshot=name=>command('display-message','-p','-t',`=${name}:`,'#{session_id}:#{pane_id}:#{pane_pid}:#{ZYLOS_RUN_ID}');
   return {dir,command,snapshot,cleanup,origin:origin?snapshot('origin'):null,
     adapter:new SessionAdapter({dependencies:actualDependencies,tmux:{binary,socketPath,sessionName:origin?'origin':undefined}})};
+}
+export function interceptCommand(f, intercept) {
+  f.adapter.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
+    const connection=await actualDependencies.openTmuxConnection(options);
+    const command=connection.command.bind(connection);
+    connection.command=(args,guard)=>intercept(args,(next=args)=>command(next,guard),connection);
+    return connection;
+  }};
 }
 export async function service(f,key) {
   const file=path.join(f.dir,'heartbeat.json'),script=path.join(f.dir,'service.mjs');

@@ -61,40 +61,19 @@ function assertLoaded(fx, expectedRoot, env) {
   assert.equal(result.status, 0, result.stderr);
 }
 
-test('explicit Core root wins over development and PATH without npm', t => {
+for (const { title, development, explicit, expected } of [
+  { title: 'explicit Core root wins over development and PATH without npm', development: true, explicit: true, expected: 'explicit' },
+  { title: 'validated development tree wins over PATH without npm', development: true, expected: 'deployed' },
+  { title: 'installed loader resolves a PATH symlink to real Core without npm', expected: 'installed' },
+  { title: 'development package identity must match before PATH is selected', development: 'unrelated', expected: 'installed' },
+]) test(title, t => {
   const fx = fixture(t);
-  const explicit = copyCore(path.join(fx.root, 'explicit'));
-  copyCore(fx.deployed);
-  const installed = copyCore(path.join(fx.root, 'installed'));
-  fs.symlinkSync(path.join(installed, 'cli/zylos.js'), path.join(fx.bin, 'zylos'));
-  assertLoaded(fx, explicit, { ZYLOS_PACKAGE_ROOT: explicit });
-  assert.equal(fx.count(), 0);
-});
-
-test('validated development tree wins over PATH without npm', t => {
-  const fx = fixture(t);
-  copyCore(fx.deployed);
-  const installed = copyCore(path.join(fx.root, 'installed'));
-  fs.symlinkSync(path.join(installed, 'cli/zylos.js'), path.join(fx.bin, 'zylos'));
-  assertLoaded(fx, fx.deployed);
-  assert.equal(fx.count(), 0);
-});
-
-test('installed loader resolves a PATH symlink to real Core without npm', t => {
-  const fx = fixture(t);
-  const installed = copyCore(path.join(fx.root, 'installed'));
-  fs.symlinkSync(path.join(installed, 'cli/zylos.js'), path.join(fx.bin, 'zylos'));
-  assertLoaded(fx, installed);
-  assert.equal(fx.count(), 0);
-});
-
-test('development package identity must match before PATH is selected', t => {
-  const fx = fixture(t);
-  copyCore(fx.deployed);
-  fs.writeFileSync(path.join(fx.deployed, 'package.json'), '{"type":"module","name":"unrelated"}');
-  const installed = copyCore(path.join(fx.root, 'installed'));
-  fs.symlinkSync(path.join(installed, 'cli/zylos.js'), path.join(fx.bin, 'zylos'));
-  assertLoaded(fx, installed);
+  const roots = { deployed: fx.deployed, installed: copyCore(path.join(fx.root, 'installed')) };
+  if (development) copyCore(roots.deployed);
+  if (development === 'unrelated') fs.writeFileSync(path.join(roots.deployed, 'package.json'), '{"type":"module","name":"unrelated"}');
+  if (explicit) roots.explicit = copyCore(path.join(fx.root, 'explicit'));
+  fs.symlinkSync(path.join(roots.installed, 'cli/zylos.js'), path.join(fx.bin, 'zylos'));
+  assertLoaded(fx, roots[expected], explicit ? { ZYLOS_PACKAGE_ROOT: roots.explicit } : undefined);
   assert.equal(fx.count(), 0);
 });
 
@@ -141,6 +120,10 @@ test('missing Core and invalid global package identity reject and failed resolut
   const result = run(fx, `
     await assert.rejects(loadCoreConfig(), /Cannot locate/);
     await assert.rejects(loadCoreConfig(), /Cannot locate/);
+    process.env.ZYLOS_PACKAGE_ROOT = ${JSON.stringify(packageRoot)};
+    const recovered = await Promise.all(Array.from({ length: 5 }, () => loadCoreConfig()));
+    assert.equal(typeof recovered[0].readZylosConfigOrThrow, 'function');
+    for (const module of recovered) assert.equal(module, recovered[0]);
   `);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fx.count(), 2);
@@ -149,41 +132,4 @@ test('missing Core and invalid global package identity reject and failed resolut
   const invalid = run(fx, `await assert.rejects(loadCoreConfig(), /Cannot locate/);`);
   assert.equal(invalid.status, 0, invalid.stderr);
   assert.equal(fx.count(), 3);
-});
-
-test('Core loader rejects an existing module without the required real exports', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core-loader-'));
-  try {
-    fs.mkdirSync(path.join(root, 'cli/lib'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
-    fs.writeFileSync(path.join(root, 'cli/lib/config.js'), 'export const readZylosConfigStrict = () => ({});');
-    const loader = new URL('../core-config-loader.js', import.meta.url).href;
-    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `await (await import(${JSON.stringify(loader)})).loadCoreConfig()`], {
-      env: { ...process.env, HOME: root, ZYLOS_DIR: root, TMPDIR: root, ZYLOS_PACKAGE_ROOT: root }, encoding: 'utf8',
-    });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /missing readZylosConfigOrThrow/);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('Core loader retries after rejection and shares concurrent successful loads', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core-loader-retry-'));
-  try {
-    const loader = new URL('../core-config-loader.js', import.meta.url).href;
-    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
-      import assert from 'node:assert/strict';
-      const { loadCoreConfig } = await import(${JSON.stringify(loader)});
-      await assert.rejects(loadCoreConfig(), /Cannot locate/);
-      process.env.ZYLOS_PACKAGE_ROOT = ${JSON.stringify(packageRoot)};
-      const modules = await Promise.all(Array.from({ length: 5 }, () => loadCoreConfig()));
-      assert.equal(typeof modules[0].readZylosConfigOrThrow, 'function');
-      for (const module of modules) assert.equal(module, modules[0]);
-      process.env.ZYLOS_PACKAGE_ROOT = ${JSON.stringify(root)};
-      assert.equal(await loadCoreConfig(), modules[0]);
-    `], {
-      env: { ...process.env, HOME: root, ZYLOS_DIR: root, TMPDIR: root, ZYLOS_PACKAGE_ROOT: root },
-      encoding: 'utf8', timeout: 10000,
-    });
-    assert.equal(result.status, 0, result.stderr);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

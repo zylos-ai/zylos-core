@@ -1,27 +1,17 @@
+import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 
 // tmux passes client stdio descriptors to its server. Killing only the client
 // leaves those pipes open while the server is frozen, keeping Node alive.
 test('connection timeout releases stdio and exits before a frozen server resumes', { timeout: 10000 }, async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-connection-timeout-'));
-  const socketPath = path.join(dir, 'tmux.sock');
-  const binary = process.env.TEST_TMUX_BIN || 'tmux';
-  const tmux = (...args) => execFileSync(binary, ['-S', socketPath, ...args], {
-    encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
   let server, child, exited;
-  t.after(async () => {
+  const {socketPath,binary,tmux}=isolatedTmux(t,{prefix:'p02-connection-timeout-',socketName:'tmux.sock',beforeCleanup:async()=>{
     if (server) try { process.kill(server, 'SIGCONT'); } catch {}
     if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     if (exited) await exited;
-    try { tmux('kill-server'); } catch {}
-    await fs.rm(dir, { recursive: true, force: true });
-  });
+  }});
   tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'keeper', 'sleep', '30');
   server = Number(tmux('display-message', '-p', '#{pid}'));
   process.kill(server, 'SIGSTOP');

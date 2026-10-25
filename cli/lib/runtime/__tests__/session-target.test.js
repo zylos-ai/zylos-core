@@ -1,20 +1,18 @@
+import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 const { openTmuxConnection, serverGeneration } = await import('../tmux-connection.js');
 const { observeSessionTarget, resolveSessionTarget, revalidateSessionTarget, readTargetRuntime } = await import('../session-target.js');
 const binary = process.env.TEST_TMUX_BIN || 'tmux';
 const ready = async () => ({ runId: 'r1', sessionId: 's1', ts: 1, startupControlIds: [] });
 async function fixture(t) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-target-'));
-  const socketPath = path.join(dir, 'tmux.sock');
-  const tmux = (...args) => execFileSync(binary, ['-S', socketPath, ...args], { encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
+  let connection;
+  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'p02-target-',socketName:'tmux.sock',beforeCleanup:()=>connection?.close()});
   tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', '-e', 'ZYLOS_RUN_ID=r1', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', 'sleep', '120');
-  const connection = await openTmuxConnection({ binary, socketPath, sessionName: 'fixture' });
-  t.after(async () => { connection.close(); try { tmux('kill-server'); } catch {} await fs.rm(dir, { recursive: true, force: true }); });
+  connection = await openTmuxConnection({ binary, socketPath, sessionName: 'fixture' });
   return { connection, tmux, socketPath, dir, options: { connection, tmuxName: 'fixture', readReady: ready } };
 }
 test('ordinary commands preserve quoting and leave no retained tmux clients', async t => {

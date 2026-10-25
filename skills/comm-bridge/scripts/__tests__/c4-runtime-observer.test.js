@@ -1,47 +1,28 @@
+import {readyTmuxTarget} from '../../../../test/helpers/ready-tmux-target.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import Database from 'better-sqlite3';
-import * as schema from '../c4-schema.js';
-import { guardDatabase } from '../sqlite-schema.js';
 import { createCoreObserver } from '../c4-runtime-observer.js';
 
 const packageRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 function fixture(t, { runtimeProcess = false } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-observer-'));
+  const f=readyTmuxTarget(t,{prefix:'c4-observer-',runtimeProcess,ledger:false,packageRoot});
   const old = { ZYLOS_DIR: process.env.ZYLOS_DIR, ZYLOS_PACKAGE_ROOT: process.env.ZYLOS_PACKAGE_ROOT };
-  process.env.ZYLOS_DIR = root; process.env.ZYLOS_PACKAGE_ROOT = packageRoot;
-  const socketPath = path.join(root, 'tmux.sock');
-  const tmux = (...args) => execFileSync('tmux', ['-S', socketPath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  const runtime = path.join(root, 'claude');
-  if (runtimeProcess) {
-    fs.writeFileSync(path.join(root, 'fixture.c'), '#include <unistd.h>\nint main(void) { sleep(120); return 0; }\n');
-    execFileSync('cc', [path.join(root, 'fixture.c'), '-o', runtime]);
-  }
-  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'zylos-group-origin',
-    '-e', 'ZYLOS_RUN_ID=run-1', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',
-    runtimeProcess ? runtime : '/bin/sleep', '120');
-  const readyPath = path.join(root, 'activity-monitor/session-groups/origin/current-session.json');
-  fs.mkdirSync(path.dirname(readyPath), { recursive: true });
-  const ready = { runId: 'run-1', sessionId: 'session-1', ts: 1, startupControlIds: [] };
-  fs.writeFileSync(readyPath, JSON.stringify(ready));
-  t.after(() => {
-    try { tmux('kill-server'); } catch {}
-    for (const [key, value] of Object.entries(old)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-  return { root, tmux, readyPath, ready, observer: createCoreObserver({ tmux: { socketPath } }) };
+  process.env.ZYLOS_DIR=f.root;process.env.ZYLOS_PACKAGE_ROOT=packageRoot;
+  t.after(()=>{for(const [key,value] of Object.entries(old)){
+    if(value===undefined)delete process.env[key];else process.env[key]=value;
+  }});
+  return {...f,observer:createCoreObserver({tmux:{socketPath:f.socketPath,binary:f.binary}})};
 }
 
 test('Core module loading retries after failure and caches success', async t => {
-  const { root, tmux, ready } = fixture(t);
+  const { root, tmux, ready, binary } = fixture(t);
   // A fresh module keeps this regression independent of other observer calls.
   const { createCoreObserver: createFreshObserver } = await import('../c4-runtime-observer.js?retry-test');
-  const observer = createFreshObserver({ tmux: { socketPath: path.join(root, 'tmux.sock') } });
+  const observer = createFreshObserver({ tmux: { socketPath: path.join(root, 'tmux.sock'), binary } });
   const incomplete = path.join(root, 'incomplete-core');
   fs.mkdirSync(path.join(incomplete, 'cli/lib'), { recursive: true });
   fs.writeFileSync(path.join(incomplete, 'cli/lib/config.js'), '');
@@ -141,21 +122,7 @@ test('frozen private tmux observation leaves the caller timer responsive', async
 });
 
 for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`production control CLI and builder use real isolated tmux (${mode}, json=${json})`, t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-binding-live-'));
-  const env = { PATH: process.env.PATH, HOME: root, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: packageRoot, TMUX_TMPDIR: root, LANG: 'en_US.UTF-8' };
-  const tmux = (...args) => execFileSync('tmux', args, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  fs.mkdirSync(path.join(root, '.zylos'));
-  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: mode }));
-  fs.mkdirSync(path.join(root, 'comm-bridge'));
-  const db = new Database(path.join(root, 'comm-bridge/c4.db')); guardDatabase(db, schema); db.pragma('journal_mode=WAL');
-  const readyPath = path.join(root, 'activity-monitor/session-groups/origin/current-session.json');
-  fs.mkdirSync(path.dirname(readyPath), { recursive: true });
-  const ready = { runId: 'run-1', sessionId: 'session-1', ts: 1, startupControlIds: [] };
-  fs.writeFileSync(readyPath, JSON.stringify(ready));
-  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'zylos-group-origin',
-    '-e', 'ZYLOS_RUN_ID=run-1', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',
-    ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), '/bin/sleep', '120');
-  t.after(() => { try { tmux('kill-server'); } catch {} db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const {env,tmux,db,readyPath,ready}=readyTmuxTarget(t,{prefix:'c4-binding-live-',mode,packageRoot});
   const args = ['enqueue', '--content', 'fixture control', '--no-ack-suffix', '--target-run', 'run-1', '--expected-runtime', 'claude', '--expected-session', 'session-1', ...(mode === 'multi' ? ['--group', 'origin'] : [])];
   const cli = (extra = [], expected) => {
     const out = spawnSync(process.execPath, [fileURLToPath(new URL('../c4-control.js', import.meta.url)), ...args, ...(json ? ['--json'] : []), ...extra], { env, encoding: 'utf8', timeout: 15000 });
@@ -200,8 +167,8 @@ for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`
 });
 
 for (const phase of ['runtime-process', 'final-revalidation']) test(`post-observation ${phase} command failure maps to TMUX_UNAVAILABLE`, async t => {
-  const {root} = fixture(t);
-  const binary = execFileSync('sh', ['-c', 'command -v tmux'], {encoding:'utf8'}).trim();
+  const {root,binary:requestedBinary} = fixture(t);
+  const binary = execFileSync('sh', ['-c', 'command -v "$1"', 'sh', requestedBinary], {encoding:'utf8'}).trim();
   const wrapper = path.join(root, 'tmux-error-wrapper');
   const count = path.join(root, 'environment-reads');
   // Initial observation uses configured F2. Inject failure only at the later

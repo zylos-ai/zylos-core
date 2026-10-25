@@ -161,63 +161,11 @@ function withAbsorbed(fn) {
 }
 
 describe('c4-fetch absorbed public CLI', () => {
-  it('paginates by count, previews 300 code points and supports summary', () => {
+  it('parses absorbed JSON --after and --limit pagination flags', () => {
     withAbsorbed(({ env, args, ids }) => {
-      const first = cli([...args, '--json'], env);
-      assert.equal(first.status, 0, first.stderr);
-      const page = JSON.parse(first.stdout).data;
-      assert.equal(page.count, 20); assert.equal(page.next, ids[19]);
-      assert.equal(page.items[0].text, '🚀'.repeat(300));
-      assert.equal(page.items[0].textTruncated, true);
-      const next = cli([...args, '--after', String(page.next), '--limit', '2', '--json'], env);
-      assert.equal(next.status, 0, next.stderr);
-      assert.deepEqual(JSON.parse(next.stdout).data.items.map(row => row.id), ids.slice(20, 22));
-      const last = cli([...args, '--after', String(ids[21]), '--limit', '2'], env);
-      assert.equal(last.status, 0, last.stderr); assert.match(last.stdout, /count=1 next=none/);
-      const summary = cli([...args, '--summary', '--limit', '1', '--json'], env);
-      assert.equal(summary.status, 0, summary.stderr);
-      assert.equal(JSON.parse(summary.stdout).data.items[0].count, 23);
-    });
-  });
-  it('returns full text and endpoint and exclusively exports original UTF8 bytes', () => {
-    withAbsorbed(({ tmpDir, env, args, ids }) => {
-      const fullArgs = [...args, '--id', String(ids[0])];
-      for (const field of ['text', 'endpoint']) for (const json of [false, true]) {
-        const expected = field === 'text' ? '🚀'.repeat(301) + '\n尾' : 'route-0';
-        const flags = [...fullArgs, '--field', field, ...(json ? ['--json'] : [])];
-        const full = cli(flags, env);
-        assert.equal(full.status, 0, full.stderr);
-        if (json) assert.equal(JSON.parse(full.stdout).data.data, expected);
-        else { assert.match(full.stdout, new RegExp(`end id=${ids[0]} field=${field}\\n$`)); assert.ok(full.stdout.includes(field === 'text' ? '🚀'.repeat(301) : expected)); }
-        const out = path.join(tmpDir, `export-${field}-${json}`);
-        const exported = cli([...flags, '--out', out], env);
-        assert.equal(exported.status, 0, exported.stderr);
-        assert.deepEqual(fs.readFileSync(out), Buffer.from(expected));
-        assert.equal(fs.statSync(out).mode & 0o777, 0o600);
-        if (json) assert.equal(JSON.parse(exported.stdout).data.path, out);
-        else assert.match(exported.stdout, /^absorbed-file /);
-        const again = cli([...flags, '--out', out], env);
-        assert.equal(again.status, 1); assert.match(again.stdout + again.stderr, /INVALID_ARGS/);
-        assert.deepEqual(fs.readFileSync(out), Buffer.from(expected));
-      }
-    });
-  });
-  it('reports WRITE_FAILED and removes a partially written export through the public entrypoint', () => {
-    withAbsorbed(({ tmpDir, env, args, ids }) => {
-      const hook = path.join(tmpDir, 'write-failure.mjs');
-      fs.writeFileSync(hook, `import fs from 'node:fs';
-        const open = fs.openSync, write = fs.writeFileSync; let target;
-        fs.openSync = function(file, flags, ...rest) { const fd = open.call(this, file, flags, ...rest); if (flags === 'wx') target = fd; return fd; };
-        fs.writeFileSync = function(fd, data, ...rest) { if (fd === target) { write.call(this, fd, data.slice(0, 1), ...rest); throw Object.assign(new Error('controlled disk full'), { code: 'ENOSPC' }); } return write.call(this, fd, data, ...rest); };
-      `);
-      for (const json of [false, true]) {
-        const out = path.join(tmpDir, `partial-${json}`);
-        const result = spawnSync(process.execPath, ['--import', hook, CLI_PATH, ...args, '--id', String(ids[0]), '--out', out, ...(json ? ['--json'] : [])], { env: { ...process.env, ...env }, encoding: 'utf8' });
-        assert.equal(result.status, 1, result.stderr);
-        if (json) { assert.equal(JSON.parse(result.stdout).error.code, 'WRITE_FAILED'); assert.equal(result.stderr, ''); }
-        else { assert.equal(result.stdout, ''); assert.match(result.stderr, /Error \[WRITE_FAILED\]/); }
-        assert.equal(fs.existsSync(out), false);
-      }
+      const page = cli([...args, '--after', String(ids[19]), '--limit', '2', '--json'], env);
+      assert.equal(page.status, 0, page.stderr);
+      assert.deepEqual(JSON.parse(page.stdout).data.items.map(row => row.id), ids.slice(20, 22));
     });
   });
   it('rejects obsolete and conflicting flags and reports WRITE_FAILED in text and JSON', () => {

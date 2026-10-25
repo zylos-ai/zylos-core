@@ -1,14 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import Database from 'better-sqlite3';
-import { guardDatabase } from '../sqlite-schema.js';
-import * as owner from '../c4-schema.js';
-import { createStore } from '../c4-v2-store.js';
+import { fixture } from './c4-v2-test-helpers.js';
 
 test('last activity uses two primary-key reads and follows head id despite backwards timestamps', t => {
-  const trace = [], db = new Database(':memory:', { verbose: sql => trace.push(sql) });
-  t.after(() => db.close()); guardDatabase(db, owner);
-  const s = createStore(db, { validateComponent: () => true });
+  const trace = [];
+  const { db, store: s } = fixture(t, {}, false, { verbose: sql => trace.push(sql) });
   const earlier = s.insertConversation('in', 'foo', 'endpoint', 'first');
   const later = s.insertConversation('in', 'foo', 'endpoint', 'second');
   db.prepare('UPDATE conversations SET timestamp=? WHERE id=?').run('2026-10-23 12:00:00', earlier.id);

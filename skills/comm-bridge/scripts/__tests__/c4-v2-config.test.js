@@ -92,6 +92,7 @@ test('failed paired UPSERT preserves old pair and committed values survive reope
 test('runtime reset preserves all runtime model rows; same-value and repeated reset are idempotent', t => {
   const { store: s } = peerFixture(t);
   for (const runtime of ['claude', 'codex']) s.setSessionModelConfig(pair(runtime, `${runtime}-model`, 'high'));
+  assert.throws(() => s.setSessionRuntimeConfig({ sessionGroup: 'foo:absent', runtime: 'codex' }), { code: 'SESSION_GROUP_NOT_FOUND' });
   assert.equal(s.setSessionRuntimeConfig({ sessionGroup: group, runtime: 'codex' }).changed, true);
   assert.equal(s.setSessionRuntimeConfig({ sessionGroup: group, runtime: 'codex' }).changed, false);
   assert.equal(s.resetSessionRuntimeConfig({ sessionGroup: group }).changed, true);
@@ -115,8 +116,8 @@ test('single uses one F1 read and ignores stored runtime/model overrides; unread
   const { store: s, db } = peerFixture(t, { readConfig: () => { reads++; return { state: 'ok', config: { runtime: 'claude' } }; } });
   s.setSessionRuntimeConfig({ sessionGroup: group, runtime: 'codex' }); s.setSessionModelConfig(pair('codex', 'm', 'high'));
   assert.deepEqual(s.resolveSessionLaunchConfig({ sessionMode: 'single' }), { runtime: 'claude', mode: 'default' }); assert.equal(reads, 1);
-  for (const config of [null, [], { runtime: 'unknown' }, { session_mode: 'broken' }]) {
-    const bad = createStore(db, { readConfig: () => ({ state: 'ok', config }) });
+  for (const result of [{ state: 'error', error: new Error('bad') }, ...[null, [], { runtime: 'unknown' }, { session_mode: 'broken' }].map(config => ({ state: 'ok', config }))]) {
+    const bad = createStore(db, { readConfig: () => result });
     assert.throws(() => bad.resolveSessionLaunchConfig({ sessionMode: 'single' }), { code: 'CONFIG_UNREADABLE' });
   }
 });

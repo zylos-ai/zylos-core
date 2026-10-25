@@ -1,9 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import Database from 'better-sqlite3';
-import { guardDatabase } from '../sqlite-schema.js';
-import * as owner from '../c4-schema.js';
-import { createStore } from '../c4-v2-store.js';
+import { fixture as storeFixture } from './c4-v2-test-helpers.js';
 import { createQueryHandlers, runAbsorbedQuery } from '../c4-v2-cli.js';
 import { escapeText, formatQueryError, formatAbsorbedPage, replyVia } from '../c4-query-format.js';
 import { execFileSync } from 'node:child_process';
@@ -11,8 +8,7 @@ import fs, { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 function fixture(t) {
-  const db = new Database(':memory:'); t.after(() => db.close()); guardDatabase(db, owner);
-  const store = createStore(db, { validateComponent: () => true });
+  const { db, store } = storeFixture(t);
   return { db, store, query: createQueryHandlers(store) };
 }
 function absorb(store, from = 'single', to = 'multi') {
@@ -146,8 +142,8 @@ test('out removes partially written destination on driver write failure', t => {
   assert.throws(() => query.absorbed({ runId, id: row.id, out }), { code: 'WRITE_FAILED' });
   assert.equal(writes, 1); assert.equal(fs.existsSync(out), false);
 });
-test('store mismatch error caps ids at 20 and retains the total before formatting', t => {
-  const { db, store } = fixture(t);
+test('missing and state-changed absorbed rows reject all formats and export before output', t => {
+  const { db, store, query } = fixture(t);
   const rows = Array.from({ length: 35 }, () => store.insertConversation('in', 'foo', 'e', 'x'));
   const runId = absorb(store), badIds = rows.map(row => row.id);
   db.prepare("UPDATE conversations SET status='failed'").run();
@@ -159,13 +155,6 @@ test('store mismatch error caps ids at 20 and retains the total before formattin
     assert.deepEqual(error.ids, badIds.slice(0, 20));
     return true;
   });
-});
-test('missing and state-changed absorbed rows reject all formats and export before output', t => {
-  const { db, store, query } = fixture(t);
-  const rows = Array.from({ length: 35 }, () => store.insertConversation('in', 'foo', 'e', 'x'));
-  const runId = absorb(store), badIds = rows.map(row => row.id);
-  db.prepare("UPDATE conversations SET status='failed'").run();
-  db.prepare('DELETE FROM conversations WHERE id=?').run(rows[3].id);
   const dir = mkdtempSync(join(tmpdir(), 'c4-absorbed-mismatch-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const out = join(dir, 'never-created.txt');

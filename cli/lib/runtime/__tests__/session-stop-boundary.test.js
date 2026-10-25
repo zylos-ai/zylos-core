@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-const {SessionAdapter}=await import(process.env.P02_STOP_ADAPTER_MODULE || new URL('../session-adapter.js',import.meta.url));
+import {SessionAdapter} from '../session-adapter.js';
 const fault=(code,cause='error')=>Object.assign(new Error(code),{code,cause});
 function fixture({present=true,runId='r',openError,revalidateError,killError,confirmError=fault('TARGET_GONE'),confirmation='$1'}={}) {
   const calls=[],target={present,runId,tmuxSessionId:'$1',paneId:'%1',serverGeneration:'10:20'};
@@ -14,8 +14,6 @@ function fixture({present=true,runId='r',openError,revalidateError,killError,con
     revalidateSessionTarget:async options=>{assert.equal(options.connection,connection);assert.equal(options.target,target);
       calls.push(['validate']);if(revalidateError)throw revalidateError;},
   }});
-  // Old-source controls must not enumerate or signal any host process.
-  if(process.env.P02_STOP_ADAPTER_MODULE)adapter.options.findRunProcesses=async()=>[];
   return {adapter,calls,stop:(expectedRunId='r')=>adapter.stop({tmuxName:'name',expectedRunId})};
 }
 test('present keyed and historical-null targets close exact original ID and confirm removal',async()=>{
@@ -26,7 +24,8 @@ test('present keyed and historical-null targets close exact original ID and conf
 });
 test('absent target and explicit no-server succeed for nonempty and null expected run IDs',async()=>{
   for(const expected of ['r',null])for(const options of [{present:false},{openError:fault('TMUX_NO_SERVER')}]){
-    const f=fixture(options);await f.stop(expected);assert.equal(f.calls.some(c=>c[0]==='kill-session'),false);
+    const f=fixture(options),logs=[];f.adapter.options.log=s=>logs.push(s);
+    await f.stop(expected);assert.equal(f.calls.some(c=>c[0]==='kill-session'),false);assert.deepEqual(logs,[]);
   }
 });
 test('run mismatch including null-vs-keyed refuses before revalidation or kill',async()=>{
