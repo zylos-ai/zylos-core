@@ -40,10 +40,10 @@ for(const mode of ['pane-disappears','executor-times-out'])test(`real paste ${mo
   assert.equal(f.snapshot('origin'),f.origin);
 });
 
-test('real paste loads a literal hash-containing TMPDIR without tmux format expansion',async t=>{
+for (const folder of ['literal-#{pid}', 'literal-$HOME', "literal-a$b-quote'-#{pid}"]) test(`real paste loads literal TMPDIR ${folder}`,async t=>{
   const f=await targetFixture(t),previous=process.env.TMPDIR;
   // A harmless format expression would expand to the server PID without escaping.
-  const temp=path.join(f.dir,'literal-#{pid}');await fs.mkdir(temp);
+  const temp=path.join(f.dir,folder);await fs.mkdir(temp);
   process.env.TMPDIR=temp;
   try {
     assert.equal(os.tmpdir(),temp);

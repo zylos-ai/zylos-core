@@ -15,12 +15,24 @@ async function fixture(t) {
   tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', '-e', 'ZYLOS_RUN_ID=r1', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', 'sleep', '120');
   const connection = await openTmuxConnection({ binary, socketPath, sessionName: 'fixture' });
   t.after(async () => { connection.close(); try { tmux('kill-server'); } catch {} await fs.rm(dir, { recursive: true, force: true }); });
-  return { connection, tmux, socketPath, options: { connection, tmuxName: 'fixture', readReady: ready } };
+  return { connection, tmux, socketPath, dir, options: { connection, tmuxName: 'fixture', readReady: ready } };
 }
 test('ordinary commands preserve quoting and leave no retained tmux clients', async t => {
-  const {connection, tmux,options} = await fixture(t);
+  const {connection, tmux,options,dir} = await fixture(t);
   await resolveSessionTarget(options);
-  assert.deepEqual(await Promise.all(["a'b",'semi;colon','$HOME'].map(x => connection.command(['display-message','-p',x]))), ["a'b",'semi;colon','$HOME']);
+  const values = ["a'b", 'semi;colon', '$HOME', 'a$b', '${HOME}', '$0', '~x', '{a}', '%1', 'a"b', '\\x', 'a\\$b', "quote'and$HOME;tail", '中文$NAME'];
+  // tmux 3.4 adds display-only backslashes before named dollars even for
+  // unguarded display-message. Verify the action's actual argument bytes instead.
+  const received = await Promise.all(values.map(async (value, index) => {
+    const buffer = `quoting-${index}`, file = path.join(dir, `bytes-${index}`);
+    await connection.commandBatch([
+      ['set-buffer', '-b', buffer, value],
+      ['save-buffer', '-b', buffer, file],
+      ['delete-buffer', '-b', buffer],
+    ]);
+    return fs.readFile(file, 'utf8');
+  }));
+  assert.deepEqual(received, values);
   assert.match(await serverGeneration(connection), /^\d+:\d+$/);
   assert.equal(tmux('list-clients','-F','#{client_pid}'), '');
   await assert.rejects(connection.command(['display-message','-p','x\ny']), TypeError);

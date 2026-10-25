@@ -31,9 +31,10 @@ export async function fixture(t,{origin=true}={}) {
 }
 export async function service(f,key) {
   const file=path.join(f.dir,'heartbeat.json'),script=path.join(f.dir,'service.mjs');
-  await fs.writeFile(script,`import {writeFileSync} from 'node:fs';import {randomUUID} from 'node:crypto';let tick=0;const signals=[],start=randomUUID();
+  await fs.writeFile(script,`import {writeFileSync,renameSync} from 'node:fs';import {randomUUID} from 'node:crypto';let tick=0;const signals=[],start=randomUUID();
 for(const signal of ['SIGHUP','SIGTERM','SIGINT'])process.on(signal,()=>signals.push(signal));
-const beat=()=>writeFileSync(${JSON.stringify(file)},JSON.stringify({pid:process.pid,start,exe:process.execPath,runId:process.env.ZYLOS_RUN_ID,tick:++tick,signals}));beat();setInterval(beat,20);`);
+// Publish one complete snapshot; readers must never observe a truncated file.
+const beat=()=>{writeFileSync(${JSON.stringify(file+'.tmp')},JSON.stringify({pid:process.pid,start,exe:process.execPath,runId:process.env.ZYLOS_RUN_ID,tick:++tick,signals}));renameSync(${JSON.stringify(file+'.tmp')},${JSON.stringify(file)});};beat();setInterval(beat,20);`);
   const child=spawn(process.execPath,[script],{detached:true,stdio:'ignore',env:{HOME:f.dir,ZYLOS_RUN_ID:key}});
   const exited=once(child,'exit');await once(child,'spawn');
   f.cleanup.push(async()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');await exited});
