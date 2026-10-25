@@ -1,0 +1,25 @@
+Running 2 Node test files
+✔ T02 unavailable alerts at 60 seconds then every thirty minutes, and remains unknown indefinitely (1.886334ms)
+✔ T02 successful observations end the alert episode and a new outage starts its own delay (0.261271ms)
+✔ T02 failed configured alert falls back to Web Console once per interval, including overlapping advances (0.388927ms)
+✔ T02 absent alert target uses Web Console and a failed Web Console target is not duplicated (0.305668ms)
+✔ T02 server outage episodes are independent and other errors are not tmux outages (0.487579ms)
+✔ T02 timeout unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict (2.276813ms)
+✔ T02 error unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict (0.403804ms)
+✔ T02 unavailable occupancy remains unknown after ten minutes without synthetic exits (0.727588ms)
+✔ T02 observed no-server follows absence and clears cached occupancy and alerts (0.396127ms)
+✔ T02 F1 alert target splits at first colon and rejects invalid/control-character destinations (0.28121ms)
+✔ T02 scene observations add no server probes and forwarded failures reach alert timing (0.485893ms)
+✔ T02 a non-tmux group error preserves all occupancy and does not start a server outage (0.350449ms)
+✔ T02 unknown occupancy has one shape after full observation or identity reads (0.428757ms)
+✔ T02 identity-only observation does not manufacture a full occupancy snapshot (0.195284ms)
+✔ T02 one failed socket retains its episode while another socket succeeds (0.502325ms)
+✔ T02 prolonged timeout and command errors never signal or end the real isolated server (367.381245ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 462.031802

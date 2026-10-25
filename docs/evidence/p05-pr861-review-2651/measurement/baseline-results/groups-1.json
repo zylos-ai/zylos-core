@@ -1,0 +1,99 @@
+{
+  "groupCount": 1,
+  "samples": [
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 102.007949,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2,
+        "legacy.tick": 1,
+        "machine.tick": 1,
+        "machine.readOriginState": 1,
+        "afterRound": 1
+      },
+      "logs": []
+    },
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 91.22990699999991,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2,
+        "legacy.tick": 1,
+        "machine.tick": 1,
+        "machine.readOriginState": 1,
+        "afterRound": 1
+      },
+      "logs": []
+    },
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 100.03078299999993,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2,
+        "legacy.tick": 1,
+        "machine.tick": 1,
+        "machine.readOriginState": 1,
+        "afterRound": 1
+      },
+      "logs": []
+    },
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 107.57294999999999,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2,
+        "legacy.tick": 1,
+        "machine.tick": 1,
+        "machine.readOriginState": 1,
+        "afterRound": 1
+      },
+      "logs": []
+    },
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 107.06215599999996,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2,
+        "legacy.tick": 1,
+        "machine.tick": 1,
+        "machine.readOriginState": 1,
+        "afterRound": 1
+      },
+      "logs": []
+    }
+  ],
+  "medianMs": 102.007949,
+  "maxMs": 107.57294999999999,
+  "tmuxVersion": "tmux 3.4",
+  "scope": "startSupervisor actual loop.tick including entry legacy and machine afterRound; injected resolved configuration and empty database, real ready tmux groups/process sampling; no legacy foreground marker; machine tasks disabled/not due at fixed local noon; health event inbox overridden empty; wrapper overhead included"
+}

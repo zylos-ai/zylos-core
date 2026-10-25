@@ -1,0 +1,74 @@
+{
+  "groupCount": 1,
+  "samples": [
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 99.77714299999997,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2
+      }
+    },
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 101.55675900000006,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2
+      }
+    },
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 88.648913,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2
+      }
+    },
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 101.08345499999996,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2
+      }
+    },
+    {
+      "tmuxCalls": 23,
+      "elapsedMs": 108.59688200000005,
+      "counts": {
+        "getModeTransition": 1,
+        "listDrainFences": 1,
+        "requestStore.read": 1,
+        "observe": 1,
+        "observeGroup": 1,
+        "processTree": 1,
+        "readIdentity": 2
+      }
+    }
+  ],
+  "medianMs": 101.08345499999996,
+  "maxMs": 108.59688200000005,
+  "tmuxVersion": "tmux 3.7c",
+  "scope": "createSupervisor composed quiet round including lifecycle, health/status and metrics; synthetic empty database reads, real ready tmux groups and real process sampling; no entry legacy/machine tasks; wrapper overhead included"
+}

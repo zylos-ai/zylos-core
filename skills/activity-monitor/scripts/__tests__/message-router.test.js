@@ -1,178 +1,99 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MessageRouter, messageForRoute, normalizeHealth } from '../message-router.js';
+import { MessageRouter, messageForRoute, validRouteRequest } from '../message-router.js';
+import { normalizeHealth } from '../runtime-health.js';
+import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 
-async function withTmpDir(fn) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'message-router-'));
-  try {
-    return await fn(tmpDir);
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+const request = (overrides = {}) => ({ version: 2, type: 'route', requestId: 'req-1', channel: 'telegram', endpoint: 'ep1',
+  componentName: 'telegram', sessionGroup: 'telegram:one', noReply: false, receivedAt: 1792000000000, ...overrides });
+function fixture(t, overrides = {}) {
+  const cacheDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'route-test-'));
+  t.after(() => fs.rmSync(cacheDirectory, { recursive: true, force: true }));
+  const states = { claude: { health: 'ok', reason: '', scheduling: {} }, codex: { health: 'unavailable', reason: 'heartbeat_timeout', scheduling: {} } };
+  const calls = { probes: [], notify: [], targets: [] };
+  const coordinator = { store: runtime => ({ read: () => states[runtime] }), notifyUserMessage: runtime => { calls.notify.push(runtime); return false; } };
+  const router = new MessageRouter({ healthCoordinator: coordinator, cacheDirectory,
+    resolveTargetRuntime: group => { calls.targets.push(group); return group === 'telegram:two' ? 'codex' : 'claude'; },
+    requestProbe: async runtime => calls.probes.push(runtime), ...overrides });
+  return { router, states, calls, coordinator, cacheDirectory };
+}
+
+test('IB-02 public messages hide internal recovery details and normalize old health', () => {
+  for (const reason of ['tool_timeout_exec', 'sticky_context_restart']) assert.match(messageForRoute({ health: 'unavailable', reason }), /temporarily unavailable/i);
+  assert.equal(normalizeHealth('recovering'), 'unavailable');
+  assert.equal(normalizeHealth('down'), 'unavailable');
+  assert.equal(normalizeHealth('rate_limited'), 'rate_limited');
+});
+test('IB-02 v2 requires all fields; v1 maps target to null', async t => {
+  for (const field of ['componentName', 'sessionGroup', 'channel', 'endpoint', 'receivedAt', 'noReply']) {
+    const input = request(); delete input[field]; assert.equal(validRouteRequest(input), false, field);
   }
-}
-
-function createHealthEngine(overrides = {}) {
-  return {
-    health: 'ok',
-    healthReason: '',
-    lastRecoveryAt: 0,
-    getBackoffDelay: () => 0,
-    notifyUserMessage: () => false,
-    runRecoveryProbe: async () => ({ recovered: false }),
-    ...overrides,
-  };
-}
-
-function routeRequest(overrides = {}) {
-  return {
-    version: 1,
-    type: 'route',
-    requestId: 'req-1',
-    channel: 'lark',
-    endpoint: 'ep1',
-    noReply: false,
-    receivedAt: Date.now(),
-    ...overrides,
-  };
-}
-
-describe('messageForRoute', () => {
-  it('maps public health without exposing internal recovery details', () => {
-    assert.match(messageForRoute({ health: 'unavailable', reason: 'tool_timeout_exec' }), /temporarily unavailable/i);
-    assert.match(messageForRoute({ health: 'unavailable', reason: 'sticky_context_restart' }), /temporarily unavailable/i);
-    assert.match(messageForRoute({ health: 'rate_limited', reason: '' }), /rate-limited/i);
-    assert.match(messageForRoute({ health: 'auth_failed', reason: '' }), /authentication/i);
-  });
+  assert.equal(validRouteRequest(request({ coreSide: true })), false);
+  assert.equal(validRouteRequest(request({ coreSide: true, coreSource: 'scheduler' })), true);
+  assert.equal(validRouteRequest(request({ sessionGroup: '../bad' })), false);
+  const f = fixture(t); const result = await f.router.route(request({ version: 1 }));
+  assert.deepEqual(f.calls.targets, [null]); assert.equal(result.version, 1); assert.equal(result.recovered, true);
 });
-
-describe('normalizeHealth', () => {
-  it('keeps public health states and maps legacy unavailable states', () => {
-    assert.equal(normalizeHealth('ok'), 'ok');
-    assert.equal(normalizeHealth('rate_limited'), 'rate_limited');
-    assert.equal(normalizeHealth('auth_failed'), 'auth_failed');
-    assert.equal(normalizeHealth('recovering'), 'unavailable');
-    assert.equal(normalizeHealth('down'), 'unavailable');
-  });
+test('IB-02 transition holds before target resolution or probe', async t => {
+  const f = fixture(t, { getModeTransition: () => ({ phase: 'gating' }) });
+  const result = await f.router.route(request());
+  assert.equal(result.decision, 'pending'); assert.equal(result.transitionHold, true);
+  assert.deepEqual(f.calls.targets, []); assert.deepEqual(f.calls.probes, []);
 });
-
-describe('MessageRouter route', () => {
-  it('returns recovered=true and clears stale cache when health is ok', async () => {
-    await withTmpDir(async (tmpDir) => {
-      const cacheFile = path.join(tmpDir, 'cache.json');
-      fs.writeFileSync(cacheFile, JSON.stringify({ version: 1 }));
-      const router = new MessageRouter({ healthEngine: createHealthEngine(), cacheFile });
-
-      const decision = await router.route(routeRequest());
-
-      assert.equal(decision.recovered, true);
-      assert.equal(decision.health, 'ok');
-      assert.equal(fs.existsSync(cacheFile), false);
-    });
-  });
-
-  it('calls notifyUserMessage before cache lookup and probes when accelerated', async () => {
-    let notifyCalls = 0;
-    let probeCalls = 0;
-    const engine = createHealthEngine({
-      health: 'rate_limited',
-      healthReason: 'rate_limit_detected',
-      notifyUserMessage: () => {
-        notifyCalls++;
-        return true;
-      },
-      runRecoveryProbe: async () => {
-        probeCalls++;
-        return { recovered: false };
-      },
-    });
-    const router = new MessageRouter({ healthEngine: engine });
-
-    const decision = await router.route(routeRequest());
-
-    assert.equal(notifyCalls, 1);
-    assert.equal(probeCalls, 1);
-    assert.equal(decision.recovered, false);
-    assert.equal(decision.health, 'rate_limited');
-    assert.match(decision.userMessage, /rate-limited/i);
-  });
-
-  it('returns cached negative decisions with current templates without probing', async () => {
-    await withTmpDir(async (tmpDir) => {
-      let probeCalls = 0;
-      const cacheFile = path.join(tmpDir, 'cache.json');
-      const now = 100000;
-      fs.writeFileSync(cacheFile, JSON.stringify({
-        version: 1,
-        health: 'unavailable',
-        reason: 'heartbeat_timeout',
-        recovered: false,
-        userMessage: 'cached message',
-        createdAt: now - 1000,
-        expiresAt: now + 1000,
-        probeStartedAt: now - 1000,
-      }));
-      const router = new MessageRouter({
-        cacheFile,
-        now: () => now,
-        healthEngine: createHealthEngine({
-          health: 'recovering',
-          healthReason: 'heartbeat_timeout',
-          runRecoveryProbe: async () => {
-            probeCalls++;
-            return { recovered: false };
-          },
-        }),
-      });
-
-      const decision = await router.route(routeRequest());
-
-      assert.equal(probeCalls, 0);
-      assert.equal(decision.cacheHit, true);
-      assert.equal(decision.userMessage, messageForRoute({ health: 'unavailable', reason: 'heartbeat_timeout' }));
-    });
-  });
-
-  it('omits userMessage for unhealthy no-reply route decisions', async () => {
-    const router = new MessageRouter({
-      healthEngine: createHealthEngine({
-        health: 'recovering',
-        healthReason: 'heartbeat_timeout',
-      }),
-    });
-
-    const decision = await router.route(routeRequest({ noReply: true }));
-
-    assert.equal(decision.recovered, false);
-    assert.equal(decision.health, 'unavailable');
-    assert.equal(decision.userMessage, undefined);
-  });
-
-  it('joins concurrent probes for the same health and reason', async () => {
-    let probeCalls = 0;
-    let resolveProbe;
-    const probe = new Promise(resolve => { resolveProbe = resolve; });
-    const router = new MessageRouter({
-      healthEngine: createHealthEngine({
-        health: 'recovering',
-        healthReason: 'heartbeat_timeout',
-        notifyUserMessage: () => true,
-        runRecoveryProbe: async () => {
-          probeCalls++;
-          return probe;
-        },
-      }),
-    });
-
-    const first = router.route(routeRequest({ requestId: 'req-1' }));
-    const second = router.route(routeRequest({ requestId: 'req-2' }));
-    resolveProbe({ recovered: false });
-    const decisions = await Promise.all([first, second]);
-
-    assert.equal(probeCalls, 1);
-    assert.equal(decisions[0].recovered, false);
-    assert.equal(decisions[1].recovered, false);
-  });
+test('IB-02 unknown runtime is pending and never borrows a health record', async t => {
+  const f = fixture(t, { resolveTargetRuntime: () => 'unknown' });
+  const result = await f.router.route(request());
+  assert.equal(result.runtime, 'unknown'); assert.equal(result.observation, 'runtime_unknown');
+  assert.equal(result.decision, 'pending'); assert.deepEqual(f.calls.notify, []);
+});
+test('IB-02 rate limit is pending; non-noReply acceleration runs before cache', async t => {
+  const f = fixture(t); f.states.claude.health = 'rate_limited'; f.states.claude.reason = 'rate_limit_detected';
+  f.coordinator.notifyUserMessage = runtime => { assert.equal(runtime, 'claude'); f.calls.notify.push(runtime); return true; };
+  f.router.writeNegativeCache('claude', 'rate_limited', 'rate_limit_detected');
+  const result = await f.router.route(request());
+  assert.deepEqual(f.calls.probes, ['claude']); assert.deepEqual(f.calls.notify, ['claude']);
+  assert.equal(result.decision, 'pending'); assert.equal(result.recovered, true); assert.equal(result.userMessage, undefined);
+});
+test('IB-02 routes share the observer probe per runtime and cache completed failures', async t => {
+  const resolvers = []; const f = fixture(t);
+  const observer = new SupervisorHealthObserver({ coordinator: {
+    restore: runtime => new Promise(resolve => resolvers.push({runtime, resolve: () => resolve(f.states[runtime])})),
+    readNegativeCache: runtime => f.router.readNegativeCache(runtime),
+  }, readMode: () => 'multi', listScenes: () => [] });
+  f.router.requestProbe = runtime => observer.requestProbe(runtime);
+  f.states.claude = { health: 'unavailable', reason: 'heartbeat_timeout', scheduling: {} };
+  const pending = [f.router.route(request()), f.router.route(request({ requestId: '2' })), f.router.route(request({ sessionGroup: 'telegram:two', requestId: '3' }))];
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(resolvers.map(x => x.runtime).sort(), ['claude', 'codex']);
+  resolvers.forEach(x => x.resolve()); await Promise.all(pending);
+  const result = await f.router.route(request());
+  assert.equal(result.cacheHit, true); assert.equal(result.recovered, false); assert.equal(resolvers.length, 2);
+  assert.equal(result.userMessage, messageForRoute({ health: 'unavailable', reason: 'heartbeat_timeout' }));
+});
+test('IB-02 healthy state clears its own cache and noReply never accelerates', async t => {
+  const f = fixture(t); f.router.writeNegativeCache('claude', 'unavailable', 'old'); f.router.writeNegativeCache('codex', 'unavailable', 'heartbeat_timeout');
+  const result = await f.router.route(request()); assert.equal(result.decision, 'pending');
+  assert.equal(fs.existsSync(f.router.cachePath('claude')), false); assert.equal(fs.existsSync(f.router.cachePath('codex')), true);
+  const unavailable = await f.router.route(request({ sessionGroup: 'telegram:two', noReply: true }));
+  assert.equal(unavailable.recovered, false); assert.equal(unavailable.userMessage, undefined); assert.deepEqual(f.calls.notify, []);
+});
+test('IB-02 auth external failures sanitize details; core and channel-less noReply stay pending', async t => {
+  let checks = 0;
+  const f = fixture(t, { checkAuth: () => { checks++; return { status: 'failure', reason: '\u0000bad\n' + 'a'.repeat(600) }; } });
+  f.states.claude.health = 'auth_failed';
+  const result = await f.router.route(request());
+  assert.equal(result.decision, 'auth_rejected'); assert.equal(result.auth.result, 'failed');
+  assert.equal(result.auth.detail.length, 500); assert.doesNotMatch(result.auth.detail, /[\x00-\x1f]/); assert.ok(result.userMessage);
+  assert.equal((await f.router.route(request({ coreSide: true, coreSource: 'scheduler' }))).decision, 'pending');
+  assert.equal((await f.router.route(request({ noReply: true, channel: null, componentName: null }))).decision, 'pending');
+  assert.equal(checks, 1);
+});
+test('IB-02 successful authentication waits for lifecycle release; uncertain is explicit', async t => {
+  const f = fixture(t, { checkAuth: () => ({ status: 'success' }) }); f.states.claude.health = 'auth_failed';
+  assert.equal((await f.router.route(request())).decision, 'pending'); assert.equal(f.states.claude.health, 'auth_failed');
+  f.router.checkAuth = () => ({ status: 'uncertain', reason: 'not confirmed' });
+  assert.equal((await f.router.route(request())).auth.result, 'unconfirmed');
 });
