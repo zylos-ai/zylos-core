@@ -30,8 +30,8 @@ export class SupervisorServerHealth {
     const episode = this.episodes.get(socketKey);
     if (!episode) return { status: 'observable' };
     const now = this.now();
-    // First alert after 60 seconds, then at most once every ten minutes.
-    if (now - episode.since >= 60000 && (episode.lastAlert === null || now - episode.lastAlert >= 600000)) {
+    // First alert after 60 seconds, then at most once every thirty minutes.
+    if (now - episode.since >= 60000 && (episode.lastAlert === null || now - episode.lastAlert >= 1800000)) {
       episode.lastAlert = now;
       await this.notify(`tmux observation has been unavailable for ${Math.floor((now - episode.since) / 1000)} seconds. Sessions remain unconfirmed.`);
     }
