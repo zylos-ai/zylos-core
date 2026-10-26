@@ -3,17 +3,13 @@ import * as database from './c4-db.js';
 import { SKILLS_DIR } from './c4-config.js';
 import { parseSendArgs, sendError } from './c4-send-args.js';
 import { readAbsorbedReply, recordVoid, sendExternal } from './c4-send-external.js';
+import { sendInternal } from './c4-send-internal.js';
 
 async function readStdin() {
   process.stdin.setEncoding('utf8');
   let content = '';
   for await (const chunk of process.stdin) content += chunk;
   return content;
-}
-
-async function sendInternal(args, readBody) {
-  const { sendInternal: handler } = await import('./c4-send-internal.js');
-  return handler(args, readBody);
 }
 
 async function main() {
