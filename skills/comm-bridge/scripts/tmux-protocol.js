@@ -97,9 +97,9 @@ export function parseTmuxEnvironment(text) {
   const result = {};
   let offset = 0;
   while (offset < text.length) {
-    const head = text.slice(offset).match(/^([A-Za-z_][A-Za-z_0-9]*)="/);
+    const head = text.slice(offset).match(/^([^=\n]+)="/);
     if (!head) {
-      const unset = text.slice(offset).match(/^unset ([A-Za-z_][A-Za-z_0-9]*);(?:\n|$)/);
+      const unset = text.slice(offset).match(/^unset ([^=\n]+);(?:\n|$)/);
       if (!unset) throw tmuxError('TMUX_RESPONSE_INVALID', 'Invalid tmux environment record');
       delete result[unset[1]];
       offset += unset[0].length;

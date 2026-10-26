@@ -1,6 +1,7 @@
-import { openTmuxConnection } from '../../../../cli/lib/runtime/tmux-connection.js';
+import { loadCoreModule } from './core-modules.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, isIdentityError, adapterError } from '../tmux-protocol.js';
-import { resolveSessionTarget, revalidateSessionTarget } from '../../../../cli/lib/runtime/session-target.js';
+const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
+const { resolveSessionTarget, revalidateSessionTarget } = await loadCoreModule('runtime/session-target.js');
 import { PeriodicEnter } from '../periodic-enter.js';
 import { sanitizeMessage } from '../c4-utils.js';
 import { findPromptY, isUsageOverlayCapture } from '../tmux-input-state.js';

@@ -1,10 +1,11 @@
+import { loadCoreModule } from './core-modules.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { groupRunDir, legacyRunDir, RUN_FILES, zylosRoot } from '../../../../cli/lib/session-group-paths.js';
-import { buildInstructionFile } from '../../../../cli/lib/runtime/instruction-builder.js';
-import { getSessionAdapter } from '../../../../cli/lib/runtime/index.js';
-import { openTmuxConnection, tmuxError } from '../../../../cli/lib/runtime/tmux-connection.js';
-import { observeSessionTarget } from '../../../../cli/lib/runtime/session-target.js';
+const { groupRunDir, legacyRunDir, RUN_FILES, zylosRoot } = await loadCoreModule('session-group-paths.js');
+const { buildInstructionFile } = await loadCoreModule('runtime/instruction-builder.js');
+const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
+const { openTmuxConnection, tmuxError } = await loadCoreModule('runtime/tmux-connection.js');
+const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
 import { createSinglePreparation, createLegacyMigration } from './resident.js';
 
 // Only stale derived samples and pre-existing lifecycle caches are reset.

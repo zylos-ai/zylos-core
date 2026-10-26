@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
@@ -37,7 +37,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-packed-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    !key.toLowerCase().startsWith('npm_') && !['NODE_PATH', 'NODE_OPTIONS'].includes(key)));
+    !key.toLowerCase().startsWith('npm_') && !['NODE_PATH', 'NODE_OPTIONS', 'ZYLOS_PACKAGE_ROOT'].includes(key)));
   Object.assign(env, { HOME: root, ZYLOS_DIR: path.join(root, 'home-zylos'),
     npm_config_update_notifier: 'false', npm_config_cache: path.join(root, 'npm-cache'), npm_config_userconfig: path.join(root, 'npmrc'),
     npm_config_globalconfig: path.join(root, 'global-npmrc') });
@@ -45,6 +45,8 @@ test('packed global CLI starts without installed skill dependencies', async t =>
   fs.writeFileSync(env.npm_config_globalconfig, '');
   const packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', root],
     { cwd: repo, env, encoding: 'utf8', timeout: 60000 }));
+  assert.deepEqual(packed[0].files.filter(({ path: file }) => file.split('/').includes('node_modules')),
+    [], 'Published package must exclude dependencies installed by pretest');
   const prefix = path.join(root, 'prefix');
   const installed = path.join(prefix, 'lib', 'node_modules', 'zylos');
   fs.mkdirSync(installed, { recursive: true });
@@ -75,4 +77,60 @@ test('packed global CLI starts without installed skill dependencies', async t =>
     assert.equal(response.data.sessionGroup, 'origin');
     assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'comm-bridge', 'c4.db')), true);
   });
+  await t.test('deployed dispatcher loads the installed Core and lazy supervisor client', () => {
+    const skill = path.join(env.ZYLOS_DIR, '.claude', 'skills', 'comm-bridge');
+    fs.cpSync(path.join(installed, 'skills', 'comm-bridge'), skill, { recursive: true });
+    const skillManifest = JSON.parse(fs.readFileSync(path.join(skill, 'package.json'), 'utf8'));
+    for (const name of Object.keys(skillManifest.dependencies || {})) {
+      copyDependency(name, repo, path.join(skill, 'node_modules'));
+    }
+    // This is the deployed skill location, not the package's adjacent copy.
+    assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, '.claude', 'cli')), false);
+    const scripts = path.join(skill, 'scripts');
+    const uri = relative => JSON.stringify(pathToFileURL(path.join(scripts, relative)).href);
+    const probe = path.join(root, 'dispatcher-probe.mjs');
+    fs.writeFileSync(probe, `
+      import assert from 'node:assert/strict';
+      const entry = await import(${uri('c4-dispatcher.js')});
+      assert.equal(typeof entry.main, 'function');
+      const loader = await import(${uri('core-config-loader.js')});
+      const { loadCoreModule } = await import(${uri('router/core-modules.js')});
+      assert.equal(loader.resolveCoreConfigModule(), ${JSON.stringify(path.join(installed, 'cli/lib/config.js'))});
+      assert.equal(await loader.loadCoreConfig(), await loadCoreModule('config.js'));
+      const { createDispatcher } = await import(${uri('router/factory.js')});
+      const events = [];
+      const empty = () => [];
+      const dispatcher = createDispatcher({
+        db: {
+          recoverOrphanRunning: () => ({ requeued: { ids: [] }, ageExpired: { ids: [] }, retryExhausted: { ids: [] } }),
+          listPendingSessionGroups: () => [{ sessionGroup: 'probe', headPriority: 0, headId: 1 }],
+          getNextPending: filter => filter?.sessionGroups?.includes('probe') ? { id: 1, session_group: 'probe' } : null,
+          expirePending: () => false, getDrainFence: () => null,
+          resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
+          expireTimedOutControls: empty, cleanupControlQueue: empty,
+          countNonTerminalControls: () => ({ pending: 0 }),
+        },
+        readSessionMode: () => ({ mode: 'multi' }),
+        listGroupTmuxSessions: async () => [],
+        readLiveIdentity: async () => ({ present: false }),
+        readRuntimeHealth: () => ({ health: 'unavailable' }),
+        diagnostics: { diagnostic: (event, fields) => events.push({ event, ...fields }), maintain() {} },
+        log() {},
+      }, { poolSize: 2 });
+      try {
+        await dispatcher.initialize();
+        for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
+        // The real lazily imported client must reach the isolated missing socket.
+        // A broken import is caught by admission as no_reply, not connect_failed.
+        assert.ok(events.some(event => event.event === 'wait_health' && event.code === 'connect_failed'), JSON.stringify(events));
+      } finally { await dispatcher.stop(); }
+      console.log('dispatcher module graph and lazy client loaded');
+    `);
+    const result = spawnSync(process.execPath, [probe], { cwd: root,
+      env: { ...env, PATH: path.dirname(bin), C4_DISPATCHER_DISABLE_MAIN: '1' },
+      encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 0, result.stdout + result.stderr + (result.error?.message || ''));
+    assert.match(result.stdout, /dispatcher module graph and lazy client loaded/);
+  });
+
 });

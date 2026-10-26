@@ -58,7 +58,8 @@ async function run(selected, env, filename) {
   const fd = fs.openSync(filename, 'wx');
   try {
     active = spawn(process.execPath, ['scripts/run-node-tests.js', ...selected], {
-      cwd: repo, env, stdio: ['ignore', fd, fd],
+      cwd: repo, env: { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS || ''} --test-reporter=tap`.trim() },
+      stdio: ['ignore', fd, fd],
     });
     return await new Promise((resolve, reject) => {
       active.once('error', reject);
