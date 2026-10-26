@@ -151,6 +151,10 @@ export async function addComponent(args) {
 
   // 1. Resolve target
   const resolved = await resolveTarget(target, { branch, file });
+  if (resolved.name === 'internal' || resolved.name === 'void') {
+    fileFlagError('reserved_name', `Component name "${resolved.name}" is reserved for a built-in channel.`);
+    return;
+  }
 
   // Validate: --branch conflicts with explicit @version in target
   // (resolved.version may be auto-populated by fetchLatestTag for registry components)
