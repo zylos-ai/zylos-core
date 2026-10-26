@@ -42,6 +42,7 @@ test('recovery clears current reason while frozen historical notice keeps origin
  verify(recovered);
  const mutant=structuredClone(recovered);const clear=value=>{if(value&&typeof value==='object')for(const key of Object.keys(value)){if(key==='reason')value[key]='';else clear(value[key]);}};clear(mutant);assert.throws(()=>verify(mutant),assert.AssertionError);
  database.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','newer','test','delivered')").run();
+ fs.mkdirSync(path.join(process.env.ZYLOS_DIR,'.claude','skills','fake'),{recursive:true});
  const sent=[];await processFirstFailureNotices({store:rebuilt,database,identity:()=>identity,now:()=>now,zylosDir,
  reserve:(channel,endpoint,route)=>reserveStatusNotice(channel,endpoint,route,{reserve:options=>reserveStatusNoticeCooldown({...options,now:Math.floor(now/1000)},database)}),
  send:async(claim,message,route)=>{sent.push({claim,message,route});return {outcome:'sent'};}});
