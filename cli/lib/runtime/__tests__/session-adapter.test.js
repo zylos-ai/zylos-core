@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { SessionAdapter } from '../session-adapter.js';
-import { buildRuntimeArgs, validateLaunchConfig, writeSessionLaunchScript } from '../session-command.js';
+import { buildRuntimeArgs, validateLaunchConfig, writeSessionLaunchScript, runtimeHelpAsync, hasNativeClaudeAuthAsync } from '../session-command.js';
 import { ClaudeAdapter } from '../claude.js';
 import { CodexAdapter } from '../codex.js';
 
@@ -117,11 +117,89 @@ test('readable runtime absence is false; unreadable and ambiguous remain unavail
   }
 });
 test('isRunning reports deterministic disappearance during observation or process read as false',async()=>{
-  for(const method of ['observeSessionTarget','readTargetRuntime'])for(const code of ['TARGET_GONE','GENERATION_CHANGED']){
+  for(const method of ['observeSessionTarget','readTargetRuntime']){
+    const code='TARGET_GONE';
     const f=fixture();f.dependencies[method]=async()=>{throw error(code)};
     assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}),{tmux:false,process:false});
     assert.deepEqual(f.calls,[['close']]);
   }
+});
+
+test('isRunning cannot infer absence when the server generation changes',async()=>{
+  for(const method of ['observeSessionTarget','readTargetRuntime']){
+    const f=fixture();f.dependencies[method]=async()=>{throw error('GENERATION_CHANGED')};
+    await assert.rejects(f.adapter.isRunning({tmuxName:'x'}),{code:'TMUX_UNAVAILABLE',cause:'error'});
+    assert.deepEqual(f.calls,[['close']]);
+  }
+});
+
+test('runtime help leaves the event loop available and maps execution errors',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'p02-help-'));
+  const command=path.join(root,'runtime');
+  try {
+    await fs.writeFile(command,'#!/bin/sh\nsleep 0.2\nprintf " --model MODEL --effort EFFORT "\n',{mode:0o700});
+    let ticked=false;
+    const timer=setTimeout(()=>{ticked=true;},10);
+    try {
+      assert.match(await runtimeHelpAsync(command),/--model/);
+      assert.equal(ticked,true);
+    } finally {clearTimeout(timer);}
+    await assert.rejects(runtimeHelpAsync(path.join(root,'missing')),{code:'LAUNCH_FAILED',cause:'error'});
+  } finally {await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('native auth status is asynchronous and preserves isolated auth precedence',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'p02-native-auth-'));
+  const command=path.join(root,'runtime');
+  const env={HOME:root,ZYLOS_DIR:root,ANTHROPIC_API_KEY:'synthetic-api',CLAUDE_CODE_OAUTH_TOKEN:'synthetic-token'};
+  const executable=status=>`#!${process.execPath}\nif (process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN || process.argv.slice(2).join(' ') !== 'auth status') process.exit(2);\nsetTimeout(()=>process.stdout.write(${JSON.stringify(JSON.stringify(status))}),100);\n`;
+  try {
+    await fs.writeFile(command,executable({loggedIn:true,authMethod:'claude.ai'}),{mode:0o700});
+    let ticked=false;
+    const timer=setTimeout(()=>{ticked=true;},10);
+    try {
+      assert.equal(await hasNativeClaudeAuthAsync(command,env),true);
+      assert.equal(ticked,true);
+    } finally {clearTimeout(timer);}
+    assert.equal(env.ANTHROPIC_API_KEY,'synthetic-api');
+    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN,'synthetic-token');
+    for(const status of [{loggedIn:false,authMethod:'claude.ai'},{loggedIn:true,authMethod:'api_key'}]){
+      await fs.writeFile(command,executable(status));
+      assert.equal(await hasNativeClaudeAuthAsync(command,env),false);
+    }
+    await fs.writeFile(command,`#!${process.execPath}\nprocess.stdout.write('invalid json');\n`);
+    assert.equal(await hasNativeClaudeAuthAsync(command,env),false);
+    assert.equal(await hasNativeClaudeAuthAsync(path.join(root,'missing'),env),false);
+    await fs.mkdir(path.join(root,'.claude'));
+    await fs.writeFile(path.join(root,'.claude','.credentials.json'),JSON.stringify({claudeAiOauth:{refreshToken:'synthetic-refresh'}}));
+    assert.equal(await hasNativeClaudeAuthAsync(path.join(root,'missing'),env),true);
+    assert.equal(await hasNativeClaudeAuthAsync(path.join(root,'missing'),{...env,CLAUDE_CONFIG_DIR:path.join(root,'other')}),false);
+  } finally {await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('launch awaits runtime help and classifies invalid launch arguments as a launch failure',async()=>{
+  const f=fixture({present:false});
+  f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.adapter.options.runtimeExecutable=()=>'/fake';
+  let queried=false;
+  f.adapter.options.runtimeHelp=async()=>{
+    await new Promise(resolve=>setImmediate(resolve));
+    queried=true;
+    return ' --model MODEL --effort EFFORT ';
+  };
+  const launchConfig={runtime:'claude',mode:'override',model:'test',effort:'high'};
+  for(const input of [
+    {sessionGroup:null,runId:'',sessionMode:'single'},
+    {sessionGroup:null,runId:'r',sessionMode:'invalid'},
+    {sessionGroup:'group',runId:'r',sessionMode:'single'},
+  ]){
+    queried=false;
+    await assert.rejects(f.adapter.launch({...input,launchConfig}),{code:'LAUNCH_FAILED',cause:'error'});
+    assert.equal(queried,true);
+  }
+  f.adapter.options.runtimeHelp=()=>'';
+  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',launchConfig}),{code:'MODEL_CONFIG_REJECTED'});
+  assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
 
 

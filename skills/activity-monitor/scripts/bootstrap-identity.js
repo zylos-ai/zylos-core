@@ -32,7 +32,7 @@ export async function readBootstrapIdentity(scope, { env = process.env, pid = pr
       if (scope.kind !== 'legacy') {
         return { runtime: target.runtime, tmuxName, paneId: target.paneId, runId: target.runId };
       }
-      const panePid = Number((await connection.command(['display-message', '-p', '-t', target.paneId, '#{pane_pid}'])).trim());
+      const panePid = Number((await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.panePid])).trim());
       if (!ancestors.has(panePid)) continue;
       let runtimeProcess;
       for (const row of ancestors.values()) {
@@ -45,3 +45,4 @@ export async function readBootstrapIdentity(scope, { env = process.env, pid = pr
   }
   throw Object.assign(new Error('Hook is not in the current managed runtime pane'), { code: 'IDENTITY_UNAVAILABLE' });
 }
+import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../../comm-bridge/scripts/tmux-protocol.js';

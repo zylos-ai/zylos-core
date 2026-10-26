@@ -45,7 +45,7 @@ test('persistent deployment environment reaches real npm lifecycle through clean
       const processEnv = JSON.parse(fs.readFileSync(deployment, 'utf8'));
       const { env } = buildCleanEnv({ processEnv, dotenvVars: {}, manifest: loadRuntimeEnvManifest(dir) });
       const spec = writeLaunchSpec({ command: process.execPath, args: [npmPath, 'run', '--silent', 'probe'], env, cwd: dir });
-      execFileSync(process.execPath, [launcher, spec], { env: { PATH: path.dirname(process.execPath) }, timeout: 15000 });
+      execFileSync(process.execPath, [launcher, spec], { env: { PATH: path.dirname(process.execPath), HOME: dir, ZYLOS_DIR: path.join(dir, 'zylos') }, timeout: 15000 });
       assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'observed.json'), 'utf8')),
         { registry, binaryHost }, cycle);
       assert.equal(fs.existsSync(spec), false);
@@ -114,7 +114,7 @@ test('persistent source environment reaches CLI through real clean launcher acro
     const launch = (processEnv, selectedManifest = manifest, dotenvVars = {}) => {
       const { env } = buildCleanEnv({ processEnv, dotenvVars, manifest: selectedManifest });
       const spec = writeLaunchSpec({ command: process.execPath, args: [cli, 'upstream', 'status', '--resolved'], env, cwd: dir });
-      return JSON.parse(execFileSync(process.execPath, [launcher, spec], { env: { PATH: path.dirname(process.execPath) }, encoding: 'utf8', timeout: 15000 }));
+      return JSON.parse(execFileSync(process.execPath, [launcher, spec], { env: { PATH: path.dirname(process.execPath), HOME: dir, ZYLOS_DIR: path.join(dir, 'zylos') }, encoding: 'utf8', timeout: 15000 }));
     };
     const assertSource = observed => {
       assert.equal(observed.selectedBy, 'environment');

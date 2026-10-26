@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { buildDiagnosticJson } from '../../commands/doctor.js';
 import { createTmuxSender, parseTmuxVersion, describeTmuxSendKeys, tmuxFailureDetails } from '../../../skills/comm-bridge/scripts/tmux-send-keys.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F, parseLegacyPanePid } from '../runtime/tmux-protocol.js';
 
 for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true], ['3.6a', true], ['3.7c', true], ['3.10', true], ['4.0', true], ['next-3.8', true], ['next-3.9', true]]) {
   test(`tmux ${version} version gate and cached execution`, () => {
@@ -50,7 +51,7 @@ test('runtime paste and trust-prompt key paths use the version-gated sender and 
   for (const version of ['3.3a', '3.7c']) {
     const calls = [];
     const exec = (bin, args, options) => { if (args[0] === '-V') return `tmux ${version}`; calls.push({ args, options }); };
-    const context = vm.createContext({ execFileSync: exec, sendTmuxKeys: createTmuxSender({ exec }).sendKeys });
+    const context = vm.createContext({ execFileSync: exec, sendTmuxKeys: createTmuxSender({ exec }).sendKeys, C, F, parseLegacyPanePid });
     vm.runInContext(source.replace(/^import .*;$/gm, '').replaceAll('export ', ''), context);
     context.tmuxPasteBuffer('agent', '/tmp/input', 'buffer');
     context.tmuxSendKeys('agent', '1', 'Enter');

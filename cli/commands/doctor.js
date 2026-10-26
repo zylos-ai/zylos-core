@@ -25,6 +25,7 @@ import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
 import { resolveCliSession } from '../lib/cli-session.js';
+import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
 
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
@@ -251,7 +252,7 @@ function checkPm2Services() {
 
 function checkTmuxSession(session) {
   try {
-    execFileSync('tmux', ['has-session', '-t', `=${session}`], {
+    execFileSync('tmux', [C.hasSession, '-t', `=${session}`], {
       stdio: 'pipe', timeout: 30000,
     });
     return true;

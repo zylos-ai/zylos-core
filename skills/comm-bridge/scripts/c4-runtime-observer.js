@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from './core-config-loader.js';
+import { isIdentityError, unavailableCommand } from './tmux-protocol.js';
 
 let coreModules;
 function loadCoreRuntime() {
@@ -51,11 +52,11 @@ export function createCoreObserver({ tmux = {} } = {}) {
         tmuxTarget: { serverGeneration: target.serverGeneration, sessionId: target.tmuxSessionId, paneId: target.paneId } };
     } catch (error) {
       if (error.code === 'TMUX_NO_SERVER') return method === 'running' ? { hasProcess: false } : null;
-      if (method === 'target' && ['TARGET_GONE','GENERATION_CHANGED','RUNID_MISMATCH'].includes(error.code)) {
+      if (method === 'target' && isIdentityError(error)) {
         throw Object.assign(new Error('Target identity changed during observation'), {code:'TARGET_NOT_READY'});
       }
       if (error.code === 'TMUX_COMMAND_FAILED') {
-        throw Object.assign(new Error('Cannot inspect tmux target'), { code: 'TMUX_UNAVAILABLE', cause: error.cause || 'error' });
+        throw unavailableCommand(error, 'Cannot inspect tmux target');
       }
       throw error;
     } finally { await connection?.close(); }

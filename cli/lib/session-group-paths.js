@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { encodeGroupCharacters, decodeGroupCharacters } from './session-group-codec.js';
 import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-group.js';
 import { tmuxClientArgs } from './runtime/tmux-client-args.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F, parseGroupSessionRows, groupListNoServer } from './runtime/tmux-protocol.js';
 
 export const GROUP_TMUX_PREFIX = 'zylos-group-';
 export const LEGACY_TMUX_NAMES = Object.freeze(['claude-main', 'codex-main']);
@@ -100,34 +101,17 @@ function execTmuxFile(binary, args, { timeout, ...options }) {
 
 /** One read only; missing tmux binary, permissions and malformed output are errors. */
 export async function listGroupTmuxSessions({ exec = execTmuxFile, socketPath, socketName, binary = 'tmux' } = {}) {
-  const args = [...tmuxClientArgs({ socketPath, socketName }), 'list-sessions', '-F', '#{session_name}\t#{session_created}'];
+  const args = [...tmuxClientArgs({ socketPath, socketName }), C.listSessions, '-F', F.sessions];
   let output;
   try {
     output = await exec(binary, args, { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
-    const stderr = String(error.stderr || '').trim();
     // tmux reports an absent or exited server with these diagnostics. Do not
     // swallow ENOENT (binary missing), timeout, permission or generic I/O errors.
-    if (error.status === 1 && !error.code && (
-      /^no server running on [^\n]+$/.test(stderr) ||
-      /^error connecting to [^\n]+ \(No such file or directory\)$/.test(stderr)
-    )) return [];
+    if (groupListNoServer(error)) return [];
     throw error;
   }
-  const result = [];
-  for (const line of String(output).split('\n')) {
-    if (!line) continue;
-    const [tmuxName, timestamp, ...extra] = line.split('\t');
-    const sessionGroup = groupFromTmuxName(tmuxName);
-    if (sessionGroup === null) continue;
-    if (extra.length || !/^\d+$/.test(timestamp || '') || !Number.isSafeInteger(Number(timestamp))) {
-      const error = new Error('Invalid tmux session creation timestamp');
-      error.code = 'TMUX_RESPONSE_INVALID';
-      throw error;
-    }
-    result.push({ sessionGroup, tmuxName, createdAt: Number(timestamp) });
-  }
-  return result;
+  return parseGroupSessionRows(output, groupFromTmuxName);
 }
 
 export { handoffPath, rulesPath, modeSwitchDir, modeSwitchPreviousDir,

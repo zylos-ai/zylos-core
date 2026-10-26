@@ -19,8 +19,10 @@ test('connection timeout releases stdio and exits before a frozen server resumes
   const source = `
     import assert from 'node:assert/strict';
     import { openTmuxConnection } from ${JSON.stringify(moduleUrl)};
-    await assert.rejects(openTmuxConnection(${JSON.stringify({ socketPath, binary, timeoutMs: 200 })}),
+    const connection = await openTmuxConnection(${JSON.stringify({ socketPath, binary, timeoutMs: 200 })});
+    await assert.rejects(connection.command(['display-message', '-p', '#{pid}:#{start_time}']),
       { code: 'TMUX_UNAVAILABLE', cause: 'timeout' });
+    connection.close();
     console.log('timeout-rejected');
   `;
   const started = performance.now();

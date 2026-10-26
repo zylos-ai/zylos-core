@@ -68,7 +68,7 @@ test('tmux launcher preserves ordinary prompt for available databases and replac
       args: ['-e', 'console.log(process.argv[1])', 'ordinary prompt'],
       promptIndex: 2,
       cwd: root,
-      env: { PATH: process.env.PATH },
+      env: { PATH: process.env.PATH, HOME: root, ZYLOS_DIR: root },
     }));
     const result = spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), specPath], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
@@ -156,7 +156,7 @@ test('throwing trusted discovery still launches runtime with isolated prompt ins
     args: ['-e', 'console.log(process.argv[1]); console.log(process.env.ZYLOS_UPGRADE_PROMPT_DELIVERED || "unset")', 'ordinary prompt'],
     promptIndex: 2,
     cwd: f.root,
-    env: {PATH: process.env.PATH},
+    env: {PATH: process.env.PATH, HOME: f.root, ZYLOS_DIR: f.root},
   }));
   const result = spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), spec], {encoding: 'utf8'});
   assert.equal(result.status, 0, result.stderr);
