@@ -1,26 +1,86 @@
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { after, describe, test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-base-url-'));
+const originalEnv = { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, CODEX_BIN: process.env.CODEX_BIN };
+after(() => {
+  for (const [key, value] of Object.entries(originalEnv)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
 process.env.HOME = tmpRoot;
 process.env.ZYLOS_DIR = path.join(tmpRoot, 'zylos-home');
 fs.mkdirSync(process.env.ZYLOS_DIR, { recursive: true });
 fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.env'), '', 'utf8');
 
 describe('runtime base URL support', () => {
-  test('reports pending migration when the selected runtime has no legacy output', async () => {
-    const { prepareRuntimeInstruction } = await import('../../commands/runtime.js');
-    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-instructions-'));
-    const pending = prepareRuntimeInstruction('codex', { zylosDir });
-    assert.equal(pending.pendingMigration, true);
-    fs.writeFileSync(path.join(zylosDir, 'AGENTS.md'), 'legacy instructions\n');
-    const preserved = prepareRuntimeInstruction('codex', { zylosDir });
-    assert.equal(preserved.pendingMigration, false);
-    fs.rmSync(zylosDir, { recursive: true, force: true });
+  test('P06 C-1: Codex readiness returns objects for missing instructions and valid or invalid real trust', async t => {
+    const { runtimeHooksReady } = await import('../../commands/runtime.js');
+    const { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, hookKeyFor,
+      isCodexTrustValid } = await import('../codex-hooks.js');
+    const { stringify } = await import('smol-toml');
+    const root = process.env.ZYLOS_DIR;
+    const instruction = path.join(root, 'AGENTS.md');
+    const fakeCodex = path.join(tmpRoot, 'codex-version');
+    const version = 'codex-cli 0.142.2';
+    const oldBin = process.env.CODEX_BIN;
+    process.env.CODEX_BIN = fakeCodex;
+    t.after(() => { if (oldBin === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = oldBin; });
+    fs.writeFileSync(fakeCodex, `#!${process.execPath}\nconsole.log(${JSON.stringify(version)});\n`, { mode: 0o755 });
+    const hooksPath = codexHooksPath(root);
+    installCoreCodexHook({ zylosDir: root });
+    fs.writeFileSync(path.join(root, '.codex', 'config.toml'), '[features]\nhooks = true\n');
+    const key = hookKeyFor({ zylosDir: root, event: 'SessionStart', groupIndex: 0, hookIndex: 0 });
+    const trustSnapshot = { [key]: { enabled: true, trusted_hash: 'fixture-current-hash' } };
+    fs.mkdirSync(path.join(tmpRoot, '.codex'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, '.codex', 'config.toml'), stringify({ features: { hooks: true }, hooks: { state: trustSnapshot } }));
+    const marker = { hooksHash: crypto.createHash('sha256').update(fs.readFileSync(hooksPath)).digest('hex'),
+      codexVersion: version, trustSnapshot };
+    fs.writeFileSync(codexTrustMarkerPath(root), JSON.stringify(marker));
+    assert.deepEqual(isCodexTrustValid({ zylosDir: root, homeDir: tmpRoot, codexVersion: version }), { valid: true, reason: 'trusted' });
+    assert.deepEqual(await runtimeHooksReady('codex'), { ready: false, pendingMigration: true });
+    fs.writeFileSync(instruction, '# Fixture instructions\n');
+    assert.deepEqual(await runtimeHooksReady('codex'), { ready: true, pendingMigration: true });
+    fs.writeFileSync(codexTrustMarkerPath(root), JSON.stringify({ ...marker, hooksHash: 'stale' }));
+    assert.deepEqual(await runtimeHooksReady('codex'), { ready: false, pendingMigration: true });
+    fs.rmSync(instruction);
   });
+  test('review P1: readiness checks installed project hooks, and rejects missing/stale hooks (M9)', async t => {
+    const { runtimeHooksReady, executeRuntimeSwitch } = await import('../../commands/runtime.js');
+    const { syncRuntimeHooks } = await import('../sync-runtime-hooks.js');
+    const instruction = path.join(process.env.ZYLOS_DIR, 'CLAUDE.md');
+    const installed = path.join(process.env.ZYLOS_DIR, '.claude', 'settings.json');
+    assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });
+    fs.writeFileSync(instruction, 'legacy instructions\n');
+    syncRuntimeHooks({ zylosDir: process.env.ZYLOS_DIR });
+    const good = fs.readFileSync(installed);
+    const userSettings = path.join(tmpRoot, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(userSettings), { recursive: true });
+    fs.writeFileSync(userSettings, '{broken');
+    assert.deepEqual(await runtimeHooksReady('claude'), { ready: true, pendingMigration: true });
+    let writes = 0;
+    const deps = { read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
+      exists: () => true, adapter: () => ({ checkAuth: () => assert.fail('no-validate must skip auth') }),
+      write: () => { writes++; return { previous: { runtime: 'codex' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: true }; },
+      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }) };
+    assert.equal((await executeRuntimeSwitch('claude', ['--no-validate'], deps)).ok, true);
+    for (const bad of [null, '{}', '{broken']) {
+      if (bad === null) fs.rmSync(installed); else fs.writeFileSync(installed, bad);
+      const result = await executeRuntimeSwitch('claude', ['--no-validate'], deps);
+      assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });
+      assert.equal(result.error.code, 'HOOKS_NOT_READY');
+      assert.deepEqual(result.error.persisted, []);
+    }
+    assert.equal(writes, 1);
+    fs.writeFileSync(installed, good);
+    t.after(() => { fs.rmSync(userSettings, { force: true }); });
+  });
+
 
   test('runtime command exports helpers for base-url parsing and validation', async () => {
     const runtimeModule = await import('../../commands/runtime.js');
@@ -58,47 +118,9 @@ describe('runtime base URL support', () => {
     assert.match(output, /--no-validate/);
   });
 
-  test('checkRuntimeAuthGate skips adapter probe for standalone --no-validate', async () => {
-    const { checkRuntimeAuthGate, parseRuntimeFlags } = await import('../../commands/runtime.js');
-    let checkAuthCalls = 0;
 
-    const result = await checkRuntimeAuthGate(
-      'codex',
-      { checkAuth: async () => { checkAuthCalls++; return { status: 'failure', reason: 'should_not_run' }; } },
-      parseRuntimeFlags(['--no-validate']),
-      { log: () => {}, error: () => {}, exit: () => { throw new Error('exit should not be called'); } }
-    );
 
-    assert.equal(result.skipped, true);
-    assert.equal(checkAuthCalls, 0);
-  });
 
-  test('checkRuntimeAuthGate proceeds only on success and exits for failure or uncertain', async () => {
-    const { checkRuntimeAuthGate, parseRuntimeFlags } = await import('../../commands/runtime.js');
-    const parsed = parseRuntimeFlags([]);
-
-    const success = await checkRuntimeAuthGate(
-      'claude',
-      { checkAuth: async () => ({ status: 'success', reason: 'cli_probe' }) },
-      parsed,
-      { log: () => {}, error: () => {}, exit: () => { throw new Error('exit should not be called'); } }
-    );
-    assert.equal(success.status, 'success');
-
-    for (const status of ['failure', 'uncertain']) {
-      let exitCode = null;
-      await assert.rejects(
-        () => checkRuntimeAuthGate(
-          'claude',
-          { checkAuth: async () => ({ status, reason: `test_${status}` }) },
-          parsed,
-          { log: () => {}, error: () => {}, exit: (code) => { exitCode = code; throw new Error(`exit ${code}`); } }
-        ),
-        /exit 2/
-      );
-      assert.equal(exitCode, 2);
-    }
-  });
 
   test('validateRuntimeFlags rejects invalid saved base URL values', async () => {
     const { validateRuntimeFlags } = await import('../../commands/runtime.js');

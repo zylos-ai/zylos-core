@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'node:url';
+import { bootstrapScope } from './bootstrap-scope.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -81,7 +82,7 @@ function readStdinSource() {
 
 const prompt = [
   'reply to your human partner if they are waiting for your reply,',
-  'then continue your ongoing tasks using the startup memory and C4 context already injected in this session,',
+  'then continue your ongoing tasks using the injected core context and C4 context; read the supplied handoff and working-memory paths on demand before resuming work,',
   'and do not query c4.db for recent conversations unless explicitly required.'
 ].join(' ');
 
@@ -120,8 +121,11 @@ export async function enqueueStartupPrompt(source, {
   childTimeoutMs = DEFAULT_CHILD_TIMEOUT_MS,
   onboardingPending = isOnboardingPending,
   migrationPending = isMigrationPending,
+  scopeReader = bootstrapScope,
 } = {}) {
-  if (onboardingPending()) return { skipped: true, reason: 'onboarding_pending' };
+  if (!['startup', 'clear'].includes(source)) return { skipped: true, reason: 'source', startupControlIds: [] };
+  if (onboardingPending()) return { skipped: true, reason: 'onboarding_pending', startupControlIds: [] };
+  const scope = await scopeReader();
 
   const activePrompt = migrationPending() ? migrationPrompt : prompt;
 
@@ -130,16 +134,20 @@ export async function enqueueStartupPrompt(source, {
   // orchestrator's per-step withTimeout budget can actually preempt it.
   // The child's own timeout + SIGKILL remains the hard backstop (bounds the
   // #601-class enqueue hang even if the orchestrator budget is generous).
-  await execFile('node', [
+  const result = await execFile('node', [
     controlPath, 'enqueue',
     '--content', activePrompt,
     '--priority', '2',
-    '--no-ack-suffix'
+    '--no-ack-suffix', '--json',
+    ...(scope.sessionGroup ? ['--group', scope.sessionGroup] : []),
   ], {
     timeout: childTimeoutMs,
     killSignal: 'SIGKILL',
   });
-  return { skipped: false, migration: activePrompt === migrationPrompt };
+  const receipt = JSON.parse(result.stdout);
+  const id = receipt.id ?? receipt.data?.id;
+  if (receipt.ok === false || !Number.isSafeInteger(id) || id <= 0) throw new Error('Startup control did not return a valid id');
+  return { skipped: false, migration: activePrompt === migrationPrompt, startupControlIds: [id] };
 }
 
 async function main() {

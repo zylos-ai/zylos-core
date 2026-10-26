@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { fixture } from './c4-v2-test-helpers.js';
 const databaseModule = import.meta.resolve('better-sqlite3');
 const storeModule = new URL('../c4-v2-store.js', import.meta.url).href;
+
 function worker(filename, code) {
   return spawn(process.execPath, ['--input-type=module', '-e', `
     import Database from ${JSON.stringify(databaseModule)};

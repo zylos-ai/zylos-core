@@ -76,7 +76,7 @@ test('tmux launcher preserves ordinary prompt for available databases and replac
   }
 });
 
-test('C4 checkpoint hook reads normal context after READY but isolates blocked recovery', t => {
+test('C4 delivered-tail hook reads normal context after READY but isolates blocked recovery', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-c4-context-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const stable = path.join(root, '.zylos/upgrade');
@@ -91,16 +91,18 @@ test('C4 checkpoint hook reads normal context after READY but isolates blocked r
   fs.writeFileSync(path.join(scripts, 'c4-diagnostic.js'), 'export function logHookTiming() {}\n');
   fs.writeFileSync(path.join(scripts, 'session-format.js'), 'export const formatSection = (label, text) => label + ": " + text;\n');
   fs.writeFileSync(path.join(registry, 'shard-registry.js'), 'export const withinBudget = () => true;\n');
-  fs.writeFileSync(path.join(scripts, 'c4-db.js'), 'export const getLastCheckpoint = () => ({summary: "ordinary checkpoint"}); export function close() {}\n');
+  fs.writeFileSync(path.join(registry, 'bootstrap-identity.js'), 'export const isSubsession = () => false;\n');
+  fs.writeFileSync(path.join(registry, 'bootstrap-scope.js'), `export const bootstrapScope = () => ({mode:'single',scope:'*',root:${JSON.stringify(root)},memoryDir:${JSON.stringify(path.join(root, 'memory'))}});\n`);
+  fs.writeFileSync(path.join(scripts, 'c4-db.js'), 'export const getGlobalCoverageEnd = () => 0; export const getGlobalDeliveredSince = () => [{content: "ordinary delivered message"}]; export const formatConversationsForAgent = rows => rows.map(row => row.content).join("\\n"); export function close() {}\n');
   for (const blocked of [false, true]) {
     fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `exports.bootstrap = () => ({active: true, blocked: ${blocked}, prompt: 'isolated recovery'});\n`);
     fs.chmodSync(path.join(stable, 'bootstrap.cjs'), 0o600);
     const runner = path.join(root, 'runner.js');
-    fs.writeFileSync(runner, 'import {emitC4Checkpoint} from "./skills/comm-bridge/scripts/c4-session-init.js"; console.log(await emitC4Checkpoint());\n');
+    fs.writeFileSync(runner, 'import {emitC4Conversations} from "./skills/comm-bridge/scripts/c4-session-init.js"; console.log(await emitC4Conversations());\n');
     const result = spawnSync(process.execPath, [runner], {encoding: 'utf8', env: {ZYLOS_DIR: root, PATH: process.env.PATH}});
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, blocked ? /UPGRADE RECOVERY TASK/ : /ordinary checkpoint/);
-    if (blocked) assert.doesNotMatch(result.stdout, /ordinary checkpoint/);
+    assert.match(result.stdout, blocked ? /UPGRADE RECOVERY TASK/ : /ordinary delivered message/);
+    if (blocked) assert.doesNotMatch(result.stdout, /ordinary delivered message|Working memory/);
     else assert.match(result.stdout, /UPGRADE RECOVERY TASK/);
   }
 });
@@ -164,14 +166,14 @@ test('throwing trusted discovery still launches runtime with isolated prompt ins
   assert.doesNotMatch(result.stdout, /ordinary prompt/);
 });
 
-test('each new session receives one recovery cue across C4 shards despite a stale runtime flag', t => {
+test('direct delivered-tail export receives recovery before scope loading despite a stale runtime flag', t => {
   const f = stableFixture(t, 'exports.bootstrap = () => {throw Error("discovery unavailable");};\n');
   const scripts = path.join(f.root, 'hook');
   fs.mkdirSync(scripts);
   fs.writeFileSync(path.join(f.root, 'package.json'), '{"type":"module"}');
   fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'), path.join(scripts, 'c4-session-init.js'));
   const runner = path.join(f.root, 'runner.js');
-  fs.writeFileSync(runner, 'import {emitC4Checkpoint,emitC4Conversations} from "./hook/c4-session-init.js"; console.log(await emitC4Checkpoint()); console.log(await emitC4Conversations());\n');
+  fs.writeFileSync(runner, 'import {emitC4Conversations} from "./hook/c4-session-init.js"; console.log(await emitC4Conversations(undefined, null, {scopeReader: () => {throw Error("scope must not load during recovery");}}));\n');
   for (const delivered of [false, true]) {
     const result = spawnSync(process.execPath, [runner], {encoding: 'utf8', env: {
       ZYLOS_DIR: f.root, PATH: process.env.PATH,

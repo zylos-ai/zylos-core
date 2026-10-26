@@ -12,6 +12,7 @@ const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'health-check', 'scripts', '__tests__'),
   path.join(ROOT, 'skills', 'comm-bridge', 'scripts', '__tests__'),
   path.join(ROOT, 'skills', 'scheduler', 'scripts', '__tests__'),
+  path.join(ROOT, 'skills', 'zylos-memory', 'scripts', 'tests'),
 ];
 
 function walk(dir, files = []) {
@@ -35,6 +36,7 @@ function isNodeTest(file) {
   if (rel.startsWith('skills/health-check/scripts/__tests__/')) return true;
   if (rel.startsWith('skills/comm-bridge/scripts/__tests__/')) return true;
   if (rel.startsWith('skills/scheduler/scripts/__tests__/')) return true;
+  if (rel.startsWith('skills/zylos-memory/scripts/tests/')) return true;
   return false;
 }
 
