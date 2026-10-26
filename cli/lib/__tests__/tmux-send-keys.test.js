@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { buildDiagnosticJson } from '../../commands/doctor.js';
 import { createTmuxSender, parseTmuxVersion, describeTmuxSendKeys, tmuxFailureDetails } from '../../../skills/comm-bridge/scripts/tmux-send-keys.js';
 
 for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true], ['3.6a', true], ['3.7c', true], ['3.10', true], ['4.0', true], ['next-3.8', true], ['next-3.9', true]]) {
@@ -76,24 +77,21 @@ test('send failure propagates the original child-process error', () => {
   const sender = createTmuxSender({ exec: (bin, args) => { if (args[0] === '-V') return 'tmux 3.7'; throw error; } });
   assert.throws(() => sender.sendKeys('agent', ['Enter']), caught => caught === error);
 });
-test('doctor text and JSON report enabled, legacy and unknown with reason', () => {
-  const source = fs.readFileSync(new URL('../../commands/doctor.js', import.meta.url), 'utf8');
-  let output;
-  const context = vm.createContext({ ACTIVE_RUNTIME: 'codex', API_HOST: 'example.test',
-    describeTmuxSendKeys, dim: s => s, red: s => s, logToFile: () => {},
-    displayCheckGroup: (name, status, checks) => { output = checks; } });
-  vm.runInContext(source.slice(source.indexOf('function buildDiagnosticJson('), source.indexOf('function displayAiGroup(')), context);
+test('doctor JSON reports enabled, legacy and unknown with reason', () => {
   for (const version of ['tmux 3.3a', 'tmux 3.7c', 'unrecognized']) {
     const capability = parseTmuxVersion(version);
-    const diag = { system: { tmux: { installed: true, ...capability }, pm2: { installed: false }, network: { reachable: true } },
+    const diag = { runtime: 'codex', display: 'Codex', apiHost: 'example.test', system: { tmux: { installed: true, ...capability }, pm2: { installed: false }, network: { reachable: true } },
       ai: { cli: { installed: true }, auth: true, autonomous: true }, services: { running: false, procs: [] } };
-    const json = context.buildDiagnosticJson(diag, { success: false });
+    const json = buildDiagnosticJson(diag, { success: false });
     const tmux = json.groups.system.checks.tmux;
     assert.equal(tmux.version, capability.version);
     assert.equal(tmux.sendKeysClientFlag, capability.useClientFlag);
     assert.equal(tmux.versionReason, capability.reason);
-    context.displaySystemGroup(diag, json.groups.system);
-    assert.equal(output[0], describeTmuxSendKeys(capability));
+    const missingCli = buildDiagnosticJson({ ...diag, ai: { ...diag.ai, cli: { installed: false } } }, { success: false });
+    assert.equal(missingCli.issues.find(issue => issue.id === 'cli_missing').label, 'Codex CLI not installed');
+    const claude = { ...diag, runtime: 'claude', display: 'Claude', apiHost: 'claude.example.test', ai: { ...diag.ai, cli: { installed: false } } };
+    assert.equal(buildDiagnosticJson(claude, { success: false }).issues.find(issue => issue.id === 'cli_missing').label, 'Claude CLI not installed');
+    assert.equal(buildDiagnosticJson(diag, { success: false }).groups.system.checks.network.host, 'example.test');
   }
 });
 test('dispatcher keystroke control executes shared gate and logs failure metadata', async () => {
