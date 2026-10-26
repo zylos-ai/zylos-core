@@ -108,7 +108,12 @@ test('Codex trust failure rejects launch before any tmux/runtime launch', async 
   const f = fixture(t);
   const calls = baseLaunch(t);
   f.env.FAKE_CODEX_FAIL = '1';
-  await assert.rejects(f.adapter.launch(launchArgs), /trust failed/i);
+  await assert.rejects(f.adapter.launch(launchArgs), error => {
+    assert.equal(error.code, 'LAUNCH_FAILED');
+    assert.match(error.message, /trust failed/i);
+    assert.ok(error.cause instanceof Error);
+    return true;
+  });
   assert.equal(calls.length, 0);
   assert.equal(fs.existsSync(codexTrustMarkerPath(f.root)), false);
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure']);
