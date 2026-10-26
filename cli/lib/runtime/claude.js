@@ -78,8 +78,10 @@ async function ensureOnboardingComplete(projectDir, env) {
     let project = path.resolve(projectDir);
     try { project = await fs.promises.realpath(project); } catch { /* Keep confirmation repair best-effort if realpath is unavailable. */ }
     if (!config.projects[project] || typeof config.projects[project] !== 'object' || Array.isArray(config.projects[project])) config.projects[project] = {};
-    fill(config.projects[project], 'hasTrustDialogAccepted', true);
-    fill(config.projects[project], 'hasCompletedProjectOnboarding', true);
+    if (config.projects[project].hasTrustDialogAccepted !== true) {
+      fill(config.projects[project], 'hasTrustDialogAccepted', true);
+      fill(config.projects[project], 'hasCompletedProjectOnboarding', true);
+    }
     if (changed) fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
   } catch { /* First-confirmation repair must not prevent launch. */ }
 

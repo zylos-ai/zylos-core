@@ -35,7 +35,7 @@ function fixture(t) {
   return { home, root, config, settings, files, write, launch, adapter };
 }
 
-for (const state of ['missing', 'false']) for (const missing of ['onboarding', 'trust', 'project-onboarding', 'permission']) {
+for (const state of ['missing', 'false']) for (const missing of ['onboarding', 'trust', 'permission']) {
   test(`Claude launch repairs ${state} ${missing} during launch`, async t => {
     const f = fixture(t);
     const unset = (object, key) => { if (state === 'missing') delete object[key]; else object[key] = false; };
@@ -44,8 +44,10 @@ for (const state of ['missing', 'false']) for (const missing of ['onboarding', '
       unset(f.config, 'effortCalloutDismissed');
       if (state === 'missing') delete f.config.lastOnboardingVersion;
     }
-    if (missing === 'trust') unset(f.config.projects[f.root], 'hasTrustDialogAccepted');
-    if (missing === 'project-onboarding') unset(f.config.projects[f.root], 'hasCompletedProjectOnboarding');
+    if (missing === 'trust') {
+      unset(f.config.projects[f.root], 'hasTrustDialogAccepted');
+      unset(f.config.projects[f.root], 'hasCompletedProjectOnboarding');
+    }
     if (missing === 'permission') unset(f.settings, 'skipDangerousModePermissionPrompt');
     f.write();
     await f.launch();
@@ -62,6 +64,18 @@ for (const state of ['missing', 'false']) for (const missing of ['onboarding', '
     assert.equal(config.projects[f.root].userProjectKey, 'keep');
     assert.deepEqual(settings.mcpServers, f.settings.mcpServers);
     assert.equal(settings.userSettingsKey, 'keep');
+  });
+}
+
+for (const state of ['missing', 'false']) {
+  test(`Claude launch leaves all true confirmations byte-identical with ${state} project-onboarding`, async t => {
+    const f = fixture(t);
+    if (state === 'missing') delete f.config.projects[f.root].hasCompletedProjectOnboarding;
+    else f.config.projects[f.root].hasCompletedProjectOnboarding = false;
+    f.write();
+    const before = Object.fromEntries(Object.entries(f.files).map(([name, file]) => [name, fs.readFileSync(file)]));
+    await f.launch();
+    for (const [name, file] of Object.entries(f.files)) assert.deepEqual(fs.readFileSync(file), before[name]);
   });
 }
 
