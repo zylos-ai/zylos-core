@@ -177,8 +177,7 @@ test('P06 2.2: both-runtime preparation preserves unrelated hook identity', () =
   for (const groups of Object.values(desired)) for (const group of groups) for (const hook of group.hooks) {
     assert.ok(hook.command.startsWith('node /isolated-instance/.claude/'), hook.command);
   }
-  const failed = syncCodexConfig({ cfg: { runtime: 'claude' },
-    projectDir: '/isolated-instance', existsSync: () => false,
+  const failed = syncCodexConfig({ projectDir: '/isolated-instance',
     readFileSync: () => 'malformed toml [', log: () => {}, writeConfig: () => false });
   assert.equal(failed.fatal, true);
 });
@@ -186,6 +185,14 @@ test('P06 2.2: both-runtime preparation preserves unrelated hook identity', () =
 test('P06 2.2/2.11: init hook sync generates both runtime assets idempotently without restart', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-hook-sync-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  });
   const settingsPath = path.join(root, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   const userHook = { type: 'command', command: 'node /user/custom-hook.js' };
@@ -203,6 +210,7 @@ test('P06 2.2/2.11: init hook sync generates both runtime assets idempotently wi
   assert.deepEqual([fs.readFileSync(settingsPath, 'utf8'), fs.readFileSync(codexPath, 'utf8')], before);
   assert.equal(fs.existsSync(path.join(root, 'comm-bridge', 'c4.db')), false);
   assert.equal(fs.existsSync(path.join(root, '.zylos', 'config.json')), false);
+  assert.match(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8'), /trust_level/);
 });
 
 test('P06 2.11: init hook sync preserves unreadable settings and reports failure before Codex generation', t => {

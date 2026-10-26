@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { readWorkMemory, parseReadWorkMemoryArgs } from '../read-work-memory.js';
 import { appendInbox } from '../../../skills/zylos-memory/scripts/memory-append.js';
 
-// P07 parser integration is deliberately unverified: this is a consumer fixture.
+// Most cases inject a parser to isolate the snapshot contract; one uses P07 below.
 const lockModule = new URL('../../../skills/zylos-memory/scripts/sync-lock.js', import.meta.url).href;
 const { withMemoryLock } = await import(lockModule);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -62,6 +62,28 @@ test('IF-22: malformed header retains body and includes all segments in ID order
   assert.deepEqual(result.data.segments.map(part => part.id), [id1, id2]);
   assert.match(result.data.text, /captured state/);
   assert.equal(result.data.warnings.length, 1);
+});
+
+test('IF-22/P07: installed real parser validates scope and excludes only committed segments', async t => {
+  const f = fixture(t);
+  const scripts = path.join(f.root, '.claude', 'skills', 'zylos-memory', 'scripts');
+  fs.mkdirSync(path.dirname(scripts), { recursive: true });
+  fs.symlinkSync(new URL('../../../skills/zylos-memory/scripts', import.meta.url).pathname, scripts, 'dir');
+  const header = scope => `<!-- zylos-state v1 | scope=${scope} | synced_at=2026-10-19T09:30:00Z | coverage=42 | inbox_committed=${id1} -->\nCaptured real state\n`;
+  const statePath = path.join(f.memory, 'state.md');
+  fs.writeFileSync(statePath, header('origin'));
+  const result = await readWorkMemory({ env: f.env });
+  assert.equal(result.data.state.valid, true);
+  assert.equal(result.data.state.scope, 'origin');
+  assert.equal(result.data.state.coverage, 42);
+  assert.deepEqual(result.data.state.inboxCommitted, [id1]);
+  assert.deepEqual(result.data.segments.map(part => part.id), [id2]);
+  assert.deepEqual(result.data.warnings, []);
+  fs.writeFileSync(statePath, header('lark:other'));
+  const wrongScope = await readWorkMemory({ env: f.env });
+  assert.equal(wrongScope.data.state.valid, false);
+  assert.deepEqual(wrongScope.data.segments.map(part => part.id), [id1, id2]);
+  assert.equal(wrongScope.data.warnings.length, 1);
 });
 
 test('IF-22: rotate/commit waits until capture releases F8; output uses its original snapshot', async t => {

@@ -121,6 +121,8 @@ describe('emitCustomInject', () => {
       await assert.rejects(emitCustomInject({ env }), { code: 'SCOPE_INVALID' });
       fs.writeFileSync(${JSON.stringify(configFile)}, '{broken');
       await assert.rejects(emitCustomInject({ env: { ZYLOS_DIR: process.env.ZYLOS_DIR } }), { code: 'CONFIG_UNREADABLE' });
+      fs.writeFileSync(${JSON.stringify(configFile)}, JSON.stringify({ session_mode: 'bogus' }));
+      await assert.rejects(emitCustomInject({ env: { ZYLOS_DIR: process.env.ZYLOS_DIR } }), { code: 'CONFIG_UNREADABLE' });
       process.stdout.write(result);
     `;
     const result = execFileSync(process.execPath, ['--input-type=module', '-e', source],
