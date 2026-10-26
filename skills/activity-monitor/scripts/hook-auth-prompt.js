@@ -43,9 +43,6 @@ export async function approvePermission(hookData, {
     throw Object.assign(new Error('auto_approve_permission must be boolean'), { code: 'CONFIG_UNREADABLE' });
   }
   if (config.auto_approve_permission === false) return { skipped: true, reason: 'disabled' };
-  let launchConfig;
-  try { launchConfig = JSON.parse(env.ZYLOS_MODEL_CONFIG); } catch { /* No F1 fallback. */ }
-  if (launchConfig?.runtime !== 'claude') return { skipped: true, reason: 'runtime_unconfirmed' };
   scopeReader ??= (await import('./bootstrap-scope.js')).bootstrapScope;
   const scope = await scopeReader(env);
   exec('node', [

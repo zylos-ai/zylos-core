@@ -626,14 +626,8 @@ export async function enqueueRestartIfNeeded({
         return { submitted: false, code: 'deadline_exceeded', sent: false, category: 'T', persisted: [] };
       }
       const request = { version: 1, type: 'restart_all', requestId: requestId(), reason: 'upgrade' };
-      let outcome;
-      try {
-        outcome = await submitRestart(request, { deadlineAt: deadline, replyMaxMs: 10000,
-          socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock') });
-      } catch {
-        // An unexpected client error cannot prove that nothing reached M4.
-        outcome = { kind: 'no_reply', sent: true };
-      }
+      const outcome = await submitRestart(request, { deadlineAt: deadline, replyMaxMs: 10000,
+        socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock') });
       const kind = outcome.kind;
       if (['accepted', 'rejected'].includes(kind)) {
         if (kind === 'accepted') {
@@ -660,7 +654,6 @@ export async function enqueueRestartIfNeeded({
       let lookup = 'unknown';
       try { lookup = await lookupRestart(request.requestId, { deadlineAt: deadline }); }
       catch { /* Preserve uncertainty when the readback itself fails. */ }
-      if (!['accepted', 'done', 'unknown', 'deadline_exceeded'].includes(lookup)) lookup = 'unknown';
       errorLog(`Settings hooks: restart result uncertain (${kind || 'invalid_reply'}); lookup: ${lookup}; no resubmission.`);
       return { submitted: ['accepted', 'done'].includes(lookup) ? true : null,
         requestId: request.requestId, code: kind || 'invalid_reply', sent: true, category: 'U', persisted: null, lookup };
@@ -795,9 +788,6 @@ export function syncRuntimeHooks({
 
   console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
 
-  // Enqueue restart when hooks changed — this runs from the NEWLY installed
-  // package during upgrade (via resolveInstalledSyncScript), so it works even
-  // when the calling component.js is an older version without restart logic.
   return { ...result, changed: true };
 }
 

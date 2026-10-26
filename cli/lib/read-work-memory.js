@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { runDirFromEnv, groupMemoryDir, zylosRoot } from './session-group-paths.js';
+import { runDirFromEnv, groupMemoryDir, groupRunDir, zylosRoot } from './session-group-paths.js';
+import { withMemoryLock as memoryLock } from '../../skills/zylos-memory/scripts/sync-lock.js';
 
 const OUTPUT_LIMIT = 32 * 1024;
 const segmentName = /^inbox\.(\d{8}T\d{9}Z(?:-[1-9]\d*)?)\.md$/;
@@ -28,7 +29,7 @@ export function parseReadWorkMemoryArgs(argv) {
 /** Capture once under F8; formatting and temporary output happen after release. */
 export async function readWorkMemory({
   env = process.env, timeoutMs = 10000, json = true,
-  withMemoryLock, parseStateHeader, now = Date.now,
+  withMemoryLock = memoryLock, parseStateHeader, now = Date.now,
   readFile = fs.readFileSync, listFiles = fs.readdirSync,
   writeFile = fs.writeFileSync, temporaryDir = env.TMPDIR || os.tmpdir(),
 } = {}) {
@@ -42,16 +43,14 @@ export async function readWorkMemory({
     memoryDir = run.sessionGroup ? groupMemoryDir(run.sessionGroup, env) : path.join(zylosRoot(env), 'memory');
   } catch (cause) { throw fail('SCOPE_INVALID', cause.message); }
   try {
-    withMemoryLock ??= (await import('../../skills/zylos-memory/scripts/sync-lock.js')).withMemoryLock;
     parseStateHeader ??= (await import(pathToFileURL(path.join(zylosRoot(env), '.claude', 'skills', 'zylos-memory', 'scripts', 'state-format.js')).href)).parseStateHeader;
-    if (typeof withMemoryLock !== 'function' || typeof parseStateHeader !== 'function') throw Error('Required memory reader dependency is unavailable');
   } catch (cause) { throw fail('READ_FAILED', `Memory reader dependency unavailable: ${cause.message}`, ['dependencies']); }
   checkBudget();
   const waitMs = Math.min(8000, deadline - now() - 2000);
   if (waitMs < 0) throw fail('LOCK_TIMEOUT', 'Insufficient budget to wait for memory lock');
   let captured;
   try {
-    captured = await withMemoryLock(run.dir, () => {
+    captured = await withMemoryLock(groupRunDir(run.sessionGroup || 'origin', env), () => {
       const read = (file, part, optional = false) => {
         checkBudget();
         try { return Buffer.from(readFile(file)); }

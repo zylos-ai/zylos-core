@@ -7,6 +7,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
 import { readWorkMemory, parseReadWorkMemoryArgs } from '../read-work-memory.js';
+import { appendInbox } from '../../../skills/zylos-memory/scripts/memory-append.js';
 
 // P07 parser integration is deliberately unverified: this is a consumer fixture.
 const lockModule = new URL('../../../skills/zylos-memory/scripts/sync-lock.js', import.meta.url).href;
@@ -80,6 +81,32 @@ test('IF-22: rotate/commit waits until capture releases F8; output uses its orig
   assert.match(result.data.text, /current inbox/);
   assert.match(result.data.text, /second segment/);
   assert.doesNotMatch(result.data.text, /new committed state/);
+});
+
+test('IF-22: legacy reads and legacy inbox appends contend on the same F8', async t => {
+  const f = fixture(t, false);
+  delete f.env.ZYLOS_RUN_ID;
+  let signalHeld, release;
+  const held = new Promise(resolve => { signalHeld = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const reader = readWorkMemory({ ...f.options,
+    withMemoryLock: (dir, action, options) => withMemoryLock(dir, async () => {
+      signalHeld(); await gate; return action();
+    }, options),
+  });
+  const before = fs.readFileSync(path.join(f.memory, 'inbox.md'));
+  let snapshot;
+  try {
+    await Promise.race([held, reader.then(() => assert.fail('reader did not hold F8'))]);
+    await assert.rejects(appendInbox({ kind: 'fact', content: 'blocked', env: f.env, waitMs: 50 }), { code: 'LOCK_TIMEOUT' });
+    assert.deepEqual(fs.readFileSync(path.join(f.memory, 'inbox.md')), before);
+  } finally { release(); snapshot = await reader; }
+  assert.equal(snapshot.data.scope, '*');
+  assert.equal(snapshot.data.inbox.sha256, sha(before));
+  const appended = await appendInbox({ kind: 'fact', content: 'after release', env: f.env });
+  assert.equal(appended.path, path.join(f.memory, 'inbox.md'));
+  assert.match(fs.readFileSync(appended.path, 'utf8'), /fact: after release/);
+  assert.doesNotMatch(snapshot.data.text, /after release/);
 });
 
 test('IF-22: large UTF-8 output spills the same captured bytes after unlocking', async t => {
