@@ -3,12 +3,12 @@ import { createLane } from './lane.js';
 import { createActivationManager } from './activation.js';
 import { initializeRouter } from './startup.js';
 import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
-  CONTROL_CLEANUP_INTERVAL_MS, CONTROL_RETENTION_DAYS } from '../c4-config.js';
+  CONTROL_CLEANUP_INTERVAL_MS, CONTROL_RETENTION_DAYS, READY_TIMEOUT_MS } from '../c4-config.js';
 
-/** Injectable router entry; the production dispatcher is connected separately.
+/** Shared router entry for the production dispatcher and isolated tests.
  * All DB calls use the shared store. Terminal I/O lives in the supplied delivery
  * functions, which settle their claimed row only after all callbacks finish.
- * readyTimeoutMs is mandatory until real-runtime measurements set a default. */
+ * The shared READY default can be overridden by isolated tests. */
 export function createRouter(dependencies, configuration = {}) {
   const required = ['readSessionMode','readLiveIdentity','readCurrentSession','listGroupTmuxSessions','readRuntimeHealth',
     'getSessionAdapter','submit','deliverControl','deliverConversation','handleExpired','prepareSingle','findLegacySessions','advanceLegacy'];
@@ -16,8 +16,8 @@ export function createRouter(dependencies, configuration = {}) {
   if (!dependencies.db) throw new TypeError('Router database is required');
   const options = { pendingMaxAgeSeconds: PENDING_MAX_AGE_SECONDS, recoverMaxAgeSeconds: RECOVER_MAX_AGE_SECONDS,
     maxRetries: MAX_RETRIES, cleanupIntervalMs: CONTROL_CLEANUP_INTERVAL_MS, retentionDays: CONTROL_RETENTION_DAYS,
-    diagnosticsIntervalMs: 60000, mismatchIntervalMs: 60000, pollIntervalMs: 1000, ...configuration };
-  for (const name of ['readyTimeoutMs','poolSize','pendingMaxAgeSeconds','recoverMaxAgeSeconds']) {
+    readyTimeoutMs: READY_TIMEOUT_MS, diagnosticsIntervalMs: 60000, mismatchIntervalMs: 60000, pollIntervalMs: 1000, ...configuration };
+  for (const name of ['readyTimeoutMs','poolSize','pendingMaxAgeSeconds','recoverMaxAgeSeconds','diagnosticsIntervalMs']) {
     if (!Number.isSafeInteger(options[name]) || options[name] <= 0) throw new TypeError(`${name} must be a positive integer`);
   }
   const deps = dependencies;
@@ -179,7 +179,6 @@ export function createRouter(dependencies, configuration = {}) {
     state.stopped = true; clearInterval(timer); timer = null;
     for (const current of state.lanes.values()) current.stop();
     await Promise.allSettled([...tasks]);
-    await deps.flushDiagnostics?.();
   }
   return { initialize, start, tick, stop, state, availableCapacity: context.availableCapacity,
     async idle() { await Promise.allSettled([...tasks]); } };

@@ -1,57 +1,11 @@
 import assert from 'node:assert/strict';
-import { describe, it, after } from 'node:test';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-
-import {
-  DELIVERY_DELAY_BASE,
-  DELIVERY_DELAY_PER_KB,
-  DELIVERY_DELAY_MAX
-} from '../c4-config.js';
-
-// Set ZYLOS_DIR to a temp dir BEFORE importing the dispatcher so the DB
-// initialises in an isolated location and the background main() loop is harmless.
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-disp-test-'));
-const origZylosDir = process.env.ZYLOS_DIR;
-const origDisableMain = process.env.C4_DISPATCHER_DISABLE_MAIN;
-process.env.ZYLOS_DIR = tmpDir;
-process.env.C4_DISPATCHER_DISABLE_MAIN = '1';
-
-const cacheBuster = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-const mod = await import(new URL(`../c4-dispatcher.js?${cacheBuster}`, import.meta.url));
-
-const {
-  sanitizeMessage,
-  getDeliveryDelay,
-  getClaudeInputBoxText,
-  checkClaudeFallbackInputBox,
-  findPromptY,
-  isUsageOverlayCapture,
-  isBypassState,
-  isKeystrokeControl,
-  parseKeystrokeKey,
-  isCodexExitLifecycleControl,
-  getHeartbeatPhase,
-  isRecoveryHeartbeatPhase,
-  shouldAutoAckHeartbeat,
-  readJsonFileWithRetry,
-  getDeliveryContent
-} = mod;
-
-after(() => {
-  if (origZylosDir === undefined) {
-    delete process.env.ZYLOS_DIR;
-  } else {
-    process.env.ZYLOS_DIR = origZylosDir;
-  }
-  if (origDisableMain === undefined) {
-    delete process.env.C4_DISPATCHER_DISABLE_MAIN;
-  } else {
-    process.env.C4_DISPATCHER_DISABLE_MAIN = origDisableMain;
-  }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
+import { describe, it } from 'node:test';
+import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX } from '../c4-config.js';
+import { sanitizeMessage } from '../c4-utils.js';
+import { findPromptY, isUsageOverlayCapture } from '../tmux-input-state.js';
+import { getDeliveryDelay, getClaudeInputBoxText, checkClaudeFallbackInputBox,
+  isBypassState, isKeystrokeControl, parseKeystrokeKey, isCodexExitLifecycleControl,
+  getHeartbeatPhase, isRecoveryHeartbeatPhase, shouldAutoAckHeartbeat } from '../router/delivery.js';
 
 // ── sanitizeMessage ─────────────────────────────────────────────────
 
@@ -400,83 +354,6 @@ describe('shouldAutoAckHeartbeat', () => {
       procState: { alive: true, frozen: true, lastDelta: 0 },
       confirmedActive: false
     }), false);
-  });
-});
-
-describe('readJsonFileWithRetry', () => {
-  it('parses valid JSON from disk', () => {
-    const file = path.join(tmpDir, 'status.json');
-    fs.writeFileSync(file, '{"health":"ok"}');
-    assert.deepStrictEqual(readJsonFileWithRetry(file), { health: 'ok' });
-  });
-
-  it('throws after exhausting retries on invalid JSON', () => {
-    const file = path.join(tmpDir, 'broken.json');
-    fs.writeFileSync(file, '{"health":');
-    assert.throws(() => readJsonFileWithRetry(file, 2), /Unexpected end of JSON input|JSON/);
-  });
-});
-
-// ── getDeliveryContent ─────────────────────────────────────────────
-
-describe('getDeliveryContent', () => {
-  it('adds reply routing for conversation items with endpoints', () => {
-    const result = getDeliveryContent({
-      type: 'conversation',
-      channel: 'telegram',
-      endpoint_id: '123',
-      content: 'hello'
-    });
-
-    assert.ok(result.startsWith('hello ---- reply via: node'));
-    assert.ok(result.includes('"telegram" "123"'));
-  });
-
-  it('does not add reply routing for conversation items without endpoints', () => {
-    assert.equal(getDeliveryContent({
-      type: 'conversation',
-      channel: 'system',
-      endpoint_id: null,
-      content: 'system note'
-    }), 'system note');
-  });
-
-  it('does not duplicate legacy reply routing', () => {
-    const legacy = 'hello ---- reply via: node /tmp/c4-send.js "telegram" "123"';
-    assert.equal(getDeliveryContent({
-      type: 'conversation',
-      channel: 'telegram',
-      endpoint_id: '123',
-      content: legacy
-    }), legacy);
-  });
-
-  it('adds reply routing when ordinary content only mentions the marker text', () => {
-    const content = 'Please inspect the literal marker ---- reply via: in this paragraph.';
-    const result = getDeliveryContent({
-      type: 'conversation',
-      channel: 'telegram',
-      endpoint_id: '123',
-      content
-    });
-
-    assert.ok(result.startsWith(content));
-    assert.ok(result.includes(' ---- reply via: node'));
-    assert.equal((result.match(/reply via:/g) || []).length, 2);
-  });
-
-  it('prefixes non-slash control messages', () => {
-    assert.equal(getDeliveryContent({
-      type: 'control',
-      content: 'Heartbeat check'
-    }), 'Meanwhile, Heartbeat check');
-  });
-
-  it('preserves slash control commands verbatim', () => {
-    assert.equal(getDeliveryContent({
-      type: 'control',
-      content: '/exit'
-    }), '/exit');
   });
 });
 
