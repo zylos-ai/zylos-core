@@ -13,7 +13,12 @@ const repo = fileURLToPath(new URL('../../../', import.meta.url));
 // complete node_modules: that would mask accidental imports of skill packages.
 function copyDependency(name, fromPackage, targetModules) {
   const require = createRequire(path.join(fromPackage, 'package.json'));
-  let source = path.dirname(require.resolve(name));
+  // Prefer the package manifest so npm packages named like Node built-ins
+  // (for example buffer) are copied instead of resolving the built-in module.
+  let entry;
+  try { entry = require.resolve(`${name}/package.json`); }
+  catch { entry = require.resolve(name); }
+  let source = path.dirname(entry);
   while (!fs.existsSync(path.join(source, 'package.json')) ||
     JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8')).name !== name) {
     const parent = path.dirname(source);
@@ -49,11 +54,11 @@ test('packed global CLI starts without installed skill dependencies', async t =>
   for (const skill of fs.readdirSync(path.join(installed, 'skills'))) {
     assert.equal(fs.existsSync(path.join(installed, 'skills', skill, 'node_modules')), false, skill);
   }
-  assert.throws(() => createRequire(path.join(installed, 'package.json')).resolve('better-sqlite3'),
-    { code: 'MODULE_NOT_FOUND' });
   const bin = path.join(prefix, 'bin', 'zylos');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.symlinkSync(path.join(installed, manifest.bin.zylos), bin);
+  fs.mkdirSync(path.join(env.ZYLOS_DIR, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(env.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', session: { mode: 'single' } }));
   for (const args of [['--version'], ['init', '--help']]) {
     await t.test(`zylos ${args.join(' ')}`, () => {
       const result = spawnSync(process.execPath, [bin, ...args], { cwd: root, env, encoding: 'utf8', timeout: 10000 });
@@ -61,4 +66,13 @@ test('packed global CLI starts without installed skill dependencies', async t =>
       assert.match(result.stdout, args[0] === '--version' ? new RegExp(manifest.version.replaceAll('.', '\\.')) : /Usage:.*zylos init/);
     });
   }
+  await t.test('zylos group runtime get reads the isolated database', () => {
+    const result = spawnSync(process.execPath, [bin, 'group', 'runtime', 'get', '--group', 'origin', '--json'],
+      { cwd: root, env, encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 0, result.stdout || result.stderr || result.error?.message);
+    const response = JSON.parse(result.stdout);
+    assert.equal(response.ok, true);
+    assert.equal(response.data.sessionGroup, 'origin');
+    assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'comm-bridge', 'c4.db')), true);
+  });
 });
