@@ -55,11 +55,11 @@ test('T02 tools pause no-response; real completion resumes accumulated time',asy
   const f=fixture(t);f.observer.resolveToolRule=()=>null;f.delivered();f.advance(590000);await f.observer.tick();f.setState({tools:[{id:'tool',startedAt:f.now(),name:'Bash'}]});await f.observer.tick();f.advance(500000);await f.observer.tick();f.setState({tools:[]});await f.observer.tick();assert.equal(f.stops.length,0);f.advance(10000);await f.observer.tick();assert.equal(f.events.at(-1).event,'no_response_detected');
 });
 test('T02 sticky needs distinct delivered checks over 30 seconds and a delivered miss resets',async t=>{
-  const f=fixture(t);f.delivered();f.setMatches({apiError:{detected:true}});await f.observer.tick();
-  f.advance(29000);f.delivered();await f.observer.tick();assert.equal(f.stops.length,0);
-  f.advance(1);f.setMatches({});f.delivered();await f.observer.tick();
-  f.advance(1);f.setMatches({apiError:{detected:true}});f.delivered();await f.observer.tick();
-  f.advance(30000);f.delivered();await f.observer.tick();assert.equal(f.events[0].event,'sticky_context_restart');assert.equal(f.health().health,'ok');
+  const f=fixture(t);f.delivered();f.setMatches({apiError:{detected:true}});f.advance(5000);await f.observer.tick();
+  f.advance(24000);f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.stops.length,0);
+  f.advance(1);f.setMatches({});f.delivered();f.advance(5000);await f.observer.tick();
+  f.advance(1);f.setMatches({apiError:{detected:true}});f.delivered();f.advance(5000);await f.observer.tick();
+  f.advance(25000);f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.events[0].event,'sticky_context_restart');assert.equal(f.health().health,'ok');
 });
 test('T02 transition and accepted Origin manual request suppress pending health kills',async t=>{
   const f=fixture(t);f.setScenes([{...f.scene(),sessionGroup:'origin'}]);f.delivered({pastedAt:f.now()-601000});f.setTransition({phase:'gating'});await f.observer.tick();assert.equal(f.stops.length,0);f.setTransition(null);f.setManual(true);await f.observer.tick();assert.equal(f.stops.length,0);f.setManual(false);await f.observer.tick();assert.equal(f.stops.length,1);
@@ -71,10 +71,10 @@ test('T02 freeze requires active tool and unchanged known context switches for 6
   const f=fixture(t);f.observer.resolveToolRule=()=>null;f.setState({tools:[{id:'one'}],contextSwitches:10});await f.observer.tick();f.advance(59000);await f.observer.tick();assert.equal(f.stops.length,0);f.setState({tools:[{id:'one'}],contextSwitches:11});await f.observer.tick();f.advance(60000);await f.observer.tick();assert.equal(f.events[0].event,'process_frozen');assert.equal(f.health().health,'ok');
 });
 test('T02 pane rate needs two delivered hits and auth requires failed checkAuth',async t=>{
-  const f=fixture(t);f.delivered();f.setMatches({rateLimit:{detected:true}});await f.observer.tick();assert.equal(f.health().health,'ok');
-  f.advance(1);f.delivered();await f.observer.tick();assert.equal(f.health().health,'rate_limited');
-  f.setHealth('ok');f.setMatches({authFailure:{detected:true}});f.setAuth({status:'uncertain'});f.advance(1);f.delivered();await f.observer.tick();assert.equal(f.health().health,'ok');
-  f.setAuth({status:'failure'});f.advance(1);f.delivered();await f.observer.tick();assert.equal(f.health().health,'auth_failed');
+  const f=fixture(t);f.delivered();f.setMatches({rateLimit:{detected:true}});f.advance(5000);await f.observer.tick();assert.equal(f.health().health,'ok');
+  f.advance(1);f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.health().health,'rate_limited');
+  f.setHealth('ok');f.setMatches({authFailure:{detected:true}});f.setAuth({status:'uncertain'});f.advance(1);f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.health().health,'ok');
+  f.setAuth({status:'failure'});f.advance(1);f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.health().health,'auth_failed');
 });
 
 test('IF-32 committed control remains single-flight when subsequent health budget write fails',async t=>{
@@ -97,8 +97,8 @@ test('T02 unordered hook verification keeps baseline on-demand check even while 
 test('T02 successful recovery suppresses its unchanged error pane without suppressing another session',async t=>{
   const f=fixture(t);f.setHealth('rate_limited');f.observer.readScreen=()=> 'old limit pane';f.setMatches({rateLimit:{detected:true}});
   const p=f.observer.requestProbe('claude');await f.prepared();f.controls[0].status='done';await f.observer.tick();await p;
-  f.delivered();await f.observer.tick();await f.observer.tick();assert.equal(f.health().health,'ok');
-  f.setScenes([{...f.scene(),sessionId:'different-session',runId:randomUUID()}]);f.delivered();await f.observer.tick();f.advance(1);f.delivered();await f.observer.tick();assert.equal(f.health().health,'rate_limited');
+  f.delivered();f.advance(5000);await f.observer.tick();await f.observer.tick();assert.equal(f.health().health,'ok');
+  f.setScenes([{...f.scene(),sessionId:'different-session',runId:randomUUID()}]);f.delivered();f.advance(5000);await f.observer.tick();f.advance(1);f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.health().health,'rate_limited');
 });
 
 test('T01 shutdown: blocked probe preparation cannot queue a control after stop',async t=>{
@@ -125,7 +125,7 @@ test('R10 one delivery with persistent API text never becomes a sticky restart o
   const f=fixture(t);let captures=0,matches=0;
   f.observer.readScreen=()=>{captures++;return 'invalid_request_error';};
   f.observer.matchScreen=()=>{matches++;return {apiError:{detected:true}};};
-  f.delivered();await f.observer.tick();
+  f.delivered();f.advance(5000);await f.observer.tick();
   f.advance(30000);await f.observer.tick();f.advance(30000);await f.observer.tick();
   assert.equal(f.stops.length,0);assert.equal(captures,1);assert.equal(matches,1);
 });
@@ -136,7 +136,7 @@ test('R10 no new delivery means no repeated capture or authentication check',asy
   f.setMatches({authFailure:{detected:true}});
   f.observer.checkAuth=()=>{authChecks++;return {status:'uncertain'};};
   await f.observer.tick();assert.equal(captures,0);assert.equal(authChecks,0);
-  const pastedAt=f.now();f.delivered();await f.observer.tick();
+  const pastedAt=f.now();f.delivered();f.advance(5000);await f.observer.tick();
   for(let i=0;i<3;i++){f.advance(1000);f.delivered({pastedAt});await f.observer.tick();}
   assert.equal(captures,1);assert.equal(authChecks,1);
 });
@@ -154,7 +154,18 @@ test('R10 a new delivery during capture remains pending for its own screen check
   const entered=new Promise(resolve=>{started=resolve;});
   const screen=new Promise(resolve=>{release=resolve;});
   f.observer.readScreen=()=>{captures++;if(captures===1){started();return screen;}return '';};
-  f.delivered();const first=f.observer.tick();await entered;
+  f.delivered();f.advance(5000);const first=f.observer.tick();await entered;
   f.advance(1);f.delivered();release('');await first;
-  await f.observer.tick();await f.observer.tick();assert.equal(captures,2);assert.equal(f.stops.length,0);
+  await f.observer.tick();assert.equal(captures,1);
+  f.advance(5000);await f.observer.tick();await f.observer.tick();assert.equal(captures,2);assert.equal(f.stops.length,0);
+});
+
+
+test('R10 screen check waits five seconds after paste and is consumed only once',async t=>{
+  const f=fixture(t);let captures=0;
+  f.observer.readScreen=()=>{captures++;return '';};
+  f.delivered();await f.observer.tick();assert.equal(captures,0);
+  f.advance(4999);await f.observer.tick();assert.equal(captures,0);
+  f.advance(1);await f.observer.tick();assert.equal(captures,1);
+  f.advance(10000);await f.observer.tick();assert.equal(captures,1);
 });

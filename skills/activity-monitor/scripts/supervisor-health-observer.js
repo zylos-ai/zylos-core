@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { recoveryEligibility } from './runtime-health.js';
 
+const USER_MESSAGE_CHECK_DELAY_MS = 5000;
 const TERMINAL = new Set(['done', 'failed', 'timeout', 'cancelled', 'superseded']);
 const fingerprint = text => createHash('sha256').update(String(text ?? '')).digest('hex');
 const sameRun = (a, b) => Boolean(a && b && a.runtime === b.runtime && a.runId && a.runId === b.runId);
@@ -175,7 +176,7 @@ export class SupervisorHealthObserver {
       if (!delivery.responded && await this.readMode() === 'multi' && delivery.elapsed >= 600000) {
         if (await this.stopScene(scene,'no_response_detected')) {tracked.delivery = null;return;}
       }
-      if (!delivery.screenChecked && await this.checkDeliveredScreen(scene, tracked, delivery, state, now)) return;
+      if (!delivery.screenChecked && now - delivery.pastedAt >= USER_MESSAGE_CHECK_DELAY_MS && await this.checkDeliveredScreen(scene, tracked, delivery, state, now)) return;
     }
     if (!tools.length) {tracked.frozen=null;tracked.watchdog=null;return;}
     if (Number.isFinite(state.contextSwitches)) {
