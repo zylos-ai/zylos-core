@@ -24,7 +24,6 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
 import { getZylosConfig, readSessionMode, updateZylosConfigLocked } from './config.js';
-import { submit, lookupRestartRequest } from './am-sock-client.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 import {
@@ -609,8 +608,8 @@ export async function enqueueRestartIfNeeded({
   zylosDir = ZYLOS_DIR,
   log = console.log,
   errorLog = console.error,
-  submitRestart = submit,
-  lookupRestart = lookupRestartRequest,
+  submitRestart = async (...args) => (await import('./am-sock-client.js')).submit(...args),
+  lookupRestart = async (...args) => (await import('./am-sock-client.js')).lookupRestartRequest(...args),
   now = Date.now,
   requestId = () => `upgrade-${now()}-${randomBytes(6).toString('hex')}`,
   deadlineAt,
