@@ -29,6 +29,7 @@ Creates a new scheduled task. Exactly one timing option is required.
 | `--miss-threshold <seconds>` | Skip if overdue by more than this | 300 |
 | `--reply-channel "<source>"` | Reply channel (e.g., "telegram", "lark") | none |
 | `--reply-endpoint "<endpoint>"` | Reply endpoint (e.g., user ID) | none |
+| `--reply-session-group "<L>"` | Group-local name; requires explicit `--reply-channel` | component overall group |
 
 ## Examples
 
@@ -72,12 +73,21 @@ Don't use for: user notifications, time-sensitive tasks, high-priority alerts.
 
 ### Reply Configuration
 
-`--reply-channel` and `--reply-endpoint` specify where results are sent.
+`--reply-channel` and `--reply-endpoint` specify where results are sent. Supply both with values or omit both; supplying only one returns `INVALID_ARGS` without creating a task.
 
 ```bash
 --reply-channel "telegram" --reply-endpoint "8101553026"     # Telegram user
 --reply-channel "lark" --reply-endpoint "chat_xxx topic_yyy" # Lark topic
---reply-channel "telegram"                                    # Broadcast
 ```
 
 Endpoint structure depends on channel implementation. Can contain multiple space-separated values.
+
+### Saving the execution group
+
+An explicit `--reply-channel X` must name an installed component directory (no `send.js` requirement). It stores X and optional `--reply-session-group L` without allocating a namespace. This target takes precedence over the creating session. Without X, creation uses only `ZYLOS_SESSION_GROUP`: a known namespace is reverse-mapped read-only; origin or no variable saves no group. Unknown namespaces and malformed groups fail without creating a task. A target need not already have messages.
+
+For target discovery and copying Core reply-via, see [Target group and replies](../SKILL.md#target-group-and-replies).
+
+```bash
+cli.js add "Report to this group" --in "1 hour" --reply-channel telegram --reply-endpoint "-1001" --reply-session-group "g-1001"
+```

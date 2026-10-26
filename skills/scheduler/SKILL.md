@@ -9,11 +9,10 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 
 ## How It Works
 
-1. Activity Monitor writes state to `~/zylos/activity-monitor/agent-status.json`
-2. Scheduler checks for pending tasks that are due
-3. If runtime is alive, dispatches task to C4 comm-bridge
-4. C4 handles execution control (idle waiting, priority queueing)
-5. Task sent to Claude based on priority and idle requirements
+1. Scheduler checks for pending tasks that are due.
+2. It submits them to C4 as Core scheduler messages, without reading session health or waiting for an online/idle session.
+3. C4 handles execution control (target group, health gates, idle waiting and priority).
+4. A queued task still needs the existing `done` completion call; queueing does not prove the work finished.
 
 ## CLI
 
@@ -29,3 +28,11 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 ## Timezone
 
 Resolves TZ: `~/zylos/.env` > `process.env.TZ` > `UTC`. Times are parsed and displayed in configured timezone. DB stores UTC. See `references/config.md` for details.
+
+## Target group and replies
+
+Copy the channel, endpoint and optional group-local name from the current Core-generated reply-via. Map c4-send's `--session-group L` to Scheduler's `--reply-session-group L`, together with `--reply-channel X`; do not pass Scheduler a full group as L. Explicit reply targets determine the saved execution group. Without a reply target, creation uses the current `ZYLOS_SESSION_GROUP` via a read-only namespace lookup; origin or no group leaves the saved target empty. No recent-message or tmux inference is used.
+
+For another chat, run `c4-db.js groups --match <text> --json`; use `componentName` for `--reply-channel` and `sessionGroupName` for `--reply-session-group` (omit L for an overall component group). Do not split a namespace yourself. If the target has no messages, use the component's `node scripts/session-group.js <endpoint>`: successful empty output means its overall group; a failed command is not empty output. If the component has no such command, follow its documentation or ask the user to send a message in the target chat and query again. Do not guess; a missing groups result does not itself forbid scheduling.
+
+`--reply-channel` and `--reply-endpoint` must both have values or both be absent. Add rejects either option alone. Update validates the route after merging the supplied options with the existing task; an incomplete result is rejected without changing the task. Changing either reply field, including only the endpoint, recalculates the saved group using the resulting reply channel; provide the complete L again or it becomes the component's overall group. `--clear-reply` removes only the reply route, and ordinary field updates preserve the saved group. Incorrect L can execute in another group even when replies reach the intended endpoint, breaking context continuity. Keep task prompts self-contained.

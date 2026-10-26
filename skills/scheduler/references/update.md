@@ -17,6 +17,7 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 | `--no-block-queue-until-idle` | Disable block-queue-until-idle behavior |
 | `--reply-channel "<source>"` | Update reply channel |
 | `--reply-endpoint "<endpoint>"` | Update reply endpoint |
+| `--reply-session-group "<L>"` | Target group-local name; requires explicit `--reply-channel` |
 | `--clear-reply` | Clear reply configuration |
 | `--miss-threshold <seconds>` | Update miss threshold |
 
@@ -43,3 +44,9 @@ cli.js update task-abc --clear-reply
 # Switch from cron to interval
 cli.js update task-abc --every "2 hours"
 ```
+
+## Saved execution group
+
+A changed reply target recomputes the saved component/group; omitted L selects the component's overall group, not the prior group. Supplying L requires `--reply-channel` in this same command. Explicit channels are checked read-only against installed component directories, without requiring `send.js`; rejection leaves the task unchanged. Endpoint-only edits reuse the existing channel and select its overall group. After merging the supplied reply fields with the existing route, channel and endpoint must both have values or both be NULL. An endpoint-only edit without an existing channel returns `INVALID_ARGS` and leaves every task field unchanged. `--clear-reply` clears both reply columns and preserves the saved group, including an empty saved group; schedule/prompt/priority-only edits preserve it too. The editor's session never retargets an existing task.
+
+For target discovery and copying Core reply-via, see [Target group and replies](../SKILL.md#target-group-and-replies).
