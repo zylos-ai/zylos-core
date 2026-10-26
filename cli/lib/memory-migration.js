@@ -122,7 +122,8 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     let record;
     try { record = JSON.parse(readRegular(recordPath).toString('utf8')); }
     catch (cause) { throw error('RECORD_UNREADABLE', cause.message); }
-    if (!record || record.v !== 1 || record.migrationId !== MIGRATION_ID || !['pending', 'done'].includes(record.state)) {
+    if (!record || record.v !== 1 || record.migrationId !== MIGRATION_ID || !['pending', 'done'].includes(record.state) ||
+        !Number.isInteger(record.attempts) || record.attempts < 0) {
       throw error('RECORD_UNREADABLE', 'Invalid migration record');
     }
     return record;
@@ -140,14 +141,11 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     try { bytes = readRegular(references); } catch { missingPaths.push('memory/references.md'); }
     const text = String(bytes || '');
     const indexed = [];
-    text.replace(/`([^`\n]+)`|\]\((?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"]*")?\)/g,
-      (match, code, angle, link) => {
-        const value = code || angle || link;
-        if (/^(?:memory\/)?reference\//.test(value)) indexed.push(value);
-        return ' ';
-      });
-    const indexedPaths = [...new Set(indexed.filter(value => !/[*?\[\]]/.test(value))
-      .map(value => `memory/${value.replace(/^memory\//, '')}`))];
+    for (const [, code, angle, link] of text.matchAll(/`([^`\n]+)`|\]\((?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"]*")?\)/g)) {
+      const value = code || angle || link;
+      if (/^(?:memory\/)?reference\//.test(value)) indexed.push(value);
+    }
+    const indexedPaths = [...new Set(indexed.map(value => `memory/${value.replace(/^memory\//, '')}`))];
     for (const indexed of indexedPaths) {
       const target = path.resolve(root, indexed);
       if (!target.startsWith(`${path.join(memory, 'reference')}${path.sep}`)) { missingPaths.push(indexed); continue; }
