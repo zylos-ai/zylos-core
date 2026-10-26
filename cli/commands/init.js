@@ -27,6 +27,7 @@ import {
 } from '../lib/runtime/instruction-builder.js';
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
+import { syncRuntimeHooks } from '../lib/sync-runtime-hooks.js';
 import {
   installGlobalPackage,
   installCodex,
@@ -744,12 +745,8 @@ function copyMissingTree(src, dest) {
  */
 export function syncSettingsHooksAfterTemplateDeploy({
   zylosDir = ZYLOS_DIR,
-  syncScript = path.join(PACKAGE_ROOT, 'cli', 'lib', 'sync-settings-hooks.js'),
 } = {}) {
-  execFileSync(process.execPath, [syncScript], {
-    stdio: 'inherit',
-    env: { ...process.env, ZYLOS_DIR: zylosDir },
-  });
+  return syncRuntimeHooks({ zylosDir });
 }
 
 export function deployTemplates({ freshInstall = false } = {}) {

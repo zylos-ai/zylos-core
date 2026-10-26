@@ -7,7 +7,7 @@ import { hookScriptKey } from './hook-utils.js';
 import {
   canonicalAssemblerEntry,
   reconcileAssemblerEntries,
-} from './sync-settings-hooks.js';
+} from './sync-runtime-hooks.js';
 import {
   activateMigratedSplitInstructions,
   hasSplitTransactionResidue,

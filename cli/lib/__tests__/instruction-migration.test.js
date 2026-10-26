@@ -25,7 +25,7 @@ import {
   readInstructionFormatVersion,
   writeInstructionFormatVersion,
 } from '../runtime/instruction-builder.js';
-import { canonicalAssemblerEntry } from '../sync-settings-hooks.js';
+import { canonicalAssemblerEntry } from '../sync-runtime-hooks.js';
 import { exportInstructionBaselines } from '../../../scripts/export-instruction-baselines.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');

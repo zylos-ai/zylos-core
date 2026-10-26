@@ -1,6 +1,8 @@
 # Runtime Switch — Authentication Relay Playbook
 
-Read this when `zylos runtime <target>` exits with **code 2 (auth required)**.
+Read this when `zylos runtime <target>` exits with **code 1** and reports
+`AUTH_NOT_CONFIRMED`. Other exit-1 errors require their own remedy; do not
+start authentication for every failure. Run `zylos init` for missing CLI or hooks.
 The switch command itself (confirmation etiquette, what it does, transition
 notice) is covered by the system instructions; this file holds the full
 per-target authentication relay scripts.
@@ -8,7 +10,7 @@ per-target authentication relay scripts.
 Credentials are always stored in **two places** so auth persists across
 restarts: the runtime's own credential store and `~/zylos/.env`.
 
-## Switching to Codex (`zylos runtime codex` exits 2)
+## Switching to Codex (`AUTH_NOT_CONFIRMED`)
 
 Ask the user which auth method they prefer. API key is fastest; device auth
 is a good fallback if the user has no API key. Example message:
@@ -25,7 +27,7 @@ is a good fallback if the user has no API key. Example message:
 
 Codex credentials live in `~/.codex/auth.json` and `~/zylos/.env`.
 
-## Switching to Claude Code (`zylos runtime claude` exits 2)
+## Switching to Claude Code (`AUTH_NOT_CONFIRMED`)
 
 Ask the user which auth method they prefer. API key is fastest; setup token
 is a good fallback for automated setups. Example message:

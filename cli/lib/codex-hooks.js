@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { SIDE_EFFECT_NAMES, buildChain } from '../../skills/activity-monitor/scripts/shard-registry.js';
+import { extractScriptPath } from './hook-utils.js';
 
 const SESSION_START = 'SessionStart';
 const CODEX_EVENT_KEYS = {
@@ -113,7 +114,7 @@ export function isCoreCodexHook(command, zylosDir) {
     'scripts',
     'session-start-orchestrator.js'
   );
-  return command.includes(script) || command.includes('session-start-orchestrator.js');
+  return typeof command === 'string' && path.resolve(extractScriptPath(command)) === script;
 }
 
 export function readCodexHooksConfig(filePath) {

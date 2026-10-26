@@ -217,15 +217,15 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
   }
 
   if (auth.status === 'uncertain') {
-    error(red(`\n${bold(target)} authentication check was inconclusive.`));
+    error(`Error [AUTH_NOT_CONFIRMED]: ${target} authentication check was inconclusive.`);
     error(yellow('\nRetry after the service/API is reachable, or use --no-validate to skip the probe if you accept the risk.'));
     error(dim(`Reason: ${auth.reason || 'auth_check_uncertain'}`));
     error(yellow('\nSwitch aborted — auth could not be verified.'));
-    exit(2);
+    exit(1);
     return { skipped: false, status: auth.status };
   }
 
-  error(red(`\n${bold(target)} is not authenticated.`));
+  error(`Error [AUTH_NOT_CONFIRMED]: ${target} is not authenticated.`);
   error(yellow('\nAuthenticate first, then retry. Options:\n'));
   if (target === 'codex') {
     error(`  ${cyan('zylos runtime codex --save-apikey <key>')}     ${dim('OpenAI API key')}`);
@@ -237,7 +237,7 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
     error(`  ${cyan('claude auth login')}                               ${dim('Browser OAuth (then retry)')}`);
   }
   error(yellow('\nSwitch aborted — authenticate first to avoid losing IM access.'));
-  exit(2);
+  exit(1);
   return { skipped: false, status: auth.status };
 }
 
@@ -386,8 +386,7 @@ Validation:
 
 Exit codes:
   0  Success
-  1  Fatal error (install failed, credential save failed)
-  2  Auth required — use --save-apikey / --save-setup-token or authenticate first
+  1  Failed; AUTH_NOT_CONFIRMED requires authentication before retrying
 
 Examples:
   zylos runtime status
