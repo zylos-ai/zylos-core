@@ -70,8 +70,8 @@ export function codexProjectConfigPath(projectDir) {
   return path.join(path.resolve(projectDir), '.codex', 'config.toml');
 }
 
-export function codexGlobalConfigPath(homeDir = os.homedir()) {
-  return path.join(homeDir, '.codex', 'config.toml');
+export function codexGlobalConfigPath(homeDir = os.homedir(), codexHome) {
+  return path.join(codexHome || path.join(homeDir, '.codex'), 'config.toml');
 }
 
 export function coreSessionStartCommand(zylosDir) {
@@ -227,10 +227,10 @@ export function ensureHooksFeatureAtPath(filePath) {
   return { path: filePath, changed: false };
 }
 
-export function ensureHooksFeature({ projectDir, homeDir = os.homedir() }) {
+export function ensureHooksFeature({ projectDir, homeDir = os.homedir(), codexHome }) {
   const paths = [
     codexProjectConfigPath(projectDir),
-    codexGlobalConfigPath(homeDir),
+    codexGlobalConfigPath(homeDir, codexHome),
   ];
   const results = paths.map(ensureHooksFeatureAtPath);
   return {
@@ -303,11 +303,12 @@ export function isCodexTrustValid({
   zylosDir,
   projectDir = zylosDir,
   homeDir = os.homedir(),
+  codexHome,
   codexVersion,
 } = {}) {
   const hooksPath = codexHooksPath(zylosDir);
   const markerPath = codexTrustMarkerPath(zylosDir);
-  const globalConfig = codexGlobalConfigPath(homeDir);
+  const globalConfig = codexGlobalConfigPath(homeDir, codexHome);
   const projectConfig = codexProjectConfigPath(projectDir);
   let hooksContent = '';
   try {
@@ -501,6 +502,7 @@ export function ensureCodexHooksTrusted({
   zylosDir,
   projectDir = zylosDir,
   homeDir = os.homedir(),
+  codexHome,
   codexBin = process.env.CODEX_BIN || 'codex',
   execFileSyncImpl,
   spawnSyncImpl = spawnSync,
@@ -508,10 +510,10 @@ export function ensureCodexHooksTrusted({
   installCoreCodexHook({ zylosDir });
 
   const codexVersion = getCodexVersion({ codexBin, execFileSyncImpl });
-  const validity = isCodexTrustValid({ zylosDir, projectDir, homeDir, codexVersion });
+  const validity = isCodexTrustValid({ zylosDir, projectDir, homeDir, codexHome, codexVersion });
   if (validity.valid) return { trusted: false, skipped: true, reason: validity.reason };
 
-  ensureHooksFeature({ projectDir, homeDir });
+  ensureHooksFeature({ projectDir, homeDir, codexHome });
   const trust = trustCodexHooksWithAppServer({ zylosDir, codexBin, spawnSyncImpl });
   if (!trust.ok) {
     throw new Error(`Codex hook trust failed (${trust.reason || 'unknown'}). Native SessionStart bootstrap may not run.`);
@@ -525,7 +527,7 @@ export function ensureCodexHooksTrusted({
   }
 
   const hooksPath = codexHooksPath(zylosDir);
-  const globalConfig = codexGlobalConfigPath(homeDir);
+  const globalConfig = codexGlobalConfigPath(homeDir, codexHome);
   const hooksContent = fs.readFileSync(hooksPath, 'utf8');
   const trustSnapshot = extractTrustSnapshot(readHooksState(globalConfig), hooksPath);
   if (Object.keys(trustSnapshot).length === 0) {

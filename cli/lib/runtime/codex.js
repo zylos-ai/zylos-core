@@ -24,6 +24,9 @@ const execFileAsync = promisify(execFile);
 import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
+import { ZYLOS_DIR } from '../config.js';
+import { ensureLaunchHooksTrusted } from './codex-launch-trust.js';
+import { launchEnvironment, runtimeExecutable } from './session-command.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -49,6 +52,16 @@ function getCodexApiBaseUrl(env) {
 export class CodexAdapter extends SessionAdapter {
   get displayName() { return 'Codex'; }
   get runtimeId() { return 'codex'; }
+
+  async launch(options) {
+    const env = this.options.env || process.env;
+    const root = await fs.promises.realpath(this.options.root || ZYLOS_DIR);
+    const codexBin = (this.options.runtimeExecutable || runtimeExecutable)('codex', env);
+    // Trust must succeed before SessionAdapter can create a tmux session.
+    await ensureLaunchHooksTrusted({ zylosDir: root, projectDir: root,
+      codexBin, env: launchEnvironment(root, env) });
+    return super.launch(options);
+  }
 
   // ── Instruction file ───────────────────────────────────────────────────────
 
