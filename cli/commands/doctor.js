@@ -24,23 +24,10 @@ import { commandExists } from '../lib/shell-utils.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
-import { getActiveAdapter } from '../lib/runtime/index.js';
+import { resolveCliSession } from '../lib/cli-session.js';
 
-// Resolve active runtime session name and display name at startup.
-// Falls back to 'claude-main' / 'Claude' if config is missing or unknown runtime.
-let SESSION = 'claude-main';
-let AGENT_DISPLAY = 'Claude';
-let ACTIVE_RUNTIME = 'claude';
-let _activeAdapter = null;
-try {
-  _activeAdapter = getActiveAdapter();
-  SESSION = _activeAdapter.sessionName;
-  AGENT_DISPLAY = _activeAdapter.displayName;
-  ACTIVE_RUNTIME = _activeAdapter.config?.runtime ?? 'claude';
-} catch { /* config.json absent or unknown runtime — use Claude defaults */ }
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
-const API_HOST = ACTIVE_RUNTIME === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
 const VERSION_CHECK_CONCURRENCY = 3;
 const CLAUDE_FIX_TIMEOUT = 300000; // 5 minutes
 
@@ -127,7 +114,7 @@ function checkPm2Installed() {
   return { installed: true, version };
 }
 
-async function checkNetwork(env) {
+async function checkNetwork(env, apiHost) {
   const results = { dns: false, proxy: null, reachable: false, details: {} };
   const proxy = env.get('HTTPS_PROXY') || env.get('https_proxy') || process.env.HTTPS_PROXY || '';
 
@@ -137,7 +124,7 @@ async function checkNetwork(env) {
 
   // DNS check
   try {
-    const addrs = await dns.resolve4(API_HOST);
+    const addrs = await dns.resolve4(apiHost);
     results.dns = true;
     results.details.resolved = addrs[0];
   } catch (err) {
@@ -151,7 +138,7 @@ async function checkNetwork(env) {
       const curlArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
         '-o', '/dev/null', '-w', '%{http_code}'];
       if (proxy) curlArgs.push('--proxy', proxy);
-      curlArgs.push(`https://${API_HOST}/`);
+      curlArgs.push(`https://${apiHost}/`);
       const code = execFileSync('curl', curlArgs, {
         encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
       }).trim();
@@ -163,7 +150,7 @@ async function checkNetwork(env) {
       if (proxy) {
         try {
           const directArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
-            '-o', '/dev/null', '-w', '%{http_code}', `https://${API_HOST}/`];
+            '-o', '/dev/null', '-w', '%{http_code}', `https://${apiHost}/`];
           execFileSync('curl', directArgs, {
             encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
           });
@@ -178,7 +165,7 @@ async function checkNetwork(env) {
     try {
       await new Promise((resolve, reject) => {
         const req = https.request({
-          hostname: API_HOST, port: 443, path: '/', method: 'HEAD', timeout: 10000,
+          hostname: apiHost, port: 443, path: '/', method: 'HEAD', timeout: 10000,
         }, (res) => {
           results.reachable = true;
           results.details.httpCode = String(res.statusCode);
@@ -262,9 +249,9 @@ function checkPm2Services() {
   }
 }
 
-function checkTmuxSession() {
+function checkTmuxSession(session) {
   try {
-    execFileSync('tmux', ['has-session', '-t', SESSION], {
+    execFileSync('tmux', ['has-session', '-t', `=${session}`], {
       stdio: 'pipe', timeout: 30000,
     });
     return true;
@@ -275,24 +262,32 @@ function checkTmuxSession() {
 
 // ── Diagnostics collection ───────────────────────────────────────
 
-async function collectDiagnostics(env) {
-  const networkPromise = checkNetwork(env);
+export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork, pm2Check = checkPm2Installed } = {}) {
+  const selected = await resolve();
+  const runtime = selected.runtime;
+  const display = runtime === 'unknown' ? 'Unknown runtime' : runtime === 'codex' ? 'Codex' : 'Claude';
+  const apiHost = runtime === 'unknown' ? null : runtime === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
+  const networkPromise = apiHost ? network(env, apiHost) : Promise.resolve({ dns: false, proxy: null, reachable: false, reason: 'runtime_unknown', details: {} });
 
   const tmux = checkTmuxInstalled();
-  const pm2 = checkPm2Installed();
+  const pm2 = pm2Check();
   const net = await networkPromise;
 
   // Runtime-specific CLI/auth checks.
   // Both runtimes use adapter.checkAuth() for consistency with the running process.
   let cli, authStatus, autonomous;
-  if (ACTIVE_RUNTIME !== 'codex') {
+  if (runtime === 'unknown') {
+    cli = { installed: false, reason: 'runtime_unknown' };
+    authStatus = 'uncertain';
+    autonomous = false;
+  } else if (runtime !== 'codex') {
     cli = checkClaudeCli();
-    authStatus = cli.installed ? (await _activeAdapter.checkAuth()).status : 'failure';
+    authStatus = cli.installed ? (await selected.adapter.checkAuth()).status : 'failure';
     autonomous = cli.installed ? checkAutonomousMode() : false;
   } else {
     // Codex runtime — check Codex CLI and auth status.
     cli = checkCodexCli();
-    authStatus = cli.installed ? (await _activeAdapter.checkAuth()).status : 'failure';
+    authStatus = cli.installed ? (await selected.adapter.checkAuth()).status : 'failure';
     autonomous = true; // not applicable for Codex
   }
   const auth = authStatus === 'success';
@@ -300,9 +295,10 @@ async function collectDiagnostics(env) {
   const services = pm2.installed
     ? checkPm2Services()
     : { running: false, total: 0, online: 0, activityMonitor: false, procs: [] };
-  const session = tmux.installed ? checkTmuxSession() : false;
+  const session = tmux.installed ? checkTmuxSession(selected.live.tmuxName) : false;
 
   return {
+    runtime, display, apiHost,
     system: { tmux, pm2, network: net },
     ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
     services: { ...services, session },
@@ -311,7 +307,7 @@ async function collectDiagnostics(env) {
 
 // ── JSON builder ─────────────────────────────────────────────────
 
-function buildDiagnosticJson(diag, coreVersion) {
+export function buildDiagnosticJson(diag, coreVersion) {
   const issues = [];
 
   if (!diag.system.tmux.installed) {
@@ -320,7 +316,9 @@ function buildDiagnosticJson(diag, coreVersion) {
   if (!diag.system.pm2.installed) {
     issues.push({ id: 'pm2_missing', label: 'PM2 not installed', hint: 'Run zylos init' });
   }
-  if (!diag.system.network.reachable) {
+  if (diag.runtime === 'unknown') {
+    issues.push({ id: 'runtime_unknown', label: 'Runtime identity unavailable', hint: 'Inspect the session launch identity before runtime-specific checks' });
+  } else if (!diag.system.network.reachable) {
     const net = diag.system.network;
     let hint = 'Check internet connection and firewall settings.';
     if (net.proxy) {
@@ -332,20 +330,20 @@ function buildDiagnosticJson(diag, coreVersion) {
     if (!net.dns && net.details.dnsError) {
       hint += ` (DNS: ${net.details.dnsError})`;
     }
-    issues.push({ id: 'network_unreachable', label: `Cannot reach ${API_HOST}`, hint });
+    issues.push({ id: 'network_unreachable', label: `Cannot reach ${diag.apiHost}`, hint });
   }
-  const runtimeLabel = ACTIVE_RUNTIME === 'codex' ? 'Codex' : 'Claude';
-  if (!diag.ai.cli.installed) {
+  const runtimeLabel = diag.display;
+  if (diag.runtime !== 'unknown' && !diag.ai.cli.installed) {
     issues.push({ id: 'cli_missing', label: `${runtimeLabel} CLI not installed`, hint: 'Run zylos init' });
   }
   if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'failure') {
-    const hint = ACTIVE_RUNTIME === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';
+    const hint = diag.runtime === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';
     issues.push({ id: 'cli_not_authed', label: `${runtimeLabel} not authorized`, hint });
   }
   if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'uncertain') {
     issues.push({ id: 'cli_auth_unverified', label: `${runtimeLabel} auth check inconclusive`, hint: 'Retry after network/API health is stable' });
   }
-  if (ACTIVE_RUNTIME !== 'codex' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
+  if (diag.runtime !== 'codex' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
     issues.push({ id: 'autonomous_off', label: 'Autonomous mode not accepted', hint: 'Set skipDangerousModePermissionPrompt in ~/.claude/settings.json' });
   }
   if (diag.system.pm2.installed) {
@@ -372,7 +370,7 @@ function buildDiagnosticJson(diag, coreVersion) {
             sendKeysClientFlag: diag.system.tmux.useClientFlag ?? false,
             versionReason: diag.system.tmux.reason ?? null },
           pm2: { ok: diag.system.pm2.installed, version: diag.system.pm2.version || null },
-          network: { ok: diag.system.network.reachable, host: API_HOST, proxy: diag.system.network.proxy || null },
+          network: { ok: diag.system.network.reachable, host: diag.apiHost, proxy: diag.system.network.proxy || null },
         },
       },
       ai_service: {
@@ -414,14 +412,14 @@ function displaySystemGroup(diag, jsonGroup) {
   }
 
   if (net.reachable) {
-    let label = `network: ${API_HOST} reachable`;
+    let label = `network: ${diag.apiHost} reachable`;
     if (net.proxy) label += dim(' (via proxy)');
     checks.push(label);
   } else {
     if (!net.dns) {
-      checks.push(red(`network: DNS failed for ${API_HOST}`));
+      checks.push(red(`network: DNS failed for ${diag.apiHost}`));
     } else {
-      checks.push(red(`network: cannot reach ${API_HOST}`));
+      checks.push(red(`network: cannot reach ${diag.apiHost}`));
     }
   }
 
@@ -440,7 +438,7 @@ function displayAiGroup(diag, jsonGroup) {
   const checks = [];
   const { cli, auth, authStatus, autonomous } = diag.ai;
 
-  const cliLabel = ACTIVE_RUNTIME === 'codex' ? 'Codex CLI' : 'Claude CLI';
+  const cliLabel = diag.runtime === 'codex' ? 'Codex CLI' : 'Claude CLI';
   if (cli.installed) {
     checks.push(`${cliLabel} ${dim(cli.version ?? '')}`);
   } else {
@@ -496,11 +494,11 @@ function displayServiceGroup(diag, jsonGroup) {
   }
 
   if (session) {
-    checks.push(`${AGENT_DISPLAY} session: ${green('active')}`);
+    checks.push(`${diag.display} session: ${green('active')}`);
   } else if (activityMonitor) {
-    checks.push(yellow(`${AGENT_DISPLAY} session: starting...`));
+    checks.push(yellow(`${diag.display} session: starting...`));
   } else {
-    checks.push(dim(`${AGENT_DISPLAY} session: waiting`));
+    checks.push(dim(`${diag.display} session: waiting`));
   }
 
   displayCheckGroup('Services', jsonGroup.passed ? 'pass' : 'fail', checks);
@@ -607,7 +605,7 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
 
 function isClaudeReady(diag) {
   // Auto-fix via `claude -p` is only available when Claude is the active runtime.
-  if (ACTIVE_RUNTIME !== 'claude') return false;
+  if (diag.runtime !== 'claude') return false;
   return diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous && diag.system.network.reachable;
 }
 

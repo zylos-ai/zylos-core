@@ -24,12 +24,17 @@ import { commandExists } from '../lib/shell-utils.js';
 import {
   activateFreshSplitInstructions,
   refreshSplitInstructions,
+  buildInstructionFile,
 } from '../lib/runtime/instruction-builder.js';
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
+import { ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
+import { syncRuntimeHooks } from '../lib/sync-runtime-hooks.js';
+import { runtimeHooksReady } from './runtime.js';
 import {
   installGlobalPackage,
   installCodex,
+  installClaude,
   isClaudeAuthenticated,
   isCodexAuthenticated,
   isValidBaseUrl,
@@ -55,6 +60,60 @@ const TEMPLATES_SRC = path.join(PACKAGE_ROOT, 'templates');
 // Minimum Node.js version
 const MIN_NODE_MAJOR = 20;
 const MIN_NODE_MINOR = 20;
+
+export async function prepareInitRuntimeClis({ exists = commandExists,
+  install = { claude: installClaude, codex: installCodex } } = {}) {
+  const result = { completed: [], failed: [], installed: [] };
+  for (const runtime of ['claude', 'codex']) {
+    try {
+      if (!exists(runtime)) {
+        if (!await install[runtime]() || !exists(runtime)) throw new Error('CLI installation failed or command not on PATH');
+        result.installed.push(runtime);
+      }
+      result.completed.push(`${runtime}.cli`);
+    } catch (error) { result.failed.push({ item: `${runtime}.cli`, message: error.message }); }
+  }
+  return result;
+}
+
+export async function prepareInitRuntimeAssets({ result = { completed: [], failed: [] },
+  instruction = runtime => buildInstructionFile(runtime, { zylosDir: ZYLOS_DIR }),
+  hooks = { claude: async () => {
+    if (!(await runtimeHooksReady('claude')).ready) throw new Error('Claude hooks/instructions not ready');
+  }, codex: () => {
+    ensureCodexHooksTrusted({ zylosDir: ZYLOS_DIR });
+  } }, exists = fs.existsSync } = {}) {
+  for (const runtime of ['claude', 'codex']) {
+    for (const [item, prepare] of [['instructions', () => {
+      const file = instruction(runtime);
+      if (!exists(file)) throw new Error('Instruction file unavailable; run zylos migrate-instructions');
+    }], ['hooks', hooks[runtime]]]) {
+      try { await prepare(); result.completed.push(`${runtime}.${item}`); }
+      catch (error) { result.failed.push({ item: `${runtime}.${item}`, message: error.message }); }
+    }
+  }
+  return result;
+}
+
+export function reportInitPreparation(result, log = console.log) {
+  if (result.failed.length) log('Runtime preparation partially completed (部分完成).');
+  for (const item of result.completed) log(`  Completed: ${item}`);
+  for (const { item, message } of result.failed) log(`  Failed: ${item}: ${message}`);
+}
+
+export function runInitNativeLogin(command, args, { spawn = spawnSync, exit = code => process.exit(code) } = {}) {
+  const result = spawn(command, args, { stdio: 'inherit' });
+  if (result.signal || result.status === 130) exit(130);
+  return result;
+}
+
+export async function ensureInitMemoryMigration({ freshInstall = false,
+  load = () => import('../lib/memory-migration.js'), warn = console.error } = {}) {
+  const { createMigration } = await load();
+  const status = await createMigration().ensure({ createdBy: 'init', freshInstall });
+  if (status.state === 'unreadable') warn('Warning [RECORD_UNREADABLE]: migration record is unreadable; existing record preserved.');
+  return status;
+}
 
 /**
  * Read service names from the deployed ecosystem.config.cjs.
@@ -541,16 +600,6 @@ function needsBypassAcceptance() {
     if (settings.skipDangerousModePermissionPrompt) return false;
   } catch {}
 
-  // Check if already accepted (claude-main session with Claude running).
-  // 'claude-main' is intentional: this check is Claude-specific (bypass prompt is Claude-only).
-  try {
-    execSync('tmux has-session -t claude-main 2>/dev/null', { stdio: 'pipe' });
-    const paneContent = execSync('tmux capture-pane -t claude-main -p 2>/dev/null', { encoding: 'utf8' });
-    if (paneContent.includes('>') || paneContent.includes('Claude')) {
-      return false;
-    }
-  } catch {}
-
   return true;
 }
 
@@ -595,61 +644,10 @@ function preAcceptClaudeTerms() {
  * Guide user through first-time Claude bypass permissions acceptance.
  */
 async function guideBypassAcceptance() {
-  // This function is Claude-specific: the bypass-permissions prompt only exists in Claude Code.
-  // Hardcoded 'claude-main' is intentional — this always creates a Claude session for acceptance.
-  const CLAUDE_SESSION = 'claude-main';
-
-  console.log(`\n${heading('Setting up Claude Code...')}`);
-
-  // Stop activity-monitor to prevent restart loop
-  try { execSync('pm2 stop activity-monitor', { stdio: 'pipe' }); } catch {}
-
-  // Kill existing session if stuck
-  try { execSync(`tmux kill-session -t ${CLAUDE_SESSION} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
-
-  // Create new tmux session with Claude
-  try {
-    const tmuxArgs = ['new-session', '-d', '-s', CLAUDE_SESSION];
-    if (process.env.IS_SANDBOX) tmuxArgs.push('-e', 'IS_SANDBOX=1');
-
-    // Write API key to temp file to avoid exposing it in process command line
-    let shellCmd;
-    let tmpEnv = null;
-    if (process.env.ANTHROPIC_API_KEY) {
-      tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
-      fs.writeFileSync(tmpEnv, `ANTHROPIC_API_KEY='${process.env.ANTHROPIC_API_KEY}'\n`, { mode: 0o600 });
-      shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && claude --dangerously-skip-permissions`;
-    } else {
-      shellCmd = `cd "${ZYLOS_DIR}" && claude --dangerously-skip-permissions`;
-    }
-    tmuxArgs.push('--', shellCmd);
-    try {
-      execFileSync('tmux', tmuxArgs, { stdio: 'pipe' });
-    } catch (e) {
-      if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch {}
-      throw e;
-    }
-    // Configure status bar with detach hint
-    try {
-      execSync(`tmux set-option -t ${CLAUDE_SESSION} status-right " Ctrl+B d = detach " 2>/dev/null`, { stdio: 'pipe' });
-      execSync(`tmux set-option -t ${CLAUDE_SESSION} status-right-style "fg=black,bg=yellow" 2>/dev/null`, { stdio: 'pipe' });
-    } catch {}
-  } catch (err) {
-    console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);
-    try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
-    return;
-  }
-
-  console.log('  Claude Code requires a one-time confirmation for autonomous mode.');
-  console.log('  Please run the following command in another terminal:\n');
-  console.log(`    ${bold('zylos attach')}\n`);
-  console.log('  Then select "Yes, I accept" and press Ctrl+B d to detach.\n');
-
-  await promptYesNo('Press Enter after you have accepted the prompt: ', true);
-
-  // Restart activity-monitor
-  try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
-  console.log(`  ${success('Claude Code configured')}`);
+  // Init already owns first-install acceptance settings. Do not launch or
+  // replace a managed runtime merely to repeat that settings preparation.
+  preAcceptClaudeTerms();
+  console.log(`  ${success('Claude Code acceptance settings prepared')}`);
 }
 
 // ── Installation state detection ────────────────────────────────
@@ -742,14 +740,8 @@ function copyMissingTree(src, dest) {
  * - ecosystem.config.cjs: always updated (managed by zylos-core)
  * - .env, CLAUDE.md, memory/*: only created if missing (user-managed)
  */
-export function syncSettingsHooksAfterTemplateDeploy({
-  zylosDir = ZYLOS_DIR,
-  syncScript = path.join(PACKAGE_ROOT, 'cli', 'lib', 'sync-settings-hooks.js'),
-} = {}) {
-  execFileSync(process.execPath, [syncScript], {
-    stdio: 'inherit',
-    env: { ...process.env, ZYLOS_DIR: zylosDir },
-  });
+export function syncSettingsHooksAfterTemplateDeploy({ zylosDir = ZYLOS_DIR } = {}) {
+  return syncRuntimeHooks({ zylosDir });
 }
 
 export function deployTemplates({ freshInstall = false } = {}) {
@@ -1646,6 +1638,7 @@ export function parseInitFlags(args) {
         if (ch === 'y') opts.yes = true;
         else if (ch === 'q') opts.quiet = true;
         else if (ch === 'h') opts.help = true;
+        else throw new Error(`Unknown init option: -${ch}`);
       }
       continue;
     }
@@ -1684,6 +1677,8 @@ export function parseInitFlags(args) {
       case '--caddy': opts.caddy = true; break;
       case '--no-caddy': opts.caddy = false; break;
       case '--skip-consent': opts.skipConsent = true; break;
+      case '--json': break; // init intentionally retains its multi-step text output.
+      default: throw new Error(`Unknown init option: ${arg}`);
     }
   }
 
@@ -1845,6 +1840,9 @@ export async function initCommand(args) {
     return;
   }
 
+  // A damaged existing F1 must fail before auth, installers, or any other write.
+  const existingConfig = readZylosConfigOrThrow();
+
   // Resolve from environment variables
   resolveFromEnv(opts);
 
@@ -1963,7 +1961,7 @@ export async function initCommand(args) {
 
   // Step 4.5: Select agent runtime
   // Resolution: --runtime flag > ZYLOS_RUNTIME env > existing config > interactive prompt
-  const existingRuntime = readZylosConfigOrThrow().runtime;
+  const existingRuntime = existingConfig.runtime;
   let selectedRuntime = opts.runtime || existingRuntime || null;
   if (!selectedRuntime) {
     if (!skipConfirm) {
@@ -1982,8 +1980,27 @@ export async function initCommand(args) {
     console.log(`  ${success(`Runtime: ${runtimeLabel}`)}`);
   }
 
-  // Steps 5–6: Install and authenticate the selected runtime
-  let claudeJustInstalled = false;
+  // Prepare both CLIs, but authenticate only the selected runtime.
+  const preparation = await prepareInitRuntimeClis();
+  if (preparation.failed.length) exitCode = 1;
+  reportInitPreparation(preparation);
+  const installState = detectInstallState();
+  if (installState === 'incomplete' && !skipConfirm) {
+    const answer = await prompt('Continue previous installation or start fresh? [c/f] (c): ');
+    if (answer.toLowerCase() === 'f') resetManagedState();
+  }
+  createDirectoryStructure();
+  const initialSkillSync = syncCoreSkills();
+  if (initialSkillSync.error) preparation.failed.push({ item: 'core.skills', message: initialSkillSync.error });
+  if (installState === 'fresh') updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
+  runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
+  try { deployTemplates({ freshInstall: installState === 'fresh' }); }
+  catch (error) { preparation.failed.push({ item: 'templates', message: error.message }); }
+  await prepareInitRuntimeAssets({ result: preparation });
+  reportInitPreparation(preparation);
+  if (preparation.failed.length) exitCode = 1;
+  await ensureInitMemoryMigration({ freshInstall: installState === 'fresh' });
+  let claudeJustInstalled = preparation.installed.includes('claude');
   let claudeAuthenticated = false;
   let codexAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
@@ -2002,27 +2019,6 @@ export async function initCommand(args) {
   }
 
   if (selectedRuntime === 'codex') {
-    // ── Step 5 (Codex): install ───────────────────────────────────────────
-    if (commandExists('codex')) {
-      if (!quiet) console.log(`  ${success('Codex installed')}`);
-    } else {
-      if (!quiet) console.log(`  ${error('Codex not found')}`);
-      if (!quiet) console.log(`    ${cyan('Installing @openai/codex...')}`);
-      if (installCodex()) {
-        if (commandExists('codex')) {
-          if (!quiet) console.log(`  ${success('Codex installed')}`);
-        } else {
-          console.error(`  ${error('Codex installed but not found in PATH')}`);
-          console.error(`    ${dim('Ensure npm global bin is in PATH, then run zylos init again.')}`);
-          process.exit(1);
-        }
-      } else {
-        console.error(`  ${error('Failed to install Codex')}`);
-        console.error(`    ${dim('Install manually: npm install -g @openai/codex')}`);
-        process.exit(1);
-      }
-    }
-
     // ── Step 6 (Codex): auth + startup config ────────────────────────────
     if (commandExists('codex')) {
       if (opts.codexApiKey) {
@@ -2050,6 +2046,7 @@ export async function initCommand(args) {
             codexAuthenticated = true;
           } else {
             console.error(`  ${error('Failed to save Codex API key to auth.json.')}`);
+            if (skipConfirm) exitCode = 1;
           }
         }
       } else {
@@ -2082,7 +2079,7 @@ export async function initCommand(args) {
               console.log(`\n  ${cyan('Starting Codex device auth...')}`);
               console.log(`  ${dim('Follow the instructions to authenticate. Press Ctrl+C when done.')}\n`);
               try {
-                spawnSync('codex', ['login', '--device-auth'], { stdio: 'inherit' });
+                runInitNativeLogin('codex', ['login', '--device-auth']);
               } catch { /* user may Ctrl+C */ }
               codexAuthenticated = isCodexAuthenticated();
               if (codexAuthenticated) {
@@ -2096,7 +2093,7 @@ export async function initCommand(args) {
               console.log(`\n  ${cyan('Starting Codex browser login...')}`);
               console.log(`  ${dim('After login completes, press Ctrl+C to return.')}\n`);
               try {
-                spawnSync('codex', ['login'], { stdio: 'inherit' });
+                runInitNativeLogin('codex', ['login']);
               } catch { /* user may Ctrl+C */ }
               codexAuthenticated = isCodexAuthenticated();
               if (codexAuthenticated) {
@@ -2119,32 +2116,6 @@ export async function initCommand(args) {
     }
 
   } else {
-    // ── Step 5 (Claude): install ──────────────────────────────────────────
-    if (commandExists('claude')) {
-      if (!quiet) console.log(`  ${success('Claude Code installed')}`);
-    } else {
-      if (!quiet) console.log(`  ${error('Claude Code not found')}`);
-      if (!quiet) console.log(`    ${cyan('Installing Claude Code (native installer)...')}`);
-      try {
-        execSync('curl -fsSL https://claude.ai/install.sh | bash', {
-          stdio: 'pipe',
-          timeout: 300000, // 5 min — downloads ~213MB native binary
-        });
-        if (commandExists('claude')) {
-          if (!quiet) console.log(`  ${success('Claude Code installed')}`);
-          claudeJustInstalled = true;
-        } else {
-          console.error(`  ${error('Claude Code installed but not found in PATH')}`);
-          console.error(`    ${dim('Add ~/.local/bin to your PATH, then run zylos init again.')}`);
-          process.exit(1);
-        }
-      } catch {
-        console.error(`  ${error('Failed to install Claude Code')}`);
-        console.error(`    ${dim('Install manually: curl -fsSL https://claude.ai/install.sh | bash')}`);
-        process.exit(1);
-      }
-    }
-
     // ── Step 6 (Claude): auth check + guided login ────────────────────────
     if (commandExists('claude')) {
       claudeAuthenticated = isClaudeAuthenticated();
@@ -2205,9 +2176,9 @@ export async function initCommand(args) {
             // /dev/tty redirects. Use `script` to allocate a fresh pseudo-terminal
             // that gives Claude full terminal control.
             if (process.platform === 'darwin') {
-              spawnSync('script', ['-q', '/dev/null', 'claude'], { stdio: 'inherit' });
+              runInitNativeLogin('script', ['-q', '/dev/null', 'claude']);
             } else {
-              spawnSync('claude', [], { stdio: 'inherit' });
+              runInitNativeLogin('claude', []);
             }
           } catch { /* user may Ctrl+C */ }
           process.removeAllListeners('SIGINT');
@@ -2287,8 +2258,6 @@ export async function initCommand(args) {
   if (!quiet) console.log('');
 
   // Re-init: skip directory creation, just sync + deploy + start
-  const installState = detectInstallState();
-
   if (installState === 'complete') {
     if (!quiet) console.log(`${dim('Zylos is already initialized at')} ${bold(ZYLOS_DIR)}\n`);
 
@@ -2310,8 +2279,7 @@ export async function initCommand(args) {
       }
     }
 
-    // Persist runtime selection before deploying templates so deployTemplates()
-    // generates the correct instruction file for the new runtime.
+    // Persist the selected runtime baseline.
     if (!existingRuntime || existingRuntime !== selectedRuntime) {
       updateZylosConfigLocked({ set: { runtime: selectedRuntime } });
     }
@@ -2319,11 +2287,9 @@ export async function initCommand(args) {
     // Ensure new-session thresholds are explicitly set in config (idempotent)
     ensureNewSessionThresholdDefaults();
 
-    // Run data migrations before deploying templates (idempotent)
-    runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
-
     if (!quiet) console.log(heading('Deploying templates...'));
-    deployTemplates();
+    // Assets were prepared for both runtimes before selected-runtime auth.
+    console.log(`Non-selected runtime: use zylos auth ${selectedRuntime === 'claude' ? 'codex' : 'claude'} when needed.`);
 
     // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
     migrateWebConsolePassword();
@@ -2357,16 +2323,6 @@ export async function initCommand(args) {
       exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
     }
 
-    // On runtime switch: clear stale health state before restart.
-    // NOTE: do NOT kill the old session here — init.js may itself be running
-    // inside that session (as a subprocess of the current runtime), so
-    // tmux kill-session would silently fail or kill the parent process mid-run.
-    // The new activity-monitor kills the stale session on startup instead.
-    if (existingRuntime && existingRuntime !== selectedRuntime) {
-      try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json')); } catch {}
-      try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'heartbeat-pending.json')); } catch {}
-      try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json')); } catch {}
-    }
     if (!quiet) console.log(heading('Starting services...'));
     const servicesStarted = startCoreServices(opts.webPassword);
     if (servicesStarted > 0) {
@@ -2384,27 +2340,13 @@ export async function initCommand(args) {
       if (!quiet) {
         const runtimeName = selectedRuntime === 'codex' ? 'Codex' : 'Claude Code';
         console.log(`\n${warn(`${runtimeName} is not authenticated.`)}`);
-        console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
+        console.log(`  ${dim(`Run "zylos auth ${selectedRuntime}" to authenticate.`)}`);
       }
     }
     printWebConsoleInfo();
     if (!quiet) console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
     if (exitCode) process.exit(exitCode);
     return;
-  }
-
-  if (installState === 'incomplete') {
-    if (!quiet) console.log(`${warn('Incomplete installation detected at')} ${bold(ZYLOS_DIR)}`);
-    if (!skipConfirm) {
-      const answer = await prompt('Continue previous installation or start fresh? [c/f] (c): ');
-      if (answer.toLowerCase() === 'f') {
-        if (!quiet) console.log('Resetting managed state...');
-        resetManagedState();
-        if (!quiet) console.log('Starting fresh...\n');
-      } else {
-        if (!quiet) console.log('Continuing...\n');
-      }
-    }
   }
 
   // Step 6: Create directory structure
@@ -2430,10 +2372,9 @@ export async function initCommand(args) {
   seedFreshInstallNewSessionThresholdDefault();
   updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
 
-  // Step 7: Run data migrations then deploy templates (both idempotent)
-  runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
-  deployTemplates({ freshInstall: true });
-  if (!quiet) console.log(`  ${success('Templates deployed')}`);
+  // Step 7: Assets and data migrations are already prepared.
+  // Assets and W7 were prepared before selected-runtime auth.
+  console.log(`Non-selected runtime: use zylos auth ${selectedRuntime === 'claude' ? 'codex' : 'claude'} when needed.`);
 
   // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
   migrateWebConsolePassword();
@@ -2482,15 +2423,6 @@ export async function initCommand(args) {
     exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
   }
 
-  // On runtime switch: clear stale health state before restart.
-  // NOTE: do NOT kill the old session here — init.js may run from inside the
-  // old session, and killing it would terminate this process before services start.
-  // The activity-monitor kills the stale session on startup instead.
-  if (existingRuntime && existingRuntime !== selectedRuntime) {
-    try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json')); } catch {}
-    try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'heartbeat-pending.json')); } catch {}
-    try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json')); } catch {}
-  }
 
   // Step 11: Start services
   if (!quiet) console.log(`\n${heading('Starting services...')}`);
@@ -2507,7 +2439,7 @@ export async function initCommand(args) {
 
   // Done
   if (!quiet) {
-    console.log(`\n${success(bold('Zylos initialized successfully!'))}\n`);
+    console.log(exitCode === 1 ? '\nZylos initialization partially completed (部分完成).\n' : `\n${success(bold('Zylos initialized successfully!'))}\n`);
   }
 
   if (servicesStarted > 0 && !quiet) {

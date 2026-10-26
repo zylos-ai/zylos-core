@@ -1,9 +1,0 @@
-{
-  "command": [
-    "node",
-    "scripts/run-node-tests.js"
-  ],
-  "exitCode": 1,
-  "seconds": 92.03203773498535,
-  "fixtureCorrection": "Existing web-console and scheduler node_modules symlinks; initial failure retained"
-}

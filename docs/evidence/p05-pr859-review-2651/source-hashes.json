@@ -1,5 +1,0 @@
-{
-  "skills/activity-monitor/scripts/supervisor-admission.js": "a15963c4570fa60403414c750ca7a3ddf837003c603b7a6283cdecc216afb96e",
-  "skills/activity-monitor/scripts/restart-request-store.js": "520fff56e9b42b771266ee86adf9cfcdbc51e208c89276dc01a54ee838e8a183",
-  "skills/activity-monitor/scripts/__tests__/supervisor-admission.test.js": "32c34b0dfed82b2cd7ccb9bb7847a562fc673dbbe7cb4d57e60d18759cc42a85"
-}

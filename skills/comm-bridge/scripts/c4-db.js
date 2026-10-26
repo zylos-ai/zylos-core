@@ -278,7 +278,7 @@ export function retryOrFailControl(id, lastError, maxRetries = CONTROL_MAX_RETRI
       WHERE id = ?
     `).get(controlId);
 
-    if (!row) {
+    if (!row || row.status !== 'running') {
       return null;
     }
 
@@ -289,7 +289,7 @@ export function retryOrFailControl(id, lastError, maxRetries = CONTROL_MAX_RETRI
       database.prepare(`
         UPDATE control_queue
         SET status = 'failed', retry_count = ?, last_error = ?, updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND status = 'running'
       `).run(nextRetryCount, errorMsg, current, controlId);
       return { status: 'failed', retry_count: nextRetryCount };
     }
@@ -297,7 +297,7 @@ export function retryOrFailControl(id, lastError, maxRetries = CONTROL_MAX_RETRI
     database.prepare(`
       UPDATE control_queue
       SET status = 'pending', retry_count = ?, last_error = ?, updated_at = ?
-      WHERE id = ?
+      WHERE id = ? AND status = 'running'
     `).run(nextRetryCount, errorMsg, current, controlId);
 
     return { status: 'pending', retry_count: nextRetryCount };
