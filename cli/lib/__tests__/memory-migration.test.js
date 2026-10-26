@@ -189,9 +189,10 @@ test('complete reports unmatched filename wildcards verbatim', async t => {
   const f = fixture(t); init(f);
   fs.mkdirSync(path.join(f.memory, 'reference'));
   fs.writeFileSync(path.join(f.memory, 'reference/topic.txt'), 'topic');
-  await f.service.apply({ ...patch, replacement: '`memory/reference/*.md`' });
+  const indexes = ['memory/reference/*.md', 'reference/absent*.md'];
+  await f.service.apply({ ...patch, replacement: '`memory/reference/*.md` [topics](reference/absent*.md)' });
   await assert.rejects(f.service.complete('Reviewed wildcard index'), e =>
-    e.code === 'CHECK_FAILED' && e.missingPaths.includes('memory/reference/*.md'));
+    e.code === 'CHECK_FAILED' && indexes.every(value => e.missingPaths.includes(value)));
 });
 
 test('complete rejects wildcard directory segments and non-regular or unreadable matches', async t => {
