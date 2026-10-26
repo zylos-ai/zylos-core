@@ -34,7 +34,7 @@ for(const mode of ['pane-disappears','executor-times-out'])test(`real paste ${mo
   await assert.rejects(f.adapter.sendText({target:f.target,connection:f.connection,text:'private-message-body'}),{code:'PASTE_FAILED',...(mode==='executor-times-out'?{cause:'timeout'}:{})});
   assert.match(buffer,/^zylos-/);
   assert.equal(cleanupChecked,true,'Failure left a real buffer that cleanup removed');
-  if(mode==='executor-times-out')assert.equal(f.connection.closed,true);
+  if(mode==='executor-times-out')assert.equal(f.connection.closed,false);
   assert.equal(f.command('list-buffers','-F','#{buffer_name}').split('\n').includes(buffer),false);
   await assert.rejects(fs.stat(privateFile),{code:'ENOENT'});
   assert.equal(f.snapshot('origin'),f.origin);

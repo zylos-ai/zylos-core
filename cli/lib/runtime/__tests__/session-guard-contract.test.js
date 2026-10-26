@@ -185,7 +185,10 @@ for(const method of ['sendText','sendKeys'])test(`IF-13 ${method} guarded comman
   const started=performance.now();
   await assert.rejects(adapter[method]({connection,target,text:'never sent',keys:['Enter']}),{code:method==='sendText'?'PASTE_FAILED':'ENTER_UNVERIFIED',cause:'timeout'});
   assert.ok(performance.now()-started>=90,'injected command must reach its 100ms timeout');
-  assert.equal(connection.closed,true);
+  assert.equal(connection.closed,false);
+  await fs.unlink(f.flag);
+  f.options.timeoutMs=2000;
+  await adapter[method]({connection,target,text:'retry on original target',keys:['Enter']});
 });
 
 test('IF-13 replacing the bound server blocks old text and keys from the new pane',async t=>{

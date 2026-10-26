@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest } from './tmux-env.js';
 import { buildKickPrompt } from './kick-prompt.js';
 import { adapterError } from './tmux-protocol.js';
@@ -60,6 +61,24 @@ export function hasNativeClaudeAuth(command, env) {
     return status?.loggedIn === true && status?.authMethod === 'claude.ai';
   } catch { return false; }
 }
+export async function hasNativeClaudeAuthAsync(command, env) {
+  if (env.HOME && !env.CLAUDE_CONFIG_DIR) {
+    try {
+      const data = JSON.parse(await fs.promises.readFile(path.join(env.HOME, '.claude', '.credentials.json'), 'utf8'));
+      if (data?.claudeAiOauth?.refreshToken) return true;
+    } catch { /* Missing/unreadable credentials may still use native status. */ }
+  }
+  try {
+    const nativeEnv = { ...env };
+    delete nativeEnv.ANTHROPIC_API_KEY;
+    delete nativeEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    const { stdout } = await promisify(execFile)(command, ['auth', 'status'], {
+      env:nativeEnv, cwd:env.ZYLOS_DIR, encoding:'utf8', timeout:10000, killSignal:'SIGKILL',
+    });
+    const status = JSON.parse(stdout);
+    return status?.loggedIn === true && status?.authMethod === 'claude.ai';
+  } catch { return false; }
+}
 export function launchEnvironment(root, processEnv = process.env) {
   const dotenvVars = {};
   try {
@@ -90,4 +109,14 @@ export function writeSessionLaunchScript({command,args,env,root,multi}) {
 export function runtimeHelp(command, env = process.env) {
   try { return execFileSync(command,['--help'],{env,encoding:'utf8',timeout:10000,killSignal:'SIGKILL',stdio:'pipe'}); }
   catch (e) { throw adapterError('LAUNCH_FAILED', 'Runtime capability query failed', e.code === 'ETIMEDOUT' ? 'timeout':'error'); }
+}
+export async function runtimeHelpAsync(command, env = process.env) {
+  try {
+    const { stdout } = await promisify(execFile)(command, ['--help'], {
+      env, encoding:'utf8', timeout:10000, killSignal:'SIGKILL',
+    });
+    return stdout;
+  } catch (error) {
+    throw adapterError('LAUNCH_FAILED', 'Runtime capability query failed', error.killed ? 'timeout' : 'error');
+  }
 }

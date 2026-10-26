@@ -53,7 +53,9 @@ test('guard marker-looking payload remains data; genuine no-server response mean
 test('no-server words in a socket path do not turn permission failure into absence', async t => {
   const f = await fixture(t);
   await f.set('permission');
-  await assert.rejects(openTmuxConnection({ binary: f.binary }), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
+  const connection = await openTmuxConnection({ binary: f.binary });
+  t.after(() => connection.close());
+  await assert.rejects(serverGeneration(connection), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
 });
 
 test('unexpected server exit is absence before the guard and TARGET_GONE after binding', async t => {

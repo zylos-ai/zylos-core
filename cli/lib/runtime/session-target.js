@@ -100,7 +100,7 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
   // expansion keeps initial name lookups safe while retaining an empty field.
   try { output = await connection.command([C.displayMessage, '-p', '-t', pinned?.paneId ?? `=${tmuxName}:`, F.observation]); }
   catch (error) {
-    if (missing(error)) return absent;
+    if (missing(error) || error.code === 'TMUX_NO_SERVER') return absent;
     throw unavailableCommand(error);
   }
   // display-message returns an empty format (not an error) for an absent target.
@@ -116,7 +116,6 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
     const ready = Boolean(runId && validReady(f3) && f3.runId === runId);
     const target = { present: true, tmuxName, runId, createdAt: Number(created), ...runtime, ready, sessionId: ready ? f3.sessionId : null, runtimeSessionId: ready ? f3.sessionId : null, rawF2, f3: ready ? f3 : null, tmuxSessionId, paneId, serverGeneration: generation };
     bindings.set(target, { connection, tmuxSessionId, paneId, serverGeneration: generation, runId });
-    await revalidateSessionTarget({ connection, target });
     return freezeDeep(target);
   } catch (error) {
     if (missing(error)) throw tmuxError('TARGET_GONE', 'Target object disappeared during observation');

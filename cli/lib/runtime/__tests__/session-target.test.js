@@ -65,18 +65,44 @@ test('F3 malformed/mismatched is not READY; snapshots immutable', async t => {
   const good = await observeSessionTarget(options); assert.equal(good.ready,true);
   assert.throws(()=>{good.rawF2.ZYLOS_RUN_ID='evil';},TypeError); assert.throws(()=>{good.f3.startupControlIds.push(1);},TypeError);
 });
+test('configured observation reads identity and guarded environment once', async t => {
+  const {connection, options} = await fixture(t);
+  const command = connection.command.bind(connection), calls = [];
+  connection.command = async (argv, settings) => {
+    calls.push(argv[0]);
+    return command(argv, settings);
+  };
+  assert.equal((await observeSessionTarget(options)).ready, true);
+  assert.deepEqual(calls, ['display-message', 'show-environment']);
+});
+test('first binding adopts the observed server rather than the server at executor creation', async t => {
+  const {connection, tmux, options} = await fixture(t);
+  const original = await serverGeneration(connection);
+  tmux('kill-server');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', '-e', 'ZYLOS_RUN_ID=r1',
+    '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', 'sleep', '120');
+  const target = await resolveSessionTarget(options);
+  assert.notEqual(target.serverGeneration, original);
+  assert.equal(await revalidateSessionTarget({connection, target}), true);
+});
 test('same socket restart fails its generation guard without replay', async t => {
   const {connection,tmux,socketPath,options} = await fixture(t);
   const target = await resolveSessionTarget(options); tmux('kill-server');
   await new Promise(resolve=>setTimeout(resolve,100));
   tmux('-f','/dev/null','new-session','-d','-s','fixture','sleep','120');
   await assert.rejects(revalidateSessionTarget({connection,target}),{code:'GENERATION_CHANGED'});
-  const replacement = await openTmuxConnection({binary,socketPath}); assert.notEqual(replacement.serverGeneration,target.serverGeneration); replacement.close();
+  const replacement = await openTmuxConnection({binary,socketPath}); assert.notEqual(await serverGeneration(replacement),target.serverGeneration); replacement.close();
 });
 test('absent server differs from unexecutable transport; missing generation rejected', async t => {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-no-server-')); t.after(()=>fs.rm(dir,{recursive:true,force:true}));
-  await assert.rejects(openTmuxConnection({binary,socketPath:path.join(dir,'absent')}),{code:'TMUX_NO_SERVER'});
-  await assert.rejects(openTmuxConnection({binary:path.join(dir,'missing')}),{code:'TMUX_UNAVAILABLE',cause:'error'});
+  const absent = await openTmuxConnection({binary,socketPath:path.join(dir,'absent')});
+  const missing = await openTmuxConnection({binary:path.join(dir,'missing')});
+  t.after(()=>{absent.close();missing.close();});
+  await assert.rejects(serverGeneration(absent),{code:'TMUX_NO_SERVER'});
+  assert.equal((await observeSessionTarget({connection:absent,tmuxName:'fixture'})).present,false);
+  await assert.rejects(resolveSessionTarget({connection:absent,tmuxName:'fixture'}),{code:'TARGET_GONE'});
+  await assert.rejects(serverGeneration(missing),{code:'TMUX_UNAVAILABLE',cause:'error'});
   await assert.rejects(serverGeneration({command:async()=> '123:'}),{code:'TMUX_UNAVAILABLE'});
 });
 test('runtime fallback uses unique shallowest name and never invents config', async () => {
@@ -125,13 +151,13 @@ test('initial disappearance and generation change are detected before any sendin
   await assert.rejects(revalidateSessionTarget({connection:held,target}),{code:'GENERATION_CHANGED'});
   await assert.rejects(revalidateSessionTarget({connection:held,target:{...target}}),TypeError);
 });
-test('command timeout closes executor and never accepts a retry', async t => {
+test('command timeout leaves executor available for a guarded retry', async t => {
   const {socketPath}=await fixture(t);
   const connection=await openTmuxConnection({binary,socketPath,timeoutMs:40});
   t.after(()=>connection.close());
   await assert.rejects(connection.command(['wait-for','unreleased-test-channel']),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
-  assert.equal(connection.closed,true);
-  await assert.rejects(connection.command(['display-message','-p','must not replay']),{code:'TMUX_UNAVAILABLE'});
+  assert.equal(connection.closed,false);
+  assert.equal(await connection.command(['display-message','-p','retry available']), 'retry available');
 });
 
 test('process observation distinguishes absence from ambiguity and unavailable scans', async () => {

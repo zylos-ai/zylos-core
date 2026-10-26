@@ -51,10 +51,7 @@ export async function openTmuxConnection(options = {}) {
     if (closed) throw tmuxError('TMUX_UNAVAILABLE', 'tmux executor is closed', 'error');
     const controller = new AbortController(); active.add(controller);
     try { return await runTmuxCommand(argv, { ...options, timeoutMs, noServerStart: true, signal: controller.signal }); }
-    catch (error) {
-      if (error.cause === 'timeout') connection.close();
-      throw error;
-    } finally { active.delete(controller); }
+    finally { active.delete(controller); }
   };
   const connection = {
     get closed() { return closed; },
@@ -62,7 +59,7 @@ export async function openTmuxConnection(options = {}) {
     async cleanupBuffer(name) {
       if (!/^zylos-[0-9a-f-]{36}$/.test(name)) throw new TypeError('Invalid private buffer name');
       // A private buffer belongs to the send, not its pane. Cleanup must still
-      // run after the pane disappears or a command timeout closes this executor.
+      // run after the pane disappears or the caller closes this executor.
       await runTmuxCommand([C.deleteBuffer, '-b', name], {
         ...options, noServerStart: true, signal: undefined,
       });
@@ -73,7 +70,6 @@ export async function openTmuxConnection(options = {}) {
       if (!validGeneration(candidate.serverGeneration) || !validSessionId(candidate.tmuxSessionId) || !validPaneId(candidate.paneId)) {
         throw new TypeError('Invalid tmux target binding');
       }
-      if (candidate.serverGeneration !== connection.serverGeneration) throw tmuxError('GENERATION_CHANGED', 'tmux server generation changed');
       if (binding && ['serverGeneration','tmuxSessionId','paneId'].some(key => binding[key] !== candidate[key])) {
         throw tmuxError('TARGET_GONE', 'Cannot replace a bound tmux target');
       }
@@ -101,15 +97,7 @@ export async function openTmuxConnection(options = {}) {
     },
     close() { closed = true; for (const controller of active) controller.abort(); },
   };
-  try {
-    const value = (await connection.command([C.displayMessage, '-p', F.generation])).trim();
-    if (!validGeneration(value)) throw tmuxError('TMUX_UNAVAILABLE', 'tmux server generation unavailable', 'error');
-    Object.defineProperty(connection, 'serverGeneration', { value, enumerable: true });
-    return connection;
-  } catch (error) {
-    connection.close();
-    throw unavailableCommand(error);
-  }
+  return connection;
 }
 
 export async function serverGeneration(connection) {
