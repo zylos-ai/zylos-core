@@ -176,6 +176,16 @@ test('complete ignores absent reference paths in ordinary prose', async t => {
   assert.equal(f.service.status().state, 'done');
 });
 
+test('complete reports one missing path for prefixed and unprefixed index aliases', async t => {
+  const f = fixture(t); init(f);
+  await f.service.apply({ ...patch, replacement: '`reference/a.md` [alias](memory/reference/a.md)' });
+  await assert.rejects(f.service.complete('Reviewed missing aliases'), e => {
+    assert.equal(e.code, 'CHECK_FAILED');
+    assert.deepEqual(e.missingPaths, ['memory/reference/a.md']);
+    return true;
+  });
+});
+
 test('complete accepts filename wildcards with a readable regular match', async t => {
   const f = fixture(t); init(f);
   fs.mkdirSync(path.join(f.memory, 'reference'));
