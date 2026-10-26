@@ -1,12 +1,24 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import { isolatedTmux, tmuxClientEnv } from '../../../../test/helpers/isolated-tmux.js';
+
+const tmuxEnvironment = tmuxClientEnv(isolatedTmux({ after }));
+function writeRuntimeHealth(root, health) {
+  fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'single' }));
+  const dir = path.join(root, 'activity-monitor', 'runtime-health'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'claude.json'), JSON.stringify({ v: 1, runtime: 'claude', health,
+    reason: health === 'ok' ? '' : 'unavailable', updatedAt: 1, hook: {}, unavailableSince: 0, cooldownUntil: 0,
+    recoveringStartedAt: 0, lastUserMessageRecoveryAt: 0, restartFailureCount: 0, lastRecoveryAt: 0,
+    lastDownCheckAt: 0, rateLimitResetTime: '' }));
+}
 
 const CLI_PATH = fileURLToPath(new URL('../c4-receive.js', import.meta.url));
 
@@ -38,7 +50,7 @@ function cliRawAsync(args, env = {}) {
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-receive-'));
   fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
-  const env = { ZYLOS_DIR: tmpDir };
+  const env = { ...tmuxEnvironment, ZYLOS_DIR: tmpDir };
   try {
     return fn({ tmpDir, env });
   } finally {
@@ -49,7 +61,7 @@ function withTmpDir(fn) {
 async function withTmpDirAsync(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-receive-'));
   fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
-  const env = { ZYLOS_DIR: tmpDir };
+  const env = { ...tmuxEnvironment, ZYLOS_DIR: tmpDir };
   try {
     return await fn({ tmpDir, env });
   } finally {
@@ -364,7 +376,7 @@ describe('c4-receive health gating', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'ok' }));
+      writeRuntimeHealth(tmpDir, 'ok');
 
       const r = cliRaw(['--no-reply', '--json', '--content', 'healthy msg'], env);
       assert.equal(r.status, 0);
@@ -375,7 +387,7 @@ describe('c4-receive health gating', () => {
 
   it('fallback records rejected no-reply unhealthy messages failed without error', () => {
     withTmpDir(({ tmpDir, env }) => {
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
+      writeRuntimeHealth(tmpDir, 'recovering');
 
       const r = cliRaw(['--no-reply', '--json', '--content', 'recovering msg'], env);
       assert.equal(r.status, 0);
@@ -394,7 +406,7 @@ describe('c4-receive health gating', () => {
 
   it('fallback normalizes legacy unhealthy status and exits zero', () => {
     withTmpDir(({ tmpDir, env }) => {
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      writeRuntimeHealth(tmpDir, 'down');
       createChannelSendScript(tmpDir, 'test-chan');
 
       const r = cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'down msg'], env);
@@ -421,7 +433,7 @@ describe('c4-receive health gating', () => {
 
   it('returns an error if unhealthy status delivery fails', () => {
     withTmpDir(({ tmpDir, env }) => {
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      writeRuntimeHealth(tmpDir, 'down');
       createChannelSendScript(tmpDir, 'test-chan', { exitCode: 7 });
 
       const r = cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'down msg'], env);
@@ -434,7 +446,7 @@ describe('c4-receive health gating', () => {
 
   it('does not write pending-channels.jsonl on fallback unhealthy route', () => {
     withTmpDir(({ tmpDir, env }) => {
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      writeRuntimeHealth(tmpDir, 'down');
       createChannelSendScript(tmpDir, 'test-chan');
 
       cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'x'], env);
@@ -445,7 +457,7 @@ describe('c4-receive health gating', () => {
 
   it('fallback suppresses repeated status notices by normalized endpoint and public health', () => {
     withTmpDir(({ tmpDir, env }) => {
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      writeRuntimeHealth(tmpDir, 'down');
       createChannelSendScript(tmpDir, 'test-chan');
 
       const first = cliRaw([
@@ -471,7 +483,7 @@ describe('c4-receive health gating', () => {
       assert.equal(entries.length, 1);
       assert.equal(entries[0].endpoint, 'oc_123|root:om_root|type:group');
       assert.equal(entries[0].status_type, 'unavailable');
-      assert.equal(entries[0].reason, 'unavailable');
+      assert.equal(entries[0].reason, 'runtime_unavailable');
       assert.equal(fs.existsSync(path.join(tmpDir, 'activity-monitor', 'status-notice-cooldowns.json')), false);
 
       const db = openDb(tmpDir);
@@ -489,7 +501,7 @@ describe('c4-receive health gating', () => {
 
   it('fallback reserves status notice cooldown before sending so concurrent receives suppress duplicates', async () => {
     await withTmpDirAsync(async ({ tmpDir, env }) => {
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      writeRuntimeHealth(tmpDir, 'down');
       createBlockingAppendChannelSendScript(tmpDir, 'test-chan');
 
       const argsA = [
@@ -538,7 +550,7 @@ describe('c4-receive health gating', () => {
       const now = Math.floor(Date.now() / 1000);
       const init = cliRaw(['--no-reply', '--json', '--content', 'init db'], env);
       assert.equal(init.status, 0);
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      writeRuntimeHealth(tmpDir, 'down');
       createChannelSendScript(tmpDir, 'test-chan');
       const db = openDb(tmpDir);
       const insertCooldown = db.prepare(`
@@ -570,7 +582,7 @@ describe('c4-receive MessageRouter IPC route', () => {
     await withTmpDirAsync(async ({ tmpDir, env }) => {
       createChannelSendScript(tmpDir, 'test-chan');
       await withRouteServer(tmpDir, (request) => ({
-        version: 1,
+        version: 2, type: 'route', runtime: 'claude', reason: 'ok', transitionHold: false, decision: 'pending',
         requestId: request.requestId,
         recovered: true,
         health: 'ok'
@@ -594,7 +606,7 @@ describe('c4-receive MessageRouter IPC route', () => {
     await withTmpDirAsync(async ({ tmpDir, env }) => {
       createChannelSendScript(tmpDir, 'test-chan');
       await withRouteServer(tmpDir, (request) => ({
-        version: 1,
+        version: 2, type: 'route', runtime: 'claude', transitionHold: false,
         requestId: request.requestId,
         recovered: false,
         health: 'unavailable',
@@ -622,7 +634,7 @@ describe('c4-receive MessageRouter IPC route', () => {
     await withTmpDirAsync(async ({ tmpDir, env }) => {
       createChannelSendScript(tmpDir, 'test-chan');
       await withRouteServer(tmpDir, (request) => ({
-        version: 1,
+        version: 2, type: 'route', runtime: 'claude', transitionHold: false,
         requestId: request.requestId,
         recovered: false,
         health: 'unavailable',
@@ -669,7 +681,7 @@ describe('c4-receive MessageRouter IPC route', () => {
   it('accepts unhealthy no-reply router decisions without userMessage', async () => {
     await withTmpDirAsync(async ({ tmpDir, env }) => {
       await withRouteServer(tmpDir, (request) => ({
-        version: 1,
+        version: 2, type: 'route', runtime: 'claude', transitionHold: false,
         requestId: request.requestId,
         recovered: false,
         health: 'unavailable',

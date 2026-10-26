@@ -5,17 +5,45 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
 import { guardDatabase } from '../sqlite-schema.js';
 import * as schema from '../c4-schema.js';
 import { freezeFirstFailureNotice, processFirstFailureNotices, sendNoticeWorker } from '../first-failure-notice.js';
-import { claimStatusNotice } from '../c4-db.js';
-import { statusNoticeKey, normalizeStatusEndpoint } from '../status-notice.js';
+import { reserveStatusNoticeCooldown } from '../c4-db.js';
+import { reserveStatusNotice } from '../status-notice.js';
 import { HealthStore } from '../../../activity-monitor/scripts/health-store.js';
 
 const identity = { runtime:'claude', session_id:'session', claude_pid:123 };
 const event = { schema_version:1, source:'hook', ...identity,
   event_id:'11111111-1111-1111-1111-111111111111', prompt_id:'prompt',
   event:'stop_failure', error:'rate_limit', received_at:100000 };
+
+test('single mode real first-failure reservation and sender preserve the grouped target scope', t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'first-notice-integration-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const sender=path.join(root,'.claude/skills/fake/scripts');
+  fs.mkdirSync(sender,{recursive:true});
+  const capture=path.join(root,'capture.json');
+  fs.writeFileSync(path.join(sender,'send.js'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:process.argv.slice(2),body:fs.readFileSync(0,'utf8')}));`);
+  const code=`import {getDb,close} from ${JSON.stringify(new URL('../c4-db.js',import.meta.url).href)};
+    import {freezeFirstFailureNotice,processFirstFailureNotices} from ${JSON.stringify(new URL('../first-failure-notice.js',import.meta.url).href)};
+    import {HealthStore} from ${JSON.stringify(new URL('../../../activity-monitor/scripts/health-store.js',import.meta.url).href)};
+    const database=getDb(),identity=${JSON.stringify(identity)};
+    database.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','fake','room','request','delivered','fake:review')").run();
+    const store=new HealthStore({zylosDir:process.env.ZYLOS_DIR,now:()=>100000,freezeNotice:options=>freezeFirstFailureNotice(database,{...options,sessionGroup:null})});
+    store.consume(${JSON.stringify(event)},{identity});
+    await processFirstFailureNotices({store,database,identity:()=>identity,zylosDir:process.env.ZYLOS_DIR});
+    console.log(JSON.stringify({outcome:store.read().last_notice_outcome.status,rows:database.prepare('SELECT cooldown_key FROM status_notice_cooldowns').all()}));close();`;
+  const result=spawnSync(process.execPath,['--input-type=module','-e',code],{env:{...process.env,ZYLOS_DIR:root},encoding:'utf8',timeout:10000});
+  assert.equal(result.status,0,result.stderr);
+  const output=JSON.parse(result.stdout.trim());
+  assert.equal(output.outcome,'sent');
+  assert.match(output.rows[0].cooldown_key,/fake:review/);
+  assert.match(output.rows[0].cooldown_key,/claude/);
+  const sent=JSON.parse(fs.readFileSync(capture,'utf8'));
+  assert.equal(sent.args[0],'room');
+  assert.doesNotMatch(sent.args.join(' ')+sent.body,/--session-group/);
+});
 
 for (const mode of ['sent','sender-signal','worker-killed','spawn-error']) {
   test('worker diagnostic is recorded once for '+mode, async t => {
@@ -45,17 +73,18 @@ for (const mode of ['sent','sender-signal','worker-killed','spawn-error']) {
     if(mode==='spawn-error') assert.equal(row.outcome,'failed');
   });
 }
-function fixture(t) {
+function fixture(t, sessionGroup = 'fake') {
+  fs.mkdirSync(path.join(process.env.ZYLOS_DIR,'.claude','skills','fake'),{recursive:true});
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'first-notice-file-'));
   const db = new Database(':memory:'); guardDatabase(db,schema);
   t.after(() => { db.close(); fs.rmSync(root,{recursive:true,force:true}); });
   const store = new HealthStore({zylosDir:root,now:()=>100000,
-    freezeNotice: options => freezeFirstFailureNotice(db,{...options,sessionGroup:null})});
+    freezeNotice: options => freezeFirstFailureNotice(db,{...options,sessionGroup})});
   return {root,db,store};
 }
-function inbound(db,id,{status='delivered',channel='fake',endpoint='group|thread:t|msg:'+id}={}) {
-  db.prepare("INSERT INTO conversations(id,direction,channel,endpoint_id,content,status) VALUES (?,'in',?,?,'private request',?)")
-    .run(id,channel,endpoint,status);
+function inbound(db,id,{status='delivered',channel='fake',endpoint='group|thread:t|msg:'+id,sessionGroup='fake'}={}) {
+  db.prepare("INSERT INTO conversations(id,direction,channel,endpoint_id,content,status,session_group) VALUES (?,'in',?,?,'private request',?,?)")
+    .run(id,channel,endpoint,status,sessionGroup);
 }
 function consume(store) {
   assert.equal(store.consume(event,{identity}).status,'processed');
@@ -64,8 +93,7 @@ function consume(store) {
 function options(f,{now=100100,scope=identity,sent=[],outcome='sent',quota=()=>null,...extra}={}) {
   return {store:f.store,database:f.db,identity:()=>scope,now:()=>now,quota,
     reserve(channel,endpoint,route) {
-      return claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),
-        health:route.health,reason:route.reason,channel,endpoint,normalizedEndpoint:normalizeStatusEndpoint(endpoint),now:Math.floor(now/1000)},f.db);
+      return reserveStatusNotice(channel,endpoint,route,{reserve:input=>reserveStatusNoticeCooldown({...input,now:Math.floor(now/1000)},f.db)});
     },
     async send(claim,message,route) {sent.push({claim,message,route});return {outcome};}, ...extra};
 }
@@ -81,6 +109,8 @@ test('health and latest target commit together; failed intake excluded and targe
   const sent=[];await processFirstFailureNotices(options(f,{sent}));
   assert.equal(sent.length,1);assert.equal(sent[0].claim.endpoint,intent.endpoint);
   assert.equal(sent[0].route.noticeKind,'first-failure');
+  assert.equal(sent[0].route.sessionGroup,'fake');
+  assert.equal(sent[0].route.runtime,'claude');
   assert.equal(f.store.read().pending_notice,undefined);
   assert.equal(f.store.read().last_notice_outcome.status,'sent');
 });
@@ -88,6 +118,28 @@ test('no eligible inbound, no reply endpoint, and control channel create no targ
   const f=fixture(t);
   inbound(f.db,1,{status:'failed'});inbound(f.db,2,{endpoint:null});
   inbound(f.db,3,{channel:'control'});inbound(f.db,4,{status:'pending'});
+  assert.equal(consume(f.store),undefined);
+});
+for (const group of ['fake:review', '']) test('single mode sends latest eligible '+(group?'grouped':'legacy')+' inbound', async t => {
+  const f=fixture(t,null);
+  inbound(f.db,1,{sessionGroup:'fake:older'});
+  inbound(f.db,2,{sessionGroup:group});
+  for (const [index,channel] of ['void','system','internal','control','scheduler'].entries()) {
+    inbound(f.db,3+index,{channel,sessionGroup:group});
+  }
+  inbound(f.db,8,{status:'failed',sessionGroup:group});
+  inbound(f.db,9,{endpoint:'',sessionGroup:group});
+  assert.equal(consume(f.store).conversation_id,2);
+  const sent=[];await processFirstFailureNotices(options(f,{sent}));
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].claim.endpoint,'group|thread:t|msg:2');
+  assert.equal(sent[0].route.sessionGroup,group || 'origin');
+  assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=2').get().session_group,group);
+  assert.equal(f.store.read().last_notice_outcome.status,'sent');
+});
+test('multi origin never selects legacy or another group', t => {
+  const f=fixture(t,'origin');
+  inbound(f.db,1,{sessionGroup:''});inbound(f.db,2,{sessionGroup:'fake:other'});
   assert.equal(consume(f.store),undefined);
 });
 test('running target sends immediately without retargeting a newer message', async t => {
@@ -112,11 +164,11 @@ test('changed process identity cancels frozen notice', async t => {
 test('inbound and first-failure share per-reason cooldown', async t => {
   const f=fixture(t);inbound(f.db,1);const intent=consume(f.store);
   const sent=[];const op=options(f,{sent});
-  op.reserve('fake','group|thread:t|msg:new',{health:intent.health,reason:intent.reason});
+  op.reserve('fake','group|thread:t|msg:new',{health:intent.health,reason:intent.reason,sessionGroup:'fake',runtime:'claude'});
   await processFirstFailureNotices(op);
   assert.equal(sent.length,0);assert.equal(f.store.read().pending_notice,undefined);
   assert.equal(f.store.read().last_notice_outcome.status,'suppressed');
-  assert.equal(op.reserve('fake',intent.endpoint,{health:'auth_failed',reason:'authentication_failed'}).suppressed,false);
+  assert.equal(op.reserve('fake',intent.endpoint,{health:'auth_failed',reason:'authentication_failed',sessionGroup:'fake',runtime:'claude'}).suppressed,false);
 });
 test('late matching quota enriches reply inside bounded wait', async t => {
   const f=fixture(t);inbound(f.db,1);consume(f.store);
@@ -151,6 +203,24 @@ test('sender exception retains cooldown and records uncertain result', async t =
   assert.equal(f.db.prepare('SELECT count(*) n FROM status_notice_cooldowns').get().n,1);
 });
 
+for (const boundary of ['identity-changed','intent-changed','send-failed']) {
+  test('definite first-failure cancellation clears reservation: '+boundary,async t=>{
+    const f=fixture(t);inbound(f.db,1);consume(f.store);
+    const sent=[];
+    const op=options(f,{sent,outcome:'failed'});
+    if(boundary==='identity-changed') {
+      let reads=0;
+      op.identity=()=>++reads===1?identity:{...identity,claude_pid:124};
+    }
+    if(boundary==='intent-changed') {
+      const update=f.store.updatePending.bind(f.store);
+      f.store.updatePending=(id,patch)=>patch.status==='sending'?false:update(id,patch);
+    }
+    await processFirstFailureNotices(op);
+    assert.equal(sent.length,boundary==='send-failed'?1:0);
+    assert.equal(f.db.prepare('SELECT count(*) n FROM status_notice_cooldowns').get().n,0);
+  });
+}
 test('T02 grouped failure freezes its own message and publishes notice updates through runtime serialization',async t=>{
   const f=fixture(t);f.store.freezeNotice=input=>freezeFirstFailureNotice(f.db,input);
   inbound(f.db,1);inbound(f.db,2);f.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run('telegram:a',1);f.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run('telegram:b',2);

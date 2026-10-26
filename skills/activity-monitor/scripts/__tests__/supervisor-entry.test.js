@@ -100,7 +100,7 @@ test('T02 entry freezes first-failure notice synchronously with correct single/m
   for(const mode of ['single','multi']) {
     const root=prepare(t,{session_mode:mode,runtime:'claude'}),w=launch(t,root);await w.next();w.child.send('freeze');
     const result=await w.next();assert.equal(result.notice.endpoint,'frozen');assert.equal(result.notice.reason,'authentication_failed');
-    assert.equal(result.noticeScope,mode==='single'?'':'origin');await stop(w);
+    assert.equal(result.noticeScope,mode==='single'?null:'origin');await stop(w);
     const stored=JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/runtime-health/claude.json'),'utf8'));
     assert.equal(stored.hook.groups.origin.pendingNotice.endpoint,'frozen');
   }
