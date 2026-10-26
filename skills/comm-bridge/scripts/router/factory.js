@@ -1,11 +1,12 @@
+import { loadCoreModule } from './core-modules.js';
 import * as database from '../c4-db.js';
-import { readSessionMode, readZylosConfigStrict } from '../../../../cli/lib/config.js';
-import { createSessionReader } from '../../../../cli/lib/session-state-reader-async.js';
-import { readRuntimeHealth } from '../../../../cli/lib/session-state-reader.js';
-import { readReadyIdentity } from '../../../../cli/lib/runtime/session-target.js';
-import { getSessionAdapter } from '../../../../cli/lib/runtime/index.js';
-import { listGroupTmuxSessions } from '../../../../cli/lib/session-group-paths.js';
-import { resolveSessionPoolSize } from '../../../../cli/lib/session-pool-config.js';
+const { readSessionMode, readZylosConfigStrict } = await loadCoreModule('config.js');
+const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
+const { readRuntimeHealth } = await loadCoreModule('session-state-reader.js');
+const { readReadyIdentity } = await loadCoreModule('runtime/session-target.js');
+const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
+const { listGroupTmuxSessions } = await loadCoreModule('session-group-paths.js');
+const { resolveSessionPoolSize } = await loadCoreModule('session-pool-config.js');
 import { createRouter } from './scheduler.js';
 import { createDelivery } from './delivery.js';
 import { formatConversation } from './format.js';
@@ -18,7 +19,7 @@ import { createLifecycleProviders } from './lifecycle.js';
 // The supervisor owns the transport. Loading it on use allows the scheduler's
 // independent paths to be exercised without implementing a second protocol.
 async function submit(request) {
-  const provider = await import('../../../../cli/lib/am-sock-client.js');
+  const provider = await loadCoreModule('am-sock-client.js');
   return provider.submit(request);
 }
 

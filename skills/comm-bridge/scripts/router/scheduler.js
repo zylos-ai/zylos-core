@@ -1,4 +1,5 @@
-import { tmuxNameForGroup, groupFromTmuxName } from '../../../../cli/lib/session-group-paths.js';
+import { loadCoreModule } from './core-modules.js';
+const { tmuxNameForGroup, groupFromTmuxName } = await loadCoreModule('session-group-paths.js');
 import { createLane } from './lane.js';
 import { createActivationManager } from './activation.js';
 import { initializeRouter } from './startup.js';
