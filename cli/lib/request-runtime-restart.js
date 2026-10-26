@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { readSessionMode, ZYLOS_DIR } from './config.js';
-import { getModeTransition } from '../../skills/comm-bridge/scripts/c4-db.js';
 import { submit, lookupRestartRequest } from './am-sock-client.js';
 
 function enqueueSingleExit() {
@@ -15,7 +14,7 @@ function enqueueSingleExit() {
  * Only the self-upgrade call after services restart may retry failed connects.
  */
 export async function requestRuntimeRestart({ now = Date.now, deadlineAt, afterServiceRestart = false, readMode = readSessionMode,
-  readTransition = getModeTransition, send = submit, lookup = lookupRestartRequest,
+  readTransition = async () => (await import('../../skills/comm-bridge/scripts/c4-db.js')).getModeTransition(), send = submit, lookup = lookupRestartRequest,
   enqueueExit = enqueueSingleExit, requestId = `restart-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
   const deadline = afterServiceRestart ? Math.min(deadlineAt ?? Infinity, now() + 30000) : deadlineAt ?? now() + 10000;
   const fail = (code, message, persisted = []) => ({ok:false,error:{code,message: afterServiceRestart && persisted !== null
