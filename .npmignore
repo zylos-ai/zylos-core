@@ -3,6 +3,9 @@
 .github/
 .DS_Store
 
+# Skill dependencies are installed at their deployed location, not shipped.
+**/node_modules/
+
 # Logs and databases
 *.log
 *.db
