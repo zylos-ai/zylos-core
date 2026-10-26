@@ -45,6 +45,8 @@ test('packed global CLI starts without installed skill dependencies', async t =>
   fs.writeFileSync(env.npm_config_globalconfig, '');
   const packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', root],
     { cwd: repo, env, encoding: 'utf8', timeout: 60000 }));
+  assert.deepEqual(packed[0].files.filter(({ path: file }) => file.split('/').includes('node_modules')),
+    [], 'Published package must exclude dependencies installed by pretest');
   const prefix = path.join(root, 'prefix');
   const installed = path.join(prefix, 'lib', 'node_modules', 'zylos');
   fs.mkdirSync(installed, { recursive: true });
