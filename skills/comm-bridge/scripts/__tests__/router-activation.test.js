@@ -116,35 +116,54 @@ test('IB34 branch validation rejects missing, forbidden, wrong units and mismatc
 });
 
 test('T03 timeout observation failures alert and retain the running row and reservation', async t => {
-  for (const failingRead of [1, 2]) {
-    await t.test(`timeout read ${failingRead}`, async t => {
-      const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
-      const a = f.add('a'), b = f.add('b');
-      const adapter = f.deps.getSessionAdapter;
-      f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
-        f.calls.push(['launch', input]); f.put(input.sessionGroup, { ready: false, runId: input.runId });
-      } });
-      const router = f.create(); await router.initialize(); await f.rounds(2);
-      assert.equal(f.row(a.id).status, 'running');
-      const activation = router.state.activations.get('a');
-      const read = f.deps.readLiveIdentity; let reads = 0;
-      f.deps.readLiveIdentity = async group => {
-        if (group === 'a' && ++reads === failingRead) throw Object.assign(Error('unobservable'), { code: 'TMUX_UNAVAILABLE' });
-        return read(group);
-      };
-      f.advance(1000); await router.state.lanes.get('a').kick();
-      assert.equal(reads, failingRead);
-      assert.equal(calls(f, 'stop').length, 0);
-      assert.equal(f.row(a.id).status, 'running'); assert.equal(f.row(a.id).retry_count, 0);
-      assert.equal(f.row(b.id).status, 'pending');
-      assert.equal(router.state.activations.get('a'), activation); assert.equal(router.availableCapacity(), 0);
-      assert.ok(f.events.some(x => x.event === 'stop_unconfirmed' && x.session_group === 'a' && x.reason === 'TMUX_UNAVAILABLE'));
-      assert.ok(calls(f, 'alert').some(x => x[1] === 'stop_unconfirmed' && x[2].runId === activation.runId));
-      f.deps.readLiveIdentity = read;
-      await router.state.lanes.get('a').kick();
-      assert.equal(calls(f, 'stop').length, 1);
-      assert.equal(f.row(a.id).status, 'pending'); assert.equal(f.row(a.id).retry_count, 1);
-      assert.equal(router.state.activations.has('a'), false);
-    });
-  }
+  const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
+  const a = f.add('a'), b = f.add('b');
+  const adapter = f.deps.getSessionAdapter;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    f.calls.push(['launch', input]); f.put(input.sessionGroup, { ready: false, runId: input.runId });
+  } });
+  const router = f.create(); await router.initialize(); await f.rounds(2);
+  assert.equal(f.row(a.id).status, 'running');
+  const activation = router.state.activations.get('a');
+  const read = f.deps.readLiveIdentity; let reads = 0;
+  f.deps.readLiveIdentity = async group => {
+    if (group === 'a' && ++reads === 1) throw Object.assign(Error('unobservable'), { code: 'TMUX_UNAVAILABLE' });
+    return read(group);
+  };
+  f.advance(1000); await router.state.lanes.get('a').kick();
+  assert.equal(reads, 1);
+  assert.equal(calls(f, 'stop').length, 0);
+  assert.equal(f.row(a.id).status, 'running'); assert.equal(f.row(a.id).retry_count, 0);
+  assert.equal(f.row(b.id).status, 'pending');
+  assert.equal(router.state.activations.get('a'), activation); assert.equal(router.availableCapacity(), 0);
+  assert.ok(f.events.some(x => x.event === 'stop_unconfirmed' && x.session_group === 'a' && x.reason === 'TMUX_UNAVAILABLE'));
+  assert.ok(calls(f, 'alert').some(x => x[1] === 'stop_unconfirmed' && x[2].runId === activation.runId));
+  f.deps.readLiveIdentity = read;
+  await router.state.lanes.get('a').kick();
+  assert.equal(calls(f, 'stop').length, 1);
+  assert.equal(f.row(a.id).status, 'pending'); assert.equal(f.row(a.id).retry_count, 1);
+  assert.equal(router.state.activations.has('a'), false);
 });
+
+// I2 R9 / T03: the one fresh post-launch read decides timeout convergence.
+for (const ready of [false, true]) {
+  test(`timeout takes one fresh observation; READY=${ready}`, async t => {
+    const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
+    const row = f.add('a'), launch = deferred();
+    const adapter = f.deps.getSessionAdapter;
+    f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+      f.calls.push(['launch', input]);
+      await launch.promise;
+      f.put(input.sessionGroup, { ready, runId: input.runId });
+    } });
+    const router = f.create(); await router.initialize(); await pump(f, 2);
+    f.advance(2000);
+    const read = f.deps.readLiveIdentity; let reads = 0;
+    f.deps.readLiveIdentity = async group => { if (group === 'a') reads++; return read(group); };
+    launch.resolve(); await router.idle();
+    assert.equal(reads, 1);
+    assert.equal(calls(f, 'stop').length, ready ? 0 : 1);
+    assert.equal(f.row(row.id).retry_count, ready ? 0 : 1);
+    assert.equal(router.state.activations.has('a'), ready);
+  });
+}
