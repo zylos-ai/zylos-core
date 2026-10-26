@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { encodeGroupCharacters, decodeGroupCharacters } from './session-group-codec.js';
-import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-db.js';
+import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-group.js';
 import { tmuxClientArgs } from './runtime/tmux-client-args.js';
 
 export const GROUP_TMUX_PREFIX = 'zylos-group-';

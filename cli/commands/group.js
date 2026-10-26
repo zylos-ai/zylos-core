@@ -1,6 +1,4 @@
-import { runConfigCli } from '../../skills/comm-bridge/scripts/c4-config-handler.js';
-
-export async function groupCommand(args, { run = runConfigCli, io = process } = {}) {
+export async function groupCommand(args, { run, io = process } = {}) {
   const [kind, ...flags] = args;
   if (!['runtime', 'model'].includes(kind)) {
     const result = { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Usage: zylos group <runtime|model> <get|set|reset> [options]', persisted: [] } };
@@ -9,6 +7,7 @@ export async function groupCommand(args, { run = runConfigCli, io = process } = 
     process.exitCode = 1;
     return;
   }
+  if (run === undefined) run = (await import('../../skills/comm-bridge/scripts/c4-config-handler.js')).runConfigCli;
   let exitCode;
   if (flags.includes('--json')) exitCode = await run(kind, flags, io);
   else {
