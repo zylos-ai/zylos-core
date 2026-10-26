@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { recoveryEligibility } from './runtime-health.js';
 
+const USER_MESSAGE_CHECK_DELAY_MS = 5000;
 const TERMINAL = new Set(['done', 'failed', 'timeout', 'cancelled', 'superseded']);
 const fingerprint = text => createHash('sha256').update(String(text ?? '')).digest('hex');
 const sameRun = (a, b) => Boolean(a && b && a.runtime === b.runtime && a.runId && a.runId === b.runId);
@@ -33,8 +34,8 @@ export class SupervisorHealthObserver {
   notifyDelivered({ sessionGroup, runId, runtime, pastedAt }) {
     if (this.stopped || !sessionGroup || !runId || !runtime || !Number.isFinite(pastedAt)) return false;
     const state = this.sceneState({sessionGroup, runId, runtime});
-    if (!state.delivery || pastedAt < state.delivery.pastedAt) {
-      state.delivery = {pastedAt, lastAt:pastedAt, elapsed:0, toolsActive:false, responded:false};
+    if (!state.delivery || pastedAt > state.delivery.pastedAt) {
+      state.delivery = {pastedAt, lastAt:pastedAt, elapsed:0, toolsActive:false, responded:false, screenChecked:false};
     }
     return true;
   }
@@ -127,6 +128,35 @@ export class SupervisorHealthObserver {
     this.finish(probe,{recovered:result.classification === 'ok',classification:result.classification});
     if (result.classification === 'other') this.sceneState(probe.scene).pendingStop='recovery_failed';
   }
+  async checkDeliveredScreen(scene, tracked, delivery, state, now) {
+    // Consume this notification before I/O; idle ticks must not resample old text.
+    delivery.screenChecked = true;
+    const health=this.coordinator.store(scene.runtime).read();
+    const screen=health.health==='ok'?await this.readScreen(scene):null;
+    const recoveredScreen=screen!==null && health.recovered?.session_id===scene.sessionId && health.recovered?.screen_fingerprint === fingerprint(screen);
+    const matches = health.health === 'ok' && !recoveredScreen ? await this.matchScreen(scene.runtime,screen) : {};
+    if (tracked.delivery !== delivery) return false;
+    const authoritativeFailure=state.healthFailureCurrent || (state.healthIdentity && health.source==='hook' && !health.hook_ok &&
+      health.session_id===state.healthIdentity.session_id && health.hook_pid===state.healthIdentity.claude_pid);
+    // Accepted current-process failure evidence outranks a pane that may still show older text.
+    if (authoritativeFailure) tracked.sticky = null;
+    else if (matches.rateLimit?.detected || matches.authFailure?.detected) {
+      tracked.sticky = null;
+      if(matches.rateLimit?.detected) {tracked.rateHits++;if(tracked.rateHits < 2) return false;}
+      else {tracked.rateHits=0;if((await this.checkAuth(scene.runtime))?.status !== 'failure') return false;}
+      if (tracked.delivery !== delivery) return false;
+      await this.coordinator.applyScreenEvidence({runtime:scene.runtime,runId:scene.runId,
+        current:await this.readIdentity(scene.sessionGroup),matches,identity:state.healthIdentity});
+      tracked.sticky = null;
+    } else if (matches.apiError?.detected) {
+      tracked.rateHits=0;
+      tracked.sticky ??= {firstAt:now,count:0};tracked.sticky.count++;
+      if (tracked.sticky.count >= 2 && now-tracked.sticky.firstAt >= 30000) {
+        if (await this.stopScene(scene,'sticky_context_restart')) {if (tracked.delivery === delivery) tracked.delivery=null;tracked.sticky=null;return true;}
+      }
+    } else {tracked.sticky = null;tracked.rateHits=0;}
+    return false;
+  }
   async observeScene(scene) {
     if (this.stopped || !scene.ready || !scene.runId) return;
     const tracked = this.sceneState(scene), state = await this.readState(scene), now = this.now();
@@ -146,28 +176,7 @@ export class SupervisorHealthObserver {
       if (!delivery.responded && await this.readMode() === 'multi' && delivery.elapsed >= 600000) {
         if (await this.stopScene(scene,'no_response_detected')) {tracked.delivery = null;return;}
       }
-      const health=this.coordinator.store(scene.runtime).read();
-      const screen=health.health==='ok'?await this.readScreen(scene):null;
-      const recoveredScreen=screen!==null && health.recovered?.session_id===scene.sessionId && health.recovered?.screen_fingerprint === fingerprint(screen);
-      const matches = health.health === 'ok' && !recoveredScreen ? await this.matchScreen(scene.runtime,screen) : {};
-      const authoritativeFailure=state.healthFailureCurrent || (state.healthIdentity && health.source==='hook' && !health.hook_ok &&
-        health.session_id===state.healthIdentity.session_id && health.hook_pid===state.healthIdentity.claude_pid);
-      // Accepted current-process failure evidence outranks a pane that may still show older text.
-      if (authoritativeFailure) tracked.sticky = null;
-      else if (matches.rateLimit?.detected || matches.authFailure?.detected) {
-        tracked.sticky = null;
-        if(matches.rateLimit?.detected) {tracked.rateHits++;if(tracked.rateHits < 2) return;}
-        else {tracked.rateHits=0;if((await this.checkAuth(scene.runtime))?.status !== 'failure') return;}
-        await this.coordinator.applyScreenEvidence({runtime:scene.runtime,runId:scene.runId,
-          current:await this.readIdentity(scene.sessionGroup),matches,identity:state.healthIdentity});
-        tracked.sticky = null;
-      } else if (matches.apiError?.detected) {
-        tracked.rateHits=0;
-        tracked.sticky ??= {firstAt:now,count:0};tracked.sticky.count++;
-        if (tracked.sticky.count >= 2 && now-tracked.sticky.firstAt >= 30000) {
-          if (await this.stopScene(scene,'sticky_context_restart')) {tracked.delivery=null;tracked.sticky=null;return;}
-        }
-      } else {tracked.sticky = null;tracked.rateHits=0;}
+      if (!delivery.screenChecked && now - delivery.pastedAt >= USER_MESSAGE_CHECK_DELAY_MS && await this.checkDeliveredScreen(scene, tracked, delivery, state, now)) return;
     }
     if (!tools.length) {tracked.frozen=null;tracked.watchdog=null;return;}
     if (Number.isFinite(state.contextSwitches)) {
