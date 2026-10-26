@@ -33,7 +33,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
   const wait = async () => { holding = true; await held.promise; };
   const db = { ...database };
   const overrides = {
-    db, diagnostics: { diagnostic: (...args) => calls.push(['event', ...args]), maintain() {}, flush() {} }, log: message => calls.push(['log', message]),
+    db, diagnostics: { diagnostic: (...args) => calls.push(['event', ...args]), maintain() {} }, log: message => calls.push(['log', message]),
     listGroupTmuxSessions: async () => keys.map(sessionGroup => ({ sessionGroup, ...scenes.get(sessionGroup) })),
     readLiveIdentity: async group => scenes.get(group) ?? { present: false },
     readCurrentSession: async group => { calls.push(['current', group]); return { runId: `r-${group}`, sessionId: `business-${group}`, startupControlIds: [] }; },
@@ -191,3 +191,56 @@ test('IF12 factory: held launch in absent A does not block existing READY B deli
   for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
   assert.equal(f.row(first.id).status, 'delivered');
 });
+
+// T03 READY deadline / Howard TG7342: omit configuration so the real factory
+// selects the one product default for both runtimes; advance only fake time.
+for (const runtime of ['claude', 'codex']) for (const outcome of ['timeout', 'boundary-ready', 'late-launch']) {
+  test(`T03 factory default READY deadline is 30000ms: ${runtime}/${outcome}`, async t => {
+    const gate = deferred(); t.after(() => gate.resolve());
+    const f = setup(t);
+    t.after(() => f.db.getDb().prepare("UPDATE conversations SET status='failed' WHERE session_group IN (?,?) AND status IN ('pending','running')").run(f.a,f.b));
+    let clock = Date.now(), started = false, stops = 0, delivered = 0, launchInput;
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime, session_mode: 'multi' }));
+    delete f.options.readyTimeoutMs;
+    f.overrides.now = () => clock;
+    f.scenes.delete(f.a);
+    f.overrides.getSessionAdapter = selected => ({
+      launch: async input => {
+        assert.equal(selected, runtime); launchInput = input; started = true;
+        if (outcome === 'late-launch') await gate.promise;
+        f.scenes.set(f.a, { present: true, ready: outcome === 'late-launch', runtime,
+          runId: input.runId, sessionId: 'ready-business', tmuxName: tmuxNameForGroup(f.a), createdAt: Math.floor(clock/1000) });
+      },
+      stop: async input => { assert.equal(input.expectedRunId, launchInput.runId); stops++; f.scenes.delete(f.a); },
+    });
+    f.overrides.readCurrentSession = async group => {
+      const scene = f.scenes.get(group);
+      return scene?.ready ? { runId: scene.runId, sessionId: scene.sessionId, startupControlIds: [] } : null;
+    };
+    f.overrides.deliverConversation = async row => { delivered++; f.db.markDelivered(row.id, { sessionId: 'ready-business' }); };
+    const row = f.add(), dispatcher = f.create();
+    await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick();
+    await until(() => { dispatcher.tick(); return started; }, () => `factory must launch absent group: ${JSON.stringify(f.calls)}`);
+    if (outcome !== 'late-launch') await dispatcher.idle();
+    clock += 29999;
+    if (outcome === 'late-launch') { dispatcher.tick(); await flush(); }
+    else await dispatcher.state.lanes.get(f.a).kick();
+    assert.equal(stops, 0); assert.equal(delivered, 0); assert.equal(f.row(row.id).status, 'running');
+    clock += 1;
+    if (outcome === 'boundary-ready') f.scenes.get(f.a).ready = true;
+    if (outcome === 'late-launch') {
+      dispatcher.tick(); await flush();
+      assert.equal(stops, 0); assert.equal(f.row(row.id).retry_count, 0);
+      assert.ok(f.calls.some(c => c[0] === 'event' && c[1] === 'stop_unconfirmed' && c[2].reason === 'launch_pending'));
+      gate.resolve(); await dispatcher.idle();
+    }
+    await dispatcher.state.lanes.get(f.a).kick();
+    assert.equal(stops, outcome === 'timeout' ? 1 : 0);
+    assert.equal(f.row(row.id).retry_count, outcome === 'timeout' ? 1 : 0);
+    if (outcome === 'timeout') { assert.equal(delivered, 0); assert.equal(f.row(row.id).status, 'pending'); }
+    else {
+      await dispatcher.state.lanes.get(f.a).kick();
+      assert.equal(delivered, 1); assert.equal(f.row(row.id).status, 'delivered');
+    }
+  });
+}

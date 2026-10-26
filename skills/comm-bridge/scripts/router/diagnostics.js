@@ -28,5 +28,5 @@ export function createRouterDiagnostics({ env = process.env, now = Date.now,
     const results = await Promise.allSettled([stream.maintain(), receiveStream.maintain()]);
     for (const result of results) if (result.status === 'rejected') report(result.reason);
   }
-  return { diagnostic, maintain, flush: () => Promise.all([stream.flush(), receiveStream.flush()]) };
+  return { diagnostic, maintain };
 }

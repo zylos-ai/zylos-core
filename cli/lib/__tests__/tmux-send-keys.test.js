@@ -96,23 +96,6 @@ test('doctor text and JSON report enabled, legacy and unknown with reason', () =
     assert.equal(output[0], describeTmuxSendKeys(capability));
   }
 });
-test('dispatcher keystroke control executes shared gate and logs failure metadata', async () => {
-  const source = fs.readFileSync(new URL('../../../skills/comm-bridge/scripts/c4-dispatcher.js', import.meta.url), 'utf8');
-  const start = source.indexOf('  const rawContent = item.content', source.indexOf('// Keystroke delivery:'));
-  const end = source.indexOf('\n  log(`Delivering ${item.type}', start);
-  let argv; let ack = false; const logs = [];
-  const context = vm.createContext({ item: { id: 1, priority: 1, content: '[KEYSTROKE] Enter' },
-    TMUX_SESSION: 'agent', agentState: { state: 'idle' }, periodicEnter: { reset() {} },
-    isKeystrokeControl: () => true, parseKeystrokeKey: () => 'Enter', log: s => logs.push(s),
-    ackControl: () => { ack = true; }, tmuxFailureDetails,
-    handleControlDeliveryFailure: async () => {} });
-  context.sendTmuxKeys = createTmuxSender({ exec: (bin, args) => { if (args[0] === '-V') return 'tmux 3.7c'; argv = args; } }).sendKeys;
-  const execute = () => vm.runInContext(`(async () => {${source.slice(start, end)}})()`, context);
-  assert.equal((await execute()).delivered, true);
-  assert.equal(ack, true);
-  assert.deepEqual(argv, ['send-keys', '-c', 'zylos-no-client', '-t', 'agent', 'Enter']);
-  context.sendTmuxKeys = () => { throw Object.assign(new Error('PRIVATE_INPUT'), { status: 1, stderr: 'client is read-only' }); };
-  assert.equal((await execute()).delivered, false);
-  assert.ok(logs.some(s => s.includes('client is read-only')));
-  assert.ok(logs.every(s => !s.includes('PRIVATE_INPUT')));
-});
+// The retired dispatcher source extraction moved to router-delivery.test.js:
+// "Enter failure increments retry, invalid keystroke rejected; valid keystroke always acks".
+// Real bound-key/version behavior remains in the runtime adapter test matrix.

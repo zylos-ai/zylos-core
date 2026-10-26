@@ -38,7 +38,6 @@ test('false, truncated, removed and rotated diagnostics leave router decisions u
         now: f.now, stderr: message => failures.push(message) });
       f.deps.diagnostic = diagnostics.diagnostic;
       f.deps.maintainDiagnostics = diagnostics.maintain;
-      f.deps.flushDiagnostics = diagnostics.flush;
       const reads = f.deps.readRuntimeHealth;
       f.deps.readRuntimeHealth = runtime => { f.calls.push(['health', runtime]); return reads(runtime); };
       await f.create().initialize();

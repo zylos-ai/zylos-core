@@ -24,7 +24,7 @@ async function submit(request) {
 
 /** Compose the same entry for production and isolated integration. Tests replace
  * only external boundaries; scheduling, claims, formatting and settlement stay
- * on the production path. readyTimeoutMs remains a required measured input. */
+ * on the production path. Both runtimes use the scheduler's shared READY default. */
 export function createDispatcher(overrides = {}, options = {}) {
   const env = overrides.env ?? process.env;
   const tmux = options.tmux ?? {};
@@ -42,7 +42,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     getSessionAdapter: runtime => getSessionAdapter(runtime, { tmux }), submit,
     ...lifecycle, diagnostic, log,
     alert: (event, fields) => log(`Router alert: ${event} ${JSON.stringify(fields)}`),
-    maintainDiagnostics: diagnostics.maintain, flushDiagnostics: diagnostics.flush,
+    maintainDiagnostics: diagnostics.maintain,
     ...overrides,
   };
   const sendStatusNotice = overrides.sendStatusNotice ?? createStatusNoticeSender({ db, log });

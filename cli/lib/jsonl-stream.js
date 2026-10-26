@@ -52,5 +52,5 @@ export function createJsonlStream(filename, { now = Date.now,
     return { rotated, removed };
   }
   // append/maintain finish their I/O before returning; there is no wait queue.
-  return { append, maintain, flush: () => Promise.resolve() };
+  return { append, maintain };
 }

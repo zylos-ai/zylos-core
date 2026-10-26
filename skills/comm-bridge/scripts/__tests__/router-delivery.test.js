@@ -265,7 +265,6 @@ test('T07 JSONL records successful settlement, stale settlement and distinct gat
     assert.equal(f.row(gated.id).retry_count, 0);
     if (kind !== 'idle') assert(f.store.claimConversation(gated.id));
   }
-  await diagnostics.flush();
   const rows = (await fs.readFile(file, 'utf8')).trim().split('\n').map(JSON.parse);
   const delivered = rows.filter(row => row.event === 'deliver');
   assert.equal(delivered.length, 1); assert.equal(delivered[0].conversation_id, success.id);
