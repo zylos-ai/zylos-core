@@ -171,7 +171,7 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     }
     const backupPresent = backupState(backupDir) === 'valid';
     if (requireBackup && !backupPresent) missingPaths.push(path.relative(root, backupDir));
-    return { referencesSha256: bytes ? hash(bytes) : null, indexedPaths, missingPaths, backupPresent };
+    return { referencesSha256: bytes ? hash(bytes) : null, indexedPaths, missingPaths: [...new Set(missingPaths)], backupPresent };
   }
   function ensure({ createdBy, freshInstall = false } = {}) {
     if (!['upgrade', 'init'].includes(createdBy)) throw error('INVALID_INPUT', 'created-by must be upgrade or init');
