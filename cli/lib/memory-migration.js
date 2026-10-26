@@ -149,7 +149,23 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     for (const indexed of indexedPaths) {
       const target = path.resolve(root, indexed);
       if (!target.startsWith(`${path.join(memory, 'reference')}${path.sep}`)) { missingPaths.push(indexed); continue; }
-      try { fs.accessSync(target, fs.constants.R_OK); } catch { missingPaths.push(indexed); }
+      try {
+        if (path.dirname(indexed).includes('*')) throw Error('Directory wildcards are unsupported');
+        const filename = path.basename(indexed);
+        if (filename.includes('*')) {
+          const matcher = new RegExp(`^${filename.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`);
+          const directory = path.dirname(target);
+          const resolvedDirectory = fs.realpathSync(directory);
+          const referenceRoot = fs.realpathSync(path.join(memory, 'reference'));
+          if (resolvedDirectory !== referenceRoot && !resolvedDirectory.startsWith(`${referenceRoot}${path.sep}`)) {
+            throw Error('Index directory is outside references');
+          }
+          if (!fs.readdirSync(directory).some(name => {
+            if (!matcher.test(name)) return false;
+            try { readRegular(path.join(directory, name)); return true; } catch { return false; }
+          })) throw Error('No readable regular file matches index');
+        } else fs.accessSync(target, fs.constants.R_OK);
+      } catch { missingPaths.push(indexed); }
     }
     const backupPresent = backupState(backupDir) === 'valid';
     if (requireBackup && !backupPresent) missingPaths.push(path.relative(root, backupDir));

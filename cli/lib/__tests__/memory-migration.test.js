@@ -159,6 +159,7 @@ test('apply backs up exact initial bytes, reuses backup, complete cannot regress
   const inode = fs.statSync(path.join(f.backup, 'references.md')).ino;
   await f.service.apply({ ...patch, expected: 'new marker', replacement: 'last marker' });
   assert.equal(fs.statSync(path.join(f.backup, 'references.md')).ino, inode);
+  assert.equal(fs.readFileSync(path.join(f.backup, 'references.md'), 'utf8'), 'original marker\n');
   assert.equal(f.service.status().state, 'pending');
   await f.service.complete('Moved history into topics');
   assert.equal(f.service.status().state, 'done');
@@ -166,6 +167,68 @@ test('apply backs up exact initial bytes, reuses backup, complete cannot regress
   await assert.rejects(f.service.complete('again'), { code: 'ALREADY_DONE', persisted: [] });
   const record = JSON.parse(fs.readFileSync(f.record));
   assert.equal(record.evidence.agent.runId, 'run1'); assert.equal(record.attempts, 1);
+});
+
+test('complete ignores absent reference paths in ordinary prose', async t => {
+  const f = fixture(t); init(f);
+  await f.service.apply({ ...patch, replacement: 'see reference/absent.md' });
+  await f.service.complete('Reviewed prose');
+  assert.equal(f.service.status().state, 'done');
+});
+
+test('complete accepts filename wildcards with a readable regular match', async t => {
+  const f = fixture(t); init(f);
+  fs.mkdirSync(path.join(f.memory, 'reference'));
+  fs.writeFileSync(path.join(f.memory, 'reference/topic.md'), 'topic');
+  await f.service.apply({ ...patch, replacement: '`memory/reference/*.md` [topics](reference/to*.md)' });
+  await f.service.complete('Reviewed wildcard index');
+  assert.equal(f.service.status().state, 'done');
+});
+
+test('complete reports unmatched filename wildcards verbatim', async t => {
+  const f = fixture(t); init(f);
+  fs.mkdirSync(path.join(f.memory, 'reference'));
+  fs.writeFileSync(path.join(f.memory, 'reference/topic.txt'), 'topic');
+  await f.service.apply({ ...patch, replacement: '`memory/reference/*.md`' });
+  await assert.rejects(f.service.complete('Reviewed wildcard index'), e =>
+    e.code === 'CHECK_FAILED' && e.missingPaths.includes('memory/reference/*.md'));
+});
+
+test('complete rejects wildcard directory segments and non-regular or unreadable matches', async t => {
+  for (const kind of ['directory-star', 'directory', 'symlink', 'unreadable', 'outside']) {
+    const f = fixture(t); init(f);
+    const directory = path.join(f.memory, 'reference'); fs.mkdirSync(directory);
+    let index = 'memory/reference/*.md';
+    if (kind === 'directory-star') {
+      fs.mkdirSync(path.join(directory, 'topic*'));
+      fs.writeFileSync(path.join(directory, 'topic*/one.md'), 'topic');
+      index = 'memory/reference/topic*/*.md';
+    } else if (kind === 'directory') fs.mkdirSync(path.join(directory, 'topic.md'));
+    else if (kind === 'symlink') fs.symlinkSync(f.references, path.join(directory, 'topic.md'));
+    else if (kind === 'unreadable') fs.writeFileSync(path.join(directory, 'topic.md'), 'topic', { mode: 0 });
+    else {
+      fs.writeFileSync(path.join(f.root, 'outside.md'), 'outside');
+      fs.symlinkSync(f.root, path.join(directory, 'outside'));
+      index = 'memory/reference/outside/*.md';
+    }
+    await f.service.apply({ ...patch, replacement: `\`${index}\`` });
+    await assert.rejects(f.service.complete('Reviewed wildcard edge'), e =>
+      e.code === 'CHECK_FAILED' && e.missingPaths.includes(index), kind);
+  }
+});
+
+test('complete treats question marks and brackets as literal filename characters', async t => {
+  const f = fixture(t); init(f);
+  const directory = path.join(f.memory, 'reference'); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, 'topic1.md'), 'topic');
+  const indexes = ['memory/reference/topic?*.md', 'memory/reference/topic[1]*.md'];
+  await f.service.apply({ ...patch, replacement: indexes.map(value => `\`${value}\``).join('\n') });
+  await assert.rejects(f.service.complete('Reviewed literal characters'), e =>
+    e.code === 'CHECK_FAILED' && indexes.every(value => e.missingPaths.includes(value)));
+  fs.writeFileSync(path.join(directory, 'topic?.md'), 'literal question mark');
+  fs.writeFileSync(path.join(directory, 'topic[1].md'), 'literal brackets');
+  await f.service.complete('Reviewed literal characters');
+  assert.equal(f.service.status().state, 'done');
 });
 
 test('complete checks without creating backups and persists attempts only on mechanical failures', async t => {
