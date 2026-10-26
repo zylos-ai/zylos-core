@@ -1,209 +1,110 @@
 ---
 name: zylos-memory
 description: >-
-  Core memory system. Maintains persistent memory across sessions via tiered
-  markdown files following the Inside Out model. Handles Memory Sync (processing
-  conversations into structured memory), session rotation, consolidation, and
-  context-aware state saving. Must be launched via a runtime-appropriate
-  background subagent mechanism — do not invoke with the Skill tool.
+  Maintain scoped working memory and shared self knowledge. Run group, Origin,
+  or single global Memory Sync when requested by the supervisor. Launch through
+  the current runtime's background subagent mechanism, not the Skill tool.
 disable-model-invocation: true
 user-invocable: false
 ---
 
 # Memory System
 
-Maintains persistent memory across sessions via tiered markdown files.
-This skill must be run via a runtime-appropriate background subagent mechanism. For Claude, use the Task tool (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). For Codex, prefer the session's native subagent tools `spawn_agent`/`wait_agent` (host session tools — they do not appear in `codex --help`) with a Codex-supported model; do not hardcode `sonnet`.
+Memory Sync is maintenance. Do not perform business tasks, send user replies,
+change project code, install components, or restart services during Sync.
+The supervisor decides when to request Sync; do not add startup or periodic
+triggers here. Start a background subagent when requested and continue the
+current work. For a pre-reclaim request, wait for its result before acknowledging
+that control as instructed.
 
-## Architecture
+## Start the correct background worker
 
-```text
-~/zylos/memory/
-├── identity.md              # Bot soul + digital assets (always loaded)
-├── state.md                 # Active working state (always loaded)
-├── references.md            # Pointers to config files (always loaded)
-├── users/
-│   └── <id>/profile.md      # Per-user preferences
-├── reference/
-│   ├── decisions.md         # Key decisions with rationale
-│   ├── projects.md          # Active/planned projects
-│   ├── preferences.md       # Shared team preferences
-│   └── ideas.md             # Uncommitted plans and ideas
-├── sessions/
-│   ├── current.md           # Today's session log
-│   └── YYYY-MM-DD.md        # Past session logs
-└── archive/                 # Cold storage
-```
+Use the runtime in the current running session's immutable launch snapshot.
+If the snapshot cannot be read, use the runtime identity observed from that
+session's live process. Do not choose from machine defaults or a newer desired
+configuration. Origin Sync uses Origin's actual runtime.
 
-## Memory Sync
+- Claude: launch `zylos-group-sync`, `zylos-origin-sync`, or `zylos-global-sync`
+  with `run_in_background: true`; these definitions use `sonnet`.
+- Codex: use this session's native `spawn_agent` mechanism, ask the worker to
+  read this skill and the matching procedure, and use a Codex-supported worker
+  model. Do not map the Claude model name or force the parent model/effort.
+- Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
+  If background tools or the restricted memory tool are unavailable, report
+  `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
 
-### Priority
+Select by the requested job and inherited environment: a nonempty
+`ZYLOS_SESSION_GROUP` means group Sync; only the `origin` group can run Origin
+Sync. No group with a `ZYLOS_RUN_ID` means single global Sync. Never invent or
+replace these bindings. Read [the complete Sync procedures](references/sync-procedures.md)
+before taking a token; run only the selected procedure.
 
-Memory Sync is the highest-priority internal maintenance task.
-When triggered, run it before handling queued user messages.
+## Writing rules
 
-Memory Sync is maintenance-only. A sync subagent must not reply through C4,
-process user-facing tasks, modify business/project repositories, install or
-upgrade components, restart services, or apply runtime changes outside the
-sync flow below.
+All Sync edits and new memory files use `mcp__zylos-memory__edit_memory`.
+Use Read/Glob/Grep for inputs and Bash only for the documented scripts.
+Do not use native Edit/Write/patch, shell redirects into memory, or a fallback
+writer after a tool denial. The token is from `sync-lock.js acquire`, never
+from another worker. The tool infers permission from its own environment and
+the matching marker; a model-supplied group or role is not authorization.
 
-### Trigger Paths
+Group Sync writes only its temporary state and its guarded checkpoint/commit.
+Origin Sync writes shared self files; it does not read or write group state or
+inbox. Global Sync writes global temporary state and shared self files, and
+never reads `session-groups/`. Formal state replacement, input cleanup, and
+progress changes use the guarded scripts. Never call `c4-checkpoint.js create`
+or a raw origin cursor mutation.
 
-1. Session init: if C4 unsummarized count is over threshold, launch memory sync.
-2. Scheduled context check: if context usage is high, launch memory sync.
+Sync does not write `ZYLOS.md`, group `rules.md`, `handoff.md`, or custom startup
+instructions. Do not copy rule text into state/inbox or clear a handoff because
+its conversations are covered by a checkpoint.
 
-Both launch a background subagent using the current runtime's supported subagent mechanism with this file's Sync Flow as the prompt.
+## Ordinary running-thread memory
 
-### Codex Background Execution
+Record a commitment, decision, or learned fact immediately using
+`memory-append.js inbox --kind commitment|decision|fact`, one body line via stdin.
+Record work history using `memory-append.js session`, which chooses the dated
+session file using configured TZ. Do not create `sessions/current.md`.
+Do not directly edit state; Sync consolidates inbox into it.
 
-In Codex, use the session's native subagent tools: `spawn_agent` to
-launch the sync subagent and `wait_agent` to collect its result. These are
-host session tools — they do not appear in `codex --help`. For a single
-long-running command, an async exec session (`exec_command` +
-`write_stdin`) also works. Bare `nohup ... &` does NOT survive the
-tool-call boundary and must never be used for sync. Never use PM2 for
-sync — do not create PM2 services, run `pm2 start ... codex exec ...`, or
-fork an extra `codex exec` sidecar: one-shot sync processes leave stopped
-services piling up in the PM2 list. If the session exposes no native
-background-agent capability, run the sync inline as a last resort and note
-that in the handoff/status.
+An explicit user request to edit shared self knowledge may be fulfilled by the
+running thread's normal Edit tool. This exception does not authorize Sync to
+bypass its restricted tool. After an actual identity change, request rotation
+with `request-rotation.js --reason identity` and report any rejection. Direct
+thread editing does not share Sync's lock, so do not claim all writers are
+mutually protected. Cross-group requests are sent through the normal internal
+channel; do not write another group's files.
 
-Before starting Memory Sync, check for existing in-flight sync work: if the
-runtime exposes background-agent status, check it for a running sync subagent
-and do not start another sync writer while one is in flight.
+## Content and formats
 
-### Sync Flow
+Keep only current focus, active work, pending items, and commitments in state.
+There is no state length budget. Never summarize away or drop pending absorbed
+messages to make the file smaller; commit preserves their exact remaining lines.
+Use the state header and four sections in [state format](references/state-format.md).
+Use [inbox format](references/inbox-format.md) and [session log format](references/session-log-format.md)
+for ordinary append operations.
 
-1. Rotate session log if needed:
-   `node ~/zylos/.claude/skills/zylos-memory/scripts/rotate-session.js`
-2. Fetch unsummarized conversations from C4:
-   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized`
-   If output says "No unsummarized conversations.", skip to step 5
-   (still save current state). Otherwise, note the `end_id` from the
-   `[Unsummarized Range]` line.
-3. Read memory files (`identity.md`, `state.md`, `references.md`, user profiles, `reference/*`, `sessions/current.md`).
-4. Extract and classify updates from conversations into the correct files.
-5. Write memory updates (always — even without new conversations,
-   update `state.md` and `sessions/current.md` with current context).
-6. Audit `references.md` against its content rules
-   (`references/references-file-format.md`): relocate rule-violating
-   entries to their routed destination (`reference/decisions.md`,
-   `archive/`, or a pointer to the config file) instead of leaving or
-   appending them. If the file exceeds the 8KB warn threshold
-   (`memory-status.js` reports WARN), trim until it is back under.
-7. Audit `state.md` against its content rules
-   (`references/state-format.md`): relocate rule-violating content to its
-   routed destination (`reference/projects.md`, `reference/decisions.md`,
-   `archive/`, or a pointer to the on-demand file that already holds it)
-   instead of leaving or appending it. If the file exceeds the 10KB warn
-   threshold (`memory-status.js` reports WARN), trim until it is back
-   under.
-8. Create checkpoint (only if conversations were fetched in step 2):
-   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-checkpoint.js create <end_id> --summary "SUMMARY"`
-9. Confirm completion.
+Shared knowledge classification:
 
-## Classification Rules
-
-- `reference/decisions.md`: committed choices that close alternatives.
-- `reference/projects.md`: scoped work efforts with status.
-- `reference/preferences.md`: standing team-wide preferences.
+- `identity.md`: stable identity, principles, and durable behavior; avoid incident histories.
+- `references.md`: essential identity, boundaries, and navigation. Reuse topic files,
+  maintain content/path/read-when pointers, and keep a single source of truth.
+- `reference/decisions.md`: committed choices and rationale.
+- `reference/projects.md`: scoped work and status.
+- `reference/preferences.md`: standing shared preferences.
 - `reference/ideas.md`: uncommitted proposals.
-- `users/<id>/profile.md`: user-specific preferences.
-- `state.md`: active focus, pending items, and blockers only, per the
-  content rules in `references/state-format.md`; completed-task narrative,
-  decisions, and run history are routed out, never accumulated.
-- `references.md`: pointers and stable identifiers only, per the content
-  rules in `references/references-file-format.md`; never duplicate config
-  values, never accumulate narrative history.
+- `users/<id>/profile.md`: individual preferences and stable facts.
 
-## File Formats and Examples
+Read an existing target before generating its replacement fragment. Check
+references for duplicated configuration values or narrative history; move the
+information into an allowed topic file and replace it with a pointer. The shared
+identity/references budget is 16 KiB, with references audited at 8 KiB. Other
+reference files have no size cap. Do not copy whole startup instructions into
+memory. References layout migration belongs to its dedicated migration command,
+not an improvised Sync write.
 
-Each memory file type has a format definition in `references/` and a
-worked example in `examples/`:
-
-| File | Format | Example |
-|------|--------|---------|
-| `identity.md` | `references/identity-format.md` | `examples/identity.md` |
-| `state.md` | `references/state-format.md` | `examples/state.md` |
-| `references.md` | `references/references-file-format.md` | `examples/references.md` |
-| `users/<id>/profile.md` | `references/user-profile-format.md` | `examples/user-profile.md` |
-| `reference/decisions.md` | `references/decisions-format.md` | `examples/decisions.md` |
-| `reference/projects.md` | `references/projects-format.md` | `examples/projects.md` |
-| `reference/preferences.md` | `references/preferences-format.md` | `examples/preferences.md` |
-| `reference/ideas.md` | `references/ideas-format.md` | `examples/ideas.md` |
-| `sessions/current.md` | `references/session-log-format.md` | `examples/session-log.md` |
-
-## Supporting Scripts
-
-- `session-start-inject.js`: prints core memory context blocks for hooks.
-- `rotate-session.js`: rotates `sessions/current.md` at day boundary.
-- `daily-commit.js`: local git snapshot for `memory/` if changed.
-- `consolidate.js`: JSON consolidation report (sizes, age, budget checks).
-  Use for deliberate memory maintenance, or for scheduler-triggered
-  consolidation when such a task is configured. Review the report and apply
-  the Consolidation Review rules below.
-- `memory-status.js`: quick health summary.
-  Use when you need a fast manual check of core file sizes and budget status.
-  If it reports `OVER`, run `consolidate.js` and perform the needed cleanup.
-
-C4 scripts used by sync flow (provided by comm-bridge skill):
-- `c4-fetch.js --unsummarized`: fetch unsummarized conversations and range.
-- `c4-checkpoint.js create <end_id> --summary "..."`: create sync checkpoint.
-
-## Consolidation Review
-
-The weekly consolidation task runs `consolidate.js` and outputs a JSON report.
-Review the report and apply these rules:
-
-### Core File Budgets
-- Files over 100% budget: summarize and trim older entries.
-  Move historical content to `reference/` or `archive/`.
-- `identity.md`, `state.md`, and `references.md` must stay under 16KB.
-- Apply file-specific cleanup:
-  - `identity.md`: keep only stable identity traits, principles, durable
-    collaboration style, and digital asset references. Move operational state
-    and one-off lessons elsewhere.
-  - `state.md`: keep active focus, pending tasks, and recent completions.
-    Move completed or historical detail to `sessions/current.md` or
-    `reference/`. Apply the content rules in `references/state-format.md`;
-    the sync-time audit (Sync Flow step 7) should keep it under the 10KB
-    warn threshold.
-  - `references.md`: keep pointers and lookup facts only. Move prose,
-    project history, and detailed decisions to `reference/`. Apply the
-    content rules in `references/references-file-format.md`; the sync-time
-    audit (Sync Flow step 6) should keep it under the 8KB warn threshold.
-
-### Session Logs
-- Logs in `archiveCandidatesOlderThan30Days`: move from `sessions/` to `archive/`.
-
-### Reference Files (`reference/*.md`)
-These files have no size cap. Maintenance is at the entry level.
-Freshness is reported by file mtime (Phase 1 limitation):
-- **active** (< 7 days): no action.
-- **aging** (7–30 days): no action.
-- **fading** (30–90 days): open the file. Review entries by their dates
-  and status fields. Update or confirm still-relevant entries; move
-  obsolete entries (superseded/completed/abandoned/dropped) to `archive/`.
-- **stale** (> 90 days): same as fading, but prioritize review.
-  Entries that are clearly still critical may remain.
-
-**Immunity:** Entries with importance 1-2 (defined in entry metadata) are
-immune to automatic fading suggestions. They may still be reviewed but
-should not be archived based on age alone.
-
-### User Profiles
-- Profiles over ~1KB: summarize older notes.
-
-### General Rules
-1. Never delete — always move to `archive/`. Content is recoverable
-   from `archive/` or git history.
-2. Log consolidation actions in `sessions/current.md`.
-
-## Best Practices
-
-1. Keep `state.md` lean (tight context budget).
-2. Prefer updates over duplication.
-3. Use explicit dates/timestamps for entries.
-4. Archive instead of deleting historical data.
-5. Route user data to user profiles.
-6. Keep configuration values in config files; use `references.md` as an index.
+`memory-status.js` and `consolidate.js` are read-only diagnostics; they do not
+replace Sync or its progress commits. `daily-commit.js` is an independent local
+Git backup. `rotate-session.js` is only a one-time legacy-log migration during
+upgrade; it is not a Sync step. Existing format/example files in `references/`
+and `examples/` document each shared knowledge category.

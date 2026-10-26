@@ -14,7 +14,7 @@ import { generateManifest, saveMergeBaseline } from './manifest.js';
 import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { getCommandHooks, hookScriptKey } from './hook-utils.js';
-import { isCoreManaged } from './sync-settings-hooks.js';
+import { isCoreManaged } from './sync-runtime-hooks.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { runMigrations } from './migrate.js';

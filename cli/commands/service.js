@@ -3,14 +3,13 @@
  */
 
 import { savePm2ProcessList } from '../lib/pm2-save.js';
-import { execSync, spawnSync, spawn } from 'node:child_process';
+import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ZYLOS_DIR, SKILLS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
-import { getActiveAdapter } from '../lib/runtime/index.js';
 import { getCoreEcosystemPath, restartFromEcosystem, restartManagedProcess } from '../lib/pm2.js';
 
 function shellQuote(value) {
@@ -73,125 +72,49 @@ export function restartServicesWithDeps({
   return true;
 }
 
-export async function showStatus() {
-  console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
+export function collectHostStatus({ exec = execFileSync, disk = () => fs.statfsSync(ZYLOS_DIR) } = {}) {
+  const result = { services: null, disk: null };
+  try {
+    result.services = JSON.parse(exec('pm2', ['jlist'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }))
+      .map(item => ({ name: item.name, status: item.pm2_env?.status ?? 'unknown' }));
+  } catch { /* Host data is supplementary to the session projection. */ }
+  try {
+    const stat = disk();
+    result.disk = { total: stat.blocks * stat.bsize, available: stat.bavail * stat.bsize };
+  } catch { /* Keep partial status available. */ }
+  return result;
+}
 
-  const activeRuntime = readZylosConfigOrThrow().runtime ?? 'claude';
-  const isCodex = activeRuntime === 'codex';
-  const runtimeBin = isCodex ? 'codex' : 'claude';
-  const runtimeLabel = isCodex ? 'Codex' : 'Claude';
-
-  // Check active runtime readiness
-  if (!commandExists(runtimeBin)) {
-    console.log(`${bold(runtimeLabel)}: ${red('NOT INSTALLED')}`);
-    console.log(`  ${dim('→ Run: zylos init')}`);
+export async function showStatus(args = [], { collect, host = collectHostStatus, load = () => import('../lib/status-view.js') } = {}) {
+  const json = args.includes('--json');
+  let result;
+  if (args.some(arg => arg !== '--json') || args.filter(arg => arg === '--json').length > 1) {
+    result = { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Usage: zylos status [--json]', persisted: [] } };
   } else {
-    // Check authentication via adapter (same logic as the running process uses)
-    let authStatus = 'failure';
-    try {
-      const adapter = getActiveAdapter();
-      const authResult = await adapter.checkAuth();
-      authStatus = authResult.status || 'failure';
-    } catch {}
-
-    if (authStatus === 'failure') {
-      console.log(`${bold(runtimeLabel)}: ${red('NOT AUTHENTICATED')}`);
-      console.log(`  ${dim(`→ Run: ${isCodex ? 'codex login' : 'zylos init to authenticate'}`)}`);
-    } else if (authStatus === 'uncertain') {
-      console.log(`${bold(runtimeLabel)}: ${yellow('AUTH CHECK INCONCLUSIVE')}`);
-      console.log(`  ${dim('→ Retry later or run zylos doctor for details')}`);
-    } else if (!isCodex) {
-      // Claude-only: check terms/bypass acceptance
-      let termsAccepted = false;
-      try {
-        const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        termsAccepted = !!settings.skipDangerousModePermissionPrompt;
-      } catch {}
-
-      if (!termsAccepted) {
-        console.log(`${bold(runtimeLabel)}: ${yellow('NOT READY')} ${dim('— autonomous mode not yet accepted')}`);
-        console.log(`  ${dim('→ Run: zylos init to complete setup')}`);
-      } else {
-        // Check runtime status from activity monitor
-        const statusFile = path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json');
-        if (fs.existsSync(statusFile)) {
-          try {
-            const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
-            const stateStr = status.state.toUpperCase();
-            const coloredState = stateStr === 'IDLE' ? green(stateStr) : stateStr === 'BUSY' ? yellow(stateStr) : stateStr;
-            console.log(`${bold(runtimeLabel)}: ${coloredState}`);
-            if (status.idle_seconds !== undefined) {
-              console.log(`  ${dim('Idle:')} ${status.idle_seconds}s`);
-            }
-            if (status.last_check_human) {
-              console.log(`  ${dim('Last check:')} ${status.last_check_human}`);
-            }
-          } catch {
-            console.log(`${bold(runtimeLabel)}: ${yellow('UNKNOWN')} ${dim('(status file unreadable)')}`);
-          }
-        } else {
-          console.log(`${bold(runtimeLabel)}: ${yellow('UNKNOWN')} ${dim('(no status file)')}`);
-        }
-      }
-    } else {
-      // Codex: just show status file if available
-      const statusFile = path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json');
-      if (fs.existsSync(statusFile)) {
-        try {
-          const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
-          const stateStr = status.state.toUpperCase();
-          const coloredState = stateStr === 'IDLE' ? green(stateStr) : stateStr === 'BUSY' ? yellow(stateStr) : stateStr;
-          console.log(`${bold(runtimeLabel)}: ${coloredState}`);
-          if (status.idle_seconds !== undefined) {
-            console.log(`  ${dim('Idle:')} ${status.idle_seconds}s`);
-          }
-          if (status.last_check_human) {
-            console.log(`  ${dim('Last check:')} ${status.last_check_human}`);
-          }
-        } catch {
-          console.log(`${bold(runtimeLabel)}: ${yellow('UNKNOWN')} ${dim('(status file unreadable)')}`);
-        }
-      } else {
-        console.log(`${bold(runtimeLabel)}: ${yellow('UNKNOWN')} ${dim('(no status file)')}`);
-      }
+    try { result = { ok: true, data: await (collect || (await load()).collectStatus)() }; }
+    catch (error) { result = { ok: false, error: { code: 'STATUS_UNAVAILABLE', message: error.message, persisted: [] } }; }
+  }
+  if (json) console.log(JSON.stringify(result));
+  else if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
+  else {
+    console.log(heading('Zylos Status'));
+    console.log(`Session mode: ${result.data.sessionMode ?? 'single'}`);
+    for (const row of [result.data.origin, ...result.data.groups]) {
+      console.log(`  ${row.sessionGroup ?? 'single'}: ${row.presence} (${row.runtime ?? 'unknown'})`);
+      if (row.status.valid) console.log(`    ${row.status.state}; idle: ${row.status.idleSeconds ?? 'unknown'}s`);
+      if (row.error) console.error(`    ${row.error.message}`);
     }
+    if (result.data.groupListError) console.error(`Groups unavailable: ${result.data.groupListError.message}`);
+    for (const [runtime, health] of Object.entries(result.data.runtimeHealth)) console.log(`  ${runtime}: ${health.health ?? 'unknown'}`);
+    const machine = host();
+    console.log(heading('Services (PM2):'));
+    if (machine.services === null) console.log('  unavailable');
+    else if (!machine.services.length) console.log('  No services running');
+    else for (const item of machine.services) console.log(`  ${item.name}: ${item.status}`);
+    console.log(machine.disk ? `Disk: ${Math.round(machine.disk.available / 1024 ** 3)} GiB available / ${Math.round(machine.disk.total / 1024 ** 3)} GiB total` : 'Disk: unavailable');
   }
-
-  console.log('');
-
-  // Check PM2 services
-  console.log(heading('Services (PM2):'));
-  try {
-    const pm2Output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
-    const processes = JSON.parse(pm2Output);
-    if (processes.length === 0) {
-      console.log(`  ${dim('No services running')}`);
-    } else {
-      processes.forEach(p => {
-        const st = p.pm2_env.status;
-        if (st === 'online' || st === 'running') {
-          console.log(`  ${success(`${bold(p.name)}: ${st}`)}`);
-        } else {
-          console.log(`  ${error(`${bold(p.name)}: ${st}`)}`);
-        }
-      });
-    }
-  } catch (e) {
-    console.log(`  ${dim('PM2 not available or no services')}`);
-  }
-
-  console.log('');
-
-  // Check disk space
-  console.log(heading('Disk:'));
-  try {
-    const df = execSync(`df -h ${ZYLOS_DIR} | tail -1`, { encoding: 'utf8' });
-    const parts = df.trim().split(/\s+/);
-    console.log(`  Used: ${bold(parts[2])} / ${parts[1]} (${parts[4]})`);
-  } catch (e) {
-    console.log(`  ${dim('Unable to check')}`);
-  }
+  if (!result.ok) process.exitCode = 1;
+  return result;
 }
 
 export function showLogs(args) {
@@ -226,6 +149,7 @@ export function showLogs(args) {
 }
 
 export function startServices() {
+  readZylosConfigOrThrow();
   console.log(heading('Starting Zylos services...'));
 
   // Prefer ecosystem.config.cjs — it has proper PATH, env vars, and component services.
@@ -294,6 +218,7 @@ export function stopServices() {
 }
 
 export function restartServices() {
+  readZylosConfigOrThrow();
   console.log(heading('Restarting Zylos services...'));
   restartServicesWithDeps();
 }

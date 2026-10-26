@@ -1,6 +1,4 @@
 export {
   findPromptY,
-  hasInProgressCapture,
-  isUsageOverlayCapture,
-  readTmuxInputState
+  isUsageOverlayCapture
 } from '../../skills/comm-bridge/scripts/tmux-input-state.js';

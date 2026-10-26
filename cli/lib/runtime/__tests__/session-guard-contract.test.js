@@ -43,7 +43,10 @@ async function fixture(t){
   await fs.writeFile(path.join(readyDir,'current-session.json'),JSON.stringify({runId:'guard-run',sessionId:'runtime-session',ts:1,startupControlIds:[]}));
   const flag=path.join(dir,'hang'),calls=path.join(dir,'calls'),wrapper=path.join(dir,'tmux-wrapper');
   await fs.writeFile(wrapper,`#!${process.execPath}\nconst fs=require('node:fs'),cp=require('node:child_process');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(a)+'\\n');if(fs.existsSync(${JSON.stringify(flag)})){setInterval(()=>{},1000);}else{const r=cp.spawnSync(${JSON.stringify(actualBinary)},a,{stdio:'inherit'});process.exit(r.status??1);}\n`,{mode:0o700});
-  const options={socketPath,binary:wrapper,timeoutMs:100};
+  // The deadline includes a new Node process for every wrapper invocation.
+  // Leave startup headroom under parallel runtime/stress load so these cases
+  // exercise the deliberate hang rather than killing the wrapper before logging.
+  const options={socketPath,binary:wrapper,timeoutMs:1000};
   return {dir,tmux,input,flag,calls,options};
 }
 
@@ -171,10 +174,17 @@ test('IF-13 marker-looking pane content and message syntax are data, not guard o
 });
 
 for(const method of ['sendText','sendKeys'])test(`IF-13 ${method} guarded command timeout uses its step error`,async t=>{
-  const f=await fixture(t),connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
+  const f=await fixture(t);
+  // Setup starts a Node wrapper for every ordinary tmux read. Under parallel
+  // suite load its startup can exceed the deliberately short fault deadline.
+  f.options.timeoutMs=2000;
+  const connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
   const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=new SessionAdapter();
+  f.options.timeoutMs=100; // Keep the actual injected hang deadline unchanged.
   await fs.writeFile(f.flag,'1');
+  const started=performance.now();
   await assert.rejects(adapter[method]({connection,target,text:'never sent',keys:['Enter']}),{code:method==='sendText'?'PASTE_FAILED':'ENTER_UNVERIFIED',cause:'timeout'});
+  assert.ok(performance.now()-started>=90,'injected command must reach its 100ms timeout');
   assert.equal(connection.closed,true);
 });
 

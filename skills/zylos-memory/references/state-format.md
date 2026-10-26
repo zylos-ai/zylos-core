@@ -1,66 +1,41 @@
-# state.md Format
+# Working state format
 
-## Purpose
+State is scoped working memory, read on demand together with inbox and
+uncommitted segments. In multi mode it lives under `session-groups/<G>/`; in
+single mode it lives directly under memory. Do not fall back to another mode's
+old files. Sync owns state; ordinary threads record new facts in inbox.
 
-What the bot is currently doing. The most frequently updated file. Answers:
-"What was I working on before this session started?"
+The first physical line is:
 
-## Loading
+```text
+<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed=20261019T053001123Z -->
+```
 
-Always loaded at session start via SessionStart hook.
+Use the current full group as scope, or `*` for single. Include all four header
+fields once. `synced_at` is an ISO8601 timestamp with zone; coverage is a
+conversation ID or empty; inbox_committed is a comma-separated set of legal
+segment IDs, or empty. It is a file recovery marker, not authoritative DB
+progress. The document then contains `# Working State` and all four headings:
 
-## Size Guideline
+| Heading | Content |
+| --- | --- |
+| `## Headline` | Current focus and next step |
+| `## In Progress` | Work underway with pointers to detail |
+| `## Pending` | Unresolved tasks, dependencies, blockers, and absorbed-message entries |
+| `## Commitments` | Promises still requiring action |
 
-Target ≤10KB (warn threshold, reported as WARN by `memory-status.js`);
-hard budget 16KB. This file is in every session's context. Every line must
-earn its place. A healthy instance sits well under the warn threshold —
-sustained growth past it means completed-task narrative or history is
-accumulating and the content rules below are being violated.
+Sections may be empty. There is no file length limit. Move completed narratives
+out of state and deduplicate facts, but never drop unresolved work to meet a
+size target. Detailed records belong in shared topic files via Origin/global
+Sync; group Sync carries that learning in its checkpoint summary.
 
-## Update Frequency
+A conversion may put a `切换来信` block at the beginning of Pending. Its entries
+point to individual absorbed C4 messages. The model does not rewrite or copy
+this block into temporary state. Give commit only IDs whose follow-up is
+confirmed by actual progress; an outbound audit row alone is not delivery
+proof. Commit preserves all other lines and the original title exactly.
 
-Every memory sync. Also updated proactively when work focus changes.
-
-## Sections
-
-| Section | Content |
-|---------|---------|
-| `Last updated` | YYYY-MM-DD HH:MM timestamp |
-| `## Current Focus` | 1-3 sentences on active work |
-| `## Pending Tasks` | Checklist with requester and date |
-| `## Recent Completions` | Recently finished items with date |
-
-See `examples/state.md` for a full example.
-
-## Content Rules
-
-state.md answers "what am I doing right now" — it is not a project log.
-
-### Allowed
-
-- Current focus: status + next step + a pointer to the file holding the
-  full detail (`reference/projects.md`, a workspace path, an issue ID)
-- Genuinely pending items: not-yet-done tasks with requester and date
-- Blocker/waiting notes: what is blocked, on whom, since when
-
-### Disallowed — route instead of accumulating
-
-| Content class | Route to |
-|---------------|----------|
-| Completed-task narrative (how it was done, verification detail) | `reference/projects.md`; collapse to a one-line ✅ in state.md, or delete |
-| Decision records and rationale | `reference/decisions.md` |
-| Run history, superseded attempts, obsolete detail | `archive/` |
-| Content already held in an on-demand file | replace with a pointer to that file |
-
-### Rules
-
-1. Keep it lean -- this is the tightest budget file.
-2. Move completed tasks out promptly (to session log or reference files).
-   A finished item earns at most one ✅ line; the story of how it finished
-   does not belong here.
-3. Pending tasks should include who requested and when.
-4. Current Focus should reflect the most recent work, not a backlog.
-   Point to detail files instead of inlining detail.
-5. One-off tasks belong here, not in `reference/projects.md`.
-6. Memory Sync audits this file against these rules on every sync
-   (see SKILL.md Sync Flow): violations are relocated, not left in place.
+Use the restricted tool for `state.md.<token>.tmp` after checkpoint succeeds,
+then `sync-files.js commit` for formal replacement. A damaged header is a reader
+fallback, not permission to discard the body or uncommitted segments. See
+[the example](../examples/state.md).
