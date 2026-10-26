@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { installTestChildGuard } from './test-child-guard.js';
 
 function isWithin(parent, target) {
   const relative = path.relative(parent, target);
@@ -15,6 +16,7 @@ export function createTestEnvironment() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-tests-'));
   const previous = { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR };
   let cleaned = false;
+  let restoreChildGuard;
 
   function cleanup() {
     if (cleaned) return;
@@ -26,6 +28,7 @@ export function createTestEnvironment() {
       assert(!resolved || !isWithin(path.join(realHome, 'zylos'), resolved),
         'Test runner ZYLOS_DIR points at the live instance');
     } finally {
+      restoreChildGuard?.();
       for (const [key, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
@@ -54,9 +57,11 @@ export function createTestEnvironment() {
     process.env.HOME = home;
     process.env.ZYLOS_DIR = zylos;
     assert.equal(os.homedir(), home, 'os.homedir() must use the isolated HOME');
+    restoreChildGuard = installTestChildGuard();
     process.on('exit', onExit);
     return { root, cleanup };
   } catch (error) {
+    restoreChildGuard?.();
     // Initialization may fail before the live inherited paths are replaced.
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];

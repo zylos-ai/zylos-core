@@ -4,10 +4,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest } from './tmux-env.js';
 import { buildKickPrompt } from './kick-prompt.js';
-
-export function adapterError(code, message = code, cause) {
-  return Object.assign(new Error(message), {code}, cause === undefined ? {} : {cause});
-}
+import { adapterError } from './tmux-protocol.js';
+export { adapterError } from './tmux-protocol.js';
 export const shellQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
 export function runtimeExecutable(runtime, env = process.env) {
   const name = env[`${runtime.toUpperCase()}_BIN`] || runtime;

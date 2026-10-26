@@ -7,6 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { sendTmuxKeys } from '../tmux-send-keys.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F, parseLegacyPanePid } from './tmux-protocol.js';
 
 const CMD_TIMEOUT = 3000;
 const LAUNCH_TIMEOUT = 10_000;
@@ -18,7 +19,7 @@ const LAUNCH_TIMEOUT = 10_000;
  */
 export function tmuxHasSession(session) {
   try {
-    execFileSync('tmux', ['has-session', '-t', session], {
+    execFileSync('tmux', [C.hasSession, '-t', session], {
       timeout: CMD_TIMEOUT,
       stdio: 'ignore',
     });
@@ -36,14 +37,12 @@ export function tmuxHasSession(session) {
  */
 export function tmuxGetPanePid(session) {
   try {
-    const out = execFileSync('tmux', ['list-panes', '-t', session, '-F', '#{pane_pid}'], {
+    const out = execFileSync('tmux', [C.listPanes, '-t', session, '-F', F.panePid], {
       encoding: 'utf8',
       timeout: CMD_TIMEOUT,
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const lines = out.split('\n');
-    const pid = parseInt(lines[0], 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : 0;
+    });
+    return parseLegacyPanePid(out);
   } catch (err) {
     if (isTimeoutError(err)) _debugTimeout('tmux list-panes', err);
     return 0;
@@ -56,7 +55,7 @@ export function tmuxGetPanePid(session) {
  */
 export function tmuxKillSession(session) {
   try {
-    execFileSync('tmux', ['kill-session', '-t', session], {
+    execFileSync('tmux', [C.killSession, '-t', session], {
       timeout: CMD_TIMEOUT,
       stdio: 'ignore',
     });
@@ -72,11 +71,11 @@ export function tmuxKillSession(session) {
  * @param {string} bufferName - Unique tmux buffer name
  */
 export function tmuxPasteBuffer(session, tmpFile, bufferName) {
-  execFileSync('tmux', ['load-buffer', '-b', bufferName, tmpFile], {
+  execFileSync('tmux', [C.loadBuffer, '-b', bufferName, tmpFile], {
     timeout: CMD_TIMEOUT,
     stdio: 'ignore',
   });
-  execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', session], {
+  execFileSync('tmux', [C.pasteBuffer, '-b', bufferName, '-t', session], {
     timeout: CMD_TIMEOUT,
     stdio: 'ignore',
   });
@@ -92,7 +91,7 @@ export function tmuxPasteBuffer(session, tmpFile, bufferName) {
  */
 export function tmuxDeleteBuffer(bufferName) {
   try {
-    execFileSync('tmux', ['delete-buffer', '-b', bufferName], {
+    execFileSync('tmux', [C.deleteBuffer, '-b', bufferName], {
       timeout: CMD_TIMEOUT,
       stdio: 'ignore',
     });
@@ -106,7 +105,7 @@ export function tmuxDeleteBuffer(bufferName) {
  */
 export function tmuxCapturePaneText(session) {
   try {
-    return execFileSync('tmux', ['capture-pane', '-p', '-t', session], {
+    return execFileSync('tmux', [C.capturePane, '-p', '-t', session], {
       encoding: 'utf8',
       timeout: CMD_TIMEOUT,
       stdio: ['ignore', 'pipe', 'ignore'],

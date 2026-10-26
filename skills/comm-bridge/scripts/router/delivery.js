@@ -1,4 +1,5 @@
 import { openTmuxConnection } from '../../../../cli/lib/runtime/tmux-connection.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F, isIdentityError, adapterError } from '../tmux-protocol.js';
 import { resolveSessionTarget, revalidateSessionTarget } from '../../../../cli/lib/runtime/session-target.js';
 import { PeriodicEnter } from '../periodic-enter.js';
 import { sanitizeMessage } from '../c4-utils.js';
@@ -9,8 +10,7 @@ import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX, MAX_RET
   PERIODIC_ENTER_INTERVAL_MS, PERIODIC_ENTER_MAX_ATTEMPTS, ENTER_CAPTURE_ENABLED, BRACKETED_PASTE_ENABLED, REQUIRE_IDLE_MIN_SECONDS,
   REQUIRE_IDLE_POST_SEND_HOLD_MS, REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS, REQUIRE_IDLE_EXECUTION_POLL_MS } from '../c4-config.js';
 
-const mismatches = new Set(['TARGET_GONE', 'GENERATION_CHANGED', 'RUNID_MISMATCH']);
-const failure = code => Object.assign(new Error(code), { code });
+const failure = adapterError;
 const offline = state => state === 'offline' || state === 'stopped';
 export function getDeliveryDelay(bytes) {
   return Math.min(DELIVERY_DELAY_BASE + Math.floor(bytes / 1024) * DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX);
@@ -76,12 +76,11 @@ export function createDelivery(deps, configuration = {}) {
       try {
         const text = await adapter.captureScreen(bound());
         await revalidate(bound());
-        const geometry = await connection.command(['display-message', '-p', '-t', target.paneId,
-          '#{cursor_x},#{cursor_y},#{pane_width},#{pane_height}']);
+        const geometry = await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.geometry]);
         const status = saveEnterCapture(text, phase, { ...fields, ...details, geometry: geometry.trim() });
         if (status === 'capacity' || status === 'failed') emit('capture_skipped', { reason: status });
       } catch (cause) {
-        if (mismatches.has(cause.code)) throw cause;
+        if (isIdentityError(cause)) throw cause;
         emit('capture_failed', { phase });
       }
     }
@@ -114,14 +113,14 @@ export function createDelivery(deps, configuration = {}) {
     }
     async function inputState() {
       await revalidate(bound());
-      const rawX = await connection.command(['display-message', '-p', '-t', target.paneId, '#{cursor_x}']);
+      const rawX = await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorX]);
       const x = Number.parseInt(rawX.trim(), 10);
       let verdict = 'indeterminate';
       if (Number.isInteger(x) && x >= 0) {
         if (x > 2) verdict = 'has_content';
         else {
           await revalidate(bound());
-          const y = Number.parseInt((await connection.command(['display-message', '-p', '-t', target.paneId, '#{cursor_y}'])).trim(), 10);
+          const y = Number.parseInt((await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorY])).trim(), 10);
           const prompt = findPromptY(await adapter.captureScreen(bound()));
           if (Number.isInteger(y) && y >= 0 && prompt >= 0) verdict = y === prompt ? 'empty' : 'has_content';
         }
@@ -130,7 +129,7 @@ export function createDelivery(deps, configuration = {}) {
         try {
           const fallback = checkClaudeFallbackInputBox(await adapter.captureScreen(bound()));
           if (fallback !== 'indeterminate') verdict = fallback;
-        } catch (cause) { if (mismatches.has(cause.code)) throw cause; }
+        } catch (cause) { if (isIdentityError(cause)) throw cause; }
       }
       emit('input_check', { verdict });
       return verdict;
@@ -142,7 +141,7 @@ export function createDelivery(deps, configuration = {}) {
         let verdict = 'indeterminate';
         try {
           verdict = await io(async () => { await capture('after', { kind: 'normal_verify', attempt }); return inputState(); });
-        } catch (cause) { if (mismatches.has(cause.code)) throw cause; }
+        } catch (cause) { if (isIdentityError(cause)) throw cause; }
         if (verdict === 'empty') return true;
         if (verdict === 'has_content') await io(() => enter('verify_retry'));
         else {
@@ -150,7 +149,7 @@ export function createDelivery(deps, configuration = {}) {
             await io(async () => {
               if (isUsageOverlayCapture(await adapter.captureScreen(bound()))) await adapter.sendKeys({ ...bound(), keys: ['Escape'] });
             });
-          } catch (cause) { if (mismatches.has(cause.code)) throw cause; }
+          } catch (cause) { if (isIdentityError(cause)) throw cause; }
         }
       }
       return false;
@@ -243,8 +242,8 @@ export function createDelivery(deps, configuration = {}) {
     if (error) {
       const code = error.code ?? 'ENTER_UNVERIFIED';
       emit('delivery_failed', { reason: code });
-      if (mismatches.has(code) || (initial && code === 'TMUX_UNAVAILABLE')) {
-        if (type === 'control' && row.target_binding != null && mismatches.has(code)) deps.db.failStaleTargetControl(row.id);
+      if (isIdentityError(code) || (initial && code === 'TMUX_UNAVAILABLE')) {
+        if (type === 'control' && row.target_binding != null && isIdentityError(code)) deps.db.failStaleTargetControl(row.id);
         else if (type === 'control') deps.db.requeueControl(row.id, code);
         else deps.db.requeueConversation(row.id);
       } else if (type === 'control') deps.db.retryOrFailControl(row.id, code, CONTROL_MAX_RETRIES);

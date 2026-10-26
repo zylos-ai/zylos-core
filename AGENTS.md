@@ -64,6 +64,24 @@ A change that builds tmux commands, format strings or environment values, or par
 
 Release rule: matrix green and no P0/P1 in review means the change merges. Each remaining P2/P3 becomes a backlog issue, not another revision round.
 
+Environment readback uses `show-environment -s` and the shared
+`tmux-protocol.js` data parser, never shell evaluation. Plain `NAME=value`
+output is ambiguous: tmux 3.4 prints an extra backslash before `$` followed by
+an ASCII letter, `_`, or `{`, and prints control bytes as C/octal escapes while
+leaving literal backslashes unchanged. The `-s` form doubles literal backslashes
+and escapes dollars, quotes and backticks first. Decode those shell escapes and
+the print escapes together: before a dollar, a run of `2k+1` (ordinary) or
+`2k+2` (3.4 named dollar) backslashes represents `k` literal backslashes.
+Elsewhere paired backslashes are literal; an odd remaining backslash introduces
+a shell quote/backtick or C/octal print escape. Do not globally unescape output
+from capture-pane or display-message: their bytes are payload, not environment
+records. Keep this rule covered across all five versions, including literal
+backslashes next to dollars and control characters.
+
+Run the scripted gate as described in `docs/tmux-matrix.md` with all five
+preprovisioned binaries. It writes runtime logs, stress metrics, a failing
+known-bad guard control and provenance into a fresh evidence directory.
+
 ## Release Process
 
 When releasing a new version:

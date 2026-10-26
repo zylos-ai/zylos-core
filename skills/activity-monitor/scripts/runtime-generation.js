@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readParentPidViaPs } from './claude-pid.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../../comm-bridge/scripts/tmux-protocol.js';
 
 export const runtimeRoot = () => process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 export function syncDirectory(directory) {
@@ -34,7 +35,7 @@ export function isManagedClaudeProcess(pid, { session = 'claude-main', platform 
   read = fs.readFileSync, run = execFileSync } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 1) return false;
   try {
-    const pane = Number(run('tmux', ['display-message', '-p', '-t', session, '#{pane_pid}'], {
+    const pane = Number(run('tmux', [C.displayMessage, '-p', '-t', session, F.panePid], {
       encoding: 'utf8', timeout: 2000, stdio: 'pipe',
     }).trim());
     if(!Number.isSafeInteger(pane)||pane<=1)return false;

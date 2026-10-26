@@ -1,13 +1,11 @@
 import { adapterError, shellQuote } from './session-command.js';
 import { openTmuxConnection, runTmuxCommand } from './tmux-connection.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F, launchFormat, parseLaunchAddress,
+  parseLaunchReceipt, parseExecReceipt } from './tmux-protocol.js';
 
 export const LAUNCH_TIMEOUT_MS = 3000;
 export const LAUNCH_CLEANUP_TIMEOUT_MS = 500;
 const EXEC_POLL_MS = 25;
-// Character formats avoid version-dependent literal escaping (3.2a retains
-// #} inside #{l:...}) and the special ##[ style expansion. Their output is
-// not expanded again, so arbitrary values remain data in the comparison.
-const formatLiteral = value => String(value).replace(/[#,}]/g, char => `#{a:${char.charCodeAt(0)}}`);
 const startingCommands = new Set(['sh','dash','bash','zsh','ksh','ash','fish','env','tmux','tmux: server']);
 
 /** Submit once and bound all confirmation and local cleanup before return. */
@@ -20,15 +18,12 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
   };
   let target, connection;
   const retainAddress = receipt => {
-    const address = receipt?.match(/^(\d+:\d+)\t(\$\d+)\t(%\d+)\t/);
+    const address = parseLaunchAddress(receipt);
     if (address) target = {serverGeneration:address[1],tmuxSessionId:address[2],paneId:address[3]};
   };
-  const equal = (key,value) => `#{==:#{${key}},${formatLiteral(value)}}`;
-  const format = ['#{pid}:#{start_time}','#{session_id}','#{pane_id}','#{pane_pid}','#{session_created}',
-    equal('ZYLOS_RUN_ID',runId),equal('ZYLOS_MODEL_CONFIG',JSON.stringify(launchConfig)),
-    equal('ZYLOS_SESSION_GROUP',sessionGroup ?? '')].join('\t');
+  const format = launchFormat(runId, launchConfig, sessionGroup);
   try {
-    const receipt = await runTmuxCommand(['new-session','-d','-P','-F',format,'-s',tmuxName,'-c',root,
+    const receipt = await runTmuxCommand([C.newSession,'-d','-P','-F',format,'-s',tmuxName,'-c',root,
       '-e',`ZYLOS_RUN_ID=${runId}`,'-e',`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`,
       '-e',sessionGroup === null ? 'ZYLOS_SESSION_GROUP' : `ZYLOS_SESSION_GROUP=${sessionGroup}`,
       `exec /bin/sh ${shellQuote(script.file)}`], {...tmux,timeoutMs:remaining(),noServerStart:false}).catch(error => {
@@ -39,7 +34,7 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
     // Preserve a valid server/object address even if environment confirmation
     // fails, so cleanup can only affect the session created by this request.
     retainAddress(receipt);
-    const match = receipt.match(/^(\d+:\d+)\t(\$\d+)\t(%\d+)\t(\d+)\t(\d+)\t([01])\t([01])\t([01])$/);
+    const match = parseLaunchReceipt(receipt);
     if (!match) throw adapterError('LAUNCH_FAILED','Invalid tmux creation receipt');
     target.createdAt = Number(match[5]);
     if (!Number.isSafeInteger(target.createdAt) || match[6] !== '1' || match[7] !== '1' || (sessionGroup !== null && match[8] !== '1')) {
@@ -48,12 +43,11 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
     connection = await openTmuxConnection({...tmux,timeoutMs:remaining()});
     connection.bindTarget(target);
     const command = argv => connection.command(argv,{timeoutMs:remaining()});
-    if (sessionGroup === null) await command(['set-environment','-r','-t',target.tmuxSessionId,'ZYLOS_SESSION_GROUP']);
+    if (sessionGroup === null) await command([C.setEnvironment,'-r','-t',target.tmuxSessionId,'ZYLOS_SESSION_GROUP']);
     let lastCommand;
     while (true) {
-      const output = await command(['display-message','-p','-t',target.paneId,
-        '#{session_id}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}']);
-      const observed = output.match(/^(\$\d+)\t(%\d+)\t([01])\t([^\t\r\n]*)$/);
+      const output = await command([C.displayMessage,'-p','-t',target.paneId, F.exec]);
+      const observed = parseExecReceipt(output);
       if (!observed || observed[1] !== target.tmuxSessionId || observed[2] !== target.paneId || observed[3] !== '0') {
         throw adapterError('LAUNCH_FAILED','Runtime exited before exec confirmation');
       }
@@ -74,7 +68,7 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
         cleanup = await openTmuxConnection({...tmux,timeoutMs:LAUNCH_CLEANUP_TIMEOUT_MS});
         cleanup.bindTarget(target);
         const timeoutMs = Math.ceil(end - performance.now());
-        if (timeoutMs > 0) await cleanup.command(['kill-session','-t',target.tmuxSessionId],{kind:'session',timeoutMs});
+        if (timeoutMs > 0) await cleanup.command([C.killSession,'-t',target.tmuxSessionId],{kind:'session',timeoutMs});
       } catch { /* Unobservable server-side outcomes are handled by the caller. */ }
       finally { cleanup?.close(); }
     }

@@ -6,6 +6,7 @@ import { execSync, execFileSync } from 'node:child_process';
 import { bold } from '../lib/colors.js';
 import { resolveCliSession } from '../lib/cli-session.js';
 import { tmuxSessionTarget } from '../lib/session-group-paths.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../lib/runtime/tmux-protocol.js';
 
 export async function attachCommand({ resolve = resolveCliSession, exec = execFileSync } = {}) {
   const { live, runtime } = await resolve();
@@ -13,7 +14,7 @@ export async function attachCommand({ resolve = resolveCliSession, exec = execFi
   const RUNTIME_LABEL = runtime;
   // Check if tmux session exists
   try {
-    exec('tmux', ['has-session', '-t', SESSION], { stdio: 'pipe' });
+    exec('tmux', [C.hasSession, '-t', SESSION], { stdio: 'pipe' });
   } catch {
     // No tmux session — check why and give appropriate advice
     let pm2Running = false;
@@ -36,12 +37,12 @@ export async function attachCommand({ resolve = resolveCliSession, exec = execFi
 
   // Show detach hint inside tmux for 3 seconds on attach
   try {
-    exec('tmux', ['set-hook', '-t', `${SESSION}:`, 'client-attached', 'display-message -d 3000 " Tip: Ctrl+B d to detach "'], { stdio: 'pipe' });
+    exec('tmux', [C.setHook, '-t', `${SESSION}:`, 'client-attached', F.detachHint], { stdio: 'pipe' });
   } catch (error) { console.error(`Detach hint unavailable: ${error.message}`); }
 
   // Attach — hands over terminal to tmux
   try {
-    exec('tmux', ['attach', '-t', SESSION], { stdio: 'inherit' });
+    exec('tmux', [C.attach, '-t', SESSION], { stdio: 'inherit' });
   } catch {
     // Normal exit when detaching
   }

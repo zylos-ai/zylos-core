@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { groupRunDir, tmuxNameForGroup, listGroupTmuxSessions } from './session-group-paths.js';
 import { openTmuxConnection } from './runtime/tmux-connection.js';
+import { isIdentityError } from './runtime/tmux-protocol.js';
 import { observeSessionTarget } from './runtime/session-target.js';
 import { readJsonSample, readCodexSampleForIdentity, sampleResult, sameIdentity } from './session-usage-reader.js';
 
@@ -36,7 +37,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
       let last;
       try { last = await read(); }
       catch (error) {
-        if (!['TARGET_GONE','RUNID_MISMATCH','GENERATION_CHANGED','TMUX_NO_SERVER'].includes(error.code)) throw error;
+        if (!isIdentityError(error) && error.code !== 'TMUX_NO_SERVER') throw error;
         last = absent(group);
       }
       return { identity: publicIdentity(first), status: sampleResult(status, first, last, freshnessMs, now()),

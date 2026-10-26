@@ -3,13 +3,13 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadCoreModule } from './core-modules.js';
+import { tmuxError as fail } from '../../comm-bridge/scripts/tmux-protocol.js';
 const { groupRunDir, listGroupTmuxSessions, tmuxNameForGroup } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget, readTargetRuntime, revalidateSessionTarget, readProcessTree: systemProcessTree } = await loadCoreModule('runtime/session-target.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 
-const fail = (code, message) => Object.assign(new Error(message), { code });
 const absent = (group, env) => ({ sessionGroup: group, present: false, ready: false, processRunning: false,
   tmuxName: tmuxNameForGroup(group ?? 'origin'), runDir: groupRunDir(group ?? 'origin', env),
   runId: null, runtime: 'unknown', sessionId: null, createdAt: null, currentSessionTs: null,

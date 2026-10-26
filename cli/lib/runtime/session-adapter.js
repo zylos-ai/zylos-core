@@ -6,6 +6,7 @@ import { RuntimeAdapter } from './base.js';
 import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, hasNativeClaudeAuth } from './session-command.js';
 import { settleLaunch } from './session-launch.js';
 import { ZYLOS_DIR } from '../config.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F, isIdentityError } from './tmux-protocol.js';
 
 export class SessionAdapter extends RuntimeAdapter {
   async dependencies() {
@@ -53,7 +54,7 @@ export class SessionAdapter extends RuntimeAdapter {
       if (target.runId !== expectedRunId) throw adapterError('RUNID_MISMATCH');
       try {
         await deps.revalidateSessionTarget({connection,target,kind:'session'});
-        await connection.command(['kill-session','-t',target.tmuxSessionId], {kind:'session'});
+        await connection.command([C.killSession,'-t',target.tmuxSessionId], {kind:'session'});
       } catch (error) {
         // Only session-level absence proves stop succeeded; observation above
         // uses pane guards and can lose a pane while its session survives.
@@ -63,7 +64,7 @@ export class SessionAdapter extends RuntimeAdapter {
       // A successful kill is not sufficient: confirm removal of the session,
       // even if its original pane vanished while other windows remained.
       try {
-        await connection.command(['display-message','-p','-t',target.tmuxSessionId,'#{session_id}'], {kind:'session'});
+        await connection.command([C.displayMessage,'-p','-t',target.tmuxSessionId,F.sessionId], {kind:'session'});
       } catch (error) {
         if (error.code === 'TARGET_GONE') return;
         throw error;
@@ -76,7 +77,7 @@ export class SessionAdapter extends RuntimeAdapter {
   }
   async captureScreen({target,connection}) {
     await (await this.dependencies()).revalidateSessionTarget({target,connection});
-    return connection.command(['capture-pane','-p','-t',target.paneId]);
+    return connection.command([C.capturePane,'-p','-t',target.paneId]);
   }
   async sendKeys({target,connection,keys}) {
     if (!Array.isArray(keys) || !keys.length || keys.some(key => typeof key !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(key))) {
@@ -84,10 +85,10 @@ export class SessionAdapter extends RuntimeAdapter {
     }
     try {
       await (await this.dependencies()).revalidateSessionTarget({target,connection});
-      return await connection.command(['send-keys','-t',target.paneId,...keys]);
+      return await connection.command([C.sendKeys,'-t',target.paneId,...keys]);
     }
     catch (error) {
-      if (['TARGET_GONE','GENERATION_CHANGED','RUNID_MISMATCH'].includes(error.code)) throw error;
+      if (isIdentityError(error)) throw error;
       throw adapterError('ENTER_UNVERIFIED','Key delivery could not be confirmed',error.cause);
     }
   }
@@ -101,11 +102,11 @@ export class SessionAdapter extends RuntimeAdapter {
       try {
         await (await this.dependencies()).revalidateSessionTarget({target,connection});
         await connection.commandBatch([
-          ['load-buffer','-b',buffer,file.replaceAll('#','##')],
-          ['paste-buffer',...(bracketedPaste ? ['-p'] : []),'-d','-b',buffer,'-t',target.paneId],
+          [C.loadBuffer,'-b',buffer,file.replaceAll('#','##')],
+          [C.pasteBuffer,...(bracketedPaste ? ['-p'] : []),'-d','-b',buffer,'-t',target.paneId],
         ]);
       } catch (error) {
-        if (['TARGET_GONE','GENERATION_CHANGED','RUNID_MISMATCH'].includes(error.code)) throw error;
+        if (isIdentityError(error)) throw error;
         throw adapterError('PASTE_FAILED','Text delivery could not be confirmed',error.cause);
       }
     } finally {

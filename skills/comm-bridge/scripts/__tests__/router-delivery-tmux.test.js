@@ -76,7 +76,10 @@ for (const replacement of ['server', 'pane']) for (const type of ['conversation'
     const adapter = getSessionAdapter('codex'), original = adapter.sendText.bind(adapter);
     let resolutions = 0;
     adapter.sendText = async args => {
-      if (replacement === 'server') terminal.tmux('kill-server');
+      if (replacement === 'server') {
+        terminal.tmux('kill-server');
+        await terminal.waitForServerExit();
+      }
       else { terminal.tmux('new-session', '-d', '-s', 'keeper', '/bin/sleep', '120'); terminal.tmux('kill-session', '-t', 'zylos-group-origin'); }
       terminal.tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'zylos-group-origin', '-e', `ZYLOS_RUN_ID=${initial.runId}`,
         '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"codex","mode":"default"}', '/bin/sleep', '120');
