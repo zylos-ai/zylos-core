@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * Rotate session log at day boundary.
+ * Migrate a legacy current.md once to a dated session log.
  *
- * Reads TZ from ~/zylos/.env, compares current.md header date to today's date,
- * rotates to YYYY-MM-DD.md when needed, then creates a fresh current.md.
+ * Preserve its header date (or mtime) and never create another current.md.
  */
 
 import fs from 'fs';
@@ -37,25 +36,14 @@ export function resolveArchivePath(baseDate, tz) {
   throw new Error(`Too many archive files for ${safeDate} (exceeded ${MAX_ARCHIVE_SUFFIX})`);
 }
 
-function writeFreshCurrent(today) {
-  const header = `# Session Log: ${today}\n\n`;
-  fs.writeFileSync(CURRENT_FILE, header, 'utf8');
-}
-
 function main() {
   const tz = loadTimezoneFromEnv();
-  const today = dateInTimeZone(new Date(), tz);
 
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
   if (fs.existsSync(CURRENT_FILE)) {
     const currentContent = fs.readFileSync(CURRENT_FILE, 'utf8');
     const headerDate = findHeaderDate(currentContent);
-
-    if (headerDate === today) {
-      console.log('No rotation needed (current.md matches today).');
-      return;
-    }
 
     const stat = fs.statSync(CURRENT_FILE);
     const fallbackDate = dateInTimeZone(stat.mtime, tz);
@@ -65,8 +53,7 @@ function main() {
     console.log(`Rotated current.md -> ${path.basename(archivePath)}`);
   }
 
-  writeFreshCurrent(today);
-  console.log(`Created fresh current.md for ${today}`);
+  // No current.md: migration is already complete; new logs use dated files.
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main();

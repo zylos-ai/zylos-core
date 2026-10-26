@@ -33,7 +33,11 @@ export async function withMemoryLock(runDir, action, { waitMs = 10000 } = {}) {
   let fd;
   try {
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-    fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600);
+    try { fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600); }
+    catch (error) {
+      if (['EISDIR', 'ELOOP'].includes(error.code)) throw memoryError('LOCK_UNAVAILABLE', 'Memory lock is not a regular file');
+      throw error;
+    }
     const inode = fs.fstatSync(fd);
     if (!inode.isFile()) throw memoryError('LOCK_UNAVAILABLE', 'Memory lock is not a regular file');
     const remaining = waitMs - (performance.now() - started);

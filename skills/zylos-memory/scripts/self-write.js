@@ -52,16 +52,20 @@ export function applyFragmentLocked({ target, expected, replacement }) {
       next = old.slice(0, first) + replacement + old.slice(first + expected.length);
     }
   }
-  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomBytes(16).toString('hex')}.tmp`);
   try {
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
     fs.writeFileSync(temporary, next, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     if (expected === null) {
       try { fs.linkSync(temporary, target); }
       catch (error) { if (error.code === 'EEXIST') throw memoryError('EXISTS', 'Target already exists'); throw error; }
     } else fs.renameSync(temporary, target);
+  } catch (error) {
+    if (error.code === 'EXISTS') throw error;
+    throw memoryError('WRITE_FAILED', 'Memory write failed');
   } finally {
-    try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    // Publication is final: cleanup must neither turn success into failure nor mask a write error.
+    try { fs.unlinkSync(temporary); } catch {}
   }
   return { bytes: Buffer.byteLength(next) };
 }

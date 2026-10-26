@@ -84,40 +84,21 @@ describe('resolveArchivePath', () => {
 describe('rotate-session integration', () => {
   afterEach(() => cleanSessions());
 
-  it('creates fresh current.md when none exists', () => {
+  it('does not recreate current.md when migration has nothing to do', () => {
     ensureSessionsDir();
-    const output = runRotate();
-    assert.match(output, /Created fresh current\.md/);
-
-    const content = fs.readFileSync(CURRENT_FILE, 'utf8');
-    assert.match(content, /^# Session Log: \d{4}-\d{2}-\d{2}\n/);
+    runRotate();
+    assert.equal(fs.existsSync(CURRENT_FILE), false);
   });
 
-  it('skips rotation when current.md matches today', () => {
+  it('archives current.md even when its date matches today', () => {
     const today = new Date().toISOString().slice(0, 10);
-    writeCurrent(`# Session Log: ${today}\n\nSome entries.\n`);
-
-    const output = runRotate();
-    assert.match(output, /No rotation needed/);
-
-    const content = fs.readFileSync(CURRENT_FILE, 'utf8');
-    assert.ok(content.includes('Some entries.'));
-  });
-
-  it('rotates current.md when header date is yesterday', () => {
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    writeCurrent(`# Session Log: ${yesterday}\n\nYesterday entries.\n`);
-
-    const output = runRotate();
-    assert.match(output, /Rotated current\.md/);
-    assert.match(output, /Created fresh current\.md/);
-
-    const archived = fs.readFileSync(path.join(SESSIONS_DIR, `${yesterday}.md`), 'utf8');
-    assert.ok(archived.includes('Yesterday entries.'));
-
-    const current = fs.readFileSync(CURRENT_FILE, 'utf8');
-    const today = new Date().toISOString().slice(0, 10);
-    assert.ok(current.includes(`# Session Log: ${today}`));
+    const content = `# Session Log: ${today}\n\nSome entries.\n`;
+    writeCurrent(content);
+    runRotate({ TZ: 'UTC' });
+    assert.equal(fs.existsSync(CURRENT_FILE), false);
+    assert.equal(fs.readFileSync(path.join(SESSIONS_DIR, `${today}.md`), 'utf8'), content);
+    runRotate({ TZ: 'UTC' });
+    assert.deepEqual(fs.readdirSync(SESSIONS_DIR), [`${today}.md`]);
   });
 
   it('handles collision when dated archive already exists', () => {
@@ -138,20 +119,22 @@ describe('rotate-session integration', () => {
 
   it('uses mtime fallback when header is missing', () => {
     writeCurrent('No header here, just content.\n');
+    const mtime = new Date('2025-06-15T01:00:00Z');
+    fs.utimesSync(CURRENT_FILE, mtime, mtime);
 
-    const output = runRotate();
+    const output = runRotate({ TZ: 'America/Los_Angeles' });
     assert.match(output, /Rotated current\.md/);
-    assert.match(output, /Created fresh current\.md/);
+    assert.equal(fs.existsSync(CURRENT_FILE), false);
 
     const files = fs.readdirSync(SESSIONS_DIR).filter((f) => f !== 'current.md');
     assert.ok(files.length >= 1, `Expected at least 1 archived file, got: ${files}`);
-    assert.match(files[0], /^\d{4}-\d{2}-\d{2}/);
+    assert.equal(files[0], '2025-06-14.md');
   });
 
   it('creates sessions directory if missing', () => {
     cleanSessions();
     const output = runRotate();
-    assert.match(output, /Created fresh current\.md/);
-    assert.ok(fs.existsSync(CURRENT_FILE));
+    assert.equal(fs.existsSync(CURRENT_FILE), false);
+    assert.equal(fs.existsSync(CURRENT_FILE), false);
   });
 });

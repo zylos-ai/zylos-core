@@ -74,16 +74,16 @@ describe('BUDGETS', () => {
     assert.equal(BUDGETS['identity.md'], 16 * 1024);
   });
 
-  it('contains state.md budget', () => {
-    assert.equal(BUDGETS['state.md'], 16 * 1024);
+  it('does not impose a state.md budget', () => {
+    assert.equal(BUDGETS['state.md'], undefined);
   });
 
   it('contains references.md budget', () => {
     assert.equal(BUDGETS['references.md'], 16 * 1024);
   });
 
-  it('has exactly 3 entries', () => {
-    assert.equal(Object.keys(BUDGETS).length, 3);
+  it('has exactly 2 entries', () => {
+    assert.equal(Object.keys(BUDGETS).length, 2);
   });
 
   it('all budget values are positive numbers', () => {
@@ -102,8 +102,8 @@ describe('WARN_THRESHOLDS', () => {
     assert.equal(WARN_THRESHOLDS['references.md'], 8 * 1024);
   });
 
-  it('warns for state.md at 10KB', () => {
-    assert.equal(WARN_THRESHOLDS['state.md'], 10 * 1024);
+  it('does not warn on state.md size', () => {
+    assert.equal(WARN_THRESHOLDS['state.md'], undefined);
   });
 
   it('every warn threshold is below its hard budget', () => {
