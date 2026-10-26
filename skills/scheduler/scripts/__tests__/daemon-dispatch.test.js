@@ -14,6 +14,7 @@ import { dispatchTask, executionMarker } from '../daemon-dispatch.js';
 import { sendViaC4 } from '../runtime.js';
 import { mainLoop, handleMissedTasks, runSchedulerIteration } from '../daemon-dispatch.js';
 import { handleStaleRunningTasks, processCompletedTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
+import { realReceive } from './fixtures/real-receive.js';
 const receiveFixture=fileURLToPath(new URL('./fixtures/receive-result.mjs',import.meta.url));
 function fixture(t, overrides={}) {
   const db=new Database(':memory:'); guardDatabase(db,schema); t.after(()=>db.close());
@@ -26,25 +27,48 @@ function fixture(t, overrides={}) {
 const base={getRecentConversations:()=>[],getConversationsByRange:()=>[]};
 function receive(mode, options={}) {return (message,route)=>sendViaC4(message,route,{receivePath:receiveFixture,execute(cmd,args,settings){return execFileSync(cmd,args,{...settings,...options,env:{...process.env,...options.env,RECEIVE_FIXTURE_MODE:mode}});}});}
 
-for(const mode of ['success','UNHEALTHY_NOTIFY_FAILED:["conversations"]','UNHEALTHY_NOTIFY_UNCERTAIN:["conversations"]'])
+for(const mode of ['success','UNHEALTHY_NOTIFY_FAILED','UNHEALTHY_NOTIFY_UNCERTAIN'])
  test(`committed ${mode} remains running and does not resend`,t=>{
-  const {db,task,read}=fixture(t);let sends=0;
-  const deps={...base,sendViaC4(...args){sends++;return receive(mode)(...args);}};
+  const {db,task,read}=fixture(t,{reply_channel:'telegram',reply_endpoint:'target'});let sends=0;
+  const real=realReceive(t,mode==='success'?{}:{health:'unavailable',...(mode==='UNHEALTHY_NOTIFY_UNCERTAIN'?{noticeExit:7}:{})});
+  const deps={...base,sendViaC4(...args){sends++;const result=real.send(...args);
+    if(mode!=='success')assert.deepEqual(result.receipt.error.persisted,['D1']);
+    return result;}};
   const result=dispatchTask(db,task,deps);assert.equal(result.claimed,true);
   const row=read();assert.equal(row.task.status,'running');assert.equal(row.history[0].status,'started');
   if(mode!=='success')assert.equal(row.task.last_error,mode.split(':')[0]);
   assert.deepEqual(dispatchTask(db,task,deps),{claimed:false});assert.equal(sends,1);
+  assert.equal(real.rows().filter(row=>row.direction==='in').length,1);
  });
 
 for(const type of ['one-time','recurring','interval']) test(`R fails exact execution and advances only recurring schedule: ${type}`,t=>{
- const {db,task,read}=fixture(t,{type,interval_seconds:60,cron_expression:'* * * * *',timezone:'UTC'});
+ const {db,task,read}=fixture(t,{type,interval_seconds:60,cron_expression:'* * * * *',timezone:'UTC',session_component:'not-installed'});
+ const real=realReceive(t);
  db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,1,'started')").run(task.id);
- const result=dispatchTask(db,task,{...base,sendViaC4:receive('INVALID_ARGS:[]')});
+ const result=dispatchTask(db,task,{...base,sendViaC4(message,route){const result=real.send(message,route);assert.equal(result.receipt.error.code,'INVALID_ARGS');assert.deepEqual(result.receipt.error.persisted,[]);return result;}});
+ assert.deepEqual(real.rows(),[]);
  const row=read(); assert.equal(row.history[0].status,'started'); assert.equal(row.history[1].id,result.historyId);
  assert.equal(row.history[1].status,'failed'); assert.equal(row.history[1].error,'INVALID_ARGS'); assert.ok(row.history[1].completed_at);
  assert.equal(row.task.status,type==='one-time'?'failed':'pending');
  assert.equal(row.task.last_error,'INVALID_ARGS');
  if(type!=='one-time')assert.ok(row.task.next_run_at>task.next_run_at);else assert.equal(row.task.next_run_at,task.next_run_at);
+});
+
+// P2-1: Scheduler claim/dispatch through the actual P09 CLI and D1 owner.
+for(const [label, route, expected] of [
+ ['saved group with reply',{session_component:'telegram',session_group_name:'team',reply_channel:'telegram',reply_endpoint:'chat|msg:9'},['telegram','chat|msg:9','telegram:team']],
+ ['saved group without reply',{session_component:'telegram',session_group_name:'team'},['telegram',null,'telegram:team']],
+ ['without reply or saved group',{},['system',null,'origin']],
+]) test(`real Scheduler dispatch D1 routing: ${label}`,t=>{
+ const {db,task,read}=fixture(t,route);const real=realReceive(t);
+ const result=dispatchTask(db,task,{...base,sendViaC4:real.send});
+ assert.equal(result.category,'success');assert.equal(read().task.status,'running');
+ assert.equal(read().history[0].status,'started');
+ const rows=real.rows();assert.equal(rows.length,1);
+ const row=rows[0];assert.deepEqual([row.channel,row.endpoint_id,row.session_group],expected);
+ assert.equal(row.direction,'in');assert.equal(row.status,'pending');
+ assert.ok(row.content.startsWith(executionMarker(task.id,result.historyId)+'\n'));
+ assert.ok(row.content.includes(task.prompt));
 });
 
 test('T known zero commit retains original due time and retries with new execution id',t=>{
@@ -182,7 +206,7 @@ for(const category of ['C','U'])for(const type of ['one-time','interval']) test(
 test('real P01 recent/range reads find full execution after a non-maximum-id lower bound',t=>{
  const {db,task,read}=fixture(t);
  const messages=c4.getDb();
- // Exercise the existing D1 owner schema and read APIs; receive remains a fixture.
+ // U readback needs a persisted row with a deliberately lost receipt; inject only that uncertainty.
  const put=messages.prepare("INSERT INTO conversations(direction,channel,content,timestamp,status,session_group) VALUES('in','system',?,?,?,?)");
  const old=Number(put.run(executionMarker(task.id,999)+'\nold',9999999999,'failed','origin').lastInsertRowid);
  const later=Number(put.run('different prior message',1,'pending','origin').lastInsertRowid);

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sendViaC4, RECEIVE_TIMEOUT_MS } from '../runtime.js';
+import { realReceive } from './fixtures/real-receive.js';
 const fixture = fileURLToPath(new URL('./fixtures/receive-result.mjs', import.meta.url));
 
 for (const [label, options, route] of [
@@ -15,23 +16,46 @@ for (const [label, options, route] of [
   ['old null pair without reply', {}, ['--no-reply']],
   ['whole component', {sessionComponent:'lark'}, ['--no-reply','--channel','lark']],
 ]) test(`four-way receive mapping: ${label}`, t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(),'scheduler-argv-'));
-  t.after(() => fs.rmSync(dir,{recursive:true,force:true}));
-  const record = path.join(dir,'argv.json');
-  const result = sendViaC4('literal $HOME `echo x`', {...options,priority:2,requireIdle:true}, {receivePath:fixture,execute(command,args,settings) {
-    assert.equal(command,process.execPath); assert.equal(settings.timeout,45000);
-    return execFileSync(command,args,{...settings,env:{...process.env,RECEIVE_FIXTURE_MODE:'success',RECEIVE_FIXTURE_RECORD:record}});
-  }});
-  assert.equal(result.category,'success');
-  assert.deepEqual(JSON.parse(fs.readFileSync(record)),['--core-source','scheduler','--json',...route,'--block-queue-until-idle','--priority','2','--content','literal $HOME `echo x`']);
+  const real = realReceive(t);
+  const result = real.send('literal $HOME `echo x`', {...options,priority:2,requireIdle:true});
+  assert.equal(result.category,'success', result.stdout + result.stderr);
+  assert.equal(real.calls[0].command,process.execPath);
+  assert.equal(real.calls[0].settings.timeout,45000);
+  assert.deepEqual(real.calls[0].args,['--core-source','scheduler','--json',...route,'--block-queue-until-idle','--priority','2','--content','literal $HOME `echo x`']);
+  const [row] = real.rows(); assert.equal(real.rows().length,1);
+  assert.equal(row.content,'literal $HOME `echo x`');
+  assert.equal(row.channel,options.sessionComponent || options.replyChannel || 'system');
+  assert.equal(row.endpoint_id,options.replyEndpoint || null);
+  assert.equal(row.session_group, options.sessionComponent ? options.sessionComponent + (options.sessionGroupName ? ':'+options.sessionGroupName : '') : options.replyChannel || 'origin');
+  assert.equal(row.priority,2); assert.equal(row.require_idle,1);
+  assert.equal(result.receipt.id,row.id); assert.equal(result.receipt.sessionGroup,row.session_group);
+
+});
+
+for (const [label, options, code] of [
+  ['missing component', {sessionComponent:'not-installed'}, 'INVALID_ARGS'],
+  ['invalid group', {sessionComponent:'telegram',sessionGroupName:'bad group'}, 'SESSION_GROUP_INVALID'],
+  ['too-long group', {sessionComponent:'telegram',sessionGroupName:'g'.repeat(96)}, 'SESSION_GROUP_TOO_LONG'],
+]) test(`real receive rejection: ${label}`, t => {
+  const real=realReceive(t); const result=real.send('x',options);
+  assert.equal(result.category,'R'); assert.equal(result.status,1);
+  assert.equal(result.receipt.error.code,code); assert.deepEqual(result.receipt.error.persisted,[]);
+  assert.deepEqual(real.rows(),[]);
+});
+
+for (const [noticeExit,code] of [[undefined,'UNHEALTHY_NOTIFY_FAILED'],[7,'UNHEALTHY_NOTIFY_UNCERTAIN']])
+ test(`real committed receipt: ${code}`, t => {
+  const real=realReceive(t,{health:'unavailable',noticeExit});
+  const result=real.send('x',{replyChannel:'telegram',replyEndpoint:'target'});
+  assert.equal(result.category,'C',result.stdout+result.stderr);
+  assert.equal(result.receipt.error.code,code); assert.deepEqual(result.receipt.error.persisted,['D1']);
+  assert.equal(real.rows().filter(row=>row.direction==='in').length,1);
 });
 
 for (const [mode, category] of [
-  ['INVALID_ARGS:[]','R'], ['SESSION_GROUP_INVALID:[]','R'], ['SESSION_GROUP_TOO_LONG:[]','R'],
   ['DB_BUSY:[]','T'], ['INTERNAL_ERROR:[]','T'], ['INTERNAL_ERROR:null','U'],
-  ['UNHEALTHY_NOTIFY_FAILED:["conversations"]','C'], ['UNHEALTHY_NOTIFY_UNCERTAIN:["conversations"]','C'],
   ['invalid','U'], ['abnormal','U'], ['signal','U'],
-]) test(`actual receive exit classification ${mode}`, () => {
+]) test(`synthetic uncertain/retryable receive classification ${mode}`, () => {
   const result=sendViaC4('x',{}, {receivePath:fixture,execute(command,args,settings) {
     return execFileSync(command,args,{...settings,env:{...process.env,RECEIVE_FIXTURE_MODE:mode}});
   }});
