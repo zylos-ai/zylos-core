@@ -223,14 +223,24 @@ test('explicit no server on opening is absent target and makes directed control 
   await f.create().deliverControl(row); assert.equal(row.status, 'timeout');
 });
 
-test('missing or other-run final F3 retains running ledger and never invents a session id', async t => {
-  for (const ready of [null, { runId: 'other', sessionId: 'other' }]) {
-    const f = setup(t), row = f.message(); f.deps.readCurrentSession = async () => ready;
-    await assert.rejects(f.create().deliverConversation(row), { code: 'READY_IDENTITY_LOST' });
-    assert.equal(f.row(row.id).status, 'running'); assert.equal(f.row(row.id).session_id, null);
+// I2 R6: a successful body must settle even when final F3 cannot identify it.
+for (const reason of ['missing', 'run_mismatch', 'read_failed']) {
+  test(`final F3 ${reason} settles delivered with NULL identity and no replay`, async t => {
+    const f = setup(t), row = f.message();
+    f.deps.readCurrentSession = async () => {
+      if (reason === 'read_failed') throw error('EIO');
+      return reason === 'missing' ? null : { runId: 'other', sessionId: 'other' };
+    };
+    await f.create().deliverConversation(row);
+    assert.equal(f.row(row.id).status, 'delivered');
+    assert.equal(f.row(row.id).session_id, null);
+    assert.equal(f.row(row.id).retry_count, 0);
+    assert.equal(f.store.getNextPending(), null);
     assert.equal(f.calls.filter(c => c[0] === 'paste').length, 1);
-  }
-});
+    assert.equal(f.calls.some(c => ['failDelivery', 'requeue'].includes(c[0])), false);
+    assert.ok(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'delivery_identity_lost' && c[2].reason === reason));
+  });
+}
 
 test('F4 reader failure is offline, while valid READY bypass control can recover', async t => {
   const f = setup(t), row = f.message();
@@ -278,4 +288,35 @@ test('T07 JSONL records successful settlement, stale settlement and distinct gat
     assert.equal(row.decision, 'release'); assert.equal(row.reason, row.code);
     assert.equal(row.conversation_id, gated.id); assert.equal(row.session_group, gated.session_group);
   }
+});
+
+// I2 R7: a delayed Enter failure must not replay an already verified body.
+test('periodic Enter failure after verified delivery drains without requeue or duplicate paste', {timeout:15000}, async t => {
+  const f = setup(t), row = f.message(), holding = deferred(), releaseHold = deferred(), periodicStarted = deferred(), releasePeriodic = deferred();
+  row.require_idle = 1;
+  f.deps.now = Date.now;
+  f.deps.sleep = async ms => { if (ms === 5000) { holding.resolve(); await releaseHold.promise; } };
+  let keys = 0;
+  f.adapter.sendKeys = async args => {
+    f.calls.push(['keys', args]);
+    if (++keys === 2) { periodicStarted.resolve(); await releasePeriodic.promise; throw error('ENTER_UNVERIFIED'); }
+  };
+  const d = f.create({periodicEnabled:true, periodicIntervalMs:5, periodicMaxAttempts:1});
+  const pending = d.deliverConversation(row);
+  await holding.promise; await periodicStarted.promise;
+  releaseHold.resolve(); await new Promise(setImmediate);
+  assert.equal(f.row(row.id).status, 'running');
+  assert.equal(f.calls.some(c=>c[0]==='close'), false);
+  releasePeriodic.resolve(); await pending;
+  const firstStatus=f.row(row.id).status, next=f.store.getNextPending();
+  if (next && f.store.claimConversation(next.id)) await d.deliverConversation(next);
+  t.diagnostic(JSON.stringify({firstStatus, retryCount:f.row(row.id).retry_count, pasteCount:f.calls.filter(c=>c[0]==='paste').length}));
+  assert.equal(firstStatus, 'delivered');
+  assert.equal(f.row(row.id).status, 'delivered');
+  assert.equal(f.row(row.id).retry_count, 0);
+  assert.equal(f.calls.some(c=>c[0]==='failDelivery'), false);
+  assert.equal(f.store.getNextPending(), null);
+  assert.equal(f.calls.filter(c=>c[0]==='paste').length, 1);
+  assert.ok(f.calls.some(c=>c[0]==='diagnostic' && c[1]==='periodic_failed'));
+  const count=keys; await new Promise(resolve=>setTimeout(resolve,15)); assert.equal(keys,count);
 });

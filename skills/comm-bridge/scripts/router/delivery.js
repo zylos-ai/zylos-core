@@ -63,11 +63,11 @@ export function createDelivery(deps, configuration = {}) {
     const emit = (event, details = {}) => diagnostic(event, { ...fields, ...details });
     const periodic = new PeriodicEnter({ enabled: options.periodicEnabled, intervalMs: options.periodicIntervalMs,
       maxAttempts: options.periodicMaxAttempts, now, emit });
-    let connection, target, adapter, timer, draining = false, queue = Promise.resolve(), periodicError;
+    let connection, target, adapter, timer, draining = false, queue = Promise.resolve();
     let result = 'blocked', gateCode, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false;
     const bound = () => ({ target, connection });
     function io(action) {
-      const work = queue.then(() => { if (periodicError) throw periodicError; return action(); });
+      const work = queue.then(action);
       queue = work.catch(() => {});
       return work;
     }
@@ -94,12 +94,10 @@ export function createDelivery(deps, configuration = {}) {
       timer = setTimeout(() => {
         if (draining || stopped) return;
         io(() => periodic.tick({ eligible: !draining && !stopped, send: async () => {
-          try {
-            await capture('before', { kind: 'periodic' });
-            await enter('periodic');
-            await sleep(options.verifyWaitMs);
-            await capture('after', { kind: 'periodic' });
-          } catch (cause) { periodicError ??= cause; throw cause; }
+          await capture('before', { kind: 'periodic' });
+          await enter('periodic');
+          await sleep(options.verifyWaitMs);
+          await capture('after', { kind: 'periodic' });
         } })).finally(schedulePeriodic).catch(() => {});
       }, options.periodicIntervalMs);
     }
@@ -233,7 +231,6 @@ export function createDelivery(deps, configuration = {}) {
     finally {
       controller.cancel();
       await queue;
-      error ??= periodicError;
       try { await connection?.close(); } catch (cause) { error ??= cause; }
       active.delete(controller);
     }
@@ -259,9 +256,14 @@ export function createDelivery(deps, configuration = {}) {
       else deps.db.requeueConversation(row.id);
       emit('release', { code: gateCode, reason: gateCode });
     } else if (result === 'delivered') {
-      const current = await deps.readCurrentSession(group);
-      if (current?.runId === target.runId && typeof current.sessionId === 'string' && current.sessionId) sessionId = current.sessionId;
-      else { emit('delivery_identity_lost', { reason: 'READY_IDENTITY_LOST' }); throw failure('READY_IDENTITY_LOST'); }
+      // The body is already verified. Missing final identity only affects attribution.
+      try {
+        const current = await deps.readCurrentSession(group);
+        if (current?.runId === target.runId && typeof current.sessionId === 'string' && current.sessionId) sessionId = current.sessionId;
+        else emit('delivery_identity_lost', { reason: current && current.runId !== target.runId ? 'run_mismatch' : 'missing' });
+      } catch {
+        emit('delivery_identity_lost', { reason: 'read_failed' });
+      }
       if (!deps.db.markDelivered(row.id, { sessionId })) emit('mark_delivered_stale', { sessionId });
       else emit('deliver', { sessionId });
     } else if (result === 'ack') deps.db.ackControl(row.id);

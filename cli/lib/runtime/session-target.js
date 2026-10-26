@@ -145,7 +145,7 @@ export async function revalidateSessionTarget({ connection, target, kind = 'pane
   try {
     // The bound command guards server generation and object identity atomically.
     env = await environment(connection, binding.tmuxSessionId, kind);
-  } catch (error) { if (missing(error)) throw tmuxError('TARGET_GONE', 'Bound tmux object disappeared'); throw error; }
+  } catch (error) { if (missing(error)) throw tmuxError('TARGET_GONE', 'Bound tmux object disappeared'); throw unavailableCommand(error); }
   if ((env.ZYLOS_RUN_ID || null) !== binding.runId) throw tmuxError('RUNID_MISMATCH', 'Target run ID changed');
   return true;
 }

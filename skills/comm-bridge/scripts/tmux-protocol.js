@@ -31,7 +31,7 @@ export function adapterError(code, message = code, cause) {
   return Object.assign(new Error(message), { code }, cause === undefined ? {} : { cause });
 }
 export function unavailableCommand(error, message = error.message) {
-  return error.code === 'TMUX_COMMAND_FAILED' ? tmuxError('TMUX_UNAVAILABLE', message, error.cause || 'error') : error;
+  return ['TMUX_COMMAND_FAILED', 'TMUX_RESPONSE_INVALID'].includes(error.code) ? tmuxError('TMUX_UNAVAILABLE', message, error.cause || 'error') : error;
 }
 // Group discovery deliberately retains its narrower legacy absence contract.
 export function groupListNoServer(error) {
@@ -99,12 +99,10 @@ export function parseTmuxEnvironment(text) {
   while (offset < text.length) {
     const head = text.slice(offset).match(/^([A-Za-z_][A-Za-z_0-9]*)="/);
     if (!head) {
-      // Retain compatibility with injected providers returning the old plain form.
-      const end = text.indexOf('\n', offset);
-      const line = text.slice(offset, end < 0 ? text.length : end);
-      const equal = line.indexOf('=');
-      if (equal > 0) result[line.slice(0, equal)] = line.slice(equal + 1);
-      offset = end < 0 ? text.length : end + 1;
+      const unset = text.slice(offset).match(/^unset ([A-Za-z_][A-Za-z_0-9]*);(?:\n|$)/);
+      if (!unset) throw tmuxError('TMUX_RESPONSE_INVALID', 'Invalid tmux environment record');
+      delete result[unset[1]];
+      offset += unset[0].length;
       continue;
     }
     const name = head[1];

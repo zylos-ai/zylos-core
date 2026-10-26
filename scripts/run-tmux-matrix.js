@@ -28,6 +28,11 @@ for (const arg of args.slice(2)) {
 fs.mkdirSync(output);
 const testDir = 'cli/lib/runtime/__tests__';
 const tests = fs.readdirSync(path.join(repo, testDir)).filter(name => name.endsWith('.test.js')).sort().map(name => `${testDir}/${name}`);
+tests.push(
+  'skills/comm-bridge/scripts/__tests__/router-delivery-tmux.test.js',
+  'cli/lib/__tests__/session-group-paths.test.js',
+  'skills/activity-monitor/scripts/__tests__/supervisor-tmux-stress.test.js',
+);
 const sha256 = filename => createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
 const sourceHashes = {};
 function hashTree(directory) {
@@ -42,6 +47,7 @@ sourceHashes['scripts/run-node-tests.js'] = sha256(path.join(repo, 'scripts/run-
 sourceHashes['scripts/run-tmux-matrix.js'] = sha256(fileURLToPath(import.meta.url));
 sourceHashes['test/helpers/isolated-tmux.js'] = sha256(path.join(repo, 'test/helpers/isolated-tmux.js'));
 sourceHashes['skills/comm-bridge/scripts/tmux-protocol.js'] = sha256(path.join(repo, 'skills/comm-bridge/scripts/tmux-protocol.js'));
+for (const filename of tests) sourceHashes[filename] = sha256(path.join(repo, filename));
 const summary = { head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
   node: process.version, platform: process.platform, tests, sourceHashes, versions: [] };
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'tmux-matrix-'));
@@ -65,24 +71,33 @@ try {
     const binary = binaries.get(version);
     const binDir = path.join(temporary, version); fs.mkdirSync(binDir);
     fs.symlinkSync(binary, path.join(binDir, 'tmux'));
-    const env = { ...process.env, TEST_TMUX_BIN: binary, PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` };
+    const supervisorLog = path.join(output, `tmux-${version}-supervisor-stress.json`);
+    const env = { ...process.env, TEST_TMUX_BIN: binary, PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+      ZYLOS_TMUX_CHURN_STRESS: '1', P05_TMUX_STRESS: '1',
+      P05_LAUNCH_ROUNDS: '300', P05_DELIVERY_ROUNDS: '150', P05_STRESS_RESULT: supervisorLog };
     delete env.ZYLOS_TMUX_BAD_CONTROL;
     const runtimeLog = path.join(output, `tmux-${version}-runtime.tap`);
-    console.log(`${version}: all ${tests.length} runtime files, including 300 launches / 150 deliveries`);
+    console.log(`${version}: ${tests.length} runtime/caller files, including adapter and supervisor stress`);
     const runtime = await run(tests, env, runtimeLog);
     const text = fs.readFileSync(runtimeLog, 'utf8');
     const metricsLine = text.split('\n').find(line => /^# \{"matrixStress":true,/.test(line));
     const metrics = metricsLine ? JSON.parse(metricsLine.slice(2)) : null;
+    const supervisorMetrics = fs.existsSync(supervisorLog) ? JSON.parse(fs.readFileSync(supervisorLog, 'utf8')) : null;
     const badLog = path.join(output, `tmux-${version}-bad-control.tap`);
     const bad = await run([`${testDir}/session-adapter-churn.test.js`], { ...env, ZYLOS_TMUX_BAD_CONTROL: '1' }, badLog);
     const badText = fs.readFileSync(badLog, 'utf8');
     const badDetected = bad.code === 1 && badText.includes('stale-message') && badText.includes('GENERATION_CHANGED');
-    const record = { version, binary, binarySha256: sha256(binary), runtime, runtimeLog, metrics, bad, badLog, badDetected,
+    const record = { version, binary, binarySha256: sha256(binary), runtime, runtimeLog, metrics,
+      supervisorLog, supervisorMetrics, bad, badLog, badDetected,
       tests: Number(text.match(/^# tests (\d+)$/m)?.[1]), failures: Number(text.match(/^# fail (\d+)$/m)?.[1]),
       skipped: Number(text.match(/^# skipped (\d+)$/m)?.[1]) };
     record.passed = runtime.code === 0 && metrics?.launches >= 300 && metrics?.deliveries >= 150 &&
       metrics.churnRounds > 0 && metrics.errors === 0 && metrics.serverCrashes === 0 &&
-      metrics.wrongPaneLines === 0 && metrics.missingLines === 0 && badDetected;
+      metrics.wrongPaneLines === 0 && metrics.missingLines === 0 &&
+      supervisorMetrics?.launchRounds >= 300 && supervisorMetrics?.deliveryRounds >= 150 &&
+      supervisorMetrics.churnCycles > 0 && supervisorMetrics.errors.length === 0 &&
+      supervisorMetrics.serverLost === false && supervisorMetrics.foreignLines === 0 &&
+      supervisorMetrics.missingLines === 0 && supervisorMetrics.duplicates === 0 && badDetected;
     summary.versions.push(record);
     fs.writeFileSync(path.join(output, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     console.log(`${version}: ${record.passed ? 'PASS' : 'FAIL'}; positive control detected=${badDetected}`);

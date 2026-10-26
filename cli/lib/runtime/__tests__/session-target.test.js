@@ -140,7 +140,8 @@ test('initial disappearance and generation change are detected before any sendin
   const held={bindTarget() {},command:async args=> {
     commands.push(args[0]);
     if(generation!=='100:200') throw Object.assign(Error('Bound server changed'),{code:'GENERATION_CHANGED'});
-    if(args[0]==='show-environment') return 'ZYLOS_RUN_ID=r1\nZYLOS_MODEL_CONFIG={"runtime":"claude"}';
+    if(args[0]==='show-environment') return String.raw`ZYLOS_RUN_ID="r1"; export ZYLOS_RUN_ID;
+ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
     return '100:200\t$1\t%1\t123';
   }};
   const target=await resolveSessionTarget({connection:held,tmuxName:'fixture',readReady:ready});
@@ -150,6 +151,21 @@ test('initial disappearance and generation change are detected before any sendin
   generation='101:201';
   await assert.rejects(revalidateSessionTarget({connection:held,target}),{code:'GENERATION_CHANGED'});
   await assert.rejects(revalidateSessionTarget({connection:held,target:{...target}}),TypeError);
+});
+
+test('malformed environment observation and revalidation expose TMUX_UNAVAILABLE', async () => {
+  let environment = 'ZYLOS_RUN_ID="r1"; export ZYLOS_RUN_ID;';
+  const connection = {bindTarget() {}, command:async args => {
+    if (args[0] === 'show-environment') return environment;
+    if (args.at(-1) === '#{pane_pid}') return '10';
+    return '100:200\t$1\t%1\t123';
+  }};
+  const options = {connection, tmuxName:'fixture', readReady:ready, readProcessTree:async()=>[]};
+  const target = await resolveSessionTarget(options);
+  assert.equal(await revalidateSessionTarget({connection,target}), true);
+  environment = 'ZYLOS_RUN_ID="unterminated';
+  await assert.rejects(observeSessionTarget(options), {code:'TMUX_UNAVAILABLE',cause:'error'});
+  await assert.rejects(revalidateSessionTarget({connection,target}), {code:'TMUX_UNAVAILABLE',cause:'error'});
 });
 test('command timeout leaves executor available for a guarded retry', async t => {
   const {socketPath}=await fixture(t);

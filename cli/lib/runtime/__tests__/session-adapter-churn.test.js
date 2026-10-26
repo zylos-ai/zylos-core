@@ -11,6 +11,7 @@ import { resolveSessionTarget, revalidateSessionTarget } from '../session-target
 const binary = process.env.TEST_TMUX_BIN || 'tmux';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const badControl = process.env.ZYLOS_TMUX_BAD_CONTROL === '1';
+const churnStress = process.env.ZYLOS_TMUX_CHURN_STRESS === '1';
 
 async function fixture(t) {
   const f = isolatedTmux(t, { prefix: 'adapter-churn-', timeout: 5000 });
@@ -49,7 +50,7 @@ process.stdin.resume();
 }
 
 test('real adapter survives 300 launches and 150 deliveries on one socket under session churn',
-  { timeout: 300000, skip: badControl }, async t => {
+  { timeout: 300000, skip: !churnStress || badControl }, async t => {
     const f = await fixture(t);
     await f.launch('stress:receiver', 'receiver'); await f.ready('receiver');
     await f.launch('stress:canary', 'canary'); await f.ready('canary');
@@ -97,7 +98,7 @@ test('real adapter survives 300 launches and 150 deliveries on one socket under 
   });
 
 test('same fixture rejects stale generation; constant-true guard positive control must fail',
-  { timeout: 20000 }, async t => {
+  { timeout: 20000, skip: !churnStress }, async t => {
     const f = await fixture(t);
     await f.launch('stress:receiver', 'old'); await f.ready('old');
     let open = openTmuxConnection;

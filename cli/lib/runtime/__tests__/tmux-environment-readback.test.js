@@ -12,6 +12,19 @@ test('shell environment parser preserves literal backslashes and rejects malform
   assert.throws(() => parseTmuxEnvironment('VALUE="x"; export OTHER;'), {code:'TMUX_RESPONSE_INVALID'});
 });
 
+test('shell environment parser accepts quoted assignments and unset records only', () => {
+  assert.deepEqual(parseTmuxEnvironment('VALUE="first\nsecond"; export VALUE;\nunset REMOVED;\nEMPTY=""; export EMPTY;\n'),
+    {VALUE:'first\nsecond', EMPTY:''});
+  for (const text of ['VALUE=plain', 'unset VALUE', 'unset z-x;', 'VALUE="x"; export VALUE; injected']) {
+    assert.throws(() => parseTmuxEnvironment(text), {code:'TMUX_RESPONSE_INVALID'}, text);
+  }
+});
+
+test('invalid variable names cannot inject a later run identity through raw newlines', () => {
+  const text = 'ZYLOS_RUN_ID="real"; export ZYLOS_RUN_ID;\nz-x="before\nZYLOS_RUN_ID=injected"; export z-x;\n';
+  assert.throws(() => parseTmuxEnvironment(text), {code:'TMUX_RESPONSE_INVALID'});
+});
+
 test('real F2 environment preserves dollars, slash runs and control characters', async t => {
   const f = isolatedTmux(t, {prefix:'environment-readback-'});
   f.tmux('-f','/dev/null','new-session','-d','-s','fixture','sleep 120');

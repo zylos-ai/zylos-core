@@ -26,7 +26,12 @@ test('matrix real launch/delivery under same-socket create/kill churn', {
   f.tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'keeper', 'sleep', '600');
   const server = await tmux('display-message', '-p', '-t', '=keeper:', '#{pid}:#{start_time}');
   const runtime = path.join(f.dir, 'runtime-fixture');
-  await fs.writeFile(runtime, `#!${process.execPath}\nconst fs=require('node:fs'),path=require('node:path'),readline=require('node:readline');\nconst file=path.join(process.env.ZYLOS_DIR,'received-'+process.env.ZYLOS_SESSION_GROUP+'.jsonl');\nreadline.createInterface({input:process.stdin}).on('line',line=>fs.appendFileSync(file,JSON.stringify(line)+'\\n'));\nsetInterval(()=>{},1000);\n`, { mode: 0o700 });
+  await fs.writeFile(runtime, `#!${process.execPath}
+const fs=require('node:fs'),path=require('node:path'),readline=require('node:readline');
+const file=path.join(process.env.ZYLOS_DIR,'received-'+process.env.ZYLOS_SESSION_GROUP+'.jsonl');
+readline.createInterface({input:process.stdin}).on('line',line=>fs.appendFileSync(file,JSON.stringify(line)+'\\n'));
+setInterval(()=>{},1000);
+`, { mode: 0o700 });
   const options = { socketPath: f.socketPath, binary: f.binary };
   const adapter = new Adapter({ root: f.dir, env: { ...env, CLAUDE_BIN: runtime }, tmux: options });
   const reader = createSessionReader({ env, connectionOptions: options });
