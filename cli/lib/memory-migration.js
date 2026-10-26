@@ -140,15 +140,17 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     const missingPaths = [];
     try { bytes = readRegular(references); } catch { missingPaths.push('memory/references.md'); }
     const text = String(bytes || '');
-    const indexed = [];
+    const indexValues = [];
     for (const [, code, angle, link] of text.matchAll(/`([^`\n]+)`|\]\((?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"]*")?\)/g)) {
       const value = code || angle || link;
-      if (/^(?:memory\/)?reference\//.test(value)) indexed.push(value);
+      if (/^(?:memory\/)?reference\//.test(value)) indexValues.push(value);
     }
-    const indexedPaths = [...new Set(indexed.map(value => `memory/${value.replace(/^memory\//, '')}`))];
-    for (const indexed of indexedPaths) {
-      const target = path.resolve(root, indexed);
-      if (!target.startsWith(`${path.join(memory, 'reference')}${path.sep}`)) { missingPaths.push(indexed); continue; }
+    const indexedPaths = [...new Set(indexValues.map(value => `memory/${value.replace(/^memory\//, '')}`))];
+    for (const indexed of new Set(indexValues)) {
+      const normalized = `memory/${indexed.replace(/^memory\//, '')}`;
+      const reported = indexed.includes('*') ? indexed : normalized;
+      const target = path.resolve(root, normalized);
+      if (!target.startsWith(`${path.join(memory, 'reference')}${path.sep}`)) { missingPaths.push(reported); continue; }
       try {
         if (path.dirname(indexed).includes('*')) throw Error('Directory wildcards are unsupported');
         const filename = path.basename(indexed);
@@ -165,7 +167,7 @@ export function createMigration({ env = process.env, now = Date.now, version = V
             try { readRegular(path.join(directory, name)); return true; } catch { return false; }
           })) throw Error('No readable regular file matches index');
         } else fs.accessSync(target, fs.constants.R_OK);
-      } catch { missingPaths.push(indexed); }
+      } catch { missingPaths.push(reported); }
     }
     const backupPresent = backupState(backupDir) === 'valid';
     if (requireBackup && !backupPresent) missingPaths.push(path.relative(root, backupDir));
