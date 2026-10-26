@@ -122,7 +122,8 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     let record;
     try { record = JSON.parse(readRegular(recordPath).toString('utf8')); }
     catch (cause) { throw error('RECORD_UNREADABLE', cause.message); }
-    if (!record || record.v !== 1 || record.migrationId !== MIGRATION_ID || !['pending', 'done'].includes(record.state)) {
+    if (!record || record.v !== 1 || record.migrationId !== MIGRATION_ID || !['pending', 'done'].includes(record.state) ||
+        !Number.isInteger(record.attempts) || record.attempts < 0) {
       throw error('RECORD_UNREADABLE', 'Invalid migration record');
     }
     return record;
@@ -139,23 +140,38 @@ export function createMigration({ env = process.env, now = Date.now, version = V
     const missingPaths = [];
     try { bytes = readRegular(references); } catch { missingPaths.push('memory/references.md'); }
     const text = String(bytes || '');
-    const indexed = [];
-    text.replace(/`([^`\n]+)`|\]\((?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"]*")?\)/g,
-      (match, code, angle, link) => {
-        const value = code || angle || link;
-        if (/^(?:memory\/)?reference\//.test(value)) indexed.push(value);
-        return ' ';
-      });
-    const indexedPaths = [...new Set(indexed.filter(value => !/[*?\[\]]/.test(value))
-      .map(value => `memory/${value.replace(/^memory\//, '')}`))];
-    for (const indexed of indexedPaths) {
-      const target = path.resolve(root, indexed);
-      if (!target.startsWith(`${path.join(memory, 'reference')}${path.sep}`)) { missingPaths.push(indexed); continue; }
-      try { fs.accessSync(target, fs.constants.R_OK); } catch { missingPaths.push(indexed); }
+    const indexValues = [];
+    for (const [, code, angle, link] of text.matchAll(/`([^`\n]+)`|\]\((?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"]*")?\)/g)) {
+      const value = code || angle || link;
+      if (/^(?:memory\/)?reference\//.test(value)) indexValues.push(value);
+    }
+    const indexedPaths = [...new Set(indexValues.map(value => `memory/${value.replace(/^memory\//, '')}`))];
+    for (const indexed of new Set(indexValues)) {
+      const normalized = `memory/${indexed.replace(/^memory\//, '')}`;
+      const reported = indexed.includes('*') ? indexed : normalized;
+      const target = path.resolve(root, normalized);
+      if (!target.startsWith(`${path.join(memory, 'reference')}${path.sep}`)) { missingPaths.push(reported); continue; }
+      try {
+        if (path.dirname(indexed).includes('*')) throw Error('Directory wildcards are unsupported');
+        const filename = path.basename(indexed);
+        if (filename.includes('*')) {
+          const matcher = new RegExp(`^${filename.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`);
+          const directory = path.dirname(target);
+          const resolvedDirectory = fs.realpathSync(directory);
+          const referenceRoot = fs.realpathSync(path.join(memory, 'reference'));
+          if (resolvedDirectory !== referenceRoot && !resolvedDirectory.startsWith(`${referenceRoot}${path.sep}`)) {
+            throw Error('Index directory is outside references');
+          }
+          if (!fs.readdirSync(directory).some(name => {
+            if (!matcher.test(name)) return false;
+            try { readRegular(path.join(directory, name)); return true; } catch { return false; }
+          })) throw Error('No readable regular file matches index');
+        } else fs.accessSync(target, fs.constants.R_OK);
+      } catch { missingPaths.push(reported); }
     }
     const backupPresent = backupState(backupDir) === 'valid';
     if (requireBackup && !backupPresent) missingPaths.push(path.relative(root, backupDir));
-    return { referencesSha256: bytes ? hash(bytes) : null, indexedPaths, missingPaths, backupPresent };
+    return { referencesSha256: bytes ? hash(bytes) : null, indexedPaths, missingPaths: [...new Set(missingPaths)], backupPresent };
   }
   function ensure({ createdBy, freshInstall = false } = {}) {
     if (!['upgrade', 'init'].includes(createdBy)) throw error('INVALID_INPUT', 'created-by must be upgrade or init');
