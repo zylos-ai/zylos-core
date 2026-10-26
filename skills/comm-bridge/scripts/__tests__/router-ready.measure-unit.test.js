@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {spawn, spawnSync} from 'node:child_process';
+import {once} from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { configFromEnv, measurementEnv, resolveBinary, proxyPresence, statistics, timing, assertOrder, runMeasurements, runWorker } from './router-ready.measure.js';
+import { waitOwnedRuntime, verifyHomeAbsent } from './router-ready-process.js';
 import { preflightInputs, readClaudeCredential, authRuntimeEnv } from './router-ready-auth.js';
 
 function directory(t) {
@@ -108,7 +111,7 @@ test('worker missing-credentials preflight returns failure after HOME removal', 
 test('measurement worker calibration covers cold/repeat and four injection paths', {timeout:180000}, async t => {
   const dir = directory(t);
   const binary = path.join(dir, 'claude-fixture.mjs');
-  fs.writeFileSync(binary, `#!${process.execPath}\nimport fs from 'node:fs';\nimport path from 'node:path';\nimport {spawn} from 'node:child_process';\nif(process.argv.includes('--version')){console.log('2.0.0');process.exit(0);}\nif(process.argv.includes('auth')){console.log(JSON.stringify({loggedIn:true}));process.exit(0);}\nconst config=JSON.parse(fs.readFileSync(path.join(process.env.HOME,'.claude/settings.json'),'utf8'));\nconst payload=JSON.stringify({source:'startup',session_id:'fixture-'+process.pid});\nfor(const group of config.hooks.SessionStart){for(const hook of group.hooks){const child=spawn('/bin/sh',['-c',hook.command],{stdio:['pipe','ignore','ignore']});child.stdin.end(payload);}}\nsetInterval(()=>{},1000);\n`, {mode:0o700});
+  fs.writeFileSync(binary, `#!${process.execPath}\nimport fs from 'node:fs';\nimport path from 'node:path';\nimport {spawn} from 'node:child_process';\nif(process.argv.includes('--version')){console.log('2.0.0');process.exit(0);}\nif(process.argv.includes('auth')){console.log(JSON.stringify({loggedIn:true}));process.exit(0);}\nif(!process.stdin.isTTY || !process.stdout.isTTY)process.exit(88);\nconst config=JSON.parse(fs.readFileSync(path.join(process.env.HOME,'.claude/settings.json'),'utf8'));\nconst payload=JSON.stringify({source:'startup',session_id:'fixture-'+process.pid});\nfor(const group of config.hooks.SessionStart){for(const hook of group.hooks){const child=spawn('/bin/sh',['-c',hook.command],{stdio:['pipe','ignore','ignore']});child.stdin.end(payload);}}\nsetInterval(()=>{},1000);\n`, {mode:0o700});
   assert.equal(resolveBinary('claude-fixture.mjs', {PATH:dir}), fs.realpathSync(binary));
   const credential = path.join(dir, 'credential.json');
   fs.writeFileSync(credential, JSON.stringify({claudeAiOauth:{accessToken:'test-only-not-real',expiresAt:Date.now()+10800000}}), {mode:0o600});
@@ -124,4 +127,75 @@ test('measurement worker calibration covers cold/repeat and four injection paths
       assert.equal(result.launchCount,1);
     });
   }
+});
+
+
+// Observed DGX regression: a writer outlives target stop and recreates HOME.
+// The negative control proves an immediate absence check accepts that race;
+// the positive path terminates only the newly owned group, then checks grace.
+test('owned runtime cleanup prevents delayed HOME recreation and detects the old race', {timeout:15000}, async t => {
+  const dir = directory(t), home = path.join(dir, 'home');
+  fs.mkdirSync(home);
+  const writerCode = `const fs=require('node:fs');const path=require('node:path');process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{fs.mkdirSync(process.env.HOME,{recursive:true});fs.writeFileSync(path.join(process.env.HOME,'late-write'),'fixture');},40);`;
+  const env = { ...measurementEnv({PATH:process.env.PATH}), HOME:home, ZYLOS_RUN_ID:'cleanup-fixture' };
+  const stray = spawn(process.execPath, ['-e',writerCode], {env,stdio:['ignore','pipe','ignore']});
+  const strayExit = once(stray,'exit');
+  t.after(async()=>{if(stray.exitCode===null&&stray.signalCode===null)stray.kill('SIGKILL');await strayExit;});
+  await once(stray.stdout,'data');
+  fs.rmSync(home,{recursive:true});
+  assert.equal(fs.existsSync(home),false,'old immediate check would pass');
+  const raced = await verifyHomeAbsent(home,200);
+  assert.equal(raced.homeRemoved,false); assert.equal(raced.absentAfterGrace,false);
+  stray.kill('SIGKILL'); await strayExit;
+
+  const receipt = path.join(dir,'receipt.json');
+  const script = path.join(dir,'supervisor.mjs');
+  fs.writeFileSync(script, `import {superviseRuntime} from ${JSON.stringify(new URL('./router-ready-process.js',import.meta.url).href)};await superviseRuntime(${JSON.stringify(process.execPath)},['-e',${JSON.stringify(writerCode)}],${JSON.stringify(receipt)});`);
+  const supervisor = spawn(process.execPath,[script],{env,stdio:['ignore','pipe','ignore']});
+  const supervisorExit = once(supervisor,'exit');
+  t.after(async()=>{if(supervisor.exitCode===null&&supervisor.signalCode===null)supervisor.kill('SIGTERM');await supervisorExit;});
+  await once(supervisor.stdout,'data');
+  supervisor.kill('SIGHUP');
+  const stopped = await waitOwnedRuntime(receipt,'cleanup-fixture');
+  assert.equal(stopped.groupGone,true,JSON.stringify(stopped));
+  await supervisorExit;
+  fs.rmSync(home,{recursive:true});
+  const removed = await verifyHomeAbsent(home);
+  assert.equal(removed.homeRemoved,true);
+});
+
+// Codex 0.164 API-key status does not use the OAuth "Logged in" text.
+test('product API-key auth check accepts explicit isolated auth.json despite uncertain status text', t => {
+  const dir=directory(t); fs.mkdirSync(path.join(dir,'.codex'));
+  fs.writeFileSync(path.join(dir,'.codex/auth.json'),JSON.stringify({auth_mode:'apikey',OPENAI_API_KEY:'test-only-not-real'}),{mode:0o600});
+  const source=`import {isCodexAuthenticated} from ${JSON.stringify(new URL('../../../../cli/lib/runtime-setup.js',import.meta.url).href)};import {classifyCodexLoginStatus} from ${JSON.stringify(new URL('../../../../cli/lib/auth-parsers.js',import.meta.url).href)};console.log(JSON.stringify({authenticated:isCodexAuthenticated(),text:classifyCodexLoginStatus('API key configured - test-only')}));`;
+  const result=spawnSync(process.execPath,['--input-type=module','-e',source],{env:{...measurementEnv({PATH:process.env.PATH}),HOME:dir,ZYLOS_DIR:path.join(dir,'zylos')},encoding:'utf8'});
+  assert.equal(result.status,0);
+  assert.deepEqual(JSON.parse(result.stdout),{authenticated:true,text:'uncertain'});
+});
+
+// Help/version used by adapter preflight must not create an unowned runtime.
+test('owned launcher transparently probes help/version without lifecycle receipt', async t => {
+  const dir=directory(t), receipt=path.join(dir,'undefined.json');
+  const script=path.join(dir,'probe.mjs');
+  fs.writeFileSync(script, `import {superviseRuntime} from ${JSON.stringify(new URL('./router-ready-process.js',import.meta.url).href)};await superviseRuntime(${JSON.stringify(process.execPath)},process.argv.slice(2),${JSON.stringify(receipt)});`);
+  for(const flag of ['--help','--version']) {
+    const result=spawnSync(process.execPath,[script,flag],{env:measurementEnv({PATH:process.env.PATH}),encoding:'utf8'});
+    assert.equal(result.status,0); assert.ok(result.stdout.length>0); assert.equal(fs.existsSync(receipt),false);
+  }
+});
+
+// Report READY success separately from cleanup/sample eligibility; exclusions
+// have reason counts, so n=9 does not silently hide a tenth valid READY result.
+test('summary records machine metadata and separate cleanup exclusions', async t => {
+  const config=configFromEnv({READY_MEASURE_RUNTIMES:'codex',READY_MEASURE_CASES:'normal',READY_MEASURE_COLD_COUNT:'2',READY_MEASURE_REPEAT_COUNT:'0',READY_MEASURE_MACHINE:'fixture-machine',READY_MEASURE_EVIDENCE_DIR:directory(t)});
+  const result=await runMeasurements(config,{READY_MEASURE_CODEX_API_KEY:'test-only'},async request=>{
+    if(request.type==='preflight')return {ok:true,homeRemoved:true};
+    const ok=request.index===0;
+    return {ok,homeRemoved:ok,outcome:'success',...(ok?{}:{cleanupError:'CLEANUP_FAILED'}),timing:{publicationFromLaunchMs:100,publicationFromReturnMs:50,observedFromLaunchMs:110,observedFromReturnMs:60}};
+  });
+  assert.equal(result.summary.machine.label,'fixture-machine'); assert.ok(result.summary.machine.logicalCpus>0);
+  assert.deepEqual(result.summary.counts,{collected:2,readyValid:2,cleanupFailed:1,includedInAggregates:1,excludedFromAggregates:1,exclusionReasons:{cleanup_failed:1}});
+  assert.deepEqual(result.summary.countsByRuntimeCondition['codex/cold'],result.summary.counts);
+  assert.equal(result.summary.aggregates['codex/cold'].publicationFromLaunchMs.n,1);
 });

@@ -21,6 +21,7 @@ nonzero test-runner exit. Each run gets a fresh `run-*` evidence directory.
 | Environment variable | Default / meaning |
 | --- | --- |
 | `READY_MEASURE` | Must be `1` to enable |
+| `READY_MEASURE_MACHINE` | Optional human machine label (for example `DGX Spark`); default platform/architecture, with CPU model/count and total memory recorded automatically |
 | `READY_MEASURE_RUNTIMES` | `claude,codex`; comma-separated selected runtimes |
 | `READY_MEASURE_CLAUDE_BIN` | `claude`, resolved on PATH; optional explicit executable |
 | `READY_MEASURE_CODEX_BIN` | `codex`, resolved on PATH; optional explicit executable |
@@ -45,9 +46,34 @@ file-backed P01 database, and shared-helper private tmux socket. Product modules
 load after the isolated environment is set. Activity-monitor skill files are
 copied so the Node direct-entry guards execute; remaining skills are linked.
 Paths are canonicalized, including macOS `/tmp` aliases. No live dispatcher or
-external channel is used. Cleanup stops the exact target then the private tmux
-server and removes HOME; `homeRemoved` reports the final existence check. A
-worker crash without cleanup proof marks the summary cleanup status false.
+external channel is used. The product adapter's `stop` contract is unchanged:
+it proves the expected tmux session is gone, not that every descendant process
+has exited. Detached services intentionally can outlive that product operation.
+
+For measurement only, a small JavaScript launcher starts the exact runtime
+binary/arguments in a newly owned POSIX process group with inherited TTY stdio.
+It handles the pane's HUP/TERM, sends TERM only to that group, waits up to 1.5s,
+then KILL if needed and waits another 1.5s. The launcher retains ownership until
+the group is absent and writes a structured receipt; the worker waits up to 5s
+for it after each stop, including the repeat warm-up. Signal-probe EPERM means
+not yet confirmed absent and is never interpreted as successful termination.
+The added launcher startup is included in new measurements; it introduces additional
+instrumentation overhead (not quantified). Help/version discovery passes through unchanged.
+
+Only after group exit confirmation does the shared fixture cleanup remove HOME.
+`cleanup` records immediate absence and a second check after 500ms;
+`homeRemoved=true` requires both plus owned-group exit confirmation. If group
+exit cannot be confirmed, explicit credential copies are scrubbed, the fixture
+is retained, and the sample fails. A worker crash without cleanup proof also
+marks summary cleanup false. This covers the group the test created, not arbitrary
+children that deliberately detach into another session/group; the bounded
+recheck cannot prove no arbitrary future recreation. No global process scan or
+host process matching/killing is performed.
+
+This change does not retroactively certify cleanup of older DGX runs. Its local
+regression uses an intentionally delayed writer with a negative control that
+recreates HOME after the old instantaneous check, and an owned-group positive
+control. No real authenticated Claude/Codex rerun is implied by that test.
 
 Claude credentials are copied with mode 0600. Onboarding and project trust use
 the same minimal writes as product `preAcceptClaudeTerms` and `approveApiKey`:
@@ -99,11 +125,16 @@ means requeued for retry; it does not claim a second runtime attempt was run).
 ## Evidence
 
 `summary.json` contains status, machine/Node details, non-secret configuration,
-proxy presence, version/auth preflights, sample outcomes, cleanup status and
+proxy presence, machine metadata, version/auth preflights, sample outcomes, cleanup status and
 per-runtime/per-condition statistics. `samples.jsonl` contains one raw structured
 record per measured sample, including failures. Files are mode 0600 in a 0700
 run directory. Failed samples and all injected samples are excluded from normal
-latency statistics. Statistics use min, ordinary median, nearest-rank p95, max.
+latency statistics. `counts` and `countsByRuntimeCondition` report collected,
+READY-valid, cleanup-failed, aggregate-included, and aggregate-excluded counts,
+with explicit exclusion reasons. A successful READY with failed cleanup still
+increments READY-valid but is excluded from aggregates. A sample may have more
+than one exclusion reason; reason counts are not additive sample totals. Old
+raw evidence is not rewritten. Statistics use min, ordinary median, nearest-rank p95, max.
 
 Timing fields include `launchStartedAt`, `launchReturnedAt`,
 `f3PublishedAtProxy`, `observedAt`, `launchDurationMs`,
@@ -134,7 +165,7 @@ node scripts/run-node-tests.js \
 
 The first command verifies preflight rejection, explicit auth/expiry, whitelist
 and redaction boundaries, order/duplicate negative controls, signed timing,
-cleanup reporting, and worker cold/repeat/four-fault execution using an explicitly
+cleanup reporting and delayed-writer recreation regression, API-key auth status regression, help/version passthrough, machine/exclusion accounting, and worker cold/repeat/four-fault execution using an explicitly
 test-only CLI stand-in that invokes real M3 hooks. That calibration is not a
 real authenticated Claude/Codex startup sample. The second command retains the
 existing 36 controlled-clock router regressions as a separate result.

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { waitOwnedRuntime, verifyHomeAbsent } from './router-ready-process.js';
 import { isolatedTmux, tmuxClientEnv } from '../../../../test/helpers/isolated-tmux.js';
 
 const packageRoot = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -35,11 +36,13 @@ async function execute(request) {
   const { runtime, config } = request;
   const cleanup = [];
   const scope = { after: callback => cleanup.push(callback) };
-  let router, home, root;
+  let router, home, root, tm, tmCleanup;
+  const ownedRuns = new Map();
+  let processCleanupConfirmed = true;
   const record = { schema: 1, type: request.type, runtime, case: request.case ?? null, condition: request.condition ?? null,
     index: request.index ?? null, ok: false, homeRemoved: false };
   try {
-    const tm = isolatedTmux(scope, { prefix: 'ready-measure-', beforeCleanup: () => router?.stop() });
+    tm = isolatedTmux({ after: callback => { tmCleanup = callback; } }, { prefix: 'ready-measure-', beforeCleanup: () => router?.stop() });
     home = fs.realpathSync(tm.dir); root = path.join(home, 'zylos');
     fs.mkdirSync(root);
     const inputs = { ...process.env };
@@ -81,7 +84,15 @@ async function execute(request) {
     db.setDrainFence('origin', { reason: 'upgrade', runId: 'measurement' });
     const tmux = { binary: tm.binary, socketPath: tm.socketPath, configFile: '/dev/null' };
     const reader = createSessionReader({ env, connectionOptions: tmux });
-    const realAdapter = getSessionAdapter(runtime, { root, tmux, env, runtimeExecutable: () => binary });
+    const launcher = path.join(home, 'runtime-launcher.mjs');
+    fs.writeFileSync(launcher, `#!${process.execPath}\nimport path from 'node:path';\nimport {superviseRuntime} from ${JSON.stringify(new URL('./router-ready-process.js', import.meta.url).href)};\nawait superviseRuntime(${JSON.stringify(binary)}, process.argv.slice(2), path.join(process.env.HOME,'owned-runtime',String(process.env.ZYLOS_RUN_ID)+'.json'));\n`, { mode: 0o700 });
+    const realAdapter = getSessionAdapter(runtime, { root, tmux, env, runtimeExecutable: () => launcher });
+    const confirmOwnedExit = async runId => {
+      const result = await waitOwnedRuntime(path.join(home, 'owned-runtime', `${runId}.json`), runId);
+      ownedRuns.set(runId, result);
+      processCleanupConfirmed &&= result.groupGone;
+      return result;
+    };
 
     async function runRound(kind) {
       const fault = kind !== 'normal';
@@ -119,6 +130,7 @@ async function execute(request) {
       const adapter = {
         launch: async input => {
           launches++; runId = input.runId; launch = stamp();
+          ownedRuns.set(runId, null);
           boundaryGate = kind === 'boundary-ready';
           try {
             const value = await realAdapter.launch(input);
@@ -221,15 +233,16 @@ async function execute(request) {
       // Stop the exact run after collection, outside the measured router outcome.
       if (finalLive.present && finalLive.runId === runId) await realAdapter.stop({ tmuxName: finalLive.tmuxName, expectedRunId: runId });
       sample.targetStoppedAfterSample = !(await reader.readLiveIdentity('measure')).present;
+      sample.runtimeCleanup = await confirmOwnedExit(runId);
       if (orderingError) throw Object.assign(fail(orderingError), { sample });
       const counts = sequence.map(e => `${e.kind}:${e.id}`);
       sample.duplicateDeliveries = counts.length-new Set(counts).size;
       const timeoutFault = ['slow-hook','missing-session-id'].includes(kind);
-      sample.ok = launches === 1 && sample.duplicateDeliveries === 0 && sample.targetStoppedAfterSample &&
+      sample.ok = launches === 1 && sample.duplicateDeliveries === 0 && sample.targetStoppedAfterSample && sample.runtimeCleanup.groupGone &&
         (timeoutFault ? ledger.retry_count === 1 && !sequence.some(e => e.kind === 'business') && stops === 1 : ledger.status === 'delivered' && stops === 0);
       if (kind === 'late-launch') sample.ok &&= events.some(e => e.event === 'stop_unconfirmed' && e.reason === 'launch_pending');
       if (kind === 'boundary-ready') sample.ok &&= boundaryReads === 2;
-      if (!sample.ok) sample.error = stopping ? 'WORKER_INTERRUPTED' : 'CONVERGENCE_ASSERTION_FAILED';
+      if (!sample.ok) sample.error = !sample.runtimeCleanup.groupGone ? 'RUNTIME_EXIT_UNCONFIRMED' : stopping ? 'WORKER_INTERRUPTED' : 'CONVERGENCE_ASSERTION_FAILED';
       return sample;
     }
     if (request.condition === 'repeat') {
@@ -250,10 +263,32 @@ async function execute(request) {
       fs.writeFileSync(path.join(home, 'injection-cancel'), 'cancel');
       await sleep(50);
     }
+    // Product stop proves tmux absence only. Wait for test-owned runtime groups
+    // before the shared helper removes the HOME. An unconfirmed group makes
+    // cleanup fail; never present a one-instant directory check as proof.
+    try { tm?.tmux('kill-server'); } catch { /* Already absent. */ }
+    for (const [runId, result] of ownedRuns) {
+      if (result) continue;
+      const exit = await waitOwnedRuntime(path.join(home, 'owned-runtime', `${runId}.json`), runId);
+      ownedRuns.set(runId, exit); processCleanupConfirmed &&= exit.groupGone;
+    }
     for (const clean of cleanup.reverse()) {
       try { await clean(); } catch { record.cleanupError = 'CLEANUP_FAILED'; record.ok = false; }
     }
-    record.homeRemoved = !home || !fs.existsSync(home);
+    if (processCleanupConfirmed) {
+      try { await tmCleanup?.(); } catch { record.cleanupError = 'CLEANUP_FAILED'; record.ok = false; }
+    } else if (home) {
+      // Do not delete a HOME whose writers have not stopped. Scrub the explicit
+      // credential copies; retain the fixture and fail rather than race writers.
+      for (const file of ['.claude/.credentials.json', '.codex/auth.json']) {
+        try { fs.rmSync(path.join(home, file), { force: true }); } catch { /* Failed cleanup is already reported. */ }
+      }
+    }
+    record.cleanup = home ? await verifyHomeAbsent(home) : { homeRemoved: true, graceMs: 0 };
+    record.cleanup.ownedGroupsExited = processCleanupConfirmed;
+    record.homeRemoved = record.cleanup.homeRemoved && processCleanupConfirmed;
+    if (!record.homeRemoved) { record.cleanupError = 'CLEANUP_FAILED'; record.ok = false; }
+
   }
 }
 

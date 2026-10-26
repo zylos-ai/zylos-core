@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { parseClaudeAuthStatus, parseCodexLoginStatus } from '../../../../cli/lib/auth-parsers.js';
+import { parseClaudeAuthStatus } from '../../../../cli/lib/auth-parsers.js';
 import { desiredClaudeHooks } from '../../../../cli/lib/sync-runtime-hooks.js';
 import { renderCodexProjectConfig, isCodexAuthenticated } from '../../../../cli/lib/runtime-setup.js';
 import {
