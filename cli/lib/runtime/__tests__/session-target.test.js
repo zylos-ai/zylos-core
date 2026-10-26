@@ -110,13 +110,17 @@ test('initial disappearance and generation change are detected before any sendin
   }};
   await assert.rejects(observeSessionTarget({connection,tmuxName:'fixture',readReady:ready}),{code:'TARGET_GONE'});
   let generation='100:200';
+  const commands=[];
   const held={bindTarget() {},command:async args=> {
+    commands.push(args[0]);
+    if(generation!=='100:200') throw Object.assign(Error('Bound server changed'),{code:'GENERATION_CHANGED'});
     if(args[0]==='show-environment') return 'ZYLOS_RUN_ID=r1\nZYLOS_MODEL_CONFIG={"runtime":"claude"}';
-    if(args.at(-1)==='#{pid}:#{start_time}') return generation;
-    if(args.at(-1)==='#{session_id}\t#{pane_id}') return '$1\t%1';
     return '100:200\t$1\t%1\t123';
   }};
   const target=await resolveSessionTarget({connection:held,tmuxName:'fixture',readReady:ready});
+  commands.length=0;
+  await revalidateSessionTarget({connection:held,target});
+  assert.deepEqual(commands,['show-environment']);
   generation='101:201';
   await assert.rejects(revalidateSessionTarget({connection:held,target}),{code:'GENERATION_CHANGED'});
   await assert.rejects(revalidateSessionTarget({connection:held,target:{...target}}),TypeError);

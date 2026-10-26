@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { groupRunDir, tmuxNameForGroup } from '../session-group-paths.js';
 import { tmuxError, TMUX_COMMAND as C, TMUX_FORMAT as F, isTmuxError,
-  isMissingTarget as missing, unavailableCommand, validGeneration, parseTargetObservation, parseTmuxEnvironment } from './tmux-protocol.js';
+  isMissingTarget as missing, unavailableCommand, parseTargetObservation, parseTmuxEnvironment } from './tmux-protocol.js';
 
 const exec = promisify(execFile);
 const bindings = new WeakMap();
@@ -142,15 +142,11 @@ export async function revalidateSessionTarget({ connection, target, kind = 'pane
   const binding = bindings.get(target);
   if (!binding || binding.connection !== connection) throw new TypeError('Target must be resolved on this connection');
   if (!['pane','session'].includes(kind)) throw new TypeError('Invalid target kind');
-  const generation = (await connection.command([C.displayMessage, '-p', F.generation], { kind })).trim();
-  if (!validGeneration(generation)) throw tmuxError('TMUX_UNAVAILABLE', 'tmux server generation unavailable', 'error');
-  if (generation !== binding.serverGeneration) throw tmuxError('GENERATION_CHANGED', 'tmux server generation changed');
-  let output, env;
+  let env;
   try {
-    output = await connection.command([C.displayMessage, '-p', '-t', kind === 'session' ? binding.tmuxSessionId : binding.paneId, kind === 'session' ? F.sessionId : F.sessionPane], { kind });
+    // The bound command guards server generation and object identity atomically.
     env = await environment(connection, binding.tmuxSessionId, kind);
   } catch (error) { if (missing(error)) throw tmuxError('TARGET_GONE', 'Bound tmux object disappeared'); throw error; }
-  if (output.trim() !== (kind === 'session' ? binding.tmuxSessionId : `${binding.tmuxSessionId}\t${binding.paneId}`)) throw tmuxError('TARGET_GONE', 'Bound tmux object changed');
   if ((env.ZYLOS_RUN_ID || null) !== binding.runId) throw tmuxError('RUNID_MISMATCH', 'Target run ID changed');
   return true;
 }
