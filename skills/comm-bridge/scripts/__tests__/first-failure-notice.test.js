@@ -18,7 +18,7 @@ const event = { schema_version:1, source:'hook', ...identity,
   event_id:'11111111-1111-1111-1111-111111111111', prompt_id:'prompt',
   event:'stop_failure', error:'rate_limit', received_at:100000 };
 
-test('real first-failure reservation and sender preserve the committed target scope', t => {
+test('single mode real first-failure reservation and sender preserve the grouped target scope', t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'first-notice-integration-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const sender=path.join(root,'.claude/skills/fake/scripts');
@@ -30,7 +30,7 @@ test('real first-failure reservation and sender preserve the committed target sc
     import {HealthStore} from ${JSON.stringify(new URL('../../../activity-monitor/scripts/health-store.js',import.meta.url).href)};
     const database=getDb(),identity=${JSON.stringify(identity)};
     database.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','fake','room','request','delivered','fake:review')").run();
-    const store=new HealthStore({zylosDir:process.env.ZYLOS_DIR,now:()=>100000,freezeNotice:options=>freezeFirstFailureNotice(database,{...options,sessionGroup:'fake:review'})});
+    const store=new HealthStore({zylosDir:process.env.ZYLOS_DIR,now:()=>100000,freezeNotice:options=>freezeFirstFailureNotice(database,{...options,sessionGroup:null})});
     store.consume(${JSON.stringify(event)},{identity});
     await processFirstFailureNotices({store,database,identity:()=>identity,zylosDir:process.env.ZYLOS_DIR});
     console.log(JSON.stringify({outcome:store.read().last_notice_outcome.status,rows:database.prepare('SELECT cooldown_key FROM status_notice_cooldowns').all()}));close();`;
@@ -73,18 +73,18 @@ for (const mode of ['sent','sender-signal','worker-killed','spawn-error']) {
     if(mode==='spawn-error') assert.equal(row.outcome,'failed');
   });
 }
-function fixture(t) {
+function fixture(t, sessionGroup = 'fake') {
   fs.mkdirSync(path.join(process.env.ZYLOS_DIR,'.claude','skills','fake'),{recursive:true});
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'first-notice-file-'));
   const db = new Database(':memory:'); guardDatabase(db,schema);
   t.after(() => { db.close(); fs.rmSync(root,{recursive:true,force:true}); });
   const store = new HealthStore({zylosDir:root,now:()=>100000,
-    freezeNotice: options => freezeFirstFailureNotice(db,{...options,sessionGroup:'fake'})});
+    freezeNotice: options => freezeFirstFailureNotice(db,{...options,sessionGroup})});
   return {root,db,store};
 }
-function inbound(db,id,{status='delivered',channel='fake',endpoint='group|thread:t|msg:'+id}={}) {
-  db.prepare("INSERT INTO conversations(id,direction,channel,endpoint_id,content,status,session_group) VALUES (?,'in',?,?,'private request',?,'fake')")
-    .run(id,channel,endpoint,status);
+function inbound(db,id,{status='delivered',channel='fake',endpoint='group|thread:t|msg:'+id,sessionGroup='fake'}={}) {
+  db.prepare("INSERT INTO conversations(id,direction,channel,endpoint_id,content,status,session_group) VALUES (?,'in',?,?,'private request',?,?)")
+    .run(id,channel,endpoint,status,sessionGroup);
 }
 function consume(store) {
   assert.equal(store.consume(event,{identity}).status,'processed');
@@ -118,6 +118,28 @@ test('no eligible inbound, no reply endpoint, and control channel create no targ
   const f=fixture(t);
   inbound(f.db,1,{status:'failed'});inbound(f.db,2,{endpoint:null});
   inbound(f.db,3,{channel:'control'});inbound(f.db,4,{status:'pending'});
+  assert.equal(consume(f.store),undefined);
+});
+for (const group of ['fake:review', '']) test('single mode sends latest eligible '+(group?'grouped':'legacy')+' inbound', async t => {
+  const f=fixture(t,null);
+  inbound(f.db,1,{sessionGroup:'fake:older'});
+  inbound(f.db,2,{sessionGroup:group});
+  for (const [index,channel] of ['void','system','internal','control','scheduler'].entries()) {
+    inbound(f.db,3+index,{channel,sessionGroup:group});
+  }
+  inbound(f.db,8,{status:'failed',sessionGroup:group});
+  inbound(f.db,9,{endpoint:'',sessionGroup:group});
+  assert.equal(consume(f.store).conversation_id,2);
+  const sent=[];await processFirstFailureNotices(options(f,{sent}));
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].claim.endpoint,'group|thread:t|msg:2');
+  assert.equal(sent[0].route.sessionGroup,group || 'origin');
+  assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=2').get().session_group,group);
+  assert.equal(f.store.read().last_notice_outcome.status,'sent');
+});
+test('multi origin never selects legacy or another group', t => {
+  const f=fixture(t,'origin');
+  inbound(f.db,1,{sessionGroup:''});inbound(f.db,2,{sessionGroup:'fake:other'});
   assert.equal(consume(f.store),undefined);
 });
 test('running target sends immediately without retargeting a newer message', async t => {

@@ -16,7 +16,8 @@ export function freezeFirstFailureNotice(database, { runtime, identity, event, r
       !identity?.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0) return null;
   const target = database.prepare(`SELECT id, channel, endpoint_id FROM conversations
     WHERE direction='in' AND status IN ('running','delivered') AND endpoint_id IS NOT NULL AND endpoint_id!=''
-    AND channel NOT IN ('void','system','internal','control') AND session_group IS ? ORDER BY id DESC LIMIT 1`).get(sessionGroup ?? '');
+    AND channel NOT IN ('void','system','internal','control','scheduler')
+    AND (? IS NULL OR session_group IS ?) ORDER BY id DESC LIMIT 1`).get(sessionGroup, sessionGroup);
   if (!target) return null;
   return { event_id:event.event_id, runtime, session_group:sessionGroup, session_id:identity.session_id,
     claude_pid:identity.claude_pid, conversation_id:target.id, channel:target.channel, endpoint:target.endpoint_id,
@@ -86,7 +87,7 @@ export async function processFirstFailureNotices({ store, database = getDb(), id
       if (!enriched.annotation && notice?.noticeCode !== 'quota_exhausted_reset' && now()-intent.created_at < Math.min(quotaWaitMs,FIRST_NOTICE_QUOTA_WAIT_MS)) return 0;
     }
   }
-  const route = {sessionGroup:target.session_group, runtime:intent.runtime,
+  const route = {sessionGroup:target.session_group === '' ? 'origin' : target.session_group, runtime:intent.runtime,
     health:intent.health, reason:intent.reason, context:'failure',noticeKind:'first-failure',noticeCode:notice?.noticeCode,resetAt:notice?.resetAt};
   let claim;
   try { claim = reserve(intent.channel,intent.endpoint,route); }
