@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from '../../../../cli/lib/auth-parsers.js';
 import { desiredClaudeHooks } from '../../../../cli/lib/sync-runtime-hooks.js';
-import { renderCodexProjectConfig } from '../../../../cli/lib/runtime-setup.js';
+import { renderCodexProjectConfig, isCodexAuthenticated } from '../../../../cli/lib/runtime-setup.js';
 import {
   ensureCodexHooksTrusted, isCodexTrustValid, readHooksState, codexGlobalConfigPath,
   codexHooksPath, readCodexHooksConfig, hookKeyFor,
@@ -140,8 +140,9 @@ export async function setupAuth({ runtime, home, root, env, binary }) {
   fs.writeFileSync(path.join(root, '.codex/config.toml'), renderCodexProjectConfig(), { mode: 0o600 });
   const login = spawnSync(binary, ['login', '--with-api-key'], { ...options, input: `${env.READY_MEASURE_CODEX_API_KEY.trim()}\n` });
   if (login.error || login.status !== 0) throw authError('codex_login_failed');
-  const status = spawnSync(binary, ['login', 'status'], options);
-  if (status.error || status.status !== 0 || !parseCodexLoginStatus((status.stdout || '') + (status.stderr || ''))) throw authError('codex_auth_preflight_failed');
+  // Same check as product init: apikey mode is read from auth.json, because
+  // Codex 0.164 prints "API key configured" rather than "Logged in ..." for it.
+  if (!isCodexAuthenticated()) throw authError('codex_auth_preflight_failed');
   let version;
   try {
     version = execFileSync(binary, ['--version'], options).trim();
