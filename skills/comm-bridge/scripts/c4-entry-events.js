@@ -57,7 +57,13 @@ export function queryRejection(id, { getConversationsByRange, filename = entryEv
         let event;
         try { event = JSON.parse(line); }
         catch { diagnostic('rejection log: skipped malformed complete line'); continue; }
-        if (event?.event === 'auth_rejected' && String(event.conversation_id) === String(id)) {
+        const valid = event && event.v === 1 && event.event === 'auth_rejected'
+          && (typeof event.conversation_id === 'string' || Number.isSafeInteger(event.conversation_id))
+          && ['auth_check_failed', 'auth_check_unconfirmed'].includes(event.reason_code)
+          && typeof event.detail === 'string' && typeof event.runtime === 'string'
+          && Number.isSafeInteger(event.ts) && event.ts >= 0;
+        if (!valid) { diagnostic('rejection log: skipped invalid event'); continue; }
+        if (String(event.conversation_id) === String(id)) {
           return { ...result, reason_code: event.reason_code, detail: event.detail, runtime: event.runtime, ts: event.ts };
         }
       }

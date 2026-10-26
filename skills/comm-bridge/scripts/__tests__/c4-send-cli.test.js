@@ -32,7 +32,7 @@ function dbRecent(env, limit = 10) {
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-send-cli-'));
-  const env = { ZYLOS_DIR: tmpDir };
+  const env = { ZYLOS_DIR: tmpDir, ZYLOS_SESSION_GROUP: 'origin' };
   try {
     return fn({ tmpDir, env });
   } finally {
@@ -93,6 +93,18 @@ describe('c4-send basic', () => {
 // -- validation --
 
 describe('c4-send validation', () => {
+  it('rejects empty positional content before dispatch or audit', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const sentFile = setupMockChannel(tmpDir, 'mock-channel');
+      const result = cli(['mock-channel', 'endpoint', ''], env);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr, '[C4] EMPTY_CONTENT: Message is required\n');
+      assert.equal(fs.existsSync(sentFile), false);
+      assert.deepEqual(dbRecent(env), []);
+    });
+  });
+
   it('errors with no arguments', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli([], env);
@@ -125,6 +137,16 @@ describe('c4-send validation', () => {
 // -- void channel (#689) --
 
 describe('c4-send void channel', () => {
+  it('rejects a present empty group without falling back to the run id origin', () => {
+    withTmpDir(({ env }) => {
+      const result = cli(['void', 'handoff', '--stdin'], { ...env, ZYLOS_SESSION_GROUP: '', ZYLOS_RUN_ID: 'run-a' }, 'note');
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr, '[C4] UNKNOWN_GROUP: Unknown recording group\n');
+      assert.deepEqual(dbRecent(env), []);
+    });
+  });
+
   it('records the message in c4.db and exits 0 without a skill directory', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli(['void', 'session-handoff', 'handoff summary'], env);
@@ -182,6 +204,19 @@ describe('c4-send void channel', () => {
 // -- failed channel --
 
 describe('c4-send failed channel', () => {
+  it('preserves the exact legacy stdout and exit code for component exit 3', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const skillDir = path.join(tmpDir, '.claude', 'skills', 'bad-channel', 'scripts');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'send.js'), 'process.exit(3);');
+      const result = cli(['bad-channel', '--stdin'], env, 'Hello');
+      assert.equal(result.status, 3);
+      assert.equal(result.stdout, '[C4] Failed to send message via bad-channel (exit code: 3)\n');
+      assert.equal(result.stderr, '[C4] SEND_FAILED: Failed to send: component exit 3; audit retained; delivery unconfirmed\n');
+      assert.equal(dbRecent(env)[0].status, 'delivered');
+    });
+  });
+
   it('reports failure when channel script exits non-zero', () => {
     withTmpDir(({ tmpDir, env }) => {
       const skillDir = path.join(tmpDir, '.claude', 'skills', 'bad-channel', 'scripts');
