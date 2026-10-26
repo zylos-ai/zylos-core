@@ -181,3 +181,14 @@ test('IF70 pending and recovery age limits print once despite reinitialize and t
   assert.deepEqual(f.calls.filter(x => x[0] === 'log').map(x => x[1]),
     ['C4_PENDING_MAX_AGE_SECONDS=123', 'C4_RECOVER_MAX_AGE_SECONDS=456']);
 });
+
+// ZYLO-98: invalid cadence must not disable maintenance or run it every tick.
+test('T07 diagnostic maintenance interval rejects non-positive and non-integer values', async t => {
+  const f = routerFixture(t);
+  for (const value of [0, -1, NaN, Infinity, 1.5, '60000']) {
+    f.options.diagnosticsIntervalMs = value;
+    assert.throws(() => f.create(), /diagnosticsIntervalMs must be a positive integer/);
+  }
+  f.options.diagnosticsIntervalMs = 1;
+  assert.doesNotThrow(() => f.create());
+});
