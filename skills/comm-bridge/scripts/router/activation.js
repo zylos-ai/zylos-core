@@ -139,14 +139,11 @@ export function createActivationManager(context) {
       return;
     }
     try {
+      // One fresh observation after launch settles, including at the timeout boundary.
       const live = await deps.readLiveIdentity(group);
       state.live.set(group, live);
       if (live.present && live.runId === activation.runId && live.ready) return;
       if (!activation.launchError && now() - activation.startedAt < options.readyTimeoutMs) return;
-      // Re-read at the timeout boundary; an arriving READY wins over stop.
-      const last = await deps.readLiveIdentity(group);
-      state.live.set(group, last);
-      if (last.present && last.runId === activation.runId && last.ready) return;
       await deps.getSessionAdapter(activation.launchConfig.runtime).stop({
         tmuxName: context.tmuxName(group), expectedRunId: activation.runId,
       });
