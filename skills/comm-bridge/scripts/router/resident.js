@@ -1,7 +1,8 @@
+import { loadCoreModule } from './core-modules.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import { LEGACY_TMUX_NAMES } from '../../../../cli/lib/session-group-paths.js';
+const { LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 
 const exec = promisify(execFile);
 export async function runningMaintenance({ execute = exec } = {}) {

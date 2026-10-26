@@ -1,5 +1,6 @@
-import { createJsonlStream } from '../../../../cli/lib/jsonl-stream.js';
-import { routerDiagnosticPath, receiveDiagnosticPath } from '../../../../cli/lib/session-group-paths.js';
+import { loadCoreModule } from './core-modules.js';
+const { createJsonlStream } = await loadCoreModule('jsonl-stream.js');
+const { routerDiagnosticPath, receiveDiagnosticPath } = await loadCoreModule('session-group-paths.js');
 
 export function createRouterDiagnostics({ env = process.env, now = Date.now,
   stream = createJsonlStream(routerDiagnosticPath(env)),
