@@ -74,6 +74,10 @@ describe('Codex core hook installer', () => {
         SessionStart: [
           { hooks: [{ type: 'command', command: 'node /tmp/dashboard/hook-ingest.cjs', timeout: 5 }] },
         ],
+        Stop: [{ matcher: '*', hooks: [
+          { type: 'command', command: 'node /tmp/third-party/hook-activity.js', timeout: 7 },
+          { type: 'command', command: `node ${path.join(zylosDir, '.claude/skills/activity-monitor/scripts/hook-activity.js')}`, timeout: 2 },
+        ] }],
       },
     }, null, 2) + '\n');
 
@@ -84,7 +88,18 @@ describe('Codex core hook installer', () => {
     assert.equal(second.changed, false);
 
     const config = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
-    assert.equal(config.hooks.SessionStart.length, 2);
+    assert.equal(config.hooks.SessionStart.length, 3);
+    assert.deepEqual(Object.keys(config.hooks).sort(), [
+      'PermissionRequest', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit',
+    ]);
+    for (const groups of Object.values(config.hooks)) {
+      const activity = groups.flatMap(group => group.hooks).filter(h => h.command.includes(`${zylosDir}/.claude/skills/activity-monitor/scripts/hook-activity.js`));
+      assert.equal(activity.length, 1);
+      assert.equal(activity[0].timeout, 25);
+    }
+    assert.deepEqual(config.hooks.Stop[0], { matcher: '*', hooks: [
+      { type: 'command', command: 'node /tmp/third-party/hook-activity.js', timeout: 7 },
+    ] });
     const coreGroup = config.hooks.SessionStart.find(group =>
       group.hooks?.some(h => h.command.includes('session-start-orchestrator.js'))
     );
@@ -123,7 +138,7 @@ describe('Codex core hook installer', () => {
 
     const removed = uninstallCoreCodexHook({ zylosDir });
 
-    assert.equal(removed.removed, 6);
+    assert.equal(removed.removed, 12);
     const config = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
     assert.equal(config.hooks.SessionStart.length, 1);
     assert.equal(config.hooks.SessionStart[0].hooks[0].command, 'node /tmp/other.js');
