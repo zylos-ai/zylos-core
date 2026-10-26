@@ -2,7 +2,7 @@
 
 Receives messages from external channels and queues them for delivery to Claude.
 
-Messages are written to DB with `status='pending'`. The c4-dispatcher daemon handles serial delivery to Claude via tmux.
+Accepted work is written with `status='pending'`. Rejected work is recorded with `status='failed'`; a status reply does not deliver that work to the runtime.
 
 ## Usage
 
@@ -22,6 +22,8 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 | `--no-reply` | Mark the message as having no reply target; defaults channel to `system` |
 | `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles |
 | `--json` | Output structured JSON instead of plain text |
+| `--session-group <name>` | Component-local group name; validated before routing or database writes |
+| `--core-source scheduler` | Mark a scheduler-originated call; other values are rejected |
 
 ## Priority Levels
 
@@ -61,9 +63,9 @@ Inbound content is stored in the conversations DB exactly as received. `c4-recei
 
 ## Health Routing
 
-Before queuing a message, `c4-receive.js` asks the activity monitor MessageRouter how the current message should be routed. If health is `ok` or the router reports recovery, the message is queued normally. If health is unavailable, rate limited, or authentication failed, the rejected inbound message is recorded as failed and the current channel receives an immediate status reply when replies are enabled. Cooldown-suppressed and `--no-reply` messages are also recorded as failed. A CLI action of `delivered` describes the status reply, not delivery of the inbound work to the runtime.
+Before committing a message, `c4-receive.js` sends a v2 route request. An explicit pending decision takes precedence over health labels, including rate limiting and recovery waits. Authentication rejection writes a failed row with the permanent category `auth_rejected`. Other unrecovered routes also write failed rows. Replies, when enabled, use a cooldown scoped by channel, normalized endpoint, committed group, runtime, health and reason. A CLI action of `delivered` describes the status reply, not delivery of the inbound work to the runtime.
 
-If the MessageRouter IPC is unavailable, `c4-receive.js` reads `~/zylos/activity-monitor/agent-status.json` and applies the same fallback behavior. Missing, unreadable, or malformed status files fail open as `ok`.
+If IPC is unavailable or returns an invalid response, the entry resolves the target runtime and reads only its runtime-health record. An active mode transition, unknown runtime, missing/unreadable health record, or healthy/rate-limited runtime leaves the work pending. Authentication failure rejects external input; scheduler-originated input remains pending. The whole-agent status projection is not a routing source.
 
 ## JSON Output
 
@@ -72,20 +74,24 @@ When `--json` is passed, all output uses structured JSON on stdout.
 **Success:**
 
 ```json
-{"ok": true, "action": "queued", "id": 42}
+{"ok": true, "action": "queued", "id": 42, "sessionGroup": "telegram", "runtime": "claude"}
 ```
 
 **Error:**
 
 ```json
-{"ok": false, "error": {"code": "INVALID_ARGS", "message": "--content is required"}}
+{"ok": false, "error": {"code": "INVALID_ARGS", "message": "--content is required", "persisted": []}}
 ```
 
-Error codes: `INVALID_ARGS`, `INTERNAL_ERROR`.
+Errors include `INVALID_ARGS`, group validation codes, `DB_BUSY`, `INTERNAL_ERROR`, `UNHEALTHY_NOTIFY_FAILED` and `UNHEALTHY_NOTIFY_UNCERTAIN`. A postcommit notice error retains the inbound row and reports `persisted:["D1"]` with its id. An unknown commit state uses `persisted:null`. Do not automatically retry an uncertain or already committed inbound call.
 
 ## Fail-Open Behavior
 
-If the status file is missing, unreadable, or contains malformed JSON, health defaults to `ok` and the message passes through normally. This ensures a broken status file never blocks message intake.
+Missing or unreadable target health evidence leaves work pending without inventing a healthy observation.
+
+## Authentication Rejection Lookup
+
+`node c4-db.js rejection --id <id> [--json]` reads the permanent row category and retained entry-event logs. It returns the historical reason when present, or `expired_or_missing` when the log is absent. Log write failure reports `reasonLogged:false` on the inbound result and does not undo the failed row. A missing historical reason is not permission to resend.
 
 ## Reply Protocol
 

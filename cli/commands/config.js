@@ -7,7 +7,7 @@
  *   zylos config set <key> <val>  Set a config value
  */
 
-import { getZylosConfig, updateZylosConfigLocked } from '../lib/config.js';
+import { readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
 import { switchProtocol, isCaddyAvailable } from '../lib/caddy.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
@@ -56,7 +56,7 @@ export async function configCommand(args) {
 }
 
 function showConfig() {
-  const config = getZylosConfig();
+  const config = readZylosConfigOrThrow();
   if (Object.keys(config).length === 0) {
     console.log(dim('No configuration found. Run "zylos init" first.'));
     return;
@@ -67,7 +67,7 @@ function showConfig() {
 }
 
 function getConfig(key) {
-  const config = getZylosConfig();
+  const config = readZylosConfigOrThrow();
   if (key in config) {
     console.log(config[key]);
   } else {
@@ -105,7 +105,7 @@ async function setConfig(key, value) {
 async function applyProtocolChange(newProtocol, oldProtocol) {
   if (newProtocol === oldProtocol) return;
 
-  const config = getZylosConfig();
+  const config = readZylosConfigOrThrow();
   if (!config.domain) {
     console.log(`  ${warn('No domain configured. Run "zylos init" to set up Caddy.')}`);
     return;

@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getClaudePid } from './claude-pid.js';
-import { isManagedClaudeProcess } from './runtime-generation.js';
+import { bootstrapScope } from './bootstrap-scope.js';
+import { isSubsession, readBootstrapIdentity } from './bootstrap-identity.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
@@ -17,15 +17,17 @@ function atomicWriteJson(filePath, value) {
   fs.renameSync(tmp, filePath);
 }
 
-export function handleSessionForeground(payload, {
+export async function handleSessionForeground(payload, {
   observedAt = Date.now(),
-  claudePid = getClaudePid(),
-  managedProcess = isManagedClaudeProcess,
-  platform = process.platform,
+  env = process.env,
+  scopeReader = bootstrapScope,
+  identityReader = readBootstrapIdentity,
 } = {}) {
-  const sessionId = payload?.session_id || process.env.CLAUDE_SESSION_ID || null;
+  const sessionId = payload?.session_id;
   if (!sessionId) return null;
-  if (payload?.agent_id || !managedProcess(claudePid, { platform })) return null;
+  if (isSubsession(payload) || env.ZYLOS_RUN_ID) return null;
+  const scope = await scopeReader(env);
+  const identity = await identityReader(scope, { env });
 
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
@@ -34,8 +36,8 @@ export function handleSessionForeground(payload, {
   const record = {
     version: 1,
     session_id: sessionId,
-    claude_pid: claudePid,
-    runtime: 'claude',
+    claude_pid: identity.runtimePid,
+    runtime: identity.runtime,
     source: 'session_start',
     session_start_source: payload?.source || null,
     observed_at: observedAt
@@ -50,10 +52,10 @@ function runCli() {
   process.stdin.on('data', (chunk) => {
     input += chunk;
   });
-  process.stdin.on('end', () => {
+  process.stdin.on('end', async () => {
     try {
       const payload = JSON.parse(input || '{}');
-      handleSessionForeground(payload);
+      await handleSessionForeground(payload);
     } catch {
       // Best-effort.
     }

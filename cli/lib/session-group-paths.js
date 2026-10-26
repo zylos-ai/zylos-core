@@ -61,6 +61,7 @@ export function runDirFromEnv(env = process.env) {
   return { dir: legacyRunDir(env), sessionGroup: null, kind: 'legacy' };
 }
 export const routerDiagnosticPath = (env = process.env) => path.join(zylosRoot(env), 'comm-bridge', 'router-events.jsonl');
+export const receiveDiagnosticPath = (env = process.env) => path.join(zylosRoot(env), 'comm-bridge', 'receive-events.jsonl');
 export const supervisorDiagnosticPath = (env = process.env) => path.join(legacyRunDir(env), 'supervisor-events.jsonl');
 export const poolMetricsPath = (env = process.env) => path.join(legacyRunDir(env), 'pool-metrics.jsonl');
 export const hookErrorLogPath = (env = process.env) => path.join(legacyRunDir(env), 'hook-activity-errors.log');

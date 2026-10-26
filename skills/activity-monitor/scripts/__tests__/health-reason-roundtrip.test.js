@@ -7,8 +7,8 @@ import { randomUUID } from 'node:crypto';
 import Database from '../../../comm-bridge/node_modules/better-sqlite3/lib/index.js';
 import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
-import { claimStatusNotice } from '../../../comm-bridge/scripts/c4-db.js';
-import { statusNoticeKey } from '../../../comm-bridge/scripts/status-notice.js';
+import { reserveStatusNoticeCooldown } from '../../../comm-bridge/scripts/c4-db.js';
+import { reserveStatusNotice } from '../../../comm-bridge/scripts/status-notice.js';
 import { freezeFirstFailureNotice, processFirstFailureNotices } from '../../../comm-bridge/scripts/first-failure-notice.js';
 import { HealthStore } from '../health-store.js';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
@@ -42,8 +42,9 @@ test('recovery clears current reason while frozen historical notice keeps origin
  verify(recovered);
  const mutant=structuredClone(recovered);const clear=value=>{if(value&&typeof value==='object')for(const key of Object.keys(value)){if(key==='reason')value[key]='';else clear(value[key]);}};clear(mutant);assert.throws(()=>verify(mutant),assert.AssertionError);
  database.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','newer','test','delivered')").run();
+ fs.mkdirSync(path.join(process.env.ZYLOS_DIR,'.claude','skills','fake'),{recursive:true});
  const sent=[];await processFirstFailureNotices({store:rebuilt,database,identity:()=>identity,now:()=>now,zylosDir,
- reserve:(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(now/1000)},database),
+ reserve:(channel,endpoint,route)=>reserveStatusNotice(channel,endpoint,route,{reserve:options=>reserveStatusNoticeCooldown({...options,now:Math.floor(now/1000)},database)}),
  send:async(claim,message,route)=>{sent.push({claim,message,route});return {outcome:'sent'};}});
  assert.equal(sent.length,1);assert.equal(sent[0].claim.endpoint,'original');assert.equal(sent[0].route.reason,'authentication_failed');assert.equal(rebuilt.read().health,'ok');assert.equal(rebuilt.read().last_notice_outcome.status,'sent');
 });

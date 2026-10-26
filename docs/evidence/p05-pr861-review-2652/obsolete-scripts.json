@@ -1,8 +1,0 @@
-{
-  "removed": [
-    "scripts/e2e/issue-492-web-tool-watchdog.sh",
-    "scripts/e2e/issue-492-web-tool-watchdog-ab.sh"
-  ],
-  "remaining_references": [],
-  "reason": "Both obsolete scripts require tool-watchdog-state.json from the removed unreachable watchdog; delete rather than replace the historical e2e contract."
-}

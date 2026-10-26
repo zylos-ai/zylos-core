@@ -20,11 +20,9 @@ import { upgradeComponent, uninstallComponent, infoComponent, listComponents, se
 import { addComponent } from './commands/add.js';
 import { initCommand } from './commands/init.js';
 import { configCommand } from './commands/config.js';
-import { attachCommand } from './commands/attach.js';
-import { doctorCommand } from './commands/doctor.js';
 import { shellCommand } from './commands/shell.js';
 import { recoveryCommand } from './commands/recovery.js';
-import { runtimeCommand } from './commands/runtime.js';
+import { authCommand } from './commands/auth.js';
 import { migrateInstructionsCommand } from './commands/migrate-instructions.js';
 
 const commands = {
@@ -32,10 +30,12 @@ const commands = {
   init: initCommand,
   upstream: upstreamCommand,
   config: configCommand,
-  attach: attachCommand,
-  doctor: doctorCommand,
+  attach: async (...args) => (await import('./commands/attach.js')).attachCommand(...args),
+  doctor: async (...args) => (await import('./commands/doctor.js')).doctorCommand(...args),
   shell: shellCommand,
-  runtime: runtimeCommand,
+  runtime: async (...args) => (await import('./commands/runtime.js')).runtimeCommand(...args),
+  auth: authCommand,
+  group: async (...args) => (await import('./commands/group.js')).groupCommand(...args),
   recovery: recoveryCommand,
   'migrate-instructions': migrateInstructionsCommand,
   // Service management
@@ -77,8 +77,7 @@ async function main() {
   if (commands[command]) {
     const parsed = parseUpstreamArgs(args.slice(1));
     const help = parsed.args.some(arg => ['--help', '-h'].includes(arg));
-    const runtimeInstall = command === 'runtime' && ['claude', 'codex'].includes(parsed.args[0]) && !commandExists(parsed.args[0]);
-    const consumesUpstream = ['init', 'add', 'upgrade', 'search'].includes(command) || runtimeInstall;
+    const consumesUpstream = ['init', 'add', 'upgrade', 'search'].includes(command);
     if (consumesUpstream && !help) {
       const prepared = await prepareUpstreams({ source: parsed.source });
       await withUpstreamSnapshot(prepared, () => commands[command](parsed.args));
@@ -146,6 +145,8 @@ Setup:
   shell               Interactive CLI mode (REPL)
   runtime <name>      Switch agent runtime (claude|codex)
   runtime status      Show currently configured runtime
+  auth <name>         Authenticate a prepared runtime (Codex: --device-code)
+  group <kind>        Read or update group runtime/model configuration
   migrate-instructions  Analyze/migrate legacy mixed instructions (dry-run by default)
                       --apply  Create durable backup and activate split instructions
                       --user-content <file>  User-only content for conservative C-class migration

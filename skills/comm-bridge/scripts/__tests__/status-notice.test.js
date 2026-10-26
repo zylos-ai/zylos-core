@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { guardDatabase } from '../sqlite-schema.js';
 import * as schema from '../c4-schema.js';
-import { claimStatusNotice, startStatusNotice, finishStatusNotice } from '../c4-db.js';
+import { reserveStatusNoticeCooldown, clearStatusNoticeCooldownReservation } from '../c4-db.js';
 import { normalizeStatusEndpoint, statusNoticeKey, reserveStatusNotice, sendStatusNotice } from '../status-notice.js';
 import { messageForStatus } from '../status-notice-templates.js';
 import fs from 'node:fs';
@@ -46,12 +46,11 @@ test('invalid sender channel is rejected before opening any database or spawning
   }
 });
 
-test('legacy cooldown metadata order preserves only the existing suppression window', t => {
+test('legacy cooldown keys cannot suppress a distinct v2 reservation', t => {
   const { db, input } = fixture(t);
   db.prepare(`INSERT INTO status_notice_cooldowns VALUES (?,?,?,?,?,?,?,?)`)
     .run('old-key', 'lark', 'group|thread:t|root:r', 'unavailable', 'unavailable', 90, 150, 90);
-  assert.equal(claimStatusNotice(input, db).reason, 'cooldown');
-  assert.equal(claimStatusNotice({ ...input, now: 150 }, db).suppressed, false);
+  assert.equal(reserveStatusNoticeCooldown(input, db).suppressed, false);
 });
 
 for (const mode of ['timeout', 'crash', 'missing', 'throw']) test(`sender ${mode} persists the correct retry boundary`, t => {
@@ -67,7 +66,7 @@ for (const mode of ['timeout', 'crash', 'missing', 'throw']) test(`sender ${mode
   const code = `import {spawnSync} from 'node:child_process';
     import {reserveStatusNotice,sendStatusNotice} from ${JSON.stringify(senderUrl)};
     import {close} from ${JSON.stringify(dbUrl)};
-    const claim=reserveStatusNotice('fake','group',{healthEpisode:'episode'});
+    const claim=reserveStatusNotice('fake','group',{sessionGroup:'fake',runtime:'claude'});
     const result=sendStatusNotice(claim,'notice',{}, {spawn:(cmd,args,options)=>{
       ${mode === 'crash' ? "process.kill(process.pid,'SIGKILL');" : mode === 'throw' ? "throw Error('injected');" : 'return spawnSync(cmd,args,{...options,timeout:500});'}
     }});console.log(JSON.stringify(result));close();`;
@@ -94,13 +93,12 @@ for (const mode of ['timeout', 'crash', 'missing', 'throw']) test(`sender ${mode
   try {
     assert.equal(db.prepare('SELECT COUNT(*) n FROM status_notice_cooldowns').get().n, mode === 'missing' ? 0 : 1);
     const row = db.prepare('SELECT * FROM status_notice_cooldowns').get();
-    const input = { key: statusNoticeKey('fake','group'), episode: 'episode', attemptId: 'replacement',
-      channel: 'fake', endpoint: 'group', normalizedEndpoint: 'group', now: row ? row.expires_at - 1 : Math.floor(Date.now() / 1000) };
-    const next = claimStatusNotice(input, db);
+    const input = { cooldownKey: statusNoticeKey('fake','group','unavailable','unavailable','fake','claude'),
+      channel: 'fake', endpoint: 'group', statusType:'unavailable',reason:'unavailable',ttl:600, now: row ? row.expires_at - 1 : Math.floor(Date.now() / 1000) };
+    const next = reserveStatusNoticeCooldown(input, db);
     assert.equal(next.suppressed, mode !== 'missing');
     if (mode !== 'missing') {
-      assert.equal(next.reason, 'cooldown');
-      assert.equal(claimStatusNotice({ ...input, now: row.expires_at }, db).suppressed, false);
+      assert.equal(reserveStatusNoticeCooldown({ ...input, now: row.expires_at }, db).suppressed, false);
     }
   } finally { db.close(); }
 });
@@ -110,8 +108,8 @@ function fixture(t) {
   guardDatabase(db, schema);
   t.after(() => db.close());
   const endpoint = 'group|root:r|thread:t|msg:a|parent:b';
-  const input = { key: statusNoticeKey('lark', endpoint), attemptId: 'a', channel: 'lark', endpoint,
-    normalizedEndpoint: normalizeStatusEndpoint(endpoint), now: 100, leaseSeconds: 60 };
+  const input = { cooldownKey: statusNoticeKey('lark', endpoint), channel: 'lark', endpoint:normalizeStatusEndpoint(endpoint),
+    statusType:'unavailable',reason:'unavailable',ttl:600, now: 100 };
   return { db, input };
 }
 
@@ -124,7 +122,7 @@ test('a notice without an endpoint uses the sender stdin broadcast contract', t 
   fs.writeFileSync(path.join(channel, 'send.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)));`);
   const code = `import {reserveStatusNotice,sendStatusNotice} from ${JSON.stringify(new URL('../status-notice.js', import.meta.url).href)};
     import {close} from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
-    const claim=reserveStatusNotice('fake',null,{healthEpisode:'episode'});
+    const claim=reserveStatusNotice('fake',null,{sessionGroup:'fake',runtime:'claude'});
     console.log(JSON.stringify(sendStatusNotice(claim,'broadcast notice',{}, {diagnostic:false})));close();`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
     env: { ...process.env, ZYLOS_DIR: root }, encoding: 'utf8', timeout: 5000,
@@ -142,44 +140,31 @@ test('endpoint keys ignore message IDs but preserve health, reason, channel, roo
   assert.notEqual(statusNoticeKey('lark', 'ep'), statusNoticeKey('other', 'ep'));
 });
 
-test('reservation atomically suppresses sends and successful completion retains cooldown', t => {
+test('reservation atomically suppresses sends until its original expiry', t => {
   const { db, input } = fixture(t);
-  const claim = claimStatusNotice(input, db);
+  const claim = reserveStatusNoticeCooldown(input, db);
   assert.equal(claim.suppressed, false);
-  assert.equal(claimStatusNotice(input, db).reason, 'cooldown');
-  assert.equal(startStatusNotice(claim, 101, db), true);
-  assert.equal(finishStatusNotice(claim, 'sent', { now: 120 }, db), true);
-  assert.equal(claimStatusNotice({ ...input, now: 719 }, db).suppressed, true);
-  assert.equal(claimStatusNotice({ ...input, now: 720 }, db).suppressed, false);
+  assert.equal(reserveStatusNoticeCooldown(input, db).suppressed, true);
+  assert.equal(reserveStatusNoticeCooldown({ ...input, now: 699 }, db).suppressed, true);
+  assert.equal(reserveStatusNoticeCooldown({ ...input, now: 700 }, db).suppressed, false);
 });
 
 test('definite failure releases reservation and stale completion cannot change replacement', t => {
   const { db, input } = fixture(t);
-  const first = claimStatusNotice(input, db);
-  finishStatusNotice(first, 'failed', { now: 101 }, db);
-  const next = claimStatusNotice({ ...input, now: 102 }, db);
+  const first = reserveStatusNoticeCooldown(input, db);
+  clearStatusNoticeCooldownReservation(first.key,first.reservedAt,db);
+  const next = reserveStatusNoticeCooldown({ ...input, now: 102 }, db);
   assert.equal(next.suppressed, false);
-  assert.equal(finishStatusNotice(first, 'sent', { now: 103 }, db), false);
+  clearStatusNoticeCooldownReservation(first.key,first.reservedAt,db);
   assert.equal(db.prepare('SELECT expires_at FROM status_notice_cooldowns').get().expires_at, 702);
-});
-
-test('sending crash and uncertain completion suppress only for the reservation window', t => {
-  const { db, input } = fixture(t);
-  const first = claimStatusNotice(input, db);
-  assert.equal(startStatusNotice(first, 101, db), true);
-  finishStatusNotice(first, 'uncertain', { now: 120 }, db);
-  assert.equal(db.prepare('SELECT expires_at FROM status_notice_cooldowns').get().expires_at, 700);
-  assert.equal(claimStatusNotice({ ...input, now: 699 }, db).suppressed, true);
-  assert.equal(claimStatusNotice({ ...input, now: 700 }, db).suppressed, false);
-  assert.equal(startStatusNotice(first, 700, db), false);
 });
 
 test('different health and reason remain independently notifiable', t => {
   const { db, input } = fixture(t);
-  claimStatusNotice(input, db);
+  reserveStatusNoticeCooldown(input, db);
   for (const [health, reason] of [['auth_failed', 'invalid_key'], ['unavailable', 'network']]) {
-    assert.equal(claimStatusNotice({ ...input, health, reason,
-      key: statusNoticeKey(input.channel, input.endpoint, health, reason) }, db).suppressed, false);
+    assert.equal(reserveStatusNoticeCooldown({ ...input, statusType:health, reason,
+      cooldownKey: statusNoticeKey(input.channel, input.endpoint, health, reason) }, db).suppressed, false);
   }
 });
 

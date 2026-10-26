@@ -30,17 +30,18 @@ test('absence only: no server is false; timeout remains unavailable',async () =>
 test('configured runtime alone cannot establish process liveness',async () => {
   await assert.rejects(fixture({runtime:'unknown'}).adapter.isRunning({tmuxName:'x'}),{code:'TMUX_UNAVAILABLE'});
 });
-test('multiline text loads a private file and pastes in one guarded batch',async () => {
+for (const bracketedPaste of [false, true]) test(`multiline text preserves bracketed paste=${bracketedPaste} in one guarded batch`,async () => {
   const f=fixture(); let file;
   f.connection.commandBatch=async commands=> {
     f.calls.push(['batch',commands]);
     assert.deepEqual(commands.map(c=>c[0]),['load-buffer','paste-buffer']);
     const load=commands[0],paste=commands[1];file=load[3];
+    assert.equal(paste.includes('-p'), bracketedPaste);
     assert.equal(await fs.readFile(file,'utf8'),'one\ntwo');
     assert.equal((await fs.stat(file)).mode & 0o777,0o600);
     assert.equal(load[2],paste[paste.indexOf('-b')+1]);
   };
-  await f.adapter.sendText({target:f.target,connection:f.connection,text:'one\ntwo'});
+  await f.adapter.sendText({target:f.target,connection:f.connection,text:'one\ntwo',bracketedPaste});
   assert.deepEqual(f.calls.map(c=>c[0]),['validate','batch','delete-buffer']);
   await assert.rejects(fs.stat(file),{code:'ENOENT'});
 });

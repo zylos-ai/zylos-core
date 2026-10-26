@@ -90,12 +90,17 @@ test('installed auth hook honors runtime and approval switch without Core or npm
   const fx = fixture(t);
   fs.unlinkSync(path.join(fx.bin, 'npm'));
   const hook = path.join(fx.skills, 'activity-monitor/scripts/hook-auth-prompt.js');
-  const run = () => spawnSync(process.execPath, [hook], {
-    env: fx.env, encoding: 'utf8', timeout: 10000,
-    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'true' } }),
-  });
+  const payload = { hook_event_name: 'PermissionRequest', session_id: 'session-1', tool_name: 'Bash' };
+  const run = () => evaluate(fx, `
+    import { approvePermission } from ${JSON.stringify(pathToFileURL(hook).href)};
+    await approvePermission(${JSON.stringify(payload)}, {
+      env: { ...process.env, ZYLOS_RUN_ID: 'run-1', ZYLOS_MODEL_CONFIG: JSON.stringify({runtime:'claude'}) },
+      scopeReader: async () => ({sessionGroup:'lark:own'}),
+      identityReader: async () => ({runtime:'claude',runId:'run-1'}),
+    });
+  `);
   for (const [config, shouldEnqueue] of [
-    [{}, true], [{ runtime: 'codex' }, false], [{ auto_approve_permission: false }, false],
+    [{}, true], [{ auto_approve_permission: false }, false],
   ]) {
     fs.rmSync(fx.flag, { force: true });
     fs.writeFileSync(fx.file, JSON.stringify(config));
@@ -103,6 +108,17 @@ test('installed auth hook honors runtime and approval switch without Core or npm
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.existsSync(fx.flag), shouldEnqueue);
     if (shouldEnqueue) assert.ok(JSON.parse(fs.readFileSync(fx.flag, 'utf8')).includes('[KEYSTROKE]Enter'));
+  }
+  // Installed disabled and unidentified hooks must not load Core at all.
+  for (const [config, input, env] of [
+    [{}, {}, {}],
+    [{auto_approve_permission:false}, payload, {ZYLOS_RUN_ID:'run-1',ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'}],
+  ]) {
+    fs.rmSync(fx.flag, {force:true});
+    fs.writeFileSync(fx.file, JSON.stringify(config));
+    const skipped = spawnSync(process.execPath, [hook], {env:{...fx.env,...env}, input:JSON.stringify(input), encoding:'utf8', timeout:10000});
+    assert.equal(skipped.status, 0, skipped.stderr);
+    assert.equal(fs.existsSync(fx.flag), false);
   }
   fs.rmSync(fx.flag, { force: true });
   fs.writeFileSync(fx.file, '{');

@@ -8,6 +8,7 @@ import { fork } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
 import { main as monitorMain } from '../monitor.js';
 import { fileURLToPath } from 'node:url';
+import { resolveSessionPoolSize } from '../../../../cli/lib/session-pool-config.js';
 const repository=fileURLToPath(new URL('../../../../',import.meta.url));
 const entry=fileURLToPath(new URL('../supervisor-main.js',import.meta.url));
 const worker=fileURLToPath(new URL('./fixtures/supervisor-entry-worker.js',import.meta.url));
@@ -15,6 +16,22 @@ function prepare(t,config={session_mode:'multi',runtime:'claude'}) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-entry-'));
   fs.mkdirSync(path.join(root,'.zylos'));fs.writeFileSync(path.join(root,'.zylos','config.json'),JSON.stringify(config));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root;
+}
+// Explicit missing-dependency package: preserve Core sources except the P04 reader.
+function withoutPoolReader(root) {
+  const pkg=path.join(root,'core-without-pool-reader');
+  fs.mkdirSync(pkg);
+  fs.copyFileSync(path.join(repository,'package.json'),path.join(pkg,'package.json'));
+  fs.cpSync(path.join(repository,'cli'),path.join(pkg,'cli'),{recursive:true,
+    filter:file=>!['node_modules','__tests__','session-pool-config.js'].includes(path.basename(file))});
+  fs.symlinkSync(fs.realpathSync(path.join(repository,'node_modules')),path.join(pkg,'node_modules'),'dir');
+  for(const name of ['activity-monitor','comm-bridge','zylos-memory']) {
+    fs.cpSync(path.join(repository,'skills',name),path.join(pkg,'skills',name),{recursive:true,
+      filter:file=>!['node_modules','__tests__'].includes(path.basename(file))});
+  }
+  fs.symlinkSync(fs.realpathSync(path.join(repository,'skills/comm-bridge/node_modules')),path.join(pkg,'skills/comm-bridge/node_modules'),'dir');
+  assert.equal(fs.existsSync(path.join(pkg,'cli/lib/session-pool-config.js')),false);
+  return pkg;
 }
 function launch(t,root,{entryFile=entry,packageRoot=repository,scenario='normal'}={}) {
   const child=fork(worker,[entryFile,scenario],{env:{...process.env,HOME:root,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:packageRoot},silent:true});
@@ -36,7 +53,7 @@ async function stop(worker) {
   const [code]=await exited;assert.equal(code,0,worker.stderr());
 }
 test('T01 actual entry restores before Sock admission and shuts down with a partial-line peer', {timeout:15000}, async t=>{
-  const root=prepare(t),w=launch(t,root);const ready=await w.next();assert.equal(ready.admissionOpen,true);
+  const root=prepare(t),w=launch(t,root,{packageRoot:withoutPoolReader(root)});const ready=await w.next();assert.equal(ready.admissionOpen,true);
   assert.ok(ready.logs.some(row=>row?.error==='DEPENDENCY_UNAVAILABLE'&&row.dependency==='P04 pool configuration reader'));
   w.child.send('rounds');const repeated=await w.next();
   assert.equal(repeated.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,1);
@@ -83,7 +100,7 @@ test('T02 entry freezes first-failure notice synchronously with correct single/m
   for(const mode of ['single','multi']) {
     const root=prepare(t,{session_mode:mode,runtime:'claude'}),w=launch(t,root);await w.next();w.child.send('freeze');
     const result=await w.next();assert.equal(result.notice.endpoint,'frozen');assert.equal(result.notice.reason,'authentication_failed');
-    assert.equal(result.noticeScope,mode==='single'?'':'origin');await stop(w);
+    assert.equal(result.noticeScope,mode==='single'?null:'origin');await stop(w);
     const stored=JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/runtime-health/claude.json'),'utf8'));
     assert.equal(stored.hook.groups.origin.pendingNotice.endpoint,'frozen');
   }
@@ -120,12 +137,27 @@ test('C4 canonical PM2 wrapper invokes the monitor entry even when imported indi
 
 // C3 / P3-1: use the actual entry's missing P04 module, without capacity injection.
 test('C3 missing P04 reader logs once across six rounds and defers eviction without config-error spam',{timeout:15000},async t=>{
- const root=prepare(t),w=launch(t,root);await w.next();
+ const root=prepare(t),w=launch(t,root,{packageRoot:withoutPoolReader(root)});await w.next();
  w.child.send('rounds');const result=await w.next();
  assert.equal(result.configuration.capacityUnavailable,true);
  assert.equal(Object.hasOwn(result.configuration,'capacity'),false);
  assert.equal(result.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,1);
  assert.equal(result.logs.filter(row=>row?.phase==='eviction').length,0);
  assert.equal((await request(root,{version:1,type:'restart_all',requestId:'after-missing-p04',reason:'upgrade'})).result,'done_empty');
+ await stop(w);
+});
+
+// P04/P05 integration regression: actual entry loads the available Core reader.
+test('C3 present P04 reader supplies real capacity without a missing-dependency notice',{timeout:15000},async t=>{
+ const config={session_mode:'multi',runtime:'claude',session_pool_size:7};
+ const root=prepare(t,config);
+ assert.equal(fs.existsSync(path.join(repository,'cli/lib/session-pool-config.js')),true);
+ const w=launch(t,root,{packageRoot:repository});
+ assert.equal((await w.next()).admissionOpen,true);
+ w.child.send('rounds');const result=await w.next();
+ const env={...process.env,HOME:root,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:repository};
+ assert.equal(result.configuration.capacityUnavailable,false);
+ assert.equal(result.configuration.capacity,resolveSessionPoolSize({env,config}));
+ assert.equal(result.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,0);
  await stop(w);
 });
