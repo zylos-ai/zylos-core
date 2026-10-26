@@ -32,7 +32,7 @@ function fixture(t) {
     assert.equal(result.tmuxName, 'zylos-group-origin');
     assert.equal(tmux.tmux('list-panes', '-t', '=zylos-group-origin', '-F', '#{pane_current_command}'), 'sleep');
   }
-  return { home, root, config, settings, files, write, launch };
+  return { home, root, config, settings, files, write, launch, adapter };
 }
 
 for (const missing of ['onboarding', 'trust', 'project-onboarding', 'permission']) {
@@ -124,3 +124,18 @@ for (const invalid of ['projects', 'project']) {
     assert.equal(JSON.parse(fs.readFileSync(f.files.settings)).skipDangerousModePermissionPrompt, true);
   });
 }
+
+
+test('Claude launch trusts the real startup directory when root is a symlink', async t => {
+  const f = fixture(t);
+  const linkedRoot = path.join(f.home, 'linked-zylos');
+  fs.symlinkSync(f.root, linkedRoot, 'dir');
+  f.adapter.options.root = linkedRoot;
+  f.adapter.options.env.ZYLOS_DIR = linkedRoot;
+  await f.launch();
+  const config = JSON.parse(fs.readFileSync(f.files.config));
+  const realRoot = fs.realpathSync(linkedRoot);
+  assert.equal(config.projects[realRoot].hasTrustDialogAccepted, true);
+  assert.equal(config.projects[realRoot].hasCompletedProjectOnboarding, true);
+  assert.equal(Object.hasOwn(config.projects, linkedRoot), false);
+});

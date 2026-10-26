@@ -77,7 +77,8 @@ async function ensureOnboardingComplete(projectDir, env) {
     fill(config, 'effortCalloutDismissed', true);
     if (!Object.hasOwn(config, 'projects')) config.projects = {};
     if (!config.projects || typeof config.projects !== 'object' || Array.isArray(config.projects)) throw new TypeError('Invalid project config');
-    const project = path.resolve(projectDir);
+    let project = path.resolve(projectDir);
+    try { project = await fs.promises.realpath(project); } catch { /* Keep confirmation repair best-effort if realpath is unavailable. */ }
     if (!Object.hasOwn(config.projects, project)) config.projects[project] = {};
     if (!config.projects[project] || typeof config.projects[project] !== 'object' || Array.isArray(config.projects[project])) throw new TypeError('Invalid project config');
     fill(config.projects[project], 'hasTrustDialogAccepted', true);
