@@ -9,8 +9,9 @@ import { test } from 'node:test';
 
 const initUrl = new URL('../../commands/init.js', import.meta.url).href;
 const exec = promisify(execFile);
-function fixture() {
+function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-init-integration-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const root = path.join(home, 'zylos');
   fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
   fs.mkdirSync(path.join(home, 'empty-bin'));
@@ -26,9 +27,9 @@ function run({ home, root }, source) {
   return JSON.parse(result.stdout.trim().split('\n').at(-1));
 }
 
-test('IF-47/DM-48 default init imports real migration ensure and preserves unreadable records', () => {
+test('IF-47/DM-48 default init imports real migration ensure and preserves unreadable records', t => {
   for (const state of ['fresh', 'existing', 'unreadable']) {
-    const context = fixture();
+    const context = fixture(t);
     fs.writeFileSync(path.join(context.root, 'memory', 'references.md'), '# References\n');
     const recordPath = path.join(context.root, '.zylos', 'migrations', 'references-layout-v1.json');
     if (state === 'unreadable') {
@@ -60,8 +61,8 @@ test('IF-47/DM-48 default init imports real migration ensure and preserves unrea
   }
 });
 
-test('IF-47 init template generator prepares dual hooks and assets report unavailable native trust', () => {
-  const context = fixture();
+test('IF-47 init template generator prepares dual hooks and assets report unavailable native trust', t => {
+  const context = fixture(t);
   const instruction = path.join(context.root, 'instructions.md');
   fs.writeFileSync(instruction, '# Fixture instructions\n');
   fs.writeFileSync(path.join(context.root, 'CLAUDE.md'), '# Fixture instructions\n');
@@ -90,8 +91,7 @@ test('IF-47 init template generator prepares dual hooks and assets report unavai
 });
 
 test('IF-47 init template sync never restarts or invokes the wrapper CLI', async t => {
-  const { home, root } = fixture();
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const { home, root } = fixture(t);
   const wrapperLog = path.join(home, 'wrapper.jsonl'), restartLog = path.join(home, 'restart.jsonl');
   const recorder = file => `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(file)}, JSON.stringify(process.argv.slice(2)) + '\\n');\n`;
   const preload = path.join(home, 'record-wrapper.mjs'), probe = path.join(home, 'sync-settings-hooks.js');

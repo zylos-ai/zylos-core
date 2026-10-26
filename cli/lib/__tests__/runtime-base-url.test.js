@@ -1,16 +1,55 @@
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { after, describe, test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-base-url-'));
+const originalEnv = { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, CODEX_BIN: process.env.CODEX_BIN };
+after(() => {
+  for (const [key, value] of Object.entries(originalEnv)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
 process.env.HOME = tmpRoot;
 process.env.ZYLOS_DIR = path.join(tmpRoot, 'zylos-home');
 fs.mkdirSync(process.env.ZYLOS_DIR, { recursive: true });
 fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.env'), '', 'utf8');
 
 describe('runtime base URL support', () => {
+  test('P06 C-1: Codex readiness returns objects for missing instructions and valid or invalid real trust', async t => {
+    const { runtimeHooksReady } = await import('../../commands/runtime.js');
+    const { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, hookKeyFor,
+      isCodexTrustValid } = await import('../codex-hooks.js');
+    const { stringify } = await import('smol-toml');
+    const root = process.env.ZYLOS_DIR;
+    const instruction = path.join(root, 'AGENTS.md');
+    const fakeCodex = path.join(tmpRoot, 'codex-version');
+    const version = 'codex-cli 0.142.2';
+    const oldBin = process.env.CODEX_BIN;
+    process.env.CODEX_BIN = fakeCodex;
+    t.after(() => { if (oldBin === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = oldBin; });
+    fs.writeFileSync(fakeCodex, `#!${process.execPath}\nconsole.log(${JSON.stringify(version)});\n`, { mode: 0o755 });
+    const hooksPath = codexHooksPath(root);
+    installCoreCodexHook({ zylosDir: root });
+    fs.writeFileSync(path.join(root, '.codex', 'config.toml'), '[features]\nhooks = true\n');
+    const key = hookKeyFor({ zylosDir: root, event: 'SessionStart', groupIndex: 0, hookIndex: 0 });
+    const trustSnapshot = { [key]: { enabled: true, trusted_hash: 'fixture-current-hash' } };
+    fs.mkdirSync(path.join(tmpRoot, '.codex'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, '.codex', 'config.toml'), stringify({ features: { hooks: true }, hooks: { state: trustSnapshot } }));
+    const marker = { hooksHash: crypto.createHash('sha256').update(fs.readFileSync(hooksPath)).digest('hex'),
+      codexVersion: version, trustSnapshot };
+    fs.writeFileSync(codexTrustMarkerPath(root), JSON.stringify(marker));
+    assert.deepEqual(isCodexTrustValid({ zylosDir: root, homeDir: tmpRoot, codexVersion: version }), { valid: true, reason: 'trusted' });
+    assert.deepEqual(await runtimeHooksReady('codex'), { ready: false, pendingMigration: true });
+    fs.writeFileSync(instruction, '# Fixture instructions\n');
+    assert.deepEqual(await runtimeHooksReady('codex'), { ready: true, pendingMigration: true });
+    fs.writeFileSync(codexTrustMarkerPath(root), JSON.stringify({ ...marker, hooksHash: 'stale' }));
+    assert.deepEqual(await runtimeHooksReady('codex'), { ready: false, pendingMigration: true });
+    fs.rmSync(instruction);
+  });
   test('review P1: readiness checks installed project hooks, and rejects missing/stale hooks (M9)', async t => {
     const { runtimeHooksReady, executeRuntimeSwitch } = await import('../../commands/runtime.js');
     const { syncRuntimeHooks } = await import('../sync-runtime-hooks.js');
