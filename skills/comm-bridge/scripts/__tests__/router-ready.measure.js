@@ -1,49 +1,143 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
-import {fixture} from './c4-v2-test-helpers.js';
-import {isolatedTmux,tmuxClientEnv} from '../../../../test/helpers/isolated-tmux.js';
-import {getSessionAdapter} from '../../../../cli/lib/runtime/index.js';
-import {createSessionReader} from '../../../../cli/lib/session-state-reader-async.js';
-import {readReadyIdentity} from '../../../../cli/lib/runtime/session-target.js';
-import {listGroupTmuxSessions} from '../../../../cli/lib/session-group-paths.js';
-import {createRouter} from '../router/scheduler.js';
-import {desiredClaudeHooks} from '../../../../cli/lib/sync-runtime-hooks.js';
-import {ensureCodexHooksTrusted} from '../../../../cli/lib/codex-hooks.js';
-const evidence='/Users/howard/zylos/workspace/zylo83-ready-evidence-21243';
-const bins={claude:'/Users/howard/.local/bin/claude',codex:'/Users/howard/.nvm/versions/node/v24.14.0/bin/codex'};
-export async function measure(t,runtime){
- let router;
- const tm=isolatedTmux(t,{prefix:'ready-21243-',beforeCleanup:()=>router?.stop()});
- const root=path.join(tm.dir,'zylos');fs.mkdirSync(root);
- const previous={...process.env};
- const env=tmuxClientEnv(tm,{PATH:process.env.PATH,HOME:tm.dir,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:process.cwd(),LANG:'en_US.UTF-8',TERM:'xterm-256color'});
- for(const k of Object.keys(process.env))delete process.env[k];Object.assign(process.env,env);
- t.after(()=>{for(const k of Object.keys(process.env))delete process.env[k];Object.assign(process.env,previous);});
- for(const dir of ['.zylos','.claude','comm-bridge','memory'])fs.mkdirSync(path.join(root,dir));
- fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({runtime,session_mode:'multi'}));
- fs.writeFileSync(path.join(root,'.zylos/runtime-env.manifest'),'inherit TMUX\ninherit ZYLOS_PACKAGE_ROOT\n');
- fs.symlinkSync(path.join(process.cwd(),'skills'),path.join(root,'.claude/skills'));
- fs.mkdirSync(path.join(tm.dir,'.claude'));
- fs.writeFileSync(path.join(root,'memory/identity.md'),'Isolated startup timing test. Do not call tools or send external messages. Wait quietly.');
- const record={runtime,utc:new Date().toISOString(),condition:'fresh isolated HOME, no copied host credentials',root,launch_ms:null,ready_from_launch_ms:null,ready_from_return_ms:null};
- const version=spawnSync(bins[runtime],['--version'],{env,encoding:'utf8',timeout:10000});record.version=version.stdout?.trim();
- const auth=spawnSync(bins[runtime],runtime==='claude'?['auth','status']:['login','status'],{env,cwd:root,encoding:'utf8',timeout:10000});record.auth={status:auth.status,stdout:auth.stdout,stderr:auth.stderr};
- if(runtime==='claude')fs.writeFileSync(path.join(tm.dir,'.claude/settings.json'),JSON.stringify({hooks:desiredClaudeHooks({zylosDir:root})}));
- else try{record.hookTrust=ensureCodexHooksTrusted({zylosDir:root,projectDir:root,homeDir:tm.dir,codexBin:bins.codex});}catch(e){record.hookTrustError=e.message;}
- const f=fixture(t,{readConfig:()=>({state:'ok',config:{runtime,session_mode:'multi'}})},path.join(root,'comm-bridge/c4.db'));
- const db={...f.store,getControlById:id=>f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),expireTimedOutControls:()=>0,cleanupControlQueue:()=>0};
- db.setDrainFence('origin',{reason:'upgrade',runId:'measure-fence'});const row=db.insertConversation('in','measure','endpoint','Isolated timing marker');
- const tmux={binary:tm.binary,socketPath:tm.socketPath,configFile:'/dev/null'};
- const reader=createSessionReader({env,connectionOptions:tmux});const events=[];let start,returned;
- const deps={db,readSessionMode:()=>({mode:'multi',keyPresent:true}),...reader,readCurrentSession:readReadyIdentity,listGroupTmuxSessions:()=>listGroupTmuxSessions(tmux),readRuntimeHealth:()=>({health:'ok',publicHealth:'ok'}),
- getSessionAdapter:r=>{const adapter=getSessionAdapter(r,{root,tmux,env,runtimeExecutable:()=>bins[r]});const launch=adapter.launch.bind(adapter);adapter.launch=async input=>{record.runId=input.runId;start=performance.now();try{return await launch(input);}catch(e){record.launchError={code:e.code,message:e.message};throw e;}finally{returned=performance.now();record.launch_ms=returned-start;}};return adapter;},
- submit:async()=>{throw Error('unexpected restricted health');},deliverControl:async()=>{},deliverConversation:async()=>{},handleExpired:async()=>{},prepareSingle:async()=>{},findLegacySessions:async()=>[],advanceLegacy:async()=>{},diagnostic:(event,fields)=>events.push({event,...fields}),alert:()=>{}};
- router=createRouter(deps,{poolSize:1,readyTimeoutMs:60000});await router.initialize();
- const limit=performance.now()+20000;
- while(performance.now()<limit){router.tick();await router.idle();const live=await reader.readLiveIdentity('measure');if(live.ready&&live.runId===record.runId){record.ready_from_launch_ms=performance.now()-start;record.ready_from_return_ms=performance.now()-returned;record.identity=live;break;}if(record.launchError)break;await new Promise(r=>setTimeout(r,200));}
- try{record.pane=tm.tmux('capture-pane','-p','-t','zylos-group-measure');}catch(e){record.paneError=e.message;}
- record.events=events;record.ledger=f.db.prepare('SELECT id,status,retry_count FROM conversations WHERE id=?').get(row.id);
- record.result=record.ready_from_launch_ms===null?'NO_READY':'READY_OBSERVED';
- fs.writeFileSync(path.join(evidence,`${runtime}-probe.json`),JSON.stringify(record,null,2));t.diagnostic(JSON.stringify({runtime,result:record.result,launch_ms:record.launch_ms,ready_from_launch_ms:record.ready_from_launch_ms}));
+import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { preflightInputs } from './router-ready-auth.js';
+
+export const PROXY_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'];
+export const CASES = ['normal', 'slow-hook', 'missing-session-id', 'late-launch', 'boundary-ready'];
+export function failure(code) { return Object.assign(new Error(code), { code }); }
+export function configFromEnv(env = process.env) {
+  const integer = (name, fallback, min = 1) => {
+    const value = Number(env[name] ?? fallback);
+    if (!Number.isSafeInteger(value) || value < min) throw failure('INVALID_MEASUREMENT_CONFIG');
+    return value;
+  };
+  const runtimes = (env.READY_MEASURE_RUNTIMES || 'claude,codex').split(',');
+  const cases = (env.READY_MEASURE_CASES || CASES.join(',')).split(',');
+  if (!runtimes.length || runtimes.some(r => !['claude','codex'].includes(r)) || new Set(runtimes).size !== runtimes.length ||
+      cases.some(c => !CASES.includes(c)) || new Set(cases).size !== cases.length) throw failure('INVALID_MEASUREMENT_CONFIG');
+  const config = {
+    runtimes, cases, coldCount: integer('READY_MEASURE_COLD_COUNT', 10, 0), repeatCount: integer('READY_MEASURE_REPEAT_COUNT', 10, 0),
+    readyTimeoutMs: integer('READY_MEASURE_TIMEOUT_MS', 60000), observationMs: integer('READY_MEASURE_OBSERVATION_MS', 90000),
+    pollMs: integer('READY_MEASURE_POLL_MS', 200), slowHookMs: integer('READY_MEASURE_SLOW_HOOK_MS', 2000),
+    evidenceDir: path.resolve(env.READY_MEASURE_EVIDENCE_DIR || 'ready-measure-evidence'),
+    binaries: { claude: env.READY_MEASURE_CLAUDE_BIN || 'claude', codex: env.READY_MEASURE_CODEX_BIN || 'codex' },
+  };
+  if (config.observationMs <= config.readyTimeoutMs + Math.max(1000, 2 * config.pollMs) || config.slowHookMs >= config.observationMs) throw failure('INVALID_MEASUREMENT_CONFIG');
+  return config;
+}
+export function measurementEnv(env = process.env) {
+  const result = { PATH: env.PATH || '', LANG: 'en_US.UTF-8', TERM: 'xterm-256color' };
+  for (const key of [...PROXY_KEYS, 'TEST_TMUX_BIN', 'READY_MEASURE_CLAUDE_CREDENTIALS', 'READY_MEASURE_CODEX_API_KEY']) {
+    if (env[key]) result[key] = env[key];
+  }
+  return result;
+}
+export function resolveBinary(name, env = process.env, cwd = process.cwd()) {
+  const candidates = name.includes(path.sep) ? [path.resolve(cwd, name)] :
+    (env.PATH || '').split(path.delimiter).filter(Boolean).map(directory => path.resolve(cwd, directory, name));
+  for (const candidate of candidates) {
+    try { fs.accessSync(candidate, fs.constants.X_OK); if (fs.statSync(candidate).isFile()) return fs.realpathSync(candidate); }
+    catch { /* Continue PATH lookup without recording host paths. */ }
+  }
+  throw failure('RUNTIME_BINARY_UNAVAILABLE');
+}
+export function proxyPresence(env) { return Object.fromEntries(PROXY_KEYS.map(key => [key, Boolean(env[key])])); }
+export function statistics(values) {
+  const sorted = values.filter(Number.isFinite).sort((a,b) => a-b);
+  if (!sorted.length) return { n: 0, min: null, median: null, p95: null, max: null };
+  const middle = Math.floor(sorted.length / 2);
+  return { n: sorted.length, min: sorted[0], median: sorted.length % 2 ? sorted[middle] : (sorted[middle-1]+sorted[middle])/2,
+    p95: sorted[Math.ceil(sorted.length * .95)-1], max: sorted.at(-1) };
+}
+export function timing(launch, returned, f3, observed) {
+  return { launchStartedAt: launch.wall, launchReturnedAt: returned?.wall ?? null, f3PublishedAtProxy: f3.ts,
+    observedAt: observed.wall, launchDurationMs: returned ? returned.mono-launch.mono : null,
+    publicationFromLaunchMs: f3.ts-launch.wall, publicationFromReturnMs: returned ? f3.ts-returned.wall : null,
+    observedFromLaunchMs: observed.mono-launch.mono, observedFromReturnMs: returned ? observed.mono-returned.mono : null,
+    publicationToObservationMs: observed.wall-f3.ts };
+}
+export function assertOrder(sequence, startupIds, businessId) {
+  if (!startupIds.length || new Set(startupIds).size !== startupIds.length) throw failure('STARTUP_PROMPT_MISSING_OR_DUPLICATED');
+  const seen = new Set();
+  for (const entry of sequence) {
+    const key = `${entry.kind}:${entry.id}`;
+    if (seen.has(key)) throw failure('DUPLICATE_DELIVERY');
+    if (entry.kind === 'business' && (entry.id !== businessId || startupIds.some(id => !seen.has(`control:${id}`)))) throw failure('BUSINESS_BEFORE_STARTUP');
+    seen.add(key);
+  }
+  if (!seen.has(`business:${businessId}`)) throw failure('BUSINESS_NOT_DELIVERED');
+}
+export async function runWorker(request, env, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('./router-ready-worker.js', import.meta.url))], {
+      env, stdio: ['pipe', 'ignore', 'ignore', 'ipc'],
+    });
+    let result;
+    child.on('message', message => { result = message; });
+    // Worker owns bounded cleanup; this backstop only diagnoses a hung worker.
+    const timer = setTimeout(() => { child.kill('SIGTERM'); }, timeoutMs);
+    child.once('error', () => { clearTimeout(timer); reject(failure('WORKER_START_FAILED')); });
+    child.once('exit', (code, signal) => {
+      clearTimeout(timer);
+      if (!result || signal || code !== 0) reject(Object.assign(failure(signal ? 'WORKER_DEADLINE' : 'WORKER_FAILED'), { cleanupUnknown: true }));
+      else resolve(result);
+    });
+    child.stdin.end(JSON.stringify(request));
+  });
+}
+export async function runMeasurements(config, env = process.env, worker = runWorker) {
+  fs.mkdirSync(config.evidenceDir, { recursive: true, mode: 0o700 });
+  const runDir = fs.mkdtempSync(path.join(config.evidenceDir, 'run-'));
+  fs.chmodSync(runDir, 0o700);
+  const samplesFile = path.join(runDir, 'samples.jsonl');
+  fs.writeFileSync(samplesFile, '', { mode: 0o600 });
+  const summary = { schema: 1, status: 'preflight', os: { platform: os.platform(), release: os.release(), arch: os.arch() },
+    node: process.version, config: Object.fromEntries(Object.entries(config).filter(([key]) => !['binaries','evidenceDir'].includes(key))),
+    proxy: proxyPresence(env), preflight: [], sampleCount: 0, samples: [], aggregates: {}, allTemporaryHomesRemoved: true,
+    timingNote: 'F3.ts is the hook timestamp immediately before publication, not the filesystem rename instant. observedAt is separate; polling plus read/scheduling latency affects observed times. Publication deltas are signed wall-clock deltas.',
+    conditions: { cold: 'fresh isolated HOME and runtime session; OS/binary caches are not flushed', repeat: 'one unmeasured successful warm-up in the same HOME, stopped before the measured launch; HOME removed after this sample',
+      faults: 'controlled M1 clock; real adapter and M3 hook, excluded from startup latency aggregates', delivery: 'ledger-settling sequence recorder; no text pasted to the model' } };
+  const writeSummary = () => fs.writeFileSync(path.join(runDir, 'summary.json'), JSON.stringify(summary, null, 2), { mode: 0o600 });
+  try {
+    preflightInputs(config.runtimes, env);
+    const workerEnv = measurementEnv(env);
+    for (const runtime of config.runtimes) {
+      const record = await worker({ type: 'preflight', runtime, config }, workerEnv, 180000);
+      summary.preflight.push(record);
+      summary.allTemporaryHomesRemoved &&= record.homeRemoved === true;
+      if (!record.ok) throw failure(record.error || 'PREFLIGHT_FAILED');
+    }
+    summary.status = 'sampling';
+    for (const runtime of config.runtimes) {
+      const jobs = [];
+      if (config.cases.includes('normal')) {
+        for (const condition of ['cold','repeat']) for (let index = 0; index < config[`${condition}Count`]; index++) jobs.push({ condition, case: 'normal', index });
+      }
+      for (const kind of config.cases.filter(c => c !== 'normal')) jobs.push({ condition: 'fault', case: kind, index: 0 });
+      for (const job of jobs) {
+        const sample = await worker({ type: 'sample', runtime, config, ...job }, workerEnv, 180000 + config.observationMs * (job.condition === 'repeat' ? 2 : 1));
+        fs.appendFileSync(samplesFile, JSON.stringify(sample)+'\n');
+        summary.samples.push({ runtime, ...job, ok: sample.ok, error: sample.error ?? null, outcome: sample.outcome ?? null });
+        summary.sampleCount++;
+        summary.allTemporaryHomesRemoved &&= sample.homeRemoved === true;
+        if (sample.ok && job.case === 'normal') {
+          const key = `${runtime}/${job.condition}`;
+          const bucket = summary.aggregates[key] ??= { publicationFromLaunchMs: [], publicationFromReturnMs: [], observedFromLaunchMs: [], observedFromReturnMs: [] };
+          for (const metric of Object.keys(bucket)) bucket[metric].push(sample.timing[metric]);
+        }
+      }
+    }
+    summary.status = summary.samples.every(s => s.ok) && summary.allTemporaryHomesRemoved ? 'complete' : 'failed';
+  } catch (error) {
+    summary.status = 'failed';
+    summary.error = /^[a-zA-Z][a-zA-Z0-9_]+$/.test(error.code || '') ? error.code : 'MEASUREMENT_FAILED';
+    if (error.cleanupUnknown) summary.allTemporaryHomesRemoved = false;
+  } finally {
+    for (const bucket of Object.values(summary.aggregates)) for (const metric of Object.keys(bucket)) bucket[metric] = statistics(bucket[metric]);
+    writeSummary();
+  }
+  return { ok: summary.status === 'complete', runDir, summary };
 }
