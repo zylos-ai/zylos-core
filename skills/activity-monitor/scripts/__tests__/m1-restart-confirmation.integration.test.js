@@ -27,9 +27,18 @@ async function decided(checker, input) {
 // IF-41 / IB-47: exercise the production PM2 CLI transport against a private
 // daemon. A successful CLI exit alone must not confirm M1's generation.
 test('IF-41 real private PM2 confirms exact online generation, rejects false success and cleans its daemon', { timeout: 45000 }, async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p05-m1-pm2-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'p05-m1-pm2-')));
   const home = path.join(root, 'pm2'); fs.mkdirSync(home);
+  // Resolve the declared test dependency, never a host-global PM2 executable.
+  // Both the production transport and fixture commands use this private entry.
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
+  const entry = path.join(bin, 'pm2.mjs');
+  fs.writeFileSync(entry, `#!${process.execPath}\nimport ${JSON.stringify(import.meta.resolve('pm2/bin/pm2'))};\n`, { mode: 0o700 });
+  fs.symlinkSync(entry, path.join(bin, 'pm2'));
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  const previousPath = process.env.PATH;
   const previousHome = process.env.PM2_HOME;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath || ''}`;
   process.env.PM2_HOME = home;
   const env = { ...process.env, PM2_HOME: home, PM2_SILENT: 'true' };
   const command = async args => (await execute('pm2', args, { env, timeout: 10000, maxBuffer: 4 * 1024 * 1024 })).stdout;
@@ -42,6 +51,8 @@ test('IF-41 real private PM2 confirms exact online generation, rejects false suc
         assert.equal(fs.existsSync(path.join(home, 'rpc.sock')), false, 'owned daemon RPC socket must be removed');
       }
     } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
       if (previousHome === undefined) delete process.env.PM2_HOME;
       else process.env.PM2_HOME = previousHome;
       fs.rmSync(root, { recursive: true, force: true });
