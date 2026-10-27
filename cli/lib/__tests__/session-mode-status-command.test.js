@@ -33,3 +33,15 @@ test('status JSON failure emits one envelope and exits 1', async t => {
   assert.equal(process.exitCode, 1); assert.equal(lines.length, 1);
   assert.equal(JSON.parse(lines[0]).error.code, 'READ_FAILED');
 });
+
+test('status text success starts with the shared OK envelope prefix', async t => {
+  const previous = process.exitCode; t.after(() => { process.exitCode = previous; });
+  const lines = []; t.mock.method(console, 'log', line => lines.push(line));
+  t.mock.method(console, 'error', () => assert.fail('success must use stdout'));
+  const data = { sessionMode: 'multi', supervisor: 'reachable', globalGate: { present: false },
+    transition: null, blocked: null, lastCompleted: null };
+  await sessionModeCommand(['status'], { readStatus: () => data });
+  assert.equal(process.exitCode ?? 0, 0);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0], 'OK: Session mode: multi\nSupervisor: reachable\nGlobal gate: absent\nTransition: none');
+});

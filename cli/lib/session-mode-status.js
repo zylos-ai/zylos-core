@@ -152,7 +152,7 @@ export async function readSessionModeStatus(options = {}) {
 
 export function formatSessionModeStatus(data) {
   const mode = data.sessionMode === null ? 'unset (effective single)' : data.sessionMode;
-  const lines = [`Session mode: ${mode}`, `Supervisor: ${data.supervisor}`];
+  const lines = [`OK: Session mode: ${mode}`, `Supervisor: ${data.supervisor}`];
   if (data.supervisorPm2) lines.push(`PM2 activity-monitor: ${data.supervisorPm2.status}${data.supervisorPm2.error ? ` (${data.supervisorPm2.error.message})` : ''}`);
   lines.push(`Global gate: ${data.globalGate.present ? 'present' : 'absent'}`);
   if (data.transition) {
