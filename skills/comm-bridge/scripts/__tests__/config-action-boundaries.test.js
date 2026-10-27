@@ -25,21 +25,37 @@ function fixture(fn) {
   finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
-test('malformed F1 leaves receive/send/checkpoint/fetch usable and messages persisted', () => fixture(({ root, file, run }) => {
+test('malformed F1 leaves receive/send/checkpoint/fetch usable and messages persisted', () => fixture(({ root, file, run, evaluate }) => {
   fs.writeFileSync(file, '{ broken');
+  fs.mkdirSync(path.join(root, '.claude/skills/void'), { recursive: true });
   const receive = run('c4-receive.js', ['--channel', 'void', '--endpoint', 'isolated', '--content', 'boundary-input', '--no-reply']);
   assert.equal(receive.status, 0, receive.stderr);
-  const send = run('c4-send.js', ['void', 'isolated', '--stdin'], { input: 'boundary-output' });
+  const send = run('c4-send.js', ['void', 'isolated', '--stdin'], {
+    input: 'boundary-output', env: { ZYLOS_RUN_ID: 'boundary-run', ZYLOS_SESSION_GROUP: undefined },
+  });
   assert.equal(send.status, 0, send.stderr);
   const db = new Database(path.join(root, 'comm-bridge/c4.db'));
   const rows = db.prepare('SELECT id, content FROM conversations ORDER BY id').all();
   db.close();
   assert.deepEqual(rows.map(row => row.content), ['boundary-input', 'boundary-output']);
+  const pending = run('c4-checkpoint.js', ['create', String(rows.at(-1).id), '--summary', 'isolated-checkpoint']);
+  assert.equal(pending.status, 1, pending.stderr);
+  assert.match(pending.stderr, /CHECKPOINT_GAP/);
+  // Checkpoints require settled input; model the isolated dispatcher's completion.
+  const delivered = evaluate(`
+    import assert from 'node:assert/strict';
+    import * as db from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
+    assert.equal(db.claimConversation(${rows[0].id}), true);
+    assert.equal(db.markDelivered(${rows[0].id}, { sessionId: 'boundary-session' }), true);
+    db.close();
+  `);
+  assert.equal(delivered.status, 0, delivered.stderr);
   const checkpoint = run('c4-checkpoint.js', ['create', String(rows.at(-1).id), '--summary', 'isolated-checkpoint']);
   assert.equal(checkpoint.status, 0, checkpoint.stderr);
   const fetch = run('c4-fetch.js', ['--begin', String(rows[0].id), '--end', String(rows.at(-1).id)]);
   assert.equal(fetch.status, 0, fetch.stderr);
   assert.match(fetch.stdout, /boundary-input/);
+  assert.match(fetch.stdout, /boundary-output/);
 }));
 
 test('c4-config constants import without loading Core or reading F1', () => fixture(({ root, file, evaluate }) => {
