@@ -3,6 +3,14 @@
 .github/
 .DS_Store
 
+# Tests and test fixtures are development-only and must not reach user
+# machines (#885). Keep this list in sync with .gitattributes (export-ignore).
+/test/
+/jest.config.js
+**/__tests__/
+**/*.test.js
+/skills/zylos-memory/scripts/tests/
+
 # Logs and databases
 *.log
 *.db
