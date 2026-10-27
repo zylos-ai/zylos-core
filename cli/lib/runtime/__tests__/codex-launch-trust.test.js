@@ -224,6 +224,29 @@ test('Codex launch refreshes trust when neither flock nor perl is available', as
   assert.equal(fs.existsSync(path.join(f.home, '.codex', 'zylos-hooks-trust.lock')), false);
 });
 
+test('Codex rejects failed trust without lock capability before runtime launch', async t => {
+  const f = fixture(t);
+  f.env.PATH = path.join(f.dir, 'empty-path');
+  f.env.FAKE_CODEX_FAIL = '1';
+  fs.writeFileSync(path.join(f.root, '.env'), 'ZYLOS_CLEAN_ENV=false\n');
+  assert.equal(detectConfigLockCapability({ platform: 'linux', env: launchEnvironment(f.root, f.env) }), null);
+  const warnings = [];
+  t.mock.method(process.stderr, 'write', chunk => { warnings.push(String(chunk)); return true; });
+  const calls = baseLaunch(t);
+  await assert.rejects(f.adapter.launch(launchArgs), error => {
+    assert.equal(error.code, 'LAUNCH_FAILED');
+    assert.match(error.message, /trust failed/i);
+    assert.ok(error.cause instanceof Error);
+    return true;
+  });
+  assert.equal(calls.length, 0, 'failed unlocked worker must not enter runtime launch');
+  assert.deepEqual(f.events().map(e => e.event), ['start', 'failure']);
+  assert.equal(fs.existsSync(codexTrustMarkerPath(f.root)), false);
+  assert.equal(fs.existsSync(path.join(f.home, '.codex', 'zylos-hooks-trust.lock')), false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Warning: Codex hook trust lock unavailable/);
+});
+
 test('Codex trust worker leaves the parent event loop responsive and environment unchanged', async t => {
   const f = fixture(t);
   const parentEnv = { HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME };
