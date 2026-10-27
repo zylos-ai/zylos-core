@@ -107,8 +107,10 @@ test('IF-47 init template sync never restarts or invokes the wrapper CLI', async
   const control = path.join(root, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
   fs.mkdirSync(path.dirname(control), { recursive: true });
   fs.writeFileSync(control, recorder(restartLog));
-  const socketPath = path.join(root, 'activity-monitor', 'am.sock');
-  fs.mkdirSync(path.dirname(socketPath), { recursive: true });
+  const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p6-'));
+  t.after(() => fs.rmSync(socketDir, { recursive: true, force: true }));
+  const socketPath = path.join(socketDir, 's');
+  assert.ok(Buffer.byteLength(socketPath) < 104, 'fixture socket must fit macOS sun_path including its terminator');
   const requests = [];
   const server = net.createServer(socket => {
     let input = '';
