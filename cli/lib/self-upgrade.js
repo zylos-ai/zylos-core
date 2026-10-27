@@ -8,13 +8,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawnSync } from 'node:child_process';
-import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig } from './config.js';
+import { SKILLS_DIR, ZYLOS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveMergeBaseline } from './manifest.js';
 import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
-import { getCommandHooks, hookScriptKey } from './hook-utils.js';
-import { isCoreManaged } from './sync-runtime-hooks.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { getCoreEcosystemPath, restartManagedProcess, createPm2Helpers } from './pm2.js';
@@ -333,154 +331,6 @@ function listTemplateFiles(templatesDir) {
   return files;
 }
 
-/**
- * Compare template settings.json hooks with installed settings.json.
- * Matches hooks by script path (not full command string) to detect:
- *  - missing_hook:  in template, not installed
- *  - modified_hook: same script path, different command or timeout
- *  - removed_hook:  in installed, not in template (core skills only)
- */
-export function generateMigrationHints(templatesDir, deps = {}) {
-  const hints = [];
-  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
-  const existsSync = deps.existsSync ?? fs.existsSync;
-  const readFileSync = deps.readFileSync ?? fs.readFileSync;
-
-  const templateSettingsPath = path.join(templatesDir, '.claude', 'settings.json');
-  if (!existsSync(templateSettingsPath)) return hints;
-
-  const installedSettingsPath = path.join(zylosDir, '.claude', 'settings.json');
-
-  let templateSettings, installedSettings;
-  try {
-    templateSettings = JSON.parse(readFileSync(templateSettingsPath, 'utf8'));
-  } catch {
-    return hints;
-  }
-  try {
-    installedSettings = existsSync(installedSettingsPath)
-      ? JSON.parse(readFileSync(installedSettingsPath, 'utf8'))
-      : {};
-  } catch {
-    installedSettings = {};
-  }
-
-  const templateHooks = templateSettings.hooks || {};
-  const installedHooks = installedSettings.hooks || {};
-
-  // --- Forward pass: detect missing and modified hooks ---
-  for (const [event, matchers] of Object.entries(templateHooks)) {
-    if (!Array.isArray(matchers)) continue;
-    const installedMatchers = Array.isArray(installedHooks[event]) ? installedHooks[event] : [];
-
-    for (const matcher of matchers) {
-      for (const templateCmd of getCommandHooks(matcher)) {
-        const templateKey = hookScriptKey(templateCmd.command);
-
-        // Find installed hook with the same script path
-        let matched = null;
-        for (const im of installedMatchers) {
-          matched = getCommandHooks(im).find(
-            h => hookScriptKey(h.command) === templateKey
-          );
-          if (matched) break;
-        }
-
-        if (!matched) {
-          hints.push({
-            type: 'missing_hook',
-            event,
-            hook: { ...templateCmd },
-            matcher: matcher.matcher !== undefined ? matcher.matcher : null,
-            // Keep flat fields for backward compatibility
-            command: templateCmd.command,
-            timeout: templateCmd.timeout,
-          });
-        } else if (matched.command !== templateCmd.command || matched.timeout !== templateCmd.timeout) {
-          hints.push({
-            type: 'modified_hook',
-            event,
-            hook: { ...templateCmd },
-            command: templateCmd.command,
-            timeout: templateCmd.timeout,
-            oldCommand: matched.command,
-            oldTimeout: matched.timeout,
-          });
-        }
-      }
-    }
-  }
-
-  // --- statusLine sync ---
-  if (templateSettings.statusLine) {
-    const tsl = JSON.stringify(templateSettings.statusLine);
-    const isl = JSON.stringify(installedSettings.statusLine || null);
-    if (tsl !== isl) {
-      hints.push({
-        type: 'statusLine',
-        value: templateSettings.statusLine,
-      });
-    }
-  } else if (installedSettings.statusLine) {
-    // Template removed statusLine — generate removal hint
-    hints.push({
-      type: 'statusLine_remove',
-    });
-  }
-
-  if (Object.hasOwn(templateSettings, 'model') && !Object.hasOwn(installedSettings, 'model')) {
-    let model = templateSettings.model;
-    const cfg = (deps.getConfig ?? getZylosConfig)();
-    if (model.includes('[1m]') && Object.hasOwn(cfg, 'new_session_threshold') && cfg.new_session_threshold > 30) {
-      model = model.replace('[1m]', '');
-    }
-    hints.push({
-      type: 'model_backfill',
-      value: model,
-    });
-  }
-
-  // Backfill boolean settings (autoMemoryEnabled, autoDreamEnabled)
-  for (const key of ['autoMemoryEnabled', 'autoDreamEnabled']) {
-    if (Object.hasOwn(templateSettings, key) && !Object.hasOwn(installedSettings, key)) {
-      hints.push({
-        type: 'setting_backfill',
-        key,
-        value: templateSettings[key],
-      });
-    }
-  }
-
-  // --- Reverse pass: detect removed hooks (core skills only) ---
-  for (const [event, matchers] of Object.entries(installedHooks)) {
-    if (!Array.isArray(matchers)) continue;
-    const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
-
-    for (const matcher of matchers) {
-      for (const installedCmd of getCommandHooks(matcher)) {
-        if (!isCoreManaged(installedCmd)) continue;
-
-        const installedKey = hookScriptKey(installedCmd.command);
-        const foundInTemplate = templateMatchers.some(tm =>
-          getCommandHooks(tm).some(
-            h => hookScriptKey(h.command) === installedKey
-          )
-        );
-
-        if (!foundInTemplate) {
-          hints.push({
-            type: 'removed_hook',
-            event,
-            command: installedCmd.command,
-            timeout: installedCmd.timeout,
-          });
-        }
-      }
-    }
-  }
-
-  return hints;
-}
 
 // ---------------------------------------------------------------------------
 // 11-step self-upgrade pipeline
@@ -790,168 +640,6 @@ export function step6_installSkillDeps(ctx, deps = {}) {
   return { step: 6, name: 'install_skill_deps', status: 'done', message: msg, duration: Date.now() - startTime };
 }
 
-/**
- * Apply migration hints to installed settings.json.
- * Adds missing hooks, updates modified hooks, removes obsolete hooks.
- * Preserves user-added hooks (hooks not from core skills).
- *
- * @param {object[]} hints - Output from generateMigrationHints()
- * @returns {{ applied: number, errors: string[] }}
- */
-export function applyMigrationHints(hints, deps = {}) {
-  const result = { applied: 0, errors: [] };
-  if (!hints || hints.length === 0) return result;
-
-  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
-  const existsSync = deps.existsSync ?? fs.existsSync;
-  const readFileSync = deps.readFileSync ?? fs.readFileSync;
-  const mkdirSync = deps.mkdirSync ?? fs.mkdirSync;
-  const writeFileSync = deps.writeFileSync ?? fs.writeFileSync;
-  const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
-  let settings;
-  try {
-    settings = existsSync(settingsPath)
-      ? JSON.parse(readFileSync(settingsPath, 'utf8'))
-      : {};
-  } catch {
-    settings = {};
-  }
-
-  if (!settings.hooks) settings.hooks = {};
-
-  for (const hint of hints) {
-    try {
-      if (hint.type === 'missing_hook') {
-        // Add the hook to the appropriate event
-        if (!Array.isArray(settings.hooks[hint.event])) {
-          settings.hooks[hint.event] = [];
-        }
-
-        // Use the full hook object from the hint (includes async, timeout, etc.)
-        const hookObj = hint.hook
-          ? { ...hint.hook }
-          : { type: 'command', command: hint.command };
-        if (!hint.hook && hint.timeout !== undefined) hookObj.timeout = hint.timeout;
-
-        // Find or create a matcher group
-        const matcherValue = hint.matcher !== undefined ? hint.matcher : null;
-        let targetGroup = null;
-
-        if (matcherValue !== null) {
-          // Look for an existing group with this matcher
-          targetGroup = settings.hooks[hint.event].find(
-            g => g.matcher === matcherValue
-          );
-        }
-
-        if (!targetGroup) {
-          targetGroup = { hooks: [] };
-          if (matcherValue !== null) targetGroup.matcher = matcherValue;
-          settings.hooks[hint.event].push(targetGroup);
-        }
-
-        targetGroup.hooks.push(hookObj);
-        result.applied++;
-
-      } else if (hint.type === 'modified_hook') {
-        // Find and update the hook by script path
-        const matchers = settings.hooks[hint.event];
-        if (!Array.isArray(matchers)) continue;
-
-        const oldScriptKey = hookScriptKey(hint.oldCommand);
-        let updated = false;
-
-        for (const group of matchers) {
-          if (!Array.isArray(group.hooks)) continue;
-          for (let i = 0; i < group.hooks.length; i++) {
-            const h = group.hooks[i];
-            if (h.type === 'command' && hookScriptKey(h.command) === oldScriptKey) {
-              // Update command and timeout
-              group.hooks[i].command = hint.command;
-              if (hint.timeout !== undefined) {
-                group.hooks[i].timeout = hint.timeout;
-              }
-              updated = true;
-              break;
-            }
-          }
-          if (updated) break;
-        }
-
-        if (updated) result.applied++;
-
-      } else if (hint.type === 'statusLine') {
-        settings.statusLine = hint.value;
-        result.applied++;
-
-      } else if (hint.type === 'statusLine_remove') {
-        if (settings.statusLine) {
-          delete settings.statusLine;
-          result.applied++;
-        }
-
-      } else if (hint.type === 'model_backfill') {
-        if (!Object.hasOwn(settings, 'model')) {
-          settings.model = hint.value;
-          result.applied++;
-        }
-
-      } else if (hint.type === 'setting_backfill') {
-        if (!Object.hasOwn(settings, hint.key)) {
-          settings[hint.key] = hint.value;
-          result.applied++;
-        }
-
-      } else if (hint.type === 'removed_hook') {
-        // Remove the hook by script path
-        const matchers = settings.hooks[hint.event];
-        if (!Array.isArray(matchers)) continue;
-
-        const scriptKey = hookScriptKey(hint.command);
-        let removed = false;
-
-        for (let gi = matchers.length - 1; gi >= 0; gi--) {
-          const group = matchers[gi];
-          if (!Array.isArray(group.hooks)) continue;
-
-          group.hooks = group.hooks.filter(h => {
-            if (h.type === 'command' && hookScriptKey(h.command) === scriptKey) {
-              removed = true;
-              return false;
-            }
-            return true;
-          });
-
-          // Remove empty groups
-          if (group.hooks.length === 0) {
-            matchers.splice(gi, 1);
-          }
-        }
-
-        // Clean up empty event arrays
-        if (matchers.length === 0) {
-          delete settings.hooks[hint.event];
-        }
-
-        if (removed) result.applied++;
-      }
-    } catch (err) {
-      result.errors.push(`${hint.type}/${hint.event}: ${err.message}`);
-    }
-  }
-
-  // Clean up empty hooks object
-  if (Object.keys(settings.hooks).length === 0) {
-    delete settings.hooks;
-  }
-
-  // Write back
-  const dir = path.dirname(settingsPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-
-  return result;
-}
 
 /**
  * Resolve a script path in the globally installed package.
@@ -1005,15 +693,40 @@ export function step11_startCoreServices(ctx, deps = {}) {
       fsApi.mkdirSync(pm2Dir, { recursive: true });
       if(ctx.preInstallProtection)ctx.journal=maintenance.read(path.join(ctx.transactionDir,'journal.json'));
       if(ctx.preInstallProtection&&!ctx.journal.initialIdentity.ecosystemHash){
-        if(fsApi.existsSync(ecosystemDest))throw Error('originally missing ecosystem appeared without provenance');
         const staging=path.join(ctx.transactionDir,'new-ecosystem.cjs'),intendedHash=maintenance.hash(ecosystemTemplateSrc);
-        maintenance.update(ctx.transactionDir,ctx.journal,{ecosystemCreationIntent:{target:ecosystemDest,originalMissing:true,intendedHash,staging}});
-        fsApi.copyFileSync(ecosystemTemplateSrc,staging);
-        const fd=fs.openSync(staging,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}
-        maintenance.fsyncDir(ctx.transactionDir);
-        // link publishes only into an absent destination; a concurrent file
-        // cannot be overwritten or absorbed into this transaction's provenance.
-        fs.linkSync(staging,ecosystemDest);maintenance.fsyncDir(path.dirname(ecosystemDest));
+        const stat = file => {
+          try { return fsApi.lstatSync(file); }
+          catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+        };
+        let intent=ctx.journal.ecosystemCreationIntent;
+        const destinationStat=stat(ecosystemDest);
+        let stagingStat=stat(staging);
+        if(!intent){
+          if(destinationStat||stagingStat)throw Error('originally missing ecosystem appeared without provenance');
+          intent={target:ecosystemDest,originalMissing:true,intendedHash,staging};
+          maintenance.update(ctx.transactionDir,ctx.journal,{ecosystemCreationIntent:intent});
+        }
+        if(intent.target!==ecosystemDest||intent.originalMissing!==true||intent.intendedHash!==intendedHash||intent.staging!==staging){
+          throw Error('ecosystem creation intent changed');
+        }
+        if(!stagingStat){
+          if(destinationStat)throw Error('ecosystem creation staging provenance missing');
+          fsApi.copyFileSync(ecosystemTemplateSrc,staging,fs.constants.COPYFILE_EXCL);
+          const fd=fsApi.openSync(staging,'r');try{maintenance.fsyncFd(fd);}finally{fsApi.closeSync(fd);}
+          maintenance.fsyncDir(ctx.transactionDir);
+          stagingStat=stat(staging);
+        }
+        if(!stagingStat.isFile()||maintenance.hash(staging)!==intendedHash)throw Error('ecosystem creation staging changed');
+        if(destinationStat){
+          // Only the hard link published by this transaction can be resumed.
+          if(!destinationStat.isFile()||destinationStat.dev!==stagingStat.dev||destinationStat.ino!==stagingStat.ino||maintenance.hash(ecosystemDest)!==intendedHash){
+            throw Error('ecosystem creation destination provenance changed');
+          }
+        }else{
+          // Exclusive publication also rejects a file appearing after validation.
+          fsApi.linkSync(staging,ecosystemDest);
+        }
+        maintenance.fsyncDir(path.dirname(ecosystemDest));
       }else fsApi.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
       ecosystemPath = ecosystemDest;
     } catch(error) {
@@ -1318,19 +1031,19 @@ function writeFinalizeState(ctx) {
   return statePath;
 }
 
-function runInstalledFinalizer(ctx) {
+export function runInstalledFinalizer(ctx, deps = {}) {
   const maintenance = maintenanceFor(ctx);
-  const finalizeScript = resolveInstalledPackageScript('cli', 'lib', 'self-upgrade-finalize.js');
+  const finalizeScript = (deps.resolveInstalledPackageScript ?? resolveInstalledPackageScript)('cli', 'lib', 'self-upgrade-finalize.js');
   if (!finalizeScript) {
     throw new Error('newly installed self-upgrade finalizer not found');
   }
 
-  const statePath = writeFinalizeState(ctx);
+  const statePath = (deps.writeFinalizeState ?? writeFinalizeState)(ctx);
   if(ctx.preInstallProtection){
     ctx.journal=maintenance.read(path.join(ctx.transactionDir,'journal.json'));
     maintenance.update(ctx.transactionDir,ctx.journal,{finalizerStarted:true,finalizerPid:null,finalizerExitConfirmed:false});
   }
-  const result = spawnSync(process.execPath, [finalizeScript,statePath], {
+  const result = (deps.spawnSync ?? spawnSync)(process.execPath, [finalizeScript,statePath], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: ctx.finalizeTimeoutMs ?? DEFAULT_FINALIZE_TIMEOUT_MS,
@@ -1342,7 +1055,7 @@ function runInstalledFinalizer(ctx) {
     const dir=ctx.transactionDir;
     const saved=maintenance.read(path.join(dir,'journal.json'));
     maintenance.update(dir,saved,{finalizerPid:result.pid||null});
-    const verified=requireFinalizerExit(dir,saved,true);
+    const verified=(deps.requireFinalizerExit ?? requireFinalizerExit)(dir,saved,true);
     ctx.finalizerExitUnconfirmed=!verified.confirmed;
     maintenance.update(dir,saved,{finalizerExitConfirmed:verified.confirmed,finalizerExitUnconfirmed:!verified.confirmed});
     if(!verified.confirmed) throw Error(verified.error || 'finalizer process exit unconfirmed');
@@ -1374,7 +1087,10 @@ export function assertDashboardUninstalled(zylosDir = ZYLOS_DIR) {
   let components;
   try { components=JSON.parse(fs.readFileSync(file,'utf8')); }
   catch (error) { if(error.code==='ENOENT')return; throw error; }
-  if (components.dashboard) throw Object.assign(Error('Uninstall the independent Dashboard while retaining its data before upgrading: zylos uninstall dashboard --yes'), {code:'DASHBOARD_STILL_INSTALLED'});
+  if (components.dashboard) throw Object.assign(Error('Uninstall the independent Dashboard while retaining its data before upgrading: zylos uninstall dashboard --yes'), {
+    code:'DASHBOARD_STILL_INSTALLED',
+    next:'Run zylos uninstall dashboard --yes while retaining its data before retrying the upgrade.'
+  });
 }
 
 async function installedDashboardOwner(ctx) {
@@ -1467,7 +1183,8 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
 
   let dashboard;
   const dashboardErrors=[];
-  const dashboardFailure=(item,error)=>dashboardErrors.push({item,code:error.code || 'DASHBOARD_UNAVAILABLE',location:error.message});
+  const dashboardFailure=(item,error)=>dashboardErrors.push({item,code:error.code || 'DASHBOARD_UNAVAILABLE',
+    message:error.message,location:error.location || error.message});
   if(ctx.journal?.dashboardInstall?.dbCopy?.ok===false) {
     const error=ctx.journal.dashboardInstall.dbCopy.error;
     dashboardFailure('dbCopy',{code:error?.code || 'COPY_FAILED',message:error?.message || 'Legacy Dashboard database was not copied.'});
@@ -1489,7 +1206,8 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
           budget.check();
           persistItem({state:'pending',attempts:(saved?.attempts || 0)+1,lastError:null});
           const result=await owner[name]({zylosDir:root});
-          if(result.state!=='done')throw Error(`${name}: ${result.state}`);
+          if(result.state!=='done')throw Object.assign(Error(result.error?.message || result.message || `${name}: ${result.state}`),
+            {code:result.error?.code || result.code,location:result.error?.location || result.location});
           persistItem({state:'done',lastError:null});
         } catch(error) {
           persistItem({state:'failed',lastError:{code:error.code || 'DASHBOARD_INSTALL_FAILED',message:error.message}});
@@ -1621,11 +1339,12 @@ function finalizationFailure(ctx, error, step = 5) {
       recoveryError = failure.message;
     }
   }
-  return {...buildSelfUpgradeResult(ctx, failed, null, false), code:error.code,
-    ...(recoveryError ? {recovery_required:true, recoveryError,
+  const guidance = recoveryError ? {recovery_required:true, recoveryError,
       next:'Repair the upgrade transaction journal before attempting recovery or resuming finalization.'} :
       closed ? {recovery_required:true, next:'Repair the reported failure, then run zylos upgrade --resume-finalize.'} :
-      !ctx.preInstallProtection ? {next:'把 CLI 装回原版本，处理失败原因后再重新升级'} : {})};
+      !ctx.preInstallProtection ? {next:'把 CLI 装回原版本，处理失败原因后再重新升级'} : {};
+  return {...buildSelfUpgradeResult(ctx, failed, null, false), code:error.code, ...guidance,
+    ...((error.next || guidance.next) ? {next:[error.next,guidance.next].filter(Boolean).join(' ')} : {})};
 }
 
 async function finalizeInstalledUpgrade(ctx, deps) {

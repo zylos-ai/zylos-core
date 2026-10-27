@@ -184,6 +184,8 @@ export function prepareRecoveryDependencies(transactionDir,zylosDir,{dashboardRo
   function syncTree(dir) {
     for(const entry of fs.readdirSync(dir,{withFileTypes:true})) {
       const file=path.join(dir,entry.name);
+      // A link's directory entry is persisted by syncDir; never chmod its target.
+      if(entry.isSymbolicLink()) continue;
       if(entry.isDirectory()) syncTree(file);
       else {fs.chmodSync(file,0o600);const fd=fs.openSync(file,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
     }

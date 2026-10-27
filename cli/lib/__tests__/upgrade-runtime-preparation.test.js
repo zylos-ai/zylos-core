@@ -6,6 +6,7 @@ import path from 'node:path';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff, validatePostCutoff, publishRuntimePreparation } from '../upgrade-post-cutoff.js';
 import { loadInstructionCatalog, migrationPromptPath, sha256 } from '../instruction-migration.js';
+import { isMigrationPending } from '../../../skills/activity-monitor/scripts/session-start-prompt.js';
 
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
 
@@ -182,7 +183,7 @@ test('prompt preparation failure stays pending, warns and preserves live bytes',
 });
 
 for (const mode of ['split', 'automatic-A']) {
-  test(`${mode} activation stages an empty stale prompt without changing live bytes until publication`, async t => {
+  test(`${mode} activation retires stale migration work only after publication`, async t => {
     const f = fixture(t);
     if (mode === 'automatic-A') {
       fs.unlinkSync(path.join(f.zylosDir, '.zylos/instructions/meta.json'));
@@ -192,13 +193,30 @@ for (const mode of ['split', 'automatic-A']) {
     f.write(promptRelative, '# stale migration instructions\n');
     const before = snapshot(f.zylosDir), prepared = f.prepare();
     assert.deepEqual(snapshot(f.zylosDir), before);
-    assert.equal(prepared.replacements.find(item => item.path === promptRelative).content, '');
+    assert.equal(isMigrationPending({ migrationPromptPath: path.join(f.zylosDir, promptRelative) }), true);
     const workDir = path.join(f.root, 'publication'); fs.mkdirSync(workDir);
     const preparation = preparePostCutoff({ ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
     const published = await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation });
     assert.equal(published.ok, true);
-    assert.equal(fs.readFileSync(path.join(f.zylosDir, promptRelative), 'utf8'), '');
+    assert.equal(isMigrationPending({ migrationPromptPath: path.join(f.zylosDir, promptRelative) }), false);
     assert.equal((await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation })).ok, true);
+  });
+}
+
+for (const mode of ['split', 'automatic-A']) {
+  test(`${mode} activation does not create an absent migration prompt`, async t => {
+    const f = fixture(t);
+    if (mode === 'automatic-A') {
+      fs.unlinkSync(path.join(f.zylosDir, '.zylos/instructions/meta.json'));
+      f.write('ZYLOS.md', loadInstructionCatalog()[0].rawContent);
+    }
+    const file = migrationPromptPath({ zylosDir: f.zylosDir });
+    assert.equal(fs.existsSync(file), false);
+    const prepared = f.prepare();
+    const workDir = path.join(f.root, 'publication'); fs.mkdirSync(workDir);
+    const preparation = preparePostCutoff({ ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
+    assert.equal((await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation })).ok, true);
+    assert.equal(fs.existsSync(file), false);
   });
 }
 

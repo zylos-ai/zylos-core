@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
-import { runSelfUpgradeFinalize, resumeUpgradeFinalization } from '../self-upgrade.js';
+import { runSelfUpgradeFinalize, resumeUpgradeFinalization, runInstalledFinalizer } from '../self-upgrade.js';
 import { LEGACY_CORE_DATABASES, createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from '../core-db-backup.js';
 import { prepareUpgradeRuntime } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff } from '../upgrade-post-cutoff.js';
@@ -183,6 +183,67 @@ test('default finalizer reports unchanged published settings truthfully', async 
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(result.settingsChanged, false);
   assert.equal(f.read('.claude/settings.json'), settings);
+});
+
+test('real finalizer stdout remains JSON when publication changes global Codex configuration', t => {
+  const f=fixture(t,{protectedUpgrade:false});
+  const config=path.join(f.home,'.codex/config.toml'),original='model = "preserve-my-model"\n';
+  fs.mkdirSync(path.dirname(config),{recursive:true});fs.writeFileSync(config,original);
+  const child=path.join(f.home,'finalizer-entry.mjs');
+  const moduleUrl=new URL('../self-upgrade.js',import.meta.url).href;
+  fs.writeFileSync(child,`
+    import {mock} from 'node:test';
+    import * as upgrade from ${JSON.stringify(moduleUrl)};
+    import {prepareUpgradeRuntime} from ${JSON.stringify(new URL('../upgrade-runtime-preparation.js',import.meta.url).href)};
+    const root=${JSON.stringify(f.root)},home=${JSON.stringify(f.home)};
+    const injected=mock.module(${JSON.stringify(moduleUrl)},{namedExports:{...upgrade,
+      runSelfUpgradeFinalize:(state,{budget})=>upgrade.runSelfUpgradeFinalize(state,{
+        budget,zylosDir:root,syncSkills:()=>({step:5,status:'done'}),
+        installDependencies:()=>({step:6,status:'done'}),prepareRuntimeClis:()=>{},
+        prepareRuntime:ctx=>prepareUpgradeRuntime(ctx,{budget,packageRoot:${JSON.stringify(packageRoot)},homeDir:home,stopFailureSupported:false}),
+        updateConfig(){},ensureMemoryMigration(){},rotateSession(){},commitBaselines:()=>({status:'done'}),
+        startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
+        dashboardOwner:{verifyDashboard:()=>({state:'ready',errors:[]})},
+        readModeStatus:()=>({sessionMode:null,transition:null}),readMode:()=>({mode:null,keyPresent:false}),readTransition:()=>null,
+        restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],
+      })}});
+    await import(${JSON.stringify(new URL('../self-upgrade-finalize.js',import.meta.url).href)});
+    injected.restore();
+  `);
+  let stdout;
+  const result=runInstalledFinalizer({...f.state}, {
+    resolveInstalledPackageScript:()=>child,
+    spawnSync:(node,args,options)=>{
+      const output=spawnSync(node,['--experimental-test-module-mocks',...args],{...options,
+        env:{...process.env,HOME:f.home,ZYLOS_DIR:f.root,PM2_HOME:path.join(f.home,'.pm2')}});
+      stdout=output.stdout;
+      return output;
+    },
+  });
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.deepEqual(JSON.parse(stdout),result);
+  const updated=fs.readFileSync(config,'utf8');
+  assert.notEqual(updated,original);
+  assert.match(updated,/preserve-my-model/);
+});
+
+test('N37 NOT_RESUMABLE after acquiring the forward-repair lock is preserved', async t => {
+  const f=fixture(t);
+  const interrupted=await f.run({publication:{afterStep(step){if(step==='t02')throw Error('pause publication');}}});
+  assert.equal(interrupted.success,false);
+  const discover=f.m.discover;let reads=0,locked=false,released=false;
+  const acquire=f.m.acquire;
+  f.m.acquire=dir=>{const release=acquire(dir);locked=true;return ()=>{released=true;release();};};
+  f.m.discover=root=>{
+    reads++;
+    if(reads===3){assert.equal(locked,true);return {candidates:[],diagnostics:[]};}
+    return discover(root);
+  };
+  const before=f.load();
+  await assert.rejects(()=>resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux'}),{code:'NOT_RESUMABLE',persisted:[]});
+  assert.equal(released,true);
+  assert.equal(f.load().lastError,before.lastError);
+  assert.equal(f.load().resumePhase,'compensation_closed');
 });
 
 for(const protectedUpgrade of [false,true]) test(`independent Dashboard rejects ${protectedUpgrade?'protected':'ordinary'} finalization before any writes`,async t=>{
@@ -457,7 +518,9 @@ test('finalizer returns the original failure when recording closed-cutoff recove
 
 test('default resume retries registration and retains degraded copy evidence when the initial Dashboard owner was unavailable', async t => {
   const f = fixture(t);
-  const failed = await f.run({ dashboardOwner: null, publication: { afterStep(step) {
+  const failed = await f.run({ dashboardOwner: { copyDashboardDb() {
+    throw Object.assign(Error('initial Dashboard copy owner unavailable'), {code:'DASHBOARD_UNAVAILABLE'});
+  } }, publication: { afterStep(step) {
     if (step === 't02') throw Error('interrupted before Dashboard registration');
   } } });
   assert.equal(failed.success, false);
@@ -582,21 +645,16 @@ test('real frozen parents time out after 180 seconds and recover according to th
       import path from 'node:path';
       import {createRequire} from 'node:module';
       import {spawnSync} from 'node:child_process';
-      import {compileFunction} from 'node:vm';
+      import {frozenFinalizer} from ${JSON.stringify(new URL('./frozen-upgrade-entry.js',import.meta.url).href)};
       const require=createRequire(import.meta.url),dir=${JSON.stringify(f.dir)},root=${JSON.stringify(f.root)};
       const m=require(path.join(dir,'maintenance.cjs')),recovery=require(path.join(dir,'runner.cjs'));
       const services=[];m.stop=()=>services.push('stop');m.start=()=>services.push('start');m.verifyServices=()=>services.push('verify');
-      const source=fs.readFileSync(${JSON.stringify(path.join(frozen, 'self-upgrade.js'))},'utf8');
-      const start=source.indexOf('function runInstalledFinalizer(ctx) {'),end=source.indexOf('\\nexport function runSelfUpgradeFinalize',start);
-      assert.ok(start>=0&&end>start);
-      const run=compileFunction(source.slice(start,end)+'\\nreturn runInstalledFinalizer(ctx);',
-        ['ctx','maintenanceFor','resolveInstalledPackageScript','writeFinalizeState','spawnSync','process','path','requireFinalizerExit']);
-      const began=performance.now();let timeout;
-      try {run({preInstallProtection:true,transactionDir:dir},()=>m,()=>${JSON.stringify(childPath)},()=>${JSON.stringify(statePath)},
-        spawnSync,process,path,(target,j,terminate)=>require(path.join(target,'finalizer.cjs')).quiesce(target,j,{terminate}));}
-      catch(error){timeout=error;}
+      const run=await frozenFinalizer(root,${JSON.stringify(version)},{finalizer:${JSON.stringify(childPath)},maintenance:m});
+      const began=performance.now();
+      const parentResult=run({...JSON.parse(fs.readFileSync(${JSON.stringify(statePath)})),preInstallProtection:true,transactionDir:dir});
       const elapsedMs=performance.now()-began;
-      assert.equal(timeout?.code,'ETIMEDOUT',timeout?.stack);
+      assert.equal(parentResult.success,false,JSON.stringify(parentResult));
+      assert.match(parentResult.error,/ETIMEDOUT/);
       assert.ok(elapsedMs>=179000&&elapsedMs<220000,'actual elapsed '+elapsedMs);
       const ready=JSON.parse(fs.readFileSync(${JSON.stringify(path.join(f.home, 'child-ready.json'))}));
       const j=m.read(path.join(dir,'journal.json'));
@@ -628,7 +686,7 @@ test('real frozen parents time out after 180 seconds and recover according to th
     cases.push({ f, version, closed, driverPath });
   }
   const results = await Promise.allSettled(cases.map(({ f, version, closed, driverPath }) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [driverPath], { encoding: 'utf8', detached: true,
+    const child = spawn(process.execPath, ['--experimental-test-module-mocks',driverPath], { encoding: 'utf8', detached: true,
       env: { ...process.env, HOME: f.home, ZYLOS_DIR: f.root, PM2_HOME: path.join(f.home, '.pm2') } });
     let stdout = '', stderr = '';
     child.stdout.on('data', bytes => { stdout += bytes; });

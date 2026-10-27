@@ -12,17 +12,11 @@ const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const failure = (code, targetId, reason) => Object.assign(new Error(reason || code), { code, targetId, reason });
 
-// Canonicalize the root, then reject links only within the publication tree.
+// Allow root aliases, but reject links within the publication tree.
 function contained(root, relative) {
   if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) ||
       relative.split(/[\\/]/).some(p => !p || p === '.' || p === '..')) throw Error('unsafe publication path');
-  let ancestor = path.resolve(root);
-  const missing = [];
-  while (!fs.existsSync(ancestor)) {
-    missing.unshift(path.basename(ancestor));
-    ancestor = path.dirname(ancestor);
-  }
-  const base = path.join(fs.realpathSync(ancestor), ...missing);
+  const base = path.resolve(root);
   let current = base;
   for (const component of relative.split('/')) {
     current = path.join(current, component);
@@ -160,7 +154,7 @@ function reconcileCodexConfig({ projectDir, homeDir }) {
   // The reused 0.9.1 writer resolves os.homedir internally. Refuse a moved
   // account rather than letting resume redirect the captured global target.
   if (path.resolve(homeDir) !== path.resolve(os.homedir())) throw Error('captured Codex home no longer matches writer home');
-  const result = syncCodexConfig({ projectDir, homeDir });
+  const result = syncCodexConfig({ projectDir, homeDir, log: () => {} });
   return runtime !== 'codex' && result.fatal ? { ...result, fatal: false, warning: true } : result;
 }
 

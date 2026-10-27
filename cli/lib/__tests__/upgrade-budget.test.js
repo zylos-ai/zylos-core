@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {compileFunction} from 'node:vm';
 import {parseFinalizeTimeout,readFinalizeState,resumeFinalizeBudget,DEFAULT_FINALIZE_TIMEOUT_MS} from '../upgrade-budget.js';
-import {step11_startCoreServices,step12_verifyServices} from '../self-upgrade.js';
+import {runInstalledFinalizer,step11_startCoreServices,step12_verifyServices} from '../self-upgrade.js';
 
 test('finalize timeout validates integer seconds before work',()=>{
   assert.equal(parseFinalizeTimeout(),600000);
@@ -46,17 +45,11 @@ test('already expired resume entry prevents new operations',()=>{
 });
 
 for(const timeout of [undefined,900000]) test(`installed finalizer spawn uses ${timeout ?? 'default'} parent budget`,()=>{
-  const source=fs.readFileSync(new URL('../self-upgrade.js',import.meta.url),'utf8');
-  const start=source.indexOf('function runInstalledFinalizer(ctx) {');
-  const end=source.indexOf('\nexport function assertDashboardUninstalled',start);
-  assert.ok(start>=0&&end>start);
-  const run=compileFunction(source.slice(start,end)+'\nreturn runInstalledFinalizer(ctx);',
-    ['ctx','maintenanceFor','resolveInstalledPackageScript','writeFinalizeState','spawnSync','process','path','requireFinalizerExit','DEFAULT_FINALIZE_TIMEOUT_MS']);
   let observed;
   const ctx={...(timeout===undefined?{}:{finalizeTimeoutMs:timeout})};
-  const result=run(ctx,()=>({}),()=>'/fixture/finalizer.js',()=>'/fixture/state.json',(_bin,args,options)=>{
+  const result=runInstalledFinalizer(ctx,{resolveInstalledPackageScript:()=>'/fixture/finalizer.js',writeFinalizeState:()=>'/fixture/state.json',spawnSync:(_bin,args,options)=>{
     observed={args,options};return {status:0,stdout:'{"success":true}'};
-  },process,path,()=>assert.fail('ordinary parent must not use protected exit handling'),DEFAULT_FINALIZE_TIMEOUT_MS);
+  },requireFinalizerExit:()=>assert.fail('ordinary parent must not use protected exit handling')});
   assert.equal(result.success,true);
   assert.deepEqual(observed.args,['/fixture/finalizer.js','/fixture/state.json']);
   assert.equal(observed.options.timeout,timeout ?? 600000);

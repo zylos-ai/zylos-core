@@ -119,7 +119,7 @@ export async function resumeFinalize(root,{status=false,timeout,entryAt=Date.now
     if(!data.core.failedItems.length || data.core.failedItems[0].code==='FINALIZE_INCOMPLETE') data.core.failedItems=[{id:result.failedStep ? `step${result.failedStep}`:'finalize',code:result.code || 'FINALIZE_INCOMPLETE',reason:result.error}];
     return {ok:false,error:{code:'FINALIZE_INCOMPLETE',message:result.error || 'Upgrade finalization did not complete.',persisted:persistedChanges(before,saved,originalHashes,m)},data};
   } catch(error) {
-    if(error.code==='CUTOFF_UNTRUSTED' || !before) throw error;
+    if(error.code==='CUTOFF_UNTRUSTED' || error.code==='NOT_RESUMABLE' || !before) throw error;
     const saved=m.transaction(root,expected.dir);
     if(isolated && saved.phase!=='upgrade_complete') m.update(expected.dir,saved,{phase:'recovery_required',resumePhase:'compensation_closed',lastError:error.message});
     const data=finalizeStatus(saved);

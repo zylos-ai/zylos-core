@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { validateSnapshotManifest } from './core-db-backup-worker.js';
+import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 
 const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
 const ID = /^upgrade-(\d+)-[a-f0-9]{12}$/;
@@ -49,10 +49,7 @@ export function selectSameVersionRetry(zylosDir, currentVersion, { excludeTransa
     if (journal.dbBackupDir !== backupDir) throw Error('Invalid snapshot directory identity');
     maintenance.privatePath(path.dirname(backupDir), { directory: true });
     maintenance.privatePath(backupDir, { directory: true });
-    const file = path.join(backupDir, 'manifest.json');
-    const manifest = maintenance.read(file);
-    if (maintenance.hash(file) !== journal.snapshotManifestHash || manifest.id !== id) throw Error('Snapshot manifest identity or hash mismatch');
-    validateSnapshotManifest(manifest);
+    const manifest = loadSnapshotManifest(journal, maintenance);
     return { retryOf: id, effectiveFrom, snapshotFormatVersion: manifest.formatVersion };
   } catch (error) { throw invalid(id, 'snapshotManifest', error.message); }
 }

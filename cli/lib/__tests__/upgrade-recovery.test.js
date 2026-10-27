@@ -6,7 +6,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import cp,{spawn,spawnSync} from 'node:child_process';
-import { compileFunction } from 'node:vm';
+import { frozenFinalizer } from './frozen-upgrade-entry.js';
 import {LEGACY_CORE_DATABASES as CORE_DATABASES,CORE_DATABASES as FORMAT2_DATABASES,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,preflightCoreDbUpgrade,runCoreDbWorker} from '../core-db-backup.js';
 import {protectedDataReady,protectedSuccess} from '../upgrade-protection.js';
 import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
@@ -317,17 +317,18 @@ for(const dashboard of [false,true])test(`format 2 compensation ${dashboard?'res
  assert.deepEqual(f.calls,['stop','start','verify']);
 });
 for(const [version,revision] of [['0.9.0','95b5850e2654fdc48b333c02b158acda2d536466'],['0.9.1','b0ae22aec5c032826d5e38a0845dfc50b624b477']]) {
- test(`frozen ${version} parent uses its 180 second timeout and propagates timeout after confirming child exit`,()=>{
-  const source=fs.readFileSync(new URL(`./fixtures/upgrade-${version}/self-upgrade.js`,import.meta.url),'utf8');
-  const start=source.indexOf('function runInstalledFinalizer(ctx) {'),end=source.indexOf('\nexport function runSelfUpgradeFinalize',start);
-  assert.ok(start>=0&&end>start);
-  // Execute the historical parent's complete function unchanged. Only its
-  // external boundaries are supplied, including the OS timeout result.
+ test(`frozen ${version} parent uses its 180 second timeout and propagates timeout after confirming child exit`,async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'frozen-timeout-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const finalizer=path.join(root,'target.js');fs.writeFileSync(finalizer,'');
+  const dir=path.join(root,'tx');fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir,'finalizer.cjs'),'module.exports.quiesce=()=>({confirmed:true});');
   const timeout=Object.assign(Error('spawnSync ETIMEDOUT'),{code:'ETIMEDOUT'}),journal={},updates=[];
   const maintenance={read:()=>journal,update:(_dir,_j,changes)=>updates.push(changes),terminalValid:()=>false};
   let observed;
-  const run=compileFunction(source.slice(start,end)+'\nreturn runInstalledFinalizer(ctx);',['ctx','maintenanceFor','resolveInstalledPackageScript','writeFinalizeState','spawnSync','process','path','requireFinalizerExit']);
-  assert.throws(()=>run({preInstallProtection:true,transactionDir:'/isolated/tx'},()=>maintenance,()=>'/isolated/finalizer.js',()=>'/isolated/state.json',(_node,args,options)=>{observed={args,options};return {error:timeout,pid:1234};},process,path,()=>({confirmed:true})),{code:'ETIMEDOUT'});
+  const run=await frozenFinalizer(root,version,{finalizer,maintenance,spawnSync:(_node,args,options)=>{observed={args,options};return {error:timeout,pid:1234};}});
+  const result=run({preInstallProtection:true,transactionDir:dir});
+  assert.equal(result.success,false);assert.match(result.error,/ETIMEDOUT/);
   assert.equal(observed.options.timeout,180000);assert.equal(observed.options.killSignal,'SIGKILL');assert.equal(observed.options.detached,true);
   assert.equal(updates.at(-1).finalizerExitConfirmed,true);assert.equal(updates.at(-1).finalizerExitUnconfirmed,false);
  });
@@ -396,17 +397,14 @@ for (const version of ['0.9.0', '0.9.1']) {
 
  test(`DM-56c frozen ${version} parent enforces real 180 second timeout before recovery`, {skip:process.platform==='darwin',timeout:210000}, async t => {
   const f=await fixture(t);
-  const source=fs.readFileSync(new URL(`./fixtures/upgrade-${version}/self-upgrade.js`,import.meta.url),'utf8');
-  const start=source.indexOf('function runInstalledFinalizer(ctx) {');
-  const end=source.indexOf('\nexport function runSelfUpgradeFinalize',start);
-  assert.ok(start>=0&&end>start);
   const finalizer=path.join(f.root,'hanging-finalizer.cjs');
   const pidFile=path.join(f.root,'finalizer.pid');
   fs.writeFileSync(finalizer,`require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000);`);
-  const run=compileFunction(source.slice(start,end)+'\nreturn runInstalledFinalizer(ctx);',['ctx','maintenanceFor','resolveInstalledPackageScript','writeFinalizeState','spawnSync','process','path','requireFinalizerExit']);
+  const run=await frozenFinalizer(f.root,version,{finalizer,maintenance:f.m});
   const finalizerModule=require(path.join(f.dir,'finalizer.cjs'));
   const began=Date.now();
-  assert.throws(()=>run({preInstallProtection:true,transactionDir:f.dir},()=>f.m,()=>finalizer,()=>path.join(f.root,'state.json'),spawnSync,process,path,(dir,j,terminate)=>finalizerModule.quiesce(dir,j,{terminate})),{code:'ETIMEDOUT'});
+  const result=run({preInstallProtection:true,transactionDir:f.dir});
+  assert.equal(result.success,false);assert.match(result.error,/ETIMEDOUT/);
   const elapsed=Date.now()-began;
   assert.ok(elapsed>=179000,`timeout elapsed ${elapsed}ms`);
   assert.ok(elapsed<200000,`timeout exceeded bounded budget: ${elapsed}ms`);

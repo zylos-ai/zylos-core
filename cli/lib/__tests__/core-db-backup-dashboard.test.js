@@ -164,6 +164,25 @@ test('default frozen Dashboard source is the deployed skill and does not retain 
   assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:path.resolve('skills'),formatVersion:2,driverPath:closure.driverPath},{workerPath:closure.workerPath}).databases[3].status,'missing');
 });
 
+test('recovery dependency durability never follows existing links and materializes copied links',{skip:!Database},t=>{
+  const {root,dashboardRoot}=fixture(t);
+  const external=path.join(root,'external');fs.mkdirSync(external,{mode:0o755});
+  const original=path.join(external,'file');fs.writeFileSync(original,'external bytes',{mode:0o644});
+  const transaction=path.join(root,'transaction'),target=path.join(transaction,'sqlite-runtime');
+  fs.mkdirSync(target,{recursive:true});
+  fs.symlinkSync(original,path.join(target,'external-file'));
+  fs.symlinkSync(external,path.join(target,'external-directory'));
+  fs.symlinkSync(original,path.join(dashboardRoot,'linked-source'));
+  const closure=prepareRecoveryDependencies(transaction,root,{dashboardRoot});
+  assert.equal(fs.statSync(original).mode&0o777,0o644);
+  assert.equal(fs.statSync(external).mode&0o777,0o755);
+  assert.equal(fs.readFileSync(original,'utf8'),'external bytes');
+  const copy=path.join(closure.driverClosureRoot,'dashboard-owner/linked-source');
+  assert.equal(fs.lstatSync(copy).isSymbolicLink(),false);
+  assert.equal(fs.readFileSync(copy,'utf8'),'external bytes');
+  assert.equal(fs.statSync(copy).mode&0o777,0o600);
+});
+
 test('runtime closure materializes nested links without chmod changing deployed files',{skip:'K2: provisional Dashboard runtime copy helper is held at baseline 28bfb63d'},async t=>{
   const {copyRuntimeTree}=await import('../dashboard-schema-runtime.js');
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'runtime-links-'));

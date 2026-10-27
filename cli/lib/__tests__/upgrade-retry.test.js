@@ -4,33 +4,27 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import vm from 'node:vm';
+import { upgradeSelfCore } from '../../commands/component.js';
 import { selectSameVersionRetry } from '../upgrade-retry.js';
 import { databasesForFormat } from '../core-db-backup-worker.js';
 import { createFinalizeState, runSelfUpgrade } from '../self-upgrade.js';
-import { beginUpgrade, maintenance } from '../upgrade-protection.js';
+import { beginUpgrade, prepareProtectedInstall, maintenance } from '../upgrade-protection.js';
 
 const target = 'arbitrary-target';
 const id = (ms, suffix = 'aaaaaaaaaaaa') => `upgrade-${ms}-${suffix}`;
 
 async function cliAdmission(root) {
-  const source=fs.readFileSync(new URL('../../commands/component.js',import.meta.url),'utf8');
-  const start=source.indexOf('async function upgradeSelfCore(');
-  const end=source.indexOf('\nexport async function uninstallComponent',start);
-  assert.ok(start>=0 && end>start);
   const calls=[],outputs=[];
-  const context=vm.createContext({
-    process:{argv:['node','zylos','--json','--yes']},
+  const deps={
     console:{log:value=>outputs.push(JSON.parse(value)),error:value=>outputs.push(value)},
-    ZYLOS_DIR:root,selectSameVersionRetry,DEFAULT_FINALIZE_TIMEOUT_MS:600000,
+    zylosDir:root,
     checkForCoreUpdates:()=>({success:true,current:target,latest:target,hasUpdate:false}),
     acquireLock:()=>{calls.push('lock');return {success:true};},
     releaseLock:()=>calls.push('unlock'),cleanupCoreTemp:()=>calls.push('cleanup'),
     downloadCoreToTemp:()=>{calls.push('download');throw Error('controlled download stop');},
     formatC4Reply:(_kind,value)=>`retry failure: ${value.code}`,
-  });
-  const run=vm.runInContext(source.slice(start,end)+'\nupgradeSelfCore',context);
-  return {result:await run({jsonOutput:true,skipConfirm:true}),calls,outputs};
+  };
+  return {result:await upgradeSelfCore({jsonOutput:true,skipConfirm:true},deps),calls,outputs};
 }
 
 test('CLI ordinary up-to-date admission creates no lock or download', async t=>{
@@ -136,6 +130,25 @@ test('changed retry base is rejected before any pipeline steps', t => {
   const result=runSelfUpgrade({newVersion:target,retry},{zylosDir:root,getCurrentVersion:()=>({success:true,version:target}),preInstallSteps:[()=>{throw Error('must not execute');}]});
   assert.equal(result.success,false);
   assert.equal(result.code,'RETRY_BASE_INVALID');
+});
+
+for(const formatVersion of [1,2]) test(`retry snapshot creation uses inherited format ${formatVersion}`, t => {
+  const root=fixture(t),transactionDir=path.join(root,'transaction');
+  fs.mkdirSync(transactionDir);
+  const owner=path.join(root,'.claude/skills/comm-bridge');
+  fs.mkdirSync(owner,{recursive:true});
+  fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');
+  fs.symlinkSync(path.resolve('skills/comm-bridge/node_modules'),path.join(owner,'node_modules'));
+  const ctx={transactionDir,snapshotFormatVersion:formatVersion,dashboardRoot:path.join(root,'absent-dashboard'),
+    journal:{transactionId:'retry-snapshot',zylosDir:root,from:target,to:target},
+    maintenance:{marker(){},update(_dir,journal,changes){Object.assign(journal,changes);},stop(){}}};
+  const sentinel=Error('snapshot boundary observed');
+  let observed;
+  assert.throws(()=>prepareProtectedInstall(ctx,{snapshot:options=>{
+    observed=options.formatVersion;
+    throw sentinel;
+  }}),error=>error===sentinel);
+  assert.equal(observed,formatVersion);
 });
 
 for(const formatVersion of [1,2]) test(`real retry admission passes inherited format ${formatVersion} to version probe`, t => {

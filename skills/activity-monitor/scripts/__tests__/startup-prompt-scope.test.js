@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enqueueStartupPrompt } from '../session-start-prompt.js';
+import { enqueueStartupPrompt, isMigrationPending } from '../session-start-prompt.js';
+
+test('migration is pending only when readable prompt content remains', () => {
+  for (const content of ['', ' \n\t']) {
+    assert.equal(isMigrationPending({ readFileSync: () => content }), false);
+  }
+  assert.equal(isMigrationPending({ readFileSync: () => '# Required action\n' }), true);
+  assert.equal(isMigrationPending({ readFileSync() { throw Object.assign(Error('missing'), { code: 'ENOENT' }); } }), false);
+});
 
 for (const sessionGroup of [null, 'origin', 'telegram:g-100123']) {
   test(`startup prompt targets its current scope: ${sessionGroup ?? 'single'}`, async () => {

@@ -233,6 +233,7 @@ test('real Codex publication uses captured home, preserves user TOML, and ignore
     env: { ...process.env, HOME: f.root, ZYLOS_DIR: f.ctx.zylosDir, CODEX_HOME: otherHome }, encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(result.stdout).ok, true, 'configuration progress must not contaminate the JSON result');
   assert.match(fs.readFileSync(path.join(f.root, '.codex/config.toml'), 'utf8'), /user_setting = "global"/);
   assert.match(fs.readFileSync(path.join(f.ctx.zylosDir, '.codex/config.toml'), 'utf8'), /user_setting = "project"/);
   assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, '.codex/hooks.trust.json'), 'utf8'), 'marker sentinel');

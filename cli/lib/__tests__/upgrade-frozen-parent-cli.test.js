@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import vm from 'node:vm';
 import {spawnSync} from 'node:child_process';
+import {frozenFinalizer,frozenComponent} from './frozen-upgrade-entry.js';
 
 const tailModule=new URL('../self-upgrade.js',import.meta.url).href;
 const restartModule=new URL('../request-runtime-restart.js',import.meta.url).href;
 
 for(const version of ['0.9.0','0.9.1']) for(const failure of [null,'migration','publication','thresholds','ensure','verify']) {
-  test(`frozen ${version} schema1 backup-only parent drives ordinary target ${failure || 'success'}`,t=>{
+  test(`frozen ${version} schema1 backup-only parent drives ordinary target ${failure || 'success'}`,async t=>{
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'frozen-ordinary-finalizer-'));
     t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     const stateFile=path.join(root,'state.json'),target=path.join(root,'target.mjs'),callsFile=path.join(root,'calls.json');
@@ -40,19 +40,8 @@ for(const version of ['0.9.0','0.9.1']) for(const failure of [null,'migration','
       fs.writeFileSync(${JSON.stringify(callsFile)},JSON.stringify(calls));
       process.stdout.write(JSON.stringify(result));
     `);
-    const driver=path.join(root,'parent.mjs');
-    fs.writeFileSync(driver,`
-      import fs from 'node:fs';import path from 'node:path';import {spawnSync} from 'node:child_process';import {compileFunction} from 'node:vm';
-      const source=fs.readFileSync(${JSON.stringify(new URL(`fixtures/upgrade-${version}/self-upgrade.js`,import.meta.url).pathname)},'utf8');
-      const start=source.indexOf('function runInstalledFinalizer(ctx) {'),end=source.indexOf('\\nexport function runSelfUpgradeFinalize',start);
-      const run=compileFunction(source.slice(start,end)+'\\nreturn runInstalledFinalizer(ctx);',
-        ['ctx','maintenanceFor','resolveInstalledPackageScript','writeFinalizeState','spawnSync','process','path','requireFinalizerExit']);
-      const result=run({preInstallProtection:false},()=>({}),()=>${JSON.stringify(target)},()=>${JSON.stringify(stateFile)},spawnSync,process,path,()=>{throw Error('protected exit path');});
-      process.stdout.write(JSON.stringify(result));
-    `);
-    const child=spawnSync(process.execPath,[driver],{encoding:'utf8',timeout:15000});
-    assert.equal(child.status,0,child.stderr);
-    const result=JSON.parse(child.stdout),calls=JSON.parse(fs.readFileSync(callsFile));
+    const run=await frozenFinalizer(root,version,{finalizer:target});
+    const result=run({preInstallProtection:false,backupOnly:true}),calls=JSON.parse(fs.readFileSync(callsFile));
     assert.equal(result.success,!failure,JSON.stringify(result));
     assert.equal(result.preInstallProtection,false);
     if(!failure)assert.equal(result.dashboardCopy?.state,'skipped');
@@ -93,19 +82,12 @@ for(const version of ['0.9.0','0.9.1'])for(const json of [false,true])for(const 
       });
       process.stdout.write(JSON.stringify(result));
     `;
-    const full=fs.readFileSync(new URL(`fixtures/upgrade-${version}/component.js`,import.meta.url),'utf8');
-    const start=full.indexOf('async function upgradeSelfCore('),end=full.indexOf('\nexport async function uninstallComponent',start);
-    assert.ok(start>=0 && end>start);
     const output=[],calls=[];
     let targetResult;
-    const context=vm.createContext({
-      process:{argv:['node','zylos','--self','--yes',...(json?['--json']:[])]},path,ZYLOS_DIR:root,
-      console:{log:value=>output.push(value),error:value=>output.push(value)},
-      ...Object.fromEntries(['bold','dim','success','warn','yellow','green','heading','error'].map(name=>[name,value=>value])),
-      acquireLock:()=>({success:true}),releaseLock:()=>calls.push('unlock'),cleanupCoreTemp:()=>calls.push('cleanup'),
+    const entry=await frozenComponent(root,version,{
+      acquireLock:()=>({success:true}),releaseLock:()=>calls.push('unlock'),cleanupTemp:()=>calls.push('cleanup'),
       checkForCoreUpdates:()=>({success:true,hasUpdate:true,current:'old',latest:'target'}),
-      downloadCoreToTemp:()=>({success:true,tempDir:root}),readCoreChangelog:()=>'',filterChangelog:()=>'',detectCoreSkillChanges:()=>[],
-      printStep(){},printSelfUpgradeProtection(){},formatC4Reply:()=>'',getZylosConfig:()=>({runtime:'claude'}),
+      downloadCoreToTemp:()=>({success:true,tempDir:root}),readChangelog:()=>'',
       runSelfUpgrade:()=>{
         calls.push('target');
         const child=spawnSync(process.execPath,['--input-type=module','-e',childScript],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:root}});
@@ -117,8 +99,12 @@ for(const version of ['0.9.0','0.9.1'])for(const json of [false,true])for(const 
         return regression?{...targetResult,instructionFilesRebuilt:true}:targetResult;
       },
     });
-    const run=vm.compileFunction(`return (${full.slice(start,end)})();`,[],{parsingContext:context,importModuleDynamically:vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER});
-    assert.equal(await run(),true);
+    const priorArgv=process.argv,priorConsole=globalThis.console;
+    try {
+      process.argv=['node','zylos','--self','--yes',...(json?['--json']:[])];
+      globalThis.console={...priorConsole,log:value=>output.push(value),error:value=>output.push(value)};
+      await entry.upgradeComponent(process.argv.slice(2));
+    } finally {process.argv=priorArgv;globalThis.console=priorConsole;}
     assert.deepEqual(calls,['target','cleanup','unlock']);
     const restarts=fs.readFileSync(log,'utf8').trim().split('\n');
     assert.deepEqual(restarts,regression?['target','parent']:['target']);

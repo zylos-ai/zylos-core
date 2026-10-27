@@ -275,8 +275,8 @@ export function formatSelfUpgradeCompletion(data) {
     lines.push(`Checkpoint audit: ${JSON.stringify(data.checkpointAudit.items)}`);
   }
   if (data.dashboardCopy?.state === 'skipped') lines.push(`Dashboard database: not copied${data.dashboardCopy.reason ? ': ' + data.dashboardCopy.reason : ''}`);
-  if (data.instructionFilesRebuilt || data.settingsChanged) {
-    lines.push(`${[data.instructionFilesRebuilt && 'Instruction files', data.settingsChanged && 'Hook settings'].filter(Boolean).join(' and ')} updated.`);
+  if (data.settingsChanged) {
+    lines.push('Hook settings updated.');
     if (!data.completion && !restart) lines.push('Restart the runtime to load the updated configuration.');
   }
   if (data.completion?.sessionRestart === 'manual_required' || restart?.ok === false) {
@@ -1173,10 +1173,19 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutput = false, skipConfirm = false, finalizeTimeoutMs = DEFAULT_FINALIZE_TIMEOUT_MS } = {}) {
+export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutput = false, skipConfirm = false, finalizeTimeoutMs = DEFAULT_FINALIZE_TIMEOUT_MS } = {}, deps = {}) {
+  const {
+    checkForCoreUpdates: checkForCoreUpdatesFn = checkForCoreUpdates,
+    selectSameVersionRetry: selectRetry = selectSameVersionRetry,
+    zylosDir = ZYLOS_DIR,
+    acquireLock: lock = acquireLock, releaseLock: unlock = releaseLock,
+    downloadCoreToTemp: download = downloadCoreToTemp,
+    cleanupCoreTemp: cleanup = cleanupCoreTemp,
+  } = deps;
+  const console = deps.console ?? globalThis.console;
   let tempDir = null;
   // Admission is read-only, including the ordinary up-to-date path.
-  const check = checkForCoreUpdates({ branch, beta });
+  const check = checkForCoreUpdatesFn({ branch, beta });
   let retry = null;
   if (!check.success && !branch) {
     if (jsonOutput) {
@@ -1185,12 +1194,12 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutpu
     return false;
   }
   if (!branch && check.success && !check.hasUpdate) {
-    try { retry = check.current === check.latest ? selectSameVersionRetry(ZYLOS_DIR, check.current) : null; }
+    try { retry = check.current === check.latest ? selectRetry(zylosDir, check.current) : null; }
     catch (error) {
       const output = { action: 'retry', success: false, error: error.message, code: error.code,
         transactionId: error.transactionId, field: error.field, expected: error.expected,
         actual: error.actual, next: error.next };
-      output.reply = formatC4Reply('error', output);
+      output.reply = (deps.formatC4Reply ?? formatC4Reply)('error', output);
       if (jsonOutput) console.log(JSON.stringify(output, null, 2));
       else console.error(`${error.code}: ${error.message} (${error.transactionId}, ${error.field}). ${error.next}`);
       return false;
@@ -1204,7 +1213,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutpu
   }
 
   // 1. Acquire lock (reuse component lock mechanism with special name)
-  const lockResult = acquireLock('_zylos-core');
+  const lockResult = lock('_zylos-core');
   if (!lockResult.success) {
     if (jsonOutput) {
       const errOutput = { action: 'self_upgrade', success: false, error: lockResult.error };
@@ -1226,7 +1235,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutpu
 
     let dlResult;
     try {
-      dlResult = downloadCoreToTemp(check.latest, branch);
+      dlResult = download(check.latest, branch);
     } catch (err) {
       dlResult = { success: false, error: err.message };
     }
@@ -1361,8 +1370,8 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutpu
 
     return result.success;
   } finally {
-    cleanupCoreTemp(tempDir);
-    releaseLock('_zylos-core');
+    cleanup(tempDir);
+    unlock('_zylos-core');
   }
 }
 

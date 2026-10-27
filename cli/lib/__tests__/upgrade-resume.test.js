@@ -182,6 +182,21 @@ test('transaction replacement while obtaining the lock never repairs the replace
   assert.deepEqual(f.calls,['lock','unlock']);
 });
 
+test('NOT_RESUMABLE after lock acquisition stays unchanged and releases the lock',async t=>{
+  const f=fixture(t),original=f.m.acquire;
+  let before;
+  f.m.acquire=()=>{
+    const release=original();
+    f.journal={...f.journal,phase:'installing'};
+    delete f.journal.compensationCutoff;
+    before=structuredClone(f.journal);
+    return release;
+  };
+  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,finalize:()=>assert.fail('finalizer called')}),{code:'NOT_RESUMABLE'});
+  assert.deepEqual(f.journal,before);
+  assert.deepEqual(f.calls,['lock','unlock']);
+});
+
 test('unconfirmed finalizer exit blocks isolation and publication and preserves the journal',async t=>{
   const f=fixture(t),before=structuredClone(f.journal);
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{f.calls.push('quiesce');throw Error('finalizer still active');},finalize:()=>assert.fail('published')});
