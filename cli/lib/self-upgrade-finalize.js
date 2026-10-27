@@ -8,7 +8,7 @@
  * package so steps 5-13 use the new implementation.
  */
 
-import fs from 'node:fs';
+import { readFinalizeState } from './upgrade-budget.js';
 import { runSelfUpgradeFinalize } from './self-upgrade.js';
 
 const statePath = process.argv[2];
@@ -19,8 +19,8 @@ if (!statePath) {
 }
 
 try {
-  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-  const result = runSelfUpgradeFinalize(state);
+  const {state, budget} = readFinalizeState(statePath);
+  const result = await runSelfUpgradeFinalize(state, {budget});
   console.log(JSON.stringify(result));
   process.exit(result.success ? 0 : 1);
 } catch (err) {

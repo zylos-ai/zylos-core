@@ -47,6 +47,7 @@ describe('self-upgrade finalizer handoff', () => {
       mode: 'merge',
     }), {
       schemaVersion: 1,
+      finalizeTimeoutMs: 600000,
       tempDir: '/tmp/new-core',
       backupDir: '/tmp/backup',
       servicesWereRunning: ['activity-monitor', 'c4-dispatcher'],
@@ -113,6 +114,25 @@ describe('self-upgrade finalizer handoff', () => {
     assert.equal(result.failedStep, 5);
     assert.equal(result.error, 'sync failed');
     assert.deepEqual(result.rollback, { performed: false, steps: [] });
+  });
+
+  it('rejects each declared transaction field in schema 1 without running ordinary steps', () => {
+    for (const declaration of [
+      { transactionDir: '/untrusted/transaction' },
+      { transactionId: 'declared-transaction' },
+      { preInstallProtection: true },
+    ]) {
+      let calls = 0;
+      const result = runSelfUpgradeFinalize({ schemaVersion: 1, ...declaration }, {
+        steps: [() => { calls++; return { step: 5, status: 'done' }; }],
+        maintenance: { transaction() { throw Error('must not read declared schema 1 transaction'); } },
+      });
+      assert.equal(result.success, false, JSON.stringify(declaration));
+      assert.equal(result.action, 'self_upgrade');
+      assert.match(result.error, /Declared upgrade transaction/);
+      assert.equal(calls, 0);
+      assert.deepEqual(result.rollback, { performed: false, steps: [] });
+    }
   });
 });
 

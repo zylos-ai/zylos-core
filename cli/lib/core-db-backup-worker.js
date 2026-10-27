@@ -34,7 +34,7 @@ export function validateSnapshotManifest(manifest) {
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function driver(input, item) {
   if(item.owner==='dashboard') {
-    if(input.driverPath && !['offline-preflight','upgrade-migrate','version-probe'].includes(input.action)) return createRequire(import.meta.url)(input.driverPath);
+    if(input.driverPath && !['offline-preflight','upgrade-migrate','ordinary-migrate','version-probe'].includes(input.action)) return createRequire(import.meta.url)(input.driverPath);
     // Dashboard is a built-in package, not a skill. The Core driver also
     // performs its online snapshots without importing Dashboard business code.
     const root=input.driverRoot || input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
@@ -44,7 +44,7 @@ function driver(input, item) {
   const req = createRequire(path.join(root,item.owner,'package.json'));
   // Snapshot verification uses the frozen independent closure. Compatibility
   // preflight must load the actual owner's native dependency under this Node.
-  return req(['offline-preflight','upgrade-migrate','version-probe'].includes(input.action) ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
+  return req(['offline-preflight','upgrade-migrate','ordinary-migrate','version-probe'].includes(input.action) ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
 }
 function missing(file) {
   if (fs.existsSync(file)) return false;
@@ -134,7 +134,7 @@ function authorizeMigration(input) {
   return j;
 }
 export async function execute(input) {
-  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','rehearse','version-probe'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
+  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','ordinary-migrate','rehearse','version-probe'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
   if(input.action==='probe') {
     const Database=createRequire(import.meta.url)(input.driverPath); const db=new Database(':memory:');
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');}finally{db.close();}
@@ -186,7 +186,13 @@ export async function execute(input) {
     return {databases:rows,needsMigration:rows.some(row=>row.needsMigration)};
   }
   if(input.action==='upgrade-migrate') authorizeMigration(input);
-  const engine=['offline-preflight','upgrade-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;
+  const engine=['offline-preflight','upgrade-migrate','ordinary-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;
+  const authorizeOrdinary=()=>{
+    if(input.transactionDir || input.transactionId || input.manifest) throw Error('ordinary migration cannot use protected transaction material');
+    if(typeof engine.assertCoreDatabaseAvailable!=='function') throw Error('Ordinary migration availability guard unavailable');
+    engine.assertCoreDatabaseAvailable(input.zylosDir);
+  };
+  if(input.action==='ordinary-migrate') authorizeOrdinary();
   if(input.action==='rehearse') {
     if (!input.schemaRoot || !input.driverRoot || !input.rehearsalDir) throw Error('Rehearsal requires target schema, installed driver, and private copy roots');
     const directory=input.rehearsalDir;
@@ -249,10 +255,11 @@ export async function execute(input) {
       if(state.userVersion!==expected.userVersion) throw new Error('Snapshot user_version mismatch');
       rows.push({...expected,...state});continue;
     }
-    if(input.action==='upgrade-migrate') {
+    if(['upgrade-migrate','ordinary-migrate'].includes(input.action)) {
       // Recheck the durable capability before each owner. Ordinary openers keep
       // rejecting this same installing marker throughout all three migrations.
-      authorizeMigration(input);
+      if(input.action==='upgrade-migrate') authorizeMigration(input);
+      else authorizeOrdinary();
       const absent=missing(source), mod=await ownerSchema(input,item);
       if(item.owner==='dashboard') {
         await inspectDashboard(mod,source,absent);

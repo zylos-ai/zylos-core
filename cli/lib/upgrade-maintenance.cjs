@@ -323,7 +323,7 @@ function discover(root, {
 // The active marker is published before stopping writers and retained until
 // terminal cleanup. Daily checks read only its one referenced journal; old
 // backups and unrelated transaction damage cannot change availability.
-function discoverActive(root) {
+function discoverActive(root, {postCutoffReady = false} = {}) {
   if (!hasRecoveryMaterials(root)) return {marker:null, candidates:[], diagnostics:[], blocked:false};
   const candidates = [], diagnostics = [];
   let marker = null;
@@ -339,10 +339,10 @@ function discoverActive(root) {
     blocked: diagnostics.length > 0 || candidates.some(({journal:j}) =>
       j.installerExitUnconfirmed || j.finalizerExitUnconfirmed ||
       TERMINAL.has(j.phase) && (j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed) ||
-      !READY.has(j.phase) && !terminalValid(j) && !provisionalAbortValid(j))};
+      !READY.has(j.phase) && !(postCutoffReady && j.phase === 'compensation_closed' && classifyCutoff(j) === 'closed' && j.postCutoff?.items?.hooks?.state === 'done') && !terminalValid(j) && !provisionalAbortValid(j))};
 }
-function assertCoreDatabaseAvailable(root) {
-  const d = discoverActive(root);
+function assertCoreDatabaseAvailable(root, options) {
+  const d = discoverActive(root, options);
   if (d.blocked) {
     const e = Error('core database maintenance: ' + (d.diagnostics.join('; ') || d.candidates.map(c => `${c.journal.transactionId}:${c.journal.phase}`).join('; ')));
     e.code = 'ZYLOS_MAINTENANCE';

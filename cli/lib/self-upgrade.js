@@ -37,15 +37,23 @@ import {
 } from './instruction-migration.js';
 import { deployManifestTemplate } from './runtime/tmux-env.js';
 import { writeCodexConfig } from './runtime-setup.js';
-import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
+import { getCoreEcosystemPath, restartManagedProcess, createPm2Helpers } from './pm2.js';
 
 import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
-import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade } from './core-db-backup.js';
+import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade, validateSnapshotManifest, runCoreDbWorker } from './core-db-backup.js';
 import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { selectSameVersionRetry } from './upgrade-retry.js';
+import { updateZylosConfigLocked, readSessionMode } from './config.js';
+import { createMigration } from './memory-migration.js';
+import { requestRuntimeRestart } from './request-runtime-restart.js';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { classifyCutoff, commitCutoff } from './upgrade-cutoff.js';
+import { preparePostCutoff, publishPostCutoff, publishRuntimePreparation } from './upgrade-post-cutoff.js';
+import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runtime-preparation.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -1295,8 +1303,13 @@ export function step10_ensureCodexConfig(deps = {}) {
 export function step11_startCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
   const fsApi = deps.fs ?? fs;
-  const restartFn = deps.restartManagedProcess ?? restartManagedProcess;
-  const exec = deps.execSync ?? execSync;
+  const budget = deps.budget ?? ctx.budget;
+  const execute = deps.execSync ?? execSync;
+  const exec = (command, options = {}) => {
+    budget?.check();
+    return execute(command, {...options,...(budget ? {timeout:Math.max(1,Math.floor(Math.min(30000,budget.remaining())))} : {})});
+  };
+  const restartFn = deps.restartManagedProcess ?? (budget ? createPm2Helpers({exec}).restartManagedProcess : restartManagedProcess);
   const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
 
   if (ctx.servicesWereRunning.length === 0) {
@@ -1395,7 +1408,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
  * Some services (e.g. component bots) take longer than 2 s to start after
  * PM2 restarts them — a one-shot check caused spurious rollbacks.
  */
-function step12_verifyServices(ctx) {
+export function step12_verifyServices(ctx, deps = {}) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
@@ -1403,13 +1416,20 @@ function step12_verifyServices(ctx) {
   }
 
   const POLL_INTERVAL_MS = 2000;
-  const TIMEOUT_MS = 30000;
+  const budget = deps.budget ?? ctx.budget;
+  const execute = deps.execSync ?? execSync;
+  const TIMEOUT_MS = Math.min(30000,budget ? budget.remaining() : Infinity);
 
   while (Date.now() - startTime < TIMEOUT_MS) {
-    try { execSync('sleep 2', { stdio: 'pipe' }); } catch { /* ignore */ }
+    try {
+      budget?.check();
+      const remaining = Math.max(1,Math.floor(Math.min(TIMEOUT_MS-(Date.now()-startTime),budget ? budget.remaining() : Infinity)));
+      execute(`sleep ${Math.min(POLL_INTERVAL_MS,remaining)/1000}`, { stdio: 'pipe',timeout:remaining });
+    } catch (error) { return {step:12,name:'verify_services',status:'failed',error:error.message,duration:Date.now()-startTime}; }
 
     try {
-      const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
+      budget?.check();
+      const output = execute('pm2 jlist 2>/dev/null', { encoding: 'utf8',timeout:Math.max(1,Math.floor(Math.min(30000,budget ? budget.remaining() : 30000))) });
       const processes = JSON.parse(output);
 
       const notOnline = ctx.servicesWereRunning.filter(name => {
@@ -1575,22 +1595,16 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
   // Migration hints: step 8 already applied settings sync via the newly installed script.
   const migrationHints = [];
 
-  // Check if instruction files were rebuilt (CLAUDE.md / AGENTS.md) — used by
-  // component.js to auto-enqueue a Claude restart after the reply is sent, so
-  // Claude does not prompt the user about restarting.
-  const step7 = ctx.steps.find(s => s.step === 7);
-  const instructionFilesRebuilt = step7?.status === 'done' && Boolean(step7?.message?.includes('rebuilt'));
-
   // Check if settings.json was modified (hooks, statusLine, model) — requires
   // Claude restart to load the new configuration.
   const step9 = ctx.steps.find(s => s.step === 9);
-  const settingsChanged = step9?.status === 'done' &&
-    !/all up to date|no changes/.test(step9?.message || '');
+  const settingsChanged = ctx.settingsChanged ?? (step9?.status === 'done' &&
+    !/all up to date|no changes/.test(step9?.message || ''));
 
   return {
     action: 'self_upgrade',
     success: true,
-    ...(ctx.retryOf ? {action:'retry',retryOf:ctx.retryOf,effectiveFrom:ctx.effectiveFrom,transactionId:ctx.transactionId} : {}),
+    ...(ctx.retryOf ? {action:'retry', retryOf:ctx.retryOf, effectiveFrom:ctx.effectiveFrom, transactionId:ctx.transactionId} : {}),
     ...backupOnlyResult(ctx, false),
     from: ctx.from,
     to: ctx.to,
@@ -1603,7 +1617,6 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     cleanupWarnings: ctx.cleanupWarnings || [],
     templates,
     migrationHints,
-    instructionFilesRebuilt,
     settingsChanged,
     mergeConflicts: ctx.mergeConflicts.length > 0 ? ctx.mergeConflicts : null,
     mergedFiles: ctx.mergedFiles.length > 0 ? ctx.mergedFiles : null,
@@ -1613,6 +1626,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
 export function createFinalizeState(ctx) {
   return {
     schemaVersion: ctx.preInstallProtection ? 2 : 1,
+    finalizeTimeoutMs: ctx.finalizeTimeoutMs ?? 600000,
     ...(ctx.retryOf ? {retryOf:ctx.retryOf,effectiveFrom:ctx.effectiveFrom} : {}),
     ...(ctx.snapshotFormatVersion ? {snapshotFormatVersion:ctx.snapshotFormatVersion} : {}),
     ...(ctx.databaseMode ? {databaseMode:ctx.databaseMode} : {}),
@@ -1660,7 +1674,7 @@ function runInstalledFinalizer(ctx) {
   const result = spawnSync(process.execPath, [finalizeScript,statePath], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 180000,
+    timeout: ctx.finalizeTimeoutMs ?? 600000,
     ...(ctx.preInstallProtection ? {detached:true,killSignal:'SIGKILL'} : {}),
   });
 
@@ -1696,6 +1710,183 @@ function runInstalledFinalizer(ctx) {
   return parsed;
 }
 
+export function assertDashboardUninstalled(zylosDir = ZYLOS_DIR) {
+  const file = path.join(zylosDir,'.zylos','components.json');
+  let components;
+  try { components=JSON.parse(fs.readFileSync(file,'utf8')); }
+  catch (error) { if(error.code==='ENOENT')return; throw error; }
+  if (components.dashboard) throw Object.assign(Error('Uninstall the independent Dashboard while retaining its data before upgrading.'), {code:'DASHBOARD_STILL_INSTALLED'});
+}
+
+async function installedDashboardOwner(ctx) {
+  const root=path.join(ctx.packageRoot || path.join(import.meta.dirname,'../..'),'components/dashboard');
+  const resolved=finalizerRequire.resolve(root);
+  return import(pathToFileURL(resolved).href);
+}
+
+function refreshMaintenanceReader(ctx) {
+  const m=maintenanceFor(ctx), j=m.transaction(ctx.zylosDir,ctx.transactionDir);
+  if(!['compensation_closed','recovery_required'].includes(j.phase) || classifyCutoff(j)!=='closed' || j.postCutoff?.items?.hooks?.state!=='done') throw Error('Core publication is not ready for service access');
+  // Keep the per-transaction frozen controller untouched. Newly started owners
+  // need the target reader at the stable path to recognize the cutoff phase.
+  const stable=path.join(ctx.zylosDir,'.zylos/upgrade/maintenance.cjs');
+  m.privatePath(path.dirname(stable),{directory:true});
+  m.privatePath(stable);
+  const staging=stable+'.'+process.pid+'.'+Date.now()+'.staging';
+  // The initial frozen reader keeps closed transactions isolated. Publish this
+  // capability only after the mandatory tail prerequisites have succeeded.
+  const source=fs.readFileSync(path.join(import.meta.dirname,'upgrade-maintenance.cjs'),'utf8');
+  fs.writeFileSync(staging,source+'\nmodule.exports.assertCoreDatabaseAvailable = root => assertCoreDatabaseAvailable(root, {postCutoffReady:true});\n',{flag:'wx',mode:0o600});
+  fs.chmodSync(staging,0o600);
+  const fd=fs.openSync(staging,'r');
+  try {m.fsyncFd(fd);} finally {fs.closeSync(fd);}
+  fs.renameSync(staging,stable);
+  m.fsyncDir(path.dirname(stable));
+  if(j.phase==='recovery_required') m.update(ctx.transactionDir,j,{phase:'compensation_closed'});
+  ctx.journal=j;
+  delete finalizerRequire.cache[stable];
+}
+
+export function readUpgradeModeStatus(zylosDir, {budget,execute=execFileSync} = {}) {
+  budget.check();
+  try {
+    const output=execute(process.execPath,[path.join(import.meta.dirname,'../zylos.js'),'session-mode','status','--json'],{
+      encoding:'utf8',stdio:'pipe',env:{...process.env,ZYLOS_DIR:zylosDir},
+      timeout:Math.max(1,Math.floor(Math.min(30000,budget.remaining())))
+    });
+    const result=JSON.parse(output);
+    if(result?.ok!==true) throw Error('P10 status command did not succeed');
+    return result;
+  } catch(cause) {
+    throw Object.assign(Error('P10 session-mode status is unavailable or could not be read.',{cause}),{code:'P10_STATUS_UNAVAILABLE'});
+  }
+}
+
+/** Shared by initial finalization and forward repair after publication is done. */
+export async function completeUpgradeFinalization(ctx, deps = {}) {
+  const root=ctx.zylosDir || ZYLOS_DIR, budget=deps.budget || ctx.budget;
+  if (!budget || typeof budget.check!=='function' || typeof budget.remaining!=='function') throw Error('finalizer budget is required');
+  const completion={install:'pending',dashboard:'degraded',sessionRestart:'manual_required',modeTransition:'unknown'};
+  const steps=ctx.steps ||= [];
+  const run=async (step,name,fn)=>{
+    try {
+      budget.check();
+      const value=await fn();
+      if(value?.status==='failed' || value?.ok===false) throw Error(value.error?.message || value.error || `${name} failed`);
+      steps.push({step,name,status:value?.status || 'done',...(value?.message ? {message:value.message} : {})});
+      return value;
+    } catch(error) {error.step=step;error.finalizeStepName=name;throw error;}
+  };
+  const fail=error=>{
+    ctx.error=error.message;
+    const failed={step:error.step ?? null,name:error.finalizeStepName || 'finalize',status:'failed',error:error.message};
+    steps.push(failed);
+    if(ctx.preInstallProtection){
+      const m=maintenanceFor(ctx), j=m.transaction(root,ctx.transactionDir);
+      if(m.classifyCutoff(j)!=='closed')throw error;
+      try { (deps.stopServices || m.stop)(j); }
+      catch(isolationError) { ctx.isolationError=isolationError.message; }
+      m.update(ctx.transactionDir,j,{phase:'recovery_required',resumePhase:'compensation_closed',lastError:error.message});
+      ctx.journal=j;
+    }
+    return {...buildSelfUpgradeResult(ctx,failed,null,false),completion,...(ctx.isolationError ? {isolationError:ctx.isolationError} : {}),
+      ...(ctx.preInstallProtection ? {recovery_required:true,next:'Repair the reported failure, then run zylos upgrade --resume-finalize.'} : {next:'把 CLI 装回原版本，处理失败原因后再重新升级'})};
+  };
+  try {
+    await run(4,'session_threshold_defaults',()=> (deps.updateConfig || updateZylosConfigLocked)(
+      {setIfAbsent:{new_session_threshold:70,codex_new_session_threshold:75}},
+      {configFile:path.join(root,'.zylos/config.json'),lockFile:path.join(root,'.zylos/config.json.lock'),waitMs:2000}));
+    await run(5,'memory_migration_ensure',()=> (deps.ensureMemoryMigration || (()=>createMigration({env:{...process.env,ZYLOS_DIR:root}}).ensure({createdBy:'upgrade'})))());
+    await run(5,'rotate_legacy_session',()=>{
+      const current=path.join(root,'memory/sessions/current.md');
+      if(!fs.existsSync(current))return {status:'skipped',message:'legacy session already absent'};
+      const script=path.join(root,'.claude/skills/zylos-memory/scripts/rotate-session.js');
+      return (deps.rotateSession || (()=>execFileSync(process.execPath,[script],{encoding:'utf8',stdio:'pipe',env:{...process.env,ZYLOS_DIR:root}})))();
+    });
+    await run(6,'preserve_working_state',()=>{
+      try {fs.readFileSync(path.join(root,'memory/state.md'),'utf8');}
+      catch(error){if(error.code!=='ENOENT')throw error;}
+      return {status:'skipped',message:'existing working state preserved for mode conversion'};
+    });
+    await run(13,'commit_skill_baselines',()=> (deps.commitBaselines || step13_commitSkillBaselines)(ctx));
+    if(ctx.preInstallProtection) await run(7,'publish_maintenance_reader',()=> (deps.refreshMaintenanceReader || refreshMaintenanceReader)(ctx));
+    await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{budget,zylosDir:root})))(ctx));
+    await run(7,'verify_core_services',()=> (deps.verifyServices || (c=>step12_verifyServices(c,{budget})))(ctx));
+  } catch(error) {return fail(error);}
+
+  let dashboard;
+  const dashboardErrors=[];
+  const dashboardFailure=(item,error)=>dashboardErrors.push({item,code:error.code || 'DASHBOARD_UNAVAILABLE',location:error.message});
+  if(ctx.journal?.dashboardInstall?.dbCopy?.ok===false) {
+    const error=ctx.journal.dashboardInstall.dbCopy.error;
+    dashboardFailure('dbCopy',{code:error?.code || 'COPY_FAILED',message:error?.message || 'Legacy Dashboard database was not copied.'});
+  }
+  try {
+    budget.check();
+    const owner=deps.dashboardOwner || await installedDashboardOwner(ctx);
+    if(ctx.firstDashboardTakeover){
+      for(const [item,name] of [['registration','applyDashboardRegistration'],['route','applyDashboardRoute']]) {
+        const saved=ctx.journal?.dashboardInstall?.items?.[item];
+        if (item==='registration' && saved?.state==='done') continue;
+        const persistItem = changes => {
+          if (!saved) return;
+          const dashboardInstall=structuredClone(ctx.journal.dashboardInstall);
+          Object.assign(dashboardInstall.items[item], changes);
+          maintenanceFor(ctx).update(ctx.transactionDir,ctx.journal,{dashboardInstall});
+        };
+        try {
+          budget.check();
+          persistItem({state:'pending',attempts:(saved?.attempts || 0)+1,lastError:null});
+          const result=await owner[name]({zylosDir:root});
+          if(result.state!=='done')throw Error(`${name}: ${result.state}`);
+          persistItem({state:'done',lastError:null});
+        } catch(error) {
+          persistItem({state:'failed',lastError:{code:error.code || 'DASHBOARD_INSTALL_FAILED',message:error.message}});
+          dashboardFailure(item,error);
+        }
+      }
+    }
+    budget.check();
+    dashboard=await owner.verifyDashboard({zylosDir:root,deadlineAt:budget.deadlineAt});
+  } catch(error) {dashboardFailure('dashboard',error);}
+  dashboard={...dashboard,state:dashboardErrors.length?'degraded':dashboard?.state || 'degraded',errors:[...(dashboard?.errors || []),...dashboardErrors]};
+  completion.dashboard=dashboard.state;
+  ctx.dashboard=dashboard;
+  try {
+    budget.check();
+    const status=await (deps.readModeStatus || (()=>readUpgradeModeStatus(root,{budget})))();
+    const data=status?.ok===true ? status.data : status;
+    if(!data || !Object.hasOwn(data,'sessionMode') || ![null,'single','multi'].includes(data.sessionMode) ||
+        !Object.hasOwn(data,'transition') || data.transition!==null && typeof data.transition!=='object') throw Error('Invalid P10 session-mode status');
+    ctx.modeStatus={state:'observed',sessionMode:data.sessionMode,transition:data.transition};
+    completion.modeTransition=data.transition ? 'in_progress' : data.sessionMode===null ? 'pending_auto' : 'none';
+  } catch(error) {
+    ctx.modeStatus={state:'unavailable',error:{code:error.code || 'P10_STATUS_UNAVAILABLE',message:error.message}};
+  }
+  let mode,transition;
+  try {
+    budget.check(); mode=await (deps.readMode || readSessionMode)();
+    budget.check(); transition=await (deps.readTransition || (async()=> (await import('../../skills/comm-bridge/scripts/c4-db.js')).getModeTransition()))();
+    const normalized=mode.mode===null ? {...mode,mode:'single'} : mode;
+    if(!['single','multi'].includes(normalized.mode))throw Error('session mode is not available');
+    budget.check();
+    const restart=await (deps.restart || requestRuntimeRestart)({deadlineAt:budget.deadlineAt,afterServiceRestart:true,
+      readMode:()=>normalized,readTransition:()=>transition});
+    completion.sessionRestart=restart.ok ? (restart.data?.result==='exit_enqueued' ? 'single_exit_enqueued' : restart.data?.result || 'accepted') : 'manual_required';
+    ctx.restart=restart;
+  } catch(error) {ctx.restart={ok:false,error:{code:error.code || 'RESTART_UNAVAILABLE',message:error.message}};}
+  try {
+    budget.check();
+    const audit=await (deps.audit || (async()=> (await import('../../skills/comm-bridge/scripts/c4-db.js')).auditCheckpoints()))();
+    ctx.checkpointAudit={state:'complete',items:audit};
+  } catch(error) {ctx.checkpointAudit={state:'incomplete',error:error.message};}
+  completion.install='done';
+  ctx.completion=completion;
+  if(ctx.preInstallProtection) (deps.protectedSuccess || protectedSuccess)(ctx);
+  return {...buildSelfUpgradeResult(ctx,null),completion,dashboard,sessionRestart:ctx.restart,checkpointAudit:ctx.checkpointAudit,
+    modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || [],...(ctx.dashboardCopy ? {dashboardCopy:ctx.dashboardCopy} : {})};
+}
+
 export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   if (state.schemaVersion !== undefined && ![1, 2].includes(state.schemaVersion)) {
     return {
@@ -1722,10 +1913,14 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.backupWarnings = state.backupWarnings;
   ctx.rehearsalCleanup = state.rehearsalCleanup;
   ctx.preInstallProtection = state.schemaVersion===2 && state.preInstallProtection===true;
+  ctx.zylosDir = deps.zylosDir || ZYLOS_DIR;
+  ctx.maintenance = deps.maintenance;
+  ctx.budget = deps.budget;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
   if(ctx.preInstallProtection){
     try {
-      ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);
+      const maintenance=maintenanceFor(ctx);
+      ctx.journal=maintenance.transaction(ctx.zylosDir,ctx.transactionDir);
       if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');
       const cutoff=maintenance.classifyCutoff(ctx.journal);
       if(cutoff!=='none')throw Error(cutoff==='closed' ? 'compensation is closed; use forward finalization' : 'untrusted cutoff requires manual recovery');
@@ -1739,6 +1934,12 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.effectiveFrom = state.effectiveFrom;
   ctx.snapshotFormatVersion = state.snapshotFormatVersion ?? state.dbManifest?.formatVersion;
   ctx.to = state.to || state.newVersion || null;
+
+  if(!ctx.preInstallProtection && (state.transactionDir || state.transactionId || state.preInstallProtection===true)) {
+    return buildSelfUpgradeResult(ctx,{step:5,error:'Declared upgrade transaction requires valid protected finalize state.'},null,false);
+  }
+
+  if (!deps.steps) return finalizeInstalledUpgrade(ctx, deps);
 
   const steps = deps.steps || POST_INSTALL_STEPS;
   const total = deps.total || 13;
@@ -1766,6 +1967,130 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   return buildSelfUpgradeResult(ctx, null);
 }
 
+function finalizationFailure(ctx, error, step = 5) {
+  const failed = {step, name:error.finalizeStepName || 'finalize', status:'failed', error:error.message};
+  ctx.steps.push(failed);
+  let closed = false;
+  let recoveryError;
+  if (ctx.preInstallProtection) {
+    try {
+      const m = maintenanceFor(ctx);
+      const journal = m.transaction(ctx.zylosDir, ctx.transactionDir);
+      closed = classifyCutoff(journal) === 'closed';
+      if (closed) m.update(ctx.transactionDir, journal, {phase:'recovery_required', resumePhase:'compensation_closed', lastError:error.message});
+      ctx.journal = journal;
+    } catch (failure) {
+      recoveryError = failure.message;
+    }
+  }
+  return {...buildSelfUpgradeResult(ctx, failed, null, false), code:error.code,
+    ...(recoveryError ? {recovery_required:true, recoveryError,
+      next:'Repair the upgrade transaction journal before attempting recovery or resuming finalization.'} :
+      closed ? {recovery_required:true, next:'Repair the reported failure, then run zylos upgrade --resume-finalize.'} :
+      !ctx.preInstallProtection ? {next:'把 CLI 装回原版本，处理失败原因后再重新升级'} : {})};
+}
+
+async function finalizeInstalledUpgrade(ctx, deps) {
+  try {
+    if (!ctx.budget) throw Error('finalizer budget is required');
+    ctx.budget.check();
+    (deps.assertDashboardUninstalled || assertDashboardUninstalled)(ctx.zylosDir);
+    let manifest;
+    if (ctx.preInstallProtection) {
+      const m = maintenanceFor(ctx);
+      const j = m.transaction(ctx.zylosDir, ctx.transactionDir);
+      if (j.transactionId !== ctx.transactionId || j.installationIntent !== true || classifyCutoff(j) !== 'none' || j.phase !== 'installing') throw Error('invalid initial finalizer transaction');
+      m.validateOriginalJournal(j, {completeBackups:true});
+      if (m.hash(path.join(j.dbBackupDir,'manifest.json')) !== j.snapshotManifestHash) throw Error('snapshot manifest hash mismatch');
+      manifest = m.read(path.join(j.dbBackupDir,'manifest.json'));
+      validateSnapshotManifest(manifest);
+      if (manifest.id !== j.transactionId) throw Error('snapshot transaction mismatch');
+      (deps.verifySnapshot || runCoreDbWorker)({action:'verify',zylosDir:ctx.zylosDir,dbBackupDir:j.dbBackupDir,manifest});
+      ctx.journal=j;
+      ctx.coreManifest=j.coreManifest;
+      ctx.dbBackupDir=j.dbBackupDir;
+      ctx.dbManifest=manifest;
+      ctx.databaseMode=j.databaseMode || ctx.databaseMode;
+      ctx.servicesWereRunning=j.originalServices.map(service=>service.name);
+    }
+    for (const [fn, options] of [[deps.syncSkills || step5_syncCoreSkills, deps.step5], [deps.installDependencies || step6_installSkillDeps, deps.step6]]) {
+      ctx.budget.check();
+      const result=await fn(ctx,options);
+      ctx.steps.push(result);
+      if(result.status==='failed') throw Object.assign(Error(result.error), {step:result.step});
+    }
+    ctx.budget.check();
+    await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx, {budget:ctx.budget});
+    ctx.budget.check();
+    if (ctx.preInstallProtection) (deps.dataReady || protectedDataReady)(ctx,{deferPublication:true});
+    else (deps.migrateDatabases || runCoreDbWorker)({action:'ordinary-migrate',zylosDir:ctx.zylosDir,schemaRoot:path.join(ctx.zylosDir,'.claude/skills'),formatVersion:1});
+    ctx.budget.check();
+    const prepared=await (deps.prepareRuntime || prepareUpgradeRuntime)(ctx,{budget:ctx.budget});
+    ctx.preparationWarnings=prepared.warnings;
+    const workDir=ctx.preInstallProtection ? ctx.transactionDir : ctx.tempDir;
+    if (!workDir) throw Error('finalizer preparation directory is unavailable');
+    const preparation=(deps.stage || preparePostCutoff)({transactionDir:workDir,zylosDir:ctx.zylosDir,...prepared,ordinary:!ctx.preInstallProtection});
+    ctx.firstDashboardTakeover=!ctx.preInstallProtection || manifest.formatVersion===1;
+    if (ctx.preInstallProtection) {
+      let dashboardInstall=null;
+      if (ctx.firstDashboardTakeover) {
+        let owner;
+        try {owner=deps.dashboardOwner || await installedDashboardOwner(ctx);} catch {}
+        let dbCopy={ok:false,error:{code:'DASHBOARD_UNAVAILABLE',message:'Dashboard owner is unavailable; legacy database was not copied.'}};
+        if(owner) {
+          try {ctx.budget.check();dbCopy=await owner.copyDashboardDb(ctx.zylosDir,ctx.transactionDir);}
+          catch(error){dbCopy={ok:false,error:{code:error.code || 'COPY_FAILED',message:error.message}};}
+        }
+        dashboardInstall={formatVersion:1,classification:fs.existsSync(path.join(ctx.zylosDir,'components/dashboard/dashboard.db'))?'data_only':'absent',dbCopy,
+          items:Object.fromEntries(['registration','route'].map(key=>[key,{state:'pending',attempts:0,lastError:null}]))};
+      }
+      ctx.budget.check();
+      (deps.commitCutoff || commitCutoff)(ctx,{postCutoff:preparation,dashboardInstall});
+      return await resumeUpgradeFinalization(ctx,deps);
+    }
+    ctx.dashboardCopy={state:'skipped',reason:'No protected transaction; legacy Dashboard database was not copied.'};
+    const publication=await (deps.publishOrdinary || publishRuntimePreparation)({workDir,zylosDir:ctx.zylosDir,preparation},{checkBudget:()=>ctx.budget.check(),...deps.publication});
+    if(!publication.ok) throw Object.assign(Error(publication.lastError?.reason || 'Core publication incomplete'), {code:publication.lastError?.code});
+    ctx.publication=publication;
+    ctx.settingsChanged=publishedSettingsChanged(preparation);
+    return await completeUpgradeFinalization(ctx,deps);
+  } catch(error) {return finalizationFailure(ctx,error,error.step);}
+}
+
+function publishedSettingsChanged(preparation) {
+  return (preparation?.items?.hooks?.targets || []).some(target =>
+    target.kind === 'claude_settings' && target.rule === 'replace' &&
+    (!target.beforeExists || target.beforeSha256 !== target.stagedSha256));
+}
+
+/** Forward repair consumes only durable publication inputs, never migrations. */
+export async function resumeUpgradeFinalization(ctx, deps = {}) {
+  ctx.steps ||= [];
+  ctx.preInstallProtection=true;
+  ctx.from ||= ctx.journal.from;
+  ctx.to ||= ctx.journal.to;
+  ctx.servicesWereRunning ||= ctx.journal.originalServices.map(service=>service.name);
+  ctx.mergeConflicts ||= [];
+  ctx.mergedFiles ||= [];
+  ctx.budget=deps.budget || ctx.budget;
+  try {
+    const m=maintenanceFor(ctx), j=ctx.journal;
+    m.privatePath(j.dbBackupDir,{directory:true});
+    const manifestPath=path.join(j.dbBackupDir,'manifest.json');
+    if(m.hash(manifestPath)!==j.snapshotManifestHash) throw Error('snapshot manifest hash mismatch');
+    const manifest=m.read(manifestPath);
+    validateSnapshotManifest(manifest);
+    if(manifest.id!==j.transactionId) throw Error('snapshot transaction mismatch');
+    ctx.dbManifest=manifest;
+    ctx.firstDashboardTakeover=manifest.formatVersion===1;
+    const publication=await (deps.publish || publishPostCutoff)(ctx,{checkBudget:()=>ctx.budget.check(),...deps.publication});
+    if(!publication.ok) throw Object.assign(Error(publication.lastError?.reason || 'Core publication incomplete'),{code:publication.lastError?.code});
+    ctx.publication=publication;
+    ctx.settingsChanged=publishedSettingsChanged(ctx.journal.postCutoff);
+    return await completeUpgradeFinalization(ctx,deps);
+  } catch(error) {return finalizationFailure(ctx,error);}
+}
+
 /**
  * Run the 13-step self-upgrade pipeline.
  * Template migration and Claude restart are handled by Claude after this completes.
@@ -1775,9 +2100,13 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
  * @param {object} [deps] - Isolated self-upgrade seam for npm, PM2, version, rollback, and finalizer boundaries
  * @returns {object} Upgrade result
  */
-export function runSelfUpgrade({ tempDir, newVersion, mode, onStep, retry } = {}, deps = {}) {
+export function runSelfUpgrade({ tempDir, newVersion, mode, onStep, retry, finalizeTimeoutMs = 600000 } = {}, deps = {}) {
+  if (!Number.isInteger(finalizeTimeoutMs) || finalizeTimeoutMs < 60000 || finalizeTimeoutMs > 3600000) {
+    return {action:'self_upgrade',success:false,code:'INVALID_ARGS',error:'finalize timeout must be an integer from 60000 to 3600000 milliseconds',steps:[],rollback:{performed:false,steps:[]}};
+  }
   const ctx = createContext({ tempDir, newVersion, mode });
   ctx.dashboardRoot = deps.dashboardRoot;
+  ctx.finalizeTimeoutMs = finalizeTimeoutMs;
 
   const getCurrentVersionFn = deps.getCurrentVersion ?? getCurrentVersion;
   const current = getCurrentVersionFn();

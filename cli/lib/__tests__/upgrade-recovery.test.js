@@ -110,6 +110,39 @@ for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects $
  assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),before);
 });
 
+for(const failure of [null,'thresholds','ensure','state'])test(`closed writer isolation survives publication until prerequisites ${failure?'fail at '+failure:'succeed'}`,async t=>{
+ const f=await fixture(t);
+ const cutoff={formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'};
+ f.m.update(f.dir,f.j,{phase:'compensation_closed',compensationCutoff:cutoff,postCutoff:{items:{hooks:{state:'pending'}}},dashboardInstall:null});
+ f.m.update(f.dir,f.j,{postCutoff:{items:{hooks:{state:'done'}}}});
+ const stable=path.join(f.root,'.zylos/upgrade/maintenance.cjs');
+ const before=fs.readFileSync(stable);
+ const blocked=()=>assert.throws(()=>require(stable).assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});
+ blocked();
+ if(failure==='state')fs.mkdirSync(path.join(f.root,'memory/state.md'),{recursive:true});
+ const {completeUpgradeFinalization}=await import('../self-upgrade.js');
+ const ctx={zylosDir:f.root,transactionDir:f.dir,transactionId:'tx',journal:f.j,maintenance:f.m,preInstallProtection:true,
+   from:'old',to:'new',steps:[],servicesWereRunning:[],mergeConflicts:[],mergedFiles:[]};
+ let started=0;
+ const result=await completeUpgradeFinalization(ctx,{
+   budget:{check(){},remaining:()=>100000,deadlineAt:Date.now()+100000},
+   updateConfig:()=>{blocked();if(failure==='thresholds')throw Error('threshold failure');},
+   ensureMemoryMigration:()=>{blocked();if(failure==='ensure')throw Error('ensure failure');},
+   commitBaselines:()=>{blocked();return {status:'done'};},
+   startServices:()=>{assert.doesNotThrow(()=>require(stable).assertCoreDatabaseAvailable(f.root));started++;return {status:'done'};},
+   verifyServices:()=>({status:'done'}),dashboardOwner:{verifyDashboard:()=>({state:'ready',errors:[]})},
+   readMode:()=>({mode:'single',keyPresent:true}),readTransition:()=>null,restart:()=>({ok:true}),audit:()=>[],protectedSuccess:()=>{}
+ });
+ assert.equal(result.success,!failure,JSON.stringify(result));
+ assert.equal(started,failure?0:1);
+ if(failure){blocked();assert.deepEqual(fs.readFileSync(stable),before);}
+ else {
+   assert.doesNotThrow(()=>require(stable).assertCoreDatabaseAvailable(f.root));
+   f.m.update(f.dir,f.j,{phase:'recovery_required',resumePhase:'compensation_closed'});
+   blocked();
+ }
+});
+
 test('unchanged database transaction resumes installed code without database inspection',async t=>{
  const f=await fixture(t);unchanged(f);
  f.m.update(f.dir,f.j,{phase:'new_data_ready'});

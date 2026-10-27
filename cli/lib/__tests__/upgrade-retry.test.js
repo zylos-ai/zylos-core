@@ -30,7 +30,7 @@ async function cliAdmission(root) {
     formatC4Reply:()=>'',
   });
   const run=vm.runInContext(source.slice(start,end)+'\nupgradeSelfCore',context);
-  return {result:await run(),calls,outputs};
+  return {result:await run({jsonOutput:true,skipConfirm:true}),calls,outputs};
 }
 
 test('CLI ordinary up-to-date admission creates no lock or download', async t=>{
