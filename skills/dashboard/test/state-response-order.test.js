@@ -31,3 +31,17 @@ test('a response from the previous fleet target cannot overwrite the current tar
   h.state.dashboardState = { runId: 'REMOTE' }; h.pending[0]({ runId: 'LOCAL' }); await first;
   assert.equal(h.state.dashboardState.runId, 'REMOTE');
 });
+
+test('late metric HTTP response cannot apply old-run usage after an identity change', async () => {
+  const pending = [];
+  const state = { navigationGeneration: 0, dashboardState: {runId:'R1',sessionId:'S1'}, metrics: new Map(), aggregated: {} };
+  const context = vm.createContext({state,METRICS:['context_pct'],fetchJson:()=>new Promise(resolve=>pending.push(resolve)),renderMetrics(){}});
+  vm.runInContext(app.slice(app.indexOf('async function refreshMetrics()'),app.indexOf('async function refreshHealth()')),context);
+  const request=context.refreshMetrics();
+  state.dashboardState={runId:'R2',sessionId:'S2'};pending[0]({value:99});await request;
+  assert.equal(state.metrics.size,0);
+  const current=context.refreshMetrics();pending[1]({value:12});
+  await new Promise(resolve=>setImmediate(resolve));
+  for(const resolve of pending.slice(2))resolve({value:1});await current;
+  assert.equal(state.metrics.get('context_pct').value,12);
+});

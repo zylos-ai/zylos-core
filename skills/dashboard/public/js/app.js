@@ -1892,7 +1892,10 @@ async function refreshState() {
 }
 
 async function refreshMetrics() {
+  const target = JSON.stringify([state.navigationGeneration, state.dashboardState?.runId, state.dashboardState?.sessionId]);
+  const stillCurrent = () => target === JSON.stringify([state.navigationGeneration, state.dashboardState?.runId, state.dashboardState?.sessionId]);
   const results = await Promise.allSettled(METRICS.map(async (n) => [n, await fetchJson(`/api/metrics/${n}`)]));
+  if (!stillCurrent()) return;
   let changed = false;
   for (const r of results) {
     if (r.status === 'fulfilled') { state.metrics.set(r.value[0], r.value[1]); changed = true; }
@@ -1903,6 +1906,7 @@ async function refreshMetrics() {
       ['tokens', 'session'], ['tokens', 'today'], ['tokens', '7d']
     ];
     const aggResults = await Promise.allSettled(aggKeys.map(([m, p]) => fetchJson(`/api/metrics/aggregate?metric=${m}&period=${p}`)));
+    if (!stillCurrent()) return;
     state.aggregated = {};
     aggKeys.forEach(([m, p], i) => {
       const r = aggResults[i];
@@ -2441,6 +2445,7 @@ function applySse(name, data) {
     refreshTimeline();
   } else if (name === 'metric_update') {
     const mn = data.metric_name || data.name;
+    if (['context_pct', 'rate_limit', 'rate_limit_7d', 'session_cost'].includes(mn)) { refreshMetrics().catch(() => {}); return; }
     if (mn) {
       const previous = state.metrics.get(mn);
       const next = data.dimensions ? data : { ...data, dimensions: previous?.dimensions ?? null };
