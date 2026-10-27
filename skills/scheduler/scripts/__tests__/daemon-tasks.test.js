@@ -107,24 +107,37 @@ describe('updateNextRunTime', () => {
     });
   });
 
-  it('uses task timezone for cron calculation', async () => {
+  it('uses task timezone for cron calculation', async (t) => {
     const originalTz = process.env.TZ;
     try {
       process.env.TZ = 'UTC';
-      await withDb((db) => {
-        const task1 = insertTask(db, { id: 'task-utc', type: 'recurring', cron_expression: '0 9 * * *', timezone: 'UTC', status: 'completed' });
-        const task2 = insertTask(db, { id: 'task-sh', type: 'recurring', cron_expression: '0 9 * * *', timezone: 'Asia/Shanghai', status: 'completed' });
+      // Pin the clock: which daily 09:00 comes next depends on the current time.
+      const cases = [
+        // 05:00 UTC = 13:00 Shanghai: today's Shanghai 09:00 has passed, UTC 09:00 has not.
+        { at: '2026-01-15T05:00:00Z', utc: '2026-01-15T09:00:00Z', shanghai: '2026-01-16T01:00:00Z' },
+        // 20:00 UTC = 04:00 Shanghai next day: both 09:00s are still ahead.
+        { at: '2026-01-15T20:00:00Z', utc: '2026-01-16T09:00:00Z', shanghai: '2026-01-16T01:00:00Z' },
+      ];
+      for (const c of cases) {
+        t.mock.timers.enable({ apis: ['Date'], now: Date.parse(c.at) });
+        try {
+          await withDb((db) => {
+            const task1 = insertTask(db, { id: 'task-utc', type: 'recurring', cron_expression: '0 9 * * *', timezone: 'UTC', status: 'completed' });
+            const task2 = insertTask(db, { id: 'task-sh', type: 'recurring', cron_expression: '0 9 * * *', timezone: 'Asia/Shanghai', status: 'completed' });
 
-        updateNextRunTime(db, task1);
-        updateNextRunTime(db, task2);
+            updateNextRunTime(db, task1);
+            updateNextRunTime(db, task2);
 
-        const utcRow = db.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('task-utc');
-        const shRow = db.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('task-sh');
+            const utcRow = db.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('task-utc');
+            const shRow = db.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('task-sh');
 
-        // Shanghai 9am is 8 hours earlier in UTC than UTC 9am
-        assert.ok(shRow.next_run_at < utcRow.next_run_at,
-          `Shanghai 9am (${shRow.next_run_at}) should be before UTC 9am (${utcRow.next_run_at})`);
-      });
+            assert.equal(utcRow.next_run_at, Date.parse(c.utc) / 1000, `UTC 09:00 after ${c.at}`);
+            assert.equal(shRow.next_run_at, Date.parse(c.shanghai) / 1000, `Shanghai 09:00 after ${c.at}`);
+          });
+        } finally {
+          t.mock.timers.reset();
+        }
+      }
     } finally {
       if (originalTz === undefined) { delete process.env.TZ; } else { process.env.TZ = originalTz; }
     }
