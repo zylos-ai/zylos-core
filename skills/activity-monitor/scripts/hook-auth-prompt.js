@@ -18,7 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { readZylosConfigOrThrow } from '../../comm-bridge/scripts/local-config.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
@@ -82,11 +82,7 @@ async function main() {
   await approvePermission(hookData);
 }
 
-function isMainModule() {
-  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
-  catch { return false; }
-}
-if (isMainModule()) main().catch((error) => {
+if (isMainModule(import.meta.url)) main().catch((error) => {
   console.error(`[hook-auth-prompt] ${error.code || 'ERROR'}: ${error.message}`);
   process.exitCode = 1;
 });

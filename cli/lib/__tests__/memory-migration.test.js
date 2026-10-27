@@ -414,6 +414,7 @@ test('installed skill uses Core discovery and rejects malformed CLI input withou
   fs.writeFileSync(path.join(f.root, 'package.json'), '{"type":"module"}');
   const wrapper = path.join(installed, 'zylos-memory/scripts/memory-migration.js');
   fs.copyFileSync(cliScript, wrapper);
+  fs.copyFileSync(path.join(path.dirname(cliScript), 'is-main-module.js'), path.join(path.dirname(wrapper), 'is-main-module.js'));
   fs.copyFileSync(fileURLToPath(new URL('../../../skills/comm-bridge/scripts/core-config-loader.js', import.meta.url)),
     path.join(installed, 'comm-bridge/scripts/core-config-loader.js'));
   const env = { ...f.env, ZYLOS_PACKAGE_ROOT: fileURLToPath(new URL('../../../', import.meta.url)) };

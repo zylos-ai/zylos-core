@@ -3,7 +3,7 @@ import { loadCoreModule } from './core-modules.js';
 /** Publish the native statusLine sample with its producing run identity. */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
 export function publishContextSample(raw, { env = process.env, now = Date.now() } = {}) {
@@ -29,11 +29,7 @@ export function publishContextSample(raw, { env = process.env, now = Date.now() 
   return sample;
 }
 
-function isMainModule() {
-  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
-  catch { return false; }
-}
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { input += chunk; });
