@@ -17,7 +17,8 @@ const kick = 'System startup trigger, not a user message. Continue with startup 
 const tmuxBinary = process.env.TEST_TMUX_BIN || 'tmux';
 
 async function launchFixture(t, runtime, withHook) {
-  const {dir:root,socketPath}=isolatedTmux(t,{prefix:'p02-sp-',tmuxArgs:['-u'],timeout:2000});
+  const {dir,socketPath}=isolatedTmux(t,{prefix:'p02-sp-',tmuxArgs:['-u'],timeout:2000});
+  const root = await fs.realpath(dir);
   const log = path.join(root, 'c4.jsonl');
   const report = path.join(root, 'runtime.json');
   const recorder = path.join(root, 'record.mjs');

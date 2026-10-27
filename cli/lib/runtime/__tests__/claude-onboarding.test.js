@@ -7,7 +7,7 @@ import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 
 function fixture(t) {
   const tmux = isolatedTmux(t, { prefix: 'p02-onboarding-' });
-  const home = path.join(tmux.dir, 'home');
+  const home = path.join(fs.realpathSync(tmux.dir), 'home');
   const root = path.join(home, 'zylos');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.mkdirSync(root);

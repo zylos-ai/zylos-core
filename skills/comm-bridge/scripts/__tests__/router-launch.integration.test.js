@@ -17,6 +17,7 @@ async function setup(t, { mode = 'multi', group = 'chat', runtime = 'claude' } =
   let router;
   let clock = Date.now();
   const tm = isolatedTmux(t, { prefix: 'router-launch-', beforeCleanup: () => router?.stop() });
+  tm.dir = fs.realpathSync(tm.dir);
   const previousRoot = process.env.ZYLOS_DIR;
   process.env.ZYLOS_DIR = tm.dir;
   t.after(() => { process.env.ZYLOS_DIR = previousRoot; });
