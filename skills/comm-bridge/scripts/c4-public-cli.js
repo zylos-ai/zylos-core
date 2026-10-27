@@ -5,6 +5,7 @@ import { createStore } from './c4-v2-store.js';
 import { createQueryHandlers } from './c4-v2-cli.js';
 import { dataError, requireGroup } from './c4-session-group.js';
 import { formatQueryError, replyVia } from './c4-query-format.js';
+import { queryRejection } from './c4-entry-events.js';
 
 const query = createQueryHandlers(createStore(db.getDb));
 const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
@@ -53,6 +54,11 @@ function checkpoint(args, positionalSummary = false) {
 }
 export function databaseCli(args) {
   const [command, ...rest] = args;
+  if (command === 'rejection') {
+    const o = options(rest, ['id'], ['json']); noPositionals(o);
+    const result = queryRejection(o.id, { getConversationsByRange: db.getConversationsByRange });
+    return o.json ? json(result) : 'OK: ' + JSON.stringify(result) + '\n';
+  }
   if (command === 'checkpoint') return checkpoint(rest, true);
   if (command === 'insert') {
     const o = options(rest, ['session-group'], ['json']);
@@ -98,7 +104,7 @@ export function databaseCli(args) {
   }
   if (command === 'checkpoints') { const o = options(rest, [], ['json']); noPositionals(o); return display(db.getCheckpoints(), o); }
   if (command === 'init') { const o = options(rest); noPositionals(o); db.getDb(); return 'Database initialized\n'; }
-  if (!command || ['--help','-h'].includes(command)) return 'c4-db.js: init | insert <in|out> <channel> <endpoint> <content> [--session-group G] | checkpoint <end> (--summary TEXT|--no-content) | unsummarized [--group G] | groups | origin-sync backlog | mode-transition show | recent | checkpoints\n';
+  if (!command || ['--help','-h'].includes(command)) return 'c4-db.js: init | insert <in|out> <channel> <endpoint> <content> [--session-group G] | checkpoint <end> (--summary TEXT|--no-content) | unsummarized [--group G] | groups | origin-sync backlog | mode-transition show | rejection --id ID [--json] | recent | checkpoints\n';
   invalid(`Unknown command ${command}`);
 }
 export function checkpointCli(args) {

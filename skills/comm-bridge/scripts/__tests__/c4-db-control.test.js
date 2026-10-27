@@ -160,6 +160,7 @@ describe('insertControl', () => {
   it('does not supersede failed or timeout controls', () => {
     const failed = enqueueTargeted('same content');
     mod.claimControl(failed.id);
+    mod.claimControl(failed.id);
     mod.retryOrFailControl(failed.id, 'boom', 1);
 
     const timedOut = enqueueTargeted('same content', { ackDeadlineAt: Math.floor(Date.now() / 1000) - 5 });
@@ -395,6 +396,7 @@ describe('retryOrFailControl', () => {
 
   it('increments retry_count and requeues to pending', () => {
     const rec = enqueueTargeted('retry me');
+    mod.claimControl(rec.id);
     const result = mod.retryOrFailControl(rec.id, 'err1', 3);
     assert.equal(result.status, 'pending');
     assert.equal(result.retry_count, 1);
@@ -405,14 +407,37 @@ describe('retryOrFailControl', () => {
 
   it('marks as failed when max retries exceeded', () => {
     const rec = enqueueTargeted('fail me');
+    mod.claimControl(rec.id);
     mod.retryOrFailControl(rec.id, 'err1', 3); // retry_count=1
+    mod.claimControl(rec.id);
     mod.retryOrFailControl(rec.id, 'err2', 3); // retry_count=2
+    mod.claimControl(rec.id);
     const result = mod.retryOrFailControl(rec.id, 'err3', 3); // retry_count=3 >= 3
     assert.equal(result.status, 'failed');
     assert.equal(result.retry_count, 3);
     const row = mod.getControlById(rec.id);
     assert.equal(row.status, 'failed');
     assert.equal(row.last_error, 'err3');
+  });
+
+  it('does not resurrect a control timed out while delivery was in flight', () => {
+    const rec = enqueueTargeted('in flight');
+    assert.equal(mod.claimControl(rec.id), true);
+    mod.expireTimedOutControls(CONTROL_DEADLINE + 1);
+    const before = mod.getControlById(rec.id);
+    assert.equal(before.status, 'timeout');
+    assert.equal(mod.retryOrFailControl(rec.id, 'late paste failure', 3), null);
+    assert.deepEqual(mod.getControlById(rec.id), before);
+  });
+
+  it('only retries a claimed running control', () => {
+    for (const status of ['pending', 'done', 'failed', 'superseded']) {
+      const rec = enqueueTargeted(`state ${status}`);
+      db.prepare('UPDATE control_queue SET status=? WHERE id=?').run(status, rec.id);
+      const before = mod.getControlById(rec.id);
+      assert.equal(mod.retryOrFailControl(rec.id, 'late failure', 1), null);
+      assert.deepEqual(mod.getControlById(rec.id), before);
+    }
   });
 
   it('returns null for nonexistent id', () => {
@@ -452,6 +477,7 @@ describe('expireTimedOutControls', () => {
     assert.equal(mod.getControlById(done.id).status, 'done');
     // failed record with past deadline
     const failed = enqueueTargeted('failed item', { ackDeadlineAt: pastDeadline });
+    mod.claimControl(failed.id);
     mod.retryOrFailControl(failed.id, 'e', 1);
 
     const count = mod.expireTimedOutControls(now);

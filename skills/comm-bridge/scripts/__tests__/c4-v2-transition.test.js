@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 function fixture(t, filename = ':memory:') {
@@ -232,6 +232,8 @@ function assertDm62RouterCensus(sources) {
 }
 const dm62RouterSources = () => [
   ['c4-dispatcher.js', readFileSync(new URL('../c4-dispatcher.js', import.meta.url), 'utf8')],
+  ...readdirSync(new URL('../router/', import.meta.url)).filter(name => name.endsWith('.js')).map(name =>
+    [`router/${name}`, readFileSync(new URL(`../router/${name}`, import.meta.url), 'utf8')]),
   ['message-router.js', readFileSync(new URL('../../../activity-monitor/scripts/message-router.js', import.meta.url), 'utf8')],
 ];
 function dm62Fixture(t, create = createStore) {

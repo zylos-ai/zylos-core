@@ -1,0 +1,32 @@
+[
+  {
+    "session_id": "01a17943-7011-73a2-acce-43acf62252f7",
+    "transcript_path": "/fixture/rollout.jsonl",
+    "cwd": "/fixture/zylos",
+    "hook_event_name": "SessionStart",
+    "model": "fixture",
+    "permission_mode": "bypassPermissions",
+    "source": "startup"
+  },
+  {
+    "session_id": "01a17943-7011-73a2-acce-43acf62252f7",
+    "turn_id": "01a17944-54d3-7771-94ce-eaef071b0950",
+    "transcript_path": "/fixture/rollout.jsonl",
+    "cwd": "/fixture/zylos",
+    "hook_event_name": "UserPromptSubmit",
+    "model": "fixture",
+    "permission_mode": "bypassPermissions",
+    "prompt": "Reply with fixture ok."
+  },
+  {
+    "session_id": "01a17943-7011-73a2-acce-43acf62252f7",
+    "turn_id": "01a17944-54d3-7771-94ce-eaef071b0950",
+    "transcript_path": "/fixture/rollout.jsonl",
+    "cwd": "/fixture/zylos",
+    "hook_event_name": "Stop",
+    "model": "fixture",
+    "permission_mode": "bypassPermissions",
+    "stop_hook_active": false,
+    "last_assistant_message": "fixture ok"
+  }
+]

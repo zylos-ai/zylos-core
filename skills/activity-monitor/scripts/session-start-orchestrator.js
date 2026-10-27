@@ -202,12 +202,18 @@ async function runC4SessionInit(payload) {
 
 async function runForeground(payload) {
   const { handleSessionForeground } = await import('./session-foreground.js');
-  handleSessionForeground(payload);
+  return handleSessionForeground(payload);
 }
 
 async function runStartupPrompt(payload) {
-  const { enqueueStartupPrompt } = await import('./session-start-prompt.js');
-  return enqueueStartupPrompt(payload?.source || null);
+  const { isSubsession } = await import('./bootstrap-identity.js');
+  if (!['startup', 'clear'].includes(payload?.source) || !payload?.session_id || isSubsession(payload)) return;
+  const { publishBootstrapReady } = await import('./bootstrap-ready.js');
+  if (!process.env.ZYLOS_RUN_ID) {
+    const { enqueueStartupPrompt } = await import('./session-start-prompt.js');
+    return enqueueStartupPrompt(payload?.source || null);
+  }
+  return publishBootstrapReady(payload);
 }
 
 export async function runSessionStartOrchestrator(payload = {}, {

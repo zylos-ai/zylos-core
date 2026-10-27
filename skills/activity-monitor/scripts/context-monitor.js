@@ -1,309 +1,42 @@
 #!/usr/bin/env node
-/**
- * Context Monitor — statusLine handler for Claude Code
- *
- * Receives JSON from Claude Code's statusLine feature via stdin after every turn.
- * - Writes status to ~/zylos/activity-monitor/statusline.json for external queries
- * - Tracks session cost: logs final cost to cost-log.jsonl when session changes
- * - Triggers new-session handoff when context usage exceeds threshold
- *
- * Replaces the old polling-based check-context mechanism:
- * - Old: activity-monitor polls hourly → enqueues /context command (costs a turn) → parses output
- * - New: Claude writes status after every turn → this script reacts instantly, zero turn cost
- *
- * Configured in ~/zylos/.claude/settings.json:
- *   "statusLine": { "type": "command", "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/context-monitor.js" }
- */
+import { loadCoreModule } from './core-modules.js';
+/** Publish the native statusLine sample with its producing run identity. */
+import fs from 'node:fs';
+import path from 'node:path';
+import { isMainModule } from './is-main-module.js';
+const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
-import { execFileSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
-import { writeHealthQuota } from './health-quota.js';
-import {
-  createMemorySyncControlPrompt,
-  markMemorySyncRequested,
-  shouldTriggerMemorySync,
-} from './memory-sync-gate.js';
-
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const AM_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
-const STATUS_FILE = path.join(AM_DIR, 'statusline.json');
-const STATE_FILE = path.join(AM_DIR, 'context-monitor-state.json');
-const COST_LOG_FILE = path.join(AM_DIR, 'cost-log.jsonl');
-const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
-const C4_DB = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-db.js');
-const CONFIG_FILE = path.join(ZYLOS_DIR, '.zylos', 'config.json');
-
-// Thresholds — configurable via config.json `new_session_threshold` (default 70)
-const DEFAULT_THRESHOLD = 70;
-const RESTART_THRESHOLD = readThresholdFromConfig();
-const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above threshold
-
-// Early memory sync: inject at 80% of session-switch threshold so memory sync
-// completes in the background before new-session fires.
-const MEMORY_SYNC_RATIO = 0.8;
-const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
-// CHECKPOINT_THRESHOLD imported from c4-config.js (single source of truth).
-const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
-const MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS = 1800;  // 30 min safety TTL for delivered-but-unacked sync prompts
-
-function readThresholdFromConfig() {
-  try {
-    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    const val = parseInt(config.new_session_threshold, 10);
-    if (!isNaN(val) && val > 0 && val <= 100) return val;
-  } catch { /* config missing or malformed */ }
-  return DEFAULT_THRESHOLD;
-}
-
-// Ensure data directory exists once at startup
-let dirReady = false;
-function ensureDirOnce() {
-  if (dirReady) return;
-  if (!fs.existsSync(AM_DIR)) fs.mkdirSync(AM_DIR, { recursive: true });
-  dirReady = true;
-}
-
-// Read JSON from stdin
-let input = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => { input += chunk; });
-process.stdin.on('end', () => {
-  try {
-    main(input);
-  } catch (err) {
-    // Silent failure — statusLine errors must not break Claude
-    try {
-      log(`ERROR: statusLine processing failed (input length: ${input.length})`);
-    } catch {}
-  }
-});
-
-function main(raw) {
-  if (!raw || !raw.trim()) return;
-
-  // Parse status JSON
-  const status = JSON.parse(raw);
-  try { writeHealthQuota(status); } catch {
-    log('Health quota snapshot unavailable');
-  }
-
-  // Ensure data directory exists
-  ensureDirOnce();
-
-  // Always write status file for external queries
-  atomicWrite(STATUS_FILE, JSON.stringify(status, null, 2));
-
-  // Track session cost and context percentage
-  trackSessionCost(status);
-
-  // Check context percentage
-  const usedPct = status.context_window?.used_percentage;
-  if (usedPct == null) return;
-
-  // Early memory sync injection: when usage reaches 80% of the session-switch
-  // threshold, prompt Claude to run memory sync in the background.  By the time
-  // the session switch fires, sync should already be done (or nearly done).
-  if (usedPct >= MEMORY_SYNC_THRESHOLD && usedPct < RESTART_THRESHOLD) {
-    maybeEnqueueMemorySync(usedPct);
-    return;
-  }
-
-  // Session-switch threshold
-  if (usedPct < RESTART_THRESHOLD) return;
-
-  // Check cooldown
-  const now = Math.floor(Date.now() / 1000);
-  const state = loadState();
-  if (state && (now - state.last_trigger_at) < COOLDOWN_SECONDS) return;
-
-  // Enqueue new-session control message with bypass_state so dispatcher
-  // delivers it even when health !== 'ok' (fixes #274: context rotation deadlock)
-  const MAX_RETRIES = 3;
-  let enqueued = false;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      execFileSync('node', [C4_CONTROL, 'enqueue',
-        '--content', `Context usage at ${usedPct}%, exceeding ${RESTART_THRESHOLD}% threshold. Use the new-session skill to start a fresh session.`,
-        '--priority', '1',
-        '--bypass-state',
-        '--no-ack-suffix'
-      ], { encoding: 'utf8', stdio: 'pipe' });
-
-      enqueued = true;
-      log(`Triggered new-session: context at ${usedPct}%`);
-      break;
-    } catch (err) {
-      log(`Failed to enqueue new-session (attempt ${attempt}/${MAX_RETRIES}): ${err.message}`);
+export function publishContextSample(raw, { env = process.env, now = Date.now() } = {}) {
+  const status = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('Invalid statusLine sample');
+  const location = runDirFromEnv(env);
+  const sample = { ...status };
+  if (location.kind === 'legacy') {
+    // Pre-upgrade sessions have no authoritative run identity. Keep the native
+    // sample at the legacy path without claiming a versioned run envelope.
+    delete sample.zylos;
+  } else {
+    if (typeof env.ZYLOS_RUN_ID !== 'string' || !env.ZYLOS_RUN_ID.trim()) {
+      throw new Error('Missing statusLine run identity');
     }
+    sample.zylos = { v: 1, runId: env.ZYLOS_RUN_ID, sessionGroup: location.sessionGroup ?? 'origin', capturedAt: now };
   }
-
-  // Only update cooldown after successful enqueue to avoid silent 5-min gap on failure
-  if (enqueued) {
-    saveState({
-      ...state,
-      last_trigger_at: now,
-      used_percentage: usedPct,
-    });
-  }
+  fs.mkdirSync(location.dir, { recursive: true });
+  const file = path.join(location.dir, RUN_FILES.STATUSLINE);
+  const temporary = `${file}.tmp.${process.pid}`;
+  fs.writeFileSync(temporary, JSON.stringify(sample));
+  fs.renameSync(temporary, file);
+  return sample;
 }
 
-/**
- * Enqueue early memory sync when context approaches the session-switch threshold.
- * Only triggers when there are enough unsummarized conversations to warrant sync.
- */
-function maybeEnqueueMemorySync(usedPct) {
-  const now = Math.floor(Date.now() / 1000);
-  const state = loadState();
-
-  // Check unsummarized conversation count — skip if below threshold
-  const unsummarizedCount = getUnsummarizedCount();
-  const gate = shouldTriggerMemorySync({
-    state,
-    now,
-    unsummarizedCount,
-    checkpointThreshold: CHECKPOINT_THRESHOLD,
-    cooldownSeconds: MEMORY_SYNC_COOLDOWN_SECONDS,
-    inFlightTtlSeconds: MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS,
+if (isMainModule(import.meta.url)) {
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { input += chunk; });
+  process.stdin.on('end', () => {
+    try { if (input.trim()) publishContextSample(input); }
+    catch (error) {
+      try { fs.appendFileSync(hookErrorLogPath(), `${new Date().toISOString()} statusline: invalid sample or publication failure\n`); } catch {}
+    }
   });
-
-  if (!gate.shouldEnqueue) {
-    if (gate.nextState !== state) {
-      saveState(gate.nextState);
-    }
-    log(`Early memory sync skipped at ${usedPct}%: ${gate.reason} (unsummarized=${unsummarizedCount}, threshold=${CHECKPOINT_THRESHOLD})`);
-    return;
-  }
-
-  const content = createMemorySyncControlPrompt({
-    pct: usedPct,
-    thresholdPct: RESTART_THRESHOLD,
-  });
-  const MAX_RETRIES = 3;
-  let enqueued = false;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      execFileSync('node', [C4_CONTROL, 'enqueue',
-        '--content', content,
-        '--priority', '2',
-        '--no-ack-suffix'
-      ], { encoding: 'utf8', stdio: 'pipe' });
-
-      enqueued = true;
-      log(`Triggered early memory sync: context at ${usedPct}%, unsummarized=${unsummarizedCount} (threshold: ${CHECKPOINT_THRESHOLD})`);
-      break;
-    } catch (err) {
-      log(`Failed to enqueue memory sync (attempt ${attempt}/${MAX_RETRIES}): ${err.message}`);
-    }
-  }
-
-  if (enqueued) {
-    saveState(markMemorySyncRequested({
-      state,
-      now,
-      unsummarizedCount,
-      pct: usedPct,
-      thresholdPct: RESTART_THRESHOLD,
-      inFlightTtlSeconds: MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS,
-    }));
-  }
-}
-
-/**
- * Get count of unsummarized conversations from C4 database.
- * Returns 0 on any error (fail-safe: don't trigger sync on error).
- */
-function getUnsummarizedCount() {
-  try {
-    const output = execFileSync('node', [C4_DB, 'unsummarized'], {
-      encoding: 'utf8', stdio: 'pipe', timeout: 5000
-    });
-    const range = JSON.parse(output);
-    return range.count || 0;
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * Track session cost: detect session changes and log the previous session's final cost.
- * State file stores current session_id and last_cost; when session_id changes,
- * the previous session's cost is appended to cost-log.jsonl.
- */
-function trackSessionCost(status) {
-  const sessionId = status.session_id;
-  const costUsd = status.cost?.total_cost_usd;
-  const usedPct = status.context_window?.used_percentage;
-  if (!sessionId) return;
-
-  const state = loadState();
-
-  // Session changed — log previous session's final cost
-  if (state && state.session_id && state.session_id !== sessionId) {
-    if (state.last_cost != null) {
-      const entry = {
-        session_id: state.session_id,
-        cost_usd: state.last_cost,
-        ended_at: new Date().toISOString(),
-        context_used_pct: state.used_percentage ?? null,
-      };
-      try {
-        fs.appendFileSync(COST_LOG_FILE, JSON.stringify(entry) + '\n');
-        log(`Session cost logged: ${state.session_id} = $${state.last_cost}`);
-      } catch (err) {
-        log(`Failed to write cost log: ${err.message}`);
-      }
-    }
-
-    // Reset cost for new session — don't carry over previous session's cost
-    saveState({
-      ...state,
-      session_id: sessionId,
-      last_cost: costUsd ?? null,
-      used_percentage: usedPct ?? null,
-      last_logged_session_id: state.session_id,
-    });
-    return;
-  }
-
-  // Same session — update cost and context percentage
-  saveState({
-    ...state,
-    session_id: sessionId,
-    last_cost: costUsd ?? state?.last_cost,
-    used_percentage: usedPct ?? state?.used_percentage,
-  });
-}
-
-function loadState() {
-  try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function saveState(state) {
-  ensureDirOnce();
-  atomicWrite(STATE_FILE, JSON.stringify(state, null, 2));
-}
-
-/**
- * Atomic write: write to temp file then rename.
- * Prevents corruption from concurrent reads or interrupted writes.
- */
-function atomicWrite(filePath, data) {
-  const tmp = filePath + `.tmp.${process.pid}`;
-  fs.writeFileSync(tmp, data);
-  fs.renameSync(tmp, filePath);
-}
-
-function log(msg) {
-  try {
-    ensureDirOnce();
-    const logFile = path.join(AM_DIR, 'context-monitor.log');
-    fs.appendFileSync(logFile, `${new Date().toISOString()} ${msg}\n`);
-  } catch {}
 }

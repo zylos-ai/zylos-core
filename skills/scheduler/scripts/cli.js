@@ -8,6 +8,7 @@ import { getDb, generateId, now } from './database.js';
 import { getNextRun, isValidCron, describeCron, getDefaultTimezone } from './cron-utils.js';
 import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-utils.js';
 import { loadTimezone } from './tz.js';
+import { resolveSavedSessionGroup, updatedReplyTarget } from './saved-session-group.js';
 
 const db = getDb();
 
@@ -17,7 +18,7 @@ function escapeLike(str) {
 }
 
 const ALLOWED_UPDATE_COLUMNS = new Set([
-  'name', 'prompt', 'priority', 'require_idle', 'reply_channel', 'reply_endpoint',
+  'name', 'prompt', 'priority', 'require_idle', 'reply_channel', 'reply_endpoint', 'session_component', 'session_group_name',
   'miss_threshold', 'type', 'cron_expression', 'interval_seconds', 'next_run_at', 'timezone', 'updated_at'
 ]);
 
@@ -55,6 +56,7 @@ Add Options:
                           Wait for sustained idle, then block subsequent dispatch until execution settles
                           Legacy alias: --require-idle
   --reply-channel "<source>"      Reply channel (e.g., "telegram", "lark")
+  --reply-session-group "<L>"    Group-local name (requires --reply-channel)
   --reply-endpoint "<endpoint>"  Reply endpoint (e.g., "8101553026", "chat_id topic_id")
   --miss-threshold <seconds>  Skip if overdue by more than this (default=300)
 
@@ -226,7 +228,8 @@ function cmdAdd(args, options) {
   const requireIdle = (options['block-queue-until-idle'] || options['require-idle']) ? 1 : 0;
 
   // Parse reply-channel and reply-endpoint
-  const replyChannel = options['reply-channel'] || null;
+  const savedGroup = resolveSavedSessionGroup(options);
+  const replyChannel = options['reply-channel'] ?? null;
   const replyEndpoint = options['reply-endpoint'] || null;
 
   // Parse miss-threshold
@@ -247,9 +250,9 @@ function cmdAdd(args, options) {
       cron_expression, interval_seconds,
       next_run_at, priority, status,
       require_idle, miss_threshold,
-      reply_channel, reply_endpoint,
+      reply_channel, reply_endpoint, session_component, session_group_name,
       created_at, updated_at, timezone
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     taskId,
     options.name || prompt.substring(0, 40),  // Default name to truncated prompt
@@ -263,6 +266,8 @@ function cmdAdd(args, options) {
     missThreshold,
     replyChannel,
     replyEndpoint,
+    savedGroup.session_component,
+    savedGroup.session_group_name,
     currentTime,
     currentTime,
     getDefaultTimezone()
@@ -579,21 +584,9 @@ function cmdUpdate(taskId, options) {
     updatedFields.push('require_idle');
   }
 
-  // Update reply configuration
-  if (options['clear-reply']) {
-    updates.reply_channel = null;
-    updates.reply_endpoint = null;
-    updatedFields.push('reply_channel', 'reply_endpoint');
-  } else {
-    if (options['reply-channel']) {
-      updates.reply_channel = options['reply-channel'];
-      updatedFields.push('reply_channel');
-    }
-    if (options['reply-endpoint']) {
-      updates.reply_endpoint = options['reply-endpoint'];
-      updatedFields.push('reply_endpoint');
-    }
-  }
+  const replyUpdates = updatedReplyTarget(task, options);
+  Object.assign(updates, replyUpdates);
+  updatedFields.push(...Object.keys(replyUpdates));
 
   // Update miss_threshold
   if (options['miss-threshold']) {
@@ -751,4 +744,9 @@ function main() {
   }
 }
 
-main();
+try { main(); }
+catch (error) {
+  const code = error.code?.startsWith('SQLITE_') ? 'DB_WRITE_FAILED' : error.code ?? 'INTERNAL_ERROR';
+  console.error(`Error: ${code}: ${error.message}`);
+  process.exitCode = 1;
+}

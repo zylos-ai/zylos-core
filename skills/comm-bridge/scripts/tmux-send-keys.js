@@ -1,16 +1,10 @@
 import { execFileSync } from 'node:child_process';
+import { TMUX_COMMAND as C, parseTmuxVersion } from './tmux-protocol.js';
 
 // This deliberately cannot name a normal tmux client (/dev/pts/N or client-PID).
 export const NO_CLIENT = 'zylos-no-client';
 
-export function parseTmuxVersion(output) {
-  const match = String(output).trim().match(/^tmux ((?:next-)?(\d+)\.(\d+)[a-z]*)(?:[-\s].*)?$/i);
-  if (!match) return { version: 'unknown', useClientFlag: false, reason: 'unrecognized tmux -V output' };
-  const major = Number(match[2]);
-  const minor = Number(match[3]);
-  return { version: match[1], major, minor,
-    useClientFlag: major > 3 || (major === 3 && minor >= 4), reason: null };
-}
+export { parseTmuxVersion };
 
 export function describeTmuxSendKeys(capability) {
   if (capability.version === 'unknown') return `tmux unknown (${capability.reason}); send-keys -c disabled (legacy argv)`;
@@ -37,7 +31,7 @@ export function createTmuxSender({ binary = 'tmux', prefix = [], exec = execFile
   }
   function sendKeys(session, keys, options = {}) {
     const flags = getCapability().useClientFlag ? ['-c', NO_CLIENT] : [];
-    return exec(binary, [...prefix, 'send-keys', ...flags, '-t', session, ...keys], options);
+    return exec(binary, [...prefix, C.sendKeys, ...flags, '-t', session, ...keys], options);
   }
   return { getCapability, sendKeys };
 }

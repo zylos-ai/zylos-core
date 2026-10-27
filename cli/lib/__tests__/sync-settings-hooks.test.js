@@ -10,13 +10,12 @@ const {
   desiredClaudeHooks,
   isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
-  shouldSyncCodexConfig,
   syncCodexConfig,
   syncHooks,
   syncModelCoupledNewSessionThreshold,
   syncTemplateSetting,
   syncTemplateModelSetting,
-} = await import('../sync-settings-hooks.js');
+} = await import('../sync-runtime-hooks.js');
 const { extractScriptPath, getCommandHooks, hookScriptKey, hookScriptBaseKey, extractShardArg } = await import('../hook-utils.js');
 const {
   renderCodexGlobalConfig,
@@ -26,7 +25,6 @@ const { activateFreshSplitInstructions, instructionPaths } = await import('../ru
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
-const CONTEXT_MONITOR_PATH = path.join(__dirname, '..', '..', '..', 'skills', 'activity-monitor', 'scripts', 'context-monitor.js');
 const POSTINSTALL_PATH = path.join(__dirname, '..', '..', '..', 'scripts', 'postinstall.js');
 const INIT_MODULE_PATH = path.join(__dirname, '..', '..', 'commands', 'init.js');
 
@@ -60,8 +58,6 @@ const CORE_SHARD_SEQUENCE = [
   'identity',
   'custom',
   'references',
-  'state',
-  'c4-checkpoint',
   'c4-conversations',
   'fg',
   'start-prompt',
@@ -74,13 +70,14 @@ describe('desiredClaudeHooks', () => {
     assert.equal(groups.length, 3);
     for (const group of groups) {
       assert.equal(group.hooks.some(hook => hook.command.includes('assembler.mjs')), false);
-      assert.deepEqual(group.hooks.map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+      assert.deepEqual(group.hooks.filter(h => h.command.includes('session-start-orchestrator.js')).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
     }
     fs.rmSync(zylosDir, { recursive: true, force: true });
   });
 
   it('real postinstall does not publish dead assembler hooks before init', () => {
-    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-postinstall-hooks-'));
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-postinstall-hooks-'));
+    const zylosDir = path.join(homeDir, 'zylos');
     fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
@@ -90,7 +87,7 @@ describe('desiredClaudeHooks', () => {
       env: {
         ...process.env,
         CI: '',
-        HOME: path.dirname(zylosDir),
+        HOME: homeDir,
         ZYLOS_DIR: zylosDir,
         ZYLOS_SKIP_POSTINSTALL: '1',
       },
@@ -98,21 +95,28 @@ describe('desiredClaudeHooks', () => {
     const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
     const installedHooks = Object.values(settings.hooks)
       .flatMap(groups => groups.flatMap(group => getCommandHooks(group)));
+    assert.ok(installedHooks.some(hook => hook.command.includes('session-start-orchestrator.js --shard identity')));
     assert.equal(installedHooks.some(hook => hook.command.includes('assembler.mjs')), false);
-    fs.rmSync(zylosDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
   it('fresh init deploy syncs exactly one assembler hook for startup, clear, and compact', () => {
-    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-init-hooks-'));
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-init-hooks-'));
+    const zylosDir = path.join(homeDir, 'zylos');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    const controlPath = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+    const restartLog = path.join(homeDir, 'restart.jsonl');
+    fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(controlPath), 'package.json'), '{"type":"module"}');
+    fs.writeFileSync(controlPath, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(restartLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');`);
     execFileSync(process.execPath, [
       '--input-type=module',
       '--eval',
       `import { deployTemplates } from ${JSON.stringify(INIT_MODULE_PATH)}; deployTemplates({ freshInstall: true });`,
     ], {
       stdio: 'pipe',
-      env: { ...process.env, HOME: path.dirname(zylosDir), ZYLOS_DIR: zylosDir },
+      env: { ...process.env, HOME: homeDir, ZYLOS_DIR: zylosDir },
     });
     const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
     for (const matcher of ['startup', 'clear', 'compact']) {
@@ -120,7 +124,8 @@ describe('desiredClaudeHooks', () => {
       assert.equal(groups.length, 1);
       assert.equal(groups[0].hooks.filter(hook => hook.command.includes('assembler.mjs')).length, 1);
     }
-    fs.rmSync(zylosDir, { recursive: true, force: true });
+    assert.equal(fs.existsSync(restartLog), false, 'fresh init must never enqueue a restart');
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
   it('the real clear hook rebuilds changed user instructions in a sandbox', () => {
@@ -143,10 +148,10 @@ describe('desiredClaudeHooks', () => {
     const groups = hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
-      assert.match(group.hooks[0].command, /\.zylos\/instructions\/assembler\.mjs/);
-      assert.equal(extractShardArg(group.hooks[0].command), null);
-      assert.deepEqual(group.hooks.slice(1).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
-      for (const hook of group.hooks.slice(1)) {
+      assert.match(group.hooks[1].command, /\.zylos\/instructions\/assembler\.mjs/);
+      assert.equal(extractShardArg(group.hooks[1].command), null);
+      assert.deepEqual(group.hooks.slice(2).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+      for (const hook of group.hooks.slice(2)) {
         assert.match(hook.command, /session-start-orchestrator\.js --shard /);
         assert.equal(path.isAbsolute(extractScriptPath(hook.command)), true);
         assert.equal(hook.timeout, 20000);
@@ -159,13 +164,6 @@ describe('desiredClaudeHooks', () => {
     assert.equal(groups.length, 1);
     assert.ok(groups[0].hooks.some(h => h.command.includes('hook-activity.js')));
     assert.equal(path.isAbsolute(extractScriptPath(groups[0].hooks[0].command)), true);
-  });
-});
-
-describe('Activity monitor threshold fallback', () => {
-  it('keeps the runtime fallback threshold at 70', () => {
-    const source = fs.readFileSync(CONTEXT_MONITOR_PATH, 'utf8');
-    assert.match(source, /const DEFAULT_THRESHOLD = 70;/);
   });
 });
 
@@ -479,18 +477,6 @@ describe('syncTemplateSetting', () => {
     });
 
     assert.equal(result.changed, false);
-  });
-});
-
-describe('shouldSyncCodexConfig', () => {
-  it('skips when runtime is not codex and no codex state exists', () => {
-    const result = shouldSyncCodexConfig({
-      cfg: { runtime: 'claude' },
-      homeDir: '/tmp/no-codex',
-      existsSync: () => false,
-    });
-
-    assert.equal(result.shouldSync, false);
   });
 });
 
@@ -821,9 +807,8 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
       desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
     });
 
-    // Removing migration-prompt subtracts one command from each of the three
-    // SessionStart matchers; retired per-step hooks remain unchanged.
-    assert.deepEqual(result, { added: 34, updated: 0, removed: 12 });
+    // Four injection shards, side effects and synchronous health registration.
+    assert.deepEqual(result, { added: 33, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });
 
@@ -977,7 +962,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
 
   it('claims a declared legacy hook: old entry removed, --shard command generated, chain covers it', async () => {
     const zylosDir = makeDeclaredZylosDir();
-    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-runtime-hooks.js');
     const { buildChain } = await import('../../../skills/activity-monitor/scripts/shard-registry.js');
 
     const installed = {
@@ -1014,7 +999,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
       .filter(h => h.command?.includes('session-start-orchestrator.js'))
       .map(h => extractShardArg(h.command));
     assert.deepEqual(shardArgs, [
-      'identity', 'custom', 'references', 'state', 'c4-checkpoint', 'c4-conversations', 'role-inject', 'fg', 'start-prompt',
+      'identity', 'custom', 'references', 'c4-conversations', 'role-inject', 'fg', 'start-prompt',
     ]);
     // User and undeclared hooks are untouched.
     assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));
@@ -1028,7 +1013,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
 
   it('claims nothing when no declarations exist, even for shard-suffixed user paths', async () => {
     const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-claim-empty-'));
-    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-runtime-hooks.js');
 
     const installed = {
       hooks: {
@@ -1070,7 +1055,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
       claimHooks: ['/custom/my-session-start.js'],
     }));
 
-    const { claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+    const { claimedHookBaseKeys } = await import('../sync-runtime-hooks.js');
     const claimed = claimedHookBaseKeys({ zylosDir });
     assert.equal(claimed.size, 0);
 

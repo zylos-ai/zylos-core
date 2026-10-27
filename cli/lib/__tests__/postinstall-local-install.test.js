@@ -15,8 +15,9 @@ const SETTINGS_BEFORE = JSON.stringify({ hooks: {} });
 const dirs = [];
 
 function fixtureZylosDir() {
-  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-postinstall-local-'));
-  dirs.push(zylosDir);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-postinstall-local-'));
+  dirs.push(home);
+  const zylosDir = path.join(home, 'zylos');
   fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
   fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), SETTINGS_BEFORE);
@@ -41,6 +42,7 @@ function installedPostinstallPath() {
 
 // Run postinstall the way npm would, with only the npm config variables given here
 function runPostinstall(zylosDir, npmEnv = {}, extraEnv = {}, scriptPath = POSTINSTALL_PATH) {
+  assert.notEqual(path.dirname(zylosDir), os.tmpdir(), 'Postinstall HOME must not be the shared temporary directory');
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_')));
   execFileSync(process.execPath, [scriptPath], {
     stdio: 'pipe',

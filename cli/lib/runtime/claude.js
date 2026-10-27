@@ -13,6 +13,7 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -42,11 +43,69 @@ function _parseEnvValue(content, key) {
   return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
 }
 
+// Missing or malformed configuration starts empty; filesystem errors remain
+// best-effort failures handled independently for each confirmation file.
+function readConfirmationConfig(file) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch (error) {
+    if (error.code === 'ENOENT' || error instanceof SyntaxError) return {};
+    throw error;
+  }
+}
+
+async function ensureOnboardingComplete(projectDir, env) {
+  const home = env.HOME || os.homedir();
+  const claudeJsonPath = path.join(home, '.claude.json');
+  try {
+    const config = readConfirmationConfig(claudeJsonPath);
+    let changed = false;
+    const fill = (object, key, value) => {
+      if (object[key] !== true) { object[key] = value; changed = true; }
+    };
+    if (config.hasCompletedOnboarding !== true) {
+      fill(config, 'hasCompletedOnboarding', true);
+      let version = '2.1.59';
+      try {
+        version = (await execFileAsync(env.CLAUDE_BIN || 'claude', ['--version'],
+          { env, encoding: 'utf8', timeout: 5000 })).stdout.trim();
+      } catch { /* Retain the baseline fallback when version discovery fails. */ }
+      config.lastOnboardingVersion = version;
+    }
+    if (!config.effortCalloutDismissed) fill(config, 'effortCalloutDismissed', true);
+    if (!config.projects || typeof config.projects !== 'object' || Array.isArray(config.projects)) config.projects = {};
+    let project = path.resolve(projectDir);
+    try { project = await fs.promises.realpath(project); } catch { /* Keep confirmation repair best-effort if realpath is unavailable. */ }
+    if (!config.projects[project] || typeof config.projects[project] !== 'object' || Array.isArray(config.projects[project])) config.projects[project] = {};
+    if (config.projects[project].hasTrustDialogAccepted !== true) {
+      fill(config.projects[project], 'hasTrustDialogAccepted', true);
+      fill(config.projects[project], 'hasCompletedProjectOnboarding', true);
+    }
+    if (changed) fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
+  } catch { /* First-confirmation repair must not prevent launch. */ }
+
+  const settingsPath = path.join(home, '.claude', 'settings.json');
+  try {
+    const settings = readConfirmationConfig(settingsPath);
+    if (settings.skipDangerousModePermissionPrompt !== true) {
+      settings.skipDangerousModePermissionPrompt = true;
+      fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    }
+  } catch { /* Other confirmation files are repaired independently. */ }
+}
+
 // ── ClaudeAdapter ─────────────────────────────────────────────────────────────
 
 export class ClaudeAdapter extends SessionAdapter {
   get displayName() { return 'Claude Code'; }
   get runtimeId() { return 'claude'; }
+
+  async launch(input) {
+    await ensureOnboardingComplete(this.options.root || ZYLOS_DIR, this.options.env || process.env);
+    return super.launch(input);
+  }
 
   // ── Instruction file ───────────────────────────────────────────────────────
 

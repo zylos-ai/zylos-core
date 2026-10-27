@@ -65,24 +65,50 @@ test('F3 malformed/mismatched is not READY; snapshots immutable', async t => {
   const good = await observeSessionTarget(options); assert.equal(good.ready,true);
   assert.throws(()=>{good.rawF2.ZYLOS_RUN_ID='evil';},TypeError); assert.throws(()=>{good.f3.startupControlIds.push(1);},TypeError);
 });
+test('configured observation reads identity and guarded environment once', async t => {
+  const {connection, options} = await fixture(t);
+  const command = connection.command.bind(connection), calls = [];
+  connection.command = async (argv, settings) => {
+    calls.push(argv[0]);
+    return command(argv, settings);
+  };
+  assert.equal((await observeSessionTarget(options)).ready, true);
+  assert.deepEqual(calls, ['display-message', 'show-environment']);
+});
+test('first binding adopts the observed server rather than the server at executor creation', async t => {
+  const {connection, tmux, options} = await fixture(t);
+  const original = await serverGeneration(connection);
+  tmux('kill-server');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', '-e', 'ZYLOS_RUN_ID=r1',
+    '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', 'sleep', '120');
+  const target = await resolveSessionTarget(options);
+  assert.notEqual(target.serverGeneration, original);
+  assert.equal(await revalidateSessionTarget({connection, target}), true);
+});
 test('same socket restart fails its generation guard without replay', async t => {
   const {connection,tmux,socketPath,options} = await fixture(t);
   const target = await resolveSessionTarget(options); tmux('kill-server');
   await new Promise(resolve=>setTimeout(resolve,100));
   tmux('-f','/dev/null','new-session','-d','-s','fixture','sleep','120');
   await assert.rejects(revalidateSessionTarget({connection,target}),{code:'GENERATION_CHANGED'});
-  const replacement = await openTmuxConnection({binary,socketPath}); assert.notEqual(replacement.serverGeneration,target.serverGeneration); replacement.close();
+  const replacement = await openTmuxConnection({binary,socketPath}); assert.notEqual(await serverGeneration(replacement),target.serverGeneration); replacement.close();
 });
 test('absent server differs from unexecutable transport; missing generation rejected', async t => {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-no-server-')); t.after(()=>fs.rm(dir,{recursive:true,force:true}));
-  await assert.rejects(openTmuxConnection({binary,socketPath:path.join(dir,'absent')}),{code:'TMUX_NO_SERVER'});
-  await assert.rejects(openTmuxConnection({binary:path.join(dir,'missing')}),{code:'TMUX_UNAVAILABLE',cause:'error'});
+  const absent = await openTmuxConnection({binary,socketPath:path.join(dir,'absent')});
+  const missing = await openTmuxConnection({binary:path.join(dir,'missing')});
+  t.after(()=>{absent.close();missing.close();});
+  await assert.rejects(serverGeneration(absent),{code:'TMUX_NO_SERVER'});
+  assert.equal((await observeSessionTarget({connection:absent,tmuxName:'fixture'})).present,false);
+  await assert.rejects(resolveSessionTarget({connection:absent,tmuxName:'fixture'}),{code:'TARGET_GONE'});
+  await assert.rejects(serverGeneration(missing),{code:'TMUX_UNAVAILABLE',cause:'error'});
   await assert.rejects(serverGeneration({command:async()=> '123:'}),{code:'TMUX_UNAVAILABLE'});
 });
 test('runtime fallback uses unique shallowest name and never invents config', async () => {
   const connection={command:async()=> '10'};
   const rows=[{pid:10,ppid:1,name:'node'},{pid:11,ppid:10,name:'codex.exe'},{pid:12,ppid:11,name:'claude'}];
-  assert.deepEqual(await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> rows}),{runtime:'codex',launchConfig:null,runtimeObservation:'present'});
+  assert.deepEqual(await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> rows}),{runtime:'codex',launchConfig:null,runtimeObservation:'present',runtimePid:11});
   rows.push({pid:13,ppid:10,name:'claude'});
   assert.equal((await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> rows})).runtime,'unknown');
   assert.equal((await readTargetRuntime({connection,paneId:'%1',rawF2:{ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'},readProcessTree:async()=> {throw Error('must not run');}})).runtime,'claude');
@@ -110,24 +136,44 @@ test('initial disappearance and generation change are detected before any sendin
   }};
   await assert.rejects(observeSessionTarget({connection,tmuxName:'fixture',readReady:ready}),{code:'TARGET_GONE'});
   let generation='100:200';
+  const commands=[];
   const held={bindTarget() {},command:async args=> {
-    if(args[0]==='show-environment') return 'ZYLOS_RUN_ID=r1\nZYLOS_MODEL_CONFIG={"runtime":"claude"}';
-    if(args.at(-1)==='#{pid}:#{start_time}') return generation;
-    if(args.at(-1)==='#{session_id}\t#{pane_id}') return '$1\t%1';
+    commands.push(args[0]);
+    if(generation!=='100:200') throw Object.assign(Error('Bound server changed'),{code:'GENERATION_CHANGED'});
+    if(args[0]==='show-environment') return String.raw`ZYLOS_RUN_ID="r1"; export ZYLOS_RUN_ID;
+ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
     return '100:200\t$1\t%1\t123';
   }};
   const target=await resolveSessionTarget({connection:held,tmuxName:'fixture',readReady:ready});
+  commands.length=0;
+  await revalidateSessionTarget({connection:held,target});
+  assert.deepEqual(commands,['show-environment']);
   generation='101:201';
   await assert.rejects(revalidateSessionTarget({connection:held,target}),{code:'GENERATION_CHANGED'});
   await assert.rejects(revalidateSessionTarget({connection:held,target:{...target}}),TypeError);
 });
-test('command timeout closes executor and never accepts a retry', async t => {
+
+test('malformed environment observation and revalidation expose TMUX_UNAVAILABLE', async () => {
+  let environment = 'ZYLOS_RUN_ID="r1"; export ZYLOS_RUN_ID;';
+  const connection = {bindTarget() {}, command:async args => {
+    if (args[0] === 'show-environment') return environment;
+    if (args.at(-1) === '#{pane_pid}') return '10';
+    return '100:200\t$1\t%1\t123';
+  }};
+  const options = {connection, tmuxName:'fixture', readReady:ready, readProcessTree:async()=>[]};
+  const target = await resolveSessionTarget(options);
+  assert.equal(await revalidateSessionTarget({connection,target}), true);
+  environment = 'ZYLOS_RUN_ID="unterminated';
+  await assert.rejects(observeSessionTarget(options), {code:'TMUX_UNAVAILABLE',cause:'error'});
+  await assert.rejects(revalidateSessionTarget({connection,target}), {code:'TMUX_UNAVAILABLE',cause:'error'});
+});
+test('command timeout leaves executor available for a guarded retry', async t => {
   const {socketPath}=await fixture(t);
   const connection=await openTmuxConnection({binary,socketPath,timeoutMs:40});
   t.after(()=>connection.close());
   await assert.rejects(connection.command(['wait-for','unreleased-test-channel']),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
-  assert.equal(connection.closed,true);
-  await assert.rejects(connection.command(['display-message','-p','must not replay']),{code:'TMUX_UNAVAILABLE'});
+  assert.equal(connection.closed,false);
+  assert.equal(await connection.command(['display-message','-p','retry available']), 'retry available');
 });
 
 test('process observation distinguishes absence from ambiguity and unavailable scans', async () => {

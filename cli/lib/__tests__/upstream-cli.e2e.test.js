@@ -4,14 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
+import { activateFreshSplitInstructions } from '../runtime/instruction-builder.js';
 
 const cli = path.resolve(import.meta.dirname, '../../zylos.js');
+const coreRoot = path.resolve(import.meta.dirname, '../../..');
 function makeProfile(host = 'mirror.example.test') {
   return { schemaVersion: 1, revision: host, providers: { github: {
     apiBase: `https://${host}/api/`, rawBase: `https://${host}/raw/`, downloadBase: `https://${host}/download/`,
   } } };
 }
-function fixture(t) {
+function fixture(t, { initialized = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upstream-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), zylosDir = path.join(home, 'zylos'), bin = path.join(root, 'bin');
@@ -19,6 +21,25 @@ function fixture(t) {
   fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(configDir, 'components.json'), '{}');
+  let candidateRoot = coreRoot;
+  if (initialized) {
+    // Model the installed package: development-only per-skill dependencies
+    // are not part of its source payload and must not be copied by init.
+    candidateRoot = path.join(root, 'core');
+    fs.mkdirSync(candidateRoot);
+    for (const entry of ['cli', 'skills', 'templates', 'scripts', 'package.json']) {
+      fs.cpSync(path.join(coreRoot, entry), path.join(candidateRoot, entry), {
+        recursive: true, filter: source => path.basename(source) !== 'node_modules',
+      });
+    }
+    fs.symlinkSync(path.join(coreRoot, 'node_modules'), path.join(candidateRoot, 'node_modules'), 'dir');
+    // Saved upstream settings imply an existing install; seed its current
+    // instruction format rather than manufacturing an unmigrated legacy state.
+    activateFreshSplitInstructions({ zylosDir, templatesDir: path.join(coreRoot, 'templates') });
+    // npm is stubbed below, so provision dependencies for the copied skills
+    // explicitly without downloading packages or consulting a host installation.
+    fs.symlinkSync(path.join(coreRoot, 'node_modules'), path.join(zylosDir, 'node_modules'), 'dir');
+  }
   const profilePath = path.join(root, 'profile.json');
   fs.writeFileSync(profilePath, JSON.stringify(makeProfile()));
   const log = path.join(root, 'requests.jsonl');
@@ -64,17 +85,24 @@ function fixture(t) {
   fs.writeFileSync(path.join(bin, 'pm2'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o755 });
   const env = {
     HOME: home, ZYLOS_DIR: zylosDir, PATH: `${bin}:${process.env.PATH}`,
+    ZYLOS_PACKAGE_ROOT: candidateRoot,
     GITHUB_TOKEN: 'fixture-token-never-forward-to-custom-hosts', GH_TOKEN: '',
     ZYLOS_GH_RETRY_DELAY_MS: '', ROUTING_LOG: log, ROUTING_TARBALL: tarball,
     ROUTING_SKILL: path.join(packageRoot, 'SKILL.md'), ROUTING_PROFILE: profilePath,
   };
-  const run = (args, extraEnv = {}) => spawnSync(process.execPath, [cli, ...args], {
+  const run = (args, extraEnv = {}) => spawnSync(process.execPath, [initialized ? path.join(candidateRoot, 'cli/zylos.js') : cli, ...args], {
     cwd: root, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 30000,
   });
   const readLog = () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   const save = source => fs.writeFileSync(path.join(configDir, 'upstreams.json'), JSON.stringify({ schemaVersion: 1, source }));
-  const success = result => { assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`); return result; };
-  return { root, bin, configDir, profilePath, log, run, readLog, save, success };
+  const success = result => {
+    const diagnostic = `${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-9;]*m/g, '')
+      .replace(/^.*Password:.*$/gm, '[fixture password omitted]');
+    assert.equal(result.status, 0, diagnostic);
+    return result;
+  };
+  const cleanup = () => fs.rmSync(root, { recursive: true, force: true });
+  return { root, bin, configDir, profilePath, log, run, readLog, save, success, cleanup };
 }
 
 test('CLI saved routing covers remote registry, real add pipeline, component/self checks and upgrade', t => {
@@ -142,26 +170,29 @@ test('CLI direct baseline keeps official URLs and creates no upstream files; blo
 test('successful CLI init source flags are temporary with absent or existing settings', t => {
   for (const saved of [false, true]) {
     for (const value of ['local', 'direct', 'https://config.example.test/profile.json']) {
-      const f = fixture(t);
+      const f = fixture(t, { initialized: true });
       for (const name of ['tmux', 'npm']) fs.writeFileSync(path.join(f.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
       fs.writeFileSync(path.join(f.bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', { mode: 0o755 });
       const settings = path.join(f.configDir, 'upstreams.json');
       const previous = JSON.stringify({ schemaVersion: 1, source: { type: 'local', path: f.profilePath }, trust: { forwardGitHubToken: true, allowedHosts: ['saved.example.test'] } });
       if (saved) fs.writeFileSync(settings, previous);
       const args = ['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy', '--upstream-config', value === 'local' ? f.profilePath : value];
-      f.success(f.run(args, { ZYLOS_UPSTREAM_CONFIG: '' }));
+      const result = f.success(f.run(args, { ZYLOS_UPSTREAM_CONFIG: '' }));
+      assert.equal(/PENDING MIGRATION|Database init failed/.test(result.stdout), false, 'init must not report preparation failures');
+      assert.equal(/Database initialized/.test(result.stdout), true, 'init must initialize the database');
       assert.equal(fs.existsSync(settings), saved);
       if (saved) assert.equal(fs.readFileSync(settings, 'utf8'), previous);
       const next = JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'])).stdout);
       assert.equal(next.selectedBy, saved ? 'saved' : 'default');
       assert.equal(next.endpoints.apiBase.url, saved ? 'https://mirror.example.test/api/' : 'https://api.github.com/');
+      f.cleanup();
     }
   }
 });
 
 test('init environment source applies only to that process and preserves saved settings', t => {
   for (const saved of [false, true]) {
-    const f = fixture(t);
+    const f = fixture(t, { initialized: true });
     for (const name of ['tmux', 'npm']) {
       fs.writeFileSync(path.join(f.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
@@ -175,7 +206,9 @@ test('init environment source applies only to that process and preserves saved s
     assert.equal(active.endpoints.apiBase.url, 'https://mirror.example.test/api/');
     assert.equal(active.trustSelectedBy, 'environment');
     assert.equal(active.endpoints.apiBase.tokenPolicy, 'locally authorized when requested; redirects rechecked');
-    f.success(f.run(['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'], env));
+    const result = f.success(f.run(['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'], env));
+    assert.equal(/PENDING MIGRATION|Database init failed/.test(result.stdout), false, 'init must not report preparation failures');
+    assert.equal(/Database initialized/.test(result.stdout), true, 'init must initialize the database');
     assert.equal(fs.existsSync(settings), saved);
     if (saved) assert.equal(fs.readFileSync(settings, 'utf8'), previous);
     const next = JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'])).stdout);
@@ -183,6 +216,7 @@ test('init environment source applies only to that process and preserves saved s
     assert.equal(next.endpoints.apiBase.url, 'https://api.github.com/');
     assert.equal(next.trustSelectedBy, saved ? 'saved' : 'default');
     assert.deepEqual(next.trust.allowedHosts, saved ? ['saved.example.test'] : []);
+    f.cleanup();
   }
 });
 

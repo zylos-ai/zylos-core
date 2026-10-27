@@ -15,10 +15,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR } from '../lib/config.js';
-import { getActiveAdapter } from '../lib/runtime/index.js';
 import { bold, dim, green, red, cyan, success, warn, heading } from '../lib/colors.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { commandExists } from '../lib/shell-utils.js';
+import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
 
 // Kill both known runtime sessions on uninstall regardless of which is active
 const TMUX_SESSIONS = ['claude-main', 'codex-main'];
@@ -175,7 +175,7 @@ export async function selfUninstall(args) {
 function killTmuxSession() {
   for (const session of TMUX_SESSIONS) {
     try {
-      execFileSync('tmux', ['kill-session', '-t', session], { stdio: 'pipe' });
+      execFileSync('tmux', [C.killSession, '-t', session], { stdio: 'pipe' });
       console.log(`  Killed tmux session ${dim(session)}`);
     } catch {
       // Session not found — normal

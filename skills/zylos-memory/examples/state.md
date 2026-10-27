@@ -1,17 +1,15 @@
-# Active State
+<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed=20261019T053001123Z -->
 
-Last updated: 2026-02-08 14:30
+# Working State
 
-## Current Focus
-Implementing memory architecture v5 for zylos-core. Currently reviewing
-and testing the zylos-memory skill scripts.
+## Headline
+Finish the proposal validation and send the result to its requester.
 
-## Pending Tasks
-- [ ] Review consolidate.js output format (Howard, 2026-02-08)
-- [ ] Update init.js for recursive memory template deployment (2026-02-07)
-- [ ] Set up Lark webhook endpoint (Howard, 2026-02-06)
+## In Progress
+- Validate the staging behavior; details in the project issue.
 
-## Recent Completions
-- [x] Remove memory-sync.js, use C4 CLI directly (2026-02-08)
-- [x] Add rotate-session.js tests (2026-02-08)
-- [x] Create session log format docs (2026-02-08)
+## Pending
+- Await the requester's choice on the remaining rollout date.
+
+## Commitments
+- Send the validated proposal after the staging check completes.

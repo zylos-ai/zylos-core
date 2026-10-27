@@ -17,6 +17,7 @@ if (mode === 'permission') {
   process.stderr.write('error connecting to /tmp/no sessions/socket (Permission denied)\\n');
   process.exit(1);
 }
+if (mode === 'unexpected') { console.error('server exited unexpectedly'); process.exit(1); }
 if (!process.argv.includes('if-shell')) { console.log('123:456'); process.exit(0); }
 if (mode === 'absent') { console.error('no server running on fixture'); process.exit(1); }
 console.log('ZYLOS_OK');
@@ -52,7 +53,19 @@ test('guard marker-looking payload remains data; genuine no-server response mean
 test('no-server words in a socket path do not turn permission failure into absence', async t => {
   const f = await fixture(t);
   await f.set('permission');
-  await assert.rejects(openTmuxConnection({ binary: f.binary }), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
+  const connection = await openTmuxConnection({ binary: f.binary });
+  t.after(() => connection.close());
+  await assert.rejects(serverGeneration(connection), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
+});
+
+test('unexpected server exit is absence before the guard and TARGET_GONE after binding', async t => {
+  const f = await fixture(t);
+  const connection = await openTmuxConnection({ binary: f.binary });
+  t.after(() => connection.close());
+  await f.set('unexpected');
+  await assert.rejects(connection.command(['capture-pane', '-p']), { code: 'TMUX_NO_SERVER' });
+  connection.bindTarget({ serverGeneration: '123:456', tmuxSessionId: '$0', paneId: '%0' });
+  await assert.rejects(connection.command(['capture-pane', '-p']), { code: 'TARGET_GONE' });
 });
 
 test('server generation maps command failures to unavailable while preserving timeout cause', async () => {

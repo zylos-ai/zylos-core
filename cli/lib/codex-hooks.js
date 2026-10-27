@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { SIDE_EFFECT_NAMES, buildChain } from '../../skills/activity-monitor/scripts/shard-registry.js';
+import { extractScriptPath } from './hook-utils.js';
 
 const SESSION_START = 'SessionStart';
 const CODEX_EVENT_KEYS = {
@@ -69,8 +70,8 @@ export function codexProjectConfigPath(projectDir) {
   return path.join(path.resolve(projectDir), '.codex', 'config.toml');
 }
 
-export function codexGlobalConfigPath(homeDir = os.homedir()) {
-  return path.join(homeDir, '.codex', 'config.toml');
+export function codexGlobalConfigPath(homeDir = os.homedir(), codexHome) {
+  return path.join(codexHome || path.join(homeDir, '.codex'), 'config.toml');
 }
 
 export function coreSessionStartCommand(zylosDir) {
@@ -105,15 +106,15 @@ export function coreSessionStartCommands(zylosDir) {
 
 export function isCoreCodexHook(command, zylosDir) {
   if (!command) return false;
-  const script = path.join(
+  const scriptsDir = path.join(
     path.resolve(zylosDir),
     '.claude',
     'skills',
     'activity-monitor',
-    'scripts',
-    'session-start-orchestrator.js'
+    'scripts'
   );
-  return command.includes(script) || command.includes('session-start-orchestrator.js');
+  return typeof command === 'string' && ['session-start-orchestrator.js', 'hook-activity.js']
+    .some(name => path.resolve(extractScriptPath(command)) === path.join(scriptsDir, name));
 }
 
 export function readCodexHooksConfig(filePath) {
@@ -159,15 +160,22 @@ export function installCoreCodexHook({ zylosDir }) {
   // then install the full desired shard command set as one group. Config
   // order is injection order on Codex, so the group must stay contiguous
   // and chain-ordered.
-  const existing = Array.isArray(config.hooks[SESSION_START]) ? config.hooks[SESSION_START] : [];
-  const preserved = existing
-    .map((group) => {
-      if (!Array.isArray(group?.hooks)) return group;
-      return { ...group, hooks: group.hooks.filter(h => !isCoreCodexHook(h?.command, zylosDir)) };
-    })
-    .filter(group => !Array.isArray(group?.hooks) || group.hooks.length > 0);
-
-  config.hooks[SESSION_START] = [...preserved, { hooks: desiredHooks }];
+  const activityCommand = `node ${path.join(path.resolve(zylosDir), '.claude', 'skills',
+    'activity-monitor', 'scripts', 'hook-activity.js')}`;
+  for (const event of Object.keys(CODEX_EVENT_KEYS)) {
+    const existing = Array.isArray(config.hooks[event]) ? config.hooks[event] : [];
+    const preserved = existing
+      .map((group) => {
+        if (!Array.isArray(group?.hooks)) return group;
+        return { ...group, hooks: group.hooks.filter(h => !isCoreCodexHook(h?.command, zylosDir)) };
+      })
+      .filter(group => !Array.isArray(group?.hooks) || group.hooks.length > 0);
+    config.hooks[event] = [
+      ...preserved,
+      ...(event === SESSION_START ? [{ hooks: desiredHooks }] : []),
+      { hooks: [{ type: 'command', command: activityCommand, timeout: DEFAULT_HOOK_TIMEOUT_SECONDS }] },
+    ];
+  }
 
   const changed = stableJson(config) !== before;
   if (changed) {
@@ -226,10 +234,10 @@ export function ensureHooksFeatureAtPath(filePath) {
   return { path: filePath, changed: false };
 }
 
-export function ensureHooksFeature({ projectDir, homeDir = os.homedir() }) {
+export function ensureHooksFeature({ projectDir, homeDir = os.homedir(), codexHome }) {
   const paths = [
     codexProjectConfigPath(projectDir),
-    codexGlobalConfigPath(homeDir),
+    codexGlobalConfigPath(homeDir, codexHome),
   ];
   const results = paths.map(ensureHooksFeatureAtPath);
   return {
@@ -302,11 +310,12 @@ export function isCodexTrustValid({
   zylosDir,
   projectDir = zylosDir,
   homeDir = os.homedir(),
+  codexHome,
   codexVersion,
 } = {}) {
   const hooksPath = codexHooksPath(zylosDir);
   const markerPath = codexTrustMarkerPath(zylosDir);
-  const globalConfig = codexGlobalConfigPath(homeDir);
+  const globalConfig = codexGlobalConfigPath(homeDir, codexHome);
   const projectConfig = codexProjectConfigPath(projectDir);
   let hooksContent = '';
   try {
@@ -500,6 +509,7 @@ export function ensureCodexHooksTrusted({
   zylosDir,
   projectDir = zylosDir,
   homeDir = os.homedir(),
+  codexHome,
   codexBin = process.env.CODEX_BIN || 'codex',
   execFileSyncImpl,
   spawnSyncImpl = spawnSync,
@@ -507,10 +517,10 @@ export function ensureCodexHooksTrusted({
   installCoreCodexHook({ zylosDir });
 
   const codexVersion = getCodexVersion({ codexBin, execFileSyncImpl });
-  const validity = isCodexTrustValid({ zylosDir, projectDir, homeDir, codexVersion });
+  const validity = isCodexTrustValid({ zylosDir, projectDir, homeDir, codexHome, codexVersion });
   if (validity.valid) return { trusted: false, skipped: true, reason: validity.reason };
 
-  ensureHooksFeature({ projectDir, homeDir });
+  ensureHooksFeature({ projectDir, homeDir, codexHome });
   const trust = trustCodexHooksWithAppServer({ zylosDir, codexBin, spawnSyncImpl });
   if (!trust.ok) {
     throw new Error(`Codex hook trust failed (${trust.reason || 'unknown'}). Native SessionStart bootstrap may not run.`);
@@ -524,7 +534,7 @@ export function ensureCodexHooksTrusted({
   }
 
   const hooksPath = codexHooksPath(zylosDir);
-  const globalConfig = codexGlobalConfigPath(homeDir);
+  const globalConfig = codexGlobalConfigPath(homeDir, codexHome);
   const hooksContent = fs.readFileSync(hooksPath, 'utf8');
   const trustSnapshot = extractTrustSnapshot(readHooksState(globalConfig), hooksPath);
   if (Object.keys(trustSnapshot).length === 0) {

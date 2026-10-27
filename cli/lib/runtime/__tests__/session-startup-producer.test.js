@@ -6,6 +6,9 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { stringify } from 'smol-toml';
+import { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, ensureHooksFeature } from '../../codex-hooks.js';
 
 const exec = promisify(execFile);
 const runtimeDir = fileURLToPath(new URL('../', import.meta.url));
@@ -14,7 +17,8 @@ const kick = 'System startup trigger, not a user message. Continue with startup 
 const tmuxBinary = process.env.TEST_TMUX_BIN || 'tmux';
 
 async function launchFixture(t, runtime, withHook) {
-  const {dir:root,socketPath}=isolatedTmux(t,{prefix:'p02-sp-',tmuxArgs:['-u'],timeout:2000});
+  const {dir,socketPath}=isolatedTmux(t,{prefix:'p02-sp-',tmuxArgs:['-u'],timeout:2000});
+  const root = await fs.realpath(dir);
   const log = path.join(root, 'c4.jsonl');
   const report = path.join(root, 'runtime.json');
   const recorder = path.join(root, 'record.mjs');
@@ -61,10 +65,22 @@ syncBuiltinESMExports();
       hooks:[{type:'command',command:`node ${promptHook}`}],
     }]}}));
   }
+  // This startup-prompt fixture is already trusted. Trust repair has its own
+  // app-server regression fixture; an unexpected app-server call here must fail.
+  if (runtime === 'codex') {
+    installCoreCodexHook({ zylosDir: root });
+    ensureHooksFeature({ projectDir: root, homeDir: root, codexHome: env.CODEX_HOME });
+    const hooksHash = createHash('sha256').update(await fs.readFile(codexHooksPath(root))).digest('hex');
+    const trustSnapshot = { [`${codexHooksPath(root)}:session_start:0:0`]: { enabled: true, trusted_hash: hooksHash } };
+    await fs.writeFile(path.join(env.CODEX_HOME, 'config.toml'), stringify({ features: { hooks: true }, hooks: { state: trustSnapshot } }));
+    await fs.writeFile(codexTrustMarkerPath(root), JSON.stringify({ hooksHash, codexVersion: 'codex-fixture', trustSnapshot }));
+  }
   await fs.writeFile(command,`#!${process.execPath}
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
-if(process.argv.includes('--help')) { console.log(' --no-daemon --model MODEL --effort EFFORT '); }
+if(process.argv.includes('--version')) { console.log('codex-fixture'); }
+else if(process.argv.includes('app-server')) { process.exit(2); }
+else if(process.argv.includes('--help')) { console.log(' --no-daemon --model MODEL --effort EFFORT '); }
 else {
   let settings={};try{settings=JSON.parse(fs.readFileSync(${JSON.stringify(path.join(root,'.claude/settings.json'))},'utf8'));}catch{}
   const hooks=settings.hooks?.SessionStart?.flatMap(entry=>entry.hooks)||[];

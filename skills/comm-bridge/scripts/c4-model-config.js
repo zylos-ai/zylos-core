@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { createConfigHandler, parseConfigArgs, runConfigCli } from './c4-config-handler.js';
 export const createModelConfigHandler = dependencies => {
   const handle = createConfigHandler(dependencies);
   return async request => await handle('model', request);
 };
 export const parseModelConfigArgs = argv => parseConfigArgs('model', argv);
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) process.exitCode = await runConfigCli('model', process.argv.slice(2));
+if (isMainModule(import.meta.url)) process.exitCode = await runConfigCli('model', process.argv.slice(2));
