@@ -59,6 +59,29 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
 - `skills/` - Claude Code skills (modular workflows)
 - `cli/` - Command-line interface tools
 
+## Tests
+
+Tests and their fixtures are development-only. They are excluded from
+everything that reaches user machines: the npm package (`.npmignore`) and the
+GitHub source archive that `zylos upgrade --self` downloads and syncs core
+skills from (`.gitattributes` `export-ignore`). Users' security scanners must
+not find fake tokens or mock binaries in an installed zylos.
+
+- **Where tests go**: module tests in a `__tests__/` directory next to the code
+  (e.g. `cli/lib/__tests__/`, `skills/<skill>/scripts/__tests__/`);
+  cross-module and integration tests in the root `test/`. Do not invent other
+  directory names. (`skills/zylos-memory/scripts/tests/` is a legacy exception
+  pending rename to `__tests__/`.)
+- **Name test files `*.test.js`**. Helpers and fixtures live inside the test
+  directory, never beside runtime code.
+- **Runtime code never reads test paths.** Nothing outside a test directory
+  may import, spawn, or read a file inside one; only dev tooling
+  (`scripts/run-node-tests.js`, `npm test` scripts) may reference them.
+- **Adding a new test location** that the patterns above do not cover requires
+  adding it to both `.npmignore` and `.gitattributes` in the same PR, and
+  checking the packed file list (`npm pack --dry-run`) and `git archive HEAD`
+  before and after.
+
 ## Skills
 
 Each skill is a self-contained module in `skills/<skill-name>/`:
