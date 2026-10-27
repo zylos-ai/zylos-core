@@ -53,7 +53,7 @@ export function preflightCoreDbUpgrade(zylosDir, {formatVersion=2,dashboardRoot}
 // schema_migrations authority and never uses user_version for admission.
 export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),formatVersion=2,dashboardRoot}={}) {
   const schemaRoot=path.join(tempDir,'skills');
-  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot,formatVersion,dashboardRoot:dashboardRoot ?? path.join(tempDir,'components/dashboard')});
+  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot,formatVersion,dashboardRoot:dashboardRoot ?? path.join(schemaRoot,'dashboard')});
 }
 // Clear a fixed-name rehearsal left by an interrupted upgrade, plus older
 // random-name copies. Refuse ambiguous paths before stopping services.
@@ -149,7 +149,7 @@ export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersi
   }
 }
 // Freeze the native driver and its runtime dependency closure before npm changes.
-export function prepareRecoveryDependencies(transactionDir,zylosDir,{dashboardRoot=path.resolve(import.meta.dirname,'../../components/dashboard')}={}) {
+export function prepareRecoveryDependencies(transactionDir,zylosDir,{dashboardRoot=path.resolve(import.meta.dirname,'../../skills/dashboard')}={}) {
   const target=path.join(transactionDir,'sqlite-runtime');fs.mkdirSync(target,{recursive:true,mode:0o700});
   fs.writeFileSync(path.join(target,'package.json'),'{"type":"module"}\n',{mode:0o600});
   const packages=path.join(target,'node_modules');fs.mkdirSync(packages,{mode:0o700});
@@ -167,15 +167,16 @@ export function prepareRecoveryDependencies(transactionDir,zylosDir,{dashboardRo
   for(const item of CORE_DATABASES) {
     try {const req=createRequire(path.join(zylosDir,'.claude','skills',item.owner,'package.json'));req.resolve('better-sqlite3');installed=req;break;}catch{}
   }
+  if(fs.existsSync(dashboardRoot)) {
+    // Freeze the pure schema owner's native dependency from its own package.
+    installed=createRequire(path.join(dashboardRoot,'package.json'));
+    installed.resolve('better-sqlite3');
+  }
   if(!installed) throw new Error('No installed core SQLite driver for independent recovery');
   copyPackage('better-sqlite3',installed);
   if (fs.existsSync(dashboardRoot)) {
     const destination=path.join(target,'dashboard-owner');
     fs.cpSync(dashboardRoot,destination,{recursive:true,dereference:true,filter:entry=>!entry.split(path.sep).includes('node_modules')});
-    const packageFile=path.join(dashboardRoot,'package.json');
-    const data=JSON.parse(fs.readFileSync(packageFile,'utf8'));
-    const own=createRequire(packageFile);
-    for(const dependency of Object.keys(data.dependencies || {})) copyPackage(dependency,own);
   }
   const workerPath=path.join(target,'core-db-backup-worker.js');fs.copyFileSync(WORKER,workerPath);
   const driverPath=path.join(packages,'better-sqlite3','lib','index.js');

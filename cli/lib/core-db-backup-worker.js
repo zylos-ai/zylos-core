@@ -10,7 +10,7 @@ export const LEGACY_CORE_DATABASES = Object.freeze([
   {source:'web-console/web-console.db',owner:'web-console',schema:'scripts/schema.js'},
 ]);
 export const CORE_DATABASES = Object.freeze([...LEGACY_CORE_DATABASES,
-  {source:'components/dashboard/dashboard.db',owner:'dashboard'},
+  {source:'components/dashboard/dashboard.db',owner:'dashboard',schema:'src/lib/schema-owner.js'},
 ]);
 export function databasesForFormat(formatVersion=2) {
   if(formatVersion===1) return LEGACY_CORE_DATABASES;
@@ -35,8 +35,12 @@ const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).d
 function driver(input, item) {
   if(item.owner==='dashboard') {
     if(input.driverPath && !['offline-preflight','upgrade-migrate','ordinary-migrate','version-probe'].includes(input.action)) return createRequire(import.meta.url)(input.driverPath);
-    // Dashboard is a built-in package, not a skill. The Core driver also
-    // performs its online snapshots without importing Dashboard business code.
+    if(['offline-preflight','upgrade-migrate','ordinary-migrate','version-probe','rehearse'].includes(input.action)) {
+      const frozen=path.join(path.dirname(fileURLToPath(import.meta.url)),'dashboard-owner');
+      const root=input.dashboardRoot || (fs.existsSync(frozen) ? frozen : fileURLToPath(new URL('../../skills/dashboard',import.meta.url)));
+      return createRequire(path.join(root,'package.json'))('better-sqlite3');
+    }
+    // Online snapshots do not import Dashboard business code.
     const root=input.driverRoot || input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
     return createRequire(path.join(root,'comm-bridge/package.json'))('better-sqlite3');
   }
@@ -89,10 +93,9 @@ function inspect(Database, file, expectedHash=hash(file)) {
 async function ownerSchema(input,item) {
   if(item.owner==='dashboard') {
     const frozen=path.join(path.dirname(fileURLToPath(import.meta.url)),'dashboard-owner');
-    const root=input.dashboardRoot || (fs.existsSync(frozen) ? frozen : fileURLToPath(new URL('../../components/dashboard',import.meta.url)));
+    const root=input.dashboardRoot || (fs.existsSync(frozen) ? frozen : fileURLToPath(new URL('../../skills/dashboard',import.meta.url)));
     try {
-      const req=createRequire(path.join(root,'__owner_loader__.js'));
-      const mod=await import(pathToFileURL(req.resolve(root)));
+      const mod=await import(pathToFileURL(path.join(root,item.schema)));
       const owner=mod.dashboardSchemaOwner;
       if(!owner||['inspectSchema','supportsNewDatabase','migrate'].some(name=>typeof owner[name]!=='function')) throw Error('missing dashboardSchemaOwner contract');
       return owner;

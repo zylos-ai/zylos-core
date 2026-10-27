@@ -28,9 +28,10 @@ function fixture(t) {
   const db=new Database(file);db.exec('CREATE TABLE preserved(value TEXT)');
   db.prepare('INSERT INTO preserved VALUES (?)').run(item.source);db.close();
  }
- const dashboardRoot=path.join(root,'dashboard-owner');fs.mkdirSync(dashboardRoot);
+ const dashboardRoot=path.join(root,'dashboard-owner');fs.mkdirSync(path.join(dashboardRoot,'src/lib'),{recursive:true});
  fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
- fs.writeFileSync(path.join(dashboardRoot,'index.js'),`import {createRequire} from 'node:module';
+ fs.symlinkSync(path.resolve('skills/comm-bridge/node_modules'),path.join(dashboardRoot,'node_modules'));
+ fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`import {createRequire} from 'node:module';
  const Database=createRequire(${JSON.stringify(path.resolve('skills/comm-bridge/package.json'))})('better-sqlite3');
  export const dashboardSchemaOwner={
  supportsNewDatabase(){return true;},

@@ -20,10 +20,12 @@ function fixture(t, fault) {
   fs.copyFileSync(path.resolve('package.json'),path.join(packageRoot,'package.json'));
   fs.cpSync(path.resolve('cli'),path.join(packageRoot,'cli'),{recursive:true,filter:file=>!file.split(path.sep).includes('__tests__')});
   fs.symlinkSync(path.resolve('node_modules'),path.join(packageRoot,'node_modules'));
-  fs.symlinkSync(path.resolve('skills'),path.join(packageRoot,'skills'));
-  const dashboardRoot=path.join(packageRoot,'components/dashboard');fs.mkdirSync(dashboardRoot,{recursive:true});
+  fs.mkdirSync(path.join(packageRoot,'skills'));
+  for(const name of fs.readdirSync(path.resolve('skills'))) if(name!=='dashboard') fs.symlinkSync(path.resolve('skills',name),path.join(packageRoot,'skills',name));
+  const dashboardRoot=path.join(packageRoot,'skills/dashboard');fs.mkdirSync(path.join(dashboardRoot,'src/lib'),{recursive:true});
   fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
-  fs.writeFileSync(path.join(dashboardRoot,'index.js'),`import {createRequire} from 'node:module';
+  fs.symlinkSync(path.resolve('skills/comm-bridge/node_modules'),path.join(dashboardRoot,'node_modules'));
+  fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`import {createRequire} from 'node:module';
   const Database=createRequire(${JSON.stringify(path.resolve('skills/comm-bridge/package.json'))})('better-sqlite3');
   export const dashboardSchemaOwner={
     supportsNewDatabase(){return true;},

@@ -1719,9 +1719,8 @@ export function assertDashboardUninstalled(zylosDir = ZYLOS_DIR) {
 }
 
 async function installedDashboardOwner(ctx) {
-  const root=path.join(ctx.packageRoot || path.join(import.meta.dirname,'../..'),'components/dashboard');
-  const resolved=finalizerRequire.resolve(root);
-  return import(pathToFileURL(resolved).href);
+  const root=ctx.packageRoot || path.join(import.meta.dirname,'../..');
+  return import(pathToFileURL(path.join(root,'cli/lib/dashboard-install.js')).href);
 }
 
 function refreshMaintenanceReader(ctx) {

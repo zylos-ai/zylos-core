@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {createRequire} from 'node:module';
-import {createCoreDbSnapshot,runCoreDbWorker,validateSnapshotManifest,probeCoreDbVersions,rehearseCoreDbUpgrade} from '../core-db-backup.js';
+import {pathToFileURL} from 'node:url';
+import {createCoreDbSnapshot,runCoreDbWorker,validateSnapshotManifest,probeCoreDbVersions,rehearseCoreDbUpgrade,prepareRecoveryDependencies} from '../core-db-backup.js';
 
 const installed=process.env.CORE_DB_TEST_SKILL;
 let Database;try {Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');} catch {}
@@ -19,11 +20,13 @@ function fixture(t) {
     fs.writeFileSync(path.join(owner,'package.json'),'{}');
     fs.symlinkSync(path.join(installed,'node_modules'),path.join(owner,'node_modules'));
   }
-  const dashboardRoot=path.join(root,'owner');fs.mkdirSync(dashboardRoot);
+  const dashboardRoot=path.join(root,'owner');fs.mkdirSync(path.join(dashboardRoot,'src/lib'),{recursive:true});
   fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
+  fs.writeFileSync(path.join(dashboardRoot,'index.js'),`throw Error('Dashboard service entry must not load');`);
+  fs.symlinkSync(path.join(installed,'node_modules'),path.join(dashboardRoot,'node_modules'));
   // Frozen IB-62 contract substitute. Dashboard owns its version authority;
   // migration 20 deliberately differs from old prose's illustrative 13.
-  fs.writeFileSync(path.join(dashboardRoot,'index.js'),`
+  fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`
     import fs from 'node:fs';
     import path from 'node:path';
     import {createRequire} from 'node:module';
@@ -126,23 +129,61 @@ test('Dashboard rehearsal migrates only its private copy and preserves the pragm
 test('version probe loads the downloaded Dashboard owner and rejects an unavailable target owner',{skip:!Database},t=>{
   const {root,source,database,driverRoot,dashboardRoot}=fixture(t);
   database().close();const before=fs.readFileSync(source);
-  const target=path.join(root,'download');fs.mkdirSync(path.join(target,'components'),{recursive:true});
-  fs.symlinkSync(path.resolve('skills'),path.join(target,'skills'));
-  fs.cpSync(dashboardRoot,path.join(target,'components/dashboard'),{recursive:true});
+  const target=path.join(root,'download');fs.mkdirSync(path.join(target,'skills'),{recursive:true});
+  for(const name of ['comm-bridge','scheduler','web-console']) fs.symlinkSync(path.resolve('skills',name),path.join(target,'skills',name));
+  fs.cpSync(dashboardRoot,path.join(target,'skills/dashboard'),{recursive:true});
   const probe=probeCoreDbVersions(root,target,{driverRoot});
   assert.deepEqual(probe.databases[3],{source:'components/dashboard/dashboard.db',status:'present',fromVersion:12,toVersion:20,needsMigration:true});
-  fs.renameSync(path.join(target,'components/dashboard'),path.join(target,'components/unavailable'));
+  fs.renameSync(path.join(target,'skills/dashboard'),path.join(target,'skills/unavailable'));
   assert.throws(()=>probeCoreDbVersions(root,target,{driverRoot}),/Incompatible owner schema code dashboard/);
   assert.deepEqual(fs.readFileSync(source),before);
 });
 
 test('Dashboard creation capability is checked without creating a missing database',{skip:!Database},t=>{
   const {root,source,driverRoot,dashboardRoot}=fixture(t);
-  const file=path.join(dashboardRoot,'index.js');
+  const file=path.join(dashboardRoot,'src/lib/schema-owner.js');
   fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace('supportsNewDatabase(){return true;}','supportsNewDatabase(){return false;}'));
   assert.throws(()=>probeCoreDbVersions(root,path.resolve('.'),{driverRoot,dashboardRoot}),/cannot initialize missing database/);
   assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:path.resolve('skills'),driverRoot,dashboardRoot}),/cannot initialize missing database/);
   assert.equal(fs.existsSync(source),false);
+});
+
+test('Dashboard compatibility checks reject its unavailable native driver without borrowing Core dependencies',{skip:!Database},t=>{
+  const {root,source,database,driverRoot,dashboardRoot}=fixture(t);
+  database().close();const before=fs.readFileSync(source);
+  fs.unlinkSync(path.join(dashboardRoot,'node_modules'));
+  assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:path.resolve('skills'),driverRoot,dashboardRoot}),/better-sqlite3/);
+  const tx=path.join(root,'transaction');fs.mkdirSync(tx);
+  assert.throws(()=>prepareRecoveryDependencies(tx,root,{dashboardRoot}),/better-sqlite3/);
+  assert.deepEqual(fs.readFileSync(source),before);
+});
+
+test('real P12 owner migrates rehearsal copies and survives freezing without its source package',{
+  skip:!Database || !process.env.P12_OWNER_DIR,
+},async t=>{
+  const {root,source,driverRoot,dashboardRoot}=fixture(t);
+  for(const name of ['schema-owner.js','schema.js']) fs.copyFileSync(path.join(process.env.P12_OWNER_DIR,'src/lib',name),path.join(dashboardRoot,'src/lib',name));
+  fs.unlinkSync(path.join(dashboardRoot,'node_modules'));
+  fs.symlinkSync(path.join(process.env.P12_OWNER_DIR,'node_modules'),path.join(dashboardRoot,'node_modules'));
+  const {dashboardSchemaOwner:owner}=await import(pathToFileURL(path.join(dashboardRoot,'src/lib/schema-owner.js')));
+  assert.equal(owner.inspectSchema(source).targetVersion,20);
+  assert.equal(fs.existsSync(source),false);
+  owner.migrate(source);
+  const db=new Database(source);
+  db.exec('DROP INDEX idx_events_group_seq; ALTER TABLE runtime_events DROP COLUMN run_id; ALTER TABLE runtime_events DROP COLUMN session_group; DELETE FROM schema_migrations WHERE version=20');
+  db.close();
+  const before=fs.readFileSync(source);
+  assert.equal(probeCoreDbVersions(root,path.resolve('.'),{driverRoot,dashboardRoot}).databases[3].fromVersion,13);
+  assert.equal(rehearseCoreDbUpgrade(root,path.resolve('.'),{driverRoot,dashboardRoot}).databases[3].toVersion,20);
+  assert.deepEqual(fs.readFileSync(source),before);
+  const tx=path.join(root,'transaction');fs.mkdirSync(tx);
+  const closure=prepareRecoveryDependencies(tx,root,{dashboardRoot});
+  fs.renameSync(dashboardRoot,dashboardRoot+'-unavailable');
+  const frozen=runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:path.resolve('skills'),driverRoot,formatVersion:2,driverPath:closure.driverPath},{workerPath:closure.workerPath});
+  assert.equal(frozen.databases[3].status,'present');
+  assert.deepEqual(fs.readFileSync(source),before);
+  const future=new Database(source);future.prepare('INSERT INTO schema_migrations(version) VALUES (?)').run(99);future.close();
+  assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:path.resolve('skills'),driverRoot,formatVersion:2,driverPath:closure.driverPath},{workerPath:closure.workerPath}),/SCHEMA_TOO_NEW/);
 });
 
 test('Dashboard backup API failure does not publish a complete group',{skip:!Database},t=>{

@@ -147,6 +147,32 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assertDataPreserved(f);
 });
 
+test('default finalizer loads IB-66 from the CLI module without loading the Dashboard service package', async t => {
+  const f=fixture(t), target=path.join(f.home,'target-package');
+  fs.mkdirSync(path.join(target,'cli/lib'),{recursive:true});
+  fs.mkdirSync(path.join(target,'components/dashboard'),{recursive:true});
+  fs.writeFileSync(path.join(target,'package.json'),'{"type":"module"}');
+  fs.writeFileSync(path.join(target,'components/dashboard/package.json'),'{"type":"module","main":"index.js"}');
+  fs.writeFileSync(path.join(target,'components/dashboard/index.js'),`throw Error('Dashboard service entry must not load');`);
+  const calls=path.join(f.home,'ib66-calls');
+  fs.writeFileSync(path.join(target,'cli/lib/dashboard-install.js'),`
+    import fs from 'node:fs';
+    const record=name=>fs.appendFileSync(${JSON.stringify(calls)},name+'\\n');
+    export function copyDashboardDb(){record('copy');return {ok:true};}
+    export function applyDashboardRegistration(){record('registration');return {state:'done'};}
+    export function applyDashboardRoute(){record('route');return {state:'done'};}
+    export function verifyDashboard({deadlineAt}){record('verify');if(!Number.isFinite(deadlineAt))throw Error('missing original deadline');return {state:'ready',errors:[]};}
+  `);
+  const result=await f.run({dashboardOwner:null,prepareRuntime:ctx=>{
+    const prepared=prepareUpgradeRuntime(ctx,{budget:f.deps.budget,packageRoot,homeDir:f.home,stopFailureSupported:false});
+    ctx.packageRoot=target;
+    return prepared;
+  }});
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(result.completion.dashboard,'ready');
+  assert.deepEqual(fs.readFileSync(calls,'utf8').trim().split('\n'),['copy','registration','route','verify']);
+});
+
 test('default finalizer reports unchanged published settings truthfully', async t => {
   const f = fixture(t);
   const prepared = f.deps.prepareRuntime({ zylosDir: f.root, tempDir: f.state.tempDir });
