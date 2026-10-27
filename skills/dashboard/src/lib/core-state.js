@@ -3,7 +3,8 @@ import { loadCoreModule } from './core-modules.js';
 export function projectOrigin(sessionGroup, observation) {
   const { identity, status, usage } = observation;
   const state = !identity.present ? 'OFFLINE' : status.reason === 'starting' ? 'STARTING' : !status.valid ? 'UNKNOWN' : String(status.value.state || 'unknown').toUpperCase();
-  return { running_tools: [], active_subagents: [], subagent_tools: [], last_message: null, last_prompt: null, updated_at: new Date().toISOString(), source: {}, state, sessionGroup, runId: identity.runId, sessionId: identity.sessionId,
+  const tools = status.valid && Array.isArray(status.value.active_tool_details) ? status.value.active_tool_details.map(tool => ({ tool_use_id: tool.id, tool_name: tool.name, started_at: Number.isFinite(tool.startedAt) ? new Date(tool.startedAt).toISOString() : null })) : [];
+  return { running_tools: tools, active_subagents: [], subagent_tools: [], last_message: null, last_prompt: null, updated_at: new Date().toISOString(), source: {}, state, sessionGroup, runId: identity.runId, sessionId: identity.sessionId,
     runtime: identity.runtime, identity, status, usage,
     sampledAt: status.sampledAt, reason: status.reason,
     confidence: status.valid ? 'HIGH' : 'LOW',

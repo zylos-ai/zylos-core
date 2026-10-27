@@ -427,7 +427,7 @@ test('Agent Fleet uses SSE fleet events with one-shot fetch fallback', () => {
   // #247: returning to the foreground refetches immediately instead of
   // waiting out the 10s fleet fallback / 30s poll timers.
   assert.match(app, /if \(document\.visibilityState === 'visible'\) refreshAll\(\)\.catch\(\(\) => \{\}\);/);
-  assert.match(app, /state\.eventSource\.addEventListener\(ev,/);
+  assert.match(app, /source\.addEventListener\(ev,/);
   assert.match(app, /'fleet'/);
   assert.match(app, /setTimeout\(\(\) => \{[\s\S]*?refreshFleet\(\)\.catch\(\(\) => \{\}\);[\s\S]*?\}, 10_000\)/);
   assert.match(app, /refreshFleet\(\)\.catch\(\(\) => \{\}\)/);

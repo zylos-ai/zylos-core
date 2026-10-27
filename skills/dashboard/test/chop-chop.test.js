@@ -20,10 +20,10 @@ function fixture(t, failContent = null) {
     if (content === ${JSON.stringify(failContent)}) {
       process.stderr.write('fixture queue failure');
       process.exitCode = 1;
-    } else console.log('OK: enqueued control 1');
+    } else console.log(JSON.stringify({ok:true,data:{id:1}}));
   `);
   return {
-    config: { zylosDir: root }, body: { request: crypto.randomUUID() },
+    config: { zylosDir: root }, body: { request: crypto.randomUUID(), runId: 'confirmed-run', sessionId: 'confirmed-session' },
     records: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : []
   };
 }
@@ -32,13 +32,13 @@ test('chop-chop queues Escape then exact continue at least 500ms later', async t
   const f = fixture(t);
   const result = await handleAction('chop-chop', f.body, f.config);
   assert.equal(result.ok, true);
-  assert.equal(result.escape_enqueued, true);
-  assert.equal(result.continue_enqueued, true);
+  assert.equal(result.steps[0].submission, 'submitted');
+  assert.equal(result.steps[1].submission, 'submitted');
   const records = f.records();
   assert.deepEqual(records.map(r => r.content), ['[KEYSTROKE]Escape', 'continue']);
   assert.ok(records[1].time - records[0].time >= 500);
   for (const record of records) {
-    assert.deepEqual(record.args, ['enqueue', '--content', record.content, '--priority', '0', '--bypass-state', '--no-ack-suffix']);
+    assert.deepEqual(record.args, ['enqueue', '--content', record.content, '--priority', '0', '--bypass-state', '--no-ack-suffix', '--target-run', 'confirmed-run', '--json', '--expected-session', 'confirmed-session']);
   }
 });
 
@@ -46,9 +46,8 @@ test('Escape failure prevents continue and reports no successful enqueue', async
   const f = fixture(t, '[KEYSTROKE]Escape');
   const result = await handleAction('chop-chop', f.body, f.config);
   assert.equal(result.ok, false);
-  assert.equal(result.error, 'chop_chop_escape_failed');
-  assert.equal(result.escape_enqueued, false);
-  assert.equal(result.continue_enqueued, false);
+  assert.equal(result.submission, 'unknown');
+  assert.equal(result.steps.length, 1);
   assert.deepEqual(f.records().map(r => r.content), ['[KEYSTROKE]Escape']);
 });
 
@@ -56,10 +55,9 @@ test('continue failure reports partial execution instead of success', async t =>
   const f = fixture(t, 'continue');
   const result = await handleAction('chop-chop', f.body, f.config);
   assert.equal(result.ok, false);
-  assert.equal(result.error, 'chop_chop_continue_failed');
-  assert.equal(result.escape_enqueued, true);
-  assert.equal(result.continue_enqueued, false);
-  assert.match(result.message, /Escape queued/);
+  assert.equal(result.steps[0].submission, 'submitted');
+  assert.equal(result.steps[1].submission, 'unknown');
+  assert.match(result.message, /unknown/);
   assert.deepEqual(f.records().map(r => r.content), ['[KEYSTROKE]Escape', 'continue']);
 });
 
@@ -76,6 +74,6 @@ test('legacy interrupt remains a single Escape control', async t => {
   const f = fixture(t);
   const result = await handleAction('interrupt', f.body, f.config);
   assert.equal(result.ok, true);
-  assert.equal(result.messageKey, 'result.interrupt_ok');
+  assert.equal(result.submission, 'submitted');
   assert.deepEqual(f.records().map(r => r.content), ['[KEYSTROKE]Escape']);
 });

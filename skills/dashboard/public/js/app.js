@@ -1874,7 +1874,11 @@ async function resolveMemoryConflict(action) {
 }
 
 async function refreshState() {
+  const request = state.stateRequest = (state.stateRequest || 0) + 1;
+  const revision = state.stateRevision || 0;
+  const navigation = state.navigationGeneration;
   const data = await fetchJson('/api/state');
+  if (request !== state.stateRequest || revision !== (state.stateRevision || 0) || navigation !== state.navigationGeneration) return;
   if (!data || typeof data !== 'object') return;
   state.dashboardState = data;
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
@@ -2413,8 +2417,10 @@ function applySse(name, data) {
   // A remote agent's stream describes its own fleet; never let it clobber ours.
   if (name === 'fleet' && state.remoteAgent) return;
   if (name === 'state_change') {
+    state.stateRevision = (state.stateRevision || 0) + 1;
     const prevRi = state.dashboardState?.runtime_info;
-    const prevSessionId = state.dashboardState?.session?.session_id;
+    const prevSessionId = state.dashboardState?.sessionId;
+    const prevRunId = state.dashboardState?.runId;
     // The SSE state payload carries only raw state — the agent identity color
     // (hue) is added by /api/state, not by the broadcast. Preserve it across SSE
     // updates so the single-agent mascot stays tinted to match its Agent Fleet
@@ -2422,9 +2428,9 @@ function applySse(name, data) {
     const prevAgent = state.dashboardState?.agent;
     state.dashboardState = data;
     if (!data.runtime_info && prevRi) {
-      const sessionChanged = data.session?.session_id !== prevSessionId;
-      state.dashboardState.runtime_info = prevRi.runtime === 'codex' && sessionChanged
-        ? { ...prevRi, model: null, model_id: null, effort: null, service_tier: null }
+      const sessionChanged = data.sessionId !== prevSessionId || data.runId !== prevRunId;
+      state.dashboardState.runtime_info = sessionChanged
+        ? { ...prevRi, runtime: data.runtime || 'unknown', model: null, model_id: null, effort: null, service_tier: null }
         : prevRi;
     }
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
@@ -2461,24 +2467,28 @@ function connectSse() {
   }
   clearTimeout(state.sseReconnectTimer);
 
-  state.eventSource = new EventSource(api(agentPath('/api/stream')));
+  const source = new EventSource(api(agentPath('/api/stream')));
+  state.eventSource = source;
 
-  state.eventSource.onopen = () => {
+  source.onopen = () => {
+    if (state.eventSource !== source) return;
     state.sseRetries = 0;
     renderConnection('live');
     refreshState().catch(() => {});
     refreshTimeline().catch(() => {});
   };
 
-  state.eventSource.onerror = () => {
-    state.eventSource.close();
+  source.onerror = () => {
+    if (state.eventSource !== source) return;
+    source.close();
     state.eventSource = null;
     renderConnection('reconnecting');
     scheduleSseReconnect();
   };
 
   for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet', 'history_changed']) {
-    state.eventSource.addEventListener(ev, (e) => {
+    source.addEventListener(ev, (e) => {
+      if (state.eventSource !== source) return;
       try { applySse(ev, JSON.parse(e.data)); renderConnection('live'); }
       catch { renderConnection('degraded'); }
     });
@@ -4123,6 +4133,7 @@ function createActionsModal() {
     btn.addEventListener('click', () => execAction(btn.dataset.action));
   });
 
+  overlay.querySelector('#action-mode').addEventListener('change', async event => { await execAction('switch-mode', { mode: event.target.value }); await refreshModeStatus(); });
   async function selectAction(sel, action, key) {
     if (sel._inFlight) return;
     const prev = sel._prevValue ?? sel.value;
@@ -4141,7 +4152,6 @@ function createActionsModal() {
     }
   }
 
-  overlay.querySelector('#action-mode').addEventListener('change', async event => { await execAction('switch-mode', { mode: event.target.value }); await refreshModeStatus(); });
   const modelSel = overlay.querySelector('#action-model');
   const modelCustom = overlay.querySelector('#action-model-custom');
   const modelApply = overlay.querySelector('#action-model-apply');
