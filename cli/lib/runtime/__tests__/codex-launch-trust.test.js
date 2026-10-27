@@ -1,20 +1,27 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { CodexAdapter } from '../codex.js';
 import { SessionAdapter } from '../session-adapter.js';
-import { detectConfigLockCapability } from '../../config-lock.js';
+import * as configLock from '../../config-lock.js';
 import { launchEnvironment } from '../session-command.js';
 import { codexHooksPath, codexTrustMarkerPath, isCodexTrustValid, readHooksState } from '../../codex-hooks.js';
+
+// Keep the real detector except in tests explicitly exercising the no-lock fallback.
+const lockDetection = { detect: configLock.detectConfigLockCapability };
+mock.module('../../config-lock.js', { namedExports: {
+  ...configLock,
+  detectConfigLockCapability: (...args) => lockDetection.detect(...args),
+} });
+const { CodexAdapter } = await import('../codex.js');
 
 const version = 'codex-cli 0.146.0';
 const launchArgs = { sessionGroup: null, runId: 'trust-regression', sessionMode: 'single', launchConfig: { runtime: 'codex', mode: 'default' } };
 
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-launch-trust-'));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-launch-trust-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const home = path.join(dir, 'home');
   const root = path.join(dir, 'zylos');
@@ -206,17 +213,25 @@ await new CodexAdapter({ root, env: process.env }).launch(${JSON.stringify(launc
   assert.equal(Object.keys(readHooksState(path.join(f.home, '.codex', 'config.toml'))).length, 2);
 });
 
+test('lock capability detection returns null when platform lock backends are absent', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'no-config-lock-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.equal(configLock.detectConfigLockCapability({ platform: 'linux', env: { PATH: dir } }), null);
+  assert.equal(configLock.detectConfigLockCapability({ platform: 'darwin', existsSync: () => false }), null);
+});
+
 test('Codex launch refreshes trust when neither flock nor perl is available', async t => {
   const f = fixture(t);
-  f.env.PATH = path.join(f.dir, 'empty-path');
+  const detect = t.mock.method(lockDetection, 'detect', () => null);
   fs.writeFileSync(path.join(f.root, '.env'), 'ZYLOS_CLEAN_ENV=false\n');
   const env = launchEnvironment(f.root, f.env);
-  assert.equal(detectConfigLockCapability({ platform: 'linux', env }), null);
-  assert.equal(detectConfigLockCapability({ platform: 'darwin', existsSync: () => false }), null);
   const warnings = [];
   t.mock.method(process.stderr, 'write', chunk => { warnings.push(String(chunk)); return true; });
   const calls = baseLaunch(t, () => assert.equal(f.valid().valid, true));
   await f.adapter.launch(launchArgs);
+  assert.equal(detect.mock.callCount(), 1, 'adapter must consume the injected no-lock capability');
+  assert.equal(detect.mock.calls[0].result, null);
+  assert.deepEqual(detect.mock.calls[0].arguments[0].env, env);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /Warning: Codex hook trust lock unavailable.*without concurrency protection/);
   assert.equal(calls.length, 1);
@@ -226,10 +241,10 @@ test('Codex launch refreshes trust when neither flock nor perl is available', as
 
 test('Codex rejects failed trust without lock capability before runtime launch', async t => {
   const f = fixture(t);
-  f.env.PATH = path.join(f.dir, 'empty-path');
+  const detect = t.mock.method(lockDetection, 'detect', () => null);
   f.env.FAKE_CODEX_FAIL = '1';
   fs.writeFileSync(path.join(f.root, '.env'), 'ZYLOS_CLEAN_ENV=false\n');
-  assert.equal(detectConfigLockCapability({ platform: 'linux', env: launchEnvironment(f.root, f.env) }), null);
+  const env = launchEnvironment(f.root, f.env);
   const warnings = [];
   t.mock.method(process.stderr, 'write', chunk => { warnings.push(String(chunk)); return true; });
   const calls = baseLaunch(t);
@@ -243,6 +258,9 @@ test('Codex rejects failed trust without lock capability before runtime launch',
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure']);
   assert.equal(fs.existsSync(codexTrustMarkerPath(f.root)), false);
   assert.equal(fs.existsSync(path.join(f.home, '.codex', 'zylos-hooks-trust.lock')), false);
+  assert.equal(detect.mock.callCount(), 1, 'adapter must consume the injected no-lock capability');
+  assert.equal(detect.mock.calls[0].result, null);
+  assert.deepEqual(detect.mock.calls[0].arguments[0].env, env);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /Warning: Codex hook trust lock unavailable/);
 });
