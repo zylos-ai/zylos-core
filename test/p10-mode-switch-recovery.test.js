@@ -135,3 +135,46 @@ test('IF-66 real M4 missing deadlines and mode conflict remain blocked across re
  fs.writeFileSync(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:'single'}));
  await worker.command('expire-controls'); const done=await finish(worker); expect(done.last.reason).toBeNull(); expect(done.fences).toEqual([]);
 },20000);
+
+
+for (const source of ['single', 'multi']) test(`DM-41 ${source} real M4 archive collision retains gate and completes after operator moves conflict`, async () => {
+  const dir = root(source), worker = launch(dir);
+  await worker.next();
+  await worker.command({ seed: [{ content: 'pending source message' }] });
+  const target = source === 'single' ? 'multi' : 'single';
+  const accepted = await request(dir, target);
+  const absorbed = await worker.command('tick');
+  expect(absorbed.row.phase).toBe('converting');
+  const targetDir = path.join(dir, source === 'single' ? 'memory/session-groups/origin' : 'memory');
+  const previous = path.join(dir, 'memory/mode-switch', accepted.runId, 'previous', source === 'single' ? 'origin' : '_global');
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.mkdirSync(previous, { recursive: true });
+  fs.writeFileSync(path.join(targetDir, 'state.md'), 'old target state\n');
+  const conflict = path.join(previous, 'state.md');
+  fs.writeFileSync(conflict, 'conflicting archived state\n');
+  for (let tick = 0; tick < 2; tick++) {
+    const blocked = await worker.command('tick');
+    expect(blocked.row.phase).toBe('converting');
+    expect(blocked.row.reason).toBe('conversion_failed:archive:EEXIST');
+    expect(blocked.row.run_id).toBe(accepted.runId);
+    expect(blocked.row.cutoff).toBe(absorbed.row.cutoff);
+    expect(blocked.row.absorbed_ids).toEqual(absorbed.row.absorbed_ids);
+    expect(blocked.fences.map(fence => fence.sessionGroup)).toEqual(['*']);
+    expect(blocked.mode.mode).toBe(source);
+  }
+  expect(fs.readFileSync(path.join(targetDir, 'state.md'), 'utf8')).toBe('old target state\n');
+  expect(fs.existsSync(path.join(previous, '.done'))).toBe(false);
+  expect(diagnostics(dir).filter(event => event.event === 'transition_convert_failed').map(event => event.reason)).toEqual(['conversion_failed:archive:EEXIST']);
+  const retained = path.join(dir, 'operator-retained-conflict.md');
+  expect(fs.readFileSync(conflict, 'utf8')).toBe('conflicting archived state\n');
+  fs.renameSync(path.join(targetDir, 'state.md'), retained);
+  const done = await finish(worker);
+  expect(done.last.run_id).toBe(accepted.runId);
+  expect(done.last.cutoff).toBe(absorbed.row.cutoff);
+  expect(done.last.reason).toBeNull();
+  expect(done.mode.mode).toBe(target);
+  expect(done.fences).toEqual([]);
+  expect(fs.readFileSync(retained, 'utf8')).toBe('old target state\n');
+  expect(fs.readFileSync(path.join(previous, 'state.md'), 'utf8')).toBe('conflicting archived state\n');
+  expect(diagnostics(dir).filter(event => event.event === 'absorb')).toHaveLength(1);
+}, 20000);

@@ -188,7 +188,7 @@ for (const source of ['single','multi']) test(`IF67 B ${source}: 1000 converted 
   assert.equal(argv(f).length, 1000); assert.deepEqual(inputSnapshot(f), before);
 }, 180000);
 
-test('IF67 19-digit owner gap is explicit: exact query ID rejected, rounded D9 never causes misrouted send', () => {
+test('IF67 unsafe-integer IDs are rejected without misrouting or sending', () => {
   const f = fixture('single'), row = f.add('x', 'exact-route'), converted = f.convert(), runId = converted.row.run_id;
   const exact = '1000000000000000001'; f.db.prepare('UPDATE conversations SET id=? WHERE id=?').run(BigInt(exact), row.id);
   f.db.prepare('UPDATE mode_transitions SET absorbed_ids=? WHERE run_id=?').run(`[${exact}]`, runId);

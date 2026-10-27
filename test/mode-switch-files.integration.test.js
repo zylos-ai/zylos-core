@@ -6,6 +6,8 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fixture as storeFixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createModeSwitchConverter } from '../skills/activity-monitor/scripts/mode-switch-convert.js';
+import { renderStateSkeleton } from '../skills/zylos-memory/scripts/state-format.js';
+import { replyVia } from '../skills/comm-bridge/scripts/c4-query-format.js';
 import { writeModeSwitchFile, parseModeSwitchHeader } from '../cli/lib/mode-switch-files.js';
 
 const cleanups = [];
@@ -108,7 +110,7 @@ for (const mutant of ['drop-pending', 'append-state', 'omit-old-handoff']) test(
 for (const suffix of ["space ' $(not-run) ", 'control\n']) test(`IB08 W4 actual commands preserve script path and IDs for ${JSON.stringify(suffix)}`, () => {
   const f = fixture('single', suffix); f.add('a', 'text', "'; touch injected; '"); const row = f.begin(); const out = f.convert()(row); const handoff = fs.readFileSync(out.handoff, 'utf8');
   const commands = handoff.split('\n').filter(line => line.startsWith('node '));
-  if (suffix.includes('\n')) { assert.equal(commands.length, 0); assert.match(handoff, /Core 路径含控制字符/); return; }
+  if (suffix.includes('\n')) { assert.equal(commands.length, 0); assert.ok(handoff.includes(replyVia({ id: 1 }, path.join(f.root, '.claude/skills/comm-bridge/scripts/c4-send.js')))); return; }
   assert.equal(commands.length, 2);
   const scripts = path.join(f.root, '.claude/skills/comm-bridge/scripts'); fs.mkdirSync(scripts, { recursive: true });
   for (const name of ['c4-send.js', 'c4-fetch.js']) fs.writeFileSync(path.join(scripts, name), 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
@@ -168,4 +170,58 @@ for (const point of ['export', 'check']) test(`conversion ${point} I/O failure p
   assert.throws(() => f.convert({ fsImpl })(row), { step: point, code: point === 'export' ? 'EIO' : 'EACCES' });
   assert.equal(fired, true); assert.deepEqual(snapshotDb(f.db), before);
   f.convert()(row); assert.deepEqual(snapshotDb(f.db), before);
+});
+
+for (const source of ['single', 'multi']) test(`IF39 ${source} recovery materials contain all source files but only previous target handoffs`, () => {
+  const f = fixture(source); f.add('a');
+  const sourceDir = source === 'single' ? '' : 'session-groups/foo:a/';
+  const targetDir = source === 'single' ? 'session-groups/foo:a/' : '';
+  const names = ['state.md', 'inbox.md', 'inbox.20261027T090000000Z.md', 'handoff.md'];
+  const sourceFiles = names.map(name => f.put(sourceDir + name, 'source ' + name));
+  for (const name of names) f.put(targetDir + name, 'previous ' + name);
+  const row = f.begin(); const out = f.convert()(row);
+  const scope = source === 'single' ? 'foo:a' : '_global';
+  const exportFiles = source === 'single' ? ['ungrouped.md'] : Object.keys(row.coverage_snapshot).map(group => group + '.md');
+  const expected = [...sourceFiles, path.join(f.root, 'memory', `mode-switch/${row.run_id}/previous/${scope}/handoff.md`),
+    ...exportFiles.map(name => path.join(f.root, 'memory', `mode-switch/${row.run_id}`, name))].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  assert.deepEqual(out.materials, expected);
+  const listed = fs.readFileSync(out.handoff, 'utf8').split('\n').filter(line => line.startsWith('- material: ')).map(line => JSON.parse(line.slice(12)));
+  assert.deepEqual(listed, expected);
+  for (const name of names) assert.equal(f.read(`mode-switch/${row.run_id}/previous/${scope}/${name}`), 'previous ' + name);
+  assert.deepEqual(f.convert()(row).materials, expected);
+});
+
+test('IF39 renderer dropping one Pending entry while retaining the heading fails check and retains D9/gate', () => {
+  const f = fixture(); f.add('a', 'first'); f.add('a', 'second');
+  const row = f.begin(); const before = snapshotDb(f.db); let removed = false;
+  const renderState = options => {
+    const text = renderStateSkeleton(options);
+    const result = text.replace(/^- #\d+ .*\n/m, '');
+    if (result !== text) removed = true;
+    assert.ok(result.includes('\n## Pending\n'));
+    return result;
+  };
+  assert.throws(() => f.convert({ renderState })(row), { code: 'ABSORBED_MISMATCH', step: 'check' });
+  assert.equal(removed, true); assert.deepEqual(snapshotDb(f.db), before);
+  assert.equal(f.store.getModeTransition().phase, 'converting'); assert.ok(f.store.getDrainFence('*'));
+  f.convert()(row); assert.deepEqual(snapshotDb(f.db), before);
+});
+
+test('W6 single ungrouped export excludes grouped rows inside the same cutoff', () => {
+  const f = fixture();
+  const insert = f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('out','foo','endpoint',?,'delivered',?)");
+  insert.run('only ungrouped one', ''); insert.run('excluded grouped', 'foo:a'); insert.run('only ungrouped two', '');
+  f.add('pending'); const row = f.begin();
+  const expected = f.db.prepare("SELECT id,direction,channel,endpoint_id,timestamp,content FROM conversations WHERE session_group='' AND id<=? ORDER BY id").all(row.cutoff)
+    .map(r => ({ id: r.id, direction: r.direction, channel: r.channel, endpoint: r.endpoint_id, timestamp: r.timestamp, content: r.content }));
+  const out = f.convert()(row); const file = out.materials.find(name => name.endsWith('/ungrouped.md'));
+  assert.deepEqual(fs.readFileSync(file, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line)), JSON.parse(JSON.stringify(expected)));
+  assert.equal(expected.length, 2);
+});
+
+test('IB08 W4 empty absorbed set needs no command even when the Core path contains control characters', () => {
+  const f = fixture('single', 'control\n'); const row = f.begin();
+  const out = f.convert()(row); const handoff = fs.readFileSync(out.handoff, 'utf8');
+  assert.ok(handoff.includes('本次没有被吸收来信，无需按 id 回复或读取全文。'));
+  assert.equal(handoff.split('\n').filter(line => line.startsWith('node ') || line.startsWith('---- reply via:')).length, 0);
 });

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { loadCoreModule } from './core-modules.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
-import { formatAbsorbedSummary, shellQuote } from '../../comm-bridge/scripts/c4-query-format.js';
+import { formatAbsorbedSummary, replyVia, shellQuote } from '../../comm-bridge/scripts/c4-query-format.js';
 import { renderStateSkeleton, validateStateDocument, parseStateHeader, absorbedEntry } from '../../zylos-memory/scripts/state-format.js';
 
 const { groupMemoryDir } = await loadCoreModule('session-group-paths.js');
@@ -80,7 +80,7 @@ export function createModeSwitchConverter({ db, zylosDir, fsImpl = fs, renderSta
     else lines.push('把有效事项按 inbox 格式写入全局 inbox，交下次 Sync；注明冲突，不直接拼接 state。');
     lines.push('Sync 只根据已核实的实际进度提交 followedUpIds；未完成条目保留，不能仅凭出站审计移出。');
     const scripts = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts');
-    if (/[\x00-\x1f\x7f]/.test(scripts)) lines.push('不可用（Core 路径含控制字符）；请先核对 Core 路径，再通过 C4 查询原文。');
+    if (/[\x00-\x1f\x7f]/.test(scripts)) lines.push(rows.length ? replyVia(rows[0], path.join(scripts, 'c4-send.js')) : '本次没有被吸收来信，无需按 id 回复或读取全文。');
     else {
       lines.push('', `脚本目录：${JSON.stringify(scripts)}`);
       if (rows.length) {
@@ -109,7 +109,7 @@ export function createModeSwitchConverter({ db, zylosDir, fsImpl = fs, renderSta
       });
       step = 'archive';
       const archives = scopes.map(scope => archive(transition.run_id, scope));
-      const materials = [...sourceMaterials(transition), ...archives.flatMap(files)];
+      const materials = [...sourceMaterials(transition), ...archives.flatMap(dir => files(dir).filter(file => path.basename(file) === 'handoff.md'))];
       step = 'skeleton';
       const expected = new Map();
       const syncedAt = new Date(transition.created_at * 1000).toISOString();

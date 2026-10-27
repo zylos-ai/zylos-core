@@ -195,3 +195,36 @@ test('IF-36/38 automatic migration respects durable manual intent and unreadable
  await owner.automatic(); assert.deepEqual(f.calls,[]);
  owner.readRequests=()=>{throw error('requests_unreadable');}; await assert.rejects(owner.automatic(),{code:'requests_unreadable'}); assert.deepEqual(f.calls,[]);
 });
+
+
+test('IF-38 changed F1 between admission reads rejects before creating D9', async () => {
+  const f = fixture(), owner = f.create();
+  let reads = 0;
+  owner.readMode = () => ({ mode: ++reads === 1 ? 'single' : 'multi', keyPresent: true });
+  await assert.rejects(owner.handle(request), { code: 'TRANSITION_PRECONDITION', persisted: [] });
+  assert.equal(reads, 2);
+  assert.equal(f.row, null);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.events, []);
+});
+
+test('IB-37 automatic skip diagnostics deduplicate by code and reset after readable F1', async () => {
+  const f = fixture(), owner = f.create();
+  let code = 'EACCES';
+  owner.readMode = () => { throw error(code); };
+  for (const next of ['EACCES', 'EACCES', 'EIO', 'EIO', 'EACCES']) {
+    code = next;
+    await owner.automatic();
+  }
+  assert.deepEqual(f.events.map(event => [event.event, event.reason]), [
+    ['auto_migration_skipped', 'EACCES'], ['auto_migration_skipped', 'EIO'], ['auto_migration_skipped', 'EACCES'],
+  ]);
+  owner.readMode = () => ({ mode: 'single', keyPresent: true });
+  await owner.automatic();
+  owner.readMode = () => { throw error('EACCES'); };
+  await owner.automatic(); await owner.automatic();
+  assert.equal(f.events.length, 4);
+  assert.equal(f.events.at(-1).reason, 'EACCES');
+  assert.equal(f.row, null);
+  assert.deepEqual(f.calls, []);
+});

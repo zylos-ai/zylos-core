@@ -27,6 +27,7 @@ export class ModeSwitchCoordinator {
       }
     });
     this.lastReasons = new Map();
+    this.lastAutoMigrationSkip = null;
     this.attempt = null;
   }
 
@@ -75,7 +76,13 @@ export class ModeSwitchCoordinator {
     if (await this.db.getModeTransition()) return;
     let value;
     try { value = await this.readMode(); if (!modes.has(modeOf(value))) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
-    catch (error) { this.event('auto_migration_skipped', null, { reason: error.code ?? 'CONFIG_UNREADABLE' }); return; }
+    catch (error) {
+      const reason = error.code ?? 'CONFIG_UNREADABLE';
+      if (this.lastAutoMigrationSkip !== reason) this.event('auto_migration_skipped', null, { reason });
+      this.lastAutoMigrationSkip = reason;
+      return;
+    }
+    this.lastAutoMigrationSkip = null;
     if (value.keyPresent !== false || modeOf(value) !== 'single' || await this.legacyPresent()) return;
     if ((await this.readRequests()).some(request => request.reason === 'manual_restart')) return;
     const { runId } = await this.db.beginModeTransition('single', 'multi');
