@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { CodexAdapter } from '../codex.js';
 import { SessionAdapter } from '../session-adapter.js';
+import { detectConfigLockCapability } from '../../config-lock.js';
+import { launchEnvironment } from '../session-command.js';
 import { codexHooksPath, codexTrustMarkerPath, isCodexTrustValid, readHooksState } from '../../codex-hooks.js';
 
 const version = 'codex-cli 0.146.0';
@@ -157,4 +159,40 @@ test('Codex launch trusts CODEX_HOME selected by the runtime dotenv policy', asy
   assert.ok(Object.keys(readHooksState(path.join(effectiveHome, 'config.toml'))).length > 0);
   await f.adapter.launch(launchArgs);
   assert.equal(f.events().filter(e => e.event === 'start').length, 1);
+});
+
+test('Codex launch refreshes trust when neither flock nor perl is available', async t => {
+  const f = fixture(t);
+  f.env.PATH = path.join(f.dir, 'empty-path');
+  fs.writeFileSync(path.join(f.root, '.env'), 'ZYLOS_CLEAN_ENV=false\n');
+  const env = launchEnvironment(f.root, f.env);
+  assert.equal(detectConfigLockCapability({ platform: 'linux', env }), null);
+  assert.equal(detectConfigLockCapability({ platform: 'darwin', existsSync: () => false }), null);
+  const calls = baseLaunch(t, () => assert.equal(f.valid().valid, true));
+  await f.adapter.launch(launchArgs);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(f.events().map(e => e.event), ['start', 'end']);
+  assert.equal(fs.existsSync(path.join(f.home, '.codex', 'zylos-hooks-trust.lock')), false);
+});
+
+test('Codex trust worker leaves the parent event loop responsive and environment unchanged', async t => {
+  const f = fixture(t);
+  const parentEnv = { HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME };
+  const calls = baseLaunch(t);
+  let observedPendingTrust = false;
+  const timer = setInterval(() => {
+    const events = f.events().map(e => e.event);
+    if (events.includes('start') && !events.includes('end')) {
+      observedPendingTrust = true;
+      assert.equal(calls.length, 0, 'runtime launch waits until trust completes');
+      assert.deepEqual({ HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME }, parentEnv);
+    }
+  }, 5);
+  t.after(() => clearInterval(timer));
+  await f.adapter.launch(launchArgs);
+  clearInterval(timer);
+  assert.equal(observedPendingTrust, true, 'parent must run while app-server trust is pending');
+  assert.equal(calls.length, 1);
+  assert.deepEqual({ HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME }, parentEnv);
+  assert.equal(f.valid().valid, true);
 });
