@@ -18,7 +18,7 @@ export function createSessionCache(read, ttlMs = 15_000) {
   let cached;
   return sessionId => {
     const now = Date.now();
-    if (cached && cached.sessionId === sessionId && now - cached.at < ttlMs) return cached.value;
+    if (sessionId !== null && sessionId !== undefined && cached && cached.sessionId === sessionId && now - cached.at < ttlMs) return cached.value;
     const value = read();
     cached = { sessionId, value, at: Date.now() };
     return value;

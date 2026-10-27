@@ -1,3 +1,4 @@
+import { handleCoreAction } from './core-actions.js';
 import { execFile, spawn } from 'node:child_process';
 import https from 'node:https';
 import { promisify } from 'node:util';
@@ -145,10 +146,11 @@ export async function handleAction(action, body, config) {
   let result;
   try {
     switch (action) {
-      case 'interrupt': result = await interrupt(reqId, zylosDir); break;
-      case 'chop-chop': result = await chopChop(reqId, zylosDir); break;
-      case 'restart-session': result = await restartSession(reqId, config); break;
-      case 'switch-runtime': result = await switchRuntime(reqId, body, config); break;
+      case 'interrupt':
+      case 'chop-chop':
+      case 'restart-session':
+      case 'switch-mode':
+      case 'switch-runtime': result = await handleCoreAction(action, body, { ...config, zylosDir }); break;
       case 'switch-model': result = await switchModel(reqId, body, config, zylosDir); break;
       case 'switch-effort': result = await switchEffort(reqId, body, config, zylosDir); break;
       case 'set-threshold': result = await setThreshold(reqId, body, config, zylosDir); break;
@@ -163,113 +165,6 @@ export async function handleAction(action, body, config) {
 
   log(reqId, `<= ${result.ok ? 'ok' : 'fail'}${result.error ? ' ' + result.error : ''}${result.message ? ' | ' + result.message : ''}`);
   return result;
-}
-
-async function interrupt(reqId, zylosDir) {
-  const c4Control = c4ControlPath(zylosDir);
-  log(reqId, `enqueue control: [KEYSTROKE]Escape (priority=0, bypass-state) via ${c4Control}`);
-  try {
-    const { stdout, stderr } = await execFileAsync(
-      'node',
-      [c4Control, 'enqueue', '--content', '[KEYSTROKE]Escape', '--priority', '0', '--bypass-state', '--no-ack-suffix'],
-      { timeout: 5000 }
-    );
-    const out = (stdout || '').trim() + (stderr ? ` | stderr: ${stderr.trim()}` : '');
-    log(reqId, `c4-control done${out ? ': ' + out : ''}`);
-    return { ok: true, message: 'Interrupt signal sent', messageKey: 'result.interrupt_ok' };
-  } catch (err) {
-    log(reqId, `c4-control failed: ${err.message}`);
-    return { ok: false, error: 'interrupt_failed', message: err.message, messageKey: 'result.interrupt_failed', messageParams: { error: err.message } };
-  }
-}
-
-async function chopChop(reqId, zylosDir) {
-  const interrupted = await interrupt(reqId, zylosDir);
-  if (!interrupted.ok) {
-    return {
-      ...interrupted, error: 'chop_chop_escape_failed',
-      messageKey: 'result.chop_chop_escape_failed',
-      escape_enqueued: false, continue_enqueued: false
-    };
-  }
-
-  // Match interrupt's enqueue guarantee; delivery to the runtime is asynchronous.
-  await delay(500);
-  const c4Control = c4ControlPath(zylosDir);
-  try {
-    log(reqId, 'enqueue control: continue (priority=0, bypass-state)');
-    await execFileAsync('node', [
-      c4Control, 'enqueue', '--content', 'continue', '--priority', '0',
-      '--bypass-state', '--no-ack-suffix'
-    ], { timeout: 5000 });
-    return {
-      ok: true, message: 'Escape and continue controls queued',
-      messageKey: 'result.chop_chop_ok',
-      escape_enqueued: true, continue_enqueued: true
-    };
-  } catch (err) {
-    log(reqId, `continue enqueue failed: ${err.message}`);
-    return {
-      ok: false, error: 'chop_chop_continue_failed',
-      message: `Escape queued, but continue could not be queued: ${err.message}`,
-      messageKey: 'result.chop_chop_continue_failed', messageParams: { error: err.message },
-      escape_enqueued: true, continue_enqueued: false
-    };
-  }
-}
-
-async function restartSession(reqId, config) {
-  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
-  const session = runtime === 'codex' ? 'codex-main' : 'claude-main';
-  log(reqId, `exec: tmux kill-session -t ${session}`);
-  try {
-    await execFileAsync('tmux', ['kill-session', '-t', session], { timeout: 5000 });
-    log(reqId, `tmux session "${session}" killed`);
-    return { ok: true, message: `Session "${session}" terminated. Activity monitor will restart it.`, messageKey: 'result.restart_ok', messageParams: { session } };
-  } catch (err) {
-    if (err.message?.includes('no server running') || err.message?.includes("can't find session")) {
-      log(reqId, `tmux: no active session "${session}"`);
-      return { ok: true, message: 'No active session found. Activity monitor will start a new one.', messageKey: 'result.restart_no_session' };
-    }
-    log(reqId, `tmux kill-session failed: ${err.message}`);
-    return { ok: false, error: 'restart_failed', message: err.message, messageKey: 'result.restart_failed', messageParams: { error: err.message } };
-  }
-}
-
-async function switchRuntime(reqId, body, config) {
-  const target = body?.runtime;
-  if (!target || !['claude', 'codex'].includes(target)) {
-    return { ok: false, error: 'invalid_runtime', message: 'runtime must be "claude" or "codex"', messageKey: 'result.invalid_runtime' };
-  }
-
-  const current = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
-  if (target === current) {
-    return { ok: false, error: 'already_active', message: `Already running ${target}`, messageKey: 'result.already_active', messageParams: { value: target } };
-  }
-
-  log(reqId, `runtime switch: ${current} → ${target}`);
-  try {
-    await execFileAsync('which', [target], { timeout: 3000 });
-  } catch {
-    log(reqId, `${target} CLI not found in PATH`);
-    return { ok: false, error: 'not_installed', message: `${target} CLI not found. Install it first.`, messageKey: 'result.not_installed', messageParams: { value: target } };
-  }
-
-  log(reqId, `spawn detached: zylos runtime ${target}`);
-  const child = spawn('zylos', ['runtime', target], {
-    detached: true, stdio: 'ignore', env: { ...process.env }
-  });
-  child.unref();
-
-  setTimeout(() => {
-    log(reqId, 'self-restart: pm2 restart zylos-dashboard');
-    const restart = spawn('pm2', ['restart', 'zylos-dashboard'], {
-      detached: true, stdio: 'ignore',
-    });
-    restart.unref();
-  }, 15_000);
-
-  return { ok: true, message: `Switching to ${target}. Dashboard will restart in ~15s.`, detached: true, messageKey: 'result.switching_runtime', messageParams: { value: target } };
 }
 
 async function switchModel(reqId, body, config, zylosDir) {

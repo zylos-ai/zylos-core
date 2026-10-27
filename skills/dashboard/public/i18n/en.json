@@ -502,5 +502,10 @@
   "observer.size.error.observer_starting": "Observer is connecting; try again in a moment",
   "observer.size.error.agent_resize_failed": "Resize failed; the saved size is unchanged",
   "observer.size.failed": "Could not set size ({code})",
-  "observer.size.error.rows_limit": "Height can be at most {maxRows} here: the tmux status line counts toward the 200-row limit"
+  "observer.size.error.rows_limit": "Height can be at most {maxRows} here: the tmux status line counts toward the 200-row limit",
+  "actions.session_mode": "Session mode",
+  "confirm.switch_mode": "Switch the whole instance to {mode}? Active work may be interrupted.",
+  "actions.supervisor_unreachable": "Supervisor unavailable",
+  "actions.blocked_since": "Blocked since {time}",
+  "timeline.source_gap": "History source {source}: {reason}"
 }

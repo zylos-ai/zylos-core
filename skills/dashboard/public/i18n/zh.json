@@ -502,5 +502,10 @@
   "observer.size.error.observer_starting": "Observer 正在连接，请稍后再试",
   "observer.size.error.agent_resize_failed": "设置失败，记住的尺寸未改变",
   "observer.size.failed": "设置失败（{code}）",
-  "observer.size.error.rows_limit": "这里的高最多为 {maxRows}：tmux 状态栏也计入 200 行上限"
+  "observer.size.error.rows_limit": "这里的高最多为 {maxRows}：tmux 状态栏也计入 200 行上限",
+  "actions.session_mode": "会话模式",
+  "confirm.switch_mode": "将整个实例切换为 {mode}？此操作可能中断正在进行的工作。",
+  "actions.supervisor_unreachable": "监督服务不可用",
+  "actions.blocked_since": "自 {time} 起受阻",
+  "timeline.source_gap": "历史来源 {source}：{reason}"
 }

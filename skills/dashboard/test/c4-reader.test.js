@@ -167,7 +167,7 @@ test('C4Reader — missing db returns safe defaults', () => {
   const reader = new C4Reader(tmpDir);
   try {
     assert.equal(reader.getTodayStats(), null);
-    assert.deepEqual(reader.getPendingQueue(), { depth: 0, oldest_age_s: null });
+    assert.deepEqual(reader.getPendingQueue(), { depth: null, oldest_age_s: null, error: 'READ_FAILED' });
     assert.deepEqual(reader.getLastOutbound(), {});
     assert.equal(reader.getAvgResponseTime(), null);
   } finally {

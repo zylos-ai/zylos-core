@@ -1032,8 +1032,9 @@ function timelineItemClass(event) {
 
 function renderTimeline() {
   const events = state.timeline || [];
+  const gaps = state.timelineGaps || [];
   const container = $('#timeline-list');
-  if (!events.length) {
+  if (!events.length && !gaps.length) {
     container.innerHTML = `<p class="empty-state">${t('timeline.empty')}</p>`;
     return;
   }
@@ -1050,6 +1051,12 @@ function renderTimeline() {
       `<span class="timeline-duration">${esc(durStr)}</span>`;
     return el;
   }));
+  for (const gap of gaps) {
+    const notice = document.createElement('p');
+    notice.className = 'empty-state';
+    notice.textContent = t('timeline.source_gap', { source: gap.name || gap.stream || 'Core', reason: gap.extra?.reason || gap.reason || 'unknown' });
+    container.prepend(notice);
+  }
   $('#timeline-updated').textContent = fmtAge(state.timelineUpdatedAt);
 }
 
@@ -1914,6 +1921,7 @@ async function refreshTimeline() {
   const since = new Date(Date.now() - 30 * 60_000).toISOString();
   const data = await fetchJson(`/api/timeline?since=${since}&limit=200&order=desc`);
   if (!data || typeof data !== 'object') return;
+  state.timelineGaps = data.gaps || [];
   state.timeline = (data.events || []).filter((e) => (
     e.event_type !== 'pre_tool_use' &&
     e.event_type !== 'tool_result'
@@ -2157,7 +2165,7 @@ async function openObserver() {
     // Keep lease acquisition observable after cancellation so a late ID can be
     // released against its original target. Frame/status fetches are abortable.
     const leaseResp = await fetch(`${endpoints.api}/leases`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Observer-Run': state.dashboardState?.runId || '' }
     });
     const lease = await leaseResp.json().catch(() => ({}));
     if (!leaseResp.ok) throw observerRequestError(lease, leaseResp.status);
@@ -4042,6 +4050,8 @@ function createActionsModal() {
     </div>
     <div class="action-group">
       <span class="action-group-label">${esc(t('actions.configuration'))}</span>
+      <div class="action-field"><label class="action-field-label">${esc(t('actions.session_mode'))}</label><select id="action-mode" class="action-select"><option value="single">single</option><option value="multi">multi</option></select></div>
+      <p id="action-mode-status" class="modal-status" style="overflow-wrap:anywhere"></p>
       <div class="action-field">
         <label class="action-field-label">${esc(t('actions.runtime'))}</label>
         <select id="action-runtime" class="action-select">
@@ -4122,6 +4132,7 @@ function createActionsModal() {
     }
   }
 
+  overlay.querySelector('#action-mode').addEventListener('change', async event => { await execAction('switch-mode', { mode: event.target.value }); await refreshModeStatus(); });
   const modelSel = overlay.querySelector('#action-model');
   const modelCustom = overlay.querySelector('#action-model-custom');
   const modelApply = overlay.querySelector('#action-model-apply');
@@ -4211,10 +4222,22 @@ function createActionsModal() {
   return overlay;
 }
 
+async function refreshModeStatus() {
+  const text = actionsModal?.querySelector('#action-mode-status');
+  try {
+    const result = await fetchJson('/api/session-mode');
+    if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
+    const data = result.data;
+    actionsModal.querySelector('#action-mode').value = data.sessionMode || 'single';
+    text.textContent = [data.sessionMode || 'single', data.transition?.phase, data.transition?.reason, data.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', data.blocked?.since ? t('actions.blocked_since', { time: data.blocked.since }) : ''].filter(Boolean).join(' · ');
+  } catch (error) { if (text) text.textContent = error.message; }
+}
+
 async function openActionsModal() {
   if (remoteIsReadOnly()) return;
   const modal = createActionsModal();
   modal.hidden = false;
+  refreshModeStatus();
 
   const statusEl = modal.querySelector('#action-status');
   statusEl.hidden = true;
@@ -4346,7 +4369,7 @@ function updateRestartDot() {
   btn.title = pending ? t('info.pending_restart') : '';
 }
 
-const CONFIRM_ACTIONS = new Set(['interrupt', 'chop-chop', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
+const CONFIRM_ACTIONS = new Set(['switch-mode', 'interrupt', 'chop-chop', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
 
 let countdownTimer = null;
 let pendingConfirmCancel = null;
@@ -4426,10 +4449,15 @@ function showConfirm(text) {
 
 async function execAction(action, body) {
   if (remoteIsReadOnly()) return false;
+  if (['interrupt', 'chop-chop', 'restart-session'].includes(action)) {
+    const shown = state.dashboardState;
+    body = { ...body, sessionGroup: shown?.sessionGroup, runId: shown?.runId, sessionId: shown?.sessionId };
+  }
   const actionPath = agentPath(`/api/actions/${action}`);
   const healthPath = agentPath('/api/health');
   if (CONFIRM_ACTIONS.has(action)) {
     const labels = {
+      'switch-mode': t('confirm.switch_mode', { mode: body?.mode }),
       'interrupt': t('confirm.interrupt'),
       'chop-chop': t('confirm.chop_chop'),
       'restart-session': t('confirm.restart'),

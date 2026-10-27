@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+import { CoreState } from './lib/core-state.js';
 import { createCoalescedBroadcast, createSessionCache, broadcastFleetSnapshot } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
-import { execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -96,10 +98,11 @@ function readInstalledVersions() {
 
 function refreshInstalledVersions() {
   readInstalledVersions();
-  const st = stateEngine?.getState();
+  const st = coreState?.getState();
   if (st) {
-    st.runtime_info = buildRuntimeInfo();
-    sse.broadcast('state_change', st);
+    const current = coreState.getState();
+    current.runtime_info = buildRuntimeInfo();
+    sse.broadcast('state_change', current);
     scheduleFleetStateBroadcast();
   }
 }
@@ -107,7 +110,7 @@ function refreshInstalledVersions() {
 const config = loadConfig();
 ensureDataDirs(config);
 await migratePasswordIfNeeded(config);
-let zylosUpgradeResult = consumeZylosUpgradeMarker(config.zylosDir, zylosVersion);
+let zylosUpgradeResult = null; // A previous launch marker is not completion evidence.
 
 const activeRuntime = loadZylosConfig(config.zylosDir).runtime || process.env.ZYLOS_RUNTIME || 'claude';
 const isClaudeRuntime = activeRuntime === 'claude';
@@ -123,10 +126,11 @@ try {
   process.exit(1);
 }
 
+const coreState = new CoreState({ onChange: () => { if (typeof scheduleFleetStateBroadcast === 'function') scheduleFleetStateBroadcast(); } });
 const auth = new AuthGate(config, store);
 const memoryBrowser = new MemoryBrowser({ zylosDir: config.zylosDir });
 const observerInstaller = new ObserverInstaller({ dataDir: config.dataDir });
-const observerContainment = createObserverContainment({ dataDir: config.dataDir });
+const observerContainment = createObserverContainment({ dataDir: config.dataDir, resolveOrigin: () => coreState.currentTarget() });
 const observerCoordinator = new ObserverCoordinator({
   configPath: config.configPath,
   installer: observerInstaller,
@@ -143,6 +147,7 @@ const observerManager = new ObserverManager({
   containment: observerContainment,
   authGate: auth,
   runtime: activeRuntime,
+  resolveOrigin: () => coreState.currentTarget(),
   maxViewers: config.observer.maxViewers,
   leaseTtlMs: config.observer.leaseTtlMs,
   idleGraceMs: config.observer.idleGraceMs,
@@ -210,7 +215,7 @@ const scheduleFleetStateBroadcast = createCoalescedBroadcast(broadcastFleetState
 const versionChecker = new VersionChecker({
   onUpdate: () => {
     if (stateEngine) {
-      const st = stateEngine.getState();
+      const st = coreState.getState();
       st.runtime_info = buildRuntimeInfo();
       sse.broadcast('state_change', st);
       scheduleFleetStateBroadcast();
@@ -234,12 +239,14 @@ const INSTALLED_VERSIONS_REFRESH_MS = 10 * 60 * 1000;
 setInterval(readInstalledVersions, INSTALLED_VERSIONS_REFRESH_MS).unref();
 
 function buildRuntimeInfo() {
-  const slInfo = statuslineCollector?.getRuntimeInfo();
+  const live = coreState.getState();
+  const usage = live.usage?.valid ? live.usage.value : null;
+  const slInfo = live.runtime === 'claude' && usage ? { model: usage.model?.display_name, model_id: usage.model?.id, effort: usage.effort?.level, cc_version: usage.version } : null;
   const latest = versionChecker.getLatest();
   const ccRunning = slInfo?.cc_version || null;
 
   const settings = isClaudeRuntime ? readClaudeSettings() : {};
-  const codexRuntimeInfo = codexRolloutCollector?.getRuntimeInfo?.() || null;
+  const codexRuntimeInfo = live.runtime === 'codex' && usage ? { model_id: usage.model ?? null, effort: usage.reasoningEffort ?? null, cli_version: usage.cliVersion ?? null } : null;
   const codexRunning = activeRuntime === 'codex' ? codexRuntimeInfo?.cli_version || null : null;
   const claudeNeedsRestart = isClaudeRuntime &&
     ((settings.model && slInfo?.model_id && settings.model !== slInfo.model_id) ||
@@ -253,8 +260,9 @@ function buildRuntimeInfo() {
 
   const info = {
     zylos_version: zylosVersion,
-    runtime: activeRuntime,
-    ...(activeRuntime === 'codex'
+    runtime: live.runtime || 'unknown',
+    configured_runtime: activeRuntime,
+    ...(live.runtime === 'codex'
       ? codexRuntimeFields(codexRuntimeInfo, {
           model: readCodexRootString('model', config.zylosDir),
           effort: readCodexRootString('model_reasoning_effort', config.zylosDir),
@@ -308,9 +316,9 @@ function getSystemMetrics() {
 const getCachedCostAggregate = createSessionCache(() => metricResolver.resolveAggregated('cost') || {});
 
 function getCostTiers() {
-  const aggregate = getCachedCostAggregate(stateEngine.getCurrentSessionId());
+  const aggregate = getCachedCostAggregate(coreState.costKey);
   return {
-    session_cost: aggregate.session ?? metricResolver.resolve('session_cost').value ?? null,
+    session_cost: aggregate.session ?? null,
     daily_cost: aggregate.today ?? metricResolver.resolve('daily_cost').value ?? null,
     weekly_cost: aggregate.seven_day ?? null
   };
@@ -319,8 +327,9 @@ function getCostTiers() {
 // 7. State engine
 const stateEngine = new StateEngine(store, collectors, config, {
   onStateChange: (st) => {
-    st.runtime_info = buildRuntimeInfo();
-    sse.broadcast('state_change', st);
+    const current = coreState.getState();
+    current.runtime_info = buildRuntimeInfo();
+    sse.broadcast('state_change', current);
     scheduleFleetStateBroadcast();
   }
 });
@@ -354,7 +363,7 @@ if (codexRolloutCollector) {
 }
 
 // 8. Metric resolver
-const metricResolver = new MetricResolver(store, collectors, config, { stateEngine });
+const metricResolver = new MetricResolver(store, collectors, config, { stateEngine: coreState });
 
 // 9b. C4 reader (read-only access to comm-bridge DB)
 const c4Reader = new C4Reader(config.zylosDir);
@@ -377,7 +386,7 @@ function rateLimitPct(metricName) {
 }
 
 function buildApiStatePayload() {
-  const stateData = stateEngine.getState();
+  const stateData = coreState.getState();
   // Include the agent's deterministic identity color/hue so the single-agent
   // mascot can be tinted to match this agent's fleet tile.
   stateData.agent = { ...config.agent, ...agentColor(config.agent?.name) };
@@ -385,9 +394,10 @@ function buildApiStatePayload() {
   stateData.runtime_info = buildRuntimeInfo();
   stateData.new_session_threshold = getNewSessionThreshold();
   stateData.system_metrics = getSystemMetrics();
-  stateData.context_pct = metricResolver.resolve('context_pct').value;
-  stateData.rate_limit_pct = rateLimitPct('rate_limit');
-  stateData.rate_limit_7d_pct = rateLimitPct('rate_limit_7d');
+  const usage = stateData.usage?.valid ? stateData.usage.value : null;
+  stateData.context_pct = usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null);
+  stateData.rate_limit_pct = coreState.accountUsage?.five_hour?.used_percentage ?? coreState.accountUsage?.fiveHour?.usedPercentage ?? null;
+  stateData.rate_limit_7d_pct = coreState.accountUsage?.seven_day?.used_percentage ?? coreState.accountUsage?.sevenDay?.usedPercentage ?? null;
   Object.assign(stateData, getCostTiers());
   return stateData;
 }
@@ -888,6 +898,7 @@ async function startupSequence({ initialCollectors = true } = {}) {
 
   // State engine initialize (snapshot restore + replay)
   await stateEngine.initialize();
+  await coreState.start();
 }
 
 function loadZylosConfig(zylosDir) {
@@ -1004,7 +1015,16 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/session-mode' || pathname === '/api/instance-status') {
+    try {
+      const args = pathname === '/api/session-mode' ? ['session-mode', 'status', '--json'] : ['status', '--json'];
+      const { stdout } = await promisify(execFile)('zylos', args, { timeout: 10000, maxBuffer: 1024 * 1024 });
+      sendJson(res, 200, JSON.parse(stdout));
+    } catch (error) { sendJson(res, 503, { ok: false, error: { code: 'STATUS_UNAVAILABLE', message: error.message } }); }
+    return true;
+  }
   if (pathname === '/api/state') {
+    await coreState.refresh();
     sendJson(res, 200, buildApiStatePayload());
     return true;
   }
@@ -1079,7 +1099,7 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 400, { error: 'metric must be "cost", "cache", or "tokens"' });
       return true;
     }
-    let bounds = periodBounds(period, tz, stateEngine);
+    let bounds = periodBounds(period, tz, coreState);
     if (bounds === undefined) { sendJson(res, 400, { error: `invalid period: ${period}` }); return true; }
     const resolved = resolveAggregateValue(store, metric, bounds, { runtime: activeRuntime, period });
     const value = resolved.value;
@@ -1127,7 +1147,13 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 400, { error: 'missing metric name' });
       return true;
     }
-    const result = metricResolver.resolve(metricName);
+    let result;
+    if (['context_pct', 'rate_limit', 'rate_limit_7d'].includes(metricName)) {
+      await coreState.refresh();
+      const current = buildApiStatePayload();
+      const value = current[{ context_pct: 'context_pct', rate_limit: 'rate_limit_pct', rate_limit_7d: 'rate_limit_7d_pct' }[metricName]];
+      result = { value, selected_source: 'core-session-reader', freshness: current.usage?.sampledAt ? (Date.now() - current.usage.sampledAt) / 1000 : null, confidence: value === null ? 'none' : 'actual', alternatives: [], fallback_reason: value === null ? current.usage?.reason || 'missing' : null };
+    } else result = metricResolver.resolve(metricName);
     sendJson(res, 200, result);
     return true;
   }
@@ -1628,7 +1654,7 @@ if (isMain && process.argv.includes('--smoke')) {
     host: config.host,
     phase: 'phase2a',
     db: dbPath,
-    state: stateEngine.getState().state
+    state: coreState.getState().state
   }, null, 2));
   store.close();
 } else if (isMain) {
@@ -1706,7 +1732,7 @@ if (isMain && process.argv.includes('--smoke')) {
       if (conversationCollector) conversationCollector.stop();
       if (codexRolloutCollector) codexRolloutCollector.stop();
       stateEngine.stopSnapshotTimer();
-
+      await coreState.stop();
       if (retentionTimer) clearInterval(retentionTimer);
       retentionAbort.abort();
       await retentionRun;

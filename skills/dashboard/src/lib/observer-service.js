@@ -278,7 +278,7 @@ export class ObserverService {
       if (pathname === '/api/observer/leases' && req.method === 'POST') {
         await this._ready();
         await this.ensureCoordinatorOwnership();
-        sendJson(res, 201, await this.manager.createLease(context));
+        sendJson(res, 201, await this.manager.createLease(context, { runId: req.headers['x-observer-run'] }));
         return true;
       }
       const leaseRoute = pathname.match(/^\/api\/observer\/leases\/([A-Za-z0-9_-]{32})\/(renew|release)$/);
