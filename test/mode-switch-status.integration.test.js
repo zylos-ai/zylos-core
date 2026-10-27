@@ -11,7 +11,7 @@ import Database from 'better-sqlite3';
 import { guardDatabase, planDatabaseMigration } from '../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
 import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
-import { readSessionModeStatus, readSupervisorPm2 } from '../cli/lib/session-mode-status.js';
+import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -79,35 +79,12 @@ test('IB44 missing database fails without bootstrapping directories or SQLite fi
   expect(fs.readdirSync(root)).toEqual([]);
 });
 
-test('IB44 PM2 observation never starts a missing daemon and reads a real private daemon', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-status-pm2-')); roots.push(root);
-  const home = path.join(root, 'pm2'); const env = { ...process.env, PM2_HOME: home, PM2_SILENT: 'true' };
-  await expect(readSupervisorPm2({ env, timeoutMs: 30 })).rejects.toThrow();
-  expect(fs.existsSync(home)).toBe(false);
-  const execute = promisify(execFile);
-  const entry = fileURLToPath(import.meta.resolve('pm2/bin/pm2'));
-  const command = args => execute(process.execPath, [entry, ...args], { env, timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
-  const script = path.join(root, 'idle.mjs'); fs.writeFileSync(script, 'setInterval(() => {}, 1000);\n');
-  try {
-    await command(['start', script, '--name', 'activity-monitor', '--no-autorestart']);
-    const pid = fs.readFileSync(path.join(home, 'pm2.pid'), 'utf8');
-    expect(await readSupervisorPm2({ env })).toBe('online');
-    await command(['stop', 'activity-monitor']);
-    expect(await readSupervisorPm2({ env })).toBe('stopped');
-    expect(fs.readFileSync(path.join(home, 'pm2.pid'), 'utf8')).toBe(pid);
-  } finally {
-    if (fs.existsSync(path.join(home, 'pm2.pid'))) await command(['kill']);
-    expect(fs.existsSync(path.join(home, 'pm2.pid'))).toBe(false);
-    expect(fs.existsSync(path.join(home, 'rpc.sock'))).toBe(false);
-  }
-}, 30000);
-
-async function publicStatus(root, args = ['--json']) {
+async function publicStatus(root, args = ['--json'], extraEnv = {}) {
   const execute = promisify(execFile);
   try {
     const result = await execute(process.execPath, ['cli/zylos.js', 'session-mode', 'status', ...args], {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
-      env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, 'private-pm2'), PM2_RPC_PORT: '' },
+      env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, 'private-pm2'), PM2_RPC_PORT: '', ...extraEnv },
       timeout: 10000,
     });
     return { ...result, code: 0 };
@@ -128,7 +105,7 @@ test('public status CLI reports real blocked D9 with M4 absent, no PM2 startup o
   const body = JSON.parse(result.stdout); expect(body.ok).toBe(true);
   expect(body.data.transition.runId).toBe(runId); expect(body.data.globalGate.present).toBe(true);
   expect(body.data.blocked).toEqual({ reason: 'running_control_without_deadline:machine:17', since: null });
-  expect(body.data.supervisor).toBe('unreachable'); expect(body.data.supervisorPm2.status).toBe('unobservable');
+  expect(body.data.supervisor).toBe('unreachable'); expect(body.data.supervisorPm2).toEqual({ status: 'daemon_not_running', error: null });
   expect(fs.existsSync(path.join(root, 'private-pm2'))).toBe(false);
   expect(fs.readFileSync(filename)).toEqual(before);
   const text = await publicStatus(root, []);
@@ -193,4 +170,73 @@ test('IB44 public status leaves a pending schema migration byte-identical instea
   expect(result.code).toBe(1);
   expect(JSON.parse(result.stdout).ok).toBe(false);
   expect(fs.existsSync(path.join(root, 'private-pm2'))).toBe(false);
+});
+
+function pm2Cli(root, body) {
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
+  const executable = path.join(bin, 'pm2');
+  fs.writeFileSync(executable, String.raw`#!${process.execPath}
+import fs from 'node:fs';
+import path from 'node:path';
+fs.appendFileSync(path.join(process.env.HOME, 'pm2-calls'), JSON.stringify(process.argv.slice(2)) + '\n');
+${body}
+`, { mode: 0o700 });
+  // The executable has no extension, so declare ESM for this isolated CLI fixture.
+  fs.writeFileSync(path.join(bin, 'package.json'), '{"type":"module"}');
+  return { PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+}
+
+async function pm2Socket(root) {
+  const home = path.join(root, 'private-pm2'); fs.mkdirSync(home);
+  const server = net.createServer(socket => socket.destroy());
+  server.listen(path.join(home, 'rpc.sock')); await once(server, 'listening');
+  return server;
+}
+
+test('IF66 missing PM2 socket skips the CLI and leaves no daemon after public status exits', async () => {
+  const { root, database } = fixture(); database.close();
+  const env = pm2Cli(root, `fs.mkdirSync(process.env.PM2_HOME, { recursive: true });
+fs.writeFileSync(path.join(process.env.PM2_HOME, 'pm2.pid'), String(process.pid));
+console.log('[]');`);
+  const result = await publicStatus(root, ['--json'], env);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout).data.supervisorPm2).toEqual({ status: 'daemon_not_running', error: null });
+  expect(fs.existsSync(path.join(root, 'pm2-calls'))).toBe(false);
+  expect(fs.existsSync(path.join(root, 'private-pm2'))).toBe(false);
+});
+
+for (const [label, output, status] of [
+  ['no activity-monitor', '[]', 'not_found'],
+  ['activity-monitor online', '[{"name":"activity-monitor","pm2_env":{"status":"online"}}]', 'online'],
+  ['activity-monitor stopped', '[{"name":"activity-monitor","pm2_env":{"status":"stopped"}}]', 'stopped'],
+]) test(`IF66 existing PM2 socket uses public jlist: ${label}`, async () => {
+  const { root, database } = fixture(); database.close();
+  const env = pm2Cli(root, `console.log('PM2 version notice');
+console.log(${JSON.stringify(output)});`);
+  const server = await pm2Socket(root);
+  try {
+    const result = await publicStatus(root, ['--json'], env);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).data.supervisorPm2).toEqual({ status, error: null });
+    expect(fs.readFileSync(path.join(root, 'pm2-calls'), 'utf8').trim()).toBe('["jlist"]');
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+for (const [label, body, message] of [
+  ['command failure', "console.error('private output must not leak'); process.exit(2);", 'Unable to collect PM2 process status'],
+  ['timeout', 'setInterval(() => {}, 1000);', 'Unable to collect PM2 process status'],
+  ['invalid output', "console.log('not JSON');", 'PM2 returned invalid JSON'],
+]) test(`IF66 public status preserves authoritative state when PM2 jlist has ${label}`, async () => {
+  const { root, database, store } = fixture();
+  const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); database.close();
+  const env = pm2Cli(root, body); const server = await pm2Socket(root);
+  try {
+    const result = await publicStatus(root, ['--json'], env);
+    expect(result.code).toBe(0);
+    const data = JSON.parse(result.stdout).data;
+    expect(data.supervisor).toBe('unreachable'); expect(data.transition.runId).toBe(runId); expect(data.globalGate.present).toBe(true);
+    expect(data.supervisorPm2).toEqual({ status: 'unobservable', error: { code: 'READ_FAILED', message } });
+    expect(result.stdout).not.toContain('private output must not leak');
+    expect(fs.readFileSync(path.join(root, 'pm2-calls'), 'utf8').trim()).toBe('["jlist"]');
+  } finally { await new Promise(resolve => server.close(resolve)); }
 });

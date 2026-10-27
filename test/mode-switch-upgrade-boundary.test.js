@@ -9,7 +9,7 @@ import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 const cleanups = [];
 afterEach(async () => { while (cleanups.length) await cleanups.pop()(); });
 
-test('frozen upgrade service-restoration boundary with real M4 preserves legacy delay, same D9 and blocked status after installation done', async () => {
+test('real M4 service recreation preserves legacy delay, same D9 and blocked status', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-upgrade-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const { db, store } = storeFixture({ after: fn => cleanups.push(fn) }, { now: () => 1800000000000 }, path.join(root, 'c4.db'));
@@ -17,9 +17,8 @@ test('frozen upgrade service-restoration boundary with real M4 preserves legacy 
   const database = { ...store, getDb: () => db, beginModeTransition(...args) { begins++; return store.beginModeTransition(...args); } };
   const mode = () => ({ mode: null, keyPresent: false });
   const scenes = { observe: async () => [], observeGroup: async () => ({ present: false }), readIdentity: async () => ({ present: false }), listRuns: async () => [], readRun: async () => null };
-  // This is the frozen P11 service boundary, not an implementation of P11 upgrade.
-  const restoreServices = async state => {
-    if (!state.cutoffClosed || !state.corePublished) return;
+  // P11 owns cutoff/publication and installation completion checks.
+  const restoreServices = async () => {
     service = await startSupervisor({ env: { ...process.env, HOME: root, ZYLOS_DIR: root }, db: database,
       scenes, readMode: mode, readConfig: () => ({ runtime: 'claude' }), legacyPresent: () => legacyPresent,
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
@@ -31,21 +30,17 @@ test('frozen upgrade service-restoration boundary with real M4 preserves legacy 
     const started = service;
     cleanups.push(() => started.stop());
   };
-  await restoreServices({ cutoffClosed: false, corePublished: true });
-  await restoreServices({ cutoffClosed: true, corePublished: false });
-  assert.equal(service, undefined); assert.equal(begins, 0); assert.equal(store.getModeTransition(), null);
-  await restoreServices({ cutoffClosed: true, corePublished: true });
+  await restoreServices();
   await service.supervisor.loop.tick(); assert.equal(begins, 0);
   legacyPresent = false;
   for (let i = 0; i < 4; i++) await service.supervisor.loop.tick();
   assert.equal(begins, 1); const first = store.getModeTransition(); assert.ok(first);
   assert.equal(first.phase, 'converting'); assert.equal(first.reason, 'conversion_failed:export:EIO');
-  const installation = { done: true };
   const previousService = service;
   await previousService.stop();
   assert.equal(previousService.server.listening, false);
   assert.equal(store.getModeTransition().run_id, first.run_id);
-  await restoreServices({ cutoffClosed: true, corePublished: true });
+  await restoreServices();
   assert.notEqual(service.supervisor, previousService.supervisor);
   assert.equal(service.server.listening, true);
   await service.supervisor.loop.tick();
@@ -54,7 +49,7 @@ test('frozen upgrade service-restoration boundary with real M4 preserves legacy 
   assert.equal(store.getModeTransition().cutoff, first.cutoff);
   assert.deepEqual(store.getModeTransition().absorbed_ids, first.absorbed_ids);
   const status = await readSessionModeStatus({ zylosDir: root, db: store, readMode: mode, probeSupervisor: async () => true, readEvents: () => [] });
-  assert.equal(installation.done, true); assert.equal(status.transition.phase, 'converting');
+  assert.equal(status.transition.phase, 'converting');
   assert.equal(status.globalGate.present, true); assert.equal(status.blocked.reason, 'conversion_failed:export:EIO');
   assert.equal(status.lastCompleted, null);
 });

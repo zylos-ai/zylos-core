@@ -2,7 +2,8 @@ import net from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { collectPm2Snapshot } from '../../skills/health-check/scripts/pm2-snapshot.js';
 import { ZYLOS_DIR, readSessionMode } from './config.js';
 import { supervisorDiagnosticPath } from './session-group-paths.js';
 import { EventLogReader } from './event-log.js';
@@ -29,47 +30,17 @@ export function probeSupervisor(socketPath, { connect = net.createConnection, ti
   });
 }
 
-function pm2Package(env) {
-  const require = createRequire(import.meta.url);
-  try { return path.dirname(require.resolve('pm2/package.json')); }
-  catch {
-    for (const directory of (env.PATH ?? '').split(path.delimiter)) {
-      if (!directory) continue;
-      try {
-        const executable = fs.realpathSync(path.join(directory, 'pm2'));
-        const root = path.dirname(path.dirname(executable));
-        if (JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name === 'pm2') return root;
-      } catch { /* Continue to the next installed CLI. */ }
-    }
-    throw Object.assign(new Error('Installed PM2 transport is unavailable'), { code: 'PM2_UNAVAILABLE' });
-  }
-}
-
-/** Read an existing PM2 daemon directly; never launch one as `pm2 jlist` can. */
+/** Query the public CLI only when a PM2 daemon socket already exists. */
 export async function readSupervisorPm2({ env = process.env, timeoutMs = 1000 } = {}) {
-  const root = pm2Package(env), require = createRequire(path.join(root, 'package.json'));
-  const axon = require('./modules/pm2-axon');
-  const rpc = require('./modules/pm2-axon-rpc');
-  const socketPath = env.PM2_RPC_PORT || path.join(env.PM2_HOME || path.join(env.HOME || os.homedir(), '.pm2'), 'rpc.sock');
-  const rows = await new Promise((resolve, reject) => {
-    const socket = axon.socket('req'), client = new rpc.Client(socket);
-    let settled = false;
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true; clearTimeout(timer); socket.close();
-      if (error) reject(error); else resolve(value);
-    };
-    const timer = setTimeout(() => finish(Object.assign(new Error('PM2 observation timed out'), { code: 'ETIMEDOUT' })), Math.min(1000, Math.max(1, timeoutMs)));
-    socket.once('error', error => finish(error));
-    socket.once('reconnect attempt', () => finish(Object.assign(new Error('PM2 daemon is not reachable'), { code: 'ECONNREFUSED' })));
-    socket.once('connect', () => client.call('getMonitorData', {}, finish));
-    try { socket.connect(socketPath); } catch (error) { finish(error); }
-  });
-  if (!Array.isArray(rows)) throw new TypeError('PM2 did not return a process list');
-  const process = rows.find(row => row.name === 'activity-monitor');
-  if (!process) return 'not_found';
-  if (typeof process.pm2_env?.status !== 'string') throw new TypeError('PM2 process status is unavailable');
-  return process.pm2_env.status;
+  const socketPath = path.join(env.PM2_HOME || path.join(env.HOME || os.homedir(), '.pm2'), 'rpc.sock');
+  if (!fs.existsSync(socketPath)) return 'daemon_not_running';
+  const snapshot = collectPm2Snapshot((command, args, options) => spawnSync(command, args, {
+    ...options, env, timeout: Math.min(1000, Math.max(1, timeoutMs)),
+  }));
+  const service = snapshot.services.find(row => row.name === 'activity-monitor');
+  if (!service) return 'not_found';
+  if (service.status === null) throw new TypeError('PM2 process status is unavailable');
+  return service.status;
 }
 
 async function openReadStore(zylosDir) {
