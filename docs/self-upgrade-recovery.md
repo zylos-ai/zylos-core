@@ -436,3 +436,9 @@ Compensation/error paths republish blocked state before stopping writers or repl
 data; no new duplicate availability record is introduced. Detailed descriptor,
 snapshot and executable validation remains in upgrade/recovery operations. This
 protocol does not protect against external deletion of its active marker.
+
+## Supported limits and trust boundary
+
+- Protected baseline, stable file discovery, trusted Node/ps/PM2, Linux flock or the frozen macOS native helper, and actual native owner dependencies are prerequisites. Automatic restart depends on the existing configured machine startup chain and available runtime credentials; no dedicated supervisor is installed.
+- Private owner-written material is the provenance trust root. Structural/path/ownership/hash checks detect damaged, redirected, incomplete or inconsistent records; hashes are not signatures against an owner deliberately forging all coherent records and hashes.
+- Strict managed-service isolation and identified-CLI waiting do not control arbitrary external sqlite3 clients, a program bypassing core entrypoints, or lifecycle scripts deliberately creating a new session. This limitation is already part of the simplified contract; no occupancy scan was authorized.
