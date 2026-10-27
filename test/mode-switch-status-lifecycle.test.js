@@ -9,7 +9,7 @@ import { createModeSwitchConverter } from '../skills/activity-monitor/scripts/mo
 import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 
 test('real M4 reason/events and readonly status agree through block, recovery and stopped supervisor', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-visible-')); const cleanup = [];
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-visible-')); const cleanup = [];
   const { db, store } = storeFixture({ after: fn => cleanup.push(fn) }, {}, path.join(root, 'c4.db'));
   let mode = 'single', failExport = true, service;
   const readMode = () => ({ mode, keyPresent: true });

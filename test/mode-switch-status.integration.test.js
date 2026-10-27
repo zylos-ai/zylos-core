@@ -16,7 +16,7 @@ import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-status-')); roots.push(root);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-status-')); roots.push(root);
   fs.mkdirSync(path.join(root, 'comm-bridge')); fs.mkdirSync(path.join(root, 'activity-monitor'));
   const filename = path.join(root, 'comm-bridge', 'c4.db'); const database = new Database(filename);
   guardDatabase(database, schema);
@@ -74,7 +74,7 @@ test('IB44 actual socket is connected exactly once without sending a request', a
 });
 
 test('IB44 missing database fails without bootstrapping directories or SQLite files', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-status-missing-')); roots.push(root);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-status-missing-')); roots.push(root);
   await expect(readSessionModeStatus(statusOptions(root))).rejects.toThrow();
   expect(fs.readdirSync(root)).toEqual([]);
 });
@@ -130,7 +130,7 @@ test('public status CLI succeeds with unreadable or missing F1 without repairing
 });
 
 test('public status CLI fails with one structured envelope when C4 is absent and creates no files', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-status-cli-missing-')); roots.push(root);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-status-cli-missing-')); roots.push(root);
   const result = await publicStatus(root);
   expect(result.code).toBe(1); expect(result.stderr).toBe('');
   expect(result.stdout.trim().split('\n')).toHaveLength(1);
@@ -153,7 +153,7 @@ test('public status CLI connects once to real am.sock and transmits zero request
 });
 
 test('IB44 public status leaves a pending schema migration byte-identical instead of upgrading the database', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-status-old-schema-')); roots.push(root);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-status-old-schema-')); roots.push(root);
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   const filename = path.join(root, 'comm-bridge', 'c4.db');
   const database = new Database(filename);
@@ -270,7 +270,9 @@ console.log(${JSON.stringify(output)});`);
 
 for (const [label, body, message] of [
   ['command failure', "console.error('private output must not leak'); process.exit(2);", 'Unable to collect PM2 process status'],
-  ['timeout', 'setInterval(() => {}, 1000);', 'Unable to collect PM2 process status'],
+  // Finish successfully after the product deadline: removing that deadline must
+  // fail the assertion without leaving a long-lived fixture process.
+  ['timeout', "setTimeout(() => { console.log('[]'); }, 2000);", 'Unable to collect PM2 process status'],
   ['invalid output', "console.log('not JSON');", 'PM2 returned invalid JSON'],
 ]) test(`IF66 public status preserves authoritative state when PM2 jlist has ${label}`, async () => {
   const { root, database, store } = fixture();

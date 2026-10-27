@@ -10,7 +10,7 @@ const cleanups = [];
 afterEach(async () => { while (cleanups.length) await cleanups.pop()(); });
 
 test('real M4 service recreation preserves legacy delay, same D9 and blocked status', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-upgrade-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-upgrade-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const { db, store } = storeFixture({ after: fn => cleanups.push(fn) }, { now: () => 1800000000000 }, path.join(root, 'c4.db'));
   let legacyPresent = true, service, begins = 0;
