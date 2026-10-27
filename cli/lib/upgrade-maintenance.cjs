@@ -6,11 +6,38 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
+const {isDeepStrictEqual} = require('node:util');
 const SELF_HASH = crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
 const READY = new Set(['new_data_ready', 'new_verifying', 'restored_data_ready', 'restored_verifying']);
 const TERMINAL = new Set(['upgrade_complete', 'restored_complete', 'aborted_before_install']);
 const DB_PATHS = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'];
+const DASHBOARD_DB = 'components/dashboard/dashboard.db';
+function databasePaths(formatVersion) {
+  if (formatVersion === 1) return DB_PATHS;
+  if (formatVersion === 2) return [...DB_PATHS, DASHBOARD_DB];
+  throw Error('unsupported snapshot manifest format');
+}
+function originalDatabasePaths(j) {
+  const paths = j.initialIdentity?.databases?.map(d => d?.source);
+  const expected = paths?.length === 4 ? databasePaths(2) : databasePaths(1);
+  if (!paths || paths.length !== expected.length || paths.some((p,i) => p !== expected[i])) throw Error('invalid original database collection');
+  return expected;
+}
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/;
+function classifyCutoff(j) {
+  const present = Object.prototype.hasOwnProperty.call(j, 'compensationCutoff');
+  const closedPhase = j.phase === 'compensation_closed' || j.phase === 'recovery_required' && j.resumePhase === 'compensation_closed';
+  if (!present) return closedPhase ? 'untrusted' : 'none';
+  if (!closedPhase && j.phase !== 'upgrade_complete') return 'untrusted';
+  const c = j.compensationCutoff;
+  const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  if (!c || c.formatVersion !== 1 || c.closed !== true || c.transactionId !== j.transactionId ||
+      !digest(c.snapshotManifestHash) || c.snapshotManifestHash !== j.snapshotManifestHash ||
+      c.writer !== 'finalizer' || typeof c.closedAt !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(c.closedAt) ||
+      !Number.isFinite(Date.parse(c.closedAt))) return 'untrusted';
+  return 'closed';
+}
 function hash(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
@@ -86,7 +113,8 @@ function validateOriginalJournal(j, {
   const absolute = value => typeof value === 'string' && path.isAbsolute(value) && path.resolve(value) === value;
   const i = j.initialIdentity;
   if (!i || typeof i !== 'object' || Array.isArray(i) || !absolute(j.nodePath) || i.nodePath !== j.nodePath || j.skillsDir !== path.join(j.zylosDir, '.claude', 'skills')) throw Error('invalid data-ready original deployment identity');
-  if (!absolute(i.packageJson) || !digest(i.packageHash) || !absolute(i.cliRoot) || !digest(i.cliHash) || !absolute(i.workerPath) || !digest(i.workerHash) || i.ecosystemHash !== null && !digest(i.ecosystemHash) || !Array.isArray(i.databases) || i.databases.length !== DB_PATHS.length || i.databases.some((d, index) => !d || d.source !== DB_PATHS[index] || typeof d.exists !== 'boolean')) throw Error('incomplete data-ready original identity');
+  const databases = originalDatabasePaths(j);
+  if (!absolute(i.packageJson) || !digest(i.packageHash) || !absolute(i.cliRoot) || !digest(i.cliHash) || !absolute(i.workerPath) || !digest(i.workerHash) || i.ecosystemHash !== null && !digest(i.ecosystemHash) || !Array.isArray(i.databases) || i.databases.length !== databases.length || i.databases.some((d, index) => !d || d.source !== databases[index] || typeof d.exists !== 'boolean')) throw Error('incomplete data-ready original identity');
   if (!Array.isArray(j.coreManifest) || !j.coreManifest.length || j.coreManifest.length > 256) throw Error('incomplete data-ready core manifest');
   const members = new Set();
   for (const e of j.coreManifest) {
@@ -154,7 +182,8 @@ function hasRecoveryHistory(root) {
   const cleanTerminal = (j, id) => {
     const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
     const absolute = value => typeof value === 'string' && path.isAbsolute(value) && path.resolve(value) === value;
-    const dbs = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'];
+    let dbs;
+    try { dbs = originalDatabasePaths(j); } catch { return false; }
     if (!j || j.formatVersion !== 1 || j.transactionId !== id || j.zylosDir !== fs.realpathSync(root) ||
         !['upgrade_complete', 'restored_complete', 'aborted_before_install'].includes(j.phase) ||
         j.cleanup?.complete !== true || j.cleanup.servicesRestored !== true || j.terminalEvidence?.verified !== true ||
@@ -503,6 +532,32 @@ function acquire(dir, {
   };
 }
 function update(dir, j, changes = {}) {
+  const savedFile = path.join(dir, 'journal.json');
+  if (fs.existsSync(savedFile)) {
+    const saved = read(savedFile);
+    const cutoff = classifyCutoff(saved);
+    const next = {...j, ...changes};
+    if (cutoff !== 'none') {
+      if (JSON.stringify(saved.compensationCutoff) !== JSON.stringify(next.compensationCutoff)) throw Error('cutoff facts are immutable');
+      if (cutoff === 'closed' && classifyCutoff(next) !== 'closed') throw Error('cannot reopen compensation after cutoff');
+      if (cutoff === 'closed') {
+        const inputs = value => {
+          const copy = structuredClone(value);
+          for (const item of Object.values(copy?.items || {})) {
+            for (const field of ['state','attempts','lastError','warnings']) delete item[field];
+          }
+          return copy;
+        };
+        if (!isDeepStrictEqual(inputs(saved.postCutoff),inputs(next.postCutoff)) ||
+            !isDeepStrictEqual(inputs(saved.dashboardInstall),inputs(next.dashboardInstall))) throw Error('cutoff publication inputs are immutable');
+      }
+      if (cutoff === 'untrusted' && (next.phase !== saved.phase || next.resumePhase !== saved.resumePhase)) throw Error('untrusted cutoff requires manual recovery');
+    } else if (Object.prototype.hasOwnProperty.call(next, 'compensationCutoff') &&
+        (classifyCutoff(next) !== 'closed' || next.phase !== 'compensation_closed' ||
+         next.postCutoff?.items?.hooks?.state !== 'pending' || !Object.prototype.hasOwnProperty.call(next, 'dashboardInstall'))) {
+      throw Error('cutoff must atomically publish phase and publication inputs');
+    }
+  }
   Object.assign(j, changes, {
     updatedAt: new Date().toISOString()
   });
@@ -727,13 +782,17 @@ function validateDescriptor(dir, j, d) {
   }
 
 }
-function preflight(dir, j, expected) {
+function preflight(dir, j, expected, {liveRestored = false} = {}) {
+  const original = expected && expected.status !== 'complete';
   return worker(dir, j, {
     action: 'offline-preflight',
     zylosDir: j.zylosDir,
     schemaRoot: j.skillsDir,
-    manifest: expected,
-    standaloneRestored: j.installationIntent === true && ['installing', 'restoring'].includes(j.phase) && expected?.status === 'complete' && expected.databases.every(database => j.dbRestore?.[database.source]?.complete === true)
+    manifest: original ? undefined : expected,
+    expectedDatabases: original ? expected.databases : undefined,
+    liveRestored,
+    formatVersion: originalDatabasePaths(j).length === 4 ? 2 : 1,
+    standaloneRestored: !liveRestored && j.installationIntent === true && ['installing', 'restoring', 'restored_data_ready', 'restored_verifying'].includes(j.phase) && expected?.status === 'complete' && expected.databases.every(database => database.source === DASHBOARD_DB && database.status === 'missing' || j.dbRestore?.[database.source]?.complete === true)
   });
 }
 function renameIntent(dir, j, key, source, dest, expectedHash) {
@@ -805,11 +864,15 @@ function finishTerminal(dir, j) {
 }
 
 module.exports = {
+  classifyCutoff,
   fsyncFd,
   platformSupported,
   preflightExternalTools,
   transaction,
+  validateOriginalJournal,
   DB_PATHS,
+  databasePaths,
+  originalDatabasePaths,
   READY,
   TERMINAL,
   hash,

@@ -63,9 +63,8 @@ function originalVerified(dir, j) {
       action: 'offline-preflight',
       zylosDir: j.zylosDir,
       schemaRoot: j.skillsDir,
-      manifest: {
-        databases: expected
-      }
+      expectedDatabases: expected,
+      formatVersion: m.originalDatabasePaths(j).length === 4 ? 2 : 1
     })], {
       encoding: 'utf8',
       timeout: 120000
@@ -113,7 +112,9 @@ function validateSnapshot(dir, j) {
   const file = path.join(j.dbBackupDir, 'manifest.json');
   const manifest = m.read(file);
   if (m.hash(file) !== j.snapshotManifestHash || manifest.id !== j.transactionId || manifest.status !== 'complete') throw Error('snapshot manifest identity mismatch');
-  if (manifest.databases.length !== 3 || manifest.databases.some((d, i) => d.source !== m.DB_PATHS[i])) throw Error('snapshot database manifest incomplete');
+  const sources = m.databasePaths(manifest.formatVersion);
+  if (!Array.isArray(manifest.databases) || manifest.databases.length !== sources.length || manifest.databases.some((d, i) => d.source !== sources[i])) throw Error('snapshot database manifest incomplete');
+  if (sources.some((source,i) => j.initialIdentity.databases[i]?.source !== source) || j.initialIdentity.databases.length !== sources.length) throw Error('snapshot and original database identity differ');
   m.worker(dir, j, {
     action: 'verify',
     zylosDir: j.zylosDir,
@@ -130,7 +131,7 @@ function rescue(dir, j) {
     mode: 0o700
   });
   // Strict stopped/known-worker-exited gate ran before this physical file capture.
-  for (const source of m.DB_PATHS) for (const suffix of ['', '-wal', '-shm']) {
+  for (const source of m.originalDatabasePaths(j)) for (const suffix of ['', '-wal', '-shm']) {
     const key = source + suffix,
       p = path.join(j.zylosDir, key),
       dest = path.join(root, key.replaceAll('/', '_'));
@@ -239,6 +240,7 @@ function restoreCore(dir, j) {
 function replaceDatabases(dir, j, manifest) {
   j.dbRestore ||= {};
   for (const d of manifest.databases) {
+    if (d.source === 'components/dashboard/dashboard.db' && d.status === 'missing') continue;
     const target = path.join(j.zylosDir, d.source),
       state = j.dbRestore[d.source] || (j.dbRestore[d.source] = {
         complete: false
@@ -297,6 +299,7 @@ function validateReady(dir, j) {
   const restored = j.phase.startsWith('restored');
   let verified = false;
   try {
+    const snapshot = restored && j.databaseMode !== 'unchanged' ? validateSnapshot(dir, j) : null;
     m.update(dir, j, {
       phase: restored ? 'restored_verifying' : 'new_verifying'
     });
@@ -304,7 +307,7 @@ function validateReady(dir, j) {
     m.verifyServices(j);
     if (j.databaseMode !== 'unchanged') {
       // Normal startup may create missing DBs/write data: use current compatibility, never old hashes.
-      const checked = m.preflight(dir, j, null);
+      const checked = m.preflight(dir, j, snapshot, {liveRestored:restored});
       if (checked.success === false) throw Error(checked.error || 'started code/data incompatible');
     }
     verified = true;
@@ -403,6 +406,11 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     // Journal identity and phase are authoritative only while holding the
     // controller. Never restore using the pre-lock snapshot.
     j = m.transaction(root, dir);
+    const cutoff = m.classifyCutoff(j);
+    if (cutoff === 'untrusted') throw Object.assign(Error('untrusted cutoff requires manual recovery'), {code: 'CUTOFF_UNTRUSTED'});
+    if (cutoff === 'closed' && j.phase !== 'upgrade_complete') {
+      return fail(dir, j, 'compensation is closed; use zylos upgrade --resume-finalize');
+    }
     verifyFinalizerExit(dir, j);
     if (m.terminalValid(j)) {
       if (j.terminalServicesStopped) {
@@ -453,7 +461,7 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     return validateReady(dir, j);
   } catch (e) {
     // Invalid identity under the lock must not write through untrusted paths.
-    if (!j || j.zylosDir !== root || j.transactionId !== path.basename(dir)) throw e;
+    if (!j || j.zylosDir !== root || j.transactionId !== path.basename(dir) || m.classifyCutoff(j) === 'untrusted') throw e;
     if (m.terminalValid(j)) return terminalPending(dir, j, e.message);
     return fail(dir, j, e.message);
   } finally {

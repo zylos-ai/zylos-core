@@ -4,6 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { beginUpgrade, maintenance as m, maintenanceFor, protectedDataReady } from '../upgrade-protection.js';
+import { createCoreDbSnapshot } from '../core-db-backup.js';
+
+function attachSnapshot(f) {
+  const result=createCoreDbSnapshot({zylosDir:f.root,transactionId:f.ctx.transactionId});
+  f.ctx.dbBackupDir=result.dbBackupDir;f.ctx.dbManifest=result.manifest;
+  m.update(f.ctx.transactionDir,f.ctx.journal,{dbBackupDir:result.dbBackupDir,snapshotManifestHash:m.hash(path.join(result.dbBackupDir,'manifest.json'))});
+}
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-publication-')));
@@ -87,6 +94,7 @@ test('symlink deployment root records canonical transaction identities', t => {
 test('data-ready publication refreshes parent context before later durable writes', t => {
   const f = fixture(t);
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
+  attachSnapshot(f);
   const active = maintenanceFor(f.ctx), preflight = active.preflight;
   active.preflight = () => ({ success: true });
   m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
@@ -122,6 +130,7 @@ test('controller acquisition failure removes only its unpublished staging attemp
 test('migration failure retains installing isolation and never reaches READY', t => {
   const f=fixture(t);
   beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
+  attachSnapshot(f);
   m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
   m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
   let verified=false;
@@ -134,6 +143,7 @@ test('migration failure retains installing isolation and never reaches READY', t
 test('changed active identity after migration prevents READY publication', t => {
   const f=fixture(t);
   beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
+  attachSnapshot(f);
   m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
   m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
   const active=maintenanceFor(f.ctx),preflight=active.preflight;

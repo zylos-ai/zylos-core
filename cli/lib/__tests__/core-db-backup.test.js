@@ -10,17 +10,24 @@ import {fileURLToPath} from 'node:url';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
 import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
-import {CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot,prepareRecoveryDependencies,probeCoreDbVersions,rehearseCoreDbUpgrade,runCoreDbWorker} from '../core-db-backup.js';
+import {LEGACY_CORE_DATABASES as CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,probeCoreDbVersions as probeVersions,rehearseCoreDbUpgrade as rehearse,runCoreDbWorker as worker} from '../core-db-backup.js';
+// Frozen three-database cases retain their actual protection scope.
+const createCoreDbSnapshot=options=>snapshot({...options,formatVersion:1});
+const runCoreDbWorker=(payload,options)=>worker({formatVersion:1,...payload},options);
+const probeCoreDbVersions=(root,target,options)=>probeVersions(root,target,{...options,formatVersion:1});
+const rehearseCoreDbUpgrade=(root,target,options)=>rehearse(root,target,{...options,formatVersion:1});
 const installed=process.env.CORE_DB_TEST_SKILL || path.join(os.homedir(),'zylos','.claude','skills','comm-bridge');
 const currentVersions=[C4_VERSION,SCHEDULER_VERSION,WEB_VERSION];
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
 function fixture(t){const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'core-db-')));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function skills(dir){for(const item of CORE_DATABASES){const owner=path.join(dir,'.claude','skills',item.owner);fs.mkdirSync(owner,{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{}');fs.symlinkSync(path.join(installed,'node_modules'),path.join(owner,'node_modules'));}}
-test('version probe reads only user_version, detects a missing or older database, and rejects a newer one', {skip:!Database}, t => {
+test('version probe uses pure owner inspection, detects a missing or older database, and rejects a newer one', {skip:!Database}, async t => {
  const dir=fixture(t);skills(dir);
+ const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
+ const owners=await Promise.all([import('../../../skills/comm-bridge/scripts/c4-schema.js'),import('../../../skills/scheduler/scripts/schema.js'),import('../../../skills/web-console/scripts/schema.js')]);
  for(const item of CORE_DATABASES){
   const file=path.join(dir,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
-  const db=new Database(file);try{db.pragma(`user_version=${currentVersions[CORE_DATABASES.indexOf(item)]}`);}finally{db.close();}
+  const db=new Database(file);try{migrateDatabase(db,owners[CORE_DATABASES.indexOf(item)],{allowNew:true,strict:false});}finally{db.close();}
  }
  const probe=()=>probeCoreDbVersions(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')});
  const current=probe();

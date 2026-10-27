@@ -102,6 +102,7 @@ export function beginUpgrade(ctx, {
     nodePath: process.execPath,
     from: ctx.from,
     to: ctx.to,
+    ...(ctx.retryOf ? {retryOf:ctx.retryOf,effectiveFrom:ctx.effectiveFrom} : {}),
     phase: 'preparing',
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
     installationIntent: false,
@@ -121,7 +122,7 @@ export function beginUpgrade(ctx, {
       workerPath: path.join(ctx.coreDir, 'cli', 'lib', 'core-db-backup-worker.js'),
       workerHash: maintenance.hash(path.join(ctx.coreDir, 'cli', 'lib', 'core-db-backup-worker.js')),
       ecosystemHash: fs.existsSync(ecosystem) ? maintenance.hash(ecosystem) : null,
-      databases: maintenance.DB_PATHS.map(source => ({
+      databases: maintenance.databasePaths(ctx.snapshotFormatVersion ?? 2).map(source => ({
         source,
         exists: fs.existsSync(path.join(zylosDir, source))
       }))
@@ -281,7 +282,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
   const maintenance = maintenanceFor(ctx);
   const j = ctx.journal,
     dir = ctx.transactionDir;
-  const deps = prepareRecoveryDependencies(dir, j.zylosDir);
+  const deps = prepareRecoveryDependencies(dir, j.zylosDir, {dashboardRoot:ctx.dashboardRoot});
   maintenance.marker(j.zylosDir, dir, j);
   maintenance.update(dir, j, {
     phase: 'stopping'
@@ -296,6 +297,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     transactionId: j.transactionId,
     fromVersion: j.from,
     toVersion: j.to,
+    formatVersion: ctx.snapshotFormatVersion ?? 2,
     verifySnapshot
   });
   ctx.dbBackupDir = snapshot.dbBackupDir;
@@ -372,6 +374,16 @@ export function recovery(ctx) {
     saved = maintenance.transaction(root, dir);
     ctx.journal = saved;
     ctx.transactionDir = dir;
+    const cutoff = maintenance.classifyCutoff(saved);
+    if (cutoff === 'untrusted') throw Object.assign(Error('untrusted cutoff requires manual recovery'), {code:'CUTOFF_UNTRUSTED'});
+    if (cutoff === 'closed' && saved.phase !== 'upgrade_complete') {
+      maintenance.marker(root,dir,saved);
+      let error = 'compensation is closed; use zylos upgrade --resume-finalize';
+      try { maintenance.stop(saved); } catch (cause) { error += '; isolation: ' + cause.message; }
+      maintenance.update(dir,saved,{phase:'recovery_required',resumePhase:'compensation_closed',error});
+      if (process.platform !== 'darwin') release();
+      return {attempted:false,completed:false,stage:'compensation_closed',error,recovery_required:true};
+    }
     // This entry is the parent's explicit failed-upgrade path, whereas direct
     // bootstrap resume is interruption continuation. A failed new finalizer
     // after data_ready must compensate, even if a later startup retry could
@@ -481,8 +493,9 @@ export function protectedDataReady(ctx, overrides = {}) {
   // This function runs in the newly installed finalizer. Use its worker, not
   // the frozen snapshot worker whose code predates the installed migrations.
   if (j.databaseMode !== 'unchanged') {
-    (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
-    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true});
+    const manifest = maintenance.read(path.join(j.dbBackupDir,'manifest.json'));
+    (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId,manifest});
+    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,manifest});
     ctx.databases=verified?.databases || null;
     const checked = maintenance.preflight(dir, j, null);
     if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');
@@ -490,7 +503,7 @@ export function protectedDataReady(ctx, overrides = {}) {
   const current=maintenance.transaction(j.zylosDir,dir);
   const marker=maintenance.read(path.join(j.zylosDir,'.zylos/upgrade/active.json'));
   if(current.phase!=='installing' || current.installationIntent!==true || current.transactionId!==j.transactionId || marker.transactionId!==j.transactionId || marker.transactionDir!==dir) throw Error('active migration transaction changed before data-ready');
-  maintenance.update(dir, current, {
+  if (!overrides.deferPublication) maintenance.update(dir, current, {
     phase: 'new_data_ready'
   });
   ctx.journal = current;

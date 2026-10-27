@@ -6,7 +6,8 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import cp,{spawn,spawnSync} from 'node:child_process';
-import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies} from '../core-db-backup.js';
+import { compileFunction } from 'node:vm';
+import {LEGACY_CORE_DATABASES as CORE_DATABASES,CORE_DATABASES as FORMAT2_DATABASES,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,preflightCoreDbUpgrade} from '../core-db-backup.js';
 import {protectedDataReady,protectedSuccess} from '../upgrade-protection.js';
 import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
@@ -24,7 +25,7 @@ function interceptSync(check) {
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
 // rescue, rename intents, isolation discovery, and terminal marker removal are real.
-async function fixture(t,{missing=false,wal=false}={}) {
+async function fixture(t,{missing=false,wal=false,formatVersion=1,dashboard=false}={}) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-recovery-')));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
@@ -49,7 +50,11 @@ async function fixture(t,{missing=false,wal=false}={}) {
   db.pragma(`user_version=${mod.SUPPORTED_SCHEMA_VERSION}`);if(wal)db.pragma('journal_mode=WAL');db.close();
  }
  const dir=path.join(root,'.backup/self-upgrade','tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
- const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'tx'}),closure=prepareRecoveryDependencies(dir,root);
+ const dashboardRoot=path.join(root,'dashboard-owner');fs.mkdirSync(dashboardRoot);
+ fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
+ fs.writeFileSync(path.join(dashboardRoot,'index.js'),`import fs from 'node:fs';import {createRequire} from 'node:module';const Database=createRequire(${JSON.stringify(path.resolve('skills/comm-bridge/package.json'))})('better-sqlite3');export const dashboardSchemaOwner={supportsNewDatabase(){return true;},inspectSchema(file){if(!fs.existsSync(file))return {currentVersion:null,targetVersion:20,needsMigration:true};const db=new Database(file,{readonly:true});try{const currentVersion=db.prepare('SELECT MAX(version) AS n FROM schema_migrations').get().n;return {currentVersion,targetVersion:20,needsMigration:currentVersion<20};}finally{db.close();}},migrate(){throw Error('recovery must not migrate Dashboard');}};`);
+ if(dashboard){const file=path.join(root,'components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});const db=new Database(file);db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);INSERT INTO schema_migrations VALUES (12);CREATE TABLE events(value TEXT);INSERT INTO events VALUES (\'original\')');db.close();}
+ const snapshotResult=snapshot({zylosDir:root,transactionId:'tx',formatVersion}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
  const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner))}));
@@ -57,7 +62,7 @@ async function fixture(t,{missing=false,wal=false}={}) {
  // Match saveProtectedCode: the disposable code root is private.
  fs.chmodSync(path.join(dir,'code'),0o700);
  const packageJson=path.join(root,'package.json');fs.writeFileSync(packageJson,'{}');const originalCli=path.join(root,'baseline-cli');fs.mkdirSync(originalCli,{mode:0o700});
- const j={formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshot.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
+ const j={formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshotResult.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
  const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
  const calls=[];m.stop=()=>calls.push('stop');m.start=()=>calls.push('start');m.verifyServices=()=>calls.push('verify');
  // These state-machine tests exercise same-owner retries on Mac, not crash
@@ -72,7 +77,7 @@ async function fixture(t,{missing=false,wal=false}={}) {
   };
  }
 
- return {root,dir,j,m,r,calls,snapshot,load:()=>m.read(path.join(dir,'journal.json')),db:p=>path.join(root,p)};
+ return {root,dir,j,m,r,calls,snapshot:snapshotResult,dashboardRoot,load:()=>m.read(path.join(dir,'journal.json')),db:p=>path.join(root,p)};
 }
 function change(f){const p=f.db('comm-bridge/c4.db'),db=new Database(p);db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(1,'new-generation');db.close();fs.writeFileSync(p+'-wal','old-wal');fs.writeFileSync(p+'-shm','old-shm');fs.appendFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json'),'\n');}
 function unchanged(f) {
@@ -81,6 +86,29 @@ function unchanged(f) {
  f.m.preflight=()=>{throw Error('database preflight must not run');};
  f.m.worker=()=>{throw Error('database worker must not run');};
 }
+
+function migrationDependencies(f) {
+ return {
+  dashboardRoot:f.dashboardRoot,
+  probeCoreDbVersions:()=>({needsMigration:true,databases:FORMAT2_DATABASES}),
+  preflightCoreDbUpgrade:(root,options)=>preflightCoreDbUpgrade(root,{...options,dashboardRoot:f.dashboardRoot}),
+  rehearseCoreDbUpgrade:()=>({databases:[]})
+ };
+}
+
+for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects ${corrupt?'untrusted':'closed'} cutoff before any step`, async t => {
+ const f=await fixture(t);
+ f.m.update(f.dir,f.j,{phase:'compensation_closed',compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},postCutoff:{items:{hooks:{state:'pending'}}},dashboardInstall:null});
+ if(corrupt){f.j.compensationCutoff.snapshotManifestHash='0'.repeat(64);f.m.durable(path.join(f.dir,'journal.json'),f.j);}
+ const before=fs.readFileSync(path.join(f.dir,'journal.json'));
+ const script=`const state=JSON.parse(process.argv[1]);process.argv[1]=undefined;const {runSelfUpgradeFinalize}=await import(${JSON.stringify(pathToFileURL(path.resolve('cli/lib/self-upgrade.js')).href)});let calls=0;const result=runSelfUpgradeFinalize(state,{steps:[()=>{calls++;throw Error('must not execute');}]});console.log(JSON.stringify({result,calls}));`;
+ const child=spawnSync(process.execPath,['--input-type=module','-e',script,JSON.stringify({schemaVersion:2,preInstallProtection:true,transactionDir:f.dir,transactionId:'tx'})],{env:{...process.env,ZYLOS_DIR:f.root},encoding:'utf8'});
+ assert.equal(child.status,0,child.stderr);
+ const {result,calls}=JSON.parse(child.stdout);
+ assert.equal(calls,0);assert.equal(result.success,false);assert.equal(result.recovery_required,true);
+ assert.match(result.error,corrupt?/untrusted cutoff/:/compensation is closed/);
+ assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),before);
+});
 
 test('unchanged database transaction resumes installed code without database inspection',async t=>{
  const f=await fixture(t);unchanged(f);
@@ -150,7 +178,7 @@ for(const verificationFails of [false,true])test(`protected same-version snapsho
   const {runSelfUpgrade}=await import('../self-upgrade.js');
   result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{
    zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),
-   probeCoreDbVersions:()=>({needsMigration:false,databases:CORE_DATABASES.map(item=>({source:item.source,status:'present',fromVersion:1,toVersion:1,needsMigration:false}))}),
+   probeCoreDbVersions:()=>({needsMigration:false,databases:FORMAT2_DATABASES.map(item=>({source:item.source,status:item.owner==='dashboard'?'missing':'present',fromVersion:1,toVersion:1,needsMigration:false}))}),
    preflightCoreDbUpgrade:()=>assert.fail('database preflight must be skipped'),
    rehearseCoreDbUpgrade:()=>assert.fail('rehearsal must be skipped'),
    step3:verificationFails?{verifySnapshot:()=>{throw Error('injected snapshot verification failure');}}:{},
@@ -236,6 +264,64 @@ test('A12/A14/A15: complete compensation restores old code/data, preserves rescu
  const original=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(result.stage,'restored_complete');assert.ok(!fs.existsSync(f.db('scheduler/scheduler.db')));assert.ok(!fs.existsSync(f.db('comm-bridge/c4.db-wal')));
  const archived=path.join(f.root,'.backup/self-upgrade/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
 });
+for(const dashboard of [false,true])test(`format 2 compensation ${dashboard?'restores backed up Dashboard':'preserves Dashboard created after a missing snapshot'}`,async t=>{
+ const f=await fixture(t,{formatVersion:2,dashboard});
+ assert.equal(f.snapshot.manifest.formatVersion,2);assert.equal(f.snapshot.manifest.databases.length,4);
+ const file=f.db('components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});
+ const snapshotRow=f.snapshot.manifest.databases.find(row=>row.source==='components/dashboard/dashboard.db');
+ const original=dashboard?fs.readFileSync(path.join(f.snapshot.dbBackupDir,snapshotRow.file)):null;
+ if(dashboard){const db=new Database(file);db.exec("INSERT INTO events VALUES ('changed')");db.close();}
+ else fs.writeFileSync(file,'new Dashboard generation is outside compensation');
+ fs.writeFileSync(file+'-wal','new-wal');fs.writeFileSync(file+'-shm','new-shm');
+ const before=[file,file+'-wal',file+'-shm'].map(p=>fs.readFileSync(p));
+ change(f);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.stage,'restored_complete',JSON.stringify(result));assert.equal(result.recovery_required,false);
+ if(dashboard){assert.deepEqual(fs.readFileSync(file),original);assert.equal(fs.existsSync(file+'-wal'),false);assert.equal(fs.existsSync(file+'-shm'),false);assert.equal(f.load().dbRestore['components/dashboard/dashboard.db'].complete,true);}
+ else {assert.deepEqual([file,file+'-wal',file+'-shm'].map(p=>fs.readFileSync(p)),before);assert.equal(f.load().dbRestore?.['components/dashboard/dashboard.db'],undefined);}
+ assert.deepEqual(f.calls,['stop','start','verify']);
+});
+for(const [version,revision] of [['0.9.0','95b5850e2654fdc48b333c02b158acda2d536466'],['0.9.1','b0ae22aec5c032826d5e38a0845dfc50b624b477']]) {
+ test(`frozen ${version} parent uses its 180 second timeout and propagates timeout after confirming child exit`,()=>{
+  const source=fs.readFileSync(new URL(`./fixtures/upgrade-${version}/self-upgrade.js`,import.meta.url),'utf8');
+  const start=source.indexOf('function runInstalledFinalizer(ctx) {'),end=source.indexOf('\nexport function runSelfUpgradeFinalize',start);
+  assert.ok(start>=0&&end>start);
+  // Execute the historical parent's complete function unchanged. Only its
+  // external boundaries are supplied, including the OS timeout result.
+  const timeout=Object.assign(Error('spawnSync ETIMEDOUT'),{code:'ETIMEDOUT'}),journal={},updates=[];
+  const maintenance={read:()=>journal,update:(_dir,_j,changes)=>updates.push(changes),terminalValid:()=>false};
+  let observed;
+  const run=compileFunction(source.slice(start,end)+'\nreturn runInstalledFinalizer(ctx);',['ctx','maintenanceFor','resolveInstalledPackageScript','writeFinalizeState','spawnSync','process','path','requireFinalizerExit']);
+  assert.throws(()=>run({preInstallProtection:true,transactionDir:'/isolated/tx'},()=>maintenance,()=>'/isolated/finalizer.js',()=>'/isolated/state.json',(_node,args,options)=>{observed={args,options};return {error:timeout,pid:1234};},process,path,()=>({confirmed:true})),{code:'ETIMEDOUT'});
+  assert.equal(observed.options.timeout,180000);assert.equal(observed.options.killSignal,'SIGKILL');assert.equal(observed.options.detached,true);
+  assert.equal(updates.at(-1).finalizerExitConfirmed,true);assert.equal(updates.at(-1).finalizerExitUnconfirmed,false);
+ });
+ for(const state of ['installing','closed','inconsistent'])test(`frozen ${version} recovery ${state==='closed'?'refuses closed cutoff without replacement':state==='inconsistent'?'negative control restores unsafe installing plus cutoff facts':'compensates installing format 1 control'}`,{skip:process.platform==='darwin'},async t=>{
+  const closed=state==='closed';
+  const f=await fixture(t),endpoint=path.join(f.root,'frozen-endpoint');fs.mkdirSync(endpoint);
+  const source=file=>fs.readFileSync(new URL(`./fixtures/upgrade-${version}/${file}`,import.meta.url),'utf8');
+  fs.writeFileSync(path.join(endpoint,'maintenance.cjs'),source('upgrade-maintenance.cjs'));
+  fs.writeFileSync(path.join(endpoint,'recovery.cjs'),source('upgrade-recovery.cjs'));
+  const oldMaintenance=require(path.join(endpoint,'maintenance.cjs')),oldRecovery=require(path.join(endpoint,'recovery.cjs'));
+  const calls=[];oldMaintenance.stop=()=>calls.push('stop');oldMaintenance.start=()=>calls.push('start');oldMaintenance.verifyServices=()=>calls.push('verify');
+  // Execute the actual historical worker too: the installing control must
+  // validate and restore its own three-database material without new defaults.
+  const worker=path.join(f.dir,'sqlite-runtime/core-db-backup-worker.js');fs.writeFileSync(worker,source('core-db-backup-worker.js'));
+  f.j.initialIdentity.workerHash=f.m.hash(worker);
+  if(state!=='installing'){if(closed)f.j.phase='compensation_closed';f.j.compensationCutoff={formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,writer:'finalizer',closedAt:'2026-10-27T00:00:00.000Z'};}
+  f.m.durable(path.join(f.dir,'journal.json'),f.j);change(f);
+  if(state==='inconsistent') {
+   const journalBytes=fs.readFileSync(path.join(f.dir,'journal.json')),liveBytes=fs.readFileSync(f.db('comm-bridge/c4.db'));
+   assert.throws(()=>f.r.resume(f.dir),{code:'CUTOFF_UNTRUSTED'});
+   assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),journalBytes);
+   assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),liveBytes);
+   assert.deepEqual(f.calls,[]);
+  }
+  const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=oldRecovery.resume(f.dir);
+  if(closed){assert.equal(result.recovery_required,true);assert.match(result.error,/unrecognized installed recovery phase: compensation_closed/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(fs.existsSync(path.join(f.dir,'rescue')),false);assert.equal(calls.includes('start'),false);}
+  else {assert.equal(result.stage,'restored_complete',JSON.stringify(result));assert.equal(result.recovery_required,false);assert.notDeepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.deepEqual(calls,['stop','start','verify']);}
+ });
+}
 for(const phase of ['rescue','restore'])test(`${phase} staging platform sync failure prevents publication and preserves retry evidence`,async t=>{
  const f=await fixture(t);change(f);
  const source=f.db('comm-bridge/c4.db'),originalHash=f.m.hash(source);
@@ -379,8 +465,8 @@ for(const postReady of [false,true])test(postReady?'explicit new-finalizer failu
  const old=path.join(f.root,'old-finalizer.cjs');fs.writeFileSync(old,postReady?`const fs=require('node:fs'),path=require('node:path');const s=JSON.parse(fs.readFileSync(process.argv[2]));const m=require(path.join(${JSON.stringify(path.join(f.root,'.zylos/upgrade'))},'maintenance.cjs'));const j=m.read(path.join(s.transactionDir,'journal.json'));m.update(s.transactionDir,j,{phase:'new_data_ready'});m.unmark(j.zylosDir,j);process.stdout.write(JSON.stringify({success:false,failedStep:11,error:'old finalizer rejects schemaVersion=2 after data-ready',steps:[]}));process.exitCode=1;`:"const fs=require('node:fs');const s=JSON.parse(fs.readFileSync(process.argv[2]));if(s.schemaVersion!==1){process.stdout.write(JSON.stringify({success:false,failedStep:5,error:'old finalizer rejects schemaVersion='+s.schemaVersion,steps:[]}));process.exitCode=1;}else process.exitCode=2;\n");
  const priorPath=process.env.PATH,priorRoot=process.env.ZYLOS_DIR;process.env.PATH=bin+path.delimiter+priorPath;process.env.ZYLOS_DIR=f.root;
  let npmStarted=false,result;const originalDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true}),before=originalDb.prepare('SELECT * FROM checkpoints ORDER BY id').all();originalDb.close();
- try{const {runSelfUpgrade,createFinalizeState}=await import('../self-upgrade.js');result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),probeCoreDbVersions:()=>({needsMigration:true,databases:CORE_DATABASES}),rehearseCoreDbUpgrade:()=>({databases:[]}),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{npmStarted=true;if(command.startsWith('npm pack'))return 'fixture.tgz\n';const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(99,'new-install-generation');db.close();return '';}},runInstalledFinalizer:ctx=>{const state=createFinalizeState(ctx);assert.equal(state.schemaVersion,2);assert.equal(ctx.journal.installationIntent,true);const stateFile=path.join(f.root,'old-state.json');fs.writeFileSync(stateFile,JSON.stringify(state));const child=spawnSync(process.execPath,[old,stateFile],{encoding:'utf8'});assert.equal(child.status,1);return JSON.parse(child.stdout);}});}finally{process.env.PATH=priorPath;if(priorRoot===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=priorRoot;}
- assert.equal(npmStarted,true);assert.equal(result.success,false);assert.match(result.error,/old finalizer rejects schemaVersion=2/);assert.equal(result.rollback.attempted,true,JSON.stringify(result.rollback));assert.equal(result.rollback.completed,true,JSON.stringify(result.rollback));assert.equal(result.rollback.stage,'restored_complete');assert.equal(result.recovery_required,false);const restoredDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.deepEqual(restoredDb.prepare('SELECT * FROM checkpoints ORDER BY id').all(),before);restoredDb.close();const archive=path.join(f.root,'.backup/self-upgrade');assert.equal(fs.readdirSync(archive).length,1);const saved=f.m.read(path.join(archive,fs.readdirSync(archive)[0],'journal.json'));assert.equal(saved.installationIntent,true);assert.equal(saved.phase,'restored_complete');
+ try{const {runSelfUpgrade,createFinalizeState}=await import('../self-upgrade.js');result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),...migrationDependencies(f),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{npmStarted=true;if(command.startsWith('npm pack'))return 'fixture.tgz\n';const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(99,'new-install-generation');db.close();return '';}},runInstalledFinalizer:ctx=>{const state=createFinalizeState(ctx);assert.equal(state.schemaVersion,2);assert.equal(ctx.journal.installationIntent,true);const stateFile=path.join(f.root,'old-state.json');fs.writeFileSync(stateFile,JSON.stringify(state));const child=spawnSync(process.execPath,[old,stateFile],{encoding:'utf8'});assert.equal(child.status,1);return JSON.parse(child.stdout);}});}finally{process.env.PATH=priorPath;if(priorRoot===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=priorRoot;}
+ assert.equal(npmStarted,true,JSON.stringify(result));assert.equal(result.success,false);assert.match(result.error,/old finalizer rejects schemaVersion=2/);assert.equal(result.rollback.attempted,true,JSON.stringify(result.rollback));assert.equal(result.rollback.completed,true,JSON.stringify(result.rollback));assert.equal(result.rollback.stage,'restored_complete');assert.equal(result.recovery_required,false);const restoredDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.deepEqual(restoredDb.prepare('SELECT * FROM checkpoints ORDER BY id').all(),before);restoredDb.close();const archive=path.join(f.root,'.backup/self-upgrade');assert.equal(fs.readdirSync(archive).length,1);const saved=f.m.read(path.join(archive,fs.readdirSync(archive)[0],'journal.json'));assert.equal(saved.installationIntent,true);assert.equal(saved.phase,'restored_complete');
 });
 test('protected upgrade restores all three databases after C4 migration succeeds and scheduler migration fails',async t=>{
  const f=await fixture(t);f.m.unmark(f.root,f.j);fs.rmSync(f.dir,{recursive:true});fs.rmSync(path.join(f.root,'.backup/db'),{recursive:true});
@@ -392,7 +478,7 @@ test('protected upgrade restores all three databases after C4 migration succeeds
  let installed=false,c4Migrated=false,result;
  try{
   const {runSelfUpgrade}=await import('../self-upgrade.js');
-  result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),probeCoreDbVersions:()=>({needsMigration:true,databases:CORE_DATABASES}),rehearseCoreDbUpgrade:()=>({databases:[]}),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{
+  result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),...migrationDependencies(f),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{
    if(command.startsWith('npm pack'))return 'fixture.tgz\n';
    if(!installed){for(const [source,sql] of inserts){const db=new Database(f.db(source));try{db.exec(sql);}finally{db.close();}}installed=true;}
    return '';
@@ -401,7 +487,7 @@ test('protected upgrade restores all three databases after C4 migration succeeds
    return {success:false,failedStep:11,error:'scheduler migration failed after C4 success',steps:[]};
   }});
  }finally{process.env.PATH=priorPath;if(priorRoot===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=priorRoot;}
- assert.equal(installed,true);assert.equal(c4Migrated,true);
+ assert.equal(installed,true,JSON.stringify(result));assert.equal(c4Migrated,true);
  assert.equal(result.success,false,JSON.stringify(result));assert.match(result.error,/scheduler migration failed/);
  assert.equal(result.rollback.stage,'restored_complete',JSON.stringify(result.rollback));assert.equal(result.rollback.completed,true);
  for(const [source] of inserts){

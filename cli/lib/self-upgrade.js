@@ -45,6 +45,7 @@ function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join
 
 import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade } from './core-db-backup.js';
 import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
+import { selectSameVersionRetry } from './upgrade-retry.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -1554,6 +1555,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     return {
       action: 'self_upgrade',
       success: false,
+      ...(ctx.retryOf ? {action:'retry',retryOf:ctx.retryOf,effectiveFrom:ctx.effectiveFrom,transactionId:ctx.transactionId} : {}),
       ...backupOnlyResult(ctx, true),
       preInstallProtection:!!ctx.preInstallProtection,
       ...(ctx.protectionUnavailableReason ? {protectionUnavailableReason:ctx.protectionUnavailableReason} : {}),
@@ -1588,6 +1590,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
   return {
     action: 'self_upgrade',
     success: true,
+    ...(ctx.retryOf ? {action:'retry',retryOf:ctx.retryOf,effectiveFrom:ctx.effectiveFrom,transactionId:ctx.transactionId} : {}),
     ...backupOnlyResult(ctx, false),
     from: ctx.from,
     to: ctx.to,
@@ -1610,6 +1613,8 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
 export function createFinalizeState(ctx) {
   return {
     schemaVersion: ctx.preInstallProtection ? 2 : 1,
+    ...(ctx.retryOf ? {retryOf:ctx.retryOf,effectiveFrom:ctx.effectiveFrom} : {}),
+    ...(ctx.snapshotFormatVersion ? {snapshotFormatVersion:ctx.snapshotFormatVersion} : {}),
     ...(ctx.databaseMode ? {databaseMode:ctx.databaseMode} : {}),
     ...backupOnlyResult(ctx, false),
     ...(ctx.backupOnly ? {dbManifest:ctx.dbManifest} : {}),
@@ -1719,12 +1724,20 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.preInstallProtection = state.schemaVersion===2 && state.preInstallProtection===true;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
   if(ctx.preInstallProtection){
-    try {ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');}
+    try {
+      ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);
+      if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');
+      const cutoff=maintenance.classifyCutoff(ctx.journal);
+      if(cutoff!=='none')throw Error(cutoff==='closed' ? 'compensation is closed; use forward finalization' : 'untrusted cutoff requires manual recovery');
+    }
     catch(error){return {success:false,error:error.message,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};}
   }
   ctx.backupDir = state.backupDir || null;
   ctx.servicesWereRunning = Array.isArray(state.servicesWereRunning) ? [...state.servicesWereRunning] : [];
   ctx.from = state.from || null;
+  ctx.retryOf = state.retryOf;
+  ctx.effectiveFrom = state.effectiveFrom;
+  ctx.snapshotFormatVersion = state.snapshotFormatVersion ?? state.dbManifest?.formatVersion;
   ctx.to = state.to || state.newVersion || null;
 
   const steps = deps.steps || POST_INSTALL_STEPS;
@@ -1762,8 +1775,9 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
  * @param {object} [deps] - Isolated self-upgrade seam for npm, PM2, version, rollback, and finalizer boundaries
  * @returns {object} Upgrade result
  */
-export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps = {}) {
+export function runSelfUpgrade({ tempDir, newVersion, mode, onStep, retry } = {}, deps = {}) {
   const ctx = createContext({ tempDir, newVersion, mode });
+  ctx.dashboardRoot = deps.dashboardRoot;
 
   const getCurrentVersionFn = deps.getCurrentVersion ?? getCurrentVersion;
   const current = getCurrentVersionFn();
@@ -1771,6 +1785,18 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
     ctx.from = current.version;
   }
   ctx.to = newVersion || null;
+  ctx.snapshotFormatVersion = 2;
+  if (retry) {
+    try {
+      const selected = selectSameVersionRetry(deps.zylosDir ?? ZYLOS_DIR, ctx.from);
+      if (ctx.from !== ctx.to || !selected || ['retryOf','effectiveFrom','snapshotFormatVersion'].some(key => selected[key] !== retry[key])) {
+        throw Object.assign(Error('Latest restored retry base changed before upgrade admission'), {code:'RETRY_BASE_INVALID',transactionId:retry.retryOf,field:'retryOf',next:'Inspect the latest transaction and run the upgrade command again.'});
+      }
+      Object.assign(ctx, selected);
+    } catch (error) {
+      return {action:'retry',success:false,error:error.message,code:error.code,transactionId:error.transactionId,field:error.field,next:error.next,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false}};
+    }
+  }
   const platform = deps.platform ?? process.platform;
   const protectionSupported = deps.protectionSupported ?? (() => maintenance.platformSupported(platform));
   const eligible = protectionSupported();
@@ -1780,12 +1806,12 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       const prior = maintenance.discover(root);
       if (prior.candidates.length || prior.diagnostics.length || prior.marker) return {action:'self_upgrade',success:false,error:'unresolved prior upgrade transaction',preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};
       ctx.rehearsalCleanup=(deps.cleanupCoreDbRehearsals ?? cleanupCoreDbRehearsals)(root);
-      ctx.databaseVersions=(deps.probeCoreDbVersions ?? probeCoreDbVersions)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR});
-      if (!ctx.databaseVersions || typeof ctx.databaseVersions.needsMigration !== 'boolean' || !Array.isArray(ctx.databaseVersions.databases) || ctx.databaseVersions.databases.length !== 3) throw Error('Invalid database version probe result');
+      ctx.databaseVersions=(deps.probeCoreDbVersions ?? probeCoreDbVersions)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR,formatVersion:ctx.snapshotFormatVersion,dashboardRoot:deps.dashboardRoot});
+      if (!ctx.databaseVersions || typeof ctx.databaseVersions.needsMigration !== 'boolean' || !Array.isArray(ctx.databaseVersions.databases) || ctx.databaseVersions.databases.length !== (ctx.snapshotFormatVersion === 1 ? 3 : 4)) throw Error('Invalid database version probe result');
       ctx.databaseMode=ctx.databaseVersions.needsMigration?'migrate':'unchanged';
       if (ctx.databaseMode === 'migrate') {
-        ctx.databasePreflight=(deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root);
-        ctx.databaseRehearsal=(deps.rehearseCoreDbUpgrade ?? rehearseCoreDbUpgrade)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR,onCleanup:cleanup=>ctx.rehearsalCleanup.removed.push(...cleanup.removed)});
+        ctx.databasePreflight=(deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root,{formatVersion:ctx.snapshotFormatVersion,dashboardRoot:deps.dashboardRoot});
+        ctx.databaseRehearsal=(deps.rehearseCoreDbUpgrade ?? rehearseCoreDbUpgrade)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR,formatVersion:ctx.snapshotFormatVersion,dashboardRoot:deps.dashboardRoot,onCleanup:cleanup=>ctx.rehearsalCleanup.removed.push(...cleanup.removed)});
       }
     }
     catch (error) { return {action:'self_upgrade',success:false,error:error.message,rehearsalCleanup:ctx.rehearsalCleanup || {removed:error.removedRehearsals || []},preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false}; }

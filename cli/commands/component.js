@@ -24,6 +24,7 @@ import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
 import { requestRuntimeRestart } from '../lib/request-runtime-restart.js';
+import { selectSameVersionRetry } from '../lib/upgrade-retry.js';
 
 /**
  * Print a single upgrade step result in real time.
@@ -1090,6 +1091,28 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = null;
+  const check = checkForCoreUpdates({ branch, beta });
+  let retry = null;
+  if (!check.success && !branch) {
+    if (jsonOutput) console.log(JSON.stringify({action:'check',target:'zylos-core',...check,reply:formatC4Reply('error',check)},null,2));
+    else console.error(`Error: ${check.message}`);
+    return false;
+  }
+  if (!branch && check.success && !check.hasUpdate) {
+    try {retry=check.current===check.latest ? selectSameVersionRetry(ZYLOS_DIR,check.current) : null;}
+    catch (error) {
+      const output={action:'retry',success:false,error:error.message,code:error.code,transactionId:error.transactionId,field:error.field,next:error.next};
+      if(jsonOutput)console.log(JSON.stringify(output,null,2));
+      else console.error(`${error.code}: ${error.message} (${error.transactionId}, ${error.field}). ${error.next}`);
+      return false;
+    }
+    if(!retry) {
+      if(jsonOutput)console.log(JSON.stringify({action:'check',target:'zylos-core',...check,reply:formatC4Reply('self-check',check)},null,2));
+      else console.log(success(`${bold('zylos-core')} is up to date (v${check.current})`));
+      return true;
+    }
+    if(!jsonOutput)console.log(`retry of ${retry.retryOf}`);
+  }
 
   // 1. Acquire lock (reuse component lock mechanism with special name)
   const lockResult = acquireLock('_zylos-core');
@@ -1105,31 +1128,6 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
   }
 
   try {
-    // 2. Check for updates (compare against branch when --branch is specified)
-    const check = checkForCoreUpdates({ branch, beta });
-
-    if (!check.success && !branch) {
-      if (jsonOutput) {
-        const errOutput = { action: 'check', target: 'zylos-core', ...check };
-        errOutput.reply = formatC4Reply('error', check);
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${check.message}`);
-      }
-      return false;
-    }
-
-    if (!branch && check.success && !check.hasUpdate) {
-      if (jsonOutput) {
-        const output = { action: 'check', target: 'zylos-core', ...check };
-        output.reply = formatC4Reply('self-check', check);
-        console.log(JSON.stringify(output, null, 2));
-      } else {
-        console.log(success(`${bold('zylos-core')} is up to date (v${check.current})`));
-      }
-      return true;
-    }
-
     // 3. Download new version to temp (always fresh in confirm/--yes flow)
     const downloadLabel = branch ? `zylos-core (branch: ${branch})` : `zylos-core@${check.latest}`;
     if (!jsonOutput) {
@@ -1201,6 +1199,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
       tempDir,
       newVersion: check.latest,
       mode,
+      retry,
       onStep: !jsonOutput ? printStep : undefined,
     });
 

@@ -16,16 +16,27 @@ function fixture(t) {
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const skillsDir=path.join(root,'.claude/skills'),tempDir=path.join(root,'new-package'),calls=[];
  for(const item of CORE_DATABASES) {
+  if(item.owner!=='dashboard') {
   const owner=path.join(skillsDir,item.owner);fs.mkdirSync(owner,{recursive:true});
   fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');
   fs.mkdirSync(path.join(owner,'scripts'));
   fs.writeFileSync(path.join(owner,item.schema),`export const supportsNewDatabase=true;export const TABLES={preserved:['value']};export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();return {extensions:{tables:[],columns:[]}};}`);
   fs.writeFileSync(path.join(owner,'scripts/sqlite-schema.js'),'export {}; // pre-chain compatibility fixture');
   fs.symlinkSync(path.resolve('skills',item.owner,'node_modules'),path.join(owner,'node_modules'));
+  }
   const file=path.join(root,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
   const db=new Database(file);db.exec('CREATE TABLE preserved(value TEXT)');
   db.prepare('INSERT INTO preserved VALUES (?)').run(item.source);db.close();
  }
+ const dashboardRoot=path.join(root,'dashboard-owner');fs.mkdirSync(dashboardRoot);
+ fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
+ fs.writeFileSync(path.join(dashboardRoot,'index.js'),`import {createRequire} from 'node:module';
+ const Database=createRequire(${JSON.stringify(path.resolve('skills/comm-bridge/package.json'))})('better-sqlite3');
+ export const dashboardSchemaOwner={
+ supportsNewDatabase(){return true;},
+ inspectSchema(file){const db=new Database(file,{readonly:true,fileMustExist:true});try{db.prepare('SELECT value FROM preserved').get();return {currentVersion:1,targetVersion:1,needsMigration:false};}finally{db.close();}},
+ migrate(){throw Error('matching Dashboard fixture must not migrate');}
+ };`);
  fs.mkdirSync(path.join(tempDir,'skills'),{recursive:true});
  const bin=path.join(root,'bin'),state=path.join(root,'pm2-state'),pm2Calls=path.join(root,'pm2-calls');
  fs.mkdirSync(bin);fs.writeFileSync(state,'online');
@@ -43,20 +54,21 @@ function fixture(t) {
   const groups=fs.existsSync(dir)?fs.readdirSync(dir).filter(n=>!n.startsWith('.')):[];
   assert.equal(groups.length,1,'one published snapshot must exist before npm');
   const dbBackupDir=path.join(dir,groups[0]),manifest=JSON.parse(fs.readFileSync(path.join(dbBackupDir,'manifest.json')));
-  assert.equal(manifest.status,'complete');assert.equal(manifest.databases.length,3);
+  assert.equal(manifest.status,'complete');assert.equal(manifest.formatVersion,2);assert.equal(manifest.databases.length,4);
+  assert.equal(manifest.databases[3].source,'components/dashboard/dashboard.db');
   for(const row of manifest.databases) {
    assert.equal(row.status,'backed_up');
    const db=new Database(path.join(dbBackupDir,row.file),{readonly:true});
    try {assert.equal(db.prepare('SELECT value FROM preserved').get().value,row.source);}finally{db.close();}
   }
-  assert.equal(runCoreDbWorker({action:'verify',zylosDir:root,dbBackupDir,manifest}).databases.length,3);
+  assert.equal(runCoreDbWorker({action:'verify',zylosDir:root,dbBackupDir,manifest}).databases.length,4);
   return dbBackupDir;
  }
  function untouchedMaintenance() {
   const found=m.discover(root);assert.deepEqual(found.candidates,[]);assert.deepEqual(found.diagnostics,[]);assert.ok(!found.marker);
   for(const item of CORE_DATABASES)assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(root,path.join(root,item.source)));
  }
- const deps={zylosDir:root,skillsDir,protectionSupported:()=>false,getCurrentVersion:()=>({success:true,version:'old'}),
+ const deps={zylosDir:root,skillsDir,dashboardRoot,protectionSupported:()=>false,getCurrentVersion:()=>({success:true,version:'old'}),
   probeCoreDbVersions:()=>({needsMigration:true,databases:CORE_DATABASES.map((item,index)=>({source:item.source,status:'present',fromVersion:index?1:0,toVersion:1,needsMigration:index===0}))}),
   rehearseCoreDbUpgrade:()=>({databases:[]}),
   step1:{zylosDir:root,skillsDir,backupDir:path.join(root,'code-backup')},
@@ -129,6 +141,7 @@ test('real pre-stop rehearsal sees committed source WAL and rejects before servi
  fs.writeFileSync(path.join(f.tempDir,'package.json'),'{"type":"module"}');
  fs.copyFileSync(path.resolve('cli/lib/core-db-backup-worker.js'),path.join(f.tempDir,'cli/lib/core-db-backup-worker.js'));
  for(const item of CORE_DATABASES){
+  if(item.owner==='dashboard')continue;
   const owner=path.join(target,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});
   fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');
   fs.copyFileSync(path.join(f.skillsDir,item.owner,item.schema),path.join(owner,item.schema));
@@ -150,10 +163,10 @@ test('real pre-stop rehearsal sees committed source WAL and rejects before servi
  f.untouchedMaintenance();
 });
 
-for(const platform of ['linux','darwin'])test(`${platform} without automatic recovery still publishes and verifies three databases before npm`,t=>{
+for(const platform of ['linux','darwin'])test(`${platform} without automatic recovery still publishes and verifies four databases before npm`,t=>{
  const f=fixture(t);f.deps.platform=platform;const result=f.run();
  assert.equal(result.success,true,JSON.stringify(result));assert.equal(result.backupOnly,true);assert.equal(result.automaticRecovery,false);
- assert.equal(result.dbBackupDir,f.snapshots());assert.equal(result.databases.length,3);assert.equal(f.calls.length,2);
+ assert.equal(result.dbBackupDir,f.snapshots());assert.equal(result.databases.length,4);assert.equal(f.calls.length,2);
  assert.match(result.protectionUnavailableReason,/manual|automatic/i);assert.equal(result.manualRecovery.required,false);
  assert.ok(fs.readFileSync(f.pm2Calls,'utf8').includes('["stop","fixture-service"]'));
  f.untouchedMaintenance();
@@ -279,7 +292,7 @@ for(const fail of [false,true])test(`backup-only serialized finalizer state pres
   const state=JSON.parse(JSON.stringify(createFinalizeState(ctx)));
   assert.equal(state.schemaVersion,1);assert.equal(state.backupOnly,true);assert.equal(state.dbSnapshotVerified,true);
   assert.equal(state.backupDir,ctx.backupDir);assert.ok(state.backupDir);
-  assert.equal(state.dbManifest.databases.length,3);assert.equal(state.dbBackupDir,ctx.dbBackupDir);
+  assert.equal(state.dbManifest.formatVersion,2);assert.equal(state.dbManifest.databases.length,4);assert.equal(state.dbBackupDir,ctx.dbBackupDir);
   return runSelfUpgradeFinalize(state,{steps:[restored=>{
    assert.equal(restored.backupDir,ctx.backupDir);assert.equal(restored.backupOnly,true);assert.equal(restored.dbSnapshotVerified,true);
    assert.equal(restored.dbBackupDir,ctx.dbBackupDir);assert.deepEqual(restored.dbManifest,ctx.dbManifest);

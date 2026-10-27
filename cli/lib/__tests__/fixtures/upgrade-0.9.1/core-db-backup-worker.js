@@ -1,0 +1,250 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+
+const DATABASES = [
+  {source:'comm-bridge/c4.db',owner:'comm-bridge',schema:'scripts/c4-schema.js'},
+  {source:'scheduler/scheduler.db',owner:'scheduler',schema:'scripts/schema.js'},
+  {source:'web-console/web-console.db',owner:'web-console',schema:'scripts/schema.js'},
+];
+const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+function driver(input, item) {
+  const root=input.driverRoot || input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
+  const req = createRequire(path.join(root,item.owner,'package.json'));
+  // Snapshot verification uses the frozen independent closure. Compatibility
+  // preflight must load the actual owner's native dependency under this Node.
+  return req(['offline-preflight','upgrade-migrate','version-probe'].includes(input.action) ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
+}
+function missing(file) {
+  if (fs.existsSync(file)) return false;
+  if (['-wal','-shm'].some(s => fs.existsSync(file+s))) throw new Error(`Orphan SQLite sidecar: ${file}`);
+  return true;
+}
+function inspectConnection(db) {
+  const checks=db.pragma('integrity_check');
+  if(checks.length!==1 || Object.values(checks[0])[0]!=='ok') throw new Error('integrity_check failed');
+  return {userVersion:db.pragma('user_version',{simple:true}),integrityCheck:'ok'};
+}
+function withStandaloneReadonly(Database, file, expectedHash, inspect) {
+  // Private snapshots are normalized to DELETE before their hash is recorded.
+  // Read them directly; no disposable database copy or WAL sidecar is needed.
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Invalid standalone database: ${file}`);
+  for (const suffix of ['-wal', '-shm']) {
+    try { fs.lstatSync(file + suffix); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    throw new Error(`Unexpected standalone SQLite sidecar: ${file + suffix}`);
+  }
+  if (hash(file) !== expectedHash) throw new Error(`Standalone database hash mismatch: ${file}`);
+  // Reject a WAL header before opening: the driver could create sidecars even
+  // through a readonly connection to an older, non-normalized snapshot.
+  const header = Buffer.alloc(20), fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, header, 0, header.length, 0); }
+  finally { fs.closeSync(fd); }
+  if (header[18] !== 1 || header[19] !== 1) throw new Error(`Standalone database is not normalized: ${file}`);
+  const db = new Database(file, {readonly:true, fileMustExist:true, timeout:5000});
+  try {
+    db.exec('BEGIN');
+    return inspect(db);
+  } finally {
+    try { if (db.inTransaction) db.exec('ROLLBACK'); }
+    finally { db.close(); }
+  }
+}
+
+function inspect(Database, file, expectedHash=hash(file)) {
+  return withStandaloneReadonly(Database, file, expectedHash, inspectConnection);
+}
+async function ownerSchema(input,item) {
+  const schemaPath=path.join(input.schemaRoot || path.join(input.zylosDir,'.claude','skills'),item.owner,item.schema);
+  try {
+    const mod=await import(pathToFileURL(schemaPath));
+    if(typeof mod.inspectSchema!=='function'||typeof mod.supportsNewDatabase!=='boolean') throw new Error('missing pure schema inspection contract');
+    if (!mod.TABLES || typeof mod.TABLES !== 'object') throw new Error('missing schema table contract');
+    // Owners classify extensions against their own current layout. Older
+    // versions have no latest-layout comparison until their migration runs.
+    return {
+      ...mod,
+      inspectSchema(db, options = {}) {
+        const result = mod.inspectSchema(db, {...options, strict:false, rejectUnsafeExtensions:true});
+        if (!result.extensions || !Array.isArray(result.extensions.tables) || !Array.isArray(result.extensions.columns)) throw new Error('missing schema extension report');
+        return result;
+      }
+    };
+  }catch(error){throw new Error(`Incompatible owner schema code ${item.owner}: ${error.message}`);}
+}
+async function migrationEngine(input) {
+  const root=input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
+  try {return await import(pathToFileURL(path.join(root,'comm-bridge/scripts/sqlite-schema.js')));}
+  catch(error) {throw Error('Incompatible owner schema code comm-bridge: '+error.message);}
+}
+function authorizeMigration(input) {
+  const root=fs.realpathSync(input.zylosDir);
+  // This module is retained outside the replaced package and sqlite closure.
+  const m=createRequire(import.meta.url)(path.join(root,'.zylos/upgrade/maintenance.cjs'));
+  const marker=m.read(path.join(root,'.zylos/upgrade/active.json'));
+  const dir=input.transactionDir;
+  if(marker.formatVersion!==1 || marker.transactionDir!==dir || marker.transactionId!==input.transactionId) throw Error('controlled migration active identity mismatch');
+  const j=m.transaction(root,dir);
+  if(j.transactionId!==input.transactionId || j.phase!=='installing' || j.installationIntent!==true || j.skillsDir!==path.join(root,'.claude/skills') || input.schemaRoot && input.schemaRoot!==j.skillsDir) throw Error('controlled migration requires active installing transaction');
+  if(j.dbBackupDir!==path.join(root,'.backup/db',j.transactionId) || m.hash(path.join(j.dbBackupDir,'manifest.json'))!==j.snapshotManifestHash) throw Error('controlled migration snapshot identity mismatch');
+  return j;
+}
+export async function execute(input) {
+  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','rehearse','version-probe'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
+  if(input.action==='probe') {
+    const Database=createRequire(import.meta.url)(input.driverPath); const db=new Database(':memory:');
+    try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');}finally{db.close();}
+    return {ok:true};
+  }
+  if(input.action==='version-probe') {
+    if (!input.schemaRoot || !input.driverRoot) throw Error('Version probe requires target schema and installed driver roots');
+    const rows=[];
+    for(const item of DATABASES) {
+      const mod=await ownerSchema(input,item);
+      const target=mod.SUPPORTED_SCHEMA_VERSION;
+      if(!Number.isInteger(target)||target<0) throw Error(`Invalid target schema version: ${item.owner}`);
+      const source=path.join(input.zylosDir,item.source);
+      if(missing(source)) {
+        rows.push({source:item.source,status:'missing',fromVersion:null,toVersion:target,needsMigration:true});
+        continue;
+      }
+      const Database=driver(input,item);
+      const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
+      let current;
+      try {current=db.pragma('user_version',{simple:true});} finally {db.close();}
+      if(!Number.isInteger(current)||current<0) throw Error(`${item.source}: invalid schema version ${current}`);
+      if(current>target) throw Error(`${item.source}: schema version ${current} exceeds supported ${target}; restore compatible code/data`);
+      rows.push({source:item.source,status:'present',fromVersion:current,toVersion:target,needsMigration:current<target});
+    }
+    return {databases:rows,needsMigration:rows.some(row=>row.needsMigration)};
+  }
+  if(input.action==='upgrade-migrate') authorizeMigration(input);
+  const engine=['offline-preflight','upgrade-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;
+  if(input.action==='rehearse') {
+    if (!input.schemaRoot || !input.driverRoot || !input.rehearsalDir) throw Error('Rehearsal requires target schema, installed driver, and private copy roots');
+    const directory=input.rehearsalDir;
+    const stat=fs.lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe private rehearsal directory');
+    const reports=[];
+    try {
+      for(const item of DATABASES) {
+        const source=path.join(input.zylosDir,item.source);
+        const mod=await ownerSchema(input,item),Database=driver(input,item);
+        const absent=missing(source);
+        if(absent && !mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
+        const target=path.join(directory,`${item.owner}.db`);
+        if(!absent) {
+          const live=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
+          try {await live.backup(target);} finally {live.close();}
+        }
+        const copy=new Database(target,{fileMustExist:!absent,timeout:5000});
+        try {
+          inspectConnection(copy);
+          const start=copy.pragma('user_version',{simple:true});
+          const result=engine.migrateDatabase(copy,mod,{allowNew:absent,strict:false});
+          reports.push({source:item.source,status:absent?'missing':'present',fromVersion:start,toVersion:result.version,extensions:result.extensions});
+        } catch(error) {throw Error(`${item.source}: rehearsal failed: ${error.message}`);} finally {copy.close();}
+      }
+      return {databases:reports};
+    } finally {fs.rmSync(directory,{recursive:true,force:true});}
+  }
+  const plan=(db,mod,options={}) => {
+    // A restored pre-chain owner still supplies its original readonly contract.
+    if(typeof engine.planDatabaseMigration==='function') {
+      const result=engine.planDatabaseMigration(db,mod,{...options,strict:true});
+      if(input.requireCurrent && (result.steps.length || result.empty)) throw Error('Database migrations remain before data-ready');
+      return result;
+    }
+    if(input.requireCurrent) throw Error('Installed migration planner unavailable');
+    return mod.inspectSchema(db,{...options,strict:true});
+  };
+  const rows=[];
+  for(const item of DATABASES) {
+    const expected=input.manifest?.databases?.find(r=>r.source===item.source);
+    const source=path.join(input.zylosDir,item.source);
+    if(input.action==='verify') {
+      if(!expected) throw new Error(`Missing manifest entry: ${item.source}`);
+      if(expected.status==='missing') {rows.push({...expected});continue;}
+      if(expected.status!=='backed_up'||path.basename(expected.file)!==expected.file) throw new Error('Invalid snapshot entry');
+      const file=path.join(input.dbBackupDir,expected.file);
+      if(fs.statSync(file).size!==expected.bytes||hash(file)!==expected.sha256) throw new Error(`Snapshot hash mismatch: ${file}`);
+      const state=inspect(driver(input,item),file,expected.sha256);
+      if(state.userVersion!==expected.userVersion) throw new Error('Snapshot user_version mismatch');
+      rows.push({...expected,...state});continue;
+    }
+    if(input.action==='upgrade-migrate') {
+      // Recheck the durable capability before each owner. Ordinary openers keep
+      // rejecting this same installing marker throughout all three migrations.
+      authorizeMigration(input);
+      const absent=missing(source), mod=await ownerSchema(input,item);
+      if(absent&&!mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
+      if(typeof engine.migrateDatabase!=='function') throw Error('Installed migration engine unavailable');
+      const Database=driver(input,item);
+      // Validate creation before creating even an empty business file.
+      if(absent) {const memory=new Database(':memory:');try {plan(memory,mod,{allowNew:true});}finally{memory.close();}}
+      fs.mkdirSync(path.dirname(source),{recursive:true});
+      const db=new Database(source,{fileMustExist:!absent,timeout:5000});
+      try {const layout=engine.migrateDatabase(db,mod,{allowNew:absent,strict:true});rows.push({source:item.source,status:'present',...inspectConnection(db),extensions:layout.extensions});}
+      finally {db.close();}
+      continue;
+    }
+    if(missing(source)) {
+      if(expected&&expected.status!=='missing') throw new Error(`Expected database absent: ${source}`);
+      if(input.action==='offline-preflight') {
+        const mod=await ownerSchema(input,item);
+        if(!mod.supportsNewDatabase) throw new Error(`Owner cannot initialize missing database: ${item.owner}`);
+        // Loading a pure module alone does not prove the actual Node/native
+        // driver combination can perform the owner's first database creation.
+        const Database=driver(input,item), memory=new Database(':memory:');
+        try {plan(memory,mod,{allowNew:true});}finally{memory.close();}
+      }
+      rows.push({source:item.source,status:'missing',userVersion:null,file:null,bytes:0,sha256:null,integrityCheck:null});continue;
+    }
+    if(expected?.status==='missing') throw new Error(`Expected missing database exists: ${source}`);
+    const Database=driver(input,item);
+    if(input.action==='offline-preflight') {
+      const mod=await ownerSchema(input,item);
+      let state;
+      if (input.standaloneRestored === true) {
+        if (input.manifest?.status !== 'complete' || expected?.status !== 'backed_up' || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Missing standalone restored snapshot evidence');
+        state = withStandaloneReadonly(Database, source, expected.sha256, db => {const layout=plan(db,mod); return {...inspectConnection(db),extensions:layout.extensions};});
+      } else {
+        // Original/preinstall and active READY verification must see committed
+        // live WAL data. Never treat those databases as standalone snapshots.
+        const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
+        try {db.exec('BEGIN');const layout=plan(db,mod);state={...inspectConnection(db),extensions:layout.extensions};}
+        finally {if(db.inTransaction)db.exec('ROLLBACK');db.close();}
+      }
+      rows.push({source:item.source,status:'present',...state});continue;
+    }
+    if(input.action!=='snapshot') throw new Error(`Unknown action: ${input.action}`);
+    const file=`${item.owner}.db`, target=path.join(input.stagingDir,file);
+    const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
+    try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');await db.backup(target);}finally{db.close();}
+    fs.chmodSync(target,0o600);
+    // db.backup preserves the source WAL header. Normalize only our private
+    // snapshot, leaving the original database and its committed WAL untouched.
+    const snapshot = new Database(target, {fileMustExist:true, timeout:5000});
+    try {
+      if (snapshot.pragma('journal_mode=DELETE', {simple:true}) !== 'delete') throw new Error('Snapshot journal mode normalization failed');
+    } finally { snapshot.close(); }
+    const state=inspect(Database,target);
+    const fd=fs.openSync(target,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+    rows.push({source:item.source,status:'backed_up',...state,file,bytes:fs.statSync(target).size,sha256:hash(target)});
+  }
+  return {databases:rows};
+}
+// Node resolves module URLs through symlinks; argv may retain the alias.
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if(isMainModule()) {
+  const timer=setTimeout(()=>{process.stderr.write('SQLite worker deadline exceeded\n');process.exit(1);},90000);
+  try {process.stdout.write(JSON.stringify(await execute(JSON.parse(process.argv[2]))));}
+  catch(error){process.stderr.write(error.stack+'\n');process.exitCode=1;}
+  finally{clearTimeout(timer);}
+}

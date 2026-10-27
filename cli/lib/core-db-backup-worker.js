@@ -4,13 +4,42 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
-const DATABASES = [
+export const LEGACY_CORE_DATABASES = Object.freeze([
   {source:'comm-bridge/c4.db',owner:'comm-bridge',schema:'scripts/c4-schema.js'},
   {source:'scheduler/scheduler.db',owner:'scheduler',schema:'scripts/schema.js'},
   {source:'web-console/web-console.db',owner:'web-console',schema:'scripts/schema.js'},
-];
+]);
+export const CORE_DATABASES = Object.freeze([...LEGACY_CORE_DATABASES,
+  {source:'components/dashboard/dashboard.db',owner:'dashboard'},
+]);
+export function databasesForFormat(formatVersion=2) {
+  if(formatVersion===1) return LEGACY_CORE_DATABASES;
+  if(formatVersion===2) return CORE_DATABASES;
+  throw Error(`Unsupported database snapshot format: ${formatVersion}`);
+}
+export function validateSnapshotManifest(manifest) {
+  if(![1,2].includes(manifest?.formatVersion)) throw Error(`Unsupported database snapshot format: ${manifest?.formatVersion}`);
+  const items=databasesForFormat(manifest?.formatVersion);
+  if(manifest?.function!=='core-self-upgrade-db'||manifest.status!=='complete'||typeof manifest.id!=='string'||!Array.isArray(manifest.databases)||manifest.databases.length!==items.length) throw Error('Incomplete snapshot group');
+  for(const item of items) {
+    const matches=manifest.databases.filter(row=>row.source===item.source);
+    if(matches.length!==1) throw Error(`Invalid snapshot source: ${item.source}`);
+    const row=matches[0];
+    if(row.status==='missing') {
+      if(row.file!==null||row.bytes!==0||row.sha256!==null||row.userVersion!==null||row.integrityCheck!==null) throw Error('Invalid missing snapshot entry');
+    } else if(row.status!=='backed_up'||row.integrityCheck!=='ok'||typeof row.file!=='string'||row.file!==`${item.owner}.db`||!Number.isSafeInteger(row.bytes)||row.bytes<=0||!Number.isInteger(row.userVersion)||row.userVersion<0||!/^[a-f0-9]{64}$/.test(row.sha256)) throw Error('Invalid snapshot entry');
+  }
+  return items;
+}
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function driver(input, item) {
+  if(item.owner==='dashboard') {
+    if(input.driverPath && !['offline-preflight','upgrade-migrate','version-probe'].includes(input.action)) return createRequire(import.meta.url)(input.driverPath);
+    // Dashboard is a built-in package, not a skill. The Core driver also
+    // performs its online snapshots without importing Dashboard business code.
+    const root=input.driverRoot || input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
+    return createRequire(path.join(root,'comm-bridge/package.json'))('better-sqlite3');
+  }
   const root=input.driverRoot || input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
   const req = createRequire(path.join(root,item.owner,'package.json'));
   // Snapshot verification uses the frozen independent closure. Compatibility
@@ -58,6 +87,17 @@ function inspect(Database, file, expectedHash=hash(file)) {
   return withStandaloneReadonly(Database, file, expectedHash, inspectConnection);
 }
 async function ownerSchema(input,item) {
+  if(item.owner==='dashboard') {
+    const frozen=path.join(path.dirname(fileURLToPath(import.meta.url)),'dashboard-owner');
+    const root=input.dashboardRoot || (fs.existsSync(frozen) ? frozen : fileURLToPath(new URL('../../components/dashboard',import.meta.url)));
+    try {
+      const req=createRequire(path.join(root,'__owner_loader__.js'));
+      const mod=await import(pathToFileURL(req.resolve(root)));
+      const owner=mod.dashboardSchemaOwner;
+      if(!owner||['inspectSchema','supportsNewDatabase','migrate'].some(name=>typeof owner[name]!=='function')) throw Error('missing dashboardSchemaOwner contract');
+      return owner;
+    } catch(error) {throw Error(`Incompatible owner schema code dashboard: ${error.message}`);}
+  }
   const schemaPath=path.join(input.schemaRoot || path.join(input.zylosDir,'.claude','skills'),item.owner,item.schema);
   try {
     const mod=await import(pathToFileURL(schemaPath));
@@ -81,6 +121,7 @@ async function migrationEngine(input) {
   catch(error) {throw Error('Incompatible owner schema code comm-bridge: '+error.message);}
 }
 function authorizeMigration(input) {
+  if(typeof input.transactionDir!=='string' || typeof input.transactionId!=='string') throw Error('controlled migration requires transaction identity');
   const root=fs.realpathSync(input.zylosDir);
   // This module is retained outside the replaced package and sqlite closure.
   const m=createRequire(import.meta.url)(path.join(root,'.zylos/upgrade/maintenance.cjs'));
@@ -99,22 +140,45 @@ export async function execute(input) {
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');}finally{db.close();}
     return {ok:true};
   }
+  // Original deployment verification has presence evidence, not a snapshot.
+  // Keep that capability separate from complete-manifest validation.
+  let databases;
+  if(input.action==='offline-preflight' && input.expectedDatabases) {
+    const rows=input.expectedDatabases;
+    databases=databasesForFormat(input.formatVersion ?? (rows?.length===3 ? 1 : 2));
+    if(!Array.isArray(rows)||rows.length!==databases.length||databases.some((item,index)=>rows[index]?.source!==item.source||!['complete','missing'].includes(rows[index].status))) throw Error('Invalid original database presence evidence');
+  } else databases=input.manifest ? validateSnapshotManifest(input.manifest) : databasesForFormat(input.formatVersion ?? 2);
+  const inspectDashboard=async (owner,file,absent) => {
+    if(absent && await owner.supportsNewDatabase()!==true) throw Error('Owner cannot initialize missing database: dashboard');
+    const state=await owner.inspectSchema(file);
+    if(!state||!Number.isInteger(state.targetVersion)||state.targetVersion<0||(!absent&&(!Number.isInteger(state.currentVersion)||state.currentVersion<0))||typeof state.needsMigration!=='boolean') throw Error('Invalid dashboard schema inspection');
+    if(state.currentVersion>state.targetVersion) throw Error(`SCHEMA_TOO_NEW ${file}: schema version ${state.currentVersion} exceeds supported ${state.targetVersion}`);
+    if(input.requireCurrent && (absent||state.needsMigration)) throw Error('Database migrations remain before data-ready');
+    return state;
+  };
   if(input.action==='version-probe') {
     if (!input.schemaRoot || !input.driverRoot) throw Error('Version probe requires target schema and installed driver roots');
     const rows=[];
-    for(const item of DATABASES) {
+    for(const item of databases) {
       const mod=await ownerSchema(input,item);
+      if(item.owner==='dashboard') {
+        const source=path.join(input.zylosDir,item.source),absent=missing(source);
+        const state=await inspectDashboard(mod,source,absent);
+        rows.push({source:item.source,status:absent?'missing':'present',fromVersion:state.currentVersion,toVersion:state.targetVersion,needsMigration:state.needsMigration});
+        continue;
+      }
       const target=mod.SUPPORTED_SCHEMA_VERSION;
       if(!Number.isInteger(target)||target<0) throw Error(`Invalid target schema version: ${item.owner}`);
       const source=path.join(input.zylosDir,item.source);
       if(missing(source)) {
+        if(!mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
         rows.push({source:item.source,status:'missing',fromVersion:null,toVersion:target,needsMigration:true});
         continue;
       }
       const Database=driver(input,item);
       const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
       let current;
-      try {current=db.pragma('user_version',{simple:true});} finally {db.close();}
+      try {current=mod.inspectSchema(db,{allowNew:false,strict:false}).version;} finally {db.close();}
       if(!Number.isInteger(current)||current<0) throw Error(`${item.source}: invalid schema version ${current}`);
       if(current>target) throw Error(`${item.source}: schema version ${current} exceeds supported ${target}; restore compatible code/data`);
       rows.push({source:item.source,status:'present',fromVersion:current,toVersion:target,needsMigration:current<target});
@@ -130,10 +194,20 @@ export async function execute(input) {
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe private rehearsal directory');
     const reports=[];
     try {
-      for(const item of DATABASES) {
+      for(const item of databases) {
         const source=path.join(input.zylosDir,item.source);
         const mod=await ownerSchema(input,item),Database=driver(input,item);
         const absent=missing(source);
+        if(item.owner==='dashboard') {
+          const before=await inspectDashboard(mod,source,absent);
+          const target=path.join(directory,'dashboard.db');
+          if(!absent) {const live=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});try {await live.backup(target);}finally{live.close();}}
+          await mod.migrate(target);
+          const after=await inspectDashboard(mod,target,false);
+          if(after.needsMigration) throw Error('SCHEMA_MIGRATION_FAILED dashboard rehearsal remains incomplete');
+          reports.push({source:item.source,status:absent?'missing':'present',fromVersion:before.currentVersion,toVersion:after.currentVersion});
+          continue;
+        }
         if(absent && !mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
         const target=path.join(directory,`${item.owner}.db`);
         if(!absent) {
@@ -162,8 +236,8 @@ export async function execute(input) {
     return mod.inspectSchema(db,{...options,strict:true});
   };
   const rows=[];
-  for(const item of DATABASES) {
-    const expected=input.manifest?.databases?.find(r=>r.source===item.source);
+  for(const item of databases) {
+    const expected=input.action==='offline-preflight' && (input.requireCurrent || input.liveRestored) ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(r=>r.source===item.source);
     const source=path.join(input.zylosDir,item.source);
     if(input.action==='verify') {
       if(!expected) throw new Error(`Missing manifest entry: ${item.source}`);
@@ -180,6 +254,14 @@ export async function execute(input) {
       // rejecting this same installing marker throughout all three migrations.
       authorizeMigration(input);
       const absent=missing(source), mod=await ownerSchema(input,item);
+      if(item.owner==='dashboard') {
+        await inspectDashboard(mod,source,absent);
+        try {await mod.migrate(source);} catch(error) {throw Error(`SCHEMA_MIGRATION_FAILED ${item.source}: ${error.message}`);}
+        const state=await inspectDashboard(mod,source,false);
+        if(state.needsMigration) throw Error('SCHEMA_MIGRATION_FAILED dashboard migration remains incomplete');
+        rows.push({source:item.source,status:'present',...state});
+        continue;
+      }
       if(absent&&!mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
       if(typeof engine.migrateDatabase!=='function') throw Error('Installed migration engine unavailable');
       const Database=driver(input,item);
@@ -189,6 +271,27 @@ export async function execute(input) {
       const db=new Database(source,{fileMustExist:!absent,timeout:5000});
       try {const layout=engine.migrateDatabase(db,mod,{allowNew:absent,strict:true});rows.push({source:item.source,status:'present',...inspectConnection(db),extensions:layout.extensions});}
       finally {db.close();}
+      continue;
+    }
+    if(input.action==='offline-preflight' && item.owner==='dashboard') {
+      // A missing Dashboard was never protected by this transaction. Recovery
+      // must not inspect or reject a Dashboard subsequently created in place.
+      const snapshotRow=input.manifest?.databases?.find(row=>row.source===item.source);
+      if((input.standaloneRestored===true || input.liveRestored===true) && snapshotRow?.status==='missing') {rows.push({...snapshotRow});continue;}
+      const absent=missing(source);
+      if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
+      if(expected?.status==='missing' && !absent) throw Error(`Expected missing database exists: ${source}`);
+      const mod=await ownerSchema(input,item);
+      if(input.standaloneRestored===true && !absent) {
+        if(expected?.status!=='backed_up') throw Error('Missing standalone restored snapshot evidence');
+        withStandaloneReadonly(driver(input,item),source,expected.sha256,inspectConnection);
+      }
+      const state=await inspectDashboard(mod,source,absent);
+      if(!absent) {
+        const db=new (driver(input,item))(source,{readonly:true,fileMustExist:true,timeout:5000});
+        try {inspectConnection(db);}finally{db.close();}
+      }
+      rows.push({source:item.source,status:absent?'missing':'present',...state});
       continue;
     }
     if(missing(source)) {

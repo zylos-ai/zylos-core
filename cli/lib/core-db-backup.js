@@ -4,11 +4,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
-export const CORE_DATABASES=Object.freeze([
-  {source:'comm-bridge/c4.db',owner:'comm-bridge',schema:'scripts/c4-schema.js'},
-  {source:'scheduler/scheduler.db',owner:'scheduler',schema:'scripts/schema.js'},
-  {source:'web-console/web-console.db',owner:'web-console',schema:'scripts/schema.js'},
-]);
+import {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest} from './core-db-backup-worker.js';
+export {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest};
 const WORKER=fileURLToPath(new URL('./core-db-backup-worker.js',import.meta.url));
 function syncDir(dir){const fd=fs.openSync(dir,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
 function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
@@ -18,7 +15,7 @@ export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.exec
   try{return JSON.parse(result.stdout);}catch{throw new Error('Invalid SQLite worker response');}
 }
 function validComplete(manifest) {
-  return manifest?.formatVersion===1&&manifest.function==='core-self-upgrade-db'&&manifest.status==='complete'&&typeof manifest.id==='string'&&Array.isArray(manifest.databases)&&manifest.databases.length===3&&CORE_DATABASES.every(item=>manifest.databases.filter(row=>row.source===item.source).length===1)&&manifest.databases.every(row=>row.status==='missing'||(row.status==='backed_up'&&row.integrityCheck==='ok'&&typeof row.file==='string'&&path.basename(row.file)===row.file&&/^[a-f0-9]{64}$/.test(row.sha256)));
+  try {validateSnapshotManifest(manifest);return true;} catch {return false;}
 }
 // Probe only snapshot durability, independently of recovery locks and process
 // identity. All platforms use Node synchronization and propagate its errors.
@@ -38,7 +35,7 @@ export function probeCoreDbSnapshotSync(zylosDir) {
 }
 // Run before any service is stopped or maintenance marker is published. This
 // opens existing databases read-only and exercises each owner's native driver.
-export function preflightCoreDbUpgrade(zylosDir) {
+export function preflightCoreDbUpgrade(zylosDir, {formatVersion=2,dashboardRoot}={}) {
   for (const relative of ['.backup', '.backup/db']) {
     const file = path.join(zylosDir, relative);
     try { const stat = fs.lstatSync(file); if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe database snapshot destination: ' + file); }
@@ -50,13 +47,13 @@ export function preflightCoreDbUpgrade(zylosDir) {
   const stat = fs.lstatSync(destination);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe database snapshot destination');
   probeCoreDbSnapshotSync(destination);
-  return runCoreDbWorker({action: 'offline-preflight', zylosDir});
+  return runCoreDbWorker({action: 'offline-preflight', zylosDir,formatVersion,dashboardRoot});
 }
-// Compare only SQLite user_version with the downloaded release's declared
-// versions. This is the sole pre-stop live-database read when versions match.
-export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills')}={}) {
+// Pure owner inspection decides compatibility; Dashboard owns its separate
+// schema_migrations authority and never uses user_version for admission.
+export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),formatVersion=2,dashboardRoot}={}) {
   const schemaRoot=path.join(tempDir,'skills');
-  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot});
+  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot,formatVersion,dashboardRoot:dashboardRoot ?? path.join(tempDir,'components/dashboard')});
 }
 // Clear a fixed-name rehearsal left by an interrupted upgrade, plus older
 // random-name copies. Refuse ambiguous paths before stopping services.
@@ -86,7 +83,7 @@ export function cleanupCoreDbRehearsals(zylosDir) {
 // Run the downloaded release's real migration code against SQLite online
 // backup copies while services are still running. This is an early warning;
 // the stopped, snapshotted databases are migrated and checked again later.
-export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup}={}) {
+export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup,formatVersion=2,dashboardRoot}={}) {
   const schemaRoot=path.join(tempDir,'skills');
   const workerPath=path.join(tempDir,'cli','lib','core-db-backup-worker.js');
   if (!fs.existsSync(workerPath) || !fs.existsSync(path.join(schemaRoot,'comm-bridge','scripts','sqlite-schema.js'))) {
@@ -110,18 +107,19 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
   const rehearsalDir=path.join(zylosDir,'.backup','db','.rehearsal');
   fs.mkdirSync(rehearsalDir,{mode:0o700});
   fs.chmodSync(rehearsalDir,0o700);
-  try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir},{workerPath});}
+  try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir,formatVersion,dashboardRoot},{workerPath});}
   finally {fs.rmSync(rehearsalDir,{recursive:true,force:true});}
 }
-export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress,verifySnapshot=runCoreDbWorker}) {
+export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress,verifySnapshot=runCoreDbWorker,formatVersion=2}) {
+  databasesForFormat(formatVersion);
   if(!/^[a-zA-Z0-9_-]+$/.test(transactionId)) throw new Error('Invalid snapshot transaction ID');
   const root=path.join(zylosDir,'.backup','db');fs.mkdirSync(root,{recursive:true,mode:0o700});
   syncDir(path.dirname(root));syncDir(zylosDir);
   const staging=fs.mkdtempSync(path.join(root,'.staging-'));fs.chmodSync(staging,0o700);syncDir(root);
   let manifest;
   try {
-    const result=runCoreDbWorker({action:'snapshot',zylosDir,stagingDir:staging});
-    manifest={formatVersion:1,function:'core-self-upgrade-db',status:'complete',id:transactionId,from:fromVersion,to:toVersion,createdAt:new Date().toISOString(),databases:result.databases};
+    const result=runCoreDbWorker({action:'snapshot',zylosDir,stagingDir:staging,formatVersion});
+    manifest={formatVersion,function:'core-self-upgrade-db',status:'complete',id:transactionId,from:fromVersion,to:toVersion,createdAt:new Date().toISOString(),databases:result.databases};
     if(!validComplete(manifest)) throw new Error('Incomplete snapshot group');
     durableJson(path.join(staging,'manifest.json'),manifest);
     const destination=path.join(root,transactionId);if(fs.existsSync(destination)) throw new Error(`Snapshot already exists: ${destination}`);
@@ -144,14 +142,14 @@ export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersi
     return {dbBackupDir:destination,manifest,warnings};
   }catch(error) {
     if(fs.existsSync(staging)) {
-      try {durableJson(path.join(staging,'failure.json'),{status:'failed',error:error.message,transactionId});}
+      try {durableJson(path.join(staging,'failure.json'),{status:'failed',error:error.message,transactionId,failure:{code:'SNAPSHOT_FAILED',next:'Fix the database backup failure, then retry the upgrade; installation was not started.'}});}
       catch(writeError) {error.message+=`; failure record could not be persisted: ${writeError.message}`;}
     }
-    error.stagingDir=staging;throw error;
+    error.code='SNAPSHOT_FAILED';error.stagingDir=staging;throw error;
   }
 }
 // Freeze the native driver and its runtime dependency closure before npm changes.
-export function prepareRecoveryDependencies(transactionDir,zylosDir) {
+export function prepareRecoveryDependencies(transactionDir,zylosDir,{dashboardRoot=path.resolve(import.meta.dirname,'../../components/dashboard')}={}) {
   const target=path.join(transactionDir,'sqlite-runtime');fs.mkdirSync(target,{recursive:true,mode:0o700});
   fs.writeFileSync(path.join(target,'package.json'),'{"type":"module"}\n',{mode:0o600});
   const packages=path.join(target,'node_modules');fs.mkdirSync(packages,{mode:0o700});
@@ -171,6 +169,14 @@ export function prepareRecoveryDependencies(transactionDir,zylosDir) {
   }
   if(!installed) throw new Error('No installed core SQLite driver for independent recovery');
   copyPackage('better-sqlite3',installed);
+  if (fs.existsSync(dashboardRoot)) {
+    const destination=path.join(target,'dashboard-owner');
+    fs.cpSync(dashboardRoot,destination,{recursive:true,dereference:true,filter:entry=>!entry.split(path.sep).includes('node_modules')});
+    const packageFile=path.join(dashboardRoot,'package.json');
+    const data=JSON.parse(fs.readFileSync(packageFile,'utf8'));
+    const own=createRequire(packageFile);
+    for(const dependency of Object.keys(data.dependencies || {})) copyPackage(dependency,own);
+  }
   const workerPath=path.join(target,'core-db-backup-worker.js');fs.copyFileSync(WORKER,workerPath);
   const driverPath=path.join(packages,'better-sqlite3','lib','index.js');
   runCoreDbWorker({action:'probe',driverPath},{workerPath});

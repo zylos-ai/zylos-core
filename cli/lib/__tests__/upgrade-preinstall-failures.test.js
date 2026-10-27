@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import {runSelfUpgrade} from '../self-upgrade.js';
+import {pathToFileURL} from 'node:url';
+import {CORE_DATABASES} from '../core-db-backup.js';
 import {maintenance as m} from '../upgrade-protection.js';
 
 const require=createRequire(import.meta.url);
@@ -14,6 +15,21 @@ function fixture(t, fault) {
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-preinstall-failure-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const skillsDir=path.join(root,'.claude/skills'),tempDir=path.join(root,'new-package');
+  const packageRoot=path.join(root,'installed-package');
+  fs.mkdirSync(packageRoot);
+  fs.copyFileSync(path.resolve('package.json'),path.join(packageRoot,'package.json'));
+  fs.cpSync(path.resolve('cli'),path.join(packageRoot,'cli'),{recursive:true,filter:file=>!file.split(path.sep).includes('__tests__')});
+  fs.symlinkSync(path.resolve('node_modules'),path.join(packageRoot,'node_modules'));
+  fs.symlinkSync(path.resolve('skills'),path.join(packageRoot,'skills'));
+  const dashboardRoot=path.join(packageRoot,'components/dashboard');fs.mkdirSync(dashboardRoot,{recursive:true});
+  fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
+  fs.writeFileSync(path.join(dashboardRoot,'index.js'),`import {createRequire} from 'node:module';
+  const Database=createRequire(${JSON.stringify(path.resolve('skills/comm-bridge/package.json'))})('better-sqlite3');
+  export const dashboardSchemaOwner={
+    supportsNewDatabase(){return true;},
+    inspectSchema(file){const db=new Database(file,{readonly:true,fileMustExist:true});try{db.prepare('SELECT value FROM preserved').get();return {currentVersion:1,targetVersion:1,needsMigration:false};}finally{db.close();}},
+    migrate(){throw Error('preinstall verification must not migrate Dashboard');}
+  };`);
   fs.mkdirSync(path.join(skillsDir,'comm-bridge'),{recursive:true});
   fs.mkdirSync(path.join(tempDir,'skills/comm-bridge'),{recursive:true});
   for (const [owner,schema] of [['comm-bridge','c4-schema.js'],['scheduler','schema.js'],['web-console','schema.js']]) {
@@ -24,7 +40,7 @@ function fixture(t, fault) {
   fs.writeFileSync(path.join(dest,'scripts/sqlite-schema.js'),'export {}; // pre-chain compatibility fixture');
   }
   const original=new Map();
-  for(const source of m.DB_PATHS) {
+  for(const {source} of CORE_DATABASES) {
     const file=path.join(root,source);fs.mkdirSync(path.dirname(file),{recursive:true});
     const db=new Database(file);db.exec('CREATE TABLE preserved (value TEXT)');
     db.prepare('INSERT INTO preserved VALUES (?)').run(source);db.close();
@@ -44,15 +60,16 @@ else if(args[0]!=='save') {console.error('unexpected fake PM2 command');process.
 `,{mode:0o700});
   const prior=process.env.PATH;process.env.PATH=bin+path.delimiter+prior;
   t.after(()=>{process.env.PATH=prior;});
-  return {root,skillsDir,tempDir,original,calls,state};
+  return {root,skillsDir,tempDir,original,calls,state,packageRoot};
 }
 
-for(const fault of ['stop','snapshot']) test(`${fault} failure in default protected pipeline prevents installation and finalizer`,t=>{
+for(const fault of ['stop','snapshot']) test(`${fault} failure in default protected pipeline prevents installation and finalizer`,async t=>{
   const f=fixture(t,fault);let installerCalls=0,finalizerCalls=0;
+  const {runSelfUpgrade}=await import(pathToFileURL(path.join(f.packageRoot,'cli/lib/self-upgrade.js')).href);
   const result=runSelfUpgrade({tempDir:f.tempDir,newVersion:'fixture-new'},{
     zylosDir:f.root,skillsDir:f.skillsDir,
     getCurrentVersion:()=>({success:true,version:'fixture-old'}),
-    probeCoreDbVersions:()=>({needsMigration:true,databases:m.DB_PATHS.map((source,index)=>({source,status:'present',fromVersion:index?1:0,toVersion:1,needsMigration:index===0}))}),
+    probeCoreDbVersions:()=>({needsMigration:true,databases:CORE_DATABASES.map(({source},index)=>({source,status:'present',fromVersion:index?1:0,toVersion:1,needsMigration:index===0}))}),
     preflightCoreDbUpgrade:()=>({databases:[]}),
     rehearseCoreDbUpgrade:()=>({databases:[]}),
     step3: fault==='snapshot' ? {snapshot:()=>{throw Error('injected snapshot failure');}} : {},
