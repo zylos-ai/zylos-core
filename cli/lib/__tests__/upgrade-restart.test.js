@@ -6,7 +6,6 @@ import { describe, it } from 'node:test';
 
 const { rollback, step7_runPostUpgradeHook, step8_startService } = await import('../upgrade.js');
 const { step11_startCoreServices } = await import('../self-upgrade.js');
-const { restartRuntimeServices } = await import('../../commands/runtime.js');
 
 function makeSkillDir(frontmatter) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-hook-'));
@@ -458,30 +457,5 @@ describe('step11_startCoreServices', () => {
     assert.equal(result.status, 'failed');
     assert.match(result.error, /ZYLOS_PACKAGE_ROOT/);
     assert.equal(calls.some(call => call.type === 'exec' && call.cmd === 'pm2 save 2>/dev/null'), false);
-  });
-});
-
-describe('restartRuntimeServices', () => {
-  it('falls back to plain restart when the core ecosystem file is missing', () => {
-    const calls = [];
-
-    restartRuntimeServices({
-      services: ['activity-monitor'],
-      ecosystemPath: '/missing/core-ecosystem.config.cjs',
-      restartManagedProcessFn: (name, opts) => {
-        calls.push({ name, opts });
-      },
-      logSuccess: () => {},
-      logWarning: () => {},
-    });
-
-    assert.deepStrictEqual(calls, [{
-      name: 'activity-monitor',
-      opts: {
-        ecosystemPath: '/missing/core-ecosystem.config.cjs',
-        stdio: 'pipe',
-        fallbackToPlainRestartOnError: true,
-      },
-    }]);
   });
 });

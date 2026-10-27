@@ -12,15 +12,16 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { readLiveIdentity } from '../lib/session-state-reader.js';
+import { submit, lookupRestartRequest } from '../lib/am-sock-client.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport } from '../lib/sync-runtime-hooks.js';
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
 import { isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
-import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
 import {
   isValidBaseUrl,
   saveApiKey,
@@ -35,8 +36,6 @@ import {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-const green  = (s) => `\x1b[32m${s}\x1b[0m`;
-const yellow = (s) => `\x1b[33m${s}\x1b[0m`;
 const bold   = (s) => `\x1b[1m${s}\x1b[0m`;
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -65,7 +64,15 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
     else {
       const data = result.data;
       console.log(data.result === 'saved' ? `Baseline saved: ${data.previousBaseline} -> ${data.baseline}` : `Already on ${data.baseline} runtime.`);
-      for (const group of data.groups) console.log(`  ${group.sessionGroup}: ${group.status}`);
+      for (const group of data.groups) {
+        if (data.sessionMode === null || data.sessionMode === 'single') {
+          const labels = { effective: 'effective', not_running: 'not running', unknown: 'unknown',
+            pending_reclaim: 'pending reclaim (the old session will be stopped and restarted with the new baseline; the current conversation will be interrupted; command does not wait)' };
+          const retry = data.reclaim && ['not_submitted', 'unknown', 'stale_target'].includes(data.reclaim.result)
+            ? `; ${data.reclaim.reason}; rerun this command later` : '';
+          console.log(`  ${group.sessionGroup}: ${labels[group.status] || group.status}${retry}`);
+        } else console.log(`  ${group.sessionGroup}: ${group.status}`);
+      }
       if (!data.groupsComplete) console.error('Group observation incomplete:', data.observationErrors.map(error => `${error.source}: ${error.message}`).join('; '));
       for (const warning of data.warnings) console.error(`Warning [${warning.code}]: ${warning.message}`);
     }
@@ -189,27 +196,6 @@ export function validateRuntimeFlags(target, parsed) {
   return null;
 }
 
-export function restartRuntimeServices({
-  services = ['activity-monitor', 'c4-dispatcher'],
-  ecosystemPath = getCoreEcosystemPath(),
-  restartManagedProcessFn = restartManagedProcess,
-  logSuccess = console.log,
-  logWarning = console.error,
-} = {}) {
-  for (const svc of services) {
-    try {
-      restartManagedProcessFn(svc, {
-        ecosystemPath,
-        stdio: 'pipe',
-        fallbackToPlainRestartOnError: true,
-      });
-      logSuccess(`  ${green('✓')} ${svc}`);
-    } catch (e) {
-      logWarning(`  ${yellow(`Warning: failed to restart ${svc} — ${e.message}`)}`);
-    }
-  }
-}
-
 // ── Switch ────────────────────────────────────────────────────────────────
 
 export async function runtimeHooksReady(target) {
@@ -230,7 +216,7 @@ export async function observeRuntimeGroups(baseline, sessionMode, { list = listG
   overrides = async () => (await import('../../skills/comm-bridge/scripts/c4-db.js')).listGroupRuntimeOverrides(),
   identity = readLiveIdentity } = {}) {
   const result = { groups: [], groupsComplete: true, observationErrors: [] };
-  if (sessionMode === null || sessionMode === 'single') return result;
+  if (sessionMode === null || sessionMode === 'single') return (await observeSingleRuntime(baseline, identity)).observed;
   const names = new Set(['origin']);
   const failures = (source, sessionGroup, error) => {
     result.groupsComplete = false;
@@ -253,10 +239,55 @@ export async function observeRuntimeGroups(baseline, sessionMode, { list = listG
   return result;
 }
 
+async function observeSingleRuntime(baseline, identity) {
+  let live = null, error = null;
+  try { live = await identity(null); }
+  catch (cause) { error = { code: 'READ_FAILED', message: cause.message }; }
+  const liveRuntime = live?.present ? live.runtime : null;
+  const status = error ? 'unknown' : !live?.present ? 'not_running'
+    : !SUPPORTED_RUNTIMES.includes(liveRuntime) || !live.launchConfig || !live.runId ? 'unknown'
+      : liveRuntime === baseline ? 'effective' : 'pending_reclaim';
+  return { live, observed: {
+    groups: [{ sessionGroup: 'origin', inherits: true, liveRuntime, status, error }],
+    groupsComplete: !error,
+    observationErrors: error ? [{ source: 'session', sessionGroup: 'origin', ...error }] : [],
+  } };
+}
+
+async function reclaimSingleRuntime(live, group, warnings, { send, lookup, requestId }) {
+  const request = { version: 1, type: 'manual_restart', requestId: requestId(), expectedRunId: live.runId };
+  let response;
+  try { response = await send(request); }
+  catch { response = { kind: 'no_reply', sent: true }; }
+  const reclaim = { requestId: request.requestId, result: null, reason: null };
+  const warning = code => warnings.push({ code,
+    message: `Runtime reclaim ${reclaim.result}: ${reclaim.reason}; rerun this command later` });
+  if (response.kind === 'accepted') {
+    reclaim.result = response.reply.result;
+    if (reclaim.result === 'already_stopped') group.status = 'not_running';
+  } else if (response.kind === 'rejected' && response.reply?.reason === 'manual_restart_pending') {
+    reclaim.result = 'already_pending'; reclaim.reason = 'manual_restart_pending';
+  } else if (response.kind === 'rejected' && response.reply?.result === 'stale_target') {
+    group.status = 'unknown'; reclaim.result = 'stale_target'; reclaim.reason = response.reply.currentRunId;
+    warning('RECLAIM_NOT_SUBMITTED');
+  } else if (response.kind === 'rejected' || response.kind === 'connect_failed'
+      || (response.kind === 'deadline_exceeded' && !response.sent)) {
+    reclaim.result = 'not_submitted'; reclaim.reason = response.reply?.reason || response.reply?.code || response.kind;
+    warning('RECLAIM_NOT_SUBMITTED');
+  } else {
+    let found;
+    try { found = await lookup(request.requestId); } catch { found = 'unknown'; }
+    reclaim.result = ['accepted', 'done'].includes(found) ? 'accepted' : 'unknown';
+    if (reclaim.result === 'unknown') { reclaim.reason = response.kind; warning('RECLAIM_RESULT_UNKNOWN'); }
+  }
+  return reclaim;
+}
+
 export async function executeRuntimeSwitch(target, flags, { read = readZylosConfigStrict, mode = readSessionMode,
   exists = commandExists, adapter = getSessionAdapter, credentials = applyCredentials, baseUrl = applyBaseUrl,
   hooksReady = runtimeHooksReady, write = updateZylosConfigLocked, observe = observeRuntimeGroups,
-  restart = restartRuntimeServices } = {}) {
+  identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest,
+  requestId = () => `cli-rt-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
   const credentialsSaved = [], warnings = [];
   const fail = (code, message, extra = {}) => ({ ok: false, error: { code, message, persisted: [...credentialsSaved], ...extra } });
   const parsed = parseRuntimeFlags(flags);
@@ -310,15 +341,19 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   try { sessionMode = fullPath ? config.session_mode ?? null : mode().mode;
     if (![null, 'single', 'multi'].includes(sessionMode)) sessionMode = 'unreadable'; }
   catch { sessionMode = 'unreadable'; }
-  let observed;
-  try { observed = await observe(baseline, sessionMode); }
-  catch (error) { observed = { groups: [], groupsComplete: false, observationErrors: [{ source: 'session', sessionGroup: null, code: 'READ_FAILED', message: error.message }] }; }
-  if (fullPath && (sessionMode === null || sessionMode === 'single')) {
-    try { restart({ logSuccess: () => {}, logWarning: message => warnings.push({ code: 'SERVICE_RESTART_FAILED', message }) }); }
-    catch (error) { warnings.push({ code: 'SERVICE_RESTART_FAILED', message: error.message }); }
+  let observed, reclaim = null;
+  try {
+    if (sessionMode === null || sessionMode === 'single') {
+      const single = await observeSingleRuntime(baseline, identity);
+      observed = single.observed;
+      if (observed.groups[0].status === 'pending_reclaim') {
+        reclaim = await reclaimSingleRuntime(single.live, observed.groups[0], warnings, { send, lookup, requestId });
+      }
+    } else observed = await observe(baseline, sessionMode);
   }
+  catch (error) { observed = { groups: [], groupsComplete: false, observationErrors: [{ source: 'session', sessionGroup: null, code: 'READ_FAILED', message: error.message }] }; }
   return { ok: true, data: { result: changed ? 'saved' : 'unchanged', previousBaseline, baseline,
-    credentialsSaved, sessionMode, ...observed, warnings } };
+    credentialsSaved, sessionMode, ...observed, reclaim, warnings } };
 }
 
 function readRuntimeConfig() {

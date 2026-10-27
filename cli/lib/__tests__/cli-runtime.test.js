@@ -18,7 +18,7 @@ function fixture(overrides = {}) {
     hooksReady: () => { calls.push('hooks'); return { ready: true, pendingMigration: false }; },
     write: () => { calls.push('write'); return { previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'multi' }, changed: true }; },
     observe: async () => { calls.push('observe'); return { groups: [], groupsComplete: true, observationErrors: [] }; },
-    restart: () => { calls.push('restart'); },
+    identity: async () => ({ present: false }),
     ...overrides,
   };
   return { calls, run: flags => executeRuntimeSwitch('codex', flags || [], deps) };
@@ -42,14 +42,13 @@ test('IF-47 runtime prechecks are ordered and stop before persistence', async ()
   assert.deepEqual(invalid.calls, []);
 });
 
-test('review JSON: full-path credentials/restart and failed precheck emit exactly the final envelope', async () => {
+test('review JSON: full-path credentials and failed precheck emit exactly the final envelope', async () => {
   const original = console.log, previousExit = process.exitCode;
   const lines = []; console.log = text => lines.push(text);
   try {
     for (const failed of [false, true]) {
       const f = fixture(failed ? { hooksReady: () => ({ ready: false, pendingMigration: false }) } : {
         write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'single' }, changed: true }),
-        restart: ({ logSuccess }) => { logSuccess('progress must stay suppressed'); },
       });
       const result = await runtimeCommand(['codex', '--save-apikey', 'fixture-key', '--json'], { execute: (_runtime, flags) => f.run(flags) });
       assert.equal(lines.length, 1);
@@ -73,7 +72,7 @@ test('IF-47 auth failure is rejected by the runtime command with exit code 1', a
   } finally { console.log = original; process.exitCode = previousExit; }
 });
 
-test('IF-47 unchanged skips install/hooks/auth/write/restart; no-validate only skips auth', async () => {
+test('IF-47 unchanged skips install/hooks/auth/write; no-validate only skips auth', async () => {
   const same = fixture({ read: () => ({ state: 'ok', config: { runtime: 'codex' } }) });
   assert.equal((await same.run()).data.result, 'unchanged');
   assert.deepEqual(same.calls, ['adapter', 'observe']);
@@ -110,17 +109,17 @@ test('IF-47 lock-return snapshot determines previous/config/changed, including c
     assert.equal(result.data.result, changed ? 'saved' : 'unchanged');
     assert.equal(result.data.previousBaseline, changed ? 'claude' : 'codex');
     assert.equal(result.data.baseline, 'codex');
-    assert.equal(f.calls.includes('restart'), true);
   }
 });
 
-test('IF-47 saved result survives local observation and restart errors', async () => {
+test('IF-47 saved result survives single identity read errors', async () => {
   const f = fixture({ observe: async () => { throw new Error('unavailable'); },
     write: () => ({ previous: {}, config: { runtime: 'codex' }, changed: true }),
-    restart: () => { throw new Error('unavailable'); } });
+    identity: async () => { throw new Error('unavailable'); } });
   const result = await f.run();
   assert.equal(result.ok, true); assert.equal(result.data.groupsComplete, false);
-  assert.equal(result.data.warnings[0].code, 'SERVICE_RESTART_FAILED');
+  assert.equal(result.data.groups[0].status, 'unknown');
+  assert.deepEqual(result.data.warnings, []);
 });
 
 test('IF-47 group union uses explicit override priority and preserves unknown identities', async () => {
