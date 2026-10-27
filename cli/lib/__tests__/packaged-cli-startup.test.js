@@ -95,7 +95,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
       assert.equal(typeof entry.main, 'function');
       const loader = await import(${uri('core-config-loader.js')});
       const { loadCoreModule } = await import(${uri('router/core-modules.js')});
-      assert.equal(loader.resolveCoreConfigModule(), ${JSON.stringify(path.join(installed, 'cli/lib/config.js'))});
+      assert.equal(loader.resolveCoreConfigModule(), ${JSON.stringify(fs.realpathSync(path.join(installed, 'cli/lib/config.js')))});
       assert.equal(await loader.loadCoreConfig(), await loadCoreModule('config.js'));
       const { createDispatcher } = await import(${uri('router/factory.js')});
       const events = [];
