@@ -10,6 +10,7 @@ const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup
 const options={db:database,scenes,legacyStatus:{tick(){},close(){}},log:value=>logs.push(value),machineTasks:{tick(){},stop(){}},
   sendAlert:()=>{throw new Error('external send forbidden');},
   loopOptions:{intervalMs:10000}};
+if(scenario==='missing-migration')options.advanceAutomaticMigration=()=>{throw Object.assign(new Error('fixture missing migration owner'),{code:'DEPENDENCY_UNAVAILABLE'});};
 if(scenario==='restore-failure')options.requestStore={read(){throw Object.assign(new Error('fixture restore failure'),{code:'RESTORE_FAILED'});}};
 let service;
 try {

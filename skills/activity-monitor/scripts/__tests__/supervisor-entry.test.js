@@ -107,8 +107,8 @@ test('T02 entry freezes first-failure notice synchronously with correct single/m
 });
 
 // P05 T01 / F1: a missing key is a readable legacy instance, not corrupt F1.
-test('T01 legacy F1 opens actual entry as single and reports unavailable automatic migration separately', {timeout:15000}, async t=>{
-  const root=prepare(t,{runtime:'claude'}),w=launch(t,root);const ready=await w.next();
+test('T01 legacy F1 opens actual entry as single and reports explicitly unavailable automatic migration separately', {timeout:15000}, async t=>{
+  const root=prepare(t,{runtime:'claude'}),w=launch(t,root,{scenario:'missing-migration'});const ready=await w.next();
   assert.equal(ready.admissionOpen,true);assert.equal(ready.configurationError,undefined);
   assert.equal(ready.mode,'single');assert.equal(ready.legacy,true);
   assert.ok(ready.logs.some(row=>row?.error==='DEPENDENCY_UNAVAILABLE' && row.phase==='automatic-migration'));

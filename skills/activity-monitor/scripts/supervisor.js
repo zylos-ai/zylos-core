@@ -2,6 +2,8 @@ import { loadCoreModule } from './core-modules.js';
 import path from 'node:path';
 import { SupervisorLoop } from './supervisor-loop.js';
 import { SupervisorAdmission } from './supervisor-admission.js';
+import { ModeSwitchCoordinator } from './mode-switch.js';
+import { createModeSwitchConverter } from './mode-switch-convert.js';
 import { SupervisorLifecycle } from './supervisor-lifecycle.js';
 import { RuntimeHealthCoordinator, aggregateRuntimeDemand } from './runtime-health.js';
 import { SupervisorHealthObserver } from './supervisor-health-observer.js';
@@ -11,6 +13,7 @@ import { SessionActivity } from './session-activity.js';
 import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
+const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
 const { supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
 
 export const AUTH_DEMAND_RETRY_MS = 60000;
@@ -19,7 +22,7 @@ export const AUTH_DEMAND_RETRY_MS = 60000;
 export function createSupervisor(deps) {
   const { db, scenes, readConfiguration, readMode, readSyncMarker, prompts, now=Date.now, log=()=>{} }=deps;
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
-  let observer,router,admission,lifecycle,stopping=false,stopPromise,roundContext;
+  let observer,router,admission,lifecycle,modeSwitch,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
   const missingDependencies=deps.missingDependencies ?? new Set();
   const reportError=(error,context={})=>{
@@ -88,20 +91,33 @@ export function createSupervisor(deps) {
   admission=new SupervisorAdmission({db,store:deps.requestStore,readMode,listRuns:()=>scenes.listRuns(),readRun:group=>scenes.readRun(group),
     resolveLaunchConfig:async group=>db.resolveSessionLaunchConfig({sessionGroup:group,sessionMode:(await readMode()).mode}),
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
-    modeSwitch:deps.modeSwitch,startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
+    modeSwitch:(request,context)=>(deps.modeSwitch ?? ((...args)=>modeSwitch.handle(...args)))(request,context),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError},{now});
+  modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
+    legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
+    convert:deps.convertModeTransition ?? createModeSwitchConverter({db,zylosDir:deps.zylosDir}),
+    writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartM1Confirmation,readMissingDeadlineIds:deps.readMissingDeadlineIds,diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({
-    readConfiguration:async()=>{roundContext=null;configuration=await readConfiguration();return configuration;},
+    readConfiguration:async()=>{
+      roundContext=null;
+      try {configuration=await readConfiguration();return configuration;}
+      catch(error) {
+        const transition=await db.getModeTransition();
+        if(transition)await modeSwitch.block(transition,'config_unreadable');
+        else modeSwitch.event('auto_migration_skipped',null,{reason:error.code ?? 'CONFIG_UNREADABLE'});
+        throw error;
+      }
+    },
     restore:async()=>{
       try{admission.restore();}catch(error){if(error.code!=='requests_unreadable')throw error;reportError(error,{phase:'requests'});}
       for(const runtime of ['claude','codex'])await health.restore(runtime);
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
     },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),
-    advanceAutomaticMigration:context=>deps.advanceAutomaticMigration?.(context),
-    advanceTransition:async transition=>{if(deps.advanceTransition)await deps.advanceTransition(transition);else reportError(Object.assign(new Error('Mode transition owner unavailable'),{code:'DEPENDENCY_UNAVAILABLE'}),{phase:'transition'});},
+    advanceAutomaticMigration:context=>(deps.advanceAutomaticMigration ?? (()=>modeSwitch.automatic()))(context),
+    advanceTransition:transition=>(deps.advanceTransition ?? (()=>modeSwitch.advance()))(transition),
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},
     observeExits:current=>exits.advance(current),
     afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),
@@ -173,7 +189,7 @@ export function createSupervisor(deps) {
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };
-  return {loop,health,observer,router,admission,lifecycle,connectionHandler,readActivity,drainHealthWrites,
+  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,drainHealthWrites,
     stop(){
       if(stopPromise)return stopPromise;
       stopping=true;admission.closeEntry();

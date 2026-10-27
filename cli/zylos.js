@@ -34,6 +34,7 @@ const commands = {
   doctor: async (...args) => (await import('./commands/doctor.js')).doctorCommand(...args),
   shell: shellCommand,
   runtime: async (...args) => (await import('./commands/runtime.js')).runtimeCommand(...args),
+  'session-mode': async (...args) => (await import('./commands/session-mode.js')).sessionModeCommand(...args),
   auth: authCommand,
   group: async (...args) => (await import('./commands/group.js')).groupCommand(...args),
   recovery: recoveryCommand,
@@ -145,6 +146,7 @@ Setup:
   shell               Interactive CLI mode (REPL)
   runtime <name>      Switch agent runtime (claude|codex)
   runtime status      Show currently configured runtime
+  session-mode switch <single|multi> [--json]  Begin a session mode switch
   auth <name>         Authenticate a prepared runtime (Codex: --device-code)
   group <kind>        Read or update group runtime/model configuration
   migrate-instructions  Analyze/migrate legacy mixed instructions (dry-run by default)
