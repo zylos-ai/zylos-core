@@ -1,0 +1,45 @@
+Running 1 Node test files
+✔ T01 actual entry restores before Sock admission and shuts down with a partial-line peer (116.998662ms)
+✔ T01 duplicate entry preserves the original listener; non-socket paths remain intact (188.813447ms)
+✔ T01 bad startup F1 keeps Sock closed to mutations; restore failure cleans up listener (175.747305ms)
+✔ T01 copied installed skills resolve the separate Core package and serve actual Sock requests (134.814885ms)
+✔ T02 entry freezes first-failure notice synchronously with correct single/multi SQL scope (203.911676ms)
+✔ T01 legacy F1 opens actual entry as single and reports unavailable automatic migration separately (183.591385ms)
+(node:1768604) ExperimentalWarning: Module mocking is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:1768604) DeprecationWarning: mock.module(): options.namedExports is deprecated. Use options.exports instead.
+✔ C4 monitor signal handler reports stop rejection and exits unsuccessfully (1.275576ms)
+✔ C4 canonical PM2 wrapper invokes the monitor entry even when imported indirectly (3.601419ms)
+✔ C3 missing P04 reader logs once across six rounds and defers eviction without config-error spam (120.684518ms)
+✔ C3 present P04 reader supplies real capacity without a missing-dependency notice (93.286814ms)
+✖ P05 actual Sock rejects requests throughout paused restoration, then admits after restoration completes (13.28491ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 10
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1335.427627
+
+✖ failing tests:
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-entry.test.js:165:1
+✖ P05 actual Sock rejects requests throughout paused restoration, then admits after restoration completes (13.28491ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + undefined
+  - 'entry_not_open'
+
+      at TestContext.<anonymous> (file://<workspace>/workspace/p05-i2-gaps-evidence-2721/protocol-rate/audit-mutation-admit-before-restore/skills/activity-monitor/scripts/__tests__/supervisor-entry.test.js:187:13)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'entry_not_open',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

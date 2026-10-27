@@ -1,0 +1,11 @@
+skills/activity-monitor/scripts/__tests__/i2-if63.integration.test.js
+skills/activity-monitor/scripts/__tests__/i2-manual-router.integration.test.js
+skills/activity-monitor/scripts/__tests__/i2-manual-scenes.integration.test.js
+skills/activity-monitor/scripts/__tests__/i2-protocol-start-attempt.test.js
+skills/activity-monitor/scripts/__tests__/i2-rate-probe.test.js
+skills/activity-monitor/scripts/__tests__/i2-reclaim-crash.integration.test.js
+skills/activity-monitor/scripts/__tests__/i2-state-derivation.test.js
+skills/activity-monitor/scripts/__tests__/message-router.test.js
+skills/activity-monitor/scripts/__tests__/supervisor-entry.test.js
+skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js
+skills/activity-monitor/scripts/__tests__/supervisor-loop.test.js

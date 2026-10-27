@@ -131,3 +131,33 @@ test('transition failure reports and continues exits, publication and existing r
   assert.equal(f.timers.length, 2);
   await f.loop.stop();
 });
+
+// P05 supplemental T01: each isolated stage failure must preserve a next round.
+test('P05 every loop step exception reports its phase and schedules the next round',async t=>{
+ for(const [method,phase] of Object.entries({
+  getModeTransition:'round',readConfiguration:'round',listDrainFences:'round',readRestartRequests:'restart-requests',
+  observe:'round',checkManualFences:'manual-fences',advanceManual:'advanceManual',advanceRestarts:'advanceRestarts',
+  reconcileConfiguration:'reconcileConfiguration',observeExits:'round',probeAndPublish:'observe',advanceReclaim:'reclaim',
+  checkRotation:'rotation',checkTtl:'ttl',checkEviction:'eviction',checkSync:'sync',writeMetricsAndMaintain:'round',afterRound:'after-round',
+ })) await t.test(method,async()=>{
+  const f=fixture({listDrainFences:async()=>[{sessionGroup:'origin'},{sessionGroup:'tg:one'}]});
+  await f.loop.start();f.calls.length=0;const original=f.deps[method];
+  f.deps[method]=async()=>{throw new Error(`injected ${method}`);};
+  await f.loop.tick();assert.ok(f.calls.includes(`error:${phase}`));assert.equal(f.timers.length,2);
+  if(['probeAndPublish','advanceReclaim','checkRotation','checkTtl'].includes(method))assert.equal(f.calls.filter(v=>v===`error:${phase}`).length,2);
+  f.deps[method]=original;f.calls.length=0;await f.loop.tick();
+  assert.ok(f.calls.includes('metrics'));assert.equal(f.timers.length,3);await f.loop.stop();
+ });
+});
+
+test('P05 long-running group stays observed without starving another group or reopening D9 producers',async()=>{
+ const scenes=[{sessionGroup:'origin',state:'busy',tools:[{id:'long'}]},{sessionGroup:'tg:one',state:'idle'}];
+ const seen=[];let transition=null;
+ const f=fixture({observe:async()=>scenes,getModeTransition:async()=>transition,
+  probeAndPublish:async scene=>seen.push(scene.sessionGroup),listDrainFences:async()=>[{sessionGroup:'tg:one'}]});
+ await f.loop.start();await f.loop.tick();assert.deepEqual(seen,['origin','tg:one','origin','tg:one']);
+ transition={id:'switch'};f.calls.length=0;await f.loop.tick();
+ assert.deepEqual(seen.slice(-2),['origin','tg:one']);assert.ok(f.calls.includes('reclaim'));
+ for(const phase of ['manual','restarts','config','rotation','ttl','evict','sync'])assert.equal(f.calls.includes(phase),false,phase);
+ assert.equal(f.timers.length,3);await f.loop.stop();
+});

@@ -59,12 +59,14 @@ export class MessageRouter {
     if (accelerated) this.clearCache(runtime);
     const cache = !accelerated && this.readNegativeCache(runtime);
     const gate = recoveryEligibility(this.healthCoordinator.store(runtime).read(), { runtime, cache, nowMs: this.now() });
-    if (gate.eligible) await this.awaitBudget(Promise.resolve().then(() => this.requestProbe?.(runtime)));
+    const probe = gate.eligible ? await this.awaitBudget(Promise.resolve().then(() => this.requestProbe?.(runtime))) : null;
     state = this.healthCoordinator.store(runtime).read();
     health = normalizeHealth(state.health ?? rawHealth); reason = this.reason(state);
     if (health === 'ok') { this.clearCache(runtime); return this.decision(request, runtime, { health, reason, decision: 'pending' }); }
     if (health === 'auth_failed') return this.authDecision(request, runtime, state);
-    if (gate.eligible) this.writeNegativeCache(runtime, health, reason);
+    // No eligible scene means no probe took place. Keep input acceleration
+    // available for M1 to register a launch in its next scheduling round.
+    if (gate.eligible && !probe?.noTarget) this.writeNegativeCache(runtime, health, reason);
     return this.decision(request, runtime, { health, reason, ...(health === 'rate_limited' ? { decision: 'pending' } : { recovered: false }), ...(gate.code === 'probe_cache' ? { cacheHit: true } : {}) });
   }
   async authDecision(request, runtime, state) {

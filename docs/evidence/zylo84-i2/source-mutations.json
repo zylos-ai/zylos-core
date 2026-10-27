@@ -1,0 +1,83 @@
+[
+  {
+    "name": "parser-adds-null-request-id",
+    "command": [
+      "node",
+      "scripts/run-node-tests.js",
+      "skills/activity-monitor/scripts/__tests__/i2-protocol-start-attempt.test.js"
+    ],
+    "exit": 1,
+    "log": "negative-controls/parser-adds-null-request-id.txt",
+    "source": "skills/activity-monitor/scripts/router-socket.js",
+    "counts": {
+      "tests": 11,
+      "pass": 10,
+      "fail": 1,
+      "skipped": 0
+    },
+    "expected_failure": "public rejection exact field set"
+  },
+  {
+    "name": "admission-echoes-nonstring-id",
+    "command": [
+      "node",
+      "scripts/run-node-tests.js",
+      "skills/activity-monitor/scripts/__tests__/i2-protocol-start-attempt.test.js"
+    ],
+    "exit": 1,
+    "log": "negative-controls/admission-echoes-nonstring-id.txt",
+    "source": "skills/activity-monitor/scripts/supervisor-admission.js",
+    "counts": {
+      "tests": 11,
+      "pass": 10,
+      "fail": 1,
+      "skipped": 0
+    },
+    "expected_failure": "numeric requestId normalized to null"
+  },
+  {
+    "name": "m1-bypasses-validation",
+    "command": [
+      "node",
+      "scripts/run-node-tests.js",
+      "skills/activity-monitor/scripts/__tests__/i2-protocol-start-attempt.test.js"
+    ],
+    "exit": 1
+  },
+  {
+    "name": "auth-clears-rate",
+    "command": [
+      "node",
+      "scripts/run-node-tests.js",
+      "skills/activity-monitor/scripts/__tests__/i2-rate-probe.test.js"
+    ],
+    "exit": 1
+  },
+  {
+    "name": "reclaim-final-conversation",
+    "command": [
+      "node",
+      "scripts/run-node-tests.js",
+      "skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js"
+    ],
+    "exit": 1
+  },
+  {
+    "name": "unknown-releases-occupancy",
+    "command": [
+      "node",
+      "scripts/run-node-tests.js",
+      "skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js"
+    ],
+    "exit": 1
+  },
+  {
+    "name": "legacy-newest-transcript",
+    "command": [
+      "node",
+      "scripts/run-node-tests.js",
+      "skills/activity-monitor/scripts/__tests__/supervisor-legacy-status.test.js"
+    ],
+    "exit": 1
+  }
+]
