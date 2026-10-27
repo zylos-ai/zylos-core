@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fixture } from './c4-v2-test-helpers.js';
 import { parseSendArgs } from '../c4-send-args.js';
@@ -117,12 +118,19 @@ test('IF-68 real component receives maximum endpoint and preserves shell metacha
 });
 
 test('IF-68 actual E2BIG and script deletion after audit preserve delivered rows', async t => {
-  const { api, dir, script, db } = setup(t);
-  await assert.rejects(sendExternal(request, 'x'.repeat(131072), { api, skillsDir: dir }),
+  const { api, dir, script, marker, db } = setup(t);
+  const argMax = Number(execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8' }).trim());
+  assert.ok(Number.isSafeInteger(argMax) && argMax > 0, 'getconf must report a positive argument limit');
+  // Exceed the platform's entire argv budget, not Linux's per-argument limit.
+  await assert.rejects(sendExternal(request, 'x'.repeat(argMax + 1), { api, skillsDir: dir }),
     error => error.code === 'COMPONENT_SPAWN_FAILED' && error.message.includes('E2BIG'));
+  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 1);
+  assert.equal(fs.existsSync(marker), false);
   await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir,
     appendFallback: () => fs.renameSync(script, script + '.removed') }), { code: 'SEND_FAILED' });
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
+  assert.equal(fs.existsSync(script + '.removed'), true);
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test('IF-07 actual outbound history and explicit group resolution log only committed fallback records', async t => {
