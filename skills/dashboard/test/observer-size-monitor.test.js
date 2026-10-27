@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/lib/config.js';
-import { ObserverSizeMonitor, parseObserverSize } from '../src/lib/observer-size-monitor.js';
+import { ObserverSizeMonitor, parseObserverSize, readObserverGeometry } from '../src/lib/observer-size-monitor.js';
 import { ObserverUpstream } from '../src/lib/observer-upstream.js';
 
 const active = { target: 'claude-main', tmuxPath: '/usr/bin/tmux', tmuxSocket: '/tmp/agent-socket' };
@@ -120,4 +120,17 @@ test('failed asynchronous size application retries and cannot publish after stop
   finish();
   await retry;
   assert.deepEqual(monitor.size, { cols: 80, rows: 24 });
+});
+
+
+test('Origin geometry queries the exact read-only target and rejects other groups', async () => {
+  const calls = [];
+  const exec = async (file, args) => { calls.push({ file, args }); return { stdout: '120 39 on' }; };
+  const origin = { ...active, target: 'zylos-group-origin' };
+  assert.deepEqual(await readObserverGeometry(origin, exec), { cols: 120, rows: 40, windowRows: 39, statusLines: 1 });
+  assert.deepEqual(calls, [{ file: active.tmuxPath, args: ['-N', '-S', active.tmuxSocket, 'display-message', '-p', '-t', '=zylos-group-origin:', '#{window_width} #{window_height} #{status}'] }]);
+  for (const target of ['zylos-group-other', 'zylos-group-origin;kill-server', '']) {
+    assert.equal(await readObserverGeometry({ ...origin, target }, exec), null);
+  }
+  assert.equal(calls.length, 1);
 });

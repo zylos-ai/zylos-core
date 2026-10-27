@@ -16,7 +16,7 @@ export function parseObserverSize(stdout) {
 }
 
 export async function readObserverGeometry(active, exec = command) {
-  if (!['claude-main', 'codex-main'].includes(active.target) || !active.tmuxPath) return null;
+  if (!['claude-main', 'codex-main', 'zylos-group-origin'].includes(active.target) || !active.tmuxPath) return null;
   const result = await exec(active.tmuxPath, targetArgs(active,
     'display-message', '-p', '-t', `=${active.target}:`, '#{window_width} #{window_height} #{status}'));
   return parseObserverGeometry(result.stdout);
