@@ -37,7 +37,7 @@ export class SupervisorAdmission {
   closeEntry() { this.open = false; }
   readRequests() { return this.store.read(); }
   async handle(request) {
-    const envelope = { version: 1, type: request?.type, requestId: request?.requestId ?? null };
+    const envelope = { version: 1, type: request?.type, requestId: request?.type === 'start_attempt' && typeof request.requestId !== 'string' ? null : request?.requestId ?? null };
     const reply = result => ({ ...envelope, ...result });
     if (!validSupervisorRequest(request)) return reply({ ok: false, code: 'invalid_request' });
     if (!this.open) {

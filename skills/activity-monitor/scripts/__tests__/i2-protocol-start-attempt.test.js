@@ -6,6 +6,8 @@ import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { validateReply } from '../../../../cli/lib/am-sock-client.js';
+import { validStartAttemptReply } from '../../../comm-bridge/scripts/router/activation.js';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { createSupervisorConnectionHandler } from '../router-socket.js';
@@ -52,13 +54,24 @@ test('IF-62 A absent group/run keys are rejected over am.sock without a health w
   assert.equal(valid.result, 'registered', 'same fixture accepts all required valid keys');
 });
 
-test('IF-62 A unparseable input explicitly replies requestId null', async t => {
+test('IF-62 A unparseable input returns a public rejection trusted by both clients', async t => {
   const f = await socketFixture(t);
+  const request = { version: 1, type: 'start_attempt', requestId: 'sa-1800000000000-0123456789ab' };
   for (const line of ['{"type":"start_attempt","requestId":\n', '[]\n', 'null\n']) {
     const reply = await f.send(line);
-    assert.equal(reply.ok, false); assert.equal(reply.code, 'invalid_request');
-    assert.equal(Object.hasOwn(reply, 'requestId'), true, 'unknown request ID must be explicit');
-    assert.equal(reply.requestId, null); f.unchanged();
+    assert.deepEqual(reply, { ok: false, code: 'invalid_request' });
+    assert.equal(validateReply(request, reply), true, 'CLI trusts the public rejection');
+    assert.equal(validStartAttemptReply(reply, request), true, 'M1 trusts the public rejection');
+    f.unchanged();
+  }
+});
+
+test('IF-62 A parsed start_attempt with missing or nonstring requestId returns a null-ID envelope', async t => {
+  const f = await socketFixture(t);
+  for (const id of [{}, { requestId: null }, { requestId: 123 }]) {
+    const request = { version: 1, type: 'start_attempt', runtime: 'claude', sessionGroup: 'telegram:a', runId: randomUUID(), ...id };
+    assert.deepEqual(await f.send(request), { version: 1, type: 'start_attempt', requestId: null, ok: false, code: 'invalid_request' });
+    f.unchanged();
   }
 });
 

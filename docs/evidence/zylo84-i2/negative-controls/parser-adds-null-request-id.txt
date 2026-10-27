@@ -1,0 +1,45 @@
+Running 1 Node test files
+✔ IF-62 A absent group/run keys are rejected over am.sock without a health write (61.00324ms)
+✖ IF-62 A unparseable input returns a public rejection trusted by both clients (29.163606ms)
+✔ IF-62 A parsed start_attempt with missing or nonstring requestId returns a null-ID envelope (23.847475ms)
+✔ IF-62 B registered missing reason: no launch, diagnostic, fresh next-round IDs (19.639592ms)
+✔ IF-62 B not_restricted with reason: no launch, diagnostic, fresh next-round IDs (8.665966ms)
+✔ IF-62 B backoff missing notBefore: no launch, diagnostic, fresh next-round IDs (9.465833ms)
+✔ IF-62 B notBefore in seconds: no launch, diagnostic, fresh next-round IDs (9.500572ms)
+✔ IF-62 B unknown code: no launch, diagnostic, fresh next-round IDs (7.61636ms)
+✔ IF-62 B probe_inflight with notBefore: no launch, diagnostic, fresh next-round IDs (7.328021ms)
+✔ IF-62 B registered with forbidden notBefore: no launch, diagnostic, fresh next-round IDs (7.319687ms)
+✔ IF-62 B valid backoff does not delay next round and an extra-field grant launches its requested run (7.763137ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 10
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 309.328718
+
+✖ failing tests:
+
+test at skills/activity-monitor/scripts/__tests__/i2-protocol-start-attempt.test.js:57:1
+✖ IF-62 A unparseable input returns a public rejection trusted by both clients (29.163606ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    {
+      code: 'invalid_request',
+      ok: false,
+  +   requestId: null
+    }
+
+      at TestContext.<anonymous> (file://<workspace>/p05-i2-revision-2723/parser-adds-null-request-id/skills/activity-monitor/scripts/__tests__/i2-protocol-start-attempt.test.js:62:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { requestId: null, ok: false, code: 'invalid_request' },
+    expected: { ok: false, code: 'invalid_request' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

@@ -2,11 +2,11 @@
 
 Base: `832d1cd98224d220ccab5537ff8e9ac2809dcd1f`. Target: `multi-session/batch-2`.
 
-This change adds explicit acceptance assertions for crash recovery, manual Origin control, start-attempt validation and cross-process recovery, injected rate-limit recovery, and the supplemental state/lifecycle checklist. It fixes two implementation defects discovered by those tests.
+This change adds explicit acceptance assertions for crash recovery, manual Origin control, start-attempt validation and cross-process recovery, injected rate-limit recovery, and the supplemental state/lifecycle checklist. It fixes the no-target recovery cache defect and validates public rejection handling across both clients.
 
 ## Implementation defects
 
-- Unparseable/nonobject socket requests omitted `requestId`. Generic invalid-request replies now explicitly return `requestId:null`. The request type remains unspecified when it cannot be parsed. Before/after and a source-revert control cover the change.
+- Unparseable/nonobject socket requests return exactly `{ok:false,code:"invalid_request"}`. Both client validators trust that public rejection. Parsed `start_attempt` requests with missing or nonstring IDs instead return the full envelope with `requestId:null`; admission now normalizes nonstring IDs before rejecting them. A source mutation reintroducing null on public rejections must fail. The earlier claim that public rejections needed null was incorrect and has been withdrawn.
 - A route-triggered recovery with no eligible target created a negative probe cache although no probe ran. This blocked next-round start admission after real input acceleration. The observer now returns an internal `noTarget` marker; routing leaves that result uncached. Actual failed/timed-out controls still create a cache. The marker does not appear in the socket protocol.
 
 ## Integration boundaries
@@ -42,14 +42,14 @@ P12 owns dashboard UI/Observer rendering and the interrupt producer. Core assert
 |---|---|
 | IF-32 inflight crash / manual intent | `i2-reclaim-crash.integration.test.js`: real M4 SIGKILL while the persisted inflight count is nonzero, row-driven continuation and manual-fence preservation; bad-reset/bad-clear controls. |
 | IF-36 scene and field matrix | `i2-manual-scenes.integration.test.js`: modes/runtimes, exact replies and persisted intent, empty Origin, identity changes, conflicts, seven crash boundaries and unrelated runtimes. `i2-manual-router.integration.test.js`: separate real M1/M4, pause after actual paste, late Enter remains bound to old object, ledger completion before gate release; new Origin launch failure cannot revive intent. Existing manual-entry/manual-session/delivery tests supply lost-response and session-reset assertions. UI is explicitly outside this task. |
-| IF-62 invalid protocol | `i2-protocol-start-attempt.test.js`: absent keys, null unparseable request ID, invalid reply variants, no launch/diagnostic, next-round fresh request and run IDs, valid reply positive control. |
+| IF-62 invalid protocol | `i2-protocol-start-attempt.test.js`: absent keys, exact public rejection trusted by both clients, null-ID envelopes for parsed requests with missing/nonstring IDs, invalid reply variants, no launch/diagnostic, next-round fresh request and run IDs, valid reply positive control. |
 | IF-63 every numbered case | `i2-if63.integration.test.js` and two fixtures: real separate M1/M4 processes, persisted grant before launch, contention, socket/transport/process failures, lost associations, run identity, active input acceleration and its negative control. Test names identify each numbered case; traces retain actual process IDs and the request/health/launch sequence. |
 | DM-63 injected rate limit | `i2-rate-probe.test.js`: future and probe-driven expired cooldown, auth block and owner reconstruction, auth release preserves independent limit, later successful probe clears it; no-rate positive control. |
 | Supplemental checklist | Seven-file mapping above; missing screen/tool, continuous rotation/directory loss, loop exceptions, all terminal states, actual LRU ordering and pre-restoration socket requests are now explicit assertions. |
 
 ## Negative controls
 
-Separate copies mutate the socket null field, M1 reply validation, auth/rate preservation, final inflight recheck, unknown occupancy, newest legacy transcript, LRU order and early admission. Every mutant fails its expected assertion. The no-target cache source-revert control additionally fails real M1/M4 input-acceleration cases. Fixture-local deliberate bad variants cover crash gate clearing, run association/backoff and screen-derived tool completion; their normal implementations pass the same oracles first.
+Separate copies add an invalid null field to public socket rejections, echo a nonstring parsed request ID, M1 reply validation, auth/rate preservation, final inflight recheck, unknown occupancy, newest legacy transcript, LRU order and early admission. Every mutant fails its expected assertion. The no-target cache source-revert control additionally fails real M1/M4 input-acceleration cases. Fixture-local deliberate bad variants cover crash gate clearing, run association/backoff and screen-derived tool completion; their normal implementations pass the same oracles first.
 
 ## IF-63 case-by-case map
 
@@ -72,9 +72,9 @@ Paths in this table refer to `skills/activity-monitor/scripts/__tests__/i2-if63.
 | Negative controls | 87,92 | Local deliberate missing-backoff and group-only-association defects fail the same positive oracle |
 
 
-## Final Linux result and reproducible commands
+## Linux results and reproducible commands
 
-The final combined activity-monitor and router regression reports **938 tests: 937 passed, 0 failed, 1 skipped**. The skipped test is the existing opt-in tmux matrix churn test, not one of the new acceptance cases. Complete output: [linux-regression.log](linux-regression.txt). The exact test-file list is [linux-regression-files.txt](linux-regression-files.txt); run from the repository root:
+The original combined activity-monitor and router regression at `b100d7e` reports **938 tests: 937 passed, 0 failed, 1 skipped**. The skipped test is the existing opt-in tmux matrix churn test, not one of the new acceptance cases. Complete output: [linux-regression.log](https://multica.luna.jinglever.com/uploads/workspaces/d1074581-74a1-4df9-a144-29d14b83f7f8/01a17c50-e32f-7c86-88dd-81f49f45cf3e.txt). The exact test-file list is [linux-regression-files.txt](linux-regression-files.txt); run from the repository root:
 
 ```sh
 node scripts/run-node-tests.js $(cat docs/evidence/zylo84-i2/linux-regression-files.txt)
@@ -92,4 +92,13 @@ The first broad development run lacked the already-pinned PM2 test dependency in
 
 Raw expected-failure output for every source mutation is in [negative-controls/](negative-controls/). Local workspace prefixes are redacted in published logs; original evidence is retained privately.
 
-[IF63 process traces](if63-process-traces.json) retain all 29 case names, real child PIDs, request/reply identities, persisted scheduling counters and actual launches. Unrelated routine logs and local temporary-root names are omitted.
+[IF63 process traces](https://multica.luna.jinglever.com/uploads/workspaces/d1074581-74a1-4df9-a144-29d14b83f7f8/01a17c50-e287-7c90-b0aa-c805b6ea38de.json) retain all 29 case names, real child PIDs, request/reply identities, persisted scheduling counters and actual launches. Unrelated routine logs and local temporary-root names are omitted.
+
+
+## PR889 incremental revision
+
+Public malformed replies now omit the envelope, and both production validators accept the exact socket response. Parsed start-attempt requests with missing, null or numeric IDs retain the full rejection envelope with a null ID; the admission entry previously echoed numeric IDs and now normalizes them. Both paths preserve health bytes.
+
+Fresh combined regression ([complete log](https://multica.luna.jinglever.com/uploads/workspaces/d1074581-74a1-4df9-a144-29d14b83f7f8/01a17c53-7531-7c40-a6b9-81452aedcd21.txt)): **939 tests, 938 passed, 0 failed, 1 existing opt-in skip** across the same 101 files. The protocol/admission focused run passed **25/25** ([log](protocol-linux.txt)). Reintroducing null on public replies fails the exact-field assertion; reverting ID normalization fails the numeric-ID assertion. Both isolated source mutants report **10 pass / 1 expected fail**, recorded in [source-mutations.json](source-mutations.json). Other unchanged source-mutation results above remain from the original supplement.
+
+The two large original evidence files are issue attachments linked above, verified after download against their source SHA256 and size. No large replacement log is added to the repository.
