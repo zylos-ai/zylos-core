@@ -147,6 +147,7 @@ Setup:
   runtime <name>      Switch agent runtime (claude|codex)
   runtime status      Show currently configured runtime
   session-mode switch <single|multi> [--json]  Begin a session mode switch
+  session-mode status [--json]  Read session mode and transition status
   auth <name>         Authenticate a prepared runtime (Codex: --device-code)
   group <kind>        Read or update group runtime/model configuration
   migrate-instructions  Analyze/migrate legacy mixed instructions (dry-run by default)
