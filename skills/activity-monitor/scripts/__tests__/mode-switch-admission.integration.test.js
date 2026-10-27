@@ -6,11 +6,11 @@ import net from 'node:net';
 import { once } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
-import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
-import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
-import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
-import { submit, lookupModeSwitch } from '../cli/lib/am-sock-client.js';
-import { executeSessionMode } from '../cli/commands/session-mode.js';
+import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
+import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
+import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
+import { submit, lookupModeSwitch } from '../../../../cli/lib/am-sock-client.js';
+import { executeSessionMode } from '../../../../cli/commands/session-mode.js';
 
 const cleanups=[];
 afterEach(async()=>{while(cleanups.length) await cleanups.pop()();});

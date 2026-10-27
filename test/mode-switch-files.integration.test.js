@@ -125,9 +125,9 @@ for (const source of ['single', 'multi']) for (const point of ['archive', 'skele
   const expectedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-crash-reference-')); cleanups.push(() => fs.rmSync(expectedRoot, { recursive: true, force: true }));
   fs.cpSync(path.join(f.root, 'memory'), path.join(expectedRoot, 'memory'), { recursive: true });
   createModeSwitchConverter({ db: f.store, zylosDir: expectedRoot })(row);
-  const child = spawnSync(process.execPath, [new URL('./helpers/p10-convert-child.js', import.meta.url).pathname, f.root, point], { encoding: 'utf8' });
+  const child = spawnSync(process.execPath, [new URL('./helpers/mode-switch-convert-child.js', import.meta.url).pathname, f.root, point], { encoding: 'utf8' });
   assert.equal(child.signal, 'SIGKILL', child.stderr); assert.deepEqual(snapshotDb(f.db), beforeDb);
-  const retry = spawnSync(process.execPath, [new URL('./helpers/p10-convert-child.js', import.meta.url).pathname, f.root, 'none'], { encoding: 'utf8' });
+  const retry = spawnSync(process.execPath, [new URL('./helpers/mode-switch-convert-child.js', import.meta.url).pathname, f.root, 'none'], { encoding: 'utf8' });
   assert.equal(retry.status, 0, retry.stderr); assert.deepEqual(snapshotDb(f.db), beforeDb);
   const expected = memoryTree(expectedRoot); for (const key of Object.keys(expected)) expected[key] = expected[key].replaceAll(expectedRoot, f.root);
   assert.deepEqual(memoryTree(f.root), expected);

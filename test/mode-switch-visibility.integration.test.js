@@ -23,7 +23,7 @@ function root(mode = 'single') {
   return dir;
 }
 function launch(dir, fault = '') {
-  const child = fork(fileURLToPath(new URL('./helpers/p10-supervisor-worker.js', import.meta.url)), [fault], {
+  const child = fork(fileURLToPath(new URL('./helpers/mode-switch-supervisor-worker.js', import.meta.url)), [fault], {
     env: { ...process.env, HOME: dir, ZYLOS_DIR: dir, ZYLOS_PACKAGE_ROOT: repository }, silent: true });
   let stderr = ''; child.stderr.on('data', chunk => stderr += chunk);
   const messages = [], waits = [];

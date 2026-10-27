@@ -252,3 +252,39 @@ test('T01 unreadable startup configuration stops before transition sampling or m
   assert.equal(calls.filter(row => row.phase === 'configuration' && row.error === 'EIO').length, 1);
   assert.equal(fs.existsSync(path.join(root, 'activity-monitor/supervisor-events.jsonl')), false);
 });
+
+test('IB-37 configuration recovery during an open transition resets automatic-skip deduplication', async t => {
+  let failure = null, transition = null;
+  const { supervisor, root, db } = fixture(t, {
+    readMode: () => {
+      if (failure) throw failure;
+      return { mode: 'single' };
+    },
+    readConfiguration: async () => {
+      if (failure) throw failure;
+      return { mode: 'single', runtime: 'claude', capacity: 2 };
+    },
+  });
+  db.getModeTransition = () => transition;
+  supervisor.loop.deps.getModeTransition = () => transition;
+  db.setModeTransitionPhase = (runId, phase, { reason }) => { transition.reason = reason; };
+  db.setDrainFence = () => {};
+  db.listRunningControlsWithoutDeadline = scope => scope.machine ? [1] : [];
+  const events = () => fs.readFileSync(path.join(root, 'activity-monitor/supervisor-events.jsonl'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line)).filter(row => row.event === 'auto_migration_skipped');
+  await supervisor.loop.start();
+  failure = Object.assign(new Error('unreadable configuration'), { code: 'EIO' });
+  await supervisor.loop.tick();
+  assert.equal(events().length, 1);
+  transition = { run_id: 'open', source_mode: 'single', target_mode: 'multi', phase: 'gating', reason: null };
+  await supervisor.loop.tick();
+  assert.equal(transition.reason, 'config_unreadable');
+  failure = null;
+  await supervisor.loop.tick();
+  assert.equal(transition.reason, 'running_control_without_deadline:machine:1');
+  assert.equal(events().length, 1);
+  transition = null;
+  failure = Object.assign(new Error('same failure after transition'), { code: 'EIO' });
+  await supervisor.loop.tick(); await supervisor.loop.tick();
+  assert.deepEqual(events().map(row => [row.session_group, row.reason]), [['*', 'EIO'], ['*', 'EIO']]);
+});

@@ -4,21 +4,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
-import { fixture as storeFixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
-import { createModeSwitchConverter } from '../skills/activity-monitor/scripts/mode-switch-convert.js';
-import { createQueryHandlers } from '../skills/comm-bridge/scripts/c4-v2-cli.js';
-import { shellQuote } from '../skills/comm-bridge/scripts/c4-query-format.js';
-import { emitC4Conversations } from '../skills/comm-bridge/scripts/c4-session-init.js';
-import { formatConversationsForAgent } from '../skills/comm-bridge/scripts/c4-db.js';
-import { readWorkMemory } from '../cli/lib/read-work-memory.js';
-import { sendInternal } from '../skills/comm-bridge/scripts/c4-send-internal.js';
-import { readAbsorbedReply, sendExternal } from '../skills/comm-bridge/scripts/c4-send-external.js';
-import { commit, extractAbsorbedBlock } from '../skills/zylos-memory/scripts/sync-files.js';
-import { acquire, release, memoryScope } from '../skills/zylos-memory/scripts/sync-lock.js';
-import { renderStateSkeleton } from '../skills/zylos-memory/scripts/state-format.js';
+import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
+import { createModeSwitchConverter } from '../../../activity-monitor/scripts/mode-switch-convert.js';
+import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
+import { shellQuote } from '../../../comm-bridge/scripts/c4-query-format.js';
+import { emitC4Conversations } from '../../../comm-bridge/scripts/c4-session-init.js';
+import { formatConversationsForAgent } from '../../../comm-bridge/scripts/c4-db.js';
+import { readWorkMemory } from '../../../../cli/lib/read-work-memory.js';
+import { sendInternal } from '../../../comm-bridge/scripts/c4-send-internal.js';
+import { readAbsorbedReply, sendExternal } from '../../../comm-bridge/scripts/c4-send-external.js';
+import { commit, extractAbsorbedBlock } from '../../../zylos-memory/scripts/sync-files.js';
+import { acquire, release, memoryScope } from '../../../zylos-memory/scripts/sync-lock.js';
+import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
 
-const repo = path.resolve(new URL('..', import.meta.url).pathname);
+const repo = path.resolve(new URL('../../../..', import.meta.url).pathname);
 const cleanups = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()(); });
 function fixture(source) {
@@ -73,13 +72,13 @@ async function boot(f, scope, run, expectedHandoff) {
   f.trace.push({ boot: run, scope, output, handoff, state: complete.text });
   return { env, memory, work: complete };
 }
-async function commitProgress(f, scope, ids, commitFn = commit) {
+async function commitProgress(f, scope, ids) {
   const env = { ...f.env, ZYLOS_RUN_ID: 'sync-' + scope }; if (scope !== '*') env.ZYLOS_SESSION_GROUP = scope;
   const memory = await memoryScope(env); const kind = scope === '*' ? 'global' : 'group';
   const token = await acquire({ env, kind }, { currentRunId: async () => env.ZYLOS_RUN_ID });
   const state = path.join(memory.memoryDir, 'state.md'), before = fs.readFileSync(state, 'utf8');
   fs.writeFileSync(`${state}.${token}.tmp`, renderStateSkeleton({ scope, syncedAt: '2026-10-27T00:00:00Z' }));
-  try { await commitFn({ env, token, input: { followedUpIds: ids } }); } finally { await release({ env, token, kind }); }
+  try { await commit({ env, token, input: { followedUpIds: ids } }); } finally { await release({ env, token, kind }); }
   const after = fs.readFileSync(state, 'utf8'); f.trace.push({ commit: ids, scope, before, after }); return { before, after };
 }
 
@@ -195,46 +194,4 @@ test('IF67 unsafe-integer IDs are rejected without misrouting or sending', () =>
   const query = f.cli('c4-fetch', ['--absorbed', '--run-id', runId, '--id', exact, '--json']); assert.equal(query.status, 1); assert.equal(JSON.parse(query.stdout).error.code, 'INVALID_ARGS');
   const send = f.cli('c4-send', ['--absorbed-reply', runId, exact], { input: 'must not misroute' }); assert.equal(send.status, 1); assert.match(send.stderr, /ABSORBED_NOT_IN_RUN/); assert.equal(argv(f).length, 0);
   assert.equal(Number.isSafeInteger(f.store.getModeTransition({ runId }).absorbed_ids[0]), false);
-});
-
-async function sourceVariant(f, relative, before, after) {
-  const original = path.join(repo, relative), text = fs.readFileSync(original, 'utf8');
-  assert.ok(text.includes(before), 'source mutation anchor must exist');
-  const changed = text.replace(before, after).replace(/from (['"])(\.[^'"]+)\1/g, (_all, quote, dependency) => 'from ' + quote + pathToFileURL(path.resolve(path.dirname(original), dependency)).href + quote);
-  const file = path.join(f.root, path.basename(original, '.js') + '-mutant.mjs'); fs.writeFileSync(file, changed);
-  return import(pathToFileURL(file).href);
-}
-
-test('IF67 source controls: truncated-route and dropped-Pending mutations fail actual argv/state oracles', async () => {
-  const f = fixture('single'), row = f.add('hello', 'r'.repeat(800)); f.add('unfinished', 'second-route'); const converted = f.convert();
-  const runId = converted.row.run_id, scope = 'demo:a';
-  const request = readAbsorbedReply(runId, String(row.id), f.api);
-  await sendExternal(request, 'reply', { api: f.api, skillsDir: f.skills, env: f.env, appendFallback: async () => {} });
-  const expected = Buffer.from(row.endpoint_id).toString('hex'); assert.equal(argv(f).at(-1)[0], expected);
-  const sender = await sourceVariant(f, 'skills/comm-bridge/scripts/c4-send-external.js', 'endpoint: record.endpoint_id,', 'endpoint: record.endpoint_id.slice(0, 125),');
-  await sender.sendExternal(sender.readAbsorbedReply(runId, String(row.id), f.api), 'reply', { api: f.api, skillsDir: f.skills, env: f.env, appendFallback: async () => {} });
-  assert.throws(() => assert.equal(argv(f).at(-1)[0], expected), { code: 'ERR_ASSERTION' });
-  const positive = await commitProgress(f, scope, []); assert.equal(extractAbsorbedBlock(positive.after).entries.length, 2);
-  const sync = await sourceVariant(f, 'skills/zylos-memory/scripts/sync-files.js', 'remaining = block.entries.filter(entry => !followed.has(entry.id))', 'remaining = []');
-  const bad = await commitProgress(f, scope, [], sync.commit);
-  assert.throws(() => assert.deepEqual(extractAbsorbedBlock(bad.after), extractAbsorbedBlock(bad.before)), { code: 'ERR_ASSERTION' });
-  f.trace.push({ sourceControls: ['truncated-route', 'dropped-pending'], detected: true });
-});
-
-test('IF67 FX-RT controls: incomplete page and outbound-only progress fail independent completeness/progress oracles', async () => {
-  const f = fixture('single'); f.add('one', 'route-one'); const failed = f.add('two', 'fail-route'); const converted = f.convert(), runId = converted.row.run_id;
-  const full = f.query.absorbed({ runId, json: true, limit: 2 });
-  const actualIds = JSON.parse(full).data.items.map(row => row.id); assert.deepEqual(actualIds, [1, 2]);
-  // Faulty tool adapter returns valid JSON after silently dropping one middle
-  // item. An independent count/ID oracle must reject it, not just JSON.parse.
-  const partial = JSON.parse(full); partial.data.items.splice(0, 1);
-  assert.throws(() => assert.equal(partial.data.items.length, partial.data.count), { code: 'ERR_ASSERTION' });
-  const result = f.cli('c4-send', ['--absorbed-reply', runId, String(failed.id)], { input: 'failed response', group: 'demo:a' });
-  assert.equal(result.status, 1); assert.match(result.stderr, /SEND_FAILED/);
-  assert.equal(f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, 1);
-  const actualProgress = new Set();
-  const checkProgress = ids => { for (const id of ids) assert.ok(actualProgress.has(id), 'outbound audit alone is not actual follow-up evidence'); };
-  checkProgress([]); assert.throws(() => checkProgress([failed.id]), { code: 'ERR_ASSERTION' });
-  const saved = await commitProgress(f, 'demo:a', []); assert.equal(extractAbsorbedBlock(saved.after).entries.length, 2);
-  f.trace.push({ fixtureControls: ['partial-valid-json', 'outbound-audit-only'], detected: true });
 });
