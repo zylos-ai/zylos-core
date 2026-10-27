@@ -1,4 +1,5 @@
 import { isolatedTmux } from '../../../test/helpers/isolated-tmux.js';
+import { seedCodexTrustFixture, codexAppServerFixtureSource } from '../../../test/helpers/codex-trust.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -26,10 +27,11 @@ function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', h
   const root = path.join(dir, "root with ' quote");
   const home = path.join(dir, 'home');
   fs.mkdirSync(root); fs.mkdirSync(home);
+  if (Cls === CodexAdapter) seedCodexTrustFixture({ root, home });
   const command = path.join(dir, "runtime with ' quote");
   const helpLog = path.join(dir, 'help-log');
   const report = path.join(dir, 'runtime-report.json');
-  fs.writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv.includes('--help')) { fs.appendFileSync(${JSON.stringify(helpLog)}, 'help\\n'); ${helpFails ? 'process.exit(2);' : `console.log(${JSON.stringify(help)});`} } else if (process.argv[2] === 'auth' && process.argv[3] === 'status') { console.log(JSON.stringify({ loggedIn: ${nativeAuth}, authMethod: 'claude.ai' })); } else { fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({pid:process.pid,args:process.argv,env:process.env,cwd:process.cwd(),exe:fs.realpathSync(process.execPath)})); setInterval(() => {}, 1000); }\n`, { mode: 0o700 });
+  fs.writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');\n${codexAppServerFixtureSource()}\nif (process.argv.includes('--version')) { console.log('codex-fixture'); process.exit(0); } else if (process.argv[2] === 'app-server') { process.exit(2); } else if (process.argv.includes('--help')) { fs.appendFileSync(${JSON.stringify(helpLog)}, 'help\\n'); ${helpFails ? 'process.exit(2);' : `console.log(${JSON.stringify(help)});`} } else if (process.argv[2] === 'auth' && process.argv[3] === 'status') { console.log(JSON.stringify({ loggedIn: ${nativeAuth}, authMethod: 'claude.ai' })); } else { fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({pid:process.pid,args:process.argv,env:process.env,cwd:process.cwd(),exe:fs.realpathSync(process.execPath)})); setInterval(() => {}, 1000); }\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(root, '.env'), `ANTHROPIC_API_KEY=${secret}\n`);
   const env = { HOME: home, PATH: process.env.PATH, USER: process.env.USER || 'test',
     CLAUDE_BIN: command, CODEX_BIN: command, CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli',

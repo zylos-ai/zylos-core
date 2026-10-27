@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fixture } from './c4-v2-test-helpers.js';
 import { createRouter } from '../router/scheduler.js';
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
+import { seedCodexTrustFixture } from '../../../../test/helpers/codex-trust.js';
 import { getSessionAdapter } from '../../../../cli/lib/runtime/index.js';
 import { createSessionReader } from '../../../../cli/lib/session-state-reader-async.js';
 import { readReadyIdentity } from '../../../../cli/lib/runtime/session-target.js';
@@ -33,8 +34,12 @@ async function setup(t, { mode = 'multi', group = 'chat', runtime = 'claude' } =
   };
   const row = db.insertConversation('in', group === 'origin' ? 'system' : group ?? 'chat', 'endpoint', 'launch');
   if (mode === 'multi' && group !== 'origin') db.setDrainFence('origin', { reason: 'upgrade', runId: 'fixture-fence' });
+  // A later group override may select Codex even with a Claude default.
+  seedCodexTrustFixture({ root: tm.dir, home: tm.dir });
   const executable = path.join(tm.dir, 'record-runtime');
   fs.writeFileSync(executable, `#!${process.execPath}\nconst fs=require('node:fs'),path=require('node:path');
+if(process.argv.includes('--version')) { console.log('codex-fixture'); process.exit(0); }
+if(process.argv[2] === 'app-server') { process.exit(2); }
 if(process.argv.includes('--help')) { console.log(' --model MODEL --effort EFFORT --no-daemon '); process.exit(0); }
 const root=process.env.ZYLOS_DIR, group=process.env.ZYLOS_SESSION_GROUP;
 const record={argv:process.argv.slice(2),runId:process.env.ZYLOS_RUN_ID,group:group??null,config:JSON.parse(process.env.ZYLOS_MODEL_CONFIG)};
