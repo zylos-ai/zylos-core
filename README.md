@@ -600,4 +600,4 @@ Want a managed experience? [Coco](https://coco.xyz) gives you a ready-to-work AI
 
 [MIT](./LICENSE)
 
-See [protected self-upgrade and recovery](docs/self-upgrade-recovery.md) for first adoption, boot prerequisites, retained evidence, and recovery commands, and [implementation validation](docs/self-upgrade-validation.md) for tests and reboot evidence.
+See [protected self-upgrade and recovery](docs/self-upgrade-recovery.md) for first adoption, boot prerequisites, retained evidence, and recovery commands, and supported limits.
