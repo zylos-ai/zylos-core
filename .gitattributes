@@ -1,0 +1,9 @@
+# Tests and test fixtures are development-only and must not reach user
+# machines (#885). `zylos upgrade --self` downloads the GitHub source archive
+# and syncs core skills from it, so they are excluded from archives here.
+# Keep this list in sync with the test section of .npmignore.
+/test export-ignore
+/jest.config.js export-ignore
+**/__tests__ export-ignore
+**/*.test.js export-ignore
+/skills/zylos-memory/scripts/tests export-ignore
