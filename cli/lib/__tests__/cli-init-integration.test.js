@@ -86,6 +86,10 @@ test('IF-47 init template generator prepares dual hooks and assets report unavai
     const commands = hooks.SessionStart.flatMap(group => group.hooks.map(hook => hook.command));
     assert.ok(commands.some(command => command.includes('session-start-orchestrator.js')));
   }
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Stop']) {
+    assert.ok(codex.hooks[event].flatMap(group => group.hooks)
+      .some(hook => hook.command.endsWith('/hook-activity.js')), `missing nondefault Codex ${event} activity hook`);
+  }
   assert.equal(fs.existsSync(path.join(context.root, '.codex', 'hooks.trust.json')), false);
   assert.equal(fs.readFileSync(configPath, 'utf8'), config);
 });

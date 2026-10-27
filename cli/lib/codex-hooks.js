@@ -106,15 +106,15 @@ export function coreSessionStartCommands(zylosDir) {
 
 export function isCoreCodexHook(command, zylosDir) {
   if (!command) return false;
-  const script = path.join(
+  const scriptsDir = path.join(
     path.resolve(zylosDir),
     '.claude',
     'skills',
     'activity-monitor',
-    'scripts',
-    'session-start-orchestrator.js'
+    'scripts'
   );
-  return typeof command === 'string' && path.resolve(extractScriptPath(command)) === script;
+  return typeof command === 'string' && ['session-start-orchestrator.js', 'hook-activity.js']
+    .some(name => path.resolve(extractScriptPath(command)) === path.join(scriptsDir, name));
 }
 
 export function readCodexHooksConfig(filePath) {
@@ -160,15 +160,22 @@ export function installCoreCodexHook({ zylosDir }) {
   // then install the full desired shard command set as one group. Config
   // order is injection order on Codex, so the group must stay contiguous
   // and chain-ordered.
-  const existing = Array.isArray(config.hooks[SESSION_START]) ? config.hooks[SESSION_START] : [];
-  const preserved = existing
-    .map((group) => {
-      if (!Array.isArray(group?.hooks)) return group;
-      return { ...group, hooks: group.hooks.filter(h => !isCoreCodexHook(h?.command, zylosDir)) };
-    })
-    .filter(group => !Array.isArray(group?.hooks) || group.hooks.length > 0);
-
-  config.hooks[SESSION_START] = [...preserved, { hooks: desiredHooks }];
+  const activityCommand = `node ${path.join(path.resolve(zylosDir), '.claude', 'skills',
+    'activity-monitor', 'scripts', 'hook-activity.js')}`;
+  for (const event of Object.keys(CODEX_EVENT_KEYS)) {
+    const existing = Array.isArray(config.hooks[event]) ? config.hooks[event] : [];
+    const preserved = existing
+      .map((group) => {
+        if (!Array.isArray(group?.hooks)) return group;
+        return { ...group, hooks: group.hooks.filter(h => !isCoreCodexHook(h?.command, zylosDir)) };
+      })
+      .filter(group => !Array.isArray(group?.hooks) || group.hooks.length > 0);
+    config.hooks[event] = [
+      ...preserved,
+      ...(event === SESSION_START ? [{ hooks: desiredHooks }] : []),
+      { hooks: [{ type: 'command', command: activityCommand, timeout: DEFAULT_HOOK_TIMEOUT_SECONDS }] },
+    ];
+  }
 
   const changed = stableJson(config) !== before;
   if (changed) {
