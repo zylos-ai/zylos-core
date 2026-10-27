@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { guard, memoryError } from './sync-lock.js';
@@ -90,6 +91,10 @@ export async function serveMemoryTools({ input = process.stdin, output = process
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isMainModule()) {
   await serveMemoryTools();
 }

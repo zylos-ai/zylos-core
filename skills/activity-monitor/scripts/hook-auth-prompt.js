@@ -82,7 +82,11 @@ async function main() {
   await approvePermission(hookData);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch((error) => {
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isMainModule()) main().catch((error) => {
   console.error(`[hook-auth-prompt] ${error.code || 'ERROR'}: ${error.message}`);
   process.exitCode = 1;
 });

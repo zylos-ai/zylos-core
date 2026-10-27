@@ -11,7 +11,8 @@
 import { execSync, execFileSync } from 'child_process';
 import path from 'path';
 import os from 'os';
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 import { getModeTransition } from '../../comm-bridge/scripts/c4-db.js';
 const { requestRuntimeRestart } = await loadCoreModule('request-runtime-restart.js');
@@ -141,6 +142,10 @@ async function main() {
   if (!result.ok) throw Object.assign(new Error(result.error.message), {code:result.error.code});
   log(`Upgrade result: ${result.data.result}; replacement sessions are started by the dispatcher`);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error=>{
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isMainModule()) main().catch(error=>{
   logError(`ERROR [${error.code ?? 'UPGRADE_FAILED'}]: ${error.message}`);process.exitCode=1;
 });

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { loadCoreModule } from './core-modules.js';
 import { randomUUID } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 const { submit } = await loadCoreModule('am-sock-client.js');
 const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
 
@@ -31,4 +32,8 @@ async function main(argv) {
   try { printResult(await readyForConfigReclaim(), json); }
   catch (error) { printResult({ok:false,error:{code:error.code ?? 'REQUEST_FAILED',message:error.message,persisted:[]}},json); }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main(process.argv.slice(2));
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isMainModule()) await main(process.argv.slice(2));

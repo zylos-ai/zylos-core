@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import * as database from './c4-db.js';
 import { reserveStatusNotice, sendStatusNotice } from './status-notice.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
@@ -118,4 +119,8 @@ export async function main(args = process.argv.slice(2)) {
     process.exitCode = 1;
   } finally { database.close(); }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isMainModule()) await main();

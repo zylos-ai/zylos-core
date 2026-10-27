@@ -43,7 +43,11 @@ for(const damage of ['malformed','missing','oversized','unknown-entry','dangling
  const result=writeUsingOwners(f.root);assert.equal(result.status,0,result.stderr);
  if(damage==='malformed') {
   const hook=spawnSync(process.execPath,['skills/comm-bridge/scripts/c4-session-init.js'],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:f.root}});
-  assert.equal(hook.status,0,hook.stderr);assert.match(hook.stdout,/LAST CHECKPOINT/);assert.doesNotMatch(hook.stdout,/UPGRADE RECOVERY TASK/);
+  assert.equal(hook.status,0,hook.stderr);
+  assert.match(hook.stdout,/^=== RECENT CONVERSATIONS ===$/m);
+  assert.ok(hook.stdout.includes(`Scope: *. Working memory is not injected. Read the complete snapshot with: node ${path.join(f.root,'.claude/skills/zylos-memory/scripts/read-work-memory.js')} --json`));
+  assert.ok(hook.stdout.includes(`Before resuming work, read ${path.join(f.root,'memory/handoff.md')} in full`));
+  assert.doesNotMatch(hook.stdout,/LAST CHECKPOINT|UPGRADE RECOVERY TASK/);
  }
  assert.equal(m.discover(f.root).blocked,true,'explicit recovery still diagnoses damaged history');
 });

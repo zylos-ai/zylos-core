@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** M4 observes and reconciles sessions; M1 exclusively owns process launch. */
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { startSupervisor } from './supervisor-main.js';
 
 export async function main({start=startSupervisor,runtime=process,log=console.error}={}) {
@@ -10,4 +11,8 @@ export async function main({start=startSupervisor,runtime=process,log=console.er
   });
   return service;
 }
-if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href)await main();
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if(isMainModule())await main();

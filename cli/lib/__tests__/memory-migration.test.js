@@ -344,7 +344,22 @@ test('lock serializes complete and apply; identity is sampled inside held lock',
   f.live.runId = 'replacement'; release(); await holder;
   await assert.rejects(pending, { code: 'RUN_MISMATCH' });
   f.live.runId = 'run1';
-  const complete = f.service.complete('reviewed');
+  let finishComplete, completeEntered;
+  const completionBarrier = new Promise(resolve => { finishComplete = resolve; });
+  const completing = new Promise(resolve => { completeEntered = resolve; });
+  const completingService = createMigration({ ...f.settings, observe: async () => {
+    completeEntered();
+    await completionBarrier;
+    return f.live;
+  } });
+  const complete = completingService.complete('reviewed');
+  await completing;
+  // Authorization runs inside the real kernel lock; keep it held while apply contends.
+  try {
+    await assert.rejects(f.service.apply({ ...patch, expected: 'new marker' }, { waitMs: 20 }), { code: 'LOCK_TIMEOUT' });
+    assert.equal(f.service.status().state, 'pending');
+    assert.equal(fs.readFileSync(f.references, 'utf8'), 'new marker\n');
+  } finally { finishComplete(); }
   const apply = f.service.apply({ ...patch, expected: 'new marker' });
   await complete; await assert.rejects(apply, { code: 'MIGRATION_DONE' });
 });
