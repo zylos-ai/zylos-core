@@ -81,10 +81,13 @@ test('IB44 missing database fails without bootstrapping directories or SQLite fi
 
 async function publicStatus(root, args = ['--json'], extraEnv = {}) {
   const execute = promisify(execFile);
+  // Keep accidental PM2 calls inside a recording, non-daemonizing fixture.
+  const pm2Root = fs.mkdtempSync(path.join(os.tmpdir(), 'session-status-pm2-')); roots.push(pm2Root);
+  const safePm2 = pm2Cli(pm2Root, 'process.exit(1);');
   try {
     const result = await execute(process.execPath, ['cli/zylos.js', 'session-mode', 'status', ...args], {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
-      env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, 'private-pm2'), PM2_RPC_PORT: '', ...extraEnv },
+      env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, 'private-pm2'), PM2_RPC_PORT: '', ...safePm2, ...extraEnv },
       timeout: 10000,
     });
     return { ...result, code: 0 };
@@ -192,6 +195,20 @@ async function pm2Socket(root) {
   server.listen(path.join(home, 'rpc.sock')); await once(server, 'listening');
   return server;
 }
+
+test('public status default PM2 shim records invocation and cannot start a daemon', async () => {
+  const { root, database } = fixture(); database.close();
+  const server = await pm2Socket(root);
+  try {
+    const result = await publicStatus(root);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).data.supervisorPm2).toEqual({
+      status: 'unobservable', error: { code: 'READ_FAILED', message: 'Unable to collect PM2 process status' },
+    });
+    expect(fs.readFileSync(path.join(root, 'pm2-calls'), 'utf8').trim()).toBe('["jlist"]');
+    expect(fs.existsSync(path.join(root, 'private-pm2', 'pm2.pid'))).toBe(false);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
 
 test('IF66 missing PM2 socket skips the CLI and leaves no daemon after public status exits', async () => {
   const { root, database } = fixture(); database.close();
