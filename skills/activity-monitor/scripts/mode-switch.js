@@ -169,17 +169,14 @@ export class ModeSwitchCoordinator {
       // P05 owns stale-control cleanup and reclaim. Other reasons stay theirs.
       for (const fence of context.fences) if (fence.sessionGroup !== '*') await this.lifecycle.advanceReclaim(fence, context);
     }
-    const counts = [];
+    const missingDeadlines = [];
     for (const scope of ['machine', 'allSessionGroups']) {
-      const value = await this.db.countNonTerminalControls({ [scope]: true });
-      if (value.runningWithoutDeadline > 0) {
-        const ids = await this.db.listRunningControlsWithoutDeadline({ [scope]: true });
-        // A control may settle between the count and detail reads. Re-read on
-        // the next tick; neither invent a blocker nor advance on stale counts.
-        if (!ids.length) return;
+      missingDeadlines.push([scope, await this.db.listRunningControlsWithoutDeadline({ [scope]: true })]);
+    }
+    for (const [scope, ids] of missingDeadlines) {
+      if (ids.length) {
         await this.block(row, `running_control_without_deadline:${scope}:${ids.join(',')}`); return;
       }
-      counts.push(value.running);
     }
     const fences = await this.db.listDrainFences(), extra = fences.filter(fence => fence.sessionGroup !== '*');
     if (extra.length) {
@@ -191,7 +188,10 @@ export class ModeSwitchCoordinator {
     const scenes = await this.observe({ configuration });
     if (scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
     const conversations = await this.db.countGlobalRunningConversations();
-    if (scenes.some(scene => scene.present) || conversations || counts.some(Boolean)) return;
+    if (scenes.some(scene => scene.present) || conversations) return;
+    for (const scope of ['machine', 'allSessionGroups']) {
+      if ((await this.db.countNonTerminalControls({ [scope]: true })).running) return;
+    }
     const result = await this.db.absorbForTransition(row.run_id);
     this.event('absorb', row, { phase: 'converting', reason: null, cutoff: result.cutoff, count: result.absorbedIds.length });
   }

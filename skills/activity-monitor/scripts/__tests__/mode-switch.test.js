@@ -15,7 +15,7 @@ function fixture(overrides = {}) {
     setDrainFence: (group, options = {}) => { if (!fences.some(f => f.sessionGroup === group)) fences.push({ sessionGroup: group, reason: options.reason ?? null, runId: options.runId ?? null, createdAt: time / 1000 }); },
     listDrainFences: () => fences,
     countNonTerminalControls: target => controls[Object.keys(target)[0]],
-    listRunningControlsWithoutDeadline: () => [4, 8],
+    listRunningControlsWithoutDeadline: target => controls[Object.keys(target)[0]].runningWithoutDeadline ? [4, 8] : [],
     countGlobalRunningConversations: () => 0,
     absorbForTransition: () => { calls.push('absorb'); row = { ...row, phase: 'converting', cutoff: 10, absorbed_ids: [] }; return { cutoff: 10, absorbedIds: [] }; },
     expirePendingControls: target => calls.push(Object.keys(target)[0]),
@@ -171,24 +171,30 @@ for (const code of ['DB_BUSY', 'DB_READ_FAILED']) test(`IF-39 missing-deadline d
   assert.equal(f.events.some(event => event.event === 'transition_blocked'), false);
 });
 
-for (const scope of ['machine', 'allSessionGroups']) test(`IF-39 ${scope} missing-deadline count/list race waits one tick without writing a reason`, async () => {
-  const f = fixture(), targets = [];
-  f.db.listRunningControlsWithoutDeadline = target => { targets.push(target); return []; };
-  const owner = f.create(); await owner.handle(request);
-  f.controls[scope] = { running: 1, runningWithoutDeadline: 1 };
-  const before = structuredClone(f.row);
-  await owner.advance();
-  assert.deepEqual(targets, [{ [scope]: true }]);
-  assert.deepEqual(f.row, before);
-  assert.deepEqual(f.fences.map(fence => fence.sessionGroup), ['*']);
-  assert.deepEqual(f.calls, ['begin']);
-  assert.equal(f.events.some(event => event.event === 'transition_blocked'), false);
-  // The next fresh observation may proceed after the control is acked/expired.
-  f.controls[scope] = { running: 0, runningWithoutDeadline: 0 };
-  await owner.advance();
-  assert.equal(f.row.phase, 'converting'); assert.equal(f.row.reason, null);
-  assert.deepEqual(f.calls, ['begin', 'absorb']);
-  assert.equal(targets.length, 1);
+test('IF-39 gating lists both scopes once before counts and blocks from returned ids', async () => {
+  const f = fixture(), reads = [];
+  f.db.listRunningControlsWithoutDeadline = target => { reads.push(target); return target.machine ? [] : [9, 12]; };
+  f.db.countNonTerminalControls = () => { throw new Error('counts must not precede missing-deadline lists'); };
+  const owner = f.create(); await owner.handle(request); await owner.advance();
+  assert.deepEqual(reads, [{ machine: true }, { allSessionGroups: true }]);
+  assert.equal(f.row.reason, 'running_control_without_deadline:allSessionGroups:9,12');
+  assert.equal(f.row.phase, 'gating'); assert.equal(f.calls.includes('absorb'), false);
+});
+
+test('IF-39 empty deadline lists allow absorption and only running counts gate it', async () => {
+  const f = fixture(), reads = [];
+  f.db.listRunningControlsWithoutDeadline = target => { reads.push(['list', target]); return []; };
+  let running = 1;
+  f.db.countNonTerminalControls = target => {
+    reads.push(['count', target]);
+    return { running, get runningWithoutDeadline() { throw new Error('obsolete deadline count read'); } };
+  };
+  const owner = f.create(); await owner.handle(request); await owner.advance();
+  assert.equal(f.row.phase, 'gating'); assert.equal(f.row.reason, null);
+  assert.deepEqual(reads.slice(0, 2), [['list', { machine: true }], ['list', { allSessionGroups: true }]]);
+  running = 0; reads.length = 0; await owner.advance();
+  assert.equal(f.row.phase, 'converting');
+  assert.deepEqual(reads, [['list', { machine: true }], ['list', { allSessionGroups: true }], ['count', { machine: true }], ['count', { allSessionGroups: true }]]);
 });
 
 test('IF-39 multi reclaim preserves existing reasons, waits starting scenes, cleans before counts', async () => {
