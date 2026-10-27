@@ -11,6 +11,7 @@ const requireForFixture = createRequire(import.meta.url);
 // real launch trust validation, while the dedicated trust regression exercises
 // app-server repair. A fake CLI without repair support rejects app-server calls.
 export function seedCodexTrustFixture({ root, home, codexHome = path.join(home, '.codex'), version = 'codex-fixture' }) {
+  root = fs.realpathSync(root);
   installCoreCodexHook({ zylosDir: root });
   ensureHooksFeature({ projectDir: root, homeDir: home, codexHome });
   const hooksHash = createHash('sha256').update(fs.readFileSync(codexHooksPath(root))).digest('hex');
