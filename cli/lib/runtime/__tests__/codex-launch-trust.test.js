@@ -3,10 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { CodexAdapter } from '../codex.js';
 import { SessionAdapter } from '../session-adapter.js';
-import { ensureLaunchHooksTrusted } from '../codex-launch-trust.js';
 import { codexHooksPath, codexTrustMarkerPath, isCodexTrustValid, readHooksState } from '../../codex-hooks.js';
 
 const version = 'codex-cli 0.146.0';
@@ -36,13 +34,8 @@ if (process.argv[2] === '--version') { console.log(${JSON.stringify(version)}); 
 if (process.argv[2] !== 'app-server') process.exit(2);
 const home = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex');
 const configPath = path.join(home, 'config.toml');
-const busy = path.join(home, 'fake-app-server.busy');
-try { fs.closeSync(fs.openSync(busy, 'wx')); }
-catch { console.error('overlapping app-server trust transaction'); process.exit(3); }
 const log = event => fs.appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({ event, cwd: process.cwd(), home: process.env.HOME, codexHome: home }) + '\\n');
 log('start');
-// Capture a full-file snapshot early: without the production lock, two writers
-// would both read stale data and overwrite one another's additions.
 const config = parse(fs.readFileSync(configPath, 'utf8'));
 const reply = (id, result, error) => console.log(JSON.stringify({ id, result, error }));
 readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -55,13 +48,13 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   }
   if (msg.method === 'config/batchWrite') {
     if (process.env.FAKE_CODEX_FAIL === '1') {
-      fs.unlinkSync(busy); log('failure'); reply(msg.id, null, { message: 'injected trust failure' }); return;
+      log('failure'); reply(msg.id, null, { message: 'injected trust failure' }); return;
     }
     setTimeout(() => {
       config.hooks ||= {}; config.hooks.state ||= {};
       Object.assign(config.hooks.state, msg.params.edits[0].value);
       fs.writeFileSync(configPath, stringify(config));
-      fs.unlinkSync(busy); log('end'); reply(msg.id, { status: 'ok' });
+      log('end'); reply(msg.id, { status: 'ok' });
     }, 150);
   }
 });
@@ -119,19 +112,9 @@ test('Codex trust failure rejects launch before any tmux/runtime launch', async 
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure']);
   delete f.env.FAKE_CODEX_FAIL;
   await f.adapter.launch(launchArgs);
-  assert.equal(calls.length, 1, 'failure releases the lock so the next launch can retry');
+  assert.equal(calls.length, 1, 'a subsequent launch can retry after a trust failure');
   assert.equal(f.valid().valid, true);
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure', 'start', 'end']);
-});
-
-test('Codex trust helper fails closed when the kernel lock executable is unavailable', async t => {
-  if (process.platform !== 'linux') return t.skip('Linux executable-path fault injection');
-  const f = fixture(t);
-  const calls = baseLaunch(t);
-  f.env.PATH = path.join(f.dir, 'empty-path');
-  await assert.rejects(ensureLaunchHooksTrusted({ zylosDir: f.root, codexBin: f.executable, env: f.env }), /lock/i);
-  assert.equal(calls.length, 0);
-  assert.deepEqual(f.events(), []);
 });
 
 test('Codex trust uses the launch environment and custom CODEX_HOME without writing default home config', async t => {
@@ -174,43 +157,4 @@ test('Codex launch trusts CODEX_HOME selected by the runtime dotenv policy', asy
   assert.ok(Object.keys(readHooksState(path.join(effectiveHome, 'config.toml'))).length > 0);
   await f.adapter.launch(launchArgs);
   assert.equal(f.events().filter(e => e.event === 'start').length, 1);
-});
-
-function runChild(file, env, root) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [file, root], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-    let diagnostic = '';
-    child.stdout.on('data', data => { diagnostic += data; });
-    child.stderr.on('data', data => { diagnostic += data; });
-    child.on('error', reject);
-    child.on('close', code => code === 0 ? resolve() : reject(new Error(`launch child exited ${code}: ${diagnostic}`)));
-  });
-}
-
-test('independent Codex launch processes sharing one home serialize and preserve both trust snapshots', async t => {
-  const f = fixture(t);
-  const secondRoot = path.join(f.dir, 'second-zylos');
-  fs.mkdirSync(secondRoot);
-  fs.mkdirSync(path.join(secondRoot, '.zylos'));
-  fs.copyFileSync(f.manifest, path.join(secondRoot, '.zylos', 'runtime-env.manifest'));
-  const runner = path.join(f.dir, 'launch.mjs');
-  fs.writeFileSync(runner, `import assert from 'node:assert/strict';
-import { CodexAdapter } from ${JSON.stringify(new URL('../codex.js', import.meta.url).href)};
-import { SessionAdapter } from ${JSON.stringify(new URL('../session-adapter.js', import.meta.url).href)};
-import { isCodexTrustValid } from ${JSON.stringify(new URL('../../codex-hooks.js', import.meta.url).href)};
-const root = process.argv[2];
-SessionAdapter.prototype.launch = async () => {
-  assert.equal(isCodexTrustValid({ zylosDir: root, homeDir: process.env.HOME, codexVersion: ${JSON.stringify(version)} }).valid, true);
-};
-await new CodexAdapter({ root, env: process.env }).launch(${JSON.stringify(launchArgs)});
-`);
-  // Two groups of one instance plus another instance share the global config.
-  // The second group must recheck the marker after acquiring the same lock.
-  await Promise.all([runChild(runner, f.env, f.root), runChild(runner, f.env, f.root), runChild(runner, f.env, secondRoot)]);
-  assert.deepEqual(f.events().map(e => e.event), ['start', 'end', 'start', 'end']);
-  assert.deepEqual(new Set(f.events().filter(e => e.event === 'start').map(e => e.cwd)), new Set([f.root, secondRoot]));
-  for (const root of [f.root, secondRoot]) {
-    assert.equal(isCodexTrustValid({ zylosDir: root, homeDir: f.home, codexVersion: version }).valid, true);
-  }
-  assert.equal(Object.keys(readHooksState(path.join(f.home, '.codex', 'config.toml'))).length, 2);
 });

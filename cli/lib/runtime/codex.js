@@ -25,7 +25,7 @@ import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ZYLOS_DIR } from '../config.js';
-import { ensureLaunchHooksTrusted } from './codex-launch-trust.js';
+import { ensureCodexHooksTrusted } from '../codex-hooks.js';
 import { adapterError, launchEnvironment, runtimeExecutable } from './session-command.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -59,8 +59,11 @@ export class CodexAdapter extends SessionAdapter {
     const codexBin = (this.options.runtimeExecutable || runtimeExecutable)('codex', env);
     // Trust must succeed before SessionAdapter can create a tmux session.
     try {
-      await ensureLaunchHooksTrusted({ zylosDir: root, projectDir: root,
-        codexBin, env: launchEnvironment(root, env) });
+      const launchEnv = launchEnvironment(root, env);
+      const homeDir = launchEnv.HOME || os.homedir();
+      const codexHome = path.resolve(root, launchEnv.CODEX_HOME || path.join(homeDir, '.codex'));
+      ensureCodexHooksTrusted({ zylosDir: root, projectDir: root,
+        codexBin, homeDir, codexHome, env: launchEnv });
     } catch (cause) {
       throw adapterError('LAUNCH_FAILED', 'Codex hook trust failed before runtime launch', cause);
     }

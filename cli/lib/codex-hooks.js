@@ -290,9 +290,10 @@ function writeTrustMarker(markerPath, marker) {
   fs.writeFileSync(markerPath, JSON.stringify(stable(marker), null, 2) + '\n', { mode: 0o600 });
 }
 
-export function getCodexVersion({ codexBin = process.env.CODEX_BIN || 'codex', execFileSyncImpl } = {}) {
+export function getCodexVersion({ codexBin = process.env.CODEX_BIN || 'codex', env = process.env, execFileSyncImpl } = {}) {
   const execImpl = execFileSyncImpl || execFileSync;
   return String(execImpl(codexBin, ['--version'], {
+    env,
     encoding: 'utf8',
     timeout: 10_000,
     stdio: 'pipe',
@@ -339,6 +340,7 @@ export function hookKeyFor({ zylosDir, event, groupIndex, hookIndex }) {
 
 export function trustCodexHooksWithAppServer({
   zylosDir,
+  env = process.env,
   codexBin = process.env.CODEX_BIN || 'codex',
   spawnSyncImpl = spawnSync,
   timeoutMs = DEFAULT_TRUST_TIMEOUT_MS,
@@ -471,7 +473,7 @@ send('initialize', {
   const result = spawnSyncImpl(process.execPath, ['-e', helper], {
     cwd: zylosDir,
     env: {
-      ...process.env,
+      ...env,
       ZYLOS_CODEX_TRUST_CWD: zylosDir,
       ZYLOS_CODEX_BIN: codexBin,
     },
@@ -500,6 +502,7 @@ send('initialize', {
 
 export function ensureCodexHooksTrusted({
   zylosDir,
+  env = process.env,
   projectDir = zylosDir,
   homeDir = os.homedir(),
   codexHome,
@@ -509,12 +512,12 @@ export function ensureCodexHooksTrusted({
 } = {}) {
   installCoreCodexHook({ zylosDir });
 
-  const codexVersion = getCodexVersion({ codexBin, execFileSyncImpl });
+  const codexVersion = getCodexVersion({ codexBin, env, execFileSyncImpl });
   const validity = isCodexTrustValid({ zylosDir, projectDir, homeDir, codexHome, codexVersion });
   if (validity.valid) return { trusted: false, skipped: true, reason: validity.reason };
 
   ensureHooksFeature({ projectDir, homeDir, codexHome });
-  const trust = trustCodexHooksWithAppServer({ zylosDir, codexBin, spawnSyncImpl });
+  const trust = trustCodexHooksWithAppServer({ zylosDir, codexBin, env, spawnSyncImpl });
   if (!trust.ok) {
     throw new Error(`Codex hook trust failed (${trust.reason || 'unknown'}). Native SessionStart bootstrap may not run.`);
   }
