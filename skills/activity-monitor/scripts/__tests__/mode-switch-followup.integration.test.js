@@ -21,7 +21,7 @@ const repo = path.resolve(new URL('../../../..', import.meta.url).pathname);
 const cleanups = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()(); });
 function fixture(source) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-if67-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-followup-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'comm-bridge'), { recursive: true });
   const { db, store } = storeFixture({ after: fn => cleanups.push(fn) }, {}, path.join(root, 'comm-bridge/c4.db'));
@@ -35,11 +35,6 @@ function fixture(source) {
   const target = source === 'single' ? 'multi' : 'single';
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true }); fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: target }));
   const env = { ...process.env, HOME: root, ZYLOS_DIR: root, TMPDIR: root, ZYLOS_RUN_ID: 'fx-session-0' }; delete env.ZYLOS_SESSION_GROUP;
-  const trace = [];
-  if (process.env.P10_IF67_EVIDENCE_DIR) cleanups.push(() => {
-    fs.mkdirSync(process.env.P10_IF67_EVIDENCE_DIR, { recursive: true });
-    fs.writeFileSync(path.join(process.env.P10_IF67_EVIDENCE_DIR, source + '-' + path.basename(root) + '.json'), JSON.stringify({ source, trace, argv: fs.existsSync(argvFile) ? fs.readFileSync(argvFile, 'utf8') : '', conversations: db.prepare('SELECT * FROM conversations ORDER BY id').all() }, null, 2));
-  });
   const add = (body, endpoint, group = 'a') => store.insertConversation('in', 'demo', endpoint, body, { groupName: group });
   function convert() { const { runId } = store.beginModeTransition(source, target); store.setDrainFence('*'); store.absorbForTransition(runId); const row = store.getModeTransition(); const result = createModeSwitchConverter({ db: store, zylosDir: root })(row); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete'); return { row, ...result }; }
   function cli(name, args, { input = '', group, shell = false } = {}) {
@@ -47,9 +42,9 @@ function fixture(source) {
     const script = path.join(skills, 'comm-bridge/scripts', name + '.js');
     const command = [process.execPath, script, ...args];
     const result = shell ? spawnSync('sh', ['-c', command.map(shellQuote).join(' ')], { env: childEnv, input, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }) : spawnSync(command[0], command.slice(1), { env: childEnv, input, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
-    trace.push({ command, status: result.status, stdout: result.stdout, stderr: result.stderr }); return result;
+    return result;
   }
-  return { root, db, store, env, skills, argvFile, trace, add, convert, cli, query: createQueryHandlers(store), api: { ...store, getDb: () => db, getConversationsByRange: (a, b) => db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=? ORDER BY id').all(a,b) } };
+  return { root, db, store, env, skills, argvFile, add, convert, cli, query: createQueryHandlers(store), api: { ...store, getDb: () => db, getConversationsByRange: (a, b) => db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=? ORDER BY id').all(a,b) } };
 }
 function inputSnapshot(f) { return f.db.prepare("SELECT * FROM conversations WHERE direction='in' AND channel!='internal' ORDER BY id").all(); }
 function argv(f) { return fs.existsSync(f.argvFile) ? fs.readFileSync(f.argvFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : []; }
@@ -69,7 +64,6 @@ async function boot(f, scope, run, expectedHandoff) {
   const handoff = fs.readFileSync(expectedHandoff, 'utf8'); assert.match(handoff, /--absorbed-reply/);
   // Group W4 is the retained main handoff referenced by the converter; all
   // replacement sessions reread it and their own guarded work-memory snapshot.
-  f.trace.push({ boot: run, scope, output, handoff, state: complete.text });
   return { env, memory, work: complete };
 }
 async function commitProgress(f, scope, ids) {
@@ -79,7 +73,7 @@ async function commitProgress(f, scope, ids) {
   const state = path.join(memory.memoryDir, 'state.md'), before = fs.readFileSync(state, 'utf8');
   fs.writeFileSync(`${state}.${token}.tmp`, renderStateSkeleton({ scope, syncedAt: '2026-10-27T00:00:00Z' }));
   try { await commit({ env, token, input: { followedUpIds: ids } }); } finally { await release({ env, token, kind }); }
-  const after = fs.readFileSync(state, 'utf8'); f.trace.push({ commit: ids, scope, before, after }); return { before, after };
+  const after = fs.readFileSync(state, 'utf8'); return { before, after };
 }
 
 for (const source of ['single', 'multi']) test(`IF67 ${source}: converted W4, P06 replacement, real query/send CLI and guarded Sync preserve route/body bytes`, async () => {
@@ -111,7 +105,6 @@ for (const source of ['single', 'multi']) test(`IF67 ${source}: converted W4, P0
     const damaged = (corruption === 'tail' ? bytes.subarray(0, -20) : Buffer.concat([bytes.subarray(0, 100), Buffer.from('<tool truncated>'), bytes.subarray(160)])).toString('utf8');
     assert.throws(() => JSON.parse(damaged));
     const retry = f.cli('c4-fetch', ['--absorbed', '--run-id', runId, '--limit', '2', '--json']); assert.equal(retry.status, 0, retry.stderr); assert.equal(JSON.parse(retry.stdout).data.items.length, 2);
-    f.trace.push({ corruption, damaged, accepted: false, retryLimit: 2 });
   }
   let after = 0, pageIds = [];
   do {

@@ -16,7 +16,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 function root(mode = 'single') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-recovery-')); roots.push(dir);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-recovery-')); roots.push(dir);
   fs.mkdirSync(path.join(dir, '.zylos')); fs.writeFileSync(path.join(dir, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: mode }));
   fs.mkdirSync(path.join(dir, 'memory'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'memory/state.md'), 'prior source state\n');
@@ -34,7 +34,7 @@ function launch(dir, fault = '') {
 }
 async function request(dir, target = 'multi') {
   const socket = net.createConnection(path.join(dir, 'activity-monitor/am.sock')); await once(socket, 'connect');
-  socket.end(JSON.stringify({ version: 1, type: 'mode_switch', requestId: 'p10-integration', target }) + '\n');
+  socket.end(JSON.stringify({ version: 1, type: 'mode_switch', requestId: 'mode-switch-integration', target }) + '\n');
   let text = ''; for await (const chunk of socket) text += chunk; return JSON.parse(text);
 }
 async function kill(worker) { worker.child.kill('SIGKILL'); await once(worker.child, 'exit'); workers.delete(worker); }

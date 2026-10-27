@@ -15,7 +15,7 @@ import { executeSessionMode } from '../../../../cli/commands/session-mode.js';
 const cleanups=[];
 afterEach(async()=>{while(cleanups.length) await cleanups.pop()();});
 async function fixture(responder) {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'p10-cli-'));
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-'));
   cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
   const db=new Database(path.join(root,'c4.db')); guardDatabase(db,schema);
   cleanups.push(()=>db.close());
@@ -62,7 +62,7 @@ test('IB44 expired reply budget does not start a D9 read or resend',async()=>{
   expect(result.ok).toBe(false);expect(result.error.persisted).toBeNull();expect(reads).toBe(0);expect(f.requests).toHaveLength(1);
 });
 test('IB44 public CLI dispatch rejects bad target with one JSON line and no instance writes',()=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'p10-cli-args-'));cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-args-'));cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
   const child=spawnSync(process.execPath,['cli/zylos.js','session-mode','switch','bad','--json'],{encoding:'utf8',env:{...process.env,HOME:root,ZYLOS_DIR:root}});
   expect(child.status).toBe(1);expect(JSON.parse(child.stdout).error.code).toBe('INVALID_ARGUMENT');
   expect(child.stdout.trim().split('\n')).toHaveLength(1);expect(fs.readdirSync(root)).toEqual([]);

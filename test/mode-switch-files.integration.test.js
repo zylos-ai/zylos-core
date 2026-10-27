@@ -13,7 +13,7 @@ import { writeModeSwitchFile, parseModeSwitchHeader } from '../cli/lib/mode-swit
 const cleanups = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()(); });
 function fixture(source = 'single', suffix = '') {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-files-' + suffix));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-files-' + suffix));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const { db, store } = storeFixture({ after: fn => cleanups.push(fn) }, { now: () => 1800000000000 }, path.join(root, 'c4.db'));
   db.pragma('journal_mode = WAL');
@@ -80,7 +80,7 @@ for (const direction of ['single', 'multi']) test(`DM41 ${direction} archive con
 
 for (const failurePoint of ['archive', 'skeleton', 'handoff']) test(`DM41 failure after ${failurePoint} restarts with byte-identical final files and source untouched`, () => {
   const f = fixture(); f.add(); f.put('state.md', 'source'); f.put('session-groups/foo:a/state.md', 'old'); f.put('session-groups/foo:a/inbox.md', 'old inbox'); const row = f.begin();
-  const expectedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-reference-')); cleanups.push(() => fs.rmSync(expectedRoot, { recursive: true, force: true }));
+  const expectedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-reference-')); cleanups.push(() => fs.rmSync(expectedRoot, { recursive: true, force: true }));
   fs.cpSync(path.join(f.root, 'memory'), path.join(expectedRoot, 'memory'), { recursive: true });
   createModeSwitchConverter({ db: f.store, zylosDir: expectedRoot })(row);
   let fired = false;
@@ -122,7 +122,7 @@ for (const source of ['single', 'multi']) for (const point of ['archive', 'skele
   const f = fixture(source); f.add(); f.put('state.md', 'global old'); f.put('inbox.md', 'global inbox'); f.put('handoff.md', 'global handoff');
   f.put('session-groups/foo:a/state.md', 'group old'); f.put('session-groups/foo:a/inbox.md', 'group inbox'); f.put('session-groups/origin/handoff.md', 'origin handoff');
   const row = f.begin(); const beforeDb = snapshotDb(f.db);
-  const expectedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-crash-reference-')); cleanups.push(() => fs.rmSync(expectedRoot, { recursive: true, force: true }));
+  const expectedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-crash-reference-')); cleanups.push(() => fs.rmSync(expectedRoot, { recursive: true, force: true }));
   fs.cpSync(path.join(f.root, 'memory'), path.join(expectedRoot, 'memory'), { recursive: true });
   createModeSwitchConverter({ db: f.store, zylosDir: expectedRoot })(row);
   const child = spawnSync(process.execPath, [new URL('./helpers/mode-switch-convert-child.js', import.meta.url).pathname, f.root, point], { encoding: 'utf8' });
