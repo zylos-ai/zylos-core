@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -203,6 +203,35 @@ console.log('[]');`);
   expect(JSON.parse(result.stdout).data.supervisorPm2).toEqual({ status: 'daemon_not_running', error: null });
   expect(fs.existsSync(path.join(root, 'pm2-calls'))).toBe(false);
   expect(fs.existsSync(path.join(root, 'private-pm2'))).toBe(false);
+});
+
+test('IF66 residual PM2 socket skips jlist and does not start a daemon', async () => {
+  const { root, database } = fixture(); database.close();
+  const home = path.join(root, 'private-pm2'); fs.mkdirSync(home);
+  const socketPath = path.join(home, 'rpc.sock');
+  const child = spawn(process.execPath, ['--input-type=module', '-e',
+    "import net from 'node:net'; net.createServer().listen(process.argv[1], () => process.send('ready'));", socketPath], {
+    env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: home },
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  const exited = once(child, 'exit');
+  try {
+    expect((await once(child, 'message'))[0]).toBe('ready');
+    child.kill('SIGKILL');
+    expect(await exited).toEqual([null, 'SIGKILL']);
+    expect(fs.statSync(socketPath).isSocket()).toBe(true);
+    const env = pm2Cli(root, `fs.writeFileSync(path.join(process.env.PM2_HOME, 'pm2.pid'), String(process.pid));
+console.log('[]');`);
+    const result = await publicStatus(root, ['--json'], env);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).data.supervisorPm2).toEqual({ status: 'daemon_not_running', error: null });
+    expect(fs.existsSync(path.join(root, 'pm2-calls'))).toBe(false);
+    expect(fs.existsSync(path.join(home, 'pm2.pid'))).toBe(false);
+    expect(fs.statSync(socketPath).isSocket()).toBe(true);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  }
 });
 
 for (const [label, output, status] of [

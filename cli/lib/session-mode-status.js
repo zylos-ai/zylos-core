@@ -1,6 +1,5 @@
 import net from 'node:net';
 import path from 'node:path';
-import fs from 'node:fs';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { collectPm2Snapshot } from '../../skills/health-check/scripts/pm2-snapshot.js';
@@ -30,16 +29,15 @@ export function probeSupervisor(socketPath, { connect = net.createConnection, ti
   });
 }
 
-/** Query the public CLI only when a PM2 daemon socket already exists. */
+/** Query the public CLI only when a PM2 daemon socket accepts a connection. */
 export async function readSupervisorPm2({ env = process.env, timeoutMs = 1000 } = {}) {
   const socketPath = path.join(env.PM2_HOME || path.join(env.HOME || os.homedir(), '.pm2'), 'rpc.sock');
-  if (!fs.existsSync(socketPath)) return 'daemon_not_running';
+  if (!await probeSupervisor(socketPath, { timeoutMs })) return 'daemon_not_running';
   const snapshot = collectPm2Snapshot((command, args, options) => spawnSync(command, args, {
     ...options, env, timeout: Math.min(1000, Math.max(1, timeoutMs)),
   }));
   const service = snapshot.services.find(row => row.name === 'activity-monitor');
   if (!service) return 'not_found';
-  if (service.status === null) throw new TypeError('PM2 process status is unavailable');
   return service.status;
 }
 
