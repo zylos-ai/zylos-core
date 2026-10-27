@@ -89,3 +89,23 @@ for (const outcome of ['connect', 'error', 'timeout']) test(`IB44 one socket con
   } });
   assert.equal(result, outcome === 'connect'); assert.equal(calls, 1); assert.equal(destroyed, 1);
 });
+
+test('IB44 an unfinished gating transition with NULL reason is not blocked, including after unblocking', async () => {
+  const input = defaults(); let reason = null;
+  input.db.getModeTransition = () => ({ ...row, reason });
+  input.readEvents = () => [{ run_id: row.run_id, event: 'transition_blocked', reason: row.reason, ts: 10 }];
+  const gating = await readSessionModeStatus(input);
+  assert.equal(gating.transition.phase, 'gating'); assert.equal(gating.transition.reason, null); assert.equal(gating.blocked, null);
+  reason = row.reason; assert.equal((await readSessionModeStatus(input)).blocked.reason, row.reason);
+  reason = null;
+  const unblocked = await readSessionModeStatus(input);
+  assert.equal(unblocked.transition.runId, row.run_id); assert.equal(unblocked.transition.phase, 'gating'); assert.equal(unblocked.blocked, null);
+});
+
+test('IB44 a global manual_restart fence is present independently of any mode transition', async () => {
+  const input = defaults(); input.db.getModeTransition = () => null;
+  input.db.getDrainFence = group => { assert.equal(group, '*'); return { reason: 'manual_restart', runId: 'restart-run' }; };
+  const status = await readSessionModeStatus(input);
+  assert.deepEqual(status.globalGate, { present: true, reason: 'manual_restart', runId: 'restart-run' });
+  assert.equal(status.transition, null); assert.equal(status.blocked, null);
+});

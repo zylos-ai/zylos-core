@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
+import { guardDatabase, planDatabaseMigration } from '../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
 import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
 import { readSessionModeStatus, readSupervisorPm2 } from '../cli/lib/session-mode-status.js';
@@ -170,4 +170,27 @@ test('public status CLI connects once to real am.sock and transmits zero request
     expect(result.code).toBe(0); expect(JSON.parse(result.stdout).data.supervisor).toBe('reachable');
     expect(connections).toBe(1); expect(bytes).toBe(0);
   } finally { for (const peer of peers) peer.destroy(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('IB44 public status leaves a pending schema migration byte-identical instead of upgrading the database', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p10-status-old-schema-')); roots.push(root);
+  fs.mkdirSync(path.join(root, 'comm-bridge'));
+  const filename = path.join(root, 'comm-bridge', 'c4.db');
+  const database = new Database(filename);
+  database.exec(fs.readFileSync(new URL('../skills/comm-bridge/scripts/__tests__/fixtures/migration-history/c4-v0.9.0-v1.sql', import.meta.url), 'utf8'));
+  expect(database.pragma('user_version', { simple: true })).toBe(schema.SUPPORTED_SCHEMA_VERSION - 1);
+  expect(planDatabaseMigration(database, schema, { strict: false }).steps.map(step => [step.from, step.to])).toEqual([[1, 2]]);
+  database.close();
+  const before = fs.readFileSync(filename); const filesBefore = fs.readdirSync(path.dirname(filename)).sort();
+  const result = await publicStatus(root);
+  // Assert the no-write invariant before the error contract, so an accidental
+  // migration fails for its data change even if it also makes the query succeed.
+  expect(fs.readFileSync(filename).equals(before)).toBe(true);
+  expect(fs.readdirSync(path.dirname(filename)).sort()).toEqual(filesBefore);
+  const readonly = new Database(filename, { readonly: true, fileMustExist: true });
+  try { expect(readonly.pragma('user_version', { simple: true })).toBe(1); }
+  finally { readonly.close(); }
+  expect(result.code).toBe(1);
+  expect(JSON.parse(result.stdout).ok).toBe(false);
+  expect(fs.existsSync(path.join(root, 'private-pm2'))).toBe(false);
 });

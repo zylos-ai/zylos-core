@@ -28,7 +28,8 @@ test('frozen upgrade service-restoration boundary with real M4 preserves legacy 
       restartM1Confirmation: { advance: () => { throw new Error('restart must not run while conversion blocked'); } },
       sendAlert: () => { throw new Error('external send forbidden'); }, log() {},
     });
-    cleanups.push(() => service.stop());
+    const started = service;
+    cleanups.push(() => started.stop());
   };
   await restoreServices({ cutoffClosed: false, corePublished: true });
   await restoreServices({ cutoffClosed: true, corePublished: false });
@@ -40,7 +41,18 @@ test('frozen upgrade service-restoration boundary with real M4 preserves legacy 
   assert.equal(begins, 1); const first = store.getModeTransition(); assert.ok(first);
   assert.equal(first.phase, 'converting'); assert.equal(first.reason, 'conversion_failed:export:EIO');
   const installation = { done: true };
-  await service.supervisor.loop.tick(); assert.equal(begins, 1); assert.equal(store.getModeTransition().run_id, first.run_id);
+  const previousService = service;
+  await previousService.stop();
+  assert.equal(previousService.server.listening, false);
+  assert.equal(store.getModeTransition().run_id, first.run_id);
+  await restoreServices({ cutoffClosed: true, corePublished: true });
+  assert.notEqual(service.supervisor, previousService.supervisor);
+  assert.equal(service.server.listening, true);
+  await service.supervisor.loop.tick();
+  assert.equal(begins, 1);
+  assert.equal(store.getModeTransition().run_id, first.run_id);
+  assert.equal(store.getModeTransition().cutoff, first.cutoff);
+  assert.deepEqual(store.getModeTransition().absorbed_ids, first.absorbed_ids);
   const status = await readSessionModeStatus({ zylosDir: root, db: store, readMode: mode, probeSupervisor: async () => true, readEvents: () => [] });
   assert.equal(installation.done, true); assert.equal(status.transition.phase, 'converting');
   assert.equal(status.globalGate.present, true); assert.equal(status.blocked.reason, 'conversion_failed:export:EIO');
