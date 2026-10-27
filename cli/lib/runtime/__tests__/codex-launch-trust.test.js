@@ -213,6 +213,13 @@ await new CodexAdapter({ root, env: process.env }).launch(${JSON.stringify(launc
   assert.equal(Object.keys(readHooksState(path.join(f.home, '.codex', 'config.toml'))).length, 2);
 });
 
+test('lock capability detection returns null when platform lock backends are absent', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'no-config-lock-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.equal(configLock.detectConfigLockCapability({ platform: 'linux', env: { PATH: dir } }), null);
+  assert.equal(configLock.detectConfigLockCapability({ platform: 'darwin', existsSync: () => false }), null);
+});
+
 test('Codex launch refreshes trust when neither flock nor perl is available', async t => {
   const f = fixture(t);
   const detect = t.mock.method(lockDetection, 'detect', () => null);
