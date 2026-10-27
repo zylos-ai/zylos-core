@@ -91,7 +91,7 @@ export function createSupervisor(deps) {
   admission=new SupervisorAdmission({db,store:deps.requestStore,readMode,listRuns:()=>scenes.listRuns(),readRun:group=>scenes.readRun(group),
     resolveLaunchConfig:async group=>db.resolveSessionLaunchConfig({sessionGroup:group,sessionMode:(await readMode()).mode}),
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
-    modeSwitch:(request,context)=>(deps.modeSwitch ?? ((...args)=>modeSwitch.handle(...args)))(request,context),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
+    modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError},{now});
   modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
@@ -103,11 +103,9 @@ export function createSupervisor(deps) {
   const loop=new SupervisorLoop({
     readConfiguration:async()=>{
       roundContext=null;
-      try {configuration=await readConfiguration();return configuration;}
+      try {configuration=await readConfiguration();modeSwitch.recordConfigurationRead();return configuration;}
       catch(error) {
-        const transition=await db.getModeTransition();
-        if(transition)await modeSwitch.block(transition,'config_unreadable');
-        else modeSwitch.event('auto_migration_skipped',null,{reason:error.code ?? 'CONFIG_UNREADABLE'});
+        modeSwitch.recordConfigurationRead(error);
         throw error;
       }
     },
@@ -116,8 +114,8 @@ export function createSupervisor(deps) {
       for(const runtime of ['claude','codex'])await health.restore(runtime);
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
     },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),
-    advanceAutomaticMigration:context=>(deps.advanceAutomaticMigration ?? (()=>modeSwitch.automatic()))(context),
-    advanceTransition:transition=>(deps.advanceTransition ?? (()=>modeSwitch.advance()))(transition),
+    advanceAutomaticMigration:()=>modeSwitch.automatic(),
+    advanceTransition:()=>modeSwitch.advance(),
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},
     observeExits:current=>exits.advance(current),
     afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),

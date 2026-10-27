@@ -1,9 +1,9 @@
 import { M1RestartConfirmation } from './m1-restart-confirmation.js';
+import { binaryCompare as groupSort } from '../../comm-bridge/scripts/c4-query-format.js';
 
 const failure = (code, message) => Object.assign(new Error(message), { code, persisted: [] });
 const modeOf = value => value?.keyPresent === false && value.mode === null ? 'single' : value?.mode;
 const modes = new Set(['single', 'multi']);
-const groupSort = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 
 /** D9 is the acceptance and recovery record. Only restart confirmation lives in
  * memory; no filesystem or diagnostic fact substitutes for a database read.
@@ -40,7 +40,7 @@ export class ModeSwitchCoordinator {
     this.lastReasons.set(row.run_id, null);
   }
 
-  async handle(request, { readRequests = this.readRequests } = {}) {
+  async handle(request) {
     const open = await this.db.getModeTransition();
     if (open) return { ok: false, code: 'transition_open', runId: open.run_id, target: open.target_mode };
     let source;
@@ -48,9 +48,7 @@ export class ModeSwitchCoordinator {
     catch { return { ok: false, code: 'config_unreadable' }; }
     if (source === request.target) return { ok: true, result: 'noop' };
     if (source === 'single' && request.target === 'multi' && await this.legacyPresent()) return { ok: false, code: 'legacy_session_present' };
-    let requests;
-    try { requests = await readRequests(); }
-    catch (error) { if (error.code === 'requests_unreadable') return { ok: false, code: 'requests_unreadable' }; throw error; }
+    const requests = await this.readRequests();
     if (requests.some(row => row.reason === 'manual_restart')) return { ok: false, code: 'manual_restart_pending' };
     let current;
     try { current = modeOf(await this.readMode()); if (!modes.has(current)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
@@ -61,17 +59,16 @@ export class ModeSwitchCoordinator {
     return { ok: true, result: 'accepted', runId };
   }
 
+  recordConfigurationRead(error = null) {
+    if (!error) { this.lastAutoMigrationSkip = null; return; }
+    const reason = error.code ?? 'CONFIG_UNREADABLE';
+    if (this.lastAutoMigrationSkip !== reason) this.event('auto_migration_skipped', null, { reason });
+    this.lastAutoMigrationSkip = reason;
+  }
+
   async automatic() {
     if (await this.db.getModeTransition()) return;
-    let value;
-    try { value = await this.readMode(); if (!modes.has(modeOf(value))) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
-    catch (error) {
-      const reason = error.code ?? 'CONFIG_UNREADABLE';
-      if (this.lastAutoMigrationSkip !== reason) this.event('auto_migration_skipped', null, { reason });
-      this.lastAutoMigrationSkip = reason;
-      return;
-    }
-    this.lastAutoMigrationSkip = null;
+    const value = await this.readMode();
     if (value.keyPresent !== false || modeOf(value) !== 'single' || await this.legacyPresent()) return;
     if ((await this.readRequests()).some(request => request.reason === 'manual_restart')) return;
     const { runId } = await this.db.beginModeTransition('single', 'multi');
@@ -144,7 +141,6 @@ export class ModeSwitchCoordinator {
       this.event('transition_cutover', row, { phase: 'cutover', reason: null });
       return null;
     }
-    if (!await this.onlyGlobal(row)) return null;
     if (this.attempt?.runId === row.run_id) return this.attempt;
     let writtenAt;
     try {
@@ -157,15 +153,10 @@ export class ModeSwitchCoordinator {
   }
 
   async gate(row, mode) {
-    // Admission makes these durable authorities mutually exclusive. A restored
-    // contradiction must not turn one operation's identity into another stop.
-    if ((await this.readRequests()).some(request => request.reason === 'manual_restart')) {
-      throw failure('TRANSITION_PRECONDITION', 'Manual restart intent conflicts with mode transition');
-    }
     await this.db.setDrainFence('*');
     const configuration = { ...await this.readConfiguration(), mode };
     const context = { configuration, transition: row, fences: await this.db.listDrainFences(), restartRequests: [], scenes: await this.observe({ configuration }) };
-    if (!Array.isArray(context.scenes) || context.scenes.some(scene => scene.observationError || typeof scene.present !== 'boolean')) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
+    if (context.scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
     if (mode === 'single') {
       const scene = context.scenes.find(scene => scene.present && (scene.sessionGroup === 'origin' || scene.sessionGroup === null));
       if (scene?.ready && scene.runId) await this.lifecycle.advanceReclaim({ sessionGroup: null, reason: 'mode_switch', runId: scene.runId }, context, { unfenced: true });
@@ -181,10 +172,8 @@ export class ModeSwitchCoordinator {
     const counts = [];
     for (const scope of ['machine', 'allSessionGroups']) {
       const value = await this.db.countNonTerminalControls({ [scope]: true });
-      if (!Number.isSafeInteger(value.running) || value.running < 0 || !Number.isSafeInteger(value.runningWithoutDeadline) || value.runningWithoutDeadline < 0) throw failure('INVALID_OBSERVATION', 'Control counts are unknown');
       if (value.runningWithoutDeadline > 0) {
         const ids = await this.db.listRunningControlsWithoutDeadline({ [scope]: true });
-        if (!Array.isArray(ids)) throw failure('INVALID_OBSERVATION', 'Missing-deadline controls are unknown');
         // A control may settle between the count and detail reads. Re-read on
         // the next tick; neither invent a blocker nor advance on stale counts.
         if (!ids.length) return;
@@ -200,9 +189,8 @@ export class ModeSwitchCoordinator {
     }
     await this.unblock(row);
     const scenes = await this.observe({ configuration });
-    if (!Array.isArray(scenes) || scenes.some(scene => scene.observationError || typeof scene.present !== 'boolean')) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
+    if (scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
     const conversations = await this.db.countGlobalRunningConversations();
-    if (!Number.isSafeInteger(conversations) || conversations < 0) throw failure('INVALID_OBSERVATION', 'Conversation count is unknown');
     if (scenes.some(scene => scene.present) || conversations || counts.some(Boolean)) return;
     const result = await this.db.absorbForTransition(row.run_id);
     this.event('absorb', row, { phase: 'converting', reason: null, cutoff: result.cutoff, count: result.absorbedIds.length });

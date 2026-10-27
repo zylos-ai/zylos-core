@@ -3,14 +3,13 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { loadCoreModule } from './core-modules.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
-import { formatAbsorbedSummary, replyVia, shellQuote } from '../../comm-bridge/scripts/c4-query-format.js';
-import { renderStateSkeleton, validateStateDocument, parseStateHeader, absorbedEntry } from '../../zylos-memory/scripts/state-format.js';
+import { absorbedSummaryItems, binaryCompare as binary, scopeFor, replyVia, shellQuote } from '../../comm-bridge/scripts/c4-query-format.js';
+import { renderStateSkeleton, validateStateDocument, parseStateHeader, absorbedEntry, inboxSegmentName } from '../../zylos-memory/scripts/state-format.js';
 
 const { groupMemoryDir } = await loadCoreModule('session-group-paths.js');
 const { modeSwitchPreviousDir, modeSwitchDonePath, modeSwitchUngroupedPath, modeSwitchGroupPath, handoffPath } = await loadCoreModule('session-memory-paths.js');
 const { writeModeSwitchFile, formatModeSwitchHandoff, parseModeSwitchHeader } = await loadCoreModule('mode-switch-files.js');
-const binary = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
-const materialName = name => ['state.md', 'inbox.md', 'handoff.md'].includes(name) || /^inbox\.\d{8}T\d{9}Z(?:-[1-9]\d*)?\.md$/.test(name);
+const materialName = name => ['state.md', 'inbox.md', 'handoff.md'].includes(name) || inboxSegmentName.test(name);
 const failure = (code, message) => Object.assign(new Error(message), { code });
 
 /** Deterministic file conversion only. D9, fences, cutover and launches belong to the caller. */
@@ -49,14 +48,6 @@ export function createModeSwitchConverter({ db, zylosDir, fsImpl = fs, renderSta
     write(done, '');
     return previous;
   }
-  function summary(transition, rows) {
-    const items = []; let scopeAfter;
-    do {
-      const page = JSON.parse(formatAbsorbedSummary({ transition, rows }, { scopeAfter, json: true })).data;
-      items.push(...page.items); scopeAfter = page.nextScope;
-    } while (scopeAfter !== null);
-    return items;
-  }
   function exportRows(rows) {
     return rows.map(row => JSON.stringify({ id: row.id, direction: row.direction, channel: row.channel,
       endpoint: row.endpoint_id, timestamp: row.timestamp, content: row.content })).join('\n') + (rows.length ? '\n' : '');
@@ -85,7 +76,6 @@ export function createModeSwitchConverter({ db, zylosDir, fsImpl = fs, renderSta
       lines.push('', `脚本目录：${JSON.stringify(scripts)}`);
       if (rows.length) {
         const id = String(rows[0].id);
-        if (!/^[0-9]+$/.test(id)) throw failure('ABSORBED_MISMATCH', 'Invalid absorbed ID');
         lines.push(`以下以 #${id} 为例；处理其他条目时只替换经过 C4 核验的十进制 id。`,
           `node ${shellQuote(path.join(scripts, 'c4-send.js'))} --absorbed-reply ${transition.run_id} ${id}`,
           `node ${shellQuote(path.join(scripts, 'c4-fetch.js'))} --absorbed --run-id ${transition.run_id} --id ${id}`);
@@ -100,11 +90,11 @@ export function createModeSwitchConverter({ db, zylosDir, fsImpl = fs, renderSta
       if (!transition || transition.phase !== 'converting' || transition.cutoff === null || !Array.isArray(transition.absorbed_ids) || !transition.coverage_snapshot) throw failure('ABSORBED_MISMATCH', 'Transition has no authoritative absorbed snapshot');
       const rows = db.getAbsorbedConversations(transition.run_id);
       if (!isDeepStrictEqual(rows.map(row => row.id), transition.absorbed_ids)) throw failure('ABSORBED_MISMATCH', 'Absorbed rows do not match the transition');
-      const summaries = summary(transition, rows);
+      const summaries = absorbedSummaryItems({ transition, rows });
       const scopes = transition.target_mode === 'single' ? ['*'] : [...new Set(['origin', ...db.listGroupHeads().map(row => row.sessionGroup)])].sort(binary);
       for (const item of summaries) if (!scopes.includes(item.scope)) throw failure('ABSORBED_MISMATCH', 'Absorbed scope is missing from group heads');
       const byScope = new Map(scopes.map(scope => [scope, []]));
-      for (const row of rows) byScope.get(transition.target_mode === 'single' ? '*' : row.session_group || 'origin').push({
+      for (const row of rows) byScope.get(scopeFor(transition, row)).push({
         id: row.id, timestamp: row.timestamp, sessionGroup: row.session_group, channel: row.channel, endpointId: row.endpoint_id, content: row.content,
       });
       step = 'archive';

@@ -2,10 +2,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { guard, memoryScope, memoryError } from './sync-lock.js';
-import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry } from './state-format.js';
+import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry, inboxSegmentName as segment } from './state-format.js';
 import { inputError, isMain, options, parseJson, readInput, runCli } from './sync-cli.js';
 
-const segment = /^inbox\.(\d{8}T\d{9}Z(?:-[1-9]\d*)?)\.md$/;
 const warn = message => console.error(`Warning: ${message}`);
 const lines = text => (text.match(/[^\n]*(?:\n|$)/g) || []).filter(Boolean).map(raw => ({ raw, text: raw.replace(/\r?\n$/, '') }));
 function readOptional(file) {

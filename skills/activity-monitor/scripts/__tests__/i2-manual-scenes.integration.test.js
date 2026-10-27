@@ -152,16 +152,10 @@ for (const mode of ['single', 'multi']) test(`IF-36 ${mode} actual M4 transition
   assertReply(await f.submit(otherManual), otherManual, 'rejected', { reason: 'manual_restart_pending' }, false);
   const upgrade = { version: 1, type: 'restart_all', requestId: 'upgrade-after-manual', reason: 'upgrade' };
   assert.deepEqual((await f.submit(upgrade)).reply, { version: 1, type: 'restart_all', requestId: upgrade.requestId, ok: false, code: 'manual_restart_pending' });
-  // Inject an out-of-order conflicting authority to verify fail-closed recovery.
-  transition();
-  const transitionBefore = f.db.prepare('SELECT * FROM mode_transitions').all();
-  let state = await m4.command('tick'); assert.deepEqual(state.requests, accepted); assert.deepEqual(state.stopped, []); assert.equal(state.scene.present, true);
-  assert.deepEqual(f.db.prepare('SELECT * FROM mode_transitions').all(), transitionBefore);
-  f.db.exec('DELETE FROM mode_transitions');
   const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
   db.setDrainFence(mode === 'single' ? '*' : 'origin', { reason: 'manual_restart', runId: 'other-run' });
   const fenceBefore = db.listDrainFences();
-  state = await m4.command('tick'); assert.deepEqual(state.requests, accepted); assert.deepEqual(state.stopped, []); assert.deepEqual(db.listDrainFences(), fenceBefore);
+  let state = await m4.command('tick'); assert.deepEqual(state.requests, accepted); assert.deepEqual(state.stopped, []); assert.deepEqual(db.listDrainFences(), fenceBefore);
   f.db.exec('DELETE FROM drain_fences');
   state = await m4.command('tick'); assert.deepEqual(state.requests, []); assert.deepEqual(state.fences, []); assert.equal(state.scene.present, false);
   await m4.stop();

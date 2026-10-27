@@ -42,14 +42,16 @@ test('IF-38 admission priority: D9, config, noop, legacy, manual and unreadable 
   owner.readMode = () => ({ mode: 'single', keyPresent: true }); f.legacy = true;
   assert.equal((await owner.handle(request)).code, 'legacy_session_present'); f.legacy = false;
   owner.readRequests = () => [{ reason: 'manual_restart' }]; assert.equal((await owner.handle(request)).code, 'manual_restart_pending');
-  owner.readRequests = () => { throw error('requests_unreadable'); }; assert.equal((await owner.handle(request)).code, 'requests_unreadable');
+  owner.readRequests = () => { throw error('requests_unreadable'); }; await assert.rejects(owner.handle(request), { code: 'requests_unreadable' });
   assert.deepEqual(f.calls, []);
   owner.readRequests = () => []; assert.equal((await owner.handle(request)).result, 'accepted'); assert.deepEqual(f.calls, ['begin']);
 });
 
 test('IF-38 actual admission wrapper defers corrupt F9 until after noop/open checks', async () => {
   const f = fixture(), owner = f.create(); f.mode = 'multi';
-  const admission = new SupervisorAdmission({ modeSwitch: (...args) => owner.handle(...args), store: { read: () => { throw error('requests_unreadable'); } } });
+  const store = { read: () => { throw error('requests_unreadable'); } };
+  owner.readRequests = () => store.read();
+  const admission = new SupervisorAdmission({ modeSwitch: request => owner.handle(request), store });
   admission.openEntry(); assert.equal((await admission.handle(request)).result, 'noop');
   f.mode = 'single'; assert.equal((await admission.handle(request)).code, 'requests_unreadable');
   f.row = { run_id: 'already', target_mode: 'multi' }; assert.equal((await admission.handle(request)).code, 'transition_open');
@@ -59,7 +61,7 @@ test('IF-38 automatic migration requires all three conditions and emits success 
   const f = fixture(), owner = f.create(); await owner.automatic(); assert.deepEqual(f.calls, []);
   owner.readMode = () => ({ mode: null, keyPresent: false }); f.legacy = true; await owner.automatic(); assert.deepEqual(f.calls, []);
   f.legacy = false; f.row = { run_id: 'existing' }; await owner.automatic(); assert.deepEqual(f.calls, []);
-  f.row = null; owner.readMode = () => { throw error('CONFIG_UNREADABLE'); }; await owner.automatic(); assert.equal(f.events.at(-1).event, 'auto_migration_skipped');
+  f.row = null; owner.readMode = () => { throw error('CONFIG_UNREADABLE'); }; await assert.rejects(owner.automatic(), { code: 'CONFIG_UNREADABLE' });
   owner.readMode = () => ({ mode: null, keyPresent: false }); const begin = f.db.beginModeTransition;
   f.db.beginModeTransition = () => { throw error('DB_BUSY'); }; await assert.rejects(owner.automatic(), { code: 'DB_BUSY' });
   assert.equal(f.events.some(event => event.event === 'auto_migration_begin'), false);
@@ -102,11 +104,10 @@ test('IF-39 conversion failure retains phase and gate, then retries without abso
   assert.equal(f.calls.filter(x => x === 'absorb').length, 1);
 });
 
-test('IF-39 unknown scenes, counts and D8 reads never become empty input', async () => {
+test('IF-39 observation errors and failed D8 reads never become empty input', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); f.scenes = [{ present: true, observationError: error('TMUX_UNAVAILABLE') }];
   await assert.rejects(owner.advance(), { code: 'INVALID_OBSERVATION' }); assert.equal(f.row.phase, 'gating');
-  f.scenes = []; f.db.countGlobalRunningConversations = () => undefined;
-  await assert.rejects(owner.advance(), { code: 'INVALID_OBSERVATION' });
+  f.scenes = [];
   f.db.listDrainFences = () => { throw error('DB_BUSY'); }; await assert.rejects(owner.advance(), { code: 'DB_BUSY' });
   assert.equal(f.calls.includes('absorb'), false);
 });
@@ -212,12 +213,6 @@ test('IF-39 single reclaim uses global scope without creating a per-group fence'
   assert.deepEqual(calls[0][2],{unfenced:true}); assert.deepEqual(f.fences.map(x=>x.sessionGroup),['*']); assert.equal(f.row.phase,'gating');
 });
 
-test('IF-36/39 contradictory restored manual intent prevents transition reclaim without changing either authority', async()=>{
- const f=fixture(), owner=f.create(); await owner.handle(request); f.requests=[{reason:'manual_restart',expectedRunId:'old'}];
- const before=structuredClone(f.row); await assert.rejects(owner.advance(),{code:'TRANSITION_PRECONDITION'});
- assert.deepEqual(f.row,before); assert.deepEqual(f.fences,[]); assert.deepEqual(f.calls,['begin']);
-});
-
 test('IF-36/38 automatic migration respects durable manual intent and unreadable intent',async()=>{
  const f=fixture({readMode:()=>({mode:null,keyPresent:false})}), owner=f.create(); f.requests=[{reason:'manual_restart'}];
  await owner.automatic(); assert.deepEqual(f.calls,[]);
@@ -236,23 +231,25 @@ test('IF-38 changed F1 between admission reads rejects before creating D9', asyn
   assert.deepEqual(f.events, []);
 });
 
-test('IB-37 automatic skip diagnostics deduplicate by code and reset after readable F1', async () => {
+
+
+test('IF-39 accepted gating continues without re-reading later damaged F9', async () => {
   const f = fixture(), owner = f.create();
-  let code = 'EACCES';
-  owner.readMode = () => { throw error(code); };
-  for (const next of ['EACCES', 'EACCES', 'EIO', 'EIO', 'EACCES']) {
-    code = next;
-    await owner.automatic();
-  }
-  assert.deepEqual(f.events.map(event => [event.event, event.reason]), [
-    ['auto_migration_skipped', 'EACCES'], ['auto_migration_skipped', 'EIO'], ['auto_migration_skipped', 'EACCES'],
-  ]);
-  owner.readMode = () => ({ mode: 'single', keyPresent: true });
-  await owner.automatic();
-  owner.readMode = () => { throw error('EACCES'); };
-  await owner.automatic(); await owner.automatic();
-  assert.equal(f.events.length, 4);
-  assert.equal(f.events.at(-1).reason, 'EACCES');
-  assert.equal(f.row, null);
-  assert.deepEqual(f.calls, []);
+  await owner.handle(request);
+  owner.readRequests = () => { throw error('requests_unreadable'); };
+  await owner.advance();
+  assert.equal(f.row.phase, 'converting');
+  assert.equal(f.row.reason, null);
+  assert.equal(f.calls.filter(call => call === 'absorb').length, 1);
+});
+
+test('IF-39 cutover writes F1 before the completion-only extra fence check', async () => {
+  const f = fixture(), owner = f.create();
+  await owner.handle(request); await owner.advance(); await owner.advance();
+  f.fences.push({ sessionGroup: 'tg:a', reason: 'model_config', runId: 'old' });
+  await owner.advance();
+  assert.equal(f.calls.includes('writeMode'), true);
+  assert.equal(f.row.phase, 'cutover');
+  assert.equal(f.row.reason, 'fence_extra:tg:a');
+  assert.equal(f.calls.includes('complete'), false);
 });

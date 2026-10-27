@@ -106,20 +106,6 @@ test('T02 entry freezes first-failure notice synchronously with correct single/m
   }
 });
 
-// P05 T01 / F1: a missing key is a readable legacy instance, not corrupt F1.
-test('T01 legacy F1 opens actual entry as single and reports explicitly unavailable automatic migration separately', {timeout:15000}, async t=>{
-  const root=prepare(t,{runtime:'claude'}),w=launch(t,root,{scenario:'missing-migration'});const ready=await w.next();
-  assert.equal(ready.admissionOpen,true);assert.equal(ready.configurationError,undefined);
-  assert.equal(ready.mode,'single');assert.equal(ready.legacy,true);
-  assert.ok(ready.logs.some(row=>row?.error==='DEPENDENCY_UNAVAILABLE' && row.phase==='automatic-migration'));
-  assert.equal((await request(root,{version:1,type:'restart_all',requestId:'legacy',reason:'upgrade'})).code,'single_mode');
-  await stop(w);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'.zylos/config.json'),'utf8')),{runtime:'claude'});
-  const explicit=prepare(t,{session_mode:'single',runtime:'claude'}),e=launch(t,explicit);const explicitReady=await e.next();
-  assert.equal(explicitReady.admissionOpen,true);assert.equal(explicitReady.legacy,false);
-  assert.equal(explicitReady.logs.some(row=>row?.phase==='automatic-migration'),false);await stop(e);
-});
-
 test('C4 monitor signal handler reports stop rejection and exits unsuccessfully',async()=>{
  const runtime=new EventEmitter(),errors=[],exits=[];runtime.exit=code=>exits.push(code);
  await monitorMain({runtime,start:async()=>({stop:async()=>{throw Object.assign(new Error('stop failed'),{code:'STOP_FAILED'});}}),log:error=>errors.push(error)});

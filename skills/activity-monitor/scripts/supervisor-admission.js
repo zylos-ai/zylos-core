@@ -51,8 +51,7 @@ export class SupervisorAdmission {
         // Mode switching has its own ordered checks; F9 is consulted only after
         // open transition, configuration, noop and legacy-session checks.
         if (request.type === 'mode_switch') {
-          if (!this.modeSwitch) return reply({ ok: false, code: 'entry_not_open' });
-          return reply(await this.modeSwitch(request, { readRequests: () => this.store.read() }));
+          return reply(await this.modeSwitch(request));
         }
         const rows = this.store.read();
         switch (request.type) {

@@ -51,7 +51,7 @@ test('IF39/DM41 single→multi preserves source and archives target once; all 10
   assert.equal(f.read('session-groups/foo:a/state.md'), state); assert.equal(f.store.getModeTransition().cutoff, row.cutoff); assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').get(late.id).status, 'pending');
 });
 
-test('IF39/#4b reads every summary page across more than 200 scopes', () => {
+test('IF39/#4b converts every absorbed summary across more than 200 scopes', () => {
   const f = fixture(); for (let n = 0; n < 205; n++) f.add('g' + n); const row = f.begin(); const out = f.convert()(row);
   assert.equal(out.scopes.length, 206); const handoff = fs.readFileSync(out.handoff, 'utf8'); assert.equal(handoff.split('\n').filter(line => line.startsWith('- scope=')).length, 205);
 });
@@ -176,7 +176,7 @@ for (const source of ['single', 'multi']) test(`IF39 ${source} recovery material
   const f = fixture(source); f.add('a');
   const sourceDir = source === 'single' ? '' : 'session-groups/foo:a/';
   const targetDir = source === 'single' ? 'session-groups/foo:a/' : '';
-  const names = ['state.md', 'inbox.md', 'inbox.20261027T090000000Z.md', 'handoff.md'];
+  const names = ['state.md', 'inbox.md', 'inbox.20261027T090000000Z.md', 'inbox.20261027T090000000Z-2.md', 'handoff.md'];
   const sourceFiles = names.map(name => f.put(sourceDir + name, 'source ' + name));
   for (const name of names) f.put(targetDir + name, 'previous ' + name);
   const row = f.begin(); const out = f.convert()(row);

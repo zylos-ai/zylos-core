@@ -59,6 +59,25 @@ test('reclaim waits conversations and controls, then stops the same run and clea
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
   assert.deepEqual(f.stops, ['run-a']); assert.equal(f.fences.size, 0);
 });
+test('mode-switch duplicate reclaim calls cannot shorten the 3s idle confirmation', async () => {
+  const f = fixture();
+  f.scenes[0].idleSince = f.now;
+  const started = f.now;
+  for (const elapsed of [0, 1, 2999]) {
+    f.now = started + elapsed;
+    const fence = f.fence('mode_switch'), context = f.context;
+    // Coordinator gating and the loop may both visit the same fence in one
+    // round. Neither repeated reads nor a renewed fence advance elapsed time.
+    assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'cancelled');
+    assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'changed');
+    assert.deepEqual(f.stops, [], `must not stop after ${elapsed}ms of idle`);
+  }
+  f.now = started + 3000;
+  const fence = f.fence('mode_switch'), context = f.context;
+  assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'done');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'changed');
+  assert.deepEqual(f.stops, ['run-a']);
+});
 test('ordinary busy cancels with TTL reset; model_config busy retains its fence', async () => {
   for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
     const f = fixture(), row = f.fence(reason); f.scenes[0].state = 'busy';

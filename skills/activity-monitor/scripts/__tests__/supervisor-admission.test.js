@@ -41,7 +41,7 @@ test('IF-34 restart empty writes only completion and steady single refuses', asy
 });
 test('DM-54 invalid F9 refuses admission without changing any byte', async t => {
   const f = fixture(t);
-  const modeSwitch = new ModeSwitchCoordinator({ db:f.db, readMode:()=>({mode:'single'}), legacyPresent:()=>false });
+  const modeSwitch = new ModeSwitchCoordinator({ db:f.db, readRequests:()=>f.store.read(), readMode:()=>({mode:'single'}), legacyPresent:()=>false });
   f.admission.modeSwitch = (...args) => modeSwitch.handle(...args);
   const good = {requestId:'x', reason:'upgrade', acceptedAt:1792000000000, runIds:['r1']};
   for (const content of ['{', '{}', JSON.stringify([{...good, extra:true}]), JSON.stringify([good,good]), JSON.stringify([{...good,runIds:[]}]), JSON.stringify([{...good,acceptedAt:null}])]) {

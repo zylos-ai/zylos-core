@@ -5,7 +5,9 @@ import { escapeText } from '../../comm-bridge/scripts/c4-query-format.js';
 const invalidHeader = () => ({ valid: false, scope: null, coverage: null, inboxCommitted: [] });
 const titles = ['# Working State', '## Headline', '## In Progress', '## Pending', '## Commitments'];
 const zonedTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
-const segmentId = /^\d{8}T\d{9}Z(?:-[1-9]\d*)?$/;
+const segmentIdPattern = String.raw`\d{8}T\d{9}Z(?:-[1-9]\d*)?`;
+const segmentId = new RegExp(`^${segmentIdPattern}$`);
+export const inboxSegmentName = new RegExp(String.raw`^inbox\.(${segmentIdPattern})\.md$`);
 
 export function parseStateHeader(text, { scope } = {}) {
   if (typeof text !== 'string') return invalidHeader();
