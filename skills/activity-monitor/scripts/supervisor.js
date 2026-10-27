@@ -101,11 +101,11 @@ export function createSupervisor(deps) {
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({
-    readConfiguration:async()=>{
+    readConfiguration:async transition=>{
       roundContext=null;
       try {configuration=await readConfiguration();modeSwitch.recordConfigurationRead();return configuration;}
       catch(error) {
-        modeSwitch.recordConfigurationRead(error);
+        if(transition===null)modeSwitch.recordConfigurationRead(error);
         throw error;
       }
     },

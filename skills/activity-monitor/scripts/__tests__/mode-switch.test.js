@@ -259,3 +259,31 @@ test('IF-39 cutover writes F1 before the completion-only extra fence check', asy
   assert.equal(f.row.reason, 'fence_extra:tg:a');
   assert.equal(f.calls.includes('complete'), false);
 });
+
+
+test('IF-39 machine blocker still reads each deadline scope exactly once', async () => {
+  const f = fixture(), reads = [];
+  f.db.listRunningControlsWithoutDeadline = target => { reads.push(target); return target.machine ? [3] : [8]; };
+  const owner = f.create(); await owner.handle(request); await owner.advance();
+  assert.deepEqual(reads, [{ machine: true }, { allSessionGroups: true }]);
+  assert.equal(f.row.reason, 'running_control_without_deadline:machine:3');
+});
+
+test('IF-39 first unknown observation adds no session fence or reclaim', async () => {
+  const f = fixture(); f.mode = 'multi';
+  f.scenes = [{sessionGroup:'tg:a', present:true, ready:true, runId:'a', observationError:error('TMUX_UNAVAILABLE')}];
+  const reclaimed = []; f.deps.lifecycle.advanceReclaim = async fence => { reclaimed.push(fence); };
+  const owner = f.create(); await owner.handle({...request,target:'single'});
+  await assert.rejects(owner.advance(), {code:'INVALID_OBSERVATION'});
+  assert.deepEqual(f.fences.map(fence => fence.sessionGroup), ['*']);
+  assert.deepEqual(reclaimed, []); assert.equal(f.calls.includes('absorb'), false);
+});
+
+test('IF-39 unknown second observation prevents absorption', async () => {
+  const f = fixture(); let reads = 0;
+  f.deps.observe = () => ++reads === 1 ? [] : [{present:false, observationError:error('TMUX_UNAVAILABLE')}];
+  const owner = f.create(); await owner.handle(request);
+  await assert.rejects(owner.advance(), {code:'INVALID_OBSERVATION'});
+  assert.equal(reads, 2); assert.equal(f.row.phase, 'gating');
+  assert.equal(f.calls.includes('absorb'), false);
+});

@@ -213,3 +213,42 @@ test('IB-37 real supervisor rounds deduplicate configuration read failures and r
   assert.equal(events().length, 4);
   assert.equal(events().at(-1).reason, 'EACCES');
 });
+
+
+test('IB-37 open transition configuration failure does not emit automatic-migration skip', async t => {
+  let failure = null;
+  const { supervisor, root, calls, db } = fixture(t, {
+    readConfiguration: async () => {
+      if (failure) throw failure;
+      return { mode: 'multi', runtime: 'claude', capacity: 2 };
+    },
+  });
+  await supervisor.loop.start();
+  const transition = { run_id: 'open', source_mode: 'single', target_mode: 'multi', phase: 'gating', reason: null };
+  supervisor.loop.deps.getModeTransition = () => transition;
+  // The real transition advance fails its F1 read; the round then reads F1 too.
+  supervisor.modeSwitch.readMode = () => { throw Object.assign(new Error('unreadable mode'), { code: 'EIO' }); };
+  db.getModeTransition = () => transition;
+  db.setModeTransitionPhase = (runId, phase, { reason }) => { transition.reason = reason; };
+  failure = Object.assign(new Error('unreadable configuration'), { code: 'EIO' });
+  await supervisor.loop.tick(); await supervisor.loop.tick();
+  assert.equal(transition.reason, 'config_unreadable');
+  assert.equal(calls.filter(row => row.phase === 'round' && row.error === 'EIO').length, 2);
+  const events = fs.readFileSync(path.join(root, 'activity-monitor/supervisor-events.jsonl'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events.some(row => row.event === 'auto_migration_skipped'), false);
+  assert.equal(events.filter(row => row.event === 'transition_blocked').length, 1);
+});
+
+test('T01 unreadable startup configuration stops before transition sampling or migration diagnostics', async t => {
+  const failure = Object.assign(new Error('unreadable startup configuration'), { code: 'EIO' });
+  const { supervisor, root, calls, db } = fixture(t, { readConfiguration: async () => { throw failure; } });
+  let transitionReads = 0;
+  db.getModeTransition = () => { transitionReads++; return null; };
+  await supervisor.loop.start();
+  assert.equal(supervisor.loop.configurationError, failure);
+  assert.equal(supervisor.admission.open, false);
+  assert.equal(transitionReads, 0);
+  assert.equal(calls.filter(row => row.phase === 'configuration' && row.error === 'EIO').length, 1);
+  assert.equal(fs.existsSync(path.join(root, 'activity-monitor/supervisor-events.jsonl')), false);
+});

@@ -178,3 +178,12 @@ test('P05 actual Sock rejects requests throughout paused restoration, then admit
   assert.equal((await request(root, { version: 1, type: 'restart_all', requestId: 'after-restore', reason: 'upgrade' })).result, 'done_empty');
   await service.stop();
 });
+
+
+test('T01 explicit single opens the actual entry with legacy false', {timeout:15000}, async t => {
+  const root = prepare(t, {session_mode:'single',runtime:'claude'}), worker = launch(t, root);
+  const ready = await worker.next();
+  assert.equal(ready.admissionOpen, true); assert.equal(ready.mode, 'single'); assert.equal(ready.legacy, false);
+  assert.equal(ready.logs.some(row => row?.phase === 'automatic-migration'), false);
+  await stop(worker);
+});
