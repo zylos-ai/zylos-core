@@ -507,5 +507,9 @@
   "confirm.switch_mode": "Switch the whole instance to {mode}? Active work may be interrupted.",
   "actions.supervisor_unreachable": "Supervisor unavailable",
   "actions.blocked_since": "Blocked since {time}",
-  "timeline.source_gap": "History source {source}: {reason}"
+  "timeline.source_gap": "History source {source}: {reason}",
+  "actions.restart_progress": "Submission: {submission} · Old run: {completion} · New Origin: {ready}",
+  "actions.ready": "ready",
+  "block.single_session": "Single session",
+  "block.origin": "Origin"
 }

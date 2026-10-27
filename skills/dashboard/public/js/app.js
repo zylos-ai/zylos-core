@@ -311,9 +311,10 @@ function confLabel(v) {
 }
 
 function srcLabel(m) {
-  if (!m) return t('confidence.unavailable');
+  if (!m || metVal(m) === null) return t('confidence.unavailable');
   const src = m.selected_source || m.source || '';
   const friendly = {
+    'core-session-reader': t('metric.current_session'),
     statusline: t('metric.current_session'),
     statusline_current_usage: t('metric.current_session'),
     jsonl_usage: t('source.jsonl_usage'),
@@ -437,6 +438,8 @@ function mascotClass(agentState) {
 }
 
 function renderState() {
+  const title = $('#runtime-title');
+  if (title) { title.removeAttribute('data-i18n'); title.textContent = t(state.dashboardState?.sessionGroup === 'origin' ? 'block.origin' : 'block.single_session'); }
   const p = state.dashboardState;
   // Same octopus mascot set + mood logic as Agent Fleet (busy with no visible
   // tool = thinking), so the agent looks identical in its tile and its detail.
@@ -2405,6 +2408,7 @@ async function refreshAll() {
 
 // ─── SSE ───
 function applySse(name, data) {
+  if (name === 'history_changed') { refreshTimeline().catch(() => {}); return; }
   if (!data || typeof data !== 'object') return;
   // A remote agent's stream describes its own fleet; never let it clobber ours.
   if (name === 'fleet' && state.remoteAgent) return;
@@ -2462,6 +2466,8 @@ function connectSse() {
   state.eventSource.onopen = () => {
     state.sseRetries = 0;
     renderConnection('live');
+    refreshState().catch(() => {});
+    refreshTimeline().catch(() => {});
   };
 
   state.eventSource.onerror = () => {
@@ -2471,7 +2477,7 @@ function connectSse() {
     scheduleSseReconnect();
   };
 
-  for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet']) {
+  for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet', 'history_changed']) {
     state.eventSource.addEventListener(ev, (e) => {
       try { applySse(ev, JSON.parse(e.data)); renderConnection('live'); }
       catch { renderConnection('degraded'); }
@@ -4027,6 +4033,8 @@ async function saveSettings() {
 
 // ─── Actions Modal ───
 let actionsModal = null;
+let modeStatusTimer = null;
+let pendingManualRestart = null;
 
 function createActionsModal() {
   if (actionsModal) return actionsModal;
@@ -4052,6 +4060,7 @@ function createActionsModal() {
       <span class="action-group-label">${esc(t('actions.configuration'))}</span>
       <div class="action-field"><label class="action-field-label">${esc(t('actions.session_mode'))}</label><select id="action-mode" class="action-select"><option value="single">single</option><option value="multi">multi</option></select></div>
       <p id="action-mode-status" class="modal-status" style="overflow-wrap:anywhere"></p>
+      <p id="action-restart-status" class="modal-status" style="overflow-wrap:anywhere"></p>
       <div class="action-field">
         <label class="action-field-label">${esc(t('actions.runtime'))}</label>
         <select id="action-runtime" class="action-select">
@@ -4223,6 +4232,13 @@ function createActionsModal() {
 }
 
 async function refreshModeStatus() {
+  if (pendingManualRestart) {
+    try {
+      const result = await fetchJson(`/api/restart-status?requestId=${encodeURIComponent(pendingManualRestart.requestId)}`);
+      const text = actionsModal?.querySelector('#action-restart-status');
+      if (text) text.textContent = t('actions.restart_progress', { submission: pendingManualRestart.submission, completion: result.completion, ready: result.origin?.ready && result.origin.runId !== pendingManualRestart.runId ? t('actions.ready') : t('value.unknown') });
+    } catch {}
+  }
   const text = actionsModal?.querySelector('#action-mode-status');
   try {
     const result = await fetchJson('/api/session-mode');
@@ -4238,6 +4254,8 @@ async function openActionsModal() {
   const modal = createActionsModal();
   modal.hidden = false;
   refreshModeStatus();
+  clearInterval(modeStatusTimer);
+  modeStatusTimer = setInterval(refreshModeStatus, 2000);
 
   const statusEl = modal.querySelector('#action-status');
   statusEl.hidden = true;
@@ -4351,6 +4369,8 @@ async function openActionsModal() {
 }
 
 function closeActionsModal() {
+  clearInterval(modeStatusTimer);
+  modeStatusTimer = null;
   if (!actionsModal) return;
   if (pendingConfirmCancel) { pendingConfirmCancel(); pendingConfirmCancel = null; }
   actionsModal.hidden = true;
@@ -4492,6 +4512,10 @@ async function execAction(action, body) {
       body: JSON.stringify(body || {})
     });
     const result = await r.json();
+    if (action === 'restart-session' && result.requestId) {
+      pendingManualRestart = { requestId: result.requestId, submission: result.submission, runId: body?.runId };
+      refreshModeStatus();
+    }
     if (result.ok && result.detached) {
       startCountdownAndReload(15, statusEl, healthPath);
       return true;

@@ -507,5 +507,9 @@
   "confirm.switch_mode": "将整个实例切换为 {mode}？此操作可能中断正在进行的工作。",
   "actions.supervisor_unreachable": "监督服务不可用",
   "actions.blocked_since": "自 {time} 起受阻",
-  "timeline.source_gap": "历史来源 {source}：{reason}"
+  "timeline.source_gap": "历史来源 {source}：{reason}",
+  "actions.restart_progress": "提交：{submission} · 旧运行：{completion} · 新 Origin：{ready}",
+  "actions.ready": "已就绪",
+  "block.single_session": "唯一会话",
+  "block.origin": "Origin"
 }

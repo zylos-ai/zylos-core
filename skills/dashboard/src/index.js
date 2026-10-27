@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { CoreState } from './lib/core-state.js';
+import { loadCoreModule } from './lib/core-modules.js';
 import { createCoalescedBroadcast, createSessionCache, broadcastFleetSnapshot } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
 import { promisify } from 'node:util';
@@ -1015,6 +1016,15 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/restart-status') {
+    const requestId = url.searchParams.get('requestId');
+    if (!/^[a-f0-9-]{36}$/i.test(requestId || '')) { sendJson(res, 400, { error: 'INVALID_REQUEST_ID' }); return true; }
+    let completion = 'unknown';
+    try { const { lookupRestartRequest } = await loadCoreModule('am-sock-client.js'); completion = await lookupRestartRequest(requestId, { deadlineAt: Date.now() + 10000 }); } catch {}
+    const current = await coreState.refresh();
+    sendJson(res, 200, { requestId, completion, origin: { runId: current.runId, sessionId: current.sessionId, ready: current.identity?.ready === true, state: current.state } });
+    return true;
+  }
   if (pathname === '/api/session-mode' || pathname === '/api/instance-status') {
     try {
       const args = pathname === '/api/session-mode' ? ['session-mode', 'status', '--json'] : ['status', '--json'];

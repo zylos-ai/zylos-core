@@ -1,6 +1,7 @@
 // Input is always a 0-100 percentage. Never infer fractions here: a genuine
 // 0.5% reading must render as "1%", not "50%" (#251).
 export function pct(v) {
+  if (v === null || v === undefined || v === '') return '--';
   const n = Number(v);
   if (!Number.isFinite(n)) return '--';
   return `${Math.round(Math.max(0, Math.min(100, n)))}%`;

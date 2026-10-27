@@ -30,6 +30,7 @@ export class CoreState {
       const group = mode === 'multi' ? 'origin' : null;
       const observation = await reader.readSessionState(group, { freshnessMs: 5000 });
       this.snapshot = projectOrigin(group, observation);
+      try {
       const groups = mode === 'multi' ? await paths.listGroupTmuxSessions() : [{ sessionGroup: null }];
       const identities = await Promise.all(groups.map(async ({ sessionGroup }) => {
         const live = await reader.readLiveIdentity(sessionGroup);
@@ -37,9 +38,11 @@ export class CoreState {
         return [sessionGroup, live.runId, live.sessionId];
       }));
       this.costKey = observation.status.reason === 'identity_changed' || observation.identity.runtime === 'unknown' ? null : JSON.stringify(identities.sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
+      } catch { this.costKey = null; }
       this.accountUsage = await reader.readAccountUsage(observation.identity.runtime).catch(() => null);
     } catch (error) {
       this.costKey = null;
+      this.accountUsage = null;
       this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: error.code || 'read_failed', message: error.message, identity: null, status: { valid: false }, usage: { valid: false }, runId: null, sessionId: null };
     }
     this.onChange(this.snapshot);

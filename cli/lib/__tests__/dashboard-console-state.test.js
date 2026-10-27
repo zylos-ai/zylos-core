@@ -60,3 +60,18 @@ test('cost cache refreshes on identity changes and every unknown observation', (
   let reads = 0; const cached = createSessionCache(() => ++reads);
   assert.equal(cached('R:S'), 1); assert.equal(cached('R:S'), 1); assert.equal(cached('R:T'), 2); assert.equal(cached(null), 3); assert.equal(cached(null), 4);
 });
+
+test('manual restart uses shared socket with confirmed identity and separates acceptance', async () => {
+  let submitted;
+  const action = createCoreActions({ load: async name => name === 'config.js' ? await modeLoader() : { submit: async (request, options) => { submitted={request,options}; return {kind:'accepted', reply:{ok:true,result:'accepted'}}; } }, now:()=>1000 });
+  const result = await action('restart-session',{runId:'R',sessionId:'S'},{});
+  assert.equal(submitted.request.type,'manual_restart'); assert.equal(submitted.request.expectedRunId,'R'); assert.equal(submitted.request.expectedSessionId,'S'); assert(!('runtime' in submitted.request)); assert.equal(submitted.options.deadlineAt,11000); assert.equal(result.submission,'accepted'); assert(!('ready' in result));
+});
+for(const result of [{kind:'connect_failed',sent:false},{kind:'timeout',sent:true},{kind:'deadline_exceeded',sent:false}]) {
+  test(`manual ${result.kind}/${result.sent} preserves uncertainty without resubmitting`,async()=>{
+    let count=0; let looked=0;
+    const action=createCoreActions({load:async name=>name==='config.js'?await modeLoader():{submit:async()=>{count++;return result;},lookupRestartRequest:async()=>{looked++;return 'unknown';}}});
+    const answer=await action('restart-session',{runId:'R'},{});
+    assert.equal(count,1);assert.equal(answer.submission,result.sent?'unknown':'not_submitted');assert.equal(looked,result.sent?1:0);
+  });
+}

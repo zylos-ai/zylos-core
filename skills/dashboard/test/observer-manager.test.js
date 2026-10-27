@@ -470,3 +470,20 @@ test('tickets are bounded per lease and dropped with their lease', async () => {
   assert.equal(f.manager.tickets.size, 0);
   assert.equal(f.manager.consumeTicket(second.ticket, second.id, admin), false);
 });
+
+test('Core Origin lease pins the confirmed run and retires on replacement or unknown identity', async () => {
+  let runId = 'origin-A';
+  const f = fixture({ resolveOrigin: async () => { if (!runId) throw new Error('unknown identity'); return { runId, tmuxName: 'zylos-group-origin' }; } });
+  f.coordinator.firstLease = async () => { f.containment.active={generation:5,originRunId:runId}; return f.containment.active; };
+  try {
+    await assert.rejects(f.manager.createLease(context('admin'),{runId:'old'}),{code:'target_mismatch'});
+    const lease=await f.manager.createLease(context('admin'),{runId});
+    assert.equal(lease.runId,'origin-A'); assert(f.manager.consumeTicket(lease.ticket,lease.id,context('admin')));
+    runId='origin-B'; await f.manager.revalidate();
+    assert.equal(f.manager.leases.size,0); assert.equal(f.containment.active,null);
+    const next=await f.manager.createLease(context('admin'),{runId});
+    assert.equal(next.runId,'origin-B');
+    runId=null; await f.manager.revalidate();
+    assert.equal(f.manager.leases.size,0); assert.equal(f.containment.active,null);
+  } finally { await f.manager.shutdown(); }
+});
