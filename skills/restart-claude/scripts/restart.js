@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 const { requestRuntimeRestart } = await loadCoreModule('request-runtime-restart.js');
 
@@ -11,7 +12,11 @@ export async function main(args = process.argv.slice(2), { requestRestart = requ
   else process.stderr.write(`Error [${result.error.code}]: ${result.error.message}\n`);
   if (!result.ok) process.exitCode=1;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error=>{
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isMainModule()) main().catch(error=>{
   const result={ok:false,error:{code:error.code??'RESTART_FAILED',message:error.message,persisted:[]}};
   if(process.argv.includes('--json'))process.stdout.write(JSON.stringify(result)+'\n');
   else process.stderr.write(`Error [${result.error.code}]: ${result.error.message}\n`);

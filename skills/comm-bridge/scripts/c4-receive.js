@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import * as database from './c4-db.js';
 import { reserveStatusNotice, sendStatusNotice } from './status-notice.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
@@ -118,4 +118,4 @@ export async function main(args = process.argv.slice(2)) {
     process.exitCode = 1;
   } finally { database.close(); }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (isMainModule(import.meta.url)) await main();

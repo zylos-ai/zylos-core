@@ -189,7 +189,9 @@ for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade pe
  for(const item of CORE_DATABASES)fs.cpSync(path.resolve('skills',item.owner,'scripts'),path.join(f.j.skillsDir,item.owner,'scripts'),{recursive:true});
  const monitor=path.join(f.j.skillsDir,'activity-monitor');fs.mkdirSync(path.join(monitor,'scripts'),{recursive:true});
  fs.writeFileSync(path.join(monitor,'package.json'),'{"type":"module"}');
- fs.copyFileSync(path.resolve('skills/activity-monitor/scripts/shard-registry.js'),path.join(monitor,'scripts/shard-registry.js'));
+ for(const script of ['shard-registry.js','bootstrap-identity.js','bootstrap-scope.js']) {
+  fs.copyFileSync(path.resolve('skills/activity-monitor/scripts',script),path.join(monitor,'scripts',script));
+ }
  if(legacy==='group-writable') {
   const shared=file=>{const stat=fs.lstatSync(file);if(stat.isSymbolicLink())return;fs.chmodSync(file,stat.mode|0o020);if(stat.isDirectory())for(const name of fs.readdirSync(file))shared(path.join(file,name));};
   shared(path.join(f.root,'.zylos'));shared(path.join(f.root,'.backup'));

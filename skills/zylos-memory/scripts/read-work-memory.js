@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
 
 export async function runCli(argv = process.argv.slice(2)) {
@@ -15,4 +16,4 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = await runCli();
+if (isMainModule(import.meta.url)) process.exitCode = await runCli();

@@ -10,7 +10,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { enqueueMachineControl } from './machine-control.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
@@ -149,4 +149,4 @@ export async function main({run=execFileSync,latestTag=getLatestTag,componentsFi
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error=>{log(`Upgrade check failed: ${error.message}`);process.exitCode=1;});
+if (isMainModule(import.meta.url)) main().catch(error=>{log(`Upgrade check failed: ${error.message}`);process.exitCode=1;});

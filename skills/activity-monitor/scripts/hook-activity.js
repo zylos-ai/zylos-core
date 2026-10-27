@@ -3,7 +3,7 @@ import { loadCoreModule } from './core-modules.js';
 /** Record native hook facts; state is derived by the supervisor. */
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 const { appendEvent } = await loadCoreModule('event-log.js');
 const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
@@ -37,7 +37,7 @@ export function handleHookActivity(data, { nowMs=Date.now(), env=process.env } =
   appendEvent(path.join(location.dir,RUN_FILES.EVENTS),record);
   return record;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href && process.env.HOOK_ACTIVITY_DISABLE_MAIN!=='1') {
+if (isMainModule(import.meta.url) && process.env.HOOK_ACTIVITY_DISABLE_MAIN!=='1') {
   let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{input+=chunk;});
   process.stdin.on('end',()=>{try{handleHookActivity(JSON.parse(input || '{}'));}catch(error){try{fs.appendFileSync(hookErrorLogPath(),`${new Date().toISOString()} group=${process.env.ZYLOS_SESSION_GROUP || ''} run=${process.env.ZYLOS_RUN_ID || ''} ${error.message}\n`);}catch{}}});
 }
