@@ -97,7 +97,7 @@ export function createSupervisor(deps) {
   modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
     convert:deps.convertModeTransition ?? createModeSwitchConverter({db,zylosDir:deps.zylosDir}),
-    writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartM1Confirmation,readMissingDeadlineIds:deps.readMissingDeadlineIds,diagnostic,now});
+    writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartM1Confirmation,diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({

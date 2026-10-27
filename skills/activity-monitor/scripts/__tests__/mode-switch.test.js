@@ -15,6 +15,7 @@ function fixture(overrides = {}) {
     setDrainFence: (group, options = {}) => { if (!fences.some(f => f.sessionGroup === group)) fences.push({ sessionGroup: group, reason: options.reason ?? null, runId: options.runId ?? null, createdAt: time / 1000 }); },
     listDrainFences: () => fences,
     countNonTerminalControls: target => controls[Object.keys(target)[0]],
+    listRunningControlsWithoutDeadline: () => [4, 8],
     countGlobalRunningConversations: () => 0,
     absorbForTransition: () => { calls.push('absorb'); row = { ...row, phase: 'converting', cutoff: 10, absorbed_ids: [] }; return { cutoff: 10, absorbedIds: [] }; },
     expirePendingControls: target => calls.push(Object.keys(target)[0]),
@@ -23,7 +24,7 @@ function fixture(overrides = {}) {
     legacyPresent: () => legacy, observe: () => sourceScenes, lifecycle: { advanceReclaim: async () => {} },
     convert: () => { calls.push('convert'); }, writeMode: value => { calls.push('writeMode'); mode = value; },
     restart: { advance: async () => ({ confirmed: true }) }, diagnostic: event => events.push(event), now: () => time,
-    readMissingDeadlineIds: () => ['4', '8'], ...overrides };
+    ...overrides };
   return { db, deps, events, calls, controls, create: () => new ModeSwitchCoordinator(deps), get row() { return row; },
     set row(value) { row = value; }, set mode(value) { mode = value; }, set time(value) { time = value; }, set fences(value) { fences = value; }, get fences() { return fences; },
     set scenes(value) { sourceScenes = value; }, set legacy(value) { legacy = value; }, set requests(value) { requests = value; } };
@@ -156,10 +157,37 @@ test('IF-39 restart rejection retains cutover and gate then starts fresh attempt
   assert.equal(f.row.phase, 'complete'); assert.equal(f.events.filter(x => x.event === 'transition_m1_restart_failed').length, 1);
 });
 
-test('IF-39 missing-deadline detail read normalizes SQLite BUSY and never absorbs', async () => {
-  const f = fixture({readMissingDeadlineIds:undefined}); f.db.getDb = () => ({prepare:()=>{throw error('SQLITE_BUSY_SNAPSHOT');}});
-  const owner = f.create(); await owner.handle(request); f.controls.machine = {running:1,runningWithoutDeadline:1};
-  await assert.rejects(owner.advance(), {code:'DB_BUSY',persisted:[]}); assert.equal(f.row.phase,'gating');
+for (const code of ['DB_BUSY', 'DB_READ_FAILED']) test(`IF-39 missing-deadline detail ${code} propagates without blocking or absorbing`, async () => {
+  const f = fixture();
+  const expected = Object.assign(error(code), { persisted: [] });
+  f.db.listRunningControlsWithoutDeadline = target => { assert.deepEqual(target, { machine: true }); throw expected; };
+  const owner = f.create(); await owner.handle(request);
+  f.controls.machine = { running: 1, runningWithoutDeadline: 1 };
+  await assert.rejects(owner.advance(), actual => actual === expected);
+  assert.equal(f.row.phase, 'gating'); assert.equal(f.row.reason, null);
+  assert.deepEqual(f.fences.map(fence => fence.sessionGroup), ['*']);
+  assert.deepEqual(f.calls, ['begin']);
+  assert.equal(f.events.some(event => event.event === 'transition_blocked'), false);
+});
+
+for (const scope of ['machine', 'allSessionGroups']) test(`IF-39 ${scope} missing-deadline count/list race waits one tick without writing a reason`, async () => {
+  const f = fixture(), targets = [];
+  f.db.listRunningControlsWithoutDeadline = target => { targets.push(target); return []; };
+  const owner = f.create(); await owner.handle(request);
+  f.controls[scope] = { running: 1, runningWithoutDeadline: 1 };
+  const before = structuredClone(f.row);
+  await owner.advance();
+  assert.deepEqual(targets, [{ [scope]: true }]);
+  assert.deepEqual(f.row, before);
+  assert.deepEqual(f.fences.map(fence => fence.sessionGroup), ['*']);
+  assert.deepEqual(f.calls, ['begin']);
+  assert.equal(f.events.some(event => event.event === 'transition_blocked'), false);
+  // The next fresh observation may proceed after the control is acked/expired.
+  f.controls[scope] = { running: 0, runningWithoutDeadline: 0 };
+  await owner.advance();
+  assert.equal(f.row.phase, 'converting'); assert.equal(f.row.reason, null);
+  assert.deepEqual(f.calls, ['begin', 'absorb']);
+  assert.equal(targets.length, 1);
 });
 
 test('IF-39 multi reclaim preserves existing reasons, waits starting scenes, cleans before counts', async () => {

@@ -12,20 +12,9 @@ const groupSort = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 export class ModeSwitchCoordinator {
   constructor({ db, readMode, readConfiguration, readRequests, legacyPresent, observe,
     lifecycle, serialize = operation => operation(), convert, writeMode,
-    restart = new M1RestartConfirmation(), diagnostic = () => {}, now = Date.now,
-    readMissingDeadlineIds } = {}) {
+    restart = new M1RestartConfirmation(), diagnostic = () => {}, now = Date.now } = {}) {
     Object.assign(this, { db, readMode, readConfiguration, readRequests, legacyPresent,
       observe, lifecycle, serialize, convert, writeMode, restart, diagnostic, now });
-    this.readMissingDeadlineIds = readMissingDeadlineIds ?? (scope => {
-      try {
-        return db.getDb().prepare(
-          `SELECT id FROM control_queue WHERE status='running' AND ack_deadline_at IS NULL AND session_group IS ${scope === 'machine' ? '' : 'NOT '}NULL ORDER BY id`
-        ).all().map(row => String(row.id));
-      } catch (error) {
-        if (error.code?.startsWith('SQLITE_BUSY')) throw Object.assign(failure('DB_BUSY', error.message), { cause: error });
-        throw error;
-      }
-    });
     this.lastReasons = new Map();
     this.lastAutoMigrationSkip = null;
     this.attempt = null;
@@ -194,8 +183,11 @@ export class ModeSwitchCoordinator {
       const value = await this.db.countNonTerminalControls({ [scope]: true });
       if (!Number.isSafeInteger(value.running) || value.running < 0 || !Number.isSafeInteger(value.runningWithoutDeadline) || value.runningWithoutDeadline < 0) throw failure('INVALID_OBSERVATION', 'Control counts are unknown');
       if (value.runningWithoutDeadline > 0) {
-        const ids = await this.readMissingDeadlineIds(scope);
-        if (!Array.isArray(ids) || !ids.length) throw failure('INVALID_OBSERVATION', 'Missing-deadline controls changed during observation');
+        const ids = await this.db.listRunningControlsWithoutDeadline({ [scope]: true });
+        if (!Array.isArray(ids)) throw failure('INVALID_OBSERVATION', 'Missing-deadline controls are unknown');
+        // A control may settle between the count and detail reads. Re-read on
+        // the next tick; neither invent a blocker nor advance on stale counts.
+        if (!ids.length) return;
         await this.block(row, `running_control_without_deadline:${scope}:${ids.join(',')}`); return;
       }
       counts.push(value.running);
