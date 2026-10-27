@@ -8,7 +8,7 @@ import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {createCoreDbSnapshot,runCoreDbWorker,validateSnapshotManifest,probeCoreDbVersions,rehearseCoreDbUpgrade,prepareRecoveryDependencies} from '../core-db-backup.js';
 
-const installed=process.env.CORE_DB_TEST_SKILL;
+const installed=process.env.CORE_DB_TEST_SKILL || path.resolve('skills/comm-bridge');
 let Database;try {Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');} catch {}
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function fixture(t) {
@@ -30,7 +30,7 @@ function fixture(t) {
     import fs from 'node:fs';
     import path from 'node:path';
     import {createRequire} from 'node:module';
-    const Database=createRequire(${JSON.stringify(path.join(installed,'package.json'))})('better-sqlite3');
+    const Database=createRequire(import.meta.url)('better-sqlite3');
     export const dashboardSchemaOwner={
       supportsNewDatabase(){return true;},
       inspectSchema(file){
@@ -124,6 +124,60 @@ test('Dashboard rehearsal migrates only its private copy and preserves the pragm
   const result=rehearseCoreDbUpgrade(root,path.resolve('.'),{driverRoot,dashboardRoot});
   assert.equal(result.databases[3].fromVersion,12);assert.equal(result.databases[3].toVersion,20);
   assert.deepEqual(fs.readFileSync(source),before);
+});
+
+test('Dashboard rehearsal ignores the Core driver override', {skip:'K2: provisional Dashboard driver precedence is held at baseline 28bfb63d'},t=>{
+  const {root,source,database,driverRoot,dashboardRoot}=fixture(t);
+  database().close();
+  const before=fs.readFileSync(source);
+  const driverPath=path.join(root,'core-driver.cjs');
+  fs.writeFileSync(driverPath,`const Database=require(${JSON.stringify(path.join(installed,'node_modules/better-sqlite3'))});
+    module.exports=function(file,options){
+      if(String(file).includes('/components/dashboard/'))throw Error('Core driver used for Dashboard');
+      return new Database(file,options);
+    };`);
+  const rehearsalDir=path.join(root,'rehearsal');fs.mkdirSync(rehearsalDir);
+  const result=runCoreDbWorker({action:'rehearse',zylosDir:root,schemaRoot:path.resolve('skills'),
+    driverRoot,dashboardRoot,rehearsalDir,driverPath});
+  assert.equal(result.databases[3].toVersion,20);
+  assert.deepEqual(fs.readFileSync(source),before);
+});
+
+test('Dashboard rejects a Core ancestor driver even when a local node_modules exists',{skip:'K2: provisional Dashboard driver isolation is held at baseline 28bfb63d'},t=>{
+  const {root,dashboardRoot}=fixture(t);
+  fs.symlinkSync(path.join(installed,'node_modules'),path.join(root,'node_modules'));
+  fs.unlinkSync(path.join(dashboardRoot,'node_modules'));
+  fs.mkdirSync(path.join(dashboardRoot,'node_modules'));
+  assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:path.resolve('skills'),dashboardRoot}),/own node_modules/);
+  assert.throws(()=>prepareRecoveryDependencies(path.join(root,'transaction'),root,{dashboardRoot}),/own node_modules/);
+});
+
+test('default frozen Dashboard source is the deployed skill and does not retain unrelated package files',{skip:'K2: provisional Dashboard root and closure paths are held at baseline 28bfb63d'},t=>{
+  const {root,driverRoot,dashboardRoot}=fixture(t);
+  fs.symlinkSync(dashboardRoot,path.join(driverRoot,'dashboard'));
+  fs.writeFileSync(path.join(dashboardRoot,'unrelated.bin'),'not part of the pure owner');
+  const closure=prepareRecoveryDependencies(path.join(root,'transaction'),root);
+  const frozen=path.join(closure.driverClosureRoot,'dashboard-owner');
+  assert.equal(fs.existsSync(path.join(frozen,'src/lib/schema-owner.js')),true);
+  assert.equal(fs.existsSync(path.join(frozen,'unrelated.bin')),false);
+  fs.renameSync(dashboardRoot,dashboardRoot+'-moved');
+  assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:path.resolve('skills'),formatVersion:2,driverPath:closure.driverPath},{workerPath:closure.workerPath}).databases[3].status,'missing');
+});
+
+test('runtime closure materializes nested links without chmod changing deployed files',{skip:'K2: provisional Dashboard runtime copy helper is held at baseline 28bfb63d'},async t=>{
+  const {copyRuntimeTree}=await import('../dashboard-schema-runtime.js');
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'runtime-links-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const source=path.join(root,'source'),target=path.join(root,'copy'),external=path.join(root,'external');
+  fs.mkdirSync(path.join(source,'nested'),{recursive:true});fs.mkdirSync(external);
+  const original=path.join(external,'file');fs.writeFileSync(original,'native closure',{mode:0o644});
+  fs.symlinkSync(original,path.join(source,'nested','file'));
+  copyRuntimeTree(source,target);
+  const copied=path.join(target,'nested','file');
+  assert.equal(fs.lstatSync(copied).isSymbolicLink(),false);
+  fs.chmodSync(copied,0o600);
+  assert.equal(fs.statSync(original).mode&0o777,0o644);
+  assert.equal(fs.readFileSync(copied,'utf8'),'native closure');
 });
 
 test('version probe loads the downloaded Dashboard owner and rejects an unavailable target owner',{skip:!Database},t=>{

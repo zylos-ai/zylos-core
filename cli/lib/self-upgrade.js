@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawnSync } from 'node:child_process';
-import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig, readZylosConfigStrict } from './config.js';
+import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveMergeBaseline } from './manifest.js';
 import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
@@ -17,35 +17,16 @@ import { getCommandHooks, hookScriptKey } from './hook-utils.js';
 import { isCoreManaged } from './sync-runtime-hooks.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
-import { runMigrations } from './migrate.js';
-import {
-  CURRENT_INSTRUCTION_FORMAT_VERSION,
-  instructionPaths,
-  readInstructionFormatVersion,
-  refreshSplitInstructions,
-  writeInstructionFormatVersion,
-} from './runtime/instruction-builder.js';
-import {
-  classifyInstructionBaseline,
-  cleanupMigrationPrompt,
-  executeMigrationApply,
-  loadInstructionCatalog,
-  migrationPromptPath,
-  sha256,
-  verifyInstructionConservation,
-  writeMigrationPrompt,
-} from './instruction-migration.js';
-import { deployManifestTemplate } from './runtime/tmux-env.js';
-import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess, createPm2Helpers } from './pm2.js';
 
 import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
-import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade, validateSnapshotManifest, runCoreDbWorker } from './core-db-backup.js';
+import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade, runCoreDbWorker } from './core-db-backup.js';
 import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { selectSameVersionRetry } from './upgrade-retry.js';
+import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 import { updateZylosConfigLocked, readSessionMode } from './config.js';
 import { createMigration } from './memory-migration.js';
 import { requestRuntimeRestart } from './request-runtime-restart.js';
@@ -54,6 +35,7 @@ import { pathToFileURL } from 'node:url';
 import { classifyCutoff, commitCutoff } from './upgrade-cutoff.js';
 import { preparePostCutoff, publishPostCutoff, publishRuntimePreparation } from './upgrade-post-cutoff.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runtime-preparation.js';
+import { DEFAULT_FINALIZE_TIMEOUT_MS, MIN_FINALIZE_TIMEOUT_MS, MAX_FINALIZE_TIMEOUT_MS } from './upgrade-budget.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -808,186 +790,6 @@ export function step6_installSkillDeps(ctx, deps = {}) {
   return { step: 6, name: 'install_skill_deps', status: 'done', message: msg, duration: Date.now() - startTime };
 }
 
-function step7Result(startTime, { status = 'done', message, error }) {
-  return {
-    step: 7,
-    name: 'sync_instructions',
-    status,
-    ...(message ? { message } : {}),
-    ...(error ? { error } : {}),
-    duration: Date.now() - startTime,
-  };
-}
-
-function cleanupPendingMigrationPrompt(zylosDir, deps) {
-  try {
-    const result = (deps.cleanupMigrationPrompt ?? cleanupMigrationPrompt)({ zylosDir });
-    if (result.error) throw result.error;
-    return { cleaned: true, promptPath: result.filePath };
-  } catch (error) {
-    (deps.warn ?? console.warn)(`Warning: could not remove stale migration prompt: ${error.message}`);
-    return { cleaned: false, error };
-  }
-}
-
-function pendingMigrationMessage(reason, { backupPath = null } = {}) {
-  const backupNote = backupPath ? `; backup: ${backupPath}` : '';
-  return `PENDING MIGRATION — ${reason}; run zylos migrate-instructions${backupNote}`;
-}
-
-/** Step 7: deploy, refresh, and migrate legacy instructions when safe. */
-export function step7_syncInstructions(ctx, deps = {}) {
-  const startTime = Date.now();
-  const zylosDir = ctx.zylosDir || ZYLOS_DIR;
-  const packageRoot = ctx.packageRoot || path.join(import.meta.dirname, '..', '..');
-
-  const templateDir = path.join(ctx.tempDir, 'templates');
-  if (!fs.existsSync(templateDir)) {
-    return step7Result(startTime, { status: 'skipped', message: 'no templates in new version' });
-  }
-
-  // runtime-env.manifest — create from template if missing (upgrade path)
-  // Try tempDir first, then fallback to installed package root
-  let manifestSrc = path.join(templateDir, 'runtime-env.manifest.example');
-  let manifestStatus = deployManifestTemplate(manifestSrc, zylosDir);
-  if (manifestStatus === 'template_missing') {
-    manifestSrc = path.join(packageRoot, 'templates', 'runtime-env.manifest.example');
-    manifestStatus = deployManifestTemplate(manifestSrc, zylosDir);
-  }
-  const manifestNote = `; manifest: ${manifestStatus}`;
-
-  const readVersion = deps.readInstructionFormatVersion ?? readInstructionFormatVersion;
-  const versionState = readVersion({ zylosDir });
-  if (versionState.valid && versionState.version > CURRENT_INSTRUCTION_FORMAT_VERSION) {
-    return step7Result(startTime, {
-      message: `future instruction format version ${versionState.version}; current v2 migration code does not apply${manifestNote}`,
-    });
-  }
-
-  // Legacy migration must preserve the old generated file and fail loudly.
-  const zylosMd = path.join(zylosDir, 'ZYLOS.md');
-  if (!fs.existsSync(zylosMd)) {
-    try {
-      (deps.runMigrations ?? runMigrations)({ zylosDir, templatesDir: templateDir });
-    } catch (err) {
-      return step7Result(startTime, { status: 'failed', error: err.message + manifestNote });
-    }
-  }
-
-  let refreshResult;
-  try {
-    refreshResult = (deps.refreshSplitInstructions ?? refreshSplitInstructions)({
-      zylosDir,
-      templatesDir: templateDir,
-      assemblerSource: path.join(ctx.tempDir, 'cli', 'lib', 'runtime', 'assembler.mjs'),
-    });
-  } catch (err) {
-    return step7Result(startTime, { status: 'failed', error: err.message + manifestNote });
-  }
-
-  if (refreshResult.active) {
-    const notes = [];
-    if (!versionState.valid) notes.push('invalid instruction format version treated as legacy');
-    if (versionState.version !== CURRENT_INSTRUCTION_FORMAT_VERSION) {
-      try {
-        (deps.writeInstructionFormatVersion ?? writeInstructionFormatVersion)({ zylosDir });
-        notes.push('instruction format version backfilled to 2');
-      } catch (error) {
-        (deps.warn ?? console.warn)(`Warning: could not backfill instruction format version: ${error.message}`);
-        notes.push('instruction format version backfill pending');
-      }
-    }
-    const cleanup = cleanupPendingMigrationPrompt(zylosDir, deps);
-    if (!cleanup.cleaned) notes.push('stale prompt cleanup pending');
-    const suffix = notes.length ? `; ${notes.join('; ')}` : '';
-    return step7Result(startTime, { message: `split instructions refreshed atomically${suffix}${manifestNote}` });
-  }
-
-  if (!refreshResult.pendingMigration) {
-    return step7Result(startTime, {
-      message: `instruction assets refreshed; migration state unchanged${manifestNote}`,
-    });
-  }
-
-  const anomaly = versionState.valid && versionState.version === CURRENT_INSTRUCTION_FORMAT_VERSION;
-  const versionWarning = anomaly
-    ? 'warning: version 2 exists but split marker is missing'
-    : !versionState.valid
-      ? 'warning: invalid instruction format version treated as legacy'
-      : null;
-  const fallback = (reason, options) => step7Result(startTime, {
-    message: `${pendingMigrationMessage(reason, options)}${versionWarning ? `; ${versionWarning}` : ''}${manifestNote}`,
-  });
-
-  let catalog;
-  let original;
-  let analysis;
-  try {
-    catalog = (deps.loadInstructionCatalog ?? loadInstructionCatalog)({
-      catalogPath: path.join(ctx.tempDir, 'data', 'instruction-baselines', 'manifest.json'),
-    });
-    original = (deps.readFileSync ?? fs.readFileSync)(zylosMd, 'utf8');
-    analysis = (deps.classifyInstructionBaseline ?? classifyInstructionBaseline)({ original, catalog });
-  } catch (error) {
-    return fallback(`automatic classification failed: ${error.message}`);
-  }
-
-  if (analysis.classification !== 'A') {
-    try {
-      const systemTemplatePath = instructionPaths('claude', { zylosDir }).systemPath;
-      const promptResult = (deps.writeMigrationPrompt ?? writeMigrationPrompt)({
-        zylosDir,
-        analysis,
-        originalSha256: sha256(original),
-        systemTemplatePath,
-      });
-      const promptPath = promptResult?.filePath ?? promptResult?.promptPath
-        ?? migrationPromptPath({ zylosDir });
-      return step7Result(startTime, {
-        message: `PENDING MIGRATION — classification ${analysis.classification}; agent prompt: ${promptPath}${versionWarning ? `; ${versionWarning}` : ''}${manifestNote}`,
-      });
-    } catch (error) {
-      (deps.warn ?? console.warn)(`Warning: could not write migration prompt: ${error.message}`);
-      return fallback(`classification ${analysis.classification}; prompt write failed: ${error.message}`);
-    }
-  }
-
-  let conservation;
-  let userContent;
-  try {
-    conservation = (deps.verifyInstructionConservation ?? verifyInstructionConservation)({
-      strippedContent: analysis.strippedContent,
-      userContent: '',
-      catalog,
-      matched: analysis.matched,
-    });
-    if (!conservation.ok) return fallback(`automatic conservation check refused: ${conservation.reason}`);
-    userContent = (deps.readFileSync ?? fs.readFileSync)(path.join(templateDir, 'ZYLOS.md'), 'utf8');
-  } catch (error) {
-    return fallback(`automatic conservation preparation failed: ${error.message}`);
-  }
-
-  const migration = (deps.executeMigrationApply ?? executeMigrationApply)({
-    zylosDir,
-    templatesDir: templateDir,
-    assemblerSource: path.join(ctx.tempDir, 'cli', 'lib', 'runtime', 'assembler.mjs'),
-    original,
-    analysis,
-    userContent,
-    conservation,
-  });
-  if (!migration.migrated) {
-    return fallback(`automatic migration failed${migration.error?.message ? `: ${migration.error.message}` : ''}`, {
-      backupPath: migration.backupPath,
-    });
-  }
-  const versionNote = migration.versionWritten === false ? '; instruction format version backfill pending' : '';
-  const a3Note = migration.a3Pending ? '; assembler settings reconciliation pending' : '';
-  return step7Result(startTime, {
-    message: `split instructions migrated automatically (classification A); backup: ${migration.backupPath}${versionNote}${a3Note}${versionWarning ? `; ${versionWarning}` : ''}${manifestNote}`,
-  });
-}
-
 /**
  * Apply migration hints to installed settings.json.
  * Adds missing hooks, updates modified hooks, removes obsolete hooks.
@@ -1152,90 +954,6 @@ export function applyMigrationHints(hints, deps = {}) {
 }
 
 /**
- * Step 8: migrate state.md for existing users.
- *
- * If state.md exists but has no Onboarding section, this is an existing user
- * upgrading. Add `onboarding: skipped` so the onboarding flow is not triggered.
- * New installs already have `Status: pending` from the template.
- */
-function step8_migrateStateMd() {
-  const startTime = Date.now();
-  const statePath = path.join(ZYLOS_DIR, 'memory', 'state.md');
-
-  if (!fs.existsSync(statePath)) {
-    return { step: 8, name: 'migrate_state_md', status: 'skipped', message: 'state.md not found', duration: Date.now() - startTime };
-  }
-
-  try {
-    const content = fs.readFileSync(statePath, 'utf8');
-
-    // Already has onboarding section — nothing to do
-    if (/## Onboarding/i.test(content)) {
-      return { step: 8, name: 'migrate_state_md', status: 'skipped', message: 'onboarding section exists', duration: Date.now() - startTime };
-    }
-
-    // Existing user without onboarding — add skipped status
-    const section = '\n\n## Onboarding\n- Status: skipped\n';
-    fs.writeFileSync(statePath, content.trimEnd() + section);
-
-    return { step: 8, name: 'migrate_state_md', status: 'done', message: 'added onboarding: skipped', duration: Date.now() - startTime };
-  } catch (err) {
-    // Non-fatal
-    return { step: 8, name: 'migrate_state_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
-  }
-}
-
-/**
- * Step 9: sync settings.json hooks from template and refresh upgrade-safe
- * config backfills via the newly installed package.
- *
- * Shells out to the NEWLY INSTALLED sync-settings-hooks.js instead of using
- * the in-memory generateMigrationHints(). This avoids bootstrap problems where
- * the old version's sync logic misses new config fields or backfills
- * (e.g. statusLine, Codex config refreshes).
- */
-function step9_syncSettingsHooks(ctx) {
-  const startTime = Date.now();
-
-  // Resolve the newly installed package path (from step 4) to use the latest sync logic.
-  const syncScript = resolveInstalledSyncScript();
-
-  if (!syncScript) {
-    // Fallback to in-memory hints if new script not found
-    const templatesDir = path.join(ctx.tempDir, 'templates');
-    const hints = generateMigrationHints(templatesDir);
-    if (hints.length === 0) {
-      return { step: 9, name: 'sync_settings_hooks', status: 'done', message: 'no changes needed', duration: Date.now() - startTime };
-    }
-    const result = applyMigrationHints(hints);
-    if (result.errors.length > 0) {
-      return { step: 9, name: 'sync_settings_hooks', status: 'failed', error: result.errors.join('; '), duration: Date.now() - startTime };
-    }
-    return { step: 9, name: 'sync_settings_hooks', status: 'done', message: `${result.applied} hooks updated`, duration: Date.now() - startTime };
-  }
-
-  try {
-    const output = execSync(`node "${syncScript}"`, { encoding: 'utf8', stdio: 'pipe', timeout: 60000 }).trim();
-    // Extract last line as the summary (script outputs per-hook details before summary)
-    const lines = output.split('\n').filter(l => l.trim());
-    const summary = lines.length > 0 ? lines[lines.length - 1].trim() : 'no changes';
-    return { step: 9, name: 'sync_settings_hooks', status: 'done', message: summary, duration: Date.now() - startTime };
-  } catch (err) {
-    const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
-    return { step: 9, name: 'sync_settings_hooks', status: 'failed', error: errMsg, duration: Date.now() - startTime };
-  }
-}
-
-/**
- * Resolve the path to sync-settings-hooks.js in the globally installed package.
- * Reads the package name from package.json to avoid hardcoding.
- * @returns {string|null} Absolute path to the script, or null if not found.
- */
-function resolveInstalledSyncScript() {
-  return resolveInstalledPackageScript('cli', 'lib', 'sync-settings-hooks.js');
-}
-
-/**
  * Resolve a script path in the globally installed package.
  * Reads the package name from package.json to avoid hardcoding.
  * @returns {string|null} Absolute path to the script, or null if not found.
@@ -1255,55 +973,12 @@ function resolveInstalledPackageScript(...parts) {
 }
 
 /**
- * Step 10: ensure Codex config is current for existing Codex-capable installs.
- *
- * Fresh install/init and `zylos runtime codex` already call writeCodexConfig().
- * This upgrade-time step covers existing deployments so newly required config
- * keys (for example [features].multi_agent) are backfilled during self-upgrade.
- */
-export function step10_ensureCodexConfig(deps = {}) {
-  const startTime = Date.now();
-  let cfg = deps.cfg;
-  if (cfg === undefined) {
-    const result = readZylosConfigStrict();
-    if (result.state === 'error') {
-      return { step: 10, name: 'ensure_codex_config', status: 'failed', error: `config unreadable: ${result.error.message}`, duration: Date.now() - startTime };
-    }
-    cfg = result.state === 'ok' ? result.config : {};
-  }
-  const codexDir = deps.codexDir ?? path.join(os.homedir(), '.codex');
-  const writeConfig = deps.writeConfig ?? writeCodexConfig;
-  const existsSync = deps.existsSync ?? fs.existsSync;
-  const hasCodexState = existsSync(path.join(codexDir, 'config.toml'))
-    || existsSync(path.join(codexDir, 'auth.json'));
-
-  if (cfg.runtime !== 'codex' && !hasCodexState) {
-    return { step: 10, name: 'ensure_codex_config', status: 'skipped', message: 'codex not in use', duration: Date.now() - startTime };
-  }
-
-  if (!writeConfig(ZYLOS_DIR)) {
-    if (cfg.runtime !== 'codex') {
-      return {
-        step: 10,
-        name: 'ensure_codex_config',
-        status: 'skipped',
-        message: 'warning: failed to refresh codex config outside codex runtime',
-        duration: Date.now() - startTime
-      };
-    }
-    return { step: 10, name: 'ensure_codex_config', status: 'failed', error: 'failed to write codex config', duration: Date.now() - startTime };
-  }
-
-  return { step: 10, name: 'ensure_codex_config', status: 'done', message: 'updated codex config (project + global)', duration: Date.now() - startTime };
-}
-
-/**
  * Step 11: start core services
  */
 export function step11_startCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
   const fsApi = deps.fs ?? fs;
-  const budget = deps.budget ?? ctx.budget;
+  const budget = ctx.budget;
   const execute = deps.execSync ?? execSync;
   const exec = (command, options = {}) => {
     budget?.check();
@@ -1416,7 +1091,7 @@ export function step12_verifyServices(ctx, deps = {}) {
   }
 
   const POLL_INTERVAL_MS = 2000;
-  const budget = deps.budget ?? ctx.budget;
+  const budget = ctx.budget;
   const execute = deps.execSync ?? execSync;
   const TIMEOUT_MS = Math.min(30000,budget ? budget.remaining() : Infinity);
 
@@ -1533,18 +1208,6 @@ export function rollbackSelf(ctx, deps = {}) {
 // Public: runSelfUpgrade
 // ---------------------------------------------------------------------------
 
-const POST_INSTALL_STEPS = [
-  step5_syncCoreSkills,
-  step6_installSkillDeps,
-  step7_syncInstructions,
-  step8_migrateStateMd,
-  step9_syncSettingsHooks,
-  step10_ensureCodexConfig,
-  step11_startCoreServices,
-  step12_verifyServices,
-  step13_commitSkillBaselines,
-];
-
 function backupOnlyResult(ctx, failed) {
   if (!ctx.backupOnly) return ctx.preInstallProtection ? {automaticCompensation:true, automaticResume:process.platform !== 'darwin', databaseMode:ctx.databaseMode || 'migrate', dbSnapshotVerified:ctx.dbSnapshotVerified===true, databases:ctx.databases || ctx.databasePreflight?.databases || null,...(ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {})} : ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {};
   return {
@@ -1592,14 +1255,10 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
   const templatesDir = ctx.tempDir ? path.join(ctx.tempDir, 'templates') : null;
   const templates = listTemplateFiles(templatesDir);
 
-  // Migration hints: step 8 already applied settings sync via the newly installed script.
+  // Runtime preparation already reconciled settings before publication.
   const migrationHints = [];
 
-  // Check if settings.json was modified (hooks, statusLine, model) — requires
-  // Claude restart to load the new configuration.
-  const step9 = ctx.steps.find(s => s.step === 9);
-  const settingsChanged = ctx.settingsChanged ?? (step9?.status === 'done' &&
-    !/all up to date|no changes/.test(step9?.message || ''));
+  const settingsChanged = ctx.settingsChanged ?? false;
 
   return {
     action: 'self_upgrade',
@@ -1626,7 +1285,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
 export function createFinalizeState(ctx) {
   return {
     schemaVersion: ctx.preInstallProtection ? 2 : 1,
-    finalizeTimeoutMs: ctx.finalizeTimeoutMs ?? 600000,
+    finalizeTimeoutMs: ctx.finalizeTimeoutMs ?? DEFAULT_FINALIZE_TIMEOUT_MS,
     ...(ctx.retryOf ? {retryOf:ctx.retryOf,effectiveFrom:ctx.effectiveFrom} : {}),
     ...(ctx.snapshotFormatVersion ? {snapshotFormatVersion:ctx.snapshotFormatVersion} : {}),
     ...(ctx.databaseMode ? {databaseMode:ctx.databaseMode} : {}),
@@ -1674,7 +1333,7 @@ function runInstalledFinalizer(ctx) {
   const result = spawnSync(process.execPath, [finalizeScript,statePath], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: ctx.finalizeTimeoutMs ?? 600000,
+    timeout: ctx.finalizeTimeoutMs ?? DEFAULT_FINALIZE_TIMEOUT_MS,
     ...(ctx.preInstallProtection ? {detached:true,killSignal:'SIGKILL'} : {}),
   });
 
@@ -1715,7 +1374,7 @@ export function assertDashboardUninstalled(zylosDir = ZYLOS_DIR) {
   let components;
   try { components=JSON.parse(fs.readFileSync(file,'utf8')); }
   catch (error) { if(error.code==='ENOENT')return; throw error; }
-  if (components.dashboard) throw Object.assign(Error('Uninstall the independent Dashboard while retaining its data before upgrading.'), {code:'DASHBOARD_STILL_INSTALLED'});
+  if (components.dashboard) throw Object.assign(Error('Uninstall the independent Dashboard while retaining its data before upgrading: zylos uninstall dashboard --yes'), {code:'DASHBOARD_STILL_INSTALLED'});
 }
 
 async function installedDashboardOwner(ctx) {
@@ -1763,7 +1422,7 @@ export function readUpgradeModeStatus(zylosDir, {budget,execute=execFileSync} = 
 
 /** Shared by initial finalization and forward repair after publication is done. */
 export async function completeUpgradeFinalization(ctx, deps = {}) {
-  const root=ctx.zylosDir || ZYLOS_DIR, budget=deps.budget || ctx.budget;
+  const root=ctx.zylosDir || ZYLOS_DIR, budget=ctx.budget;
   if (!budget || typeof budget.check!=='function' || typeof budget.remaining!=='function') throw Error('finalizer budget is required');
   const completion={install:'pending',dashboard:'degraded',sessionRestart:'manual_required',modeTransition:'unknown'};
   const steps=ctx.steps ||= [];
@@ -1771,7 +1430,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     try {
       budget.check();
       const value=await fn();
-      if(value?.status==='failed' || value?.ok===false) throw Error(value.error?.message || value.error || `${name} failed`);
+      if(value?.status==='failed' || value?.ok===false) throw Object.assign(Error(value.error?.message || value.error || `${name} failed`), {code:value.code || value.error?.code});
       steps.push({step,name,status:value?.status || 'done',...(value?.message ? {message:value.message} : {})});
       return value;
     } catch(error) {error.step=step;error.finalizeStepName=name;throw error;}
@@ -1780,15 +1439,8 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     ctx.error=error.message;
     const failed={step:error.step ?? null,name:error.finalizeStepName || 'finalize',status:'failed',error:error.message};
     steps.push(failed);
-    if(ctx.preInstallProtection){
-      const m=maintenanceFor(ctx), j=m.transaction(root,ctx.transactionDir);
-      if(m.classifyCutoff(j)!=='closed')throw error;
-      try { (deps.stopServices || m.stop)(j); }
-      catch(isolationError) { ctx.isolationError=isolationError.message; }
-      m.update(ctx.transactionDir,j,{phase:'recovery_required',resumePhase:'compensation_closed',lastError:error.message});
-      ctx.journal=j;
-    }
-    return {...buildSelfUpgradeResult(ctx,failed,null,false),completion,...(ctx.isolationError ? {isolationError:ctx.isolationError} : {}),
+    if(ctx.preInstallProtection) recordClosedFinalizationFailure(ctx,error,{stopServices:deps.stopServices,requireClosed:true});
+    return {...buildSelfUpgradeResult(ctx,failed,null,false),code:error.code,completion,...(ctx.isolationError ? {isolationError:ctx.isolationError} : {}),
       ...(ctx.preInstallProtection ? {recovery_required:true,next:'Repair the reported failure, then run zylos upgrade --resume-finalize.'} : {next:'把 CLI 装回原版本，处理失败原因后再重新升级'})};
   };
   try {
@@ -1809,8 +1461,8 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     });
     await run(13,'commit_skill_baselines',()=> (deps.commitBaselines || step13_commitSkillBaselines)(ctx));
     if(ctx.preInstallProtection) await run(7,'publish_maintenance_reader',()=> (deps.refreshMaintenanceReader || refreshMaintenanceReader)(ctx));
-    await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{budget,zylosDir:root})))(ctx));
-    await run(7,'verify_core_services',()=> (deps.verifyServices || (c=>step12_verifyServices(c,{budget})))(ctx));
+    await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(ctx));
+    await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(ctx));
   } catch(error) {return fail(error);}
 
   let dashboard;
@@ -1938,32 +1590,23 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     return buildSelfUpgradeResult(ctx,{step:5,error:'Declared upgrade transaction requires valid protected finalize state.'},null,false);
   }
 
-  if (!deps.steps) return finalizeInstalledUpgrade(ctx, deps);
+  return finalizeInstalledUpgrade(ctx, deps);
+}
 
-  const steps = deps.steps || POST_INSTALL_STEPS;
-  const total = deps.total || 13;
-  let failedStep = null;
-
-  for (const stepFn of steps) {
-    let result;
-    try {if(ctx.preInstallProtection && stepFn===step11_startCoreServices)protectedDataReady(ctx);result=stepFn(ctx);}
-    catch(error){const ordinal=POST_INSTALL_STEPS.indexOf(stepFn);result={step:ordinal>=0?ordinal+5:null,name:stepFn.name||'finalizer_step',status:'failed',error:error.message};}
-    result.total = total;
-    ctx.steps.push(result);
-
-    if (result.status === 'failed') {
-      failedStep = result;
-      ctx.error = result.error;
-      break;
+function recordClosedFinalizationFailure(ctx, error, {stopServices, requireClosed=false} = {}) {
+  const m = maintenanceFor(ctx);
+  const journal = m.transaction(ctx.zylosDir || ZYLOS_DIR, ctx.transactionDir);
+  const closed = m.classifyCutoff(journal) === 'closed';
+  if (requireClosed && !closed) throw error;
+  if (closed) {
+    if (requireClosed) {
+      try { (stopServices || m.stop)(journal); }
+      catch (isolationError) { ctx.isolationError = isolationError.message; }
     }
+    m.update(ctx.transactionDir, journal, {phase:'recovery_required', resumePhase:'compensation_closed', lastError:error.message});
   }
-
-  if (failedStep) {
-    return buildSelfUpgradeResult(ctx, failedStep, null, false);
-  }
-
-  if(ctx.preInstallProtection)protectedSuccess(ctx);
-  return buildSelfUpgradeResult(ctx, null);
+  ctx.journal = journal;
+  return closed;
 }
 
 function finalizationFailure(ctx, error, step = 5) {
@@ -1973,11 +1616,7 @@ function finalizationFailure(ctx, error, step = 5) {
   let recoveryError;
   if (ctx.preInstallProtection) {
     try {
-      const m = maintenanceFor(ctx);
-      const journal = m.transaction(ctx.zylosDir, ctx.transactionDir);
-      closed = classifyCutoff(journal) === 'closed';
-      if (closed) m.update(ctx.transactionDir, journal, {phase:'recovery_required', resumePhase:'compensation_closed', lastError:error.message});
-      ctx.journal = journal;
+      closed = recordClosedFinalizationFailure(ctx,error);
     } catch (failure) {
       recoveryError = failure.message;
     }
@@ -1994,16 +1633,14 @@ async function finalizeInstalledUpgrade(ctx, deps) {
     if (!ctx.budget) throw Error('finalizer budget is required');
     ctx.budget.check();
     (deps.assertDashboardUninstalled || assertDashboardUninstalled)(ctx.zylosDir);
+    const hadCoreDashboard = fs.existsSync(path.join(ctx.zylosDir,'.claude/skills/dashboard/src/lib/schema-owner.js'));
     let manifest;
     if (ctx.preInstallProtection) {
       const m = maintenanceFor(ctx);
       const j = m.transaction(ctx.zylosDir, ctx.transactionDir);
       if (j.transactionId !== ctx.transactionId || j.installationIntent !== true || classifyCutoff(j) !== 'none' || j.phase !== 'installing') throw Error('invalid initial finalizer transaction');
       m.validateOriginalJournal(j, {completeBackups:true});
-      if (m.hash(path.join(j.dbBackupDir,'manifest.json')) !== j.snapshotManifestHash) throw Error('snapshot manifest hash mismatch');
-      manifest = m.read(path.join(j.dbBackupDir,'manifest.json'));
-      validateSnapshotManifest(manifest);
-      if (manifest.id !== j.transactionId) throw Error('snapshot transaction mismatch');
+      manifest = loadSnapshotManifest(j, m);
       (deps.verifySnapshot || runCoreDbWorker)({action:'verify',zylosDir:ctx.zylosDir,dbBackupDir:j.dbBackupDir,manifest});
       ctx.journal=j;
       ctx.coreManifest=j.coreManifest;
@@ -2019,17 +1656,17 @@ async function finalizeInstalledUpgrade(ctx, deps) {
       if(result.status==='failed') throw Object.assign(Error(result.error), {step:result.step});
     }
     ctx.budget.check();
-    await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx, {budget:ctx.budget});
+    await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx);
     ctx.budget.check();
     if (ctx.preInstallProtection) (deps.dataReady || protectedDataReady)(ctx,{deferPublication:true});
     else (deps.migrateDatabases || runCoreDbWorker)({action:'ordinary-migrate',zylosDir:ctx.zylosDir,schemaRoot:path.join(ctx.zylosDir,'.claude/skills'),formatVersion:1});
     ctx.budget.check();
-    const prepared=await (deps.prepareRuntime || prepareUpgradeRuntime)(ctx,{budget:ctx.budget});
+    const prepared=await (deps.prepareRuntime || prepareUpgradeRuntime)(ctx);
     ctx.preparationWarnings=prepared.warnings;
     const workDir=ctx.preInstallProtection ? ctx.transactionDir : ctx.tempDir;
     if (!workDir) throw Error('finalizer preparation directory is unavailable');
     const preparation=(deps.stage || preparePostCutoff)({transactionDir:workDir,zylosDir:ctx.zylosDir,...prepared,ordinary:!ctx.preInstallProtection});
-    ctx.firstDashboardTakeover=!ctx.preInstallProtection || manifest.formatVersion===1;
+    ctx.firstDashboardTakeover=ctx.preInstallProtection ? manifest.formatVersion===1 : !hadCoreDashboard;
     if (ctx.preInstallProtection) {
       let dashboardInstall=null;
       if (ctx.firstDashboardTakeover) {
@@ -2071,15 +1708,9 @@ export async function resumeUpgradeFinalization(ctx, deps = {}) {
   ctx.servicesWereRunning ||= ctx.journal.originalServices.map(service=>service.name);
   ctx.mergeConflicts ||= [];
   ctx.mergedFiles ||= [];
-  ctx.budget=deps.budget || ctx.budget;
   try {
     const m=maintenanceFor(ctx), j=ctx.journal;
-    m.privatePath(j.dbBackupDir,{directory:true});
-    const manifestPath=path.join(j.dbBackupDir,'manifest.json');
-    if(m.hash(manifestPath)!==j.snapshotManifestHash) throw Error('snapshot manifest hash mismatch');
-    const manifest=m.read(manifestPath);
-    validateSnapshotManifest(manifest);
-    if(manifest.id!==j.transactionId) throw Error('snapshot transaction mismatch');
+    const manifest=ctx.dbManifest || loadSnapshotManifest(j, m);
     ctx.dbManifest=manifest;
     ctx.firstDashboardTakeover=manifest.formatVersion===1;
     const publication=await (deps.publish || publishPostCutoff)(ctx,{checkBudget:()=>ctx.budget.check(),...deps.publication});
@@ -2099,8 +1730,8 @@ export async function resumeUpgradeFinalization(ctx, deps = {}) {
  * @param {object} [deps] - Isolated self-upgrade seam for npm, PM2, version, rollback, and finalizer boundaries
  * @returns {object} Upgrade result
  */
-export function runSelfUpgrade({ tempDir, newVersion, mode, onStep, retry, finalizeTimeoutMs = 600000 } = {}, deps = {}) {
-  if (!Number.isInteger(finalizeTimeoutMs) || finalizeTimeoutMs < 60000 || finalizeTimeoutMs > 3600000) {
+export function runSelfUpgrade({ tempDir, newVersion, mode, onStep, retry, finalizeTimeoutMs = DEFAULT_FINALIZE_TIMEOUT_MS } = {}, deps = {}) {
+  if (!Number.isInteger(finalizeTimeoutMs) || finalizeTimeoutMs < MIN_FINALIZE_TIMEOUT_MS || finalizeTimeoutMs > MAX_FINALIZE_TIMEOUT_MS) {
     return {action:'self_upgrade',success:false,code:'INVALID_ARGS',error:'finalize timeout must be an integer from 60000 to 3600000 milliseconds',steps:[],rollback:{performed:false,steps:[]}};
   }
   const ctx = createContext({ tempDir, newVersion, mode });

@@ -23,9 +23,8 @@ import { acquireLock, releaseLock } from '../lib/lock.js';
 import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
-import { requestRuntimeRestart } from '../lib/request-runtime-restart.js';
 import { selectSameVersionRetry } from '../lib/upgrade-retry.js';
-import { parseFinalizeTimeout } from '../lib/upgrade-budget.js';
+import { parseFinalizeTimeout, DEFAULT_FINALIZE_TIMEOUT_MS } from '../lib/upgrade-budget.js';
 import { resumeFinalize } from '../lib/upgrade-resume.js';
 
 /**
@@ -1167,23 +1166,6 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
   cleanupCoreTemp(tempDir);
 }
 
-/** Request one runtime restart after the self-upgrade services have returned. */
-export async function restartAfterSelfUpgrade(result, { requestRestart = requestRuntimeRestart } = {}) {
-  // P11 owns merging hook and instruction requests in the upgrade finalizer.
-  // This legacy result flag requests one restart after the services return.
-  if (result.success && result.instructionFilesRebuilt) {
-    try {
-      result.runtimeRestart = await requestRestart({ afterServiceRestart: true });
-      if (!result.runtimeRestart.ok) console.error(`Warning: ${result.runtimeRestart.error.message} (${result.runtimeRestart.error.code})`);
-    } catch (error) {
-      result.runtimeRestart = { ok: false, error: { code: error.code || 'restart_submission_failed',
-        message: `Runtime restart was not submitted: ${error.message}. All currently running managed sessions, including Origin, need manual restart.` } };
-      console.error(`Warning: ${result.runtimeRestart.error.message}`);
-    }
-  }
-  return result;
-}
-
 /**
  * Upgrade zylos-core itself.
  * Lock-first pattern, same as component upgrades.
@@ -1191,7 +1173,7 @@ export async function restartAfterSelfUpgrade(result, { requestRestart = request
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutput = false, skipConfirm = false, finalizeTimeoutMs = 600000 } = {}) {
+async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutput = false, skipConfirm = false, finalizeTimeoutMs = DEFAULT_FINALIZE_TIMEOUT_MS } = {}) {
   let tempDir = null;
   // Admission is read-only, including the ordinary up-to-date path.
   const check = checkForCoreUpdates({ branch, beta });
@@ -1208,6 +1190,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutpu
       const output = { action: 'retry', success: false, error: error.message, code: error.code,
         transactionId: error.transactionId, field: error.field, expected: error.expected,
         actual: error.actual, next: error.next };
+      output.reply = formatC4Reply('error', output);
       if (jsonOutput) console.log(JSON.stringify(output, null, 2));
       else console.error(`${error.code}: ${error.message} (${error.transactionId}, ${error.field}). ${error.next}`);
       return false;

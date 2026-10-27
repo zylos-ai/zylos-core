@@ -22,12 +22,12 @@ async function cliAdmission(root) {
   const context=vm.createContext({
     process:{argv:['node','zylos','--json','--yes']},
     console:{log:value=>outputs.push(JSON.parse(value)),error:value=>outputs.push(value)},
-    ZYLOS_DIR:root,selectSameVersionRetry,
+    ZYLOS_DIR:root,selectSameVersionRetry,DEFAULT_FINALIZE_TIMEOUT_MS:600000,
     checkForCoreUpdates:()=>({success:true,current:target,latest:target,hasUpdate:false}),
     acquireLock:()=>{calls.push('lock');return {success:true};},
     releaseLock:()=>calls.push('unlock'),cleanupCoreTemp:()=>calls.push('cleanup'),
     downloadCoreToTemp:()=>{calls.push('download');throw Error('controlled download stop');},
-    formatC4Reply:()=>'',
+    formatC4Reply:(_kind,value)=>`retry failure: ${value.code}`,
   });
   const run=vm.runInContext(source.slice(start,end)+'\nupgradeSelfCore',context);
   return {result:await run({jsonOutput:true,skipConfirm:true}),calls,outputs};
@@ -52,6 +52,7 @@ test('CLI invalid latest retry rejects before lock and download', async t=>{
   assert.equal(result.result,false);assert.deepEqual(result.calls,[]);
   assert.equal(result.outputs[0].code,'RETRY_BASE_INVALID');
   assert.equal(result.outputs[0].field,'to');
+  assert.equal(result.outputs[0].reply,'retry failure: RETRY_BASE_INVALID');
 });
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-retry-')));
@@ -121,6 +122,12 @@ test('manifest corruption rejects rather than inferring format from source versi
   fs.writeFileSync(path.join(journal.dbBackupDir,'manifest.json'),'{}');
   assert.throws(() => selectSameVersionRetry(root,target),{code:'RETRY_BASE_INVALID',field:'snapshotManifest'});
 });
+test('valid replacement manifest with changed bytes rejects against the saved hash', t => {
+  const root=fixture(t), transactionId=id(2);
+  const {journal,manifest}=saved(root,transactionId,{formatVersion:2});
+  fs.writeFileSync(path.join(journal.dbBackupDir,'manifest.json'),JSON.stringify({...manifest,createdAt:'changed'}));
+  assert.throws(() => selectSameVersionRetry(root,target),{code:'RETRY_BASE_INVALID',field:'snapshotManifest'});
+});
 test('changed retry base is rejected before any pipeline steps', t => {
   const root=fixture(t);
   saved(root,id(1),{});
@@ -129,6 +136,29 @@ test('changed retry base is rejected before any pipeline steps', t => {
   const result=runSelfUpgrade({newVersion:target,retry},{zylosDir:root,getCurrentVersion:()=>({success:true,version:target}),preInstallSteps:[()=>{throw Error('must not execute');}]});
   assert.equal(result.success,false);
   assert.equal(result.code,'RETRY_BASE_INVALID');
+});
+
+for(const formatVersion of [1,2]) test(`real retry admission passes inherited format ${formatVersion} to version probe`, t => {
+  const root=fixture(t);
+  const {dir}=saved(root,id(1),{formatVersion});
+  const retry=selectSameVersionRetry(root,target);
+  // A clean restored terminal is history, so no live recovery marker blocks admission.
+  const journal=JSON.parse(fs.readFileSync(path.join(dir,'journal.json'),'utf8'));
+  Object.assign(journal,{installationIntent:true,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),
+    cleanup:{complete:true,servicesRestored:true},terminalEvidence:{verified:true,kind:'code_data_services'},
+    coreManifest:[{name:'core',existedBefore:false,backedUp:false,originalHash:null}],originalServices:[],
+    initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'a'.repeat(64),
+      cliRoot:path.join(root,'cli'),cliHash:'b'.repeat(64),workerPath:path.join(root,'worker.js'),workerHash:'c'.repeat(64),
+      ecosystemHash:null,databases:databasesForFormat(formatVersion).map(({source})=>({source,exists:false}))}});
+  fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify(journal));
+  let observed;
+  const result=runSelfUpgrade({newVersion:target,retry},{zylosDir:root,
+    getCurrentVersion:()=>({success:true,version:target}),protectionSupported:()=>false,
+    cleanupCoreDbRehearsals:()=>({removed:[]}),
+    probeCoreDbVersions:(_root,_target,options)=>{observed=options.formatVersion;throw Error('bounded probe stop');}});
+  assert.equal(observed,formatVersion);
+  assert.equal(result.error,'bounded probe stop');
+  assert.equal(result.recovery_required,false);
 });
 
 test('retry identity and inherited format exist at the very first journal write', t => {

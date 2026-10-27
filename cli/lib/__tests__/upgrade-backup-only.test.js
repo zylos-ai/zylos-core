@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import vm from 'node:vm';
-import {runSelfUpgrade,createFinalizeState,runSelfUpgradeFinalize,resolveProtectedNpmCli} from '../self-upgrade.js';
+import {spawnSync} from 'node:child_process';
+import {runSelfUpgrade,createFinalizeState,resolveProtectedNpmCli} from '../self-upgrade.js';
 import {CORE_DATABASES,runCoreDbWorker} from '../core-db-backup.js';
 import {maintenance as m} from '../upgrade-protection.js';
 const require=createRequire(import.meta.url);
@@ -294,12 +295,33 @@ for(const fail of [false,true])test(`backup-only serialized finalizer state pres
   assert.equal(state.schemaVersion,1);assert.equal(state.backupOnly,true);assert.equal(state.dbSnapshotVerified,true);
   assert.equal(state.backupDir,ctx.backupDir);assert.ok(state.backupDir);
   assert.equal(state.dbManifest.formatVersion,2);assert.equal(state.dbManifest.databases.length,4);assert.equal(state.dbBackupDir,ctx.dbBackupDir);
-  return runSelfUpgradeFinalize(state,{steps:[restored=>{
-   assert.equal(restored.backupDir,ctx.backupDir);assert.equal(restored.backupOnly,true);assert.equal(restored.dbSnapshotVerified,true);
-   assert.equal(restored.dbBackupDir,ctx.dbBackupDir);assert.deepEqual(restored.dbManifest,ctx.dbManifest);
-   assert.deepEqual(restored.servicesWereRunning,ctx.servicesWereRunning);
-   return {step:5,name:'fixture_finalize',status:fail?'failed':'done',...(fail?{error:'injected serialized finalizer failure'}:{})};
-  }]});
+  const input=path.join(f.tempDir,'serialized-finalizer.json');
+  fs.writeFileSync(input,JSON.stringify({state,expected:{backupDir:ctx.backupDir,dbBackupDir:ctx.dbBackupDir,
+   dbManifest:ctx.dbManifest,servicesWereRunning:ctx.servicesWereRunning},fail}));
+  const child=spawnSync(process.execPath,['--input-type=module','-e',`
+   import fs from 'node:fs';import assert from 'node:assert/strict';
+   import {runSelfUpgradeFinalize} from ${JSON.stringify(new URL('../self-upgrade.js',import.meta.url).href)};
+   const {state,expected,fail}=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+   const budget={check(){},remaining:()=>60000,deadlineAt:Date.now()+60000};
+   const result=await runSelfUpgradeFinalize(state,{zylosDir:process.argv[2],budget,
+    assertDashboardUninstalled(){},
+    syncSkills(restored){
+     assert.equal(restored.backupDir,expected.backupDir);assert.equal(restored.backupOnly,true);
+     assert.equal(restored.dbSnapshotVerified,true);assert.equal(restored.dbBackupDir,expected.dbBackupDir);
+     assert.deepEqual(restored.dbManifest,expected.dbManifest);assert.deepEqual(restored.servicesWereRunning,expected.servicesWereRunning);
+     return {step:5,name:'fixture_finalize',status:fail?'failed':'done',...(fail?{error:'injected serialized finalizer failure'}:{})};
+    },
+    installDependencies:()=>({step:6,status:'done'}),prepareRuntimeClis(){},migrateDatabases(){},
+    prepareRuntime:()=>({replacements:[],warnings:[]}),
+    ensureMemoryMigration(){},commitBaselines(){},startServices(){},verifyServices(){},
+    dashboardOwner:{applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:'done'}),
+     verifyDashboard:()=>({state:'ready',errors:[]})},
+    readModeStatus:()=>({sessionMode:'single',transition:null}),readMode:()=>({mode:'single'}),
+    readTransition:()=>null,restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],
+   });process.stdout.write(JSON.stringify(result));
+  `,input,f.root],{encoding:'utf8',timeout:60000,env:{...process.env,ZYLOS_DIR:f.root}});
+  assert.equal(child.error,undefined);assert.equal(child.status,0,child.stderr);
+  return JSON.parse(child.stdout);
  };
  const result=f.run();assert.equal(result.success,!fail,JSON.stringify(result));
  if(fail)assert.equal(result.error,'injected serialized finalizer failure');

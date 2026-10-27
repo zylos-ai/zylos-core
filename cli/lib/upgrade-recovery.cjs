@@ -345,34 +345,6 @@ function validateReady(dir, j) {
     return null;
   }
 }
-function finalizerDescriptor(dir, j) {
-  const d = m.read(path.join(dir, 'descriptor.json'));
-  m.validateDescriptor(dir, j, d);
-  return d;
-}
-function verifyFinalizerExit(dir, j) {
-  for (const kind of ['installer', 'finalizer']) {
-    const started = kind + 'Started',
-      confirmed = kind + 'ExitConfirmed',
-      unconfirmed = kind + 'ExitUnconfirmed';
-    if (j[unconfirmed] || j[started] && !j[confirmed]) {
-      const d = finalizerDescriptor(dir, j);
-      for (const name of ['finalizer.cjs', 'maintenance.cjs']) {
-        if (!d.hashes?.[name]) throw Error('missing trusted finalizer exit verification material: ' + name);
-        m.privatePath(path.join(dir, name));
-      }
-      const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {
-        terminate: false,
-        kind
-      });
-      if (!result.confirmed) throw Error(result.error || kind + ' exit requires verification before resume');
-      m.update(dir, j, {
-        [unconfirmed]: false,
-        [confirmed]: true
-      });
-    }
-  }
-}
 function resume(dir, {hooks = {}, ownership} = {}) {
   if (process.platform === 'darwin') {
     if (typeof ownership !== 'function') throw Error('interrupted macOS upgrade requires manual recovery; automatic resume is unavailable');
@@ -411,7 +383,7 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     if (cutoff === 'closed' && j.phase !== 'upgrade_complete') {
       return fail(dir, j, 'compensation is closed; use zylos upgrade --resume-finalize');
     }
-    verifyFinalizerExit(dir, j);
+    m.verifyFinalizerExit(dir, j);
     if (m.terminalValid(j)) {
       if (j.terminalServicesStopped) {
         m.start(j);

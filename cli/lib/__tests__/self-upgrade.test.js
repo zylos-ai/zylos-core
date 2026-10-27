@@ -8,13 +8,9 @@ const {
   createFinalizeState,
   runSelfUpgradeFinalize,
   step1_backupCoreSkills,
-  step7_syncInstructions,
   rollbackSelf,
-  step10_ensureCodexConfig,
 } = await import('../self-upgrade.js');
 const { generateMigrationHints, applyMigrationHints } = await import('../self-upgrade.js');
-const { deployManifestTemplate } = await import('../runtime/tmux-env.js');
-const { activateFreshSplitInstructions } = await import('../runtime/instruction-builder.js');
 
 function fixtureZylosDir() {
   return path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
@@ -22,17 +18,6 @@ function fixtureZylosDir() {
 
 function zylosHookPath(relativePath) {
   return path.join(fixtureZylosDir(), '.claude', relativePath).replaceAll('\\', '/');
-}
-
-function writeSplitPackage(pkgRoot) {
-  const templatesDir = path.join(pkgRoot, 'templates');
-  const runtimeDir = path.join(pkgRoot, 'cli', 'lib', 'runtime');
-  fs.mkdirSync(templatesDir, { recursive: true });
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(path.join(templatesDir, 'claude-system.md'), '# Claude system\n');
-  fs.writeFileSync(path.join(templatesDir, 'codex-system.md'), '# Codex system\n');
-  fs.writeFileSync(path.join(templatesDir, 'onboarding.md'), '# Onboarding\n');
-  fs.copyFileSync(path.resolve('cli/lib/runtime/assembler.mjs'), path.join(runtimeDir, 'assembler.mjs'));
 }
 
 describe('self-upgrade finalizer handoff', () => {
@@ -58,9 +43,9 @@ describe('self-upgrade finalizer handoff', () => {
     });
   });
 
-  it('runs post-install steps with restored state and returns upgrade metadata', () => {
+  it('restores state into the production pipeline and ignores obsolete steps injection', async () => {
     const calls = [];
-    const result = runSelfUpgradeFinalize({
+    const result = await runSelfUpgradeFinalize({
       schemaVersion: 1,
       tempDir: '/tmp/new-core',
       backupDir: '/tmp/backup',
@@ -70,24 +55,26 @@ describe('self-upgrade finalizer handoff', () => {
       to: '0.4.13',
       mode: 'merge',
     }, {
-      steps: [
-        (ctx) => {
-          calls.push({
-            tempDir: ctx.tempDir,
-            backupDir: ctx.backupDir,
-            servicesWereRunning: ctx.servicesWereRunning,
-            mode: ctx.mode,
-          });
-          return { step: 5, name: 'sync_core_skills', status: 'done', message: 'ok' };
-        },
-      ],
+      budget: { check() {} },
+      steps: [() => { throw Error('obsolete pipeline must not run'); }],
+      assertDashboardUninstalled() {},
+      syncSkills(ctx) {
+        calls.push({ tempDir: ctx.tempDir, backupDir: ctx.backupDir,
+          servicesWereRunning: ctx.servicesWereRunning, mode: ctx.mode });
+        return { step: 5, name: 'sync_core_skills', status: 'done' };
+      },
+      installDependencies: () => ({ step: 6, name: 'install_skill_deps', status: 'done' }),
+      prepareRuntimeClis() {},
+      migrateDatabases() {},
+      prepareRuntime: () => ({ replacements: [], warnings: [] }),
+      stage() { throw Error('stop after restored state reaches staging'); },
     });
 
-    assert.equal(result.success, true);
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'stop after restored state reaches staging');
     assert.equal(result.from, '0.4.12');
-    assert.equal(result.to, '0.4.13');
-    assert.equal(result.backupDir, '/tmp/backup');
-    assert.equal(result.steps.length, 1);
+    assert.equal(result.to, null);
+    assert.equal(result.steps.length, 3);
     assert.deepEqual(calls, [{
       tempDir: '/tmp/new-core',
       backupDir: '/tmp/backup',
@@ -96,8 +83,8 @@ describe('self-upgrade finalizer handoff', () => {
     }]);
   });
 
-  it('fails without rollback when a post-install step fails', () => {
-    const result = runSelfUpgradeFinalize({
+  it('fails without rollback when production skill synchronization fails', async () => {
+    const result = await runSelfUpgradeFinalize({
       schemaVersion: 1,
       tempDir: '/tmp/new-core',
       backupDir: '/tmp/backup',
@@ -105,9 +92,9 @@ describe('self-upgrade finalizer handoff', () => {
       from: '0.4.12',
       to: '0.4.13',
     }, {
-      steps: [
-        () => ({ step: 5, name: 'sync_core_skills', status: 'failed', error: 'sync failed' }),
-      ],
+      budget: { check() {} },
+      assertDashboardUninstalled() {},
+      syncSkills: () => ({ step: 5, name: 'sync_core_skills', status: 'failed', error: 'sync failed' }),
     });
 
     assert.equal(result.success, false);
@@ -116,15 +103,15 @@ describe('self-upgrade finalizer handoff', () => {
     assert.deepEqual(result.rollback, { performed: false, steps: [] });
   });
 
-  it('rejects each declared transaction field in schema 1 without running ordinary steps', () => {
+  it('rejects each declared transaction field in schema 1 without running ordinary steps', async () => {
     for (const declaration of [
       { transactionDir: '/untrusted/transaction' },
       { transactionId: 'declared-transaction' },
       { preInstallProtection: true },
     ]) {
       let calls = 0;
-      const result = runSelfUpgradeFinalize({ schemaVersion: 1, ...declaration }, {
-        steps: [() => { calls++; return { step: 5, status: 'done' }; }],
+      const result = await runSelfUpgradeFinalize({ schemaVersion: 1, ...declaration }, {
+        syncSkills() { calls++; return { step: 5, status: 'done' }; },
         maintenance: { transaction() { throw Error('must not read declared schema 1 transaction'); } },
       });
       assert.equal(result.success, false, JSON.stringify(declaration));
@@ -133,46 +120,6 @@ describe('self-upgrade finalizer handoff', () => {
       assert.equal(calls, 0);
       assert.deepEqual(result.rollback, { performed: false, steps: [] });
     }
-  });
-});
-
-describe('step10_ensureCodexConfig', () => {
-  it('skips codex config write when non-codex runtime has no codex state', () => {
-    const result = step10_ensureCodexConfig({
-      cfg: { runtime: 'claude' },
-      codexDir: '/tmp/fake-codex-none',
-      existsSync: () => false,
-      writeConfig: () => {
-        throw new Error('should not be called');
-      }
-    });
-
-    assert.equal(result.status, 'skipped');
-    assert.equal(result.message, 'codex not in use');
-  });
-
-  it('treats codex config write failure as best-effort outside codex runtime', () => {
-    const result = step10_ensureCodexConfig({
-      cfg: { runtime: 'claude' },
-      codexDir: '/tmp/fake-codex',
-      existsSync: () => true,
-      writeConfig: () => false
-    });
-
-    assert.equal(result.status, 'skipped');
-    assert.match(result.message, /warning: failed to refresh codex config outside codex runtime/);
-  });
-
-  it('still fails when codex runtime cannot write codex config', () => {
-    const result = step10_ensureCodexConfig({
-      cfg: { runtime: 'codex' },
-      codexDir: '/tmp/fake-codex',
-      existsSync: () => true,
-      writeConfig: () => false
-    });
-
-    assert.equal(result.status, 'failed');
-    assert.equal(result.error, 'failed to write codex config');
   });
 });
 
@@ -626,424 +573,6 @@ describe('self-upgrade hook migration hints', () => {
 
     assert.equal(result.applied, 1);
     assert.equal(updated.hooks, undefined);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-});
-
-describe('step7 manifest deploy (real step7_syncInstructions)', () => {
-  it('uses the split-era step name when the new package has no templates', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-no-templates-'));
-    const result = step7_syncInstructions({ tempDir: tmpDir, zylosDir: path.join(tmpDir, 'zylos') });
-    assert.equal(result.status, 'skipped');
-    assert.equal(result.name, 'sync_instructions');
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('fails loudly before asset deployment when a legacy migration fails', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-legacy-fail-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.mkdirSync(zylosDir, { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'CLAUDE.md'), 'legacy bytes\n');
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      runMigrations() { throw new Error('injected migration failure'); },
-    });
-    assert.equal(result.status, 'failed');
-    assert.match(result.error, /injected migration failure/);
-    assert.equal(fs.readFileSync(path.join(zylosDir, 'CLAUDE.md'), 'utf8'), 'legacy bytes\n');
-    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'instructions')), false);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('refreshes both generated files when split mode is already active', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-active-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.writeFileSync(path.join(pkgRoot, 'templates', 'ZYLOS.md'), 'user seed\n');
-    activateFreshSplitInstructions({
-      zylosDir,
-      templatesDir: path.join(pkgRoot, 'templates'),
-      assemblerSource: path.join(pkgRoot, 'cli', 'lib', 'runtime', 'assembler.mjs'),
-    });
-    fs.writeFileSync(path.join(pkgRoot, 'templates', 'claude-system.md'), '# Claude system v2\n');
-    fs.writeFileSync(path.join(pkgRoot, 'templates', 'codex-system.md'), '# Codex system v2\n');
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot });
-    assert.equal(result.status, 'done');
-    assert.match(result.message, /refreshed atomically/);
-    assert.match(fs.readFileSync(path.join(zylosDir, 'CLAUDE.md'), 'utf8'), /Claude system v2/);
-    assert.match(fs.readFileSync(path.join(zylosDir, 'AGENTS.md'), 'utf8'), /Codex system v2/);
-    assert.ok(fs.existsSync(path.join(zylosDir, '.zylos', 'instructions', 'meta.json')));
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('returns before all v2 instruction work for a future format version', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-future-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.mkdirSync(path.join(zylosDir, '.zylos', 'instructions'), { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'future user bytes\n');
-    fs.writeFileSync(path.join(zylosDir, 'CLAUDE.md'), 'future claude bytes\n');
-    fs.writeFileSync(path.join(zylosDir, 'AGENTS.md'), 'future codex bytes\n');
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instructions', 'meta.json'), '{"version":99}\n');
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instructions', 'future.asset'), 'future asset bytes\n');
-    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start'), { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md'), 'future prompt bytes\n');
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), '3\n');
-    const instructionFiles = [
-      'ZYLOS.md',
-      'CLAUDE.md',
-      'AGENTS.md',
-      '.zylos/instructions/meta.json',
-      '.zylos/instructions/future.asset',
-      'custom-hooks/session-start/90-migration-prompt.md',
-      '.zylos/instruction-format-version',
-    ];
-    const before = new Map(instructionFiles.map(file => [file, fs.readFileSync(path.join(zylosDir, file))]));
-    let refreshed = false;
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      refreshSplitInstructions() { refreshed = true; throw new Error('must not run'); },
-    });
-
-    assert.equal(result.status, 'done');
-    assert.match(result.message, /future instruction format version 3/);
-    assert.equal(refreshed, false);
-    for (const [file, bytes] of before) {
-      assert.deepEqual(fs.readFileSync(path.join(zylosDir, file)), bytes, file);
-    }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('returns before legacy instruction migration when a future format omits ZYLOS.md', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-future-no-zylos-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'CLAUDE.md'), 'future-owned instruction bytes\n');
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), '3\n');
-    const before = fs.readFileSync(path.join(zylosDir, 'CLAUDE.md'));
-    let legacyMigrationRan = false;
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      runMigrations() { legacyMigrationRan = true; throw new Error('must not run'); },
-      refreshSplitInstructions() { throw new Error('must not run'); },
-    });
-
-    assert.equal(result.status, 'done');
-    assert.match(result.message, /future instruction format version 3/);
-    assert.equal(legacyMigrationRan, false);
-    assert.equal(fs.existsSync(path.join(zylosDir, 'ZYLOS.md')), false);
-    assert.deepEqual(fs.readFileSync(path.join(zylosDir, 'CLAUDE.md')), before);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('backfills version and removes a stale prompt for active split instructions', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-backfill-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'legacy\n');
-    const promptPath = path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md');
-    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
-    fs.writeFileSync(promptPath, 'stale prompt\n');
-    let versionWrites = 0;
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      refreshSplitInstructions: () => ({ active: true, pendingMigration: false }),
-      writeInstructionFormatVersion: () => { versionWrites++; },
-    });
-
-    assert.equal(result.status, 'done');
-    assert.equal(versionWrites, 1);
-    assert.match(result.message, /backfilled to 2/);
-    assert.equal(fs.existsSync(promptPath), false);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('keeps active refresh successful when stale prompt cleanup fails', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-cleanup-fail-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'legacy\n');
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), '2\n');
-    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start'), { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md'), 'stale\n');
-    const warnings = [];
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      refreshSplitInstructions: () => ({ active: true, pendingMigration: false }),
-      cleanupMigrationPrompt: () => ({ removed: false, error: new Error('unlink fault') }),
-      warn: warning => warnings.push(warning),
-    });
-
-    assert.equal(result.status, 'done');
-    assert.match(result.message, /cleanup pending/);
-    assert.equal(warnings.length, 1);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('writes a C-class prompt and reports its path', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-c-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.mkdirSync(zylosDir, { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'custom legacy\n');
-    const promptPath = path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md');
-    let promptArgs;
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      refreshSplitInstructions: () => ({ active: false, pendingMigration: true }),
-      loadInstructionCatalog: () => [],
-      classifyInstructionBaseline: () => ({ classification: 'C', candidates: [] }),
-      writeMigrationPrompt: args => { promptArgs = args; return { filePath: promptPath }; },
-    });
-
-    assert.equal(result.status, 'done');
-    assert.match(result.message, /classification C/);
-    assert.match(result.message, new RegExp(promptPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.match(promptArgs.originalSha256, /^[a-f0-9]{64}$/);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('returns manual C-class guidance when the prompt write fails', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-c-fail-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.mkdirSync(zylosDir, { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'custom legacy\n');
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      refreshSplitInstructions: () => ({ active: false, pendingMigration: true }),
-      loadInstructionCatalog: () => [],
-      classifyInstructionBaseline: () => ({ classification: 'C', candidates: [] }),
-      writeMigrationPrompt: () => { throw new Error('rename fault'); },
-      warn: () => {},
-    });
-
-    assert.equal(result.status, 'done');
-    assert.match(result.message, /PENDING MIGRATION/);
-    assert.match(result.message, /prompt write failed/);
-    assert.doesNotMatch(result.message, /agent prompt:/);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('separates A verification from seed materialization and branches on migrated', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-a-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    writeSplitPackage(pkgRoot);
-    fs.writeFileSync(path.join(pkgRoot, 'templates', 'ZYLOS.md'), 'new seed\n');
-    fs.mkdirSync(zylosDir, { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'known baseline\n');
-    const analysis = { classification: 'A', strippedContent: 'known baseline\n', matched: { sha256: 'known' } };
-    const conservation = { ok: true, matched: analysis.matched };
-    let verifyArgs;
-    let engineArgs;
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      readInstructionFormatVersion: () => ({ valid: true, exists: true, version: 2 }),
-      refreshSplitInstructions: () => ({ active: false, pendingMigration: true }),
-      loadInstructionCatalog: () => [analysis.matched],
-      classifyInstructionBaseline: () => analysis,
-      verifyInstructionConservation: args => { verifyArgs = args; return conservation; },
-      executeMigrationApply: args => {
-        engineArgs = args;
-        return { migrated: false, fatal: false, backupPath: '/backup/path', error: new Error('transaction fault') };
-      },
-    });
-
-    assert.equal(verifyArgs.userContent, '');
-    assert.equal(engineArgs.userContent, 'new seed\n');
-    assert.equal(engineArgs.conservation, conservation);
-    assert.match(result.message, /PENDING MIGRATION/);
-    assert.match(result.message, /transaction fault/);
-    assert.match(result.message, /backup: \/backup\/path/);
-    assert.match(result.message, /version 2 exists but split marker is missing/);
-
-    const success = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
-      readInstructionFormatVersion: () => ({ valid: true, exists: true, version: 2 }),
-      refreshSplitInstructions: () => ({ active: false, pendingMigration: true }),
-      loadInstructionCatalog: () => [analysis.matched],
-      classifyInstructionBaseline: () => analysis,
-      verifyInstructionConservation: () => conservation,
-      executeMigrationApply: () => ({ migrated: true, backupPath: '/backup/path', versionWritten: true, a3Pending: false }),
-    });
-    assert.equal(success.status, 'done');
-    assert.match(success.message, /migrated automatically/);
-    assert.doesNotMatch(success.message, /PENDING MIGRATION/);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('auto-migrates an A-class fixture end-to-end with the new package catalog', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-a-real-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const pkgRoot = path.join(tmpDir, 'pkg');
-    fs.mkdirSync(path.join(pkgRoot, 'cli', 'lib', 'runtime'), { recursive: true });
-    fs.mkdirSync(path.join(pkgRoot, 'data', 'instruction-baselines'), { recursive: true });
-    fs.cpSync(path.resolve('templates'), path.join(pkgRoot, 'templates'), { recursive: true });
-    fs.copyFileSync(
-      path.resolve('cli/lib/runtime/assembler.mjs'),
-      path.join(pkgRoot, 'cli', 'lib', 'runtime', 'assembler.mjs'),
-    );
-    fs.copyFileSync(
-      path.resolve('data/instruction-baselines/manifest.json'),
-      path.join(pkgRoot, 'data', 'instruction-baselines', 'manifest.json'),
-    );
-    const catalog = JSON.parse(fs.readFileSync(path.resolve('data/instruction-baselines/manifest.json'), 'utf8'));
-    const legacyBaseline = Buffer.from(catalog.entries[0].contentBase64, 'base64').toString('utf8');
-    fs.mkdirSync(zylosDir, { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), legacyBaseline);
-    fs.writeFileSync(path.join(zylosDir, 'CLAUDE.md'), legacyBaseline);
-    fs.writeFileSync(path.join(zylosDir, 'AGENTS.md'), legacyBaseline);
-
-    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot });
-
-    assert.equal(result.status, 'done');
-    assert.match(result.message, /migrated automatically \(classification A\)/);
-    assert.equal(
-      fs.readFileSync(path.join(zylosDir, 'ZYLOS.md'), 'utf8'),
-      fs.readFileSync(path.join(pkgRoot, 'templates', 'ZYLOS.md'), 'utf8'),
-    );
-    assert.equal(fs.readFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), 'utf8'), '2\n');
-    assert.ok(fs.existsSync(path.join(zylosDir, '.zylos', 'instructions', 'meta.json')));
-    assert.match(result.message, /backup:/);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('creates manifest from tempDir template when missing, message includes manifest: created', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    writeSplitPackage(path.join(tmpDir, 'pkg'));
-    fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env TZ\n');
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-
-    const manifestDest = path.join(zylosDir, '.zylos', 'runtime-env.manifest');
-    assert.ok(!fs.existsSync(manifestDest));
-
-    const result = step7_syncInstructions({
-      tempDir: path.join(tmpDir, 'pkg'),
-      zylosDir,
-      packageRoot: path.join(tmpDir, 'no-fallback'),
-    });
-
-    assert.equal(result.step, 7);
-    assert.equal(result.name, 'sync_instructions');
-    assert.equal(result.status, 'done');
-    assert.ok(result.message.includes('manifest: created'));
-    assert.ok(fs.existsSync(manifestDest));
-    assert.equal(fs.readFileSync(manifestDest, 'utf8'), 'env TZ\n');
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('does not overwrite existing manifest, message includes manifest: exists', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    writeSplitPackage(path.join(tmpDir, 'pkg'));
-    fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env NEW\n');
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest'), 'env CUSTOM\n');
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-
-    const result = step7_syncInstructions({
-      tempDir: path.join(tmpDir, 'pkg'),
-      zylosDir,
-      packageRoot: path.join(tmpDir, 'no-fallback'),
-    });
-
-    assert.ok(result.message.includes('manifest: exists'));
-    assert.equal(
-      fs.readFileSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest'), 'utf8'),
-      'env CUSTOM\n',
-    );
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('falls back to packageRoot template when tempDir template is missing', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
-    const pkgRoot = path.join(tmpDir, 'installed-pkg');
-    const pkgTemplates = path.join(pkgRoot, 'templates');
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    writeSplitPackage(path.join(tmpDir, 'pkg'));
-    fs.mkdirSync(pkgTemplates, { recursive: true });
-    fs.writeFileSync(path.join(pkgTemplates, 'runtime-env.manifest.example'), 'env FALLBACK\n');
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-
-    const result = step7_syncInstructions({
-      tempDir: path.join(tmpDir, 'pkg'),
-      zylosDir,
-      packageRoot: pkgRoot,
-    });
-
-    assert.ok(result.message.includes('manifest: created'));
-    const manifestDest = path.join(zylosDir, '.zylos', 'runtime-env.manifest');
-    assert.ok(fs.existsSync(manifestDest));
-    assert.equal(fs.readFileSync(manifestDest, 'utf8'), 'env FALLBACK\n');
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('reports template_missing when both tempDir and packageRoot templates are absent', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    writeSplitPackage(path.join(tmpDir, 'pkg'));
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-
-    const result = step7_syncInstructions({
-      tempDir: path.join(tmpDir, 'pkg'),
-      zylosDir,
-      packageRoot: path.join(tmpDir, 'no-such-pkg'),
-    });
-
-    assert.ok(result.message.includes('manifest: template_missing'));
-    assert.ok(!fs.existsSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest')));
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('works end-to-end through runSelfUpgradeFinalize with real POST_INSTALL_STEPS', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
-    const zylosDir = path.join(tmpDir, 'zylos');
-    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    writeSplitPackage(path.join(tmpDir, 'pkg'));
-    fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env TZ\n');
-    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-
-    const wrappedStep7 = (ctx) => step7_syncInstructions({ ...ctx, zylosDir, packageRoot: path.join(tmpDir, 'no-fallback') });
-
-    const result = runSelfUpgradeFinalize({
-      schemaVersion: 1,
-      tempDir: path.join(tmpDir, 'pkg'),
-      from: '0.4.12',
-      to: '0.4.13',
-    }, { steps: [wrappedStep7] });
-
-    assert.equal(result.success, true);
-    const step7Result = result.steps.find(s => s.step === 7);
-    assert.ok(step7Result);
-    assert.ok(step7Result.message.includes('manifest: created'));
-    assert.ok(step7Result.message.includes('PENDING MIGRATION'));
-    assert.ok(fs.existsSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest')));
-
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });

@@ -12,13 +12,19 @@ const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const failure = (code, targetId, reason) => Object.assign(new Error(reason || code), { code, targetId, reason });
 
-// Reject symlinks in every existing path component, including missing-file parents.
+// Canonicalize the root, then reject links only within the publication tree.
 function contained(root, relative) {
   if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) ||
       relative.split(/[\\/]/).some(p => !p || p === '.' || p === '..')) throw Error('unsafe publication path');
-  const base = path.resolve(root);
-  let current = path.parse(base).root;
-  for (const component of [...base.slice(current.length).split('/').filter(Boolean), ...relative.split('/')]) {
+  let ancestor = path.resolve(root);
+  const missing = [];
+  while (!fs.existsSync(ancestor)) {
+    missing.unshift(path.basename(ancestor));
+    ancestor = path.dirname(ancestor);
+  }
+  const base = path.join(fs.realpathSync(ancestor), ...missing);
+  let current = base;
+  for (const component of relative.split('/')) {
     current = path.join(current, component);
     try { if (fs.lstatSync(current).isSymbolicLink()) throw Error('symlink publication path'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -175,6 +181,7 @@ export async function publishRuntimePreparation({ workDir, zylosDir, preparation
 
 async function publishPrepared(ctx, { checkBudget = () => {}, installHook = installCoreCodexHook,
   syncConfig = reconcileCodexConfig, persist = (journal, changes) => maintenance.update(ctx.transactionDir, journal, changes),
+  // DM-56d crash-injection boundary; production keeps the default no-op.
   afterStep = () => {} } = {}) {
   const journal = ctx.journal;
   const hooks = journal.postCutoff?.items?.hooks;

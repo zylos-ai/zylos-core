@@ -5,10 +5,32 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { classifyCutoff, commitCutoff } from '../upgrade-cutoff.js';
+import { recovery } from '../upgrade-protection.js';
 
 const require = createRequire(import.meta.url);
 const m = require('../upgrade-maintenance.cjs');
 const hash = 'a'.repeat(64);
+
+test('snapshot validates original database identities before executing its worker', t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'cutoff-snapshot-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.copyFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),path.join(root,'maintenance.cjs'));
+  fs.copyFileSync(new URL('../upgrade-recovery.cjs',import.meta.url),path.join(root,'recovery.cjs'));
+  const controller=require(path.join(root,'maintenance.cjs')),runner=require(path.join(root,'recovery.cjs'));
+  const manifest={formatVersion:1,id:'tx',status:'complete',databases:controller.databasePaths(1).map(source=>({source}))};
+  const file=path.join(root,'manifest.json');controller.durable(file,manifest);
+  const j={transactionId:'tx',zylosDir:root,dbBackupDir:root,snapshotManifestHash:controller.hash(file),
+    initialIdentity:{databases:manifest.databases.map(d=>({...d,exists:false}))}};
+  let calls=0;controller.worker=()=>{calls++;};
+  assert.equal(runner.validateSnapshot(root,j).formatVersion,1);
+  assert.equal(calls,1);
+  const original=structuredClone(j.initialIdentity.databases);
+  for(const alter of [databases=>{databases[0].source='unrelated/database.db';},databases=>{databases.pop();}]) {
+    j.initialIdentity.databases=structuredClone(original);alter(j.initialIdentity.databases);
+    assert.throws(()=>runner.validateSnapshot(root,j),/snapshot and original database identity differ/);
+    assert.equal(calls,1,'invalid original identity must not reach snapshot worker');
+  }
+});
 function journal(phase = 'compensation_closed') {
   return { transactionId: 'tx', phase, snapshotManifestHash: hash,
     compensationCutoff: { formatVersion: 1, closed: true, transactionId: 'tx',
@@ -54,6 +76,80 @@ test('journal update preserves cutoff facts and refuses every backwards phase', 
   assert.equal(classifyCutoff(m.read(path.join(dir,'journal.json'))),'closed');
 });
 
+test('closed cutoff freezes publication bytes but permits item progress', t => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cutoff-inputs-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const j={...journal(),postCutoff:{formatVersion:1,items:{hooks:{state:'pending',attempts:0,input:{sha256:hash,path:'staged-settings'}}}},
+    dashboardInstall:{items:{registration:{state:'pending',payload:{route:'/dashboard'}}}}};
+  m.durable(path.join(dir,'journal.json'),j);
+  const before=fs.readFileSync(path.join(dir,'journal.json'));
+  for(const field of ['postCutoff','dashboardInstall']) {
+    const next=structuredClone(j);
+    if(field==='postCutoff') next.postCutoff.items.hooks.input.sha256='b'.repeat(64);
+    else next.dashboardInstall.items.registration.payload.route='/other';
+    assert.throws(()=>m.update(dir,next),/publication inputs are immutable/,field);
+    assert.deepEqual(fs.readFileSync(path.join(dir,'journal.json')),before);
+  }
+  const next=structuredClone(j);
+  Object.assign(next.postCutoff.items.hooks,{state:'done',attempts:1,lastError:null});
+  assert.doesNotThrow(()=>m.update(dir,next));
+});
+
+test('untrusted cutoff cannot advance phase or rewrite its recovery phase', t => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cutoff-untrusted-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const j={...journal('recovery_required'),resumePhase:'compensation_closed'};
+  j.compensationCutoff.closedAt='invalid';
+  m.durable(path.join(dir,'journal.json'),j);
+  const before=fs.readFileSync(path.join(dir,'journal.json'));
+  for(const changes of [{phase:'upgrade_complete'},{resumePhase:'installing'}]) {
+    assert.throws(()=>m.update(dir,structuredClone(j),changes),/untrusted cutoff requires manual recovery/);
+    assert.deepEqual(fs.readFileSync(path.join(dir,'journal.json')),before);
+  }
+});
+
+for(const missing of ['postCutoff','dashboardInstall']) test(`cutoff first write requires atomic ${missing}`, t => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cutoff-atomic-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const j={transactionId:'tx',phase:'installing',snapshotManifestHash:hash};
+  m.durable(path.join(dir,'journal.json'),j);
+  const changes={...journal(),postCutoff:{items:{hooks:{state:'pending'}}},dashboardInstall:null};
+  delete changes[missing];
+  assert.throws(()=>m.update(dir,j,changes),/must atomically publish/);
+  assert.equal(m.read(path.join(dir,'journal.json')).phase,'installing');
+});
+
+for(const invalid of ['phase','manifest']) test(`commit rejects ${invalid} before durable write`, () => {
+  const ctx={transactionId:'tx',zylosDir:'/isolated',transactionDir:'/isolated/tx'};
+  const saved={transactionId:'tx',phase:invalid==='phase'?'prepared':'installing',installationIntent:true,
+    dbBackupDir:'/isolated/backup',snapshotManifestHash:hash};
+  let writes=0;
+  const controller={transaction:()=>structuredClone(saved),hash:()=>invalid==='manifest'?'b'.repeat(64):hash,
+    update:()=>{writes++;}};
+  assert.throws(()=>commitCutoff(ctx,{postCutoff:{formatVersion:1,items:{hooks:{state:'pending'}}}},
+    {maintenance:controller}),invalid==='phase'?/own installing transaction/:/manifest changed before cutoff/);
+  assert.equal(writes,0);
+});
+
+for(const corrupt of [false,true]) test(`parent recovery handles ${corrupt?'untrusted':'closed'} cutoff before runner dispatch`, () => {
+  const root='/isolated',dir=path.join(root,'.backup/self-upgrade/tx');
+  let saved={...journal(),zylosDir:root,installationIntent:true};
+  if(corrupt) saved.compensationCutoff.closedAt='invalid';
+  const calls=[];
+  const controller={transaction:()=>structuredClone(saved),classifyCutoff,marker:()=>calls.push('marker'),
+    stop:()=>calls.push('stop'),update:(_dir,_journal,changes)=>{calls.push('update');saved={...saved,...changes};},
+    terminalValid:()=>false,READY:new Set(),read:()=>assert.fail('cutoff must not dispatch a recovery runner')};
+  const ctx={transactionId:'tx',transactionDir:dir,journal:saved,maintenance:controller,releaseControl:()=>calls.push('release')};
+  const result=recovery(ctx);
+  assert.equal(result.attempted,false);assert.equal(result.completed,false);assert.equal(result.recovery_required,true);
+  assert.match(result.error,corrupt?/untrusted cutoff/:/compensation is closed; use zylos upgrade --resume-finalize/);
+  if(corrupt) assert.deepEqual(calls,process.platform==='darwin'?[]:['release']);
+  else {
+    assert.deepEqual(calls,process.platform==='darwin'?['marker','stop','update']:['marker','stop','update','release']);
+    assert.equal(saved.phase,'recovery_required');assert.equal(saved.resumePhase,'compensation_closed');
+  }
+});
+
 test('cutoff commit atomically publishes and verifies all facts; readback mismatch is uncertain', () => {
   const initial={transactionId:'tx',zylosDir:'/isolated',phase:'installing',installationIntent:true,
     dbBackupDir:'/isolated/backup',snapshotManifestHash:hash};
@@ -94,6 +190,7 @@ for (const corrupt of [false,true]) test(`recovery ${corrupt?'rejects untrusted 
   } else {
     const result=recovery.resume(dir);
     assert.equal(result.recovery_required,true);
+    assert.match(result.error,/compensation is closed; use zylos upgrade --resume-finalize/);
     const after=controller.read(path.join(dir,'journal.json'));
     assert.equal(after.phase,'recovery_required');assert.equal(after.resumePhase,'compensation_closed');
     assert.deepEqual(after.compensationCutoff,saved.compensationCutoff);

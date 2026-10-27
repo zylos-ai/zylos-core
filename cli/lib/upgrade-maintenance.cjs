@@ -20,7 +20,7 @@ function databasePaths(formatVersion) {
 function originalDatabasePaths(j) {
   const paths = j.initialIdentity?.databases?.map(d => d?.source);
   const expected = paths?.length === 4 ? databasePaths(2) : databasePaths(1);
-  if (!paths || paths.length !== expected.length || paths.some((p,i) => p !== expected[i])) throw Error('invalid original database collection');
+  if (!paths || paths.length !== expected.length || paths.some((p,i) => p !== expected[i])) throw Error('invalid data-ready original database collection');
   return expected;
 }
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/;
@@ -863,7 +863,23 @@ function finishTerminal(dir, j) {
   return {complete:true, warnings:[]};
 }
 
+function verifyFinalizerExit(dir, j) {
+  for (const kind of ['installer', 'finalizer']) {
+    const started = kind + 'Started', confirmed = kind + 'ExitConfirmed', unconfirmed = kind + 'ExitUnconfirmed';
+    if (!j[unconfirmed] && (!j[started] || j[confirmed])) continue;
+    const descriptor = read(path.join(dir, 'descriptor.json'));
+    validateDescriptor(dir, j, descriptor);
+    for (const name of ['finalizer.cjs', 'maintenance.cjs']) {
+      if (!descriptor.hashes?.[name]) throw Error('missing trusted finalizer exit verification material: ' + name);
+      privatePath(path.join(dir, name));
+    }
+    const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:false, kind});
+    if (!result.confirmed) throw Error(result.error || kind + ' exit requires verification before resume');
+    update(dir, j, {[unconfirmed]:false, [confirmed]:true});
+  }
+}
 module.exports = {
+  verifyFinalizerExit,
   classifyCutoff,
   fsyncFd,
   platformSupported,

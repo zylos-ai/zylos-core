@@ -8,7 +8,6 @@ import { requestRuntimeRestart } from '../request-runtime-restart.js';
 import { submit } from '../am-sock-client.js';
 import { upgradeRuntime } from '../../../skills/upgrade-claude/scripts/upgrade.js';
 import { main as restartMain } from '../../../skills/restart-claude/scripts/restart.js';
-import { restartAfterSelfUpgrade, formatC4Reply } from '../../commands/component.js';
 async function fixture(t, response) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-producers-')); const socketPath = path.join(root, 'am.sock');
   const requests = [], peers = new Set(), trace = [];
@@ -31,7 +30,6 @@ async function fixture(t, response) {
 async function invoke(t, producer, response) {
   const f = await fixture(t, response), output = [];
   const restart = async (options) => {
-    if (producer === 'component') assert.deepEqual(options, { afterServiceRestart: true });
     return f.restart(options);
   };
   const priorExitCode = process.exitCode;
@@ -39,12 +37,7 @@ async function invoke(t, producer, response) {
   const mocks = [t.mock.method(console, 'log', capture), t.mock.method(console, 'error', capture),
     t.mock.method(process.stdout, 'write', capture)];
   try {
-    if (producer === 'component') {
-      // The actual self-upgrade finalizer calls this step after installation.
-      const result = await restartAfterSelfUpgrade({ success: true, instructionFilesRebuilt: true,
-        from: '1.0.0', to: '1.0.1' }, { requestRestart: restart });
-      output.push(JSON.stringify({ ...result, reply: formatC4Reply('self-upgrade', result) }));
-    } else if (producer === 'restart') {
+    if (producer === 'restart') {
       await restartMain(['--json'], { requestRestart: restart });
     } else {
       const result = await upgradeRuntime({ readMode: () => ({ mode: 'multi' }), readTransition: () => null,
@@ -63,20 +56,7 @@ async function invoke(t, producer, response) {
   if (response === 'rejected') assert.match(all, /manual_restart_pending/);
   if (['uncertain', 'timeout'].includes(response)) assert.match(all, /restart_result_unknown/);
   if (response === 'accepted') assert.match(all, /accepted/);
-  if (producer === 'component' && response !== 'accepted') {
-    const report=JSON.parse(output.find(line=>line.trim().startsWith('{')));
-    assert.equal(report.runtimeRestart.ok,false);assert.doesNotMatch(report.reply,/No action needed/);
-    if(response==='rejected') assert.match(report.reply,/All currently running managed sessions, including Origin, need manual restart/);
-    else assert.match(report.reply,/do not resubmit automatically/);
-  }
 }
-test('IB-17 self-upgrade restart step and restart/upgrade producers: Unix Sock success, refusal and uncertain result', async t => {
-  for (const producer of ['component', 'restart', 'upgrade']) for (const response of ['accepted', 'rejected', 'uncertain', 'timeout']) await invoke(t, producer, response);
-});
-test('IB-17 self-upgrade restart step only requests restart after successful instruction rebuild', async t => {
-  for (const result of [{success:false,instructionFilesRebuilt:true},{success:true,instructionFilesRebuilt:false}]) {
-    let calls = 0;
-    assert.equal(await restartAfterSelfUpgrade(result,{requestRestart:()=>{calls++;}}),result);
-    assert.equal(calls,0);
-  }
+test('IB-17 restart/upgrade producers: Unix Sock success, refusal and uncertain result', async t => {
+  for (const producer of ['restart', 'upgrade']) for (const response of ['accepted', 'rejected', 'uncertain', 'timeout']) await invoke(t, producer, response);
 });

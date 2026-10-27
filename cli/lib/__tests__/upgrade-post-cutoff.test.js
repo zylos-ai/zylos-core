@@ -31,6 +31,28 @@ test('staging leaves shared bytes unchanged and no-Codex state omits reconcile t
   assert.equal(fs.existsSync(path.join(f.ctx.zylosDir, '.codex')), false);
 });
 
+test('publication allows a symlink ancestor of the instance root', async t => {
+  const f = fixture(t);
+  const alias = path.join(f.root, 'alias');
+  fs.symlinkSync(f.root, alias, 'dir');
+  f.ctx.journal.zylosDir = path.join(alias, 'zylos');
+  f.ctx.transactionDir = path.join(alias, 'transaction');
+  const result = await publishPostCutoff(f.ctx, f.options);
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(path.join(f.root, 'zylos/CLAUDE.md'), 'utf8'), 'new instructions');
+});
+
+test('publication rejects a symlink below the instance root', async t => {
+  const f = fixture(t);
+  const original = path.join(f.ctx.zylosDir, '.claude');
+  const moved = path.join(f.root, 'settings');
+  fs.renameSync(original, moved);
+  fs.symlinkSync(moved, original, 'dir');
+  const result = await publishPostCutoff(f.ctx, f.options);
+  assert.equal(result.lastError.code, 'material_corrupt');
+  assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, 'CLAUDE.md'), 'utf8'), 'old instructions');
+});
+
 test('replace conflict preserves bytes; repair retries and done drift never rolls back done', async t => {
   const f = fixture(t);
   f.write('.claude/settings.json', 'conflict');
@@ -99,6 +121,22 @@ for (const [relative, value, id] of [['.codex/hooks.json', '{"hooks":', 't03'], 
   const result = await publishPostCutoff(f.ctx, { ...f.options, installHook: () => calls++, syncConfig: () => calls++ });
   assert.equal(result.lastError.code, 'codex_config_unparseable'); assert.equal(result.lastError.targetId, id);
   assert.equal(calls, 0); assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, relative), 'utf8'), value);
+});
+
+test('truncated global Codex TOML invokes no writer and preserves global bytes', async t => {
+  const f = fixture(t, 'codex');
+  const file = path.join(f.root, '.codex/config.toml');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const truncated = 'model = "unfinished';
+  fs.writeFileSync(file, truncated);
+  let calls = 0;
+  const result = await publishPostCutoff(f.ctx, {
+    ...f.options, installHook: () => calls++, syncConfig: () => calls++,
+  });
+  assert.equal(result.lastError.code, 'codex_config_unparseable');
+  assert.equal(result.lastError.targetId, 't05');
+  assert.equal(calls, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), truncated);
 });
 
 test('Codex writer exception is retryable, done never reconciles again', async t => {

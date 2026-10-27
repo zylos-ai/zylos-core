@@ -7,7 +7,7 @@ import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import cp,{spawn,spawnSync} from 'node:child_process';
 import { compileFunction } from 'node:vm';
-import {LEGACY_CORE_DATABASES as CORE_DATABASES,CORE_DATABASES as FORMAT2_DATABASES,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,preflightCoreDbUpgrade} from '../core-db-backup.js';
+import {LEGACY_CORE_DATABASES as CORE_DATABASES,CORE_DATABASES as FORMAT2_DATABASES,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,preflightCoreDbUpgrade,runCoreDbWorker} from '../core-db-backup.js';
 import {protectedDataReady,protectedSuccess} from '../upgrade-protection.js';
 import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
@@ -26,7 +26,7 @@ function interceptSync(check) {
 // Only service calls are replaced: database/native worker, hashes, journal,
 // rescue, rename intents, isolation discovery, and terminal marker removal are real.
 async function fixture(t,{missing=false,wal=false,formatVersion=1,dashboard=false}={}) {
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-recovery-')));
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_RECOVERY_TEST_TMPDIR || os.tmpdir(),'upgrade-recovery-')));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dst));
@@ -97,6 +97,7 @@ function migrationDependencies(f) {
  };
 }
 
+
 for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects ${corrupt?'untrusted':'closed'} cutoff before any step`, async t => {
  const f=await fixture(t);
  f.m.update(f.dir,f.j,{phase:'compensation_closed',compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},postCutoff:{items:{hooks:{state:'pending'}}},dashboardInstall:null});
@@ -123,10 +124,10 @@ for(const failure of [null,'thresholds','ensure','state'])test(`closed writer is
  if(failure==='state')fs.mkdirSync(path.join(f.root,'memory/state.md'),{recursive:true});
  const {completeUpgradeFinalization}=await import('../self-upgrade.js');
  const ctx={zylosDir:f.root,transactionDir:f.dir,transactionId:'tx',journal:f.j,maintenance:f.m,preInstallProtection:true,
-   from:'old',to:'new',steps:[],servicesWereRunning:[],mergeConflicts:[],mergedFiles:[]};
+   from:'old',to:'new',steps:[],servicesWereRunning:[],mergeConflicts:[],mergedFiles:[],
+   budget:{check(){},remaining:()=>100000,deadlineAt:Date.now()+100000}};
  let started=0;
  const result=await completeUpgradeFinalization(ctx,{
-   budget:{check(){},remaining:()=>100000,deadlineAt:Date.now()+100000},
    updateConfig:()=>{blocked();if(failure==='thresholds')throw Error('threshold failure');},
    ensureMemoryMigration:()=>{blocked();if(failure==='ensure')throw Error('ensure failure');},
    commitBaselines:()=>{blocked();return {status:'done'};},
@@ -356,6 +357,101 @@ for(const [version,revision] of [['0.9.0','95b5850e2654fdc48b333c02b158acda2d536
   else {assert.equal(result.stage,'restored_complete',JSON.stringify(result));assert.equal(result.recovery_required,false);assert.notDeepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.deepEqual(calls,['stop','start','verify']);}
  });
 }
+for (const version of ['0.9.0', '0.9.1']) {
+ for (const closed of [false,true]) test(`DM-56c frozen ${version} recovery ${closed?'rejects closed cutoff':'restores installing'} in a real isolated child`, {skip:process.platform==='darwin'}, async t => {
+  const f = await fixture(t);
+  const endpoint = path.join(f.root, 'old-child');
+  fs.mkdirSync(endpoint);
+  for (const [source, target] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-recovery.cjs','recovery.cjs']]) {
+   fs.copyFileSync(new URL(`./fixtures/upgrade-${version}/${source}`, import.meta.url), path.join(endpoint,target));
+  }
+  const worker = path.join(f.dir, 'sqlite-runtime/core-db-backup-worker.js');
+  fs.copyFileSync(new URL(`./fixtures/upgrade-${version}/core-db-backup-worker.js`, import.meta.url), worker);
+  f.j.initialIdentity.workerHash = f.m.hash(worker);
+  if (closed) {
+   f.j.phase='compensation_closed';
+   f.j.compensationCutoff={formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,writer:'finalizer',closedAt:'2026-10-27T00:00:00.000Z'};
+  }
+  f.m.durable(path.join(f.dir,'journal.json'), f.j);
+  change(f);
+  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
+  const script = `const m=require(process.argv[1]+'/maintenance.cjs');const calls=[];m.stop=()=>calls.push('stop');m.start=()=>calls.push('start');m.verifyServices=()=>calls.push('verify');const result=require(process.argv[1]+'/recovery.cjs').resume(process.argv[2]);console.log(JSON.stringify({pid:process.pid,result,calls}));`;
+  const child = spawnSync(process.execPath, ['-e',script,endpoint,f.dir], {encoding:'utf8',timeout:30000});
+  assert.equal(child.status,0,child.stderr);
+  const evidence=JSON.parse(child.stdout);
+  assert.notEqual(evidence.pid,process.pid);
+  if (closed) {
+   assert.equal(evidence.result.recovery_required,true);
+   assert.match(evidence.result.error,/unrecognized installed recovery phase: compensation_closed/);
+   assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
+   assert.equal(fs.existsSync(path.join(f.dir,'rescue')),false);
+   assert.ok(!evidence.calls.includes('start'));
+   return;
+  }
+  assert.equal(evidence.result.stage,'restored_complete',child.stdout);
+  assert.deepEqual(evidence.calls,['stop','start','verify']);
+  const db = new Database(f.db('comm-bridge/c4.db'),{readonly:true});
+  try {assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,0);} finally {db.close();}
+ });
+
+ test(`DM-56c frozen ${version} parent enforces real 180 second timeout before recovery`, {skip:process.platform==='darwin',timeout:210000}, async t => {
+  const f=await fixture(t);
+  const source=fs.readFileSync(new URL(`./fixtures/upgrade-${version}/self-upgrade.js`,import.meta.url),'utf8');
+  const start=source.indexOf('function runInstalledFinalizer(ctx) {');
+  const end=source.indexOf('\nexport function runSelfUpgradeFinalize',start);
+  assert.ok(start>=0&&end>start);
+  const finalizer=path.join(f.root,'hanging-finalizer.cjs');
+  const pidFile=path.join(f.root,'finalizer.pid');
+  fs.writeFileSync(finalizer,`require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000);`);
+  const run=compileFunction(source.slice(start,end)+'\nreturn runInstalledFinalizer(ctx);',['ctx','maintenanceFor','resolveInstalledPackageScript','writeFinalizeState','spawnSync','process','path','requireFinalizerExit']);
+  const finalizerModule=require(path.join(f.dir,'finalizer.cjs'));
+  const began=Date.now();
+  assert.throws(()=>run({preInstallProtection:true,transactionDir:f.dir},()=>f.m,()=>finalizer,()=>path.join(f.root,'state.json'),spawnSync,process,path,(dir,j,terminate)=>finalizerModule.quiesce(dir,j,{terminate})),{code:'ETIMEDOUT'});
+  const elapsed=Date.now()-began;
+  assert.ok(elapsed>=179000,`timeout elapsed ${elapsed}ms`);
+  assert.ok(elapsed<200000,`timeout exceeded bounded budget: ${elapsed}ms`);
+  const pid=Number(fs.readFileSync(pidFile,'utf8'));
+  assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
+  assert.equal(f.load().finalizerExitConfirmed,true);
+  assert.equal(f.load().finalizerExitUnconfirmed,false);
+  assert.equal(f.r.resume(f.dir).stage,'restored_complete');
+ });
+}
+
+test('M23 Dashboard controlled migration rejects an owner still needing migration', async t => {
+ const f=await fixture(t,{formatVersion:2,dashboard:true});
+ const owner=path.join(f.dashboardRoot,'src/lib/schema-owner.js');
+ fs.writeFileSync(owner,fs.readFileSync(owner,'utf8').replace("throw Error('recovery must not migrate Dashboard');",''));
+ const file=f.db('components/dashboard/dashboard.db');
+ const before=fs.readFileSync(file);
+ assert.throws(()=>runCoreDbWorker({action:'upgrade-migrate',zylosDir:f.root,schemaRoot:f.j.skillsDir,dashboardRoot:f.dashboardRoot,transactionDir:f.dir,transactionId:'tx',manifest:f.snapshot.manifest}),/SCHEMA_MIGRATION_FAILED dashboard migration remains incomplete/);
+ assert.deepEqual(fs.readFileSync(file),before);
+ assert.equal(f.load().phase,'installing');
+});
+
+test('M24 Dashboard controlled migration requires transaction identity before invoking its owner', async t => {
+ const f=await fixture(t,{formatVersion:2,dashboard:true});
+ const file=f.db('components/dashboard/dashboard.db');
+ const before=fs.readFileSync(file);
+ assert.throws(()=>runCoreDbWorker({action:'upgrade-migrate',zylosDir:f.root,schemaRoot:f.j.skillsDir,dashboardRoot:f.dashboardRoot}),/controlled migration requires transaction identity/);
+ assert.deepEqual(fs.readFileSync(file),before);
+ assert.equal(f.load().phase,'installing');
+});
+
+test('M18 snapshot and original database identities must agree before compensation', async t => {
+ const f=await fixture(t,{formatVersion:2});
+ f.j.initialIdentity.databases.pop();
+ f.m.durable(path.join(f.dir,'journal.json'),f.j);
+ change(f);
+ const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,true);
+ assert.match(result.error,/snapshot and original database identity differ/);
+ assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
+ assert.equal(fs.existsSync(path.join(f.dir,'rescue')),false);
+ assert.ok(!f.calls.includes('start'));
+});
+
 for(const phase of ['rescue','restore'])test(`${phase} staging platform sync failure prevents publication and preserves retry evidence`,async t=>{
  const f=await fixture(t);change(f);
  const source=f.db('comm-bridge/c4.db'),originalHash=f.m.hash(source);

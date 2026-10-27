@@ -7,11 +7,10 @@ import { instructionPaths, readInstructionFormatVersion, CURRENT_INSTRUCTION_FOR
   hasSplitTransactionResidue, activateMigratedSplitInstructions } from './runtime/instruction-builder.js';
 import { migrateClaudeMdToZylosMd } from './migrate.js';
 import { loadInstructionCatalog, classifyInstructionBaseline, verifyInstructionConservation,
-  createMigrationBackup, renderMigrationReport } from './instruction-migration.js';
+  createMigrationBackup, renderMigrationReport, migrationPromptPath, writeMigrationPrompt } from './instruction-migration.js';
 import { desiredClaudeHooks, syncHooks, claimedHookBaseKeys, detectStopFailureSupport,
   syncTemplateModelSetting, syncTemplateSetting } from './sync-runtime-hooks.js';
 import { removeLegacyDashboardHooks } from './upgrade-post-cutoff.js';
-import { buildRuntimeArgs } from './runtime/session-command.js';
 import { readConfigStrict } from './config-store.js';
 import { commandExists } from './shell-utils.js';
 import { installClaude, installCodex } from './runtime-setup.js';
@@ -49,12 +48,14 @@ function readRegular(file, { optional = false } = {}) {
 
 /** Render target-owned assets in private scratch space; never write live configuration. */
 export function prepareUpgradeRuntime(ctx, {
-  budget,
+  budget = ctx.budget,
   packageRoot = ctx.tempDir || PACKAGE_ROOT,
-  homeDir = ctx.homeDir || os.homedir(),
+  homeDir = os.homedir(),
   generatedAt = new Date(),
   stopFailureSupported,
   detectStopFailure = detectStopFailureSupport,
+  classifyBaseline = classifyInstructionBaseline,
+  writePrompt = writeMigrationPrompt,
 } = {}) {
   const check = () => budget?.check();
   check();
@@ -63,7 +64,7 @@ export function prepareUpgradeRuntime(ctx, {
   const templatesDir = path.join(sourceRoot, 'templates');
   const config = readConfigStrict(path.join(zylosDir, '.zylos/config.json'));
   if (config.state === 'error') throw config.error;
-  const runtime = config.state === 'ok' ? config.config.runtime || 'claude' : ctx.runtime || 'claude';
+  const runtime = config.state === 'ok' ? config.config.runtime || 'claude' : 'claude';
   if (!['claude', 'codex'].includes(runtime)) throw Error('Unsupported preparation runtime');
   const replacements = [];
   const warnings = [];
@@ -71,14 +72,17 @@ export function prepareUpgradeRuntime(ctx, {
     replacements.push({ path: relative, content, kind, ...(id ? { id } : {}) });
   };
   const relative = file => path.relative(zylosDir, file);
+  const promptRelative = relative(migrationPromptPath({ zylosDir }));
+  // Publication supports replacement bytes; an empty hook retires stale instructions.
+  const clearPendingPrompt = () => {
+    if (readRegular(path.join(zylosDir, promptRelative), { optional: true }) !== null) add(promptRelative, '');
+  };
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-render-'));
   fs.chmodSync(scratch, 0o700);
-  let instructionState;
   try {
     const version = readInstructionFormatVersion({ zylosDir });
     const claude = instructionPaths('claude', { zylosDir });
     if (version.valid && version.version > CURRENT_INSTRUCTION_FORMAT_VERSION) {
-      instructionState = 'future_format_preserved';
       warnings.push(`Instruction format ${version.version} is newer than this target; preserved`);
     } else {
       if (hasSplitTransactionResidue(zylosDir)) throw Error('Unresolved split instruction transaction; recover it before upgrade');
@@ -109,7 +113,7 @@ export function prepareUpgradeRuntime(ctx, {
         add(relative(claude.markerPath), JSON.stringify({ ...marker,
           refreshedAt: generatedAt.toISOString(), userSha256: hash(user) }, null, 2) + '\n');
         add('.zylos/instruction-format-version', `${CURRENT_INSTRUCTION_FORMAT_VERSION}\n`);
-        instructionState = 'split_prepared';
+        clearPendingPrompt();
       } else {
         // The historical v0.4 migration is safe in scratch and conserves CLAUDE.md.
         if (readRegular(claude.userPath, { optional: true }) === null) {
@@ -121,7 +125,6 @@ export function prepareUpgradeRuntime(ctx, {
             add('ZYLOS.md', readRegular(path.join(scratch, 'ZYLOS.md')));
           }
         }
-        instructionState = 'pending_migration';
         const originalBytes = readRegular(claude.userPath, { optional: true }) ??
           replacements.find(item => item.path === 'ZYLOS.md')?.content ?? null;
         let analysis;
@@ -134,7 +137,7 @@ export function prepareUpgradeRuntime(ctx, {
           let catalog;
           try {
             catalog = loadInstructionCatalog({ catalogPath: path.join(sourceRoot, 'data/instruction-baselines/manifest.json') });
-            analysis = classifyInstructionBaseline({ original, catalog });
+            analysis = classifyBaseline({ original, catalog });
           } catch (error) {
             warnings.push(`Automatic instruction classification unavailable: ${error.message}`);
           }
@@ -187,8 +190,18 @@ export function prepareUpgradeRuntime(ctx, {
           }
           add(relative(claude.markerPath), readRegular(instructionPaths('claude', { zylosDir: migrationRoot }).markerPath));
           add('.zylos/instruction-format-version', `${CURRENT_INSTRUCTION_FORMAT_VERSION}\n`);
-          instructionState = 'split_migration_prepared';
+          clearPendingPrompt();
         } else {
+          if (analysis && ['B', 'C'].includes(analysis.classification)) {
+            check();
+            try {
+              const prompt = writePrompt({ zylosDir: scratch, analysis,
+                originalSha256: hash(originalBytes), systemTemplatePath: claude.systemPath });
+              add(promptRelative, readRegular(prompt.filePath));
+            } catch (error) {
+              warnings.push(`Could not prepare instruction migration prompt: ${error.message}`);
+            }
+          }
           warnings.push(`Split instruction migration is pending${analysis ? ` (classification ${analysis.classification})` : ''}; legacy generated files and existing ZYLOS.md preserved`);
         }
       }
@@ -207,8 +220,9 @@ export function prepareUpgradeRuntime(ctx, {
     const healthSupported = stopFailureSupported ?? detectStopFailure();
     check();
     settings = removeLegacyDashboardHooks(settings, zylosDir);
+    const existsWithStaged = file => replacements.some(item => path.join(zylosDir, item.path) === file) || fs.existsSync(file);
     syncHooks(settings, {}, { zylosDir, log: () => {}, claimedKeys: claimedHookBaseKeys({ zylosDir }),
-      desiredHooks: desiredClaudeHooks({ zylosDir, stopFailureSupported: healthSupported }) });
+      desiredHooks: desiredClaudeHooks({ zylosDir, existsSync: existsWithStaged, stopFailureSupported: healthSupported }) });
     const templateSettings = JSON.parse(readRegular(path.join(templatesDir, '.claude/settings.json')));
     if (templateSettings.statusLine) settings.statusLine = templateSettings.statusLine;
     else delete settings.statusLine;
@@ -230,14 +244,11 @@ export function prepareUpgradeRuntime(ctx, {
     // P02 already attaches memory MCP per launch. Preserve that gate and verify
     // the installed target actually ships its server, without launching a runtime.
     readRegular(path.join(sourceRoot, 'skills/zylos-memory/scripts/memory-mcp-server.js'));
-    const startupArgs = Object.fromEntries(['claude', 'codex'].map(name => [name,
-      buildRuntimeArgs(name, { runtime: name, mode: 'default' }, { root: zylosDir })]));
     const manifest = '.zylos/runtime-env.manifest';
     if (readRegular(path.join(zylosDir, manifest), { optional: true }) === null) {
       add(manifest, readRegular(path.join(templatesDir, 'runtime-env.manifest.example')));
     }
     check();
-    return { replacements, runtime, homeDir: path.resolve(homeDir), warnings, instructionState,
-      agents: agents.map(name => `.claude/agents/${name}`), startupArgs };
+    return { replacements, runtime, homeDir: path.resolve(homeDir), warnings };
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }

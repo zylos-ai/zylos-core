@@ -12,12 +12,12 @@ function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-tail-'));
   fs.mkdirSync(path.join(root,'memory'),{recursive:true});
   const ctx={zylosDir:root,from:'old',to:'new',tempDir:null,servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
+  ctx.budget={deadlineAt:Date.now()+100000,check(){},remaining:()=>100000};
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   return ctx;
 }
 function deps(calls, extras={}) {
   return {
-    budget:{deadlineAt:Date.now()+100000,check(){},remaining:()=>100000},
     updateConfig:(input,options)=>{calls.push('thresholds');assert.deepEqual(input,{setIfAbsent:{new_session_threshold:70,codex_new_session_threshold:75}});assert.equal(options.waitMs,2000);},
     ensureMemoryMigration:()=>{calls.push('ensure');},
     rotateSession:()=>{calls.push('rotate');},
@@ -112,6 +112,7 @@ test('budget exhausted after prerequisites never starts services',async t=>{
   const ctx=fixture(t),calls=[];
   let checks=0;
   const d=deps(calls,{budget:{deadlineAt:Date.now(),remaining:()=>0,check(){if(++checks===5)throw Object.assign(Error('exhausted'),{code:'deadline_exceeded'});}}});
+  ctx.budget=d.budget;
   const result=await completeUpgradeFinalization(ctx,d);
   assert.equal(result.success,false);
   assert.equal(calls.includes('start'),false);
@@ -161,8 +162,8 @@ test('Dashboard budget exhaustion leaves Core done and prevents later owner oper
   const ctx=fixture(t),calls=[];
   ctx.firstDashboardTakeover=true;
   let expired=false;
+  ctx.budget={remaining:()=>expired?0:100000,check(){if(expired)throw Object.assign(Error('exhausted'),{code:'deadline_exceeded'});}};
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
-    budget:{remaining:()=>expired?0:100000,check(){if(expired)throw Object.assign(Error('exhausted'),{code:'deadline_exceeded'});}},
     dashboardOwner:{applyDashboardRegistration:()=>{calls.push('registration');expired=true;return {state:'done'};},applyDashboardRoute:()=>{calls.push('route');return {state:'done'};},verifyDashboard:()=>{calls.push('dashboardVerify');return {state:'ready'};}}
   }));
   assert.equal(result.success,true);

@@ -1,8 +1,13 @@
 import fs from 'node:fs';
 import { performance } from 'node:perf_hooks';
 
-export function parseFinalizeTimeout(value = 600) {
-  if (!/^[0-9]+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value) < 60 || Number(value) > 3600) {
+export const DEFAULT_FINALIZE_TIMEOUT_MS = 600000;
+export const LEGACY_FINALIZE_TIMEOUT_MS = 180000;
+export const MIN_FINALIZE_TIMEOUT_MS = 60000;
+export const MAX_FINALIZE_TIMEOUT_MS = 3600000;
+
+export function parseFinalizeTimeout(value = DEFAULT_FINALIZE_TIMEOUT_MS / 1000) {
+  if (!/^[0-9]+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value) < MIN_FINALIZE_TIMEOUT_MS / 1000 || Number(value) > MAX_FINALIZE_TIMEOUT_MS / 1000) {
     throw Object.assign(Error('finalize timeout must be an integer from 60 to 3600 seconds'), {code:'INVALID_ARGS'});
   }
   return Number(value) * 1000;
@@ -24,9 +29,9 @@ export function readFinalizeState(statePath, {now = Date.now()} = {}) {
   let state, stat;
   try { state = JSON.parse(fs.readFileSync(fd, 'utf8')); stat = fs.fstatSync(fd); }
   finally { fs.closeSync(fd); }
-  const timeout = Object.hasOwn(state,'finalizeTimeoutMs') ? state.finalizeTimeoutMs : 180000;
+  const timeout = Object.hasOwn(state,'finalizeTimeoutMs') ? state.finalizeTimeoutMs : LEGACY_FINALIZE_TIMEOUT_MS;
   const floor = Math.floor(stat.mtimeMs / 1000) * 1000;
-  if (!Number.isInteger(timeout) || timeout < 60000 || timeout > 3600000 || !Number.isFinite(floor) || floor > now) {
+  if (!Number.isInteger(timeout) || timeout < MIN_FINALIZE_TIMEOUT_MS || timeout > MAX_FINALIZE_TIMEOUT_MS || !Number.isFinite(floor) || floor > now) {
     throw Object.assign(Error('cannot determine parent finalize budget'), {code:'FINALIZE_BUDGET_INVALID'});
   }
   return {state, budget:budget(floor + timeout - 1000, now)};

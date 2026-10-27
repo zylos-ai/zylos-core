@@ -32,10 +32,12 @@ export function validateSnapshotManifest(manifest) {
   return items;
 }
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const OWNER_NATIVE_ACTIONS = new Set(['offline-preflight','upgrade-migrate','ordinary-migrate','version-probe']);
+const DASHBOARD_OWNER_ACTIONS = new Set([...OWNER_NATIVE_ACTIONS,'rehearse']);
 function driver(input, item) {
   if(item.owner==='dashboard') {
-    if(input.driverPath && !['offline-preflight','upgrade-migrate','ordinary-migrate','version-probe'].includes(input.action)) return createRequire(import.meta.url)(input.driverPath);
-    if(['offline-preflight','upgrade-migrate','ordinary-migrate','version-probe','rehearse'].includes(input.action)) {
+    if(input.driverPath && !OWNER_NATIVE_ACTIONS.has(input.action)) return createRequire(import.meta.url)(input.driverPath);
+    if(DASHBOARD_OWNER_ACTIONS.has(input.action)) {
       const frozen=path.join(path.dirname(fileURLToPath(import.meta.url)),'dashboard-owner');
       const root=input.dashboardRoot || (fs.existsSync(frozen) ? frozen : fileURLToPath(new URL('../../skills/dashboard',import.meta.url)));
       return createRequire(path.join(root,'package.json'))('better-sqlite3');
@@ -48,7 +50,7 @@ function driver(input, item) {
   const req = createRequire(path.join(root,item.owner,'package.json'));
   // Snapshot verification uses the frozen independent closure. Compatibility
   // preflight must load the actual owner's native dependency under this Node.
-  return req(['offline-preflight','upgrade-migrate','ordinary-migrate','version-probe'].includes(input.action) ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
+  return req(OWNER_NATIVE_ACTIONS.has(input.action) ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
 }
 function missing(file) {
   if (fs.existsSync(file)) return false;

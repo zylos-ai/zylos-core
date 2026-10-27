@@ -25,6 +25,7 @@ function fixture(t, config = {}) {
       if (budget.remaining() <= 0) throw Object.assign(Error('budget exhausted'), { code: 'deadline_exceeded' });
     },
   };
+  ctx.budget = budget;
   const deps = {
     budget,
     ensureMemoryMigration: () => { calls.push('ensure'); },

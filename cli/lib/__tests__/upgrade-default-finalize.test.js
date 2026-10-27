@@ -10,6 +10,7 @@ import { LEGACY_CORE_DATABASES, createCoreDbSnapshot, prepareRecoveryDependencie
 import { prepareUpgradeRuntime } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff } from '../upgrade-post-cutoff.js';
 import { commitCutoff } from '../upgrade-cutoff.js';
+import { resumeFinalize } from '../upgrade-resume.js';
 
 const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
@@ -113,7 +114,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {
   };
   const load = () => m.transaction(root, dir);
   const resume = (overrides = {}) => resumeUpgradeFinalization({ zylosDir: root, transactionDir: dir,
-    transactionId: 'tx', journal: load(), maintenance: m, budget }, { ...deps, ...overrides });
+    transactionId: 'tx', journal: load(), maintenance: m, budget:overrides.budget || budget }, { ...deps, ...overrides });
   return { root, home, dir, state, deps, calls, m, write, load, resume,
     read: relative => fs.readFileSync(path.join(root, relative), 'utf8'),
     run: overrides => runSelfUpgradeFinalize(state, { ...deps, ...overrides }) };
@@ -182,6 +183,109 @@ test('default finalizer reports unchanged published settings truthfully', async 
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(result.settingsChanged, false);
   assert.equal(f.read('.claude/settings.json'), settings);
+});
+
+for(const protectedUpgrade of [false,true]) test(`independent Dashboard rejects ${protectedUpgrade?'protected':'ordinary'} finalization before any writes`,async t=>{
+  const f=fixture(t,{protectedUpgrade});
+  f.write('.zylos/components.json',JSON.stringify({dashboard:{version:'legacy'}}));
+  const before=f.read('.claude/settings.json');
+  const result=await f.run();
+  assert.equal(result.success,false);
+  assert.equal(result.code,'DASHBOARD_STILL_INSTALLED');
+  assert.match(result.error,/zylos uninstall dashboard --yes/);
+  assert.deepEqual(f.calls,[]);
+  assert.equal(f.read('.claude/settings.json'),before);
+  if(protectedUpgrade)assert.equal(f.load().phase,'installing');
+  assertDataPreserved(f);
+});
+
+test('ordinary subsequent upgrade verifies Dashboard without repeating registration or route',async t=>{
+  const f=fixture(t,{protectedUpgrade:false});
+  f.write('.claude/skills/dashboard/src/lib/schema-owner.js','// existing Core owner');
+  const result=await f.run();
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.calls.includes('registration'),false);
+  assert.equal(f.calls.includes('route'),false);
+  assert.equal(f.calls.includes('dashboard-verify'),true);
+});
+
+test('resume entry preserves step 4 lock timeout without adding persistent fields',async t=>{
+  const f=fixture(t);
+  await f.run({ensureMemoryMigration(){throw Error('initial failure');}});
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},
+    finalize:ctx=>resumeUpgradeFinalization(ctx,{...f.deps,budget:ctx.budget,
+      updateConfig(){throw Object.assign(Error('configuration lock timed out'),{code:'LOCK_TIMEOUT'});}})});
+  assert.equal(result.ok,false);
+  const expected={id:'step4',code:'LOCK_TIMEOUT',reason:'configuration lock timed out'};
+  assert.deepEqual(result.data.core.failedItems,[expected]);
+  const status=await resumeFinalize(f.root,{status:true},{maintenance:f.m});
+  assert.equal(status.data.core.failedItems[0].reason,expected.reason);
+  assert.equal(Object.hasOwn(f.load(),'finalizeError'),false);
+  assert.equal(f.load().phase,'recovery_required');
+});
+
+for (const [fault, step, code] of [
+  ['threshold-budget',4,'deadline_exceeded'], ['threshold-lock',4,'LOCK_TIMEOUT'],
+  ['threshold-write',4,'EACCES'], ['ensure',5,'ENSURE_FAILED'],
+  ['rename',5,'EACCES'], ['between-ensure-rotate',5,'deadline_exceeded'],
+  ['state-budget',6,'deadline_exceeded'], ['state-read',6,'EACCES'],
+]) test(`D4 protected ${fault} blocks services and permits forward repair`,async t=>{
+  const f=fixture(t);
+  await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});
+  const state=f.read('memory/state.md'), settings=f.read('.claude/settings.json');
+  const config=f.read('.zylos/config.json');
+  const current=path.join(f.root,'memory/sessions/current.md');
+  const archived=path.join(f.root,'memory/sessions/repaired.md');
+  f.write('memory/sessions/current.md','legacy session bytes');
+  f.calls.length=0;
+  let expired=false, readingFault=fault==='state-read';
+  const read=fs.readFileSync;
+  fs.readFileSync=function(file,...args){
+    if(readingFault && String(file)===path.join(f.root,'memory/state.md')) {
+      throw Object.assign(Error('injected state read failure'),{code:'EACCES'});
+    }
+    return read.call(this,file,...args);
+  };
+  t.after(()=>{fs.readFileSync=read;});
+  const budget={deadlineAt:Date.now()+100000,remaining:()=>expired?0:100000,
+    check(){if(expired)throw Object.assign(Error('injected deadline'),{code:'deadline_exceeded'});}};
+  const fail=()=>{throw Object.assign(Error(`injected ${fault}`),{code});};
+  const rotate=()=>{if(fs.existsSync(current))fs.renameSync(current,archived);};
+  const result=await f.resume({budget,
+    publish:()=>{if(fault==='threshold-budget')expired=true;return {ok:true};},
+    ...(fault==='threshold-lock'||fault==='threshold-write'?{updateConfig:fail}:{}),
+    ensureMemoryMigration(){
+      if(fault==='ensure')fail();
+      if(fault==='between-ensure-rotate')expired=true;
+    },
+    rotateSession(){
+      if(fault==='rename')fail();
+      rotate();
+      if(fault==='state-budget')expired=true;
+    },
+  });
+  readingFault=false;
+  assert.equal(result.success,false,JSON.stringify(result));
+  assert.equal(result.failedStep,step);
+  assert.equal(result.code,code);
+  assert.match(result.next,/resume-finalize/);
+  assert.equal(f.calls.includes('start'),false);
+  assert.equal(f.load().phase,'recovery_required');
+  assert.equal(f.load().resumePhase,'compensation_closed');
+  assert.equal(Object.hasOwn(f.load(),'finalizeError'),false);
+  assertDataPreserved(f);
+  const repaired=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},
+    finalize:ctx=>resumeUpgradeFinalization(ctx,{...f.deps,budget:ctx.budget,
+      rotateSession:rotate})});
+  assert.equal(repaired.ok,true,JSON.stringify(repaired));
+  assert.equal(f.load().phase,'upgrade_complete');
+  assert.equal(f.calls.includes('start'),true);
+  assert.equal(f.read('memory/state.md'),state);
+  assert.equal(f.read('.claude/settings.json'),settings);
+  assert.equal(f.read('.zylos/config.json'),config);
+  assert.equal(fs.readFileSync(archived,'utf8'),'legacy session bytes');
+  assert.equal(fs.existsSync(current),false);
+  assertDataPreserved(f);
 });
 
 for (const failure of [false, true]) test(`default ordinary finalizer ${failure ? 'rejects invalid settings before publication' : 'migrates and publishes without a journal'}`, async t => {
@@ -282,7 +386,7 @@ test('declared damaged snapshot never falls back to ordinary finalization', asyn
   fs.appendFileSync(path.join(f.load().dbBackupDir, 'manifest.json'), '\n');
   const result = await f.run();
   assert.equal(result.success, false);
-  assert.match(result.error, /snapshot manifest hash mismatch/);
+  assert.match(result.error, /Snapshot manifest hash does not match cutoff facts/);
   assert.equal(f.load().phase, 'installing');
   assert.deepEqual(f.calls, []);
   assert.equal(f.read('CLAUDE.md'), 'old Claude output');
