@@ -22,7 +22,6 @@ import { desiredClaudeHooks, syncHooks, detectStopFailureSupport } from '../lib/
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
 import { isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
-import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
 import {
   isValidBaseUrl,
   saveApiKey,
@@ -37,8 +36,6 @@ import {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-const green  = (s) => `\x1b[32m${s}\x1b[0m`;
-const yellow = (s) => `\x1b[33m${s}\x1b[0m`;
 const bold   = (s) => `\x1b[1m${s}\x1b[0m`;
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -70,7 +67,7 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
       for (const group of data.groups) {
         if (data.sessionMode === null || data.sessionMode === 'single') {
           const labels = { effective: 'effective', not_running: 'not running', unknown: 'unknown',
-            pending_reclaim: 'pending reclaim (switch after the current conversation ends; command does not wait)' };
+            pending_reclaim: 'pending reclaim (the old session will be stopped and restarted with the new baseline; the current conversation will be interrupted; command does not wait)' };
           const retry = data.reclaim && ['not_submitted', 'unknown', 'stale_target'].includes(data.reclaim.result)
             ? `; ${data.reclaim.reason}; rerun this command later` : '';
           console.log(`  ${group.sessionGroup}: ${labels[group.status] || group.status}${retry}`);
@@ -199,27 +196,6 @@ export function validateRuntimeFlags(target, parsed) {
   return null;
 }
 
-export function restartRuntimeServices({
-  services = ['activity-monitor', 'c4-dispatcher'],
-  ecosystemPath = getCoreEcosystemPath(),
-  restartManagedProcessFn = restartManagedProcess,
-  logSuccess = console.log,
-  logWarning = console.error,
-} = {}) {
-  for (const svc of services) {
-    try {
-      restartManagedProcessFn(svc, {
-        ecosystemPath,
-        stdio: 'pipe',
-        fallbackToPlainRestartOnError: true,
-      });
-      logSuccess(`  ${green('✓')} ${svc}`);
-    } catch (e) {
-      logWarning(`  ${yellow(`Warning: failed to restart ${svc} — ${e.message}`)}`);
-    }
-  }
-}
-
 // ── Switch ────────────────────────────────────────────────────────────────
 
 export async function runtimeHooksReady(target) {
@@ -310,7 +286,7 @@ async function reclaimSingleRuntime(live, group, warnings, { send, lookup, reque
 export async function executeRuntimeSwitch(target, flags, { read = readZylosConfigStrict, mode = readSessionMode,
   exists = commandExists, adapter = getSessionAdapter, credentials = applyCredentials, baseUrl = applyBaseUrl,
   hooksReady = runtimeHooksReady, write = updateZylosConfigLocked, observe = observeRuntimeGroups,
-  restart = restartRuntimeServices, identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest,
+  identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest,
   requestId = () => `cli-rt-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
   const credentialsSaved = [], warnings = [];
   const fail = (code, message, extra = {}) => ({ ok: false, error: { code, message, persisted: [...credentialsSaved], ...extra } });

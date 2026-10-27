@@ -16,7 +16,7 @@ async function fixture(t, { baseline = 'claude', live = old, response = { ok: tr
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r-'));
   const file = path.join(dir, 'config.json'), socketPath = path.join(dir, 's');
   fs.writeFileSync(file, JSON.stringify({ runtime: baseline, session_mode: 'single', keep: 1 }));
-  const calls = { requests: [], identities: [], pm2: 0, lookup: 0, auth: 0, credentials: 0, writes: 0 };
+  const calls = { requests: [], identities: [], lookup: 0, auth: 0, credentials: 0, writes: 0 };
   const f9 = response?.reason === 'manual_restart_pending' ? [{ requestId: 'existing-request', expectedRunId: 'old-run' }] : [];
   let reply = response;
   const server = net.createServer(socket => {
@@ -42,7 +42,6 @@ async function fixture(t, { baseline = 'claude', live = old, response = { ok: tr
     credentials: () => { calls.credentials++; return true; }, hooksReady: () => ({ ready: true }),
     write: update => { calls.writes++; return updateConfigWithLock({ configFile: file, lockFile: `${file}.lock`, update }); },
     identity: async group => { calls.identities.push(group); if (live instanceof Error) throw live; return live; },
-    restart: () => { calls.pm2++; },
     send: (request, ...options) => {
       assert.deepEqual(options, [], 'use default replyMaxMs and no connect retry');
       assert.deepEqual(Object.keys(request).sort(), ['expectedRunId', 'requestId', 'type', 'version']);
@@ -67,7 +66,6 @@ async function command(f, json, flags = []) {
     });
     assert.equal(process.exitCode, 0, 'reclaim cannot change successful exit');
     assert.equal(result.ok, true);
-    assert.equal(f.calls.pm2, 0);
     assert.deepEqual(f.calls.identities.at(-1), null);
     assert.equal(result.data.groups.length, 1);
     assert.equal(result.data.groups[0].sessionGroup, 'origin');
