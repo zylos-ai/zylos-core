@@ -137,7 +137,7 @@ test('TTL preparation cancels on new messages or replaced run without fencing', 
   }
 });
 test('TTL preparation accepts terminal outcomes only after idle and same-run checks', async () => {
-  for (const status of ['done', 'timeout', 'superseded']) {
+  for (const status of ['done', 'timeout', 'superseded', 'failed', 'cancelled']) {
     const f = fixture(); f.unsummarized = 1;
     await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = status;
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.get('a')?.reason, 'ttl');
@@ -520,4 +520,19 @@ test('C3 unavailable capacity defers eviction; malformed resolved capacity remai
   f.context.configuration.capacity=capacity;
   await assert.rejects(f.lifecycle.checkEviction(f.scenes,f.context),{code:'CONFIG_UNREADABLE'});
  }
+});
+
+test('P05 LRU selects the oldest activity among multiple eligible idle groups regardless of enumeration order', async () => {
+  for (const order of [['newer', 'oldest', 'middle'], ['middle', 'newer', 'oldest']]) {
+    const f = fixture(); f.context.configuration.capacity = 3;
+    f.scenes = order.map(group => scene(group)); f.pending = [{ sessionGroup: 'waiting' }];
+    const activity = { oldest: 100, middle: 200, newer: 300 };
+    f.db.getLastActivity = group => ({ ts: activity[group] });
+    const result = await f.lifecycle.checkEviction(f.scenes, f.context);
+    assert.equal(result.need, 1); assert.equal(result.selected, 1);
+    assert.deepEqual([...f.fences.keys()], ['oldest']);
+    assert.equal(f.fences.get('oldest').reason, 'evict');
+    assert.equal(f.fences.get('oldest').runId, 'run-oldest');
+    assert.deepEqual(f.stops, []);
+  }
 });

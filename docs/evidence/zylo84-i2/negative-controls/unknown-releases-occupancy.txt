@@ -1,0 +1,90 @@
+Running 1 Node test files
+✖ T02 timeout unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict (1.913582ms)
+✖ T02 error unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict (0.237924ms)
+✖ T02 unavailable occupancy remains unknown after ten minutes without synthetic exits (0.28813ms)
+✔ T02 observed no-server follows absence and clears cached occupancy and alerts (1.206282ms)
+✔ T02 F1 alert target splits at first colon and rejects invalid/control-character destinations (0.220856ms)
+✔ T02 scene observations add no server probes and forwarded failures reach alert timing (0.670643ms)
+✔ T02 a non-tmux group error preserves all occupancy and does not start a server outage (0.339821ms)
+✔ T02 unknown occupancy has one shape after full observation or identity reads (0.442509ms)
+✔ T02 identity-only observation does not manufacture a full occupancy snapshot (0.288295ms)
+✔ T02 one failed socket retains its episode while another socket succeeds (0.604918ms)
+✖ T02 prolonged timeout and command errors never signal or end the real isolated server (191.098908ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 7
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 277.197015
+
+✖ failing tests:
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js:23:40
+✖ T02 timeout unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict (1.913582ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  false !== true
+
+      at TestContext.<anonymous> (file://<workspace>/workspace/p05-i2-gaps-evidence-2721/protocol-rate/final-mutation-unknown-releases-occupancy/skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js:26:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js:23:40
+✖ T02 error unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict (0.237924ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  false !== true
+
+      at TestContext.<anonymous> (file://<workspace>/workspace/p05-i2-gaps-evidence-2721/protocol-rate/final-mutation-unknown-releases-occupancy/skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js:26:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js:33:1
+✖ T02 unavailable occupancy remains unknown after ten minutes without synthetic exits (0.28813ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  false !== true
+
+      at TestContext.<anonymous> (file://<workspace>/workspace/p05-i2-gaps-evidence-2721/protocol-rate/final-mutation-unknown-releases-occupancy/skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js:37:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js:144:1
+✖ T02 prolonged timeout and command errors never signal or end the real isolated server (191.098908ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  false !== true
+
+      at TestContext.<anonymous> (file://<workspace>/workspace/p05-i2-gaps-evidence-2721/protocol-rate/final-mutation-unknown-releases-occupancy/skills/activity-monitor/scripts/__tests__/supervisor-server-observation.test.js:167:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

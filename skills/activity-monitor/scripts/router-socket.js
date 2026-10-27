@@ -41,8 +41,8 @@ export function createSupervisorConnectionHandler({ admission, router, readRun, 
       consumed = true;
       let request;
       try { request = JSON.parse(data.slice(0, end)); }
-      catch { reply({ ok: false, code: 'invalid_request' }); return; }
-      if (!request || typeof request !== 'object' || Array.isArray(request)) { reply({ ok: false, code: 'invalid_request' }); return; }
+      catch { reply({ requestId: null, ok: false, code: 'invalid_request' }); return; }
+      if (!request || typeof request !== 'object' || Array.isArray(request)) { reply({ requestId: null, ok: false, code: 'invalid_request' }); return; }
       try {
         if (['route','health_events_ready','notify_delivered'].includes(request.type) && !isOpen()) { socket.destroy(); return; }
         if (request.type === 'route') { reply(await router.route(request)); return; }

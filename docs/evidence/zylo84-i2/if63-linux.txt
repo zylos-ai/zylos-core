@@ -1,0 +1,38 @@
+Running 1 Node test files
+✔ IF63 ①⑫ transient registered run preserves attempt budget between M4 scans (589.989169ms)
+✔ IF63 ② two pending groups share one registered attempt (489.219256ms)
+✔ IF63 ③ absent M4 socket prevents restricted ordinary launch (409.971362ms)
+✔ IF63 4a persisted grant survives transport/process/fence interruption (573.281852ms)
+✔ IF63 4a-invalid persisted grant survives transport/process/fence interruption (423.709965ms)
+✔ IF63 4a-no-reply persisted grant survives transport/process/fence interruption (398.293068ms)
+✔ IF63 4b persisted grant survives transport/process/fence interruption (650.800698ms)
+✔ IF63 4d persisted grant survives transport/process/fence interruption (591.97675ms)
+✔ IF63 5 persisted grant survives transport/process/fence interruption (512.243745ms)
+✔ IF63 6 persisted grant survives transport/process/fence interruption (599.987443ms)
+✔ IF63 7 persisted grant survives transport/process/fence interruption (780.236129ms)
+✔ IF63 8 persisted grant survives transport/process/fence interruption (647.206112ms)
+✔ IF63 9 persisted grant survives transport/process/fence interruption (418.900311ms)
+✔ IF63 ⑰ unavailable real incoming route accelerates before prior notBefore (524.513248ms)
+✔ IF63 ⑰ rate_limited real incoming route accelerates before prior notBefore (521.085282ms)
+✔ IF63 ⑰ down real incoming route accelerates before prior notBefore (526.825826ms)
+✔ IF63 ⑰a′ without incoming message early next round preserves F10 bytes (415.340631ms)
+✔ IF63 ⑪ healthy bypasses start_attempt (616.71348ms)
+✔ IF63 ⑪ origin bypasses start_attempt (474.905429ms)
+✔ IF63 ⑪ single bypasses start_attempt (437.820759ms)
+✔ IF63 ⑬ bound other does not recount; Origin does (991.775491ms)
+✔ IF63 ⑬b bound other after stale does not recount; Origin does (1126.588248ms)
+✔ IF63 ⑭ replacement run binds only the new registration (876.62191ms)
+✔ IF63 ⑮ restart before probe conservatively counts once per lost association (1564.665581ms)
+✔ IF63 ⑯ same-group different run does not consume lost-reply association (1053.208915ms)
+✔ IF63 ④c⑩ incoming message during uncertainty accelerates once per 60 seconds (735.008685ms)
+✔ IF63 negative control: removing backoff fails the unchanged rejection oracle (502.518611ms)
+✔ IF63 negative control: group-only association fails the same runId counter oracle (1044.423337ms)
+✔ IF63 ⑪ concurrent healthy runtime and Origin launch while restricted group is backoff blocked (761.030755ms)
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 19321.799169

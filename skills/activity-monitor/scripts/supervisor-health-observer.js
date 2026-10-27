@@ -109,7 +109,7 @@ export class SupervisorHealthObserver {
       if(probe.phase === 'recovery') await this.coordinator.markProbeQueued(probe.runtime);
       return;
     }
-    this.finish(probe,{recovered:false});
+    this.finish(probe,{recovered:false,noTarget:true});
   }
   async pollProbe(probe) {
     if (this.stopped || probe.preparing) return;

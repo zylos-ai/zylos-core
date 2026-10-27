@@ -161,3 +161,34 @@ test('C3 present P04 reader supplies real capacity without a missing-dependency 
  assert.equal(result.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,0);
  await stop(w);
 });
+
+test('P05 actual Sock rejects requests throughout paused restoration, then admits after restoration completes', { timeout: 15000 }, async t => {
+  const { startSupervisor } = await import('../supervisor-main.js');
+  const root = prepare(t); let release, entered, service, observations = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const restoring = new Promise(resolve => { entered = resolve; });
+  const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
+    listPendingSessionGroups: () => [], getControlById: () => null,
+    resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };
+  const scenes = { observe: async () => { observations++; return []; },
+    readIdentity: async () => ({ present: false }), observeGroup: async () => ({ present: false }),
+    listRuns: async () => [], readRun: async () => null };
+  const starting = startSupervisor({ env: { ...process.env, HOME: root, ZYLOS_DIR: root }, db, scenes,
+    readMode: () => ({ mode: 'multi', keyPresent: true }), readConfig: () => ({ session_mode: 'multi', runtime: 'claude' }),
+    restoreTransition: async () => { entered(); await held; },
+    legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
+    sendAlert: () => { throw new Error('external send forbidden'); }, log: () => {},
+    loopOptions: { schedule: () => 1, cancel: () => {} } });
+  t.after(async () => { release(); service ??= await starting; await service.stop(); });
+  await Promise.race([restoring, starting.then(() => { throw new Error('restoration was not paused'); })]);
+  for (const value of [
+    { version: 1, type: 'restart_all', requestId: 'during-restore', reason: 'upgrade' },
+    { version: 1, type: 'manual_restart', requestId: 'manual-during-restore', expectedRunId: 'old-run' },
+  ]) assert.equal((await request(root, value)).code, 'entry_not_open');
+  assert.equal(observations, 0, 'no scheduling while restoration is pending');
+  assert.equal(fs.existsSync(path.join(root, 'activity-monitor/restart-requests.json')), false);
+  release(); service = await starting;
+  assert.equal(service.supervisor.admission.open, true); assert.ok(observations > 0);
+  assert.equal((await request(root, { version: 1, type: 'restart_all', requestId: 'after-restore', reason: 'upgrade' })).result, 'done_empty');
+  await service.stop();
+});

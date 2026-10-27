@@ -1,0 +1,30 @@
+Running 1 Node test files
+✖ T01/T08 legacy and new Origin publish separate identities; newest unrelated transcript cannot make legacy busy (265.561526ms)
+✔ T01/T08 legacy foreground from another PID or unobservable tmux never publishes state (141.993902ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 482.222481
+
+✖ failing tests:
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-legacy-status.test.js:21:1
+✖ T01/T08 legacy and new Origin publish separate identities; newest unrelated transcript cannot make legacy busy (265.561526ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  'busy' !== 'idle'
+
+      at TestContext.<anonymous> (file://<workspace>/workspace/p05-i2-gaps-evidence-2721/protocol-rate/final-mutation-legacy-newest-transcript/skills/activity-monitor/scripts/__tests__/supervisor-legacy-status.test.js:23:87)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'busy',
+    expected: 'idle',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

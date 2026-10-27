@@ -1,0 +1,57 @@
+Running 3 Node test files
+✔ IF-36 single real M1 paste in flight, real M4 manual kill retains gate until late bound Enter settles (846.757805ms)
+ℹ {"mode":"single","boundary":{"barrier":"after-real-paste","runId":"run-1"},"accounted":{"status":"pending","retry_count":0},"delayedKeys":[{"kind":"keys-attempt","runId":"run-1","keys":["Enter"]}],"finalRun":"replacement"}
+✔ IF-36 multi real M1 paste in flight, real M4 manual kill retains gate until late bound Enter settles (850.312757ms)
+ℹ {"mode":"multi","boundary":{"barrier":"after-real-paste","runId":"run-1"},"accounted":{"status":"pending","retry_count":0},"delayedKeys":[{"kind":"keys-attempt","runId":"run-1","keys":["Enter"]}],"finalRun":"replacement"}
+✔ IF-36 real M1 in-flight negative control detects early M4 D8 removal (786.781571ms)
+✔ IF-36 single real M1 replacement startup failure cannot restore completed manual intent or gate (808.515528ms)
+ℹ {"mode":"single","attempts":[{"kind":"launch","input":{"sessionGroup":null,"runId":"7cb4ea8a-07d2-44cf-888d-710f677f0bc0","launchConfig":{"runtime":"claude","mode":"default"},"sessionMode":"single"}}],"failures":[{"kind":"launch-error","input":{"sessionGroup":null,"runId":"7cb4ea8a-07d2-44cf-888d-710f677f0bc0","launchConfig":{"runtime":"claude","mode":"default"},"sessionMode":"single"},"code":"LAUNCH_FAILED","message":"tmux target guard rejected the operation"}],"resident":{"failures":1,"absentSince":1793084639297,"readySince":null,"fenced":false}}
+✔ IF-36 multi real M1 replacement startup failure cannot restore completed manual intent or gate (971.125666ms)
+ℹ {"mode":"multi","attempts":[{"kind":"launch","input":{"sessionGroup":"origin","runId":"02133454-db6b-4631-be78-3fb3148aea37","launchConfig":{"runtime":"claude","mode":"default"},"sessionMode":"multi"}}],"failures":[{"kind":"launch-error","input":{"sessionGroup":"origin","runId":"02133454-db6b-4631-be78-3fb3148aea37","launchConfig":{"runtime":"claude","mode":"default"},"sessionMode":"multi"},"code":"LAUNCH_FAILED","message":"tmux target guard rejected the operation"}],"resident":{"failures":1,"absentSince":1793084640222,"readySince":null,"fenced":false}}
+✔ IF-36 single/claude real M4 exact target rejection fields and accepted F9 identity (934.595014ms)
+✔ IF-36 single/claude actual empty Origin already_stopped has no intent, gate, stop or launch; later appearance survives (410.540803ms)
+✔ IF-36 single/codex real M4 exact target rejection fields and accepted F9 identity (1014.174478ms)
+✔ IF-36 single/codex actual empty Origin already_stopped has no intent, gate, stop or launch; later appearance survives (420.743369ms)
+✔ IF-36 multi/claude real M4 exact target rejection fields and accepted F9 identity (903.974031ms)
+✔ IF-36 multi/claude actual empty Origin already_stopped has no intent, gate, stop or launch; later appearance survives (393.335942ms)
+✔ IF-36 multi/codex real M4 exact target rejection fields and accepted F9 identity (915.278448ms)
+✔ IF-36 multi/codex actual empty Origin already_stopped has no intent, gate, stop or launch; later appearance survives (422.309671ms)
+✔ IF-36 actual M4 empty Origin conflict and corrupt F9 fail closed before already_stopped (206.401426ms)
+✔ IF-36 single manual restart stops busy Sync-held run despite running control, retains D8 until inflight accounted (556.907767ms)
+✔ IF-36 multi manual restart stops busy Sync-held run despite running control, retains D8 until inflight accounted (597.813932ms)
+✔ IF-36 negative control early gate withdrawal is detected by the same real M4 inflight assertion (565.504267ms)
+✔ IF-36 single full M4 SIGKILL before-intent recovers durable intent without resubmission or retargeting (773.951861ms)
+✔ IF-36 single full M4 SIGKILL after-intent recovers durable intent without resubmission or retargeting (838.439192ms)
+✔ IF-36 single full M4 SIGKILL after-fence recovers durable intent without resubmission or retargeting (875.356839ms)
+✔ IF-36 single full M4 SIGKILL after-stop recovers durable intent without resubmission or retargeting (1019.556311ms)
+✔ IF-36 single full M4 SIGKILL after-clear recovers durable intent without resubmission or retargeting (906.062825ms)
+✔ IF-36 single full M4 SIGKILL before-remove recovers durable intent without resubmission or retargeting (1013.116719ms)
+✔ IF-36 single full M4 SIGKILL after-remove recovers durable intent without resubmission or retargeting (1007.460556ms)
+✔ IF-36 multi full M4 SIGKILL before-intent recovers durable intent without resubmission or retargeting (829.710319ms)
+✔ IF-36 multi full M4 SIGKILL after-intent recovers durable intent without resubmission or retargeting (789.399359ms)
+✔ IF-36 multi full M4 SIGKILL after-fence recovers durable intent without resubmission or retargeting (887.723575ms)
+✔ IF-36 multi full M4 SIGKILL after-stop recovers durable intent without resubmission or retargeting (852.308642ms)
+✔ IF-36 multi full M4 SIGKILL after-clear recovers durable intent without resubmission or retargeting (918.305235ms)
+✔ IF-36 multi full M4 SIGKILL before-remove recovers durable intent without resubmission or retargeting (909.233704ms)
+✔ IF-36 multi full M4 SIGKILL after-remove recovers durable intent without resubmission or retargeting (914.643494ms)
+✔ IF-36 negative control retargeting recovered intent kills replacement and fails the same survival assertion (785.345178ms)
+✔ IF-36 single actual M4 transition/fence conflict holds accepted manual identity and does not reuse global gate (719.755548ms)
+✔ IF-36 multi actual M4 transition/fence conflict holds accepted manual identity and does not reuse global gate (735.255045ms)
+✔ IF-36 single real Origin appearing during target observation requires refresh, never auto-selects (422.248342ms)
+✔ IF-36 multi real Origin appearing during target observation requires refresh, never auto-selects (426.314302ms)
+✔ IF-36 single actual tmux server restart and reused Origin name cannot redirect accepted intent (594.47995ms)
+✔ IF-36 multi actual tmux server restart and reused Origin name cannot redirect accepted intent (580.897817ms)
+✔ IF-36 claude stopping Origin leaves real ready ordinary runtime and its ledger untouched (614.05255ms)
+✔ IF-36 codex stopping Origin leaves real ready ordinary runtime and its ledger untouched (650.203454ms)
+✔ IF-32 [a] SIGKILL real M4 while waiting for actual SQLite inflight delivery resumes same row and withdraws gate only after accounting (818.535486ms)
+✔ IF-32 clearing D8 on M4 restart fails the retained-wait assertion (733.119323ms)
+✔ IF-32 SIGKILL real M4 retains manual_restart row and never lets generic reclaim clear or stop it (957.725081ms)
+✔ IF-32 generic reclaim clearing a manual row is detected after actual M4 restart (711.93522ms)
+ℹ tests 44
+ℹ suites 0
+ℹ pass 44
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 25478.486591

@@ -1,0 +1,6240 @@
+[
+  {
+    "name": "IF63 8 persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1837293
+      },
+      {
+        "role": "m1",
+        "pid": 1837311
+      },
+      {
+        "role": "m4",
+        "pid": 1837419
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1837311,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-8846c0da410c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9c02b16d-5579-40ab-a014-3192b9175e38"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1837311,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-8846c0da410c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9c02b16d-5579-40ab-a014-3192b9175e38"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837311,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-300a624a3810",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "fbb3f036-8fad-48df-a03a-f6245624f21e"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1837311,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-300a624a3810",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "fbb3f036-8fad-48df-a03a-f6245624f21e"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-300a624a3810",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837293,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-8846c0da410c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9c02b16d-5579-40ab-a014-3192b9175e38"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837293,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-8846c0da410c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9c02b16d-5579-40ab-a014-3192b9175e38"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-8846c0da410c",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837419,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-300a624a3810",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "fbb3f036-8fad-48df-a03a-f6245624f21e"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837419,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-300a624a3810",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "fbb3f036-8fad-48df-a03a-f6245624f21e"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-300a624a3810",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246a healthy bypasses start_attempt",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1838310
+      },
+      {
+        "role": "m1",
+        "pid": 1838344
+      }
+    ],
+    "events": [
+      {
+        "kind": "launch",
+        "pid": 1838344,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "a2425221-7354-4016-a454-7f7846418ef5",
+          "launchConfig": {
+            "runtime": "codex",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "ok",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 0,
+            "lastRecoveryAt": 0,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 6 persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1836875
+      },
+      {
+        "role": "m1",
+        "pid": 1836922
+      },
+      {
+        "role": "m1",
+        "pid": 1837006
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1836922,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-e74d579b2ecf",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5a6ad13e-b43b-4df9-bb64-1112e2de34fc"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1836922,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-e74d579b2ecf",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5a6ad13e-b43b-4df9-bb64-1112e2de34fc"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-e74d579b2ecf",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837006,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-d946580f266f",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ee3df6b4-71f2-4c35-88fb-ae68f93603c5"
+        },
+        "round": 2
+      },
+      {
+        "kind": "reply",
+        "pid": 1837006,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-d946580f266f",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ee3df6b4-71f2-4c35-88fb-ae68f93603c5"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000010000-d946580f266f",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837006,
+        "clock": 1800000011000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-8d79ff0af2b9",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "903ef18e-6704-4550-bc4a-c7298095292f"
+        },
+        "round": 3
+      },
+      {
+        "kind": "reply",
+        "pid": 1837006,
+        "clock": 1800000011000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-8d79ff0af2b9",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "903ef18e-6704-4550-bc4a-c7298095292f"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000011000-8d79ff0af2b9",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837006,
+        "clock": 1800000012000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-8146fbd6e2f8",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "b4521185-b6cf-4b37-8044-64c2075ce420"
+        },
+        "round": 4
+      },
+      {
+        "kind": "reply",
+        "pid": 1837006,
+        "clock": 1800000012000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-8146fbd6e2f8",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "b4521185-b6cf-4b37-8044-64c2075ce420"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000012000-8146fbd6e2f8",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837006,
+        "clock": 1800000013000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-a9ef04d18c3a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0c09ed87-4c7d-405b-8546-cba41146287c"
+        },
+        "round": 5
+      },
+      {
+        "kind": "reply",
+        "pid": 1837006,
+        "clock": 1800000013000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-a9ef04d18c3a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0c09ed87-4c7d-405b-8546-cba41146287c"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000013000-a9ef04d18c3a",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837006,
+        "clock": 1800000014000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-019fda2c03e4",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "445d245c-e63b-4f4d-8e92-86f5320e676b"
+        },
+        "round": 6
+      },
+      {
+        "kind": "reply",
+        "pid": 1837006,
+        "clock": 1800000014000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-019fda2c03e4",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "445d245c-e63b-4f4d-8e92-86f5320e676b"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000014000-019fda2c03e4",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837006,
+        "clock": 1800000015000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-e3c68a404e4d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "1e2b1fb2-c9ad-46f9-8fb2-2aad49255196"
+        },
+        "round": 7
+      },
+      {
+        "kind": "reply",
+        "pid": 1837006,
+        "clock": 1800000015000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-e3c68a404e4d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "1e2b1fb2-c9ad-46f9-8fb2-2aad49255196"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000015000-e3c68a404e4d",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837006,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-fe6e660de4e3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "23dc912c-53b6-4da1-93c8-b3d20770b5c5"
+        },
+        "round": 8
+      },
+      {
+        "kind": "reply",
+        "pid": 1837006,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-fe6e660de4e3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "23dc912c-53b6-4da1-93c8-b3d20770b5c5"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000016000-fe6e660de4e3",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837006,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-3f2afd73fb7e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9b39aebd-fd02-454f-9f4a-0e6715a5ad36"
+        },
+        "round": 9
+      },
+      {
+        "kind": "reply",
+        "pid": 1837006,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-3f2afd73fb7e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9b39aebd-fd02-454f-9f4a-0e6715a5ad36"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000016000-3f2afd73fb7e",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-e74d579b2ecf",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5a6ad13e-b43b-4df9-bb64-1112e2de34fc"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-e74d579b2ecf",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5a6ad13e-b43b-4df9-bb64-1112e2de34fc"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-e74d579b2ecf",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-d946580f266f",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ee3df6b4-71f2-4c35-88fb-ae68f93603c5"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-d946580f266f",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ee3df6b4-71f2-4c35-88fb-ae68f93603c5"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-d946580f266f",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000011000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-8d79ff0af2b9",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "903ef18e-6704-4550-bc4a-c7298095292f"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000011000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-8d79ff0af2b9",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "903ef18e-6704-4550-bc4a-c7298095292f"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-8d79ff0af2b9",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000012000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-8146fbd6e2f8",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "b4521185-b6cf-4b37-8044-64c2075ce420"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000012000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-8146fbd6e2f8",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "b4521185-b6cf-4b37-8044-64c2075ce420"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-8146fbd6e2f8",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000013000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-a9ef04d18c3a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0c09ed87-4c7d-405b-8546-cba41146287c"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000013000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-a9ef04d18c3a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0c09ed87-4c7d-405b-8546-cba41146287c"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-a9ef04d18c3a",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000014000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-019fda2c03e4",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "445d245c-e63b-4f4d-8e92-86f5320e676b"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000014000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-019fda2c03e4",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "445d245c-e63b-4f4d-8e92-86f5320e676b"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-019fda2c03e4",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000015000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-e3c68a404e4d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "1e2b1fb2-c9ad-46f9-8fb2-2aad49255196"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000015000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-e3c68a404e4d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "1e2b1fb2-c9ad-46f9-8fb2-2aad49255196"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-e3c68a404e4d",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-fe6e660de4e3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "23dc912c-53b6-4da1-93c8-b3d20770b5c5"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-fe6e660de4e3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "23dc912c-53b6-4da1-93c8-b3d20770b5c5"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-fe6e660de4e3",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836875,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-3f2afd73fb7e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9b39aebd-fd02-454f-9f4a-0e6715a5ad36"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836875,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-3f2afd73fb7e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9b39aebd-fd02-454f-9f4a-0e6715a5ad36"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-3f2afd73fb7e",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 4a-invalid persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1836174
+      },
+      {
+        "role": "m1",
+        "pid": 1836210
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1836210,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d200818635b5",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "aaf55637-340d-4ccd-a11b-13d36ca72e68"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1836210,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d200818635b5",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "aaf55637-340d-4ccd-a11b-13d36ca72e68"
+        },
+        "result": {
+          "kind": "invalid_reply",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836210,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-99234be071fc",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "067946c3-116c-424c-9935-579b09e8865d"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1836210,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-99234be071fc",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "067946c3-116c-424c-9935-579b09e8865d"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-99234be071fc",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836174,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d200818635b5",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "aaf55637-340d-4ccd-a11b-13d36ca72e68"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836174,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d200818635b5",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "aaf55637-340d-4ccd-a11b-13d36ca72e68"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d200818635b5",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836174,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-99234be071fc",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "067946c3-116c-424c-9935-579b09e8865d"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836174,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-99234be071fc",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "067946c3-116c-424c-9935-579b09e8865d"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-99234be071fc",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246a concurrent healthy runtime and Origin launch while restricted group is backoff blocked",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1842093
+      },
+      {
+        "role": "m1",
+        "pid": 1842123
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1842123,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48ae2ffcadb2",
+          "runtime": "claude",
+          "sessionGroup": "blocked",
+          "runId": "17535142-6b57-47a0-aab5-58d316022300"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1842123,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48ae2ffcadb2",
+          "runtime": "claude",
+          "sessionGroup": "blocked",
+          "runId": "17535142-6b57-47a0-aab5-58d316022300"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-48ae2ffcadb2",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800001500000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1842123,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "origin",
+          "runId": "7b01f8aa-7fc6-4b2f-9cf5-1d49a9d69017",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1842123,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "healthy",
+          "runId": "e3fd4457-03ac-4fae-8ca9-6f3632762ecc",
+          "launchConfig": {
+            "runtime": "codex",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "ok",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 0,
+            "lastRecoveryAt": 0,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1842093,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48ae2ffcadb2",
+          "runtime": "claude",
+          "sessionGroup": "blocked",
+          "runId": "17535142-6b57-47a0-aab5-58d316022300"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1842093,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48ae2ffcadb2",
+          "runtime": "claude",
+          "sessionGroup": "blocked",
+          "runId": "17535142-6b57-47a0-aab5-58d316022300"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48ae2ffcadb2",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800001500000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246f same-group different run does not consume lost-reply association",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1840617
+      },
+      {
+        "role": "m1",
+        "pid": 1840655
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1840655,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5671cd87964",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "b7b2f553-a555-4902-8eaf-4d708ee00aea"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1840655,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5671cd87964",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "b7b2f553-a555-4902-8eaf-4d708ee00aea"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1840655,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "origin",
+          "runId": "765a4cbb-de50-4e7d-8e00-777fa39b65f8",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1840655,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "4919251e-a5c7-4332-8e3a-db34c1e5b596",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840617,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5671cd87964",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "b7b2f553-a555-4902-8eaf-4d708ee00aea"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1840617,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5671cd87964",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "b7b2f553-a555-4902-8eaf-4d708ee00aea"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5671cd87964",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1840617,
+        "clock": 1800000009000,
+        "group": "chat",
+        "runId": "4919251e-a5c7-4332-8e3a-db34c1e5b596",
+        "controlId": 1,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u2470a\u2032 without incoming message early next round preserves F10 bytes",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1838109
+      },
+      {
+        "role": "m1",
+        "pid": 1838135
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1838135,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-fb1d30ef102e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3b988c6b-a81f-4932-ba12-140b0878eeea"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1838135,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-fb1d30ef102e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3b988c6b-a81f-4932-ba12-140b0878eeea"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-fb1d30ef102e",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800001500000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1838135,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-408c4e85ed44",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ba814d0e-e633-4ad8-a8fc-31612c504df6"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1838135,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-408c4e85ed44",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ba814d0e-e633-4ad8-a8fc-31612c504df6"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000009000-408c4e85ed44",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800001500000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1838109,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-fb1d30ef102e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3b988c6b-a81f-4932-ba12-140b0878eeea"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1838109,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-fb1d30ef102e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3b988c6b-a81f-4932-ba12-140b0878eeea"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-fb1d30ef102e",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800001500000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1838109,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-408c4e85ed44",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ba814d0e-e633-4ad8-a8fc-31612c504df6"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1838109,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-408c4e85ed44",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ba814d0e-e633-4ad8-a8fc-31612c504df6"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-408c4e85ed44",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800001500000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u2460\u246b transient registered run preserves attempt budget between M4 scans",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1835257
+      },
+      {
+        "role": "m1",
+        "pid": 1835265
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1835265,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9890beb2792d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a8b7d6ef-efc5-4f1a-930b-bdef619bb508"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1835265,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9890beb2792d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a8b7d6ef-efc5-4f1a-930b-bdef619bb508"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-9890beb2792d",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1835265,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "a8b7d6ef-efc5-4f1a-930b-bdef619bb508",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1835265,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-4df9b390952f",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "47091d8c-b192-4fdf-bc2e-7ae9759aee7d"
+        },
+        "round": 16
+      },
+      {
+        "kind": "reply",
+        "pid": 1835265,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-4df9b390952f",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "47091d8c-b192-4fdf-bc2e-7ae9759aee7d"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000009000-4df9b390952f",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1835257,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9890beb2792d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a8b7d6ef-efc5-4f1a-930b-bdef619bb508"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1835257,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9890beb2792d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a8b7d6ef-efc5-4f1a-930b-bdef619bb508"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9890beb2792d",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1835257,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-4df9b390952f",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "47091d8c-b192-4fdf-bc2e-7ae9759aee7d"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1835257,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-4df9b390952f",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "47091d8c-b192-4fdf-bc2e-7ae9759aee7d"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-4df9b390952f",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u2462 absent M4 socket prevents restricted ordinary launch",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1835791
+      },
+      {
+        "role": "m1",
+        "pid": 1835934
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1835934,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9ce0df295427",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "eac7b8c8-d705-4a7e-a370-56ca9cc00cb1"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1835934,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9ce0df295427",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "eac7b8c8-d705-4a7e-a370-56ca9cc00cb1"
+        },
+        "result": {
+          "kind": "connect_failed",
+          "sent": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 4d persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1836596
+      },
+      {
+        "role": "m1",
+        "pid": 1836629
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1836629,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d689406ca354",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0e2713ad-2313-4b2d-a001-510b942b31e3"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1836629,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d689406ca354",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0e2713ad-2313-4b2d-a001-510b942b31e3"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836629,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-3c2ab11702ff",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "40b90b79-cee7-4ead-aee1-750fc506adba"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1836629,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-3c2ab11702ff",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "40b90b79-cee7-4ead-aee1-750fc506adba"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-3c2ab11702ff",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836596,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d689406ca354",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0e2713ad-2313-4b2d-a001-510b942b31e3"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836596,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d689406ca354",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0e2713ad-2313-4b2d-a001-510b942b31e3"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d689406ca354",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836596,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-3c2ab11702ff",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "40b90b79-cee7-4ead-aee1-750fc506adba"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836596,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-3c2ab11702ff",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "40b90b79-cee7-4ead-aee1-750fc506adba"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-3c2ab11702ff",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246e restart before probe conservatively counts once per lost association",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1840080
+      },
+      {
+        "role": "m1",
+        "pid": 1840098
+      },
+      {
+        "role": "m4",
+        "pid": 1840244
+      },
+      {
+        "role": "m4",
+        "pid": 1840447
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1840098,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f9470ec1ad3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a413f0cf-b17c-487e-aa99-22aae95240bb"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1840098,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f9470ec1ad3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a413f0cf-b17c-487e-aa99-22aae95240bb"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-9f9470ec1ad3",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1840098,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "a413f0cf-b17c-487e-aa99-22aae95240bb",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840098,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-198541aaf379",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "f405a35a-280a-421a-a2f3-3fc51a0d0c30"
+        },
+        "round": 13
+      },
+      {
+        "kind": "reply",
+        "pid": 1840098,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-198541aaf379",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "f405a35a-280a-421a-a2f3-3fc51a0d0c30"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000009000-198541aaf379",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000309000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840098,
+        "clock": 1800000309000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000309000-c5fa66873d58",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "2642e09f-0865-4b22-8db5-9d1df84d1151"
+        },
+        "round": 14
+      },
+      {
+        "kind": "reply",
+        "pid": 1840098,
+        "clock": 1800000309000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000309000-c5fa66873d58",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "2642e09f-0865-4b22-8db5-9d1df84d1151"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000309000-c5fa66873d58",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1840098,
+        "clock": 1800000309000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "2642e09f-0865-4b22-8db5-9d1df84d1151",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000309,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840098,
+        "clock": 1800000310000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000310000-b523b9c210da",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "e2905f7d-37ac-423c-851d-72ade0a172b5"
+        },
+        "round": 17
+      },
+      {
+        "kind": "reply",
+        "pid": 1840098,
+        "clock": 1800000310000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000310000-b523b9c210da",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "e2905f7d-37ac-423c-851d-72ade0a172b5"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000310000-b523b9c210da",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800003910000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840080,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f9470ec1ad3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a413f0cf-b17c-487e-aa99-22aae95240bb"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1840080,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f9470ec1ad3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a413f0cf-b17c-487e-aa99-22aae95240bb"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f9470ec1ad3",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1840244,
+        "clock": 1800000009000,
+        "group": "chat",
+        "runId": "a413f0cf-b17c-487e-aa99-22aae95240bb",
+        "controlId": 2,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840244,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-198541aaf379",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "f405a35a-280a-421a-a2f3-3fc51a0d0c30"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1840244,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-198541aaf379",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "f405a35a-280a-421a-a2f3-3fc51a0d0c30"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-198541aaf379",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000309000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 2,
+            "lastRecoveryAt": 1800000009,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840244,
+        "clock": 1800000309000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000309000-c5fa66873d58",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "2642e09f-0865-4b22-8db5-9d1df84d1151"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1840244,
+        "clock": 1800000309000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000309000-c5fa66873d58",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "2642e09f-0865-4b22-8db5-9d1df84d1151"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000309000-c5fa66873d58",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000309,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1840447,
+        "clock": 1800000310000,
+        "group": "chat",
+        "runId": "2642e09f-0865-4b22-8db5-9d1df84d1151",
+        "controlId": 4,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840447,
+        "clock": 1800000310000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000310000-b523b9c210da",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "e2905f7d-37ac-423c-851d-72ade0a172b5"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1840447,
+        "clock": 1800000310000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000310000-b523b9c210da",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "e2905f7d-37ac-423c-851d-72ade0a172b5"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000310000-b523b9c210da",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800003910000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 4,
+            "lastRecoveryAt": 1800000310,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 4a persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1835984
+      },
+      {
+        "role": "m1",
+        "pid": 1836031
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1836031,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0d0853217894",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "824e155e-4c52-4a25-8061-a0eb852ac181"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1836031,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0d0853217894",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "824e155e-4c52-4a25-8061-a0eb852ac181"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836031,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-1519d9866753",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "d7a28f70-8315-4290-9619-ea6130b03d71"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1836031,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-1519d9866753",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "d7a28f70-8315-4290-9619-ea6130b03d71"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-1519d9866753",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1835984,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0d0853217894",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "824e155e-4c52-4a25-8061-a0eb852ac181"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1835984,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0d0853217894",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "824e155e-4c52-4a25-8061-a0eb852ac181"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0d0853217894",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1835984,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-1519d9866753",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "d7a28f70-8315-4290-9619-ea6130b03d71"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1835984,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-1519d9866753",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "d7a28f70-8315-4290-9619-ea6130b03d71"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-1519d9866753",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 7 persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1837086
+      },
+      {
+        "role": "m1",
+        "pid": 1837115
+      },
+      {
+        "role": "m1",
+        "pid": 1837186
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1837115,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-df967be9b434",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "32223440-dcc8-4509-9fc5-33f1e37f782c"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1837115,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-df967be9b434",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "32223440-dcc8-4509-9fc5-33f1e37f782c"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837186,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-5e7942a7176d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3d786756-1ca2-4a45-8214-a4429e50348b"
+        },
+        "round": 2
+      },
+      {
+        "kind": "reply",
+        "pid": 1837186,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-5e7942a7176d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3d786756-1ca2-4a45-8214-a4429e50348b"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000010000-5e7942a7176d",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837186,
+        "clock": 1800000011000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-4f0b271c11b7",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5d2fdd08-885b-4156-b011-5dff3489870b"
+        },
+        "round": 3
+      },
+      {
+        "kind": "reply",
+        "pid": 1837186,
+        "clock": 1800000011000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-4f0b271c11b7",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5d2fdd08-885b-4156-b011-5dff3489870b"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000011000-4f0b271c11b7",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837186,
+        "clock": 1800000012000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-cc1a5cb847ca",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "fd4a4cbb-0b20-4c20-911f-d963476b4fa9"
+        },
+        "round": 4
+      },
+      {
+        "kind": "reply",
+        "pid": 1837186,
+        "clock": 1800000012000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-cc1a5cb847ca",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "fd4a4cbb-0b20-4c20-911f-d963476b4fa9"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000012000-cc1a5cb847ca",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837186,
+        "clock": 1800000013000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-d25745be5635",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "454791de-7ee7-4203-ae7a-79af2659be14"
+        },
+        "round": 5
+      },
+      {
+        "kind": "reply",
+        "pid": 1837186,
+        "clock": 1800000013000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-d25745be5635",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "454791de-7ee7-4203-ae7a-79af2659be14"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000013000-d25745be5635",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837186,
+        "clock": 1800000014000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-8a7799fcd849",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "71849763-788f-4675-be7e-3d988dcbaeb5"
+        },
+        "round": 6
+      },
+      {
+        "kind": "reply",
+        "pid": 1837186,
+        "clock": 1800000014000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-8a7799fcd849",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "71849763-788f-4675-be7e-3d988dcbaeb5"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000014000-8a7799fcd849",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837186,
+        "clock": 1800000015000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-fd9210bd77d1",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3436f6d9-0e3e-42d2-b83f-92606ee99839"
+        },
+        "round": 7
+      },
+      {
+        "kind": "reply",
+        "pid": 1837186,
+        "clock": 1800000015000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-fd9210bd77d1",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3436f6d9-0e3e-42d2-b83f-92606ee99839"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000015000-fd9210bd77d1",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837186,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-a86893fa5d48",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "902cbc80-3b61-4130-aeab-d5f2cfaaa6f3"
+        },
+        "round": 8
+      },
+      {
+        "kind": "reply",
+        "pid": 1837186,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-a86893fa5d48",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "902cbc80-3b61-4130-aeab-d5f2cfaaa6f3"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000016000-a86893fa5d48",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837186,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-2a00ed15626e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ffe63ba6-f7f3-427c-b903-e91d547092ca"
+        },
+        "round": 9
+      },
+      {
+        "kind": "reply",
+        "pid": 1837186,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-2a00ed15626e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ffe63ba6-f7f3-427c-b903-e91d547092ca"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000016000-2a00ed15626e",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-df967be9b434",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "32223440-dcc8-4509-9fc5-33f1e37f782c"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-df967be9b434",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "32223440-dcc8-4509-9fc5-33f1e37f782c"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-df967be9b434",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-5e7942a7176d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3d786756-1ca2-4a45-8214-a4429e50348b"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-5e7942a7176d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3d786756-1ca2-4a45-8214-a4429e50348b"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-5e7942a7176d",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000011000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-4f0b271c11b7",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5d2fdd08-885b-4156-b011-5dff3489870b"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000011000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-4f0b271c11b7",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5d2fdd08-885b-4156-b011-5dff3489870b"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000011000-4f0b271c11b7",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000012000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-cc1a5cb847ca",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "fd4a4cbb-0b20-4c20-911f-d963476b4fa9"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000012000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-cc1a5cb847ca",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "fd4a4cbb-0b20-4c20-911f-d963476b4fa9"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000012000-cc1a5cb847ca",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000013000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-d25745be5635",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "454791de-7ee7-4203-ae7a-79af2659be14"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000013000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-d25745be5635",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "454791de-7ee7-4203-ae7a-79af2659be14"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000013000-d25745be5635",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000014000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-8a7799fcd849",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "71849763-788f-4675-be7e-3d988dcbaeb5"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000014000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-8a7799fcd849",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "71849763-788f-4675-be7e-3d988dcbaeb5"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000014000-8a7799fcd849",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000015000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-fd9210bd77d1",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3436f6d9-0e3e-42d2-b83f-92606ee99839"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000015000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-fd9210bd77d1",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3436f6d9-0e3e-42d2-b83f-92606ee99839"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000015000-fd9210bd77d1",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-a86893fa5d48",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "902cbc80-3b61-4130-aeab-d5f2cfaaa6f3"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-a86893fa5d48",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "902cbc80-3b61-4130-aeab-d5f2cfaaa6f3"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-a86893fa5d48",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837086,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-2a00ed15626e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ffe63ba6-f7f3-427c-b903-e91d547092ca"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837086,
+        "clock": 1800000016000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-2a00ed15626e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "ffe63ba6-f7f3-427c-b903-e91d547092ca"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000016000-2a00ed15626e",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u2461 two pending groups share one registered attempt",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1835363
+      },
+      {
+        "role": "m1",
+        "pid": 1835401
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1835401,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d45a1e67349f",
+          "runtime": "claude",
+          "sessionGroup": "a",
+          "runId": "f82aea5d-a163-41b1-b2d8-cd2051b99943"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1835401,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d45a1e67349f",
+          "runtime": "claude",
+          "sessionGroup": "a",
+          "runId": "f82aea5d-a163-41b1-b2d8-cd2051b99943"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-d45a1e67349f",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1835401,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "a",
+          "runId": "f82aea5d-a163-41b1-b2d8-cd2051b99943",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1835363,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d45a1e67349f",
+          "runtime": "claude",
+          "sessionGroup": "a",
+          "runId": "f82aea5d-a163-41b1-b2d8-cd2051b99943"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1835363,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d45a1e67349f",
+          "runtime": "claude",
+          "sessionGroup": "a",
+          "runId": "f82aea5d-a163-41b1-b2d8-cd2051b99943"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-d45a1e67349f",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246d replacement run binds only the new registration",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1839673
+      },
+      {
+        "role": "m1",
+        "pid": 1839735
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1839735,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-f786f6f8355c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "48bfdcd6-87ce-4cd2-baef-41690fa29116"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1839735,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-f786f6f8355c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "48bfdcd6-87ce-4cd2-baef-41690fa29116"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-f786f6f8355c",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1839735,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "48bfdcd6-87ce-4cd2-baef-41690fa29116",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1839735,
+        "clock": 1800000068000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-47d9575a2fa4",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "294f82f2-e580-436e-a9ec-41cdbdbb8c23"
+        },
+        "round": 13
+      },
+      {
+        "kind": "reply",
+        "pid": 1839735,
+        "clock": 1800000068000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-47d9575a2fa4",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "294f82f2-e580-436e-a9ec-41cdbdbb8c23"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000068000-47d9575a2fa4",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1839735,
+        "clock": 1800000068000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "294f82f2-e580-436e-a9ec-41cdbdbb8c23",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 2,
+            "lastRecoveryAt": 1800000068,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1839673,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-f786f6f8355c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "48bfdcd6-87ce-4cd2-baef-41690fa29116"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1839673,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-f786f6f8355c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "48bfdcd6-87ce-4cd2-baef-41690fa29116"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-f786f6f8355c",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1839673,
+        "clock": 1800000068000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-47d9575a2fa4",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "294f82f2-e580-436e-a9ec-41cdbdbb8c23"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1839673,
+        "clock": 1800000068000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-47d9575a2fa4",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "294f82f2-e580-436e-a9ec-41cdbdbb8c23"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-47d9575a2fa4",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 2,
+            "lastRecoveryAt": 1800000068,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1839673,
+        "clock": 1800000069000,
+        "group": "chat",
+        "runId": "294f82f2-e580-436e-a9ec-41cdbdbb8c23",
+        "controlId": 1,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 negative control: removing backoff fails the unchanged rejection oracle",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1841171
+      },
+      {
+        "role": "m1",
+        "pid": 1841200
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1841200,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f0b90007423",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "05c3dff5-aae3-49c8-a928-8fb59fa1b589"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1841200,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f0b90007423",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "05c3dff5-aae3-49c8-a928-8fb59fa1b589"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-9f0b90007423",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800001500000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1841200,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-7a279f9d3116",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a4a007c6-a397-4b60-bd6c-a5f6dad0a7ac"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1841200,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-7a279f9d3116",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a4a007c6-a397-4b60-bd6c-a5f6dad0a7ac"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-7a279f9d3116",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1841200,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "a4a007c6-a397-4b60-bd6c-a5f6dad0a7ac",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 4,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1841171,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f0b90007423",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "05c3dff5-aae3-49c8-a928-8fb59fa1b589"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1841171,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f0b90007423",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "05c3dff5-aae3-49c8-a928-8fb59fa1b589"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-9f0b90007423",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800001500000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1841171,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-7a279f9d3116",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a4a007c6-a397-4b60-bd6c-a5f6dad0a7ac"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1841171,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-7a279f9d3116",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a4a007c6-a397-4b60-bd6c-a5f6dad0a7ac"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-7a279f9d3116",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 4,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246c bound other does not recount; Origin does",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1838915
+      },
+      {
+        "role": "m1",
+        "pid": 1838931
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1838931,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-02938410d8d6",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "35149991-caf2-468f-8c24-fa3b7cb05c4d"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1838931,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-02938410d8d6",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "35149991-caf2-468f-8c24-fa3b7cb05c4d"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-02938410d8d6",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1838931,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "35149991-caf2-468f-8c24-fa3b7cb05c4d",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1838931,
+        "clock": 1800000009000,
+        "input": {
+          "sessionGroup": "origin",
+          "runId": "97ba40e1-dfc7-483f-9f54-e27e86ad2ef1",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000009,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1838915,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-02938410d8d6",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "35149991-caf2-468f-8c24-fa3b7cb05c4d"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1838915,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-02938410d8d6",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "35149991-caf2-468f-8c24-fa3b7cb05c4d"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-02938410d8d6",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1838915,
+        "clock": 1800000009000,
+        "group": "chat",
+        "runId": "35149991-caf2-468f-8c24-fa3b7cb05c4d",
+        "controlId": 1,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1838915,
+        "clock": 1800000010000,
+        "group": "origin",
+        "runId": "97ba40e1-dfc7-483f-9f54-e27e86ad2ef1",
+        "controlId": 2,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u2470 rate_limited real incoming route accelerates before prior notBefore",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1837749
+      },
+      {
+        "role": "m1",
+        "pid": 1837757
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1837757,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-593129ae978a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "4aec32d7-84d1-4848-a9b4-94ba166cfead"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1837757,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-593129ae978a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "4aec32d7-84d1-4848-a9b4-94ba166cfead"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-593129ae978a",
+            "ok": false,
+            "code": "rate_limit_cooldown",
+            "notBefore": 1800003600000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837757,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-55019e84b04d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "c0faad25-4be6-4e4a-9558-d272458928bc"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1837757,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-55019e84b04d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "c0faad25-4be6-4e4a-9558-d272458928bc"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000009000-55019e84b04d",
+            "ok": true,
+            "result": "registered",
+            "reason": "user_message"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1837757,
+        "clock": 1800000009000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "c0faad25-4be6-4e4a-9558-d272458928bc",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "rate_limited",
+          "rateLimitActive": true,
+          "scheduling": {
+            "restartFailureCount": 4,
+            "lastRecoveryAt": 1800000009,
+            "lastDownCheckAt": 1800000000,
+            "lastUserMessageRecoveryAt": 1800000009,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837749,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-593129ae978a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "4aec32d7-84d1-4848-a9b4-94ba166cfead"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837749,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-593129ae978a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "4aec32d7-84d1-4848-a9b4-94ba166cfead"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-593129ae978a",
+          "ok": false,
+          "code": "rate_limit_cooldown",
+          "notBefore": 1800003600000
+        },
+        "health": {
+          "health": "rate_limited",
+          "rateLimitActive": true,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 1800000000,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 1800003600
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837749,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-55019e84b04d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "c0faad25-4be6-4e4a-9558-d272458928bc"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837749,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-55019e84b04d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "c0faad25-4be6-4e4a-9558-d272458928bc"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-55019e84b04d",
+          "ok": true,
+          "result": "registered",
+          "reason": "user_message"
+        },
+        "health": {
+          "health": "rate_limited",
+          "rateLimitActive": true,
+          "scheduling": {
+            "restartFailureCount": 4,
+            "lastRecoveryAt": 1800000009,
+            "lastDownCheckAt": 1800000000,
+            "lastUserMessageRecoveryAt": 1800000009,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 negative control: group-only association fails the same runId counter oracle",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1841339
+      },
+      {
+        "role": "m1",
+        "pid": 1841579
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1841579,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-4eb5e3a2ae1b",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "70e0b6f2-9708-4bb1-a795-1813a3c76255"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1841579,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-4eb5e3a2ae1b",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "70e0b6f2-9708-4bb1-a795-1813a3c76255"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1841579,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "origin",
+          "runId": "e0fc0640-cc35-4339-9e7c-9cd599c2c258",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1841579,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "45321635-39c0-411b-9f50-286692678b03",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1841339,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-4eb5e3a2ae1b",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "70e0b6f2-9708-4bb1-a795-1813a3c76255"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1841339,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-4eb5e3a2ae1b",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "70e0b6f2-9708-4bb1-a795-1813a3c76255"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-4eb5e3a2ae1b",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1841339,
+        "clock": 1800000009000,
+        "group": "chat",
+        "runId": "45321635-39c0-411b-9f50-286692678b03",
+        "controlId": 1,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u2463c\u2469 incoming message during uncertainty accelerates once per 60 seconds",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1840989
+      },
+      {
+        "role": "m1",
+        "pid": 1841015
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1841015,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a67ac0f45652",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a2a35dec-fa57-4b22-97b4-28376c948334"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1841015,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a67ac0f45652",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a2a35dec-fa57-4b22-97b4-28376c948334"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1841015,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-504cf59dd683",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "e6a60aad-23f2-4cea-817e-4436686ade26"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1841015,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-504cf59dd683",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "e6a60aad-23f2-4cea-817e-4436686ade26"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1841015,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-830ef722e613",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9f8773f0-9485-4ea8-a1f7-137e7a7d9450"
+        },
+        "round": 12
+      },
+      {
+        "kind": "reply",
+        "pid": 1841015,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-830ef722e613",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9f8773f0-9485-4ea8-a1f7-137e7a7d9450"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000010000-830ef722e613",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000069000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840989,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a67ac0f45652",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a2a35dec-fa57-4b22-97b4-28376c948334"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1840989,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a67ac0f45652",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a2a35dec-fa57-4b22-97b4-28376c948334"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a67ac0f45652",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840989,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-504cf59dd683",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "e6a60aad-23f2-4cea-817e-4436686ade26"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1840989,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-504cf59dd683",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "e6a60aad-23f2-4cea-817e-4436686ade26"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-504cf59dd683",
+          "ok": true,
+          "result": "registered",
+          "reason": "user_message"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000009,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 1800000009,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1840989,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-830ef722e613",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9f8773f0-9485-4ea8-a1f7-137e7a7d9450"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1840989,
+        "clock": 1800000010000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-830ef722e613",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9f8773f0-9485-4ea8-a1f7-137e7a7d9450"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000010000-830ef722e613",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000069000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000009,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 1800000009,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u2470 down real incoming route accelerates before prior notBefore",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1837936
+      },
+      {
+        "role": "m1",
+        "pid": 1837973
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1837973,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48a42184363e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "977b0e5d-9b1a-48b6-b9c5-92b6e30ce033"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1837973,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48a42184363e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "977b0e5d-9b1a-48b6-b9c5-92b6e30ce033"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-48a42184363e",
+            "ok": false,
+            "code": "down_retry_interval",
+            "notBefore": 1800003600000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837973,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-ab6323d4ded1",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "544ed685-97d8-4732-a53d-f3d3e20b3ff3"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1837973,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-ab6323d4ded1",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "544ed685-97d8-4732-a53d-f3d3e20b3ff3"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000009000-ab6323d4ded1",
+            "ok": true,
+            "result": "registered",
+            "reason": "user_message"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1837973,
+        "clock": 1800000009000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "544ed685-97d8-4732-a53d-f3d3e20b3ff3",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "down",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 1800000009,
+            "lastUserMessageRecoveryAt": 1800000009,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837936,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48a42184363e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "977b0e5d-9b1a-48b6-b9c5-92b6e30ce033"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837936,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48a42184363e",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "977b0e5d-9b1a-48b6-b9c5-92b6e30ce033"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-48a42184363e",
+          "ok": false,
+          "code": "down_retry_interval",
+          "notBefore": 1800003600000
+        },
+        "health": {
+          "health": "down",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 1800000000,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837936,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-ab6323d4ded1",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "544ed685-97d8-4732-a53d-f3d3e20b3ff3"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837936,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-ab6323d4ded1",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "544ed685-97d8-4732-a53d-f3d3e20b3ff3"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-ab6323d4ded1",
+          "ok": true,
+          "result": "registered",
+          "reason": "user_message"
+        },
+        "health": {
+          "health": "down",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 1800000009,
+            "lastUserMessageRecoveryAt": 1800000009,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246a origin bypasses start_attempt",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1838584
+      },
+      {
+        "role": "m1",
+        "pid": 1838610
+      }
+    ],
+    "events": [
+      {
+        "kind": "launch",
+        "pid": 1838610,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "origin",
+          "runId": "b56d50ec-3f62-4bac-a27a-ba078220bddc",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 0,
+            "lastRecoveryAt": 0,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 4b persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1836437
+      },
+      {
+        "role": "m1",
+        "pid": 1836457
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1836457,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0b6b2936959a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9bc2e49b-c927-4869-8c12-a464479f5181"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1836457,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0b6b2936959a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9bc2e49b-c927-4869-8c12-a464479f5181"
+        },
+        "result": {
+          "kind": "deadline_exceeded",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836457,
+        "clock": 1800000068000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-7492346e857d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "351b1d7a-dbfb-4643-9225-e2e3c241a5b9"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1836457,
+        "clock": 1800000068000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-7492346e857d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "351b1d7a-dbfb-4643-9225-e2e3c241a5b9"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000068000-7492346e857d",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1836457,
+        "clock": 1800000068000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "351b1d7a-dbfb-4643-9225-e2e3c241a5b9",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 2,
+            "lastRecoveryAt": 1800000068,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836437,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0b6b2936959a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9bc2e49b-c927-4869-8c12-a464479f5181"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836437,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0b6b2936959a",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "9bc2e49b-c927-4869-8c12-a464479f5181"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-0b6b2936959a",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836437,
+        "clock": 1800000068000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-7492346e857d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "351b1d7a-dbfb-4643-9225-e2e3c241a5b9"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836437,
+        "clock": 1800000068000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-7492346e857d",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "351b1d7a-dbfb-4643-9225-e2e3c241a5b9"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000068000-7492346e857d",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 2,
+            "lastRecoveryAt": 1800000068,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u2470 unavailable real incoming route accelerates before prior notBefore",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1837572
+      },
+      {
+        "role": "m1",
+        "pid": 1837620
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1837620,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-46a12b3fe45c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5e0b537d-87a9-475a-84a2-633d9cc6e335"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1837620,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-46a12b3fe45c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5e0b537d-87a9-475a-84a2-633d9cc6e335"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-46a12b3fe45c",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800001500000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837620,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-36f7dd9b79b3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3261fe70-06eb-4160-8d13-68222e5d2ac4"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1837620,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-36f7dd9b79b3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3261fe70-06eb-4160-8d13-68222e5d2ac4"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000009000-36f7dd9b79b3",
+            "ok": true,
+            "result": "registered",
+            "reason": "user_message"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1837620,
+        "clock": 1800000009000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "3261fe70-06eb-4160-8d13-68222e5d2ac4",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000009,
+            "lastDownCheckAt": 1800000000,
+            "lastUserMessageRecoveryAt": 1800000009,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837572,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-46a12b3fe45c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5e0b537d-87a9-475a-84a2-633d9cc6e335"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837572,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-46a12b3fe45c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5e0b537d-87a9-475a-84a2-633d9cc6e335"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-46a12b3fe45c",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800001500000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 3,
+            "lastRecoveryAt": 1800000000,
+            "lastDownCheckAt": 1800000000,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837572,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-36f7dd9b79b3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3261fe70-06eb-4160-8d13-68222e5d2ac4"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837572,
+        "clock": 1800000009000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-36f7dd9b79b3",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "3261fe70-06eb-4160-8d13-68222e5d2ac4"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000009000-36f7dd9b79b3",
+          "ok": true,
+          "result": "registered",
+          "reason": "user_message"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000009,
+            "lastDownCheckAt": 1800000000,
+            "lastUserMessageRecoveryAt": 1800000009,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 9 persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1837456
+      },
+      {
+        "role": "m1",
+        "pid": 1837477
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1837477,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-6203263b99de",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a1e4854a-8f10-4b9c-a498-4b513e25b685"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1837477,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-6203263b99de",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a1e4854a-8f10-4b9c-a498-4b513e25b685"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-6203263b99de",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837477,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5b0aa681e6b",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5c3c8c92-85d7-4208-82c9-584979fce809"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1837477,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5b0aa681e6b",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5c3c8c92-85d7-4208-82c9-584979fce809"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-a5b0aa681e6b",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837456,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-6203263b99de",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a1e4854a-8f10-4b9c-a498-4b513e25b685"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837456,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-6203263b99de",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a1e4854a-8f10-4b9c-a498-4b513e25b685"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-6203263b99de",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1837456,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5b0aa681e6b",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5c3c8c92-85d7-4208-82c9-584979fce809"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1837456,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5b0aa681e6b",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "5c3c8c92-85d7-4208-82c9-584979fce809"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-a5b0aa681e6b",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246a single bypasses start_attempt",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1838754
+      },
+      {
+        "role": "m1",
+        "pid": 1838784
+      }
+    ],
+    "events": [
+      {
+        "kind": "launch",
+        "pid": 1838784,
+        "clock": 1800000006000,
+        "input": {
+          "sessionGroup": null,
+          "runId": "14ed7c87-497c-4419-b6b1-4ad8859bcefd",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "single"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 0,
+            "lastRecoveryAt": 0,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 5 persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1836766
+      },
+      {
+        "role": "m1",
+        "pid": 1836788
+      },
+      {
+        "role": "m4",
+        "pid": 1836849
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1836788,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-ee9263faff81",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "369dec23-b41b-4c5d-9ce3-5398f8c44375"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1836788,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-ee9263faff81",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "369dec23-b41b-4c5d-9ce3-5398f8c44375"
+        },
+        "result": {
+          "kind": "no_reply",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836788,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-62b7b09fa863",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "cd3ba338-3200-4bc3-a885-1d62c390a988"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1836788,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-62b7b09fa863",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "cd3ba338-3200-4bc3-a885-1d62c390a988"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-62b7b09fa863",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836766,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-ee9263faff81",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "369dec23-b41b-4c5d-9ce3-5398f8c44375"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836766,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-ee9263faff81",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "369dec23-b41b-4c5d-9ce3-5398f8c44375"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-ee9263faff81",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836849,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-62b7b09fa863",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "cd3ba338-3200-4bc3-a885-1d62c390a988"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836849,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-62b7b09fa863",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "cd3ba338-3200-4bc3-a885-1d62c390a988"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-62b7b09fa863",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 4a-no-reply persisted grant survives transport/process/fence interruption",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1836297
+      },
+      {
+        "role": "m1",
+        "pid": 1836321
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1836321,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-836764762485",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a3a05468-e703-4411-b778-f50b0419a696"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1836321,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-836764762485",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a3a05468-e703-4411-b778-f50b0419a696"
+        },
+        "result": {
+          "kind": "no_reply",
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836321,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-24b6833d1941",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0593bc3a-dac2-4caa-a8ac-a56ad9bb45ff"
+        },
+        "round": 11
+      },
+      {
+        "kind": "reply",
+        "pid": 1836321,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-24b6833d1941",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0593bc3a-dac2-4caa-a8ac-a56ad9bb45ff"
+        },
+        "result": {
+          "kind": "rejected",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-24b6833d1941",
+            "ok": false,
+            "code": "attempt_backoff",
+            "notBefore": 1800000068000
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836297,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-836764762485",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a3a05468-e703-4411-b778-f50b0419a696"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836297,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-836764762485",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "a3a05468-e703-4411-b778-f50b0419a696"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-836764762485",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1836297,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-24b6833d1941",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0593bc3a-dac2-4caa-a8ac-a56ad9bb45ff"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1836297,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-24b6833d1941",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "0593bc3a-dac2-4caa-a8ac-a56ad9bb45ff"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-24b6833d1941",
+          "ok": false,
+          "code": "attempt_backoff",
+          "notBefore": 1800000068000
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "IF63 \u246cb bound other after stale does not recount; Origin does",
+    "processes": [
+      {
+        "role": "m4",
+        "pid": 1839261
+      },
+      {
+        "role": "m1",
+        "pid": 1839277
+      }
+    ],
+    "events": [
+      {
+        "kind": "request",
+        "pid": 1839277,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-374b0e60703c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "f55318d7-6109-415f-81ee-00bbbe23e906"
+        },
+        "round": 10
+      },
+      {
+        "kind": "reply",
+        "pid": 1839277,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-374b0e60703c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "f55318d7-6109-415f-81ee-00bbbe23e906"
+        },
+        "result": {
+          "kind": "accepted",
+          "reply": {
+            "version": 1,
+            "type": "start_attempt",
+            "requestId": "sa-1800000008000-374b0e60703c",
+            "ok": true,
+            "result": "registered",
+            "reason": "recovery_due"
+          },
+          "sent": true
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1839277,
+        "clock": 1800000008000,
+        "input": {
+          "sessionGroup": "chat",
+          "runId": "f55318d7-6109-415f-81ee-00bbbe23e906",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "launch",
+        "pid": 1839277,
+        "clock": 1800000010000,
+        "input": {
+          "sessionGroup": "origin",
+          "runId": "e590f94e-d4ff-475d-b9fc-b6ee51d462a3",
+          "launchConfig": {
+            "runtime": "claude",
+            "mode": "default"
+          },
+          "sessionMode": "multi"
+        },
+        "f10": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000010,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "pid": 1839261,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-374b0e60703c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "f55318d7-6109-415f-81ee-00bbbe23e906"
+        }
+      },
+      {
+        "kind": "persisted-response",
+        "pid": 1839261,
+        "clock": 1800000008000,
+        "request": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-374b0e60703c",
+          "runtime": "claude",
+          "sessionGroup": "chat",
+          "runId": "f55318d7-6109-415f-81ee-00bbbe23e906"
+        },
+        "response": {
+          "version": 1,
+          "type": "start_attempt",
+          "requestId": "sa-1800000008000-374b0e60703c",
+          "ok": true,
+          "result": "registered",
+          "reason": "recovery_due"
+        },
+        "health": {
+          "health": "unavailable",
+          "rateLimitActive": false,
+          "scheduling": {
+            "restartFailureCount": 1,
+            "lastRecoveryAt": 1800000008,
+            "lastDownCheckAt": 0,
+            "lastUserMessageRecoveryAt": 0,
+            "cooldownUntil": 0
+          }
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1839261,
+        "clock": 1800000009000,
+        "group": "chat",
+        "runId": "f55318d7-6109-415f-81ee-00bbbe23e906",
+        "controlId": 1,
+        "result": {
+          "recovered": false,
+          "classification": "stale"
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1839261,
+        "clock": 1800000010000,
+        "group": "chat",
+        "runId": "f55318d7-6109-415f-81ee-00bbbe23e906",
+        "controlId": 2,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      },
+      {
+        "kind": "probe",
+        "pid": 1839261,
+        "clock": 1800000011000,
+        "group": "origin",
+        "runId": "e590f94e-d4ff-475d-b9fc-b6ee51d462a3",
+        "controlId": 3,
+        "result": {
+          "recovered": false,
+          "classification": "other"
+        }
+      }
+    ]
+  }
+]

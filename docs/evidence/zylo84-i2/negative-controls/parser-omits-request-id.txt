@@ -1,0 +1,39 @@
+Running 1 Node test files
+✔ IF-62 A absent group/run keys are rejected over am.sock without a health write (29.82505ms)
+✖ IF-62 A unparseable input explicitly replies requestId null (12.374753ms)
+✔ IF-62 B registered missing reason: no launch, diagnostic, fresh next-round IDs (16.745751ms)
+✔ IF-62 B not_restricted with reason: no launch, diagnostic, fresh next-round IDs (6.218158ms)
+✔ IF-62 B backoff missing notBefore: no launch, diagnostic, fresh next-round IDs (6.200319ms)
+✔ IF-62 B notBefore in seconds: no launch, diagnostic, fresh next-round IDs (5.495404ms)
+✔ IF-62 B unknown code: no launch, diagnostic, fresh next-round IDs (5.37009ms)
+✔ IF-62 B probe_inflight with notBefore: no launch, diagnostic, fresh next-round IDs (5.908597ms)
+✔ IF-62 B registered with forbidden notBefore: no launch, diagnostic, fresh next-round IDs (5.035232ms)
+✔ IF-62 B valid backoff does not delay next round and an extra-field grant launches its requested run (5.777394ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 9
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 175.675804
+
+✖ failing tests:
+
+test at skills/activity-monitor/scripts/__tests__/i2-protocol-start-attempt.test.js:55:1
+✖ IF-62 A unparseable input explicitly replies requestId null (12.374753ms)
+  AssertionError [ERR_ASSERTION]: unknown request ID must be explicit
+
+  false !== true
+
+      at TestContext.<anonymous> (file://<workspace>/workspace/p05-i2-gaps-evidence-2721/protocol-rate/final-mutation-parser-omits-request-id/skills/activity-monitor/scripts/__tests__/i2-protocol-start-attempt.test.js:60:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
