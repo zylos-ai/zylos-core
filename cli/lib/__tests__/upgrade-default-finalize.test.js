@@ -254,6 +254,7 @@ for(const protectedUpgrade of [false,true]) test(`independent Dashboard rejects 
   assert.equal(result.success,false);
   assert.equal(result.code,'DASHBOARD_STILL_INSTALLED');
   assert.match(result.error,/zylos uninstall dashboard --yes/);
+  assert.match(result.next,/zylos uninstall dashboard --yes/);
   assert.deepEqual(f.calls,[]);
   assert.equal(f.read('.claude/settings.json'),before);
   if(protectedUpgrade)assert.equal(f.load().phase,'installing');

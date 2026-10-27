@@ -323,14 +323,28 @@ for(const [version,revision] of [['0.9.0','95b5850e2654fdc48b333c02b158acda2d536
   const finalizer=path.join(root,'target.js');fs.writeFileSync(finalizer,'');
   const dir=path.join(root,'tx');fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir,'finalizer.cjs'),'module.exports.quiesce=()=>({confirmed:true});');
-  const timeout=Object.assign(Error('spawnSync ETIMEDOUT'),{code:'ETIMEDOUT'}),journal={},updates=[];
-  const maintenance={read:()=>journal,update:(_dir,_j,changes)=>updates.push(changes),terminalValid:()=>false};
-  let observed;
-  const run=await frozenFinalizer(root,version,{finalizer,maintenance,spawnSync:(_node,args,options)=>{observed={args,options};return {error:timeout,pid:1234};}});
-  const result=run({preInstallProtection:true,transactionDir:dir});
-  assert.equal(result.success,false);assert.match(result.error,/ETIMEDOUT/);
-  assert.equal(observed.options.timeout,180000);assert.equal(observed.options.killSignal,'SIGKILL');assert.equal(observed.options.detached,true);
-  assert.equal(updates.at(-1).finalizerExitConfirmed,true);assert.equal(updates.at(-1).finalizerExitUnconfirmed,false);
+  // Builtin module mocks can survive restore() in later CommonJS loads.
+  // Keep the fake spawn and the complete frozen entry in a disposable child.
+  const driver=path.join(root,'timeout-driver.mjs');
+  fs.writeFileSync(driver,`
+    import assert from 'node:assert/strict';
+    import {frozenFinalizer} from ${JSON.stringify(new URL('./frozen-upgrade-entry.js',import.meta.url).href)};
+    const timeout=Object.assign(Error('spawnSync ETIMEDOUT'),{code:'ETIMEDOUT'}),journal={},updates=[];
+    const maintenance={read:()=>journal,update:(_dir,_j,changes)=>updates.push(changes),terminalValid:()=>false};
+    let observed;
+    const run=await frozenFinalizer(${JSON.stringify(root)},${JSON.stringify(version)},{finalizer:${JSON.stringify(finalizer)},maintenance,
+      spawnSync:(_node,args,options)=>{observed={args,options};return {error:timeout,pid:1234};}});
+    const result=run({preInstallProtection:true,transactionDir:${JSON.stringify(dir)}});
+    assert.equal(result.success,false);assert.match(result.error,/ETIMEDOUT/);
+    assert.equal(observed.options.timeout,180000);assert.equal(observed.options.killSignal,'SIGKILL');assert.equal(observed.options.detached,true);
+    assert.equal(updates.at(-1).finalizerExitConfirmed,true);assert.equal(updates.at(-1).finalizerExitUnconfirmed,false);
+  `);
+  const child=spawnSync(process.execPath,['--experimental-test-module-mocks',driver],{encoding:'utf8',timeout:30000});
+  assert.equal(child.error,undefined);assert.equal(child.status,0,child.stderr);
+  const commonjs=path.join(root,'after-timeout.cjs');
+  fs.writeFileSync(commonjs,"module.exports = require('node:child_process').spawnSync;");
+  const actual=require(commonjs)(process.execPath,['-e','process.stdout.write("real-spawn")'],{encoding:'utf8',timeout:10000});
+  assert.equal(actual.error,undefined);assert.equal(actual.status,0,actual.stderr);assert.equal(actual.stdout,'real-spawn');
  });
  for(const state of ['installing','closed','inconsistent'])test(`frozen ${version} recovery ${state==='closed'?'refuses closed cutoff without replacement':state==='inconsistent'?'negative control restores unsafe installing plus cutoff facts':'compensates installing format 1 control'}`,{skip:process.platform==='darwin'},async t=>{
   const closed=state==='closed';

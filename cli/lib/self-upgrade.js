@@ -709,6 +709,12 @@ export function step11_startCoreServices(ctx, deps = {}) {
         if(intent.target!==ecosystemDest||intent.originalMissing!==true||intent.intendedHash!==intendedHash||intent.staging!==staging){
           throw Error('ecosystem creation intent changed');
         }
+        if(!destinationStat&&stagingStat?.isFile()&&maintenance.hash(staging)!==intendedHash){
+          // A copy interrupted before publication can leave incomplete private staging.
+          fsApi.unlinkSync(staging);
+          maintenance.fsyncDir(ctx.transactionDir);
+          stagingStat=null;
+        }
         if(!stagingStat){
           if(destinationStat)throw Error('ecosystem creation staging provenance missing');
           fsApi.copyFileSync(ecosystemTemplateSrc,staging,fs.constants.COPYFILE_EXCL);

@@ -56,6 +56,51 @@ for (const cutoff of ['intent', 'staging', 'link']) test(`ecosystem creation res
   assert.equal(fs.statSync(f.destination).ino, fs.statSync(f.staging).ino);
 });
 
+for (const contents of ['', '// incomplete ecosystem']) test(`ecosystem resume recreates ${contents ? 'corrupt' : 'empty'} private staging`, t => {
+  const f = fixture(t);
+  assert.equal(f.run({ fs: { ...fs, copyFileSync(source, destination) {
+    fs.writeFileSync(destination, contents, { flag: 'wx' });
+    throw Error('copy interrupted');
+  } } }).status, 'failed');
+  const originalIntent = f.intent();
+  assert.equal(fs.existsSync(f.destination), false);
+  assert.deepEqual(f.calls, []);
+  let copies = 0;
+  const result = f.run({ fs: { ...fs, copyFileSync(source, destination, flags) {
+    copies++;
+    assert.equal(flags, fs.constants.COPYFILE_EXCL);
+    fs.copyFileSync(source, destination, flags);
+  } } });
+  assert.equal(result.status, 'done');
+  assert.equal(copies, 1);
+  assert.deepEqual(f.calls, ['scheduler']);
+  assert.deepEqual(fs.readFileSync(f.destination), fs.readFileSync(f.template));
+  assert.equal(fs.statSync(f.destination).ino, fs.statSync(f.staging).ino);
+  assert.deepEqual(f.intent(), originalIntent);
+});
+
+for (const defect of ['symlink', 'directory', 'unrelated-destination']) test(`incomplete ecosystem staging rejects ${defect}`, t => {
+  const f = fixture(t);
+  assert.equal(f.run({ fs: { ...fs, copyFileSync() { throw Error('copy interrupted'); } } }).status, 'failed');
+  if (defect === 'symlink') fs.symlinkSync(f.template, f.staging);
+  else if (defect === 'directory') fs.mkdirSync(f.staging);
+  else {
+    fs.writeFileSync(f.staging, '// incomplete staging');
+    fs.writeFileSync(f.destination, '// unrelated destination');
+  }
+  const before = fs.lstatSync(f.staging);
+  const result = f.run();
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /staging changed/);
+  assert.equal(fs.lstatSync(f.staging).ino, before.ino);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(fs.readFileSync(f.template), Buffer.from('module.exports = { apps: [] };\n'));
+  if (defect === 'unrelated-destination') {
+    assert.equal(fs.readFileSync(f.staging, 'utf8'), '// incomplete staging');
+    assert.equal(fs.readFileSync(f.destination, 'utf8'), '// unrelated destination');
+  } else assert.equal(fs.existsSync(f.destination), false);
+});
+
 for (const defect of ['independent-same-bytes', 'changed-link', 'missing-staging', 'symlink', 'intent', 'template']) {
   test(`ecosystem resume rejects ${defect} before restarting services`, t => {
     const f = fixture(t);
