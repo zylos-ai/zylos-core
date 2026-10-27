@@ -18,6 +18,7 @@ function fixture(overrides = {}) {
     hooksReady: () => { calls.push('hooks'); return { ready: true, pendingMigration: false }; },
     write: () => { calls.push('write'); return { previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'multi' }, changed: true }; },
     observe: async () => { calls.push('observe'); return { groups: [], groupsComplete: true, observationErrors: [] }; },
+    identity: async () => ({ present: false }),
     restart: () => { calls.push('restart'); },
     ...overrides,
   };
@@ -110,17 +111,20 @@ test('IF-47 lock-return snapshot determines previous/config/changed, including c
     assert.equal(result.data.result, changed ? 'saved' : 'unchanged');
     assert.equal(result.data.previousBaseline, changed ? 'claude' : 'codex');
     assert.equal(result.data.baseline, 'codex');
-    assert.equal(f.calls.includes('restart'), true);
+    assert.equal(f.calls.includes('restart'), false);
   }
 });
 
-test('IF-47 saved result survives local observation and restart errors', async () => {
+test('IF-47 saved result survives single identity read errors without restarting services', async () => {
   const f = fixture({ observe: async () => { throw new Error('unavailable'); },
     write: () => ({ previous: {}, config: { runtime: 'codex' }, changed: true }),
+    identity: async () => { throw new Error('unavailable'); },
     restart: () => { throw new Error('unavailable'); } });
   const result = await f.run();
   assert.equal(result.ok, true); assert.equal(result.data.groupsComplete, false);
-  assert.equal(result.data.warnings[0].code, 'SERVICE_RESTART_FAILED');
+  assert.equal(result.data.groups[0].status, 'unknown');
+  assert.deepEqual(result.data.warnings, []);
+  assert.equal(f.calls.includes('restart'), false);
 });
 
 test('IF-47 group union uses explicit override priority and preserves unknown identities', async () => {
