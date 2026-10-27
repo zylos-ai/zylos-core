@@ -10,9 +10,9 @@ import { test } from 'node:test';
 const initUrl = new URL('../../commands/init.js', import.meta.url).href;
 const exec = promisify(execFile);
 function fixture(t) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-init-integration-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'p6-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const root = path.join(home, 'zylos');
+  const root = path.join(home, 'z');
   fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
   fs.mkdirSync(path.join(home, 'empty-bin'));
   return { home, root };
@@ -107,9 +107,8 @@ test('IF-47 init template sync never restarts or invokes the wrapper CLI', async
   const control = path.join(root, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
   fs.mkdirSync(path.dirname(control), { recursive: true });
   fs.writeFileSync(control, recorder(restartLog));
-  const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p6-'));
-  t.after(() => fs.rmSync(socketDir, { recursive: true, force: true }));
-  const socketPath = path.join(socketDir, 's');
+  const socketPath = path.join(root, 'activity-monitor', 'am.sock');
+  fs.mkdirSync(path.dirname(socketPath), { recursive: true });
   assert.ok(Buffer.byteLength(socketPath) < 104, 'fixture socket must fit macOS sun_path including its terminator');
   const requests = [];
   const server = net.createServer(socket => {
