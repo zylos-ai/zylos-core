@@ -21,7 +21,7 @@ async function fixture(t) {
   fs.writeFileSync(path.join(bin,'pm2'),`#!${process.execPath}\nif(process.argv[2]!=='jlist')process.exit(9);console.log('[]');\n`,{mode:0o700});
   const prior=process.env.PATH;process.env.PATH=bin+path.delimiter+prior;t.after(()=>{process.env.PATH=prior;});
   const protection=await import(pathToFileURL(path.join(pkg,'cli/lib/upgrade-protection.js')));
-  ctx={coreDir:pkg,tempDir,from:'old',to:'new'};
+  ctx={coreDir:pkg,tempDir,from:'old',to:'new',firstTakeover:false,dashboardOwnerManaged:false};
   protection.beginUpgrade(ctx,{zylosDir:root,skillsDir});
   // This closure must originate in beginUpgrade, not a fixture-installed binding.
   const dir=ctx.transactionDir,m=protection.maintenance;

@@ -110,6 +110,27 @@ function unchanged(f) {
  f.m.worker=()=>{throw Error('database worker must not run');};
 }
 
+for(const firstTakeover of [false,true]) for(const dashboardOwnerManaged of [false,true]) {
+ test(`K2h compensation preflight uses persisted owner=${dashboardOwnerManaged}, takeover=${firstTakeover}`,async t=>{
+  const f=await fixture(t,{dashboard:true});
+  f.m.update(f.dir,f.j,{firstTakeover,dashboardOwnerManaged});
+  const result=f.m.preflight(f.dir,f.load(),null);
+  const row=result.databases.find(item=>item.source==='components/dashboard/dashboard.db');
+  assert.equal(row.ownerSkipped===true,!dashboardOwnerManaged);
+  assert.equal(row.currentVersion,dashboardOwnerManaged?12:undefined);
+ });
+ test(`K2i original verification uses persisted owner=${dashboardOwnerManaged}, takeover=${firstTakeover}`,async t=>{
+  const f=await fixture(t,{dashboard:true});
+  f.m.update(f.dir,f.j,{firstTakeover,dashboardOwnerManaged,installationIntent:false,phase:'prepared'});
+  // Exercise the original-worker path, independently of descriptor preflight.
+  fs.renameSync(path.join(f.dir,'descriptor.json'),path.join(f.dir,'descriptor.held.json'));
+  const owner=path.join(f.dashboardRoot,'src/lib/schema-owner.js');
+  fs.writeFileSync(owner,"export const dashboardSchemaOwner={inspectSchema(){throw Error('K2i persisted owner invoked');},migrate(){throw Error('must not migrate');}};");
+  if(dashboardOwnerManaged)assert.throws(()=>f.r.originalVerified(f.dir,f.load()),/K2i persisted owner invoked/);
+  else assert.doesNotThrow(()=>f.r.originalVerified(f.dir,f.load()));
+ });
+}
+
 for (const mutation of ['source', 'manifest']) test(`N4 ${mutation} mutation before baseline staging rejects before cutoff and compensates code/data`, async t => {
  const f=await fixture(t);
  const download=path.join(f.root,'download'),source=path.join(download,'skills/comm-bridge');
@@ -441,8 +462,18 @@ test('A26: partial rescue resumes recorded generation and refuses changed rescue
  fs.appendFileSync(path.join(f.dir,'rescue/comm-bridge_c4.db'),'tampered');const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/rescue hash conflict/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
 });
 for(const phase of ['restored_data_ready','restored_verifying'])test(`A16/A27: ${phase} resumes validation and retains valid normal writes`,async t=>{
- const f=await fixture(t);const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(7,'normal-write');db.close();f.m.update(f.dir,f.j,{phase});
+ const f=await fixture(t);
+ const snapshotHash=f.m.hash(f.db('comm-bridge/c4.db'));
+ f.m.start=()=>{
+  f.calls.push('start');
+  const db=new Database(f.db('comm-bridge/c4.db'));
+  try{db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(7,'normal-write');}finally{db.close();}
+ };
+ const dbRestore=Object.fromEntries(f.snapshot.manifest.databases.filter(row=>row.status!=='missing').map(row=>[row.source,{complete:true}]));
+ f.m.update(f.dir,f.j,{phase,dbRestore});
  const result=f.r.resume(f.dir);assert.equal(result.recovery_required,false);assert.ok(!f.calls.includes('stop'));const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT summary FROM checkpoints WHERE id=7').get().summary,'normal-write');read.close();assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));
+ assert.notEqual(f.m.hash(f.db('comm-bridge/c4.db')),snapshotHash);
+ assert.deepEqual(f.calls,['start','verify']);
 });
 test('A27: restored verification failure isolates without a second database replacement',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));f.m.verifyServices=()=>{throw Error('service failed');};

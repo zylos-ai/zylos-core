@@ -851,7 +851,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       return {status:'skipped',message:'existing working state preserved for mode conversion'};
     });
     await run(13,'commit_skill_baselines',()=> (deps.commitBaselines || step13_commitSkillBaselines)(ctx));
-    await run(7,'publish_maintenance_reader',()=> (deps.refreshMaintenanceReader || refreshMaintenanceReader)(ctx));
+    await run(7,'refresh_maintenance_reader',()=> (deps.refreshMaintenanceReader || refreshMaintenanceReader)(ctx));
     await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(ctx));
     await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(ctx));
   } catch(error) {return fail(error);}

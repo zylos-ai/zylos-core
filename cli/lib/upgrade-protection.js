@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged } from './core-db-backup.js';
+import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -67,6 +67,7 @@ export function beginUpgrade(ctx, {
   zylosDir,
   skillsDir
 }) {
+  if (typeof ctx.firstTakeover !== 'boolean' || typeof ctx.dashboardOwnerManaged !== 'boolean') throw Error('upgrade source decisions must be inspected before beginning');
   zylosDir = fs.realpathSync(zylosDir);
   // Canonical deployment roots make recovery identities independent of aliases.
   const expectedSkills = path.join(zylosDir, ".claude", "skills");
@@ -103,8 +104,8 @@ export function beginUpgrade(ctx, {
     nodePath: process.execPath,
     from: ctx.from,
     to: ctx.to,
-    firstTakeover: typeof ctx.firstTakeover === 'boolean' ? ctx.firstTakeover : inspectFirstDashboardTakeover(ctx.coreDir),
-    dashboardOwnerManaged: typeof ctx.dashboardOwnerManaged === 'boolean' ? ctx.dashboardOwnerManaged : inspectDashboardOwnerManaged(zylosDir),
+    firstTakeover: ctx.firstTakeover,
+    dashboardOwnerManaged: ctx.dashboardOwnerManaged,
     phase: 'preparing',
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
     installationIntent: false,
@@ -223,7 +224,7 @@ export function saveProtectedCode(ctx) {
     try {dependencyStat=fs.lstatSync(modules);} catch(error) {if(error.code!=='ENOENT')throw error;}
     if(!dependencyStat) e.dependencies={kind:'missing'};
     else {
-      if(!dependencyStat.isDirectory() || dependencyStat.isSymbolicLink())throw Error('invalid original skill dependencies: '+e.name);
+      if(!dependencyStat.isDirectory())throw Error('invalid original skill dependencies: '+e.name);
       const dependencyBackup=path.join(ctx.backupDir,'dependencies',e.name);
       fs.cpSync(modules,dependencyBackup,{recursive:true,verbatimSymlinks:true});
       const originalHash=maintenance.treeHash(dependencyBackup,{excludeNodeModules:false,includeModes:true});

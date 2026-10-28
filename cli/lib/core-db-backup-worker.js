@@ -296,7 +296,6 @@ export async function execute(input) {
       if(item.owner==='dashboard' && absent) {rows.push({source:item.source,status:'missing'});continue;}
       const mod=await ownerSchema(input,item);
       if(item.owner==='dashboard') {
-        if(absent) {rows.push({source:item.source,status:'missing'});continue;}
         await inspectDashboardFile(mod,source,absent);
         fs.mkdirSync(path.dirname(source),{recursive:true});
         const Database=driver(input),db=new Database(source,{fileMustExist:!absent,timeout:5000});

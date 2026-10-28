@@ -32,9 +32,18 @@ function fixture(t) {
   const services = m.services;
   m.services = () => [];
   t.after(() => { m.services = services; });
-  ctx = { coreDir, tempDir, from: 'old', to: 'new' };
+  ctx = { coreDir, tempDir, from: 'old', to: 'new', firstTakeover:true, dashboardOwnerManaged:false };
   return { root, skillsDir, ctx };
 }
+
+for (const field of ['firstTakeover','dashboardOwnerManaged']) test(`beginning requires inspected ${field} before creating transaction materials`, t => {
+  const f=fixture(t);
+  delete f.ctx[field];
+  const before=fs.readdirSync(path.join(f.root,'.backup'));
+  assert.throws(()=>beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir}),/source decisions must be inspected/);
+  assert.deepEqual(fs.readdirSync(path.join(f.root,'.backup')),before);
+  assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade')),false);
+});
 
 test('ordinary unconfigured adoption deploys bootstrap and atomically publishes a live controller', t => {
   const f = fixture(t);

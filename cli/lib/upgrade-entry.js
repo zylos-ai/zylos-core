@@ -49,7 +49,7 @@ export function inspectUpgradeSource(input, deps = {}) {
   for(const name of declaredSkills) {
     try {
       const stat=fs.lstatSync(path.join(skillsDir,name,'node_modules'));
-      if(!stat.isDirectory() || stat.isSymbolicLink())throw Object.assign(Error('Installed core skill node_modules must be a real directory or absent: '+name),{code:'INVALID_CORE_DEPENDENCIES'});
+      if(!stat.isDirectory())throw Object.assign(Error('Installed core skill node_modules must be a real directory or absent: '+name),{code:'INVALID_CORE_DEPENDENCIES'});
     } catch(error) {if(error.code!=='ENOENT')throw error;}
   }
   const firstTakeover = inspectFirstDashboardTakeover(coreDir);

@@ -11,7 +11,7 @@ export function inspectFirstDashboardTakeover(installedRoot) {
   const directory=path.join(installedRoot,'skills/dashboard');
   try {
     const stat=fs.lstatSync(directory);
-    if(!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Installed Dashboard must be a regular directory');
+    if(!stat.isDirectory()) throw Error('Installed Dashboard must be a regular directory');
     fs.accessSync(directory,fs.constants.R_OK);
     return false;
   } catch(error) {
