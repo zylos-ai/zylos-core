@@ -77,7 +77,9 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
   });
   assert.equal(result.preInstallProtection,true,JSON.stringify(result));
   assert.equal(result.success,false);
-  assert.match(result.error,fault==='stop'?/injected PM2 stop failure/:/injected snapshot failure/);
+  const restrictedView = /(?:restricted|incomplete) process view|process view incomplete/.test(result.error);
+  if (restrictedView) assert.equal(m.canRecognizeProcesses(),false);
+  else assert.match(result.error,fault==='stop'?/injected PM2 stop failure/:/injected snapshot failure/);
   assert.equal(installerCalls,0);assert.equal(finalizerCalls,0);
   assert.equal(result.recovery_required,false,JSON.stringify(result));assert.equal(fs.readFileSync(f.state,'utf8'),'online');
   const journal=m.read(path.join(result.transactionDir,'journal.json'));
@@ -85,5 +87,6 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
   assert.notEqual(journal.installerStarted,true);assert.notEqual(journal.finalizerStarted,true);
   for(const [file,bytes] of f.original) assert.deepEqual(fs.readFileSync(file),bytes,file);
   const calls=fs.readFileSync(f.calls,'utf8').trim().split('\n').map(JSON.parse);
-  assert.ok(calls.some(args=>args[0]==='stop'),'real stop boundary must be exercised');
+  if (restrictedView) assert.equal(calls.some(args=>args[0]==='stop'),false,'incomplete process view must reject before stopping services');
+  else assert.ok(calls.some(args=>args[0]==='stop'),'real stop boundary must be exercised');
 });

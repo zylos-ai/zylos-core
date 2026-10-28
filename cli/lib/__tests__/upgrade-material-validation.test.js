@@ -92,7 +92,7 @@ test('absent recovery directories permit ordinary database access',t=>{
 function readyFixture(t){
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-ready-identity-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
-  const j={formatVersion:1,transactionId:'tx',zylosDir:root,phase:'new_data_ready',installationIntent:true,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:'a'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}],originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:[...m.DB_PATHS,'components/dashboard/dashboard.db'].map(source=>({source,exists:true}))}};
+  const j={formatVersion:1,transactionId:'tx',zylosDir:root,phase:'restored_data_ready',installationIntent:true,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:'a'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}],originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:[...m.DB_PATHS,'components/dashboard/dashboard.db'].map(source=>({source,exists:true}))}};
   return {root,dir,j,save:()=>m.durable(path.join(dir,'journal.json'),j)};
 }
 const badReadyRecords={
@@ -113,7 +113,7 @@ for(const [label,alter] of Object.entries(badReadyRecords))test(`data-ready ${la
   const result=m.discover(f.root);assert.equal(result.blocked,true);assert.match(result.diagnostics.join(' '),/data-ready/);assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);assert.equal(fs.readFileSync(business,'utf8'),'normal writes');
 });
 test('complete data-ready records allow subsequent legitimate writes without frozen hash revalidation',t=>{
-  const f=readyFixture(t);for(const phase of ['new_data_ready','new_verifying','restored_data_ready','restored_verifying']){f.j.phase=phase;f.save();m.marker(f.root,f.dir,f.j);assert.equal(m.discover(f.root).blocked,false);assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));}
+  const f=readyFixture(t);for(const phase of ['restored_data_ready','restored_verifying']){f.j.phase=phase;f.save();m.marker(f.root,f.dir,f.j);assert.equal(m.discover(f.root).blocked,false);assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));}
 });
 for(const phase of ['upgrade_complete','restored_complete','aborted_before_install'])test(`${phase} cannot hide incomplete original identity or directory manifest`,t=>{
   const f=readyFixture(t);Object.assign(f.j,{phase,installationIntent:phase!=='aborted_before_install',cleanup:{complete:true,markerRemoved:true,servicesRestored:true},terminalEvidence:{verified:true,kind:phase==='aborted_before_install'?'original_deployment_and_readonly_data':'code_data_services'}});

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { completeUpgradeFinalization, createFinalizeState, readUpgradeModeStatus, step11_startCoreServices, step12_verifyServices, runSelfUpgradeFinalize } from '../self-upgrade.js';
+import { completeUpgradeFinalization, readUpgradeModeStatus, step11_startCoreServices, step12_verifyServices, runSelfUpgradeFinalize } from '../self-upgrade.js';
 
 const maintenance=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
@@ -46,6 +46,10 @@ function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-tail-'));
   fs.mkdirSync(path.join(root,'memory'),{recursive:true});
   const ctx={zylosDir:root,from:'old',to:'new',tempDir:null,servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
+  ctx.journal={phase:'compensation_closed'};
+  ctx.transactionDir=path.join(root,'transaction');
+  ctx.maintenance={transaction:()=>ctx.journal,classifyCutoff:()=> 'closed',
+    update(_dir,j,changes){Object.assign(j,changes);},stop(){},canRecognizeProcesses:()=>true};
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   return ctx;
 }
@@ -63,6 +67,7 @@ function deps(calls, extras={}) {
     restart:async options=>{calls.push('restart');assert.equal((await options.readMode()).mode,'single');return {ok:true,data:{result:'exit_enqueued'}};},
     audit:()=>{calls.push('audit');return [];},
     commitBaselines:()=>{calls.push('baselines');return {status:'done'};},
+    refreshMaintenanceReader(){},protectedSuccess(){},
     ...extras,
   };
 }
@@ -131,7 +136,7 @@ for(const failing of ['thresholds','ensure','rotate'])test(`failure in ${failing
   assert.equal(result.success,false);
   assert.match(result.error,/failure/);
   assert.equal(calls.includes('start'),false);
-  assert.match(result.next,/CLI/);
+  assert.match(result.next,/resume-finalize/);
 });
 test('W1 read failure stops before services and does not rewrite state',async t=>{
   const ctx=fixture(t),calls=[];
@@ -158,11 +163,6 @@ test('restart path read errors are reported without submitting; audit failure is
   assert.equal(calls.includes('restart'),false);
   assert.equal(result.checkpointAudit.state,'incomplete');
 });
-test('state never serializes an overall finalization timeout',()=>{
-  assert.equal(Object.hasOwn(createFinalizeState({}),'finalizeTimeoutMs'),false);
-  assert.equal(Object.hasOwn(createFinalizeState({finalizeTimeoutMs:60000}),'finalizeTimeoutMs'),false);
-});
-
 test('baseline failure prevents service and restart submission and leaves install pending',async t=>{
   const ctx=fixture(t),calls=[];
   const result=await completeUpgradeFinalization(ctx,deps(calls,{commitBaselines:()=>({status:'failed',error:'baseline write denied'})}));
@@ -220,6 +220,7 @@ function protectedReaderFixture(t,{phase='recovery_required',hooks='done',corrup
 test('closed recovery resumes through actual maintenance reader refresh before services',async t=>{
   const {ctx,journal,stable}=protectedReaderFixture(t),calls=[];
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
+    refreshMaintenanceReader:undefined,
     startServices:()=>{assert.ok(fs.readFileSync(stable,'utf8').startsWith(fs.readFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),'utf8')));assert.match(fs.readFileSync(stable,'utf8'),/postCutoffReady:true/);calls.push('start');return {status:'done'};},
     protectedSuccess:()=>{calls.push('success');}
   }));
@@ -253,16 +254,16 @@ test('Dashboard persists independent failure and retries it without repeating co
 });
 
 test('unfinished publication blocks actual maintenance reader refresh and service start',async t=>{
-  const {ctx,stable}=protectedReaderFixture(t,{hooks:'failed'}),calls=[];
-  const result=await completeUpgradeFinalization(ctx,deps(calls));
+  const {ctx,stable}=protectedReaderFixture(t,{hooks:'failed'}),calls=[];calls.protectedReader=true;
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{refreshMaintenanceReader:undefined}));
   assert.equal(result.success,false);
   assert.equal(calls.includes('start'),false);
   assert.equal(fs.readFileSync(stable,'utf8'),'old stable reader');
 });
 
 test('untrusted recovery cutoff cannot refresh stable reader or start services',async t=>{
-  const {ctx,stable}=protectedReaderFixture(t,{corrupt:true}),calls=[];
-  await assert.rejects(()=>completeUpgradeFinalization(ctx,deps(calls)),/publication is not ready/);
+  const {ctx,stable}=protectedReaderFixture(t,{corrupt:true}),calls=[];calls.protectedReader=true;
+  await assert.rejects(()=>completeUpgradeFinalization(ctx,deps(calls,{refreshMaintenanceReader:undefined})),/publication is not ready/);
   assert.equal(calls.includes('start'),false);
   assert.equal(fs.readFileSync(stable,'utf8'),'old stable reader');
 });

@@ -343,61 +343,13 @@ export function recovery(ctx) {
       if (maintenance.canRecognizeProcesses()) release();
       return {attempted:false,completed:false,stage:'compensation_closed',error,recovery_required:true};
     }
-    // This entry is the parent's explicit failed-upgrade path, whereas direct
-    // bootstrap resume is interruption continuation. A failed new finalizer
-    // after data_ready must compensate, even if a later startup retry could
-    // pass. Verified terminals and restored-data validation never compensate.
-    const failedNewReady = !maintenance.terminalValid(saved) && maintenance.READY.has(saved.phase) && saved.phase.startsWith('new');
-    if (ctx.finalizerExitUnconfirmed) {
-      // The child may have persisted ready/terminal state and new identities.
-      // Never overwrite those with the old parent's in-memory journal.
-      const terminal = maintenance.terminalValid(saved);
-      maintenance.marker(root, dir, saved);
-      maintenance.update(dir, saved, {
-        ...(terminal ? {
-          terminalServicesStopped: true
-        } : {
-          resumePhase: failedNewReady ? 'restoring' : saved.phase === 'recovery_required' ? saved.resumePhase : saved.phase,
-          phase: 'recovery_required'
-        }),
-        error: 'finalizer exit unconfirmed',
-        finalizerExitUnconfirmed: true
-      });
-      let error = 'finalizer exit unconfirmed; do not replace databases';
-      try {
-        maintenance.stop(saved);
-      } catch (stopError) {
-        error += '; isolation: ' + stopError.message;
-        maintenance.update(dir, saved, {
-          error
-        });
-      }
-      if (maintenance.canRecognizeProcesses()) release();
-      return {
-        attempted: false,
-        completed: false,
-        stage: 'finalizer_exit',
-        error,
-        recovery_required: true
-      };
-    }
-    if (failedNewReady) {
-      maintenance.marker(root, dir, saved);
-      maintenance.update(dir, saved, {
-        phase: 'recovery_required',
-        resumePhase: 'restoring',
-        error: 'new finalizer failed after data-ready publication'
-      });
-      maintenance.stop(saved);
-    }
     if (maintenance.terminalValid(saved)) {
       const cleanup = maintenance.finishTerminal(dir, saved);
       release();
       return {attempted:saved.phase === 'restored_complete', completed:saved.phase === 'restored_complete', stage:saved.phase, recovery_required:false, ...cleanup};
     }
     if (maintenance.canRecognizeProcesses()) release();
-    // A lost finalizer response cannot authorize compensation of an already
-    // verified terminal. Resume its saved runner for cleanup/exit verification.
+    // Resume only the frozen runner after checking its retained identity.
     let runner = path.join(dir, 'runner.cjs');
     if (maintenance.hash(runner) !== saved.recoveryHashes?.['runner.cjs']) throw Error('transaction recovery runner changed');
     if (saved.installationIntent && !maintenance.terminalValid(saved)) {
@@ -468,11 +420,7 @@ export function protectedDataReady(ctx, overrides = {}) {
   const current=maintenance.transaction(j.zylosDir,dir);
   const marker=maintenance.read(path.join(j.zylosDir,'.zylos/upgrade/active.json'));
   if(current.phase!=='installing' || current.installationIntent!==true || current.transactionId!==j.transactionId || marker.transactionId!==j.transactionId || marker.transactionDir!==dir) throw Error('active migration transaction changed before data-ready');
-  if (!overrides.deferPublication) maintenance.update(dir, current, {
-    phase: 'new_data_ready'
-  });
   ctx.journal = current;
-  // READY permits normal access; retain the marker until verified terminal exit.
 }
 export function protectedSuccess(ctx) {
   const maintenance = maintenanceFor(ctx);
@@ -490,6 +438,6 @@ export function protectedSuccess(ctx) {
       servicesRestored: true
     }
   });
-  // The parent confirms finalizer exit before finishTerminal removes the marker.
+  // Finalization retains controller ownership through terminal cleanup.
   return maintenance.finishTerminal(dir,j);
 }

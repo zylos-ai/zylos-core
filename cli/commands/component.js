@@ -128,49 +128,6 @@ export function formatC4Reply(type, data) {
       if (skill?.caddy?.notice) r += `\n\nCaddy routes: ${skill.caddy.notice}`;
       return r;
     }
-    case 'self-upgrade': {
-      const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles } = data;
-      if (!success) {
-        let r = `zylos-core upgrade failed${failedStep==null?'':` (step ${failedStep})`}: ${error}`;
-        if (rollback?.steps?.length) r += '\nRollback: ' + rollback.steps.map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
-        const completion = formatSelfUpgradeCompletion(data); if (completion) r += '\n' + completion;
-        const protection=formatSelfUpgradeProtection(data);if(protection)r+='\n'+protection;
-        return r;
-      }
-      let r = `zylos-core upgraded: ${from} -> ${to}`;
-      if (changelog) r += `\n\nChangelog:\n${changelog}`;
-      if (mergedFiles?.length > 0) {
-        r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
-      }
-      if (mergeConflicts?.length > 0) {
-        const withBackup = mergeConflicts.filter(c => c.backupPath);
-        const withoutBackup = mergeConflicts.filter(c => !c.backupPath);
-        if (withBackup.length > 0) {
-          r += '\n\nConflict files (local backed up, new version applied):';
-          for (const c of withBackup) r += `\n  ${c.skill}/${c.file} → backup: ${c.backupPath}`;
-          r += '\n\nUse Claude to review and re-merge backed-up local changes.';
-        }
-        if (withoutBackup.length > 0) {
-          r += `\n\nOverwritten without backup (${withoutBackup.length}): ${withoutBackup.map(c => `${c.skill}/${c.file}`).join(', ')}`;
-        }
-      }
-      if (migrationHints?.length > 0) {
-        r += '\n\nACTION REQUIRED - Hook changes in ~/zylos/.claude/settings.json:';
-        for (const hint of migrationHints) {
-          if (hint.type === 'missing_hook') {
-            r += `\n  [${hint.event}] ADD: ${hint.command} (timeout: ${hint.timeout}ms)`;
-          } else if (hint.type === 'modified_hook') {
-            r += `\n  [${hint.event}] UPDATE: ${hint.command} (timeout: ${hint.timeout}ms)`;
-          } else if (hint.type === 'removed_hook') {
-            r += `\n  [${hint.event}] REMOVE: ${hint.command}`;
-          }
-        }
-        r += '\nPlease update hooks in ~/zylos/.claude/settings.json and restart Claude to apply.';
-      }
-      const completion = formatSelfUpgradeCompletion(data); if (completion) r += '\n\n' + completion;
-      const protection=formatSelfUpgradeProtection(data);if(protection)r+='\n'+protection;
-      return r;
-    }
     case 'check-all': {
       const { total, updatable, components } = data;
       const failed = components.filter(c => !c.success);
@@ -286,42 +243,6 @@ export function formatSelfUpgradeCompletion(data) {
   if (data.next) lines.push(data.next);
   if (data.recoveryError) lines.push(`Recovery journal error: ${data.recoveryError}`);
   return lines.join('\n');
-}
-
-// Shared human/C4 details preserve the independent upgrade and recovery outcomes.
-export function formatSelfUpgradeProtection(data) {
-  const lines=[];
-  for(const dir of data.rehearsalCleanup?.removed || [])lines.push(`Removed rehearsal copy: ${dir}`);
-  for(const warning of data.rehearsalCleanup?.warnings || [])lines.push(`Rehearsal cleanup warning: ${warning}`);
-  if(typeof data.preInstallProtection==='boolean')lines.push(`Pre-install protection: ${data.preInstallProtection?'enabled':'unavailable'}`);
-  if(data.preInstallProtection && data.dbSnapshotVerified)lines.push('Database snapshot: verified');
-  if(data.automaticCompensation===true)lines.push('Automatic compensation: available for observed failures after writer exit is confirmed');
-  if(data.automaticResume===false)lines.push('Interrupted upgrade: manual recovery required; automatic takeover is disabled');
-  if(data.dbBackupDir)lines.push(`Database snapshots: ${data.dbBackupDir}`);
-  const databases=data.databases||data.dbManifest?.databases;
-  if(Array.isArray(databases))for(const db of databases){
-    lines.push(`  ${db.source}: ${db.status}${db.userVersion!=null?` (schema ${db.userVersion})`:''}`);
-    for(const table of db.extensions?.tables || [])lines.push(`    Accepted extra table: ${table}`);
-    for(const {table,column} of db.extensions?.columns || [])lines.push(`    Accepted extra column: ${table}.${column}`);
-  }
-  if(data.transactionDir)lines.push(`Recovery materials: ${data.transactionDir}`);
-  if(data.archiveDir)lines.push(`Archived recovery materials: ${data.archiveDir}`);
-  const rb=data.rollback;
-  if(rb){
-    const attempted=rb.attempted??rb.performed;
-    const completed=rb.completed??(rb.steps?.length?rb.steps.every(step=>step.success===true):undefined);
-    const boolean=value=>typeof value==='boolean'?String(value):'unknown';
-    lines.push(`Rollback attempted=${boolean(attempted)} completed=${boolean(completed)} stage=${rb.stage||'unknown'}${rb.error?': '+rb.error:''}`);
-  }else if(data.preInstallProtection&&data.success)lines.push('Rollback attempted=false completed=false stage=upgrade_complete');
-  const required=data.recovery_required??rb?.recovery_required??(data.preInstallProtection&&data.success?false:undefined);
-  if(typeof required==='boolean')lines.push(`Recovery required: ${required?'yes; maintenance remains active':'no'}`);
-  const warnings=[...(data.cleanupWarnings||[]),...(rb?.warnings||[])];
-  for(const warning of new Set(warnings))lines.push(`Cleanup warning: ${warning}`);
-  return lines.join('\n');
-}
-
-export function printSelfUpgradeProtection(data) {
-  const text=formatSelfUpgradeProtection(data);if(text)console.log(text);
 }
 
 export function parseUpgradeFinalizeOptions(args) {

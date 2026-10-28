@@ -21,35 +21,10 @@ const currentVersions=[C4_VERSION,SCHEDULER_VERSION,WEB_VERSION];
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
 function fixture(t){const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'core-db-')));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function skills(dir){for(const item of CORE_DATABASES){const owner=path.join(dir,'.claude','skills',item.owner);fs.mkdirSync(owner,{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{}');fs.symlinkSync(path.join(installed,'node_modules'),path.join(owner,'node_modules'));}}
-test('ordinary owner migration creates current schemas without protection material and rejects protected capabilities', {skip:!Database},t=>{
- const dir=fixture(t);skills(dir);
- const payload={action:'ordinary-migrate',zylosDir:dir,schemaRoot:path.resolve('skills'),driverRoot:path.join(dir,'.claude/skills')};
- const result=runCoreDbWorker(payload);
- assert.equal(result.databases.length,3);
- for(const [index,item] of CORE_DATABASES.entries()) {
-  const db=new Database(path.join(dir,item.source),{readonly:true});
-  try {assert.equal(db.pragma('user_version',{simple:true}),currentVersions[index]);}finally{db.close();}
- }
- assert.equal(fs.existsSync(path.join(dir,'.backup')),false);
- assert.equal(fs.existsSync(path.join(dir,'.zylos/upgrade')),false);
- const before=CORE_DATABASES.map(item=>fs.readFileSync(path.join(dir,item.source)));
- assert.throws(()=>runCoreDbWorker({...payload,transactionId:'untrusted'}),/cannot use protected transaction material/);
- assert.throws(()=>runCoreDbWorker({...payload,action:'upgrade-migrate'}),/ENOENT|transaction|controlled migration/);
- fs.mkdirSync(path.join(dir,'.zylos/upgrade'),{recursive:true});
- fs.writeFileSync(path.join(dir,'.zylos/upgrade/active.json'),'{}');
- assert.throws(()=>runCoreDbWorker(payload),/Core databases unavailable/);
- assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(path.join(dir,item.source))),before);
-});
-
-test('ordinary owner migration rejects a future schema before creating later databases', {skip:!Database},t=>{
- const dir=fixture(t);skills(dir);
- const file=path.join(dir,'comm-bridge/c4.db');fs.mkdirSync(path.dirname(file),{recursive:true});
- const db=new Database(file);db.pragma('user_version=999');db.close();
- const before=fs.readFileSync(file);
- assert.throws(()=>runCoreDbWorker({action:'ordinary-migrate',zylosDir:dir,schemaRoot:path.resolve('skills'),driverRoot:path.join(dir,'.claude/skills')}),/future|exceeds|supported/);
- assert.deepEqual(fs.readFileSync(file),before);
- assert.equal(fs.existsSync(path.join(dir,'scheduler/scheduler.db')),false);
- assert.equal(fs.existsSync(path.join(dir,'.backup')),false);
+test('removed ordinary migration action rejects before creating databases',t=>{
+ const dir=fixture(t);
+ assert.throws(()=>runCoreDbWorker({action:'ordinary-migrate',zylosDir:dir}),/Unknown action/);
+ assert.deepEqual(fs.readdirSync(dir),[]);
 });
 test('version probe uses pure owner inspection, detects a missing or older database, and rejects a newer one', {skip:!Database}, async t => {
  const dir=fixture(t);skills(dir);
@@ -365,10 +340,15 @@ test('controlled installed migration requires installing identity, preserves sna
  for(const item of ordinary)assert.notEqual(open(item).status,0);
  const preflight=m.preflight;m.preflight=()=>({success:true});
  try {protectedDataReady({transactionDir,transactionId});}finally{m.preflight=preflight;}
+ for(const item of ordinary)assert.notEqual(open(item).status,0);
+ // Migration completion does not publish business availability. Simulate the
+ // verified terminal after the protected publication and service checks.
+ m.update(transactionDir,j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:true,servicesRestored:true}});
+ m.unmark(dir,j);
  for(const item of ordinary){const result=open(item);assert.equal(result.status,0,result.stderr);}
  for(const [index,table] of ['conversations','tasks','sessions'].entries()) {
   const db=new Database(path.join(dir,CORE_DATABASES[index].source),{readonly:true});
   try {assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,1);}finally{db.close();}
  }
- assert.throws(()=>runCoreDbWorker(payload),/active installing/);
+ assert.throws(()=>runCoreDbWorker(payload),/active installing|ENOENT/);
 });

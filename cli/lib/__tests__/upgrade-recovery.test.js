@@ -1,4 +1,4 @@
-import test from 'node:test';
+import nativeTest from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,6 +13,13 @@ import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/sch
 import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
 
 const require=createRequire(import.meta.url);
+const automaticRecovery = require('../upgrade-maintenance.cjs').canRecognizeProcesses();
+// These crash-takeover scenarios require observable process identities. The
+// capability suite separately verifies rejection and live ownership without them.
+const test = (name, options, fn) => nativeTest(name, {
+ ...(typeof options === 'function' ? {} : options),
+ ...(process.platform === 'linux' && !automaticRecovery ? {skip:'automatic process recognition unavailable'} : {}),
+}, typeof options === 'function' ? options : fn);
 const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'));
 const currentVersions=[C4_VERSION,SCHEDULER_VERSION,WEB_VERSION];
 function interceptSync(check) {
@@ -142,12 +149,12 @@ for(const failure of [null,'thresholds','ensure','state'])test(`closed writer is
  }
 });
 
-test('unchanged database transaction resumes installed code without database inspection',async t=>{
+test('unchanged database transaction resumes restored code without database inspection',async t=>{
  const f=await fixture(t);unchanged(f);
- f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ f.m.update(f.dir,f.j,{phase:'restored_data_ready'});
  const result=f.r.resume(f.dir);
  assert.equal(result.recovery_required,false,JSON.stringify(result));
- assert.equal(result.stage,'upgrade_complete');
+ assert.equal(result.stage,'restored_complete');
  assert.equal(f.m.discover(f.root).blocked,false);
  assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));
 });
@@ -178,7 +185,7 @@ test('unchanged database transaction aborts before install without database insp
 
 test('ready journal requires snapshot identity even with unchanged database versions',async t=>{
  const f=await fixture(t);
- f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ f.m.update(f.dir,f.j,{phase:'restored_data_ready'});
  assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
  f.j.databaseMode='unchanged';
  f.m.update(f.dir,f.j);
@@ -213,7 +220,7 @@ for(const verificationFails of [false,true]) test(`protected unchanged-version s
 
 for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade permits ordinary owners after retained materials become ${legacy}`,async t=>{
  const f=await fixture(t);
- f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ f.m.update(f.dir,f.j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}});
  const result=f.r.resume(f.dir);
  assert.equal(result.stage,'upgrade_complete',JSON.stringify(result));
  assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')),false);
@@ -256,7 +263,7 @@ test('interrupted data-ready upgrade resumes while retaining an extra column',as
  const db=new Database(f.db('comm-bridge/c4.db'));
  try {db.exec('ALTER TABLE conversations ADD COLUMN extension_value TEXT');}
  finally {db.close();}
- f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ f.m.update(f.dir,f.j,{phase:'restored_data_ready'});
  const result=f.r.resume(f.dir);
  assert.equal(result.recovery_required,false,JSON.stringify(result));
  const retained=new Database(f.db('comm-bridge/c4.db'),{readonly:true});
@@ -366,16 +373,13 @@ test('A26: partial rescue resumes recorded generation and refuses changed rescue
  const f=await fixture(t);change(f);const real=f.m.renameIntent;let crashed=false;f.m.renameIntent=(dir,j,key,...args)=>{const result=real(dir,j,key,...args);if(!crashed&&key==='rescue_comm-bridge_c4.db'){crashed=true;throw Error('simulated crash');}return result;};assert.throws(()=>f.r.rescue(f.dir,f.j),/crash/);f.m.renameIntent=real;
  fs.appendFileSync(path.join(f.dir,'rescue/comm-bridge_c4.db'),'tampered');const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/rescue hash conflict/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
 });
-for(const phase of ['new_data_ready','restored_data_ready','new_verifying','restored_verifying'])test(`A16/A27: ${phase} resumes validation and retains valid normal writes`,async t=>{
+for(const phase of ['restored_data_ready','restored_verifying'])test(`A16/A27: ${phase} resumes validation and retains valid normal writes`,async t=>{
  const f=await fixture(t);const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(7,'normal-write');db.close();f.m.update(f.dir,f.j,{phase});
  const result=f.r.resume(f.dir);assert.equal(result.recovery_required,false);assert.ok(!f.calls.includes('stop'));const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT summary FROM checkpoints WHERE id=7').get().summary,'normal-write');read.close();assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));
 });
 test('A27: restored verification failure isolates without a second database replacement',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));f.m.verifyServices=()=>{throw Error('service failed');};
  const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.equal(f.load().resumePhase,'restored_verifying');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));assert.equal(f.m.discover(f.root).blocked,true);
-});
-test('A28: unconfirmed finalizer exit keeps current generation isolated',async t=>{
- const f=await fixture(t);change(f);f.m.update(f.dir,f.j,{finalizerExitUnconfirmed:true});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/interrupted launch/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
 });
 test('A24/A29: trusted preinstall abort verifies original data without snapshot restore',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));assert.equal(result.attempted,false);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));assert.equal(f.m.discover(f.root).blocked,false);
@@ -406,25 +410,6 @@ for(const action of ['terminal-write','marker-remove'])test(`A25: abort ${action
 test('A26: partial core restore skips verified completed members after interruption',async t=>{
  const f=await fixture(t);change(f);f.r.rescue(f.dir,f.j);const real=f.m.sync,seen=[];let crash=true;f.m.sync=(src,dest)=>{seen.push(path.basename(dest));real(src,dest);if(crash&&path.basename(dest)==='scheduler'){crash=false;throw Error('core-copy crash');}};
  assert.throws(()=>f.r.restoreCore(f.dir,f.j),/core-copy crash/);assert.equal(f.load().codeRestore['comm-bridge'].complete,true);seen.length=0;const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.deepEqual(seen,['scheduler','web-console']);
-});
-test('A27: failed new-code validation isolates then compensates once',async t=>{
- const f=await fixture(t);const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(8,'new-runtime-write');db.close();f.m.update(f.dir,f.j,{phase:'new_data_ready'});let first=true;f.m.verifyServices=()=>{f.calls.push('verify');if(first){first=false;throw Error('new runtime verification failed');}};
- const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=f.r.resume(f.dir);assert.equal(result.stage,'restored_complete');assert.equal(result.completed,true);assert.equal(f.calls.filter(c=>c==='stop').length,2);assert.deepEqual(fs.readFileSync(path.join(f.root,'.backup/self-upgrade/tx/rescue/comm-bridge_c4.db')),before);const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT count(*) AS n FROM checkpoints').get().n,0);read.close();
-});
-test('A28: live finalizer blocks compensation until the process group has exited',async t=>{
- const f=await fixture(t);change(f);const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});
- f.m.update(f.dir,f.j,{finalizerStarted:true,finalizerPid:child.pid,finalizerExitUnconfirmed:true});
- const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const blocked=f.r.resume(f.dir);
- assert.equal(blocked.recovery_required,true);assert.match(blocked.error,/still active/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
- const exited=new Promise(resolve=>child.once('exit',resolve));process.kill(-child.pid,'SIGKILL');await exited;
- const result=f.r.resume(f.dir);assert.equal(result.completed,true);const saved=f.load();assert.equal(saved.finalizerExitConfirmed,true);assert.equal(saved.finalizerExitUnconfirmed,false);
-});
-test('A28: interrupted finalizer launch without a PID preserves current data',async t=>{
- const f=await fixture(t);change(f);f.m.update(f.dir,f.j,{finalizerStarted:true,finalizerPid:null,finalizerExitUnconfirmed:true});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
- const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/interrupted launch/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(f.load().finalizerExitUnconfirmed,true);
-});
-test('A28: missing trusted finalizer helper preserves isolation and current data',async t=>{
- const f=await fixture(t);change(f);f.m.update(f.dir,f.j,{finalizerStarted:true,finalizerPid:null,finalizerExitUnconfirmed:true});fs.unlinkSync(path.join(f.dir,'finalizer.cjs'));const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
 });
 for(const installationIntent of [true,false])test(`unknown phase with installationIntent=${installationIntent} never restores or aborts`,async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'unknown-future-stage',installationIntent});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
@@ -570,7 +555,7 @@ test('preinstall readonly verification still includes committed uncheckpointed o
   assert.equal(writer.prepare('SELECT summary FROM checkpoints WHERE id=82').get().summary, 'committed-live-WAL');
 });
 
-for(const phase of ['new_data_ready','restored_data_ready']) test(`${phase}: terminal marker clear failure retries without replacing committed data`, async t => {
+for(const phase of ['restored_data_ready']) test(`${phase}: terminal marker clear failure retries without replacing committed data`, async t => {
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
  const unlink=fs.unlinkSync;let first=true;t.after(()=>{fs.unlinkSync=unlink;});
  fs.unlinkSync=file=>{if(first&&file===path.join(f.root,'.zylos/upgrade/active.json')){first=false;throw Error('terminal marker clear failed');}return unlink(file);};
@@ -592,11 +577,11 @@ test('terminal marker unlink followed by fsync interruption recreates the marker
  assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')),true);
  f.calls.length=0;assert.equal(f.r.resume(f.dir).complete,true);assert.deepEqual(f.calls,[]);assert.ok(fs.existsSync(f.dir));
 });
-for(const phase of ['new_data_ready','restored_data_ready']) test(`${phase}: terminal journal write failure resumes verification without compensation`, async t => {
+for(const phase of ['restored_data_ready']) test(`${phase}: terminal journal write failure resumes verification without compensation`, async t => {
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase});const update=f.m.update;let first=true;
  f.m.update=(dir,j,changes={})=>{if(first&&changes.phase?.endsWith('_complete')){first=false;throw Error('terminal journal fsync failed');}return update(dir,j,changes);};
  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));assert.equal(f.r.resume(f.dir).recovery_required,true);
- assert.equal(f.load().resumePhase,phase.startsWith('restored')?'restored_verifying':'new_verifying');
+ assert.equal(f.load().resumePhase,'restored_verifying');
  assert.equal(f.m.discover(f.root).blocked,true);assert.equal(f.r.resume(f.dir).recovery_required,false);
  assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(fs.existsSync(path.join(f.dir,'rescue')),false);
 });
@@ -647,7 +632,7 @@ test('successful cleanup deletes only code copies and unlinks nested symlinks wi
  const retained=['descriptor.json','runner.cjs','maintenance.cjs','finalizer.cjs','install.log','recovery.log','rescue/evidence'];
  const hashes=Object.fromEntries(retained.map(name=>[name,f.m.hash(path.join(f.dir,name))]));
  const snapshotHash=f.m.treeHash(f.snapshot.dbBackupDir);
- f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ f.m.update(f.dir,f.j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}});
  const result=f.r.resume(f.dir);
  assert.equal(result.complete,true,JSON.stringify(result));assert.equal(fs.existsSync(code),false);
  assert.equal(f.load().cleanup.codeRemoved,true);assert.equal(f.load().cleanup.complete,true);
@@ -678,7 +663,7 @@ test('partial code removal failure retries without compensation or service resta
  const f=await fixture(t),code=path.join(f.dir,'code'),rm=fs.rmSync;let fail=true;
  t.after(()=>{fs.rmSync=rm;});
  fs.rmSync=(file,options)=>{if(file===code&&fail){fail=false;rm(path.join(code,'skills/comm-bridge'),{recursive:true});throw Error('partial code removal failed');}return rm(file,options);};
- f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ f.m.update(f.dir,f.j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}});
  const first=f.r.resume(f.dir);assert.equal(first.complete,false);assert.match(first.warnings.join('\n'),/partial code removal failed/);
  assert.equal(f.load().phase,'upgrade_complete');assert.equal(f.load().cleanup.complete,false);assert.equal(f.load().cleanup.codeRemoved,false);
  const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(99,'post-ready write');db.close();
@@ -693,7 +678,7 @@ test('partial code removal failure retries without compensation or service resta
 for(const targetExists of [true,false])test(`code root symlink is refused (target exists=${targetExists})`,async t=>{
  const f=await fixture(t),code=path.join(f.dir,'code'),target=path.join(f.root,'other-code');
  fs.renameSync(code,target);fs.symlinkSync(targetExists?target:path.join(f.root,'absent'),code);
- const before=f.m.treeHash(target);f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ const before=f.m.treeHash(target);f.m.update(f.dir,f.j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}});
  const result=f.r.resume(f.dir);assert.equal(result.complete,false);assert.match(result.warnings.join('\n'),/unsafe recovery path/);
  assert.equal(fs.lstatSync(code).isSymbolicLink(),true);assert.equal(f.m.treeHash(target),before);
  assert.equal(f.load().cleanup.complete,false);assert.equal(f.load().cleanup.codeRemoved,false);
@@ -711,7 +696,7 @@ for(const failure of ['directory-sync','completion-journal'])test(`code cleanup 
   return rename(source,target);
  };
  t.after(()=>{restoreSync();fs.renameSync=rename;});
- f.m.update(f.dir,f.j,{phase:'new_data_ready'});const first=f.r.resume(f.dir);
+ f.m.update(f.dir,f.j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}});const first=f.r.resume(f.dir);
  assert.equal(hit,true);assert.equal(first.complete,false);assert.equal(fs.existsSync(code),false);
  assert.equal(f.load().cleanup.complete,false);assert.equal(f.load().cleanup.codeRemoved,false);
  f.calls.length=0;const retry=f.r.resume(f.dir);assert.equal(retry.complete,true,JSON.stringify(retry));assert.deepEqual(f.calls,[]);

@@ -61,3 +61,33 @@ test('restoration runs a tracked installer before checking restored installed id
   fs.writeFileSync(archive, 'corrupted');
   assert.throws(() => m.restoreOriginalPackage(f.dir, j), /archive changed/);
 });
+
+function restorationFixture(t, installer) {
+  const f = fixture(t), j = f.ctx.journal;
+  const packageJson = path.join(f.source, 'package.json'), cliRoot = path.join(f.source, 'cli');
+  j.initialIdentity = {packageJson, packageHash:m.hash(packageJson), cliRoot, cliHash:m.treeHash(cliRoot)};
+  fs.writeFileSync(f.ctx.protectedNpmCli, installer);
+  for (const [source, name] of [['upgrade-finalizer.cjs','finalizer.cjs'], ['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-recovery.cjs','runner.cjs']]) {
+    fs.copyFileSync(path.resolve('cli/lib',source), path.join(f.dir,name));
+  }
+  j.recoveryHashes = Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name,m.hash(path.join(f.dir,name))]));
+  const archive = path.join(f.dir, 'original.tgz'); fs.writeFileSync(archive, 'original');
+  j.originalPackage = {path:archive, sha256:m.hash(archive), sourceVersion:'0.9.3', npmCli:f.ctx.protectedNpmCli};
+  m.update(f.dir, j);
+  return {...f, j, packageJson, cliRoot};
+}
+
+for (const mismatch of ['package', 'cli']) test(`B07 successful installer cannot hide a restored ${mismatch} identity mismatch`, t => {
+  const f = restorationFixture(t, 'process.exit(0);');
+  fs.writeFileSync(mismatch === 'package' ? f.packageJson : path.join(f.cliRoot, 'entry.js'), 'wrong restored contents');
+  assert.throws(() => m.restoreOriginalPackage(f.dir, f.j), /restored installed package identity mismatch/);
+  assert.equal(f.j.installerExitConfirmed, true);
+});
+
+test('B10 failed original-package installation never publishes the restored flag', t => {
+  const f = restorationFixture(t, 'process.exit(12);');
+  assert.throws(() => m.restoreOriginalPackage(f.dir, f.j));
+  assert.equal(f.j.originalPackageRestored, undefined);
+  assert.equal(m.read(path.join(f.dir, 'journal.json')).originalPackageRestored, undefined);
+  assert.equal(f.j.installerStage, 'restore-original-package');
+});

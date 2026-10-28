@@ -152,6 +152,15 @@ describe('postinstall local install guard', () => {
     assert.equal(settingsSynced(zylosDir), true);
   });
 
+  for (const value of ['', '0', 'true']) it(`does not suppress skill synchronization for legacy flag ${JSON.stringify(value)}`, () => {
+    const zylosDir = fixtureZylosDir();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' },
+      { ZYLOS_SKIP_POSTINSTALL: value, ZYLOS_PROTECTED_INSTALL: '' });
+    assert.equal(skillsSynced(zylosDir), true);
+    assert.equal(settingsSynced(zylosDir), true);
+    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), true);
+  });
+
   it('preserves shared files when the installer supplies the legacy CI suppression', () => {
     const zylosDir = fixtureZylosDir();
     runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' }, { CI: '1' });

@@ -25,6 +25,7 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
     else owner[item==='registration'?'applyDashboardRegistration':'applyDashboardRoute']=fail;
     const result=await completeUpgradeFinalization(ctx,{
       dashboardOwner:owner,updateConfig:()=>{},ensureMemoryMigration:()=>{},commitBaselines:()=>{},
+      refreshMaintenanceReader:()=>{},protectedSuccess:()=>{},
       startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
       readModeStatus:()=>({sessionMode:'single',transition:null}),readMode:()=>({mode:'single'}),readTransition:()=>null,
       restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],

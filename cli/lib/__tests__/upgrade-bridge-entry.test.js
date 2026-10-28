@@ -34,6 +34,28 @@ test('schema probe rejects old installed caller before schema or driver access',
   assert.doesNotThrow(() => rejectLegacySchemaProbe(['node', worker, '{"action":"snapshot"}']));
 });
 
+test('A09 importing the actual target schema rejects a legacy version-probe caller', t => {
+  const root = fixture(t), worker = path.join(root, 'cli/lib/core-db-backup-worker.js');
+  fs.mkdirSync(path.dirname(worker), {recursive:true});
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({version:'0.9.2'}));
+  fs.writeFileSync(worker, `process.argv[2] = JSON.stringify({action:'version-probe'}); import(${JSON.stringify(path.resolve('skills/comm-bridge/scripts/c4-schema.js'))}).catch(error => { console.error(error.code); process.exitCode=1; });`);
+  const child = spawnSync(process.execPath, [worker], {encoding:'utf8'});
+  assert.equal(child.status, 1, child.stderr);
+  assert.match(child.stderr, /UPGRADE_SOURCE_TOO_OLD/);
+});
+
+test('A13 thin entry refuses recovery failure before checking or downloading updates', async () => {
+  const {upgradeSelfCore} = await import('../../commands/component.js');
+  let checked = false;
+  const result = await upgradeSelfCore({skipConfirm:true}, {
+    recoverBeforeUpgrade() {throw Object.assign(Error('recovery blocked'), {code:'UPGRADE_RECOVERY_REQUIRED'});},
+    checkForCoreUpdates() {checked=true; return {success:true,hasUpdate:false};},
+    console:{log(){},error(){}},
+  });
+  assert.equal(result, false);
+  assert.equal(checked, false);
+});
+
 test('actual preinstall rejects legacy upgrades and allows fresh/new upgrades without target dependencies', t => {
   const root = fixture(t), script = path.resolve('scripts/preinstall.js');
   const env = { ...process.env, HOME: root, PM2_HOME: path.join(root, '.pm2') };

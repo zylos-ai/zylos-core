@@ -28,7 +28,7 @@ test('target checks reject old sources and standalone Dashboard before touching 
   fs.writeFileSync(path.join(input.installedRoot, 'package.json'), JSON.stringify({name:'zylos', version:'0.9.3'}));
   fs.mkdirSync(path.join(input.zylosDir, '.zylos'));
   fs.writeFileSync(path.join(input.zylosDir, '.zylos/components.json'), JSON.stringify({components:{dashboard:{version:'1'}}}));
-  assert.throws(() => inspectUpgradeSource(input, deps), {code:'DASHBOARD_STILL_INSTALLED'});
+  assert.throws(() => inspectUpgradeSource(input, deps), error => error.code === 'DASHBOARD_STILL_INSTALLED' && /zylos uninstall dashboard --yes/.test(error.next));
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
 });
 
@@ -66,6 +66,14 @@ test('protected entry saves original package before code, stops, snapshot and in
   const result = await runUpgradeEntry(input, f.deps);
   assert.equal(result.success, true);
   assert.deepEqual(f.calls, ['begin', 'savePackage', 'saveCode', 'prepare', 'install', 'finalize', 'release']);
+});
+
+test('A04 rejected prechecks never create a transaction or request compensation', async t => {
+  const input = fixture(t), f = pipeline(input);
+  f.deps.inspect = () => { throw Object.assign(Error('precheck rejected'), {code:'PRECHECK_REJECTED'}); };
+  const result = await runUpgradeEntry(input, f.deps);
+  assert.equal(result.success, false);
+  assert.deepEqual(f.calls, []);
 });
 
 for (const failure of ['savePackage', 'saveCode', 'prepare', 'install']) test(`entry compensates ${failure} failure and never finalizes`, async t => {

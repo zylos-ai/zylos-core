@@ -16,10 +16,9 @@ import { copyTree } from './fs-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { getCoreEcosystemPath, createPm2Helpers } from './pm2.js';
+import { createRequire } from 'node:module';
 
-import { createRequire as createFinalizerRequire } from 'node:module';
-const finalizerRequire=createFinalizerRequire(import.meta.url);
-function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
+const finalizerRequire=createRequire(import.meta.url);
 
 import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade, runCoreDbWorker } from './core-db-backup.js';
 import { recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
@@ -420,12 +419,12 @@ export function step6_installSkillDeps(ctx, deps = {}) {
   const startTime = Date.now();
   const skillsRoot=deps.skillsDir || ctx.journal?.skillsDir || SKILLS_DIR;
   const entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
-  const allowed=ctx.preInstallProtection ? new Set(ctx.coreManifest.map(entry=>entry.name)) : null;
+  const allowed=new Set(ctx.coreManifest.map(entry=>entry.name));
   let installed = 0;
   const failed = [];
 
   for (const entry of entries) {
-    if (!entry.isDirectory() || (allowed&&!allowed.has(entry.name))) continue;
+    if (!entry.isDirectory() || !allowed.has(entry.name)) continue;
     const skillDir = path.join(skillsRoot, entry.name);
     const pkgPath = path.join(skillDir, 'package.json');
     if (!fs.existsSync(pkgPath)) continue;
@@ -434,7 +433,7 @@ export function step6_installSkillDeps(ctx, deps = {}) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       if (!pkg.dependencies || Object.keys(pkg.dependencies).length === 0) continue;
 
-      if (!ctx.preInstallProtection || !ctx.transactionDir || !ctx.journal) throw Error('skill dependencies require a protected transaction');
+      if (!ctx.transactionDir || !ctx.journal) throw Error('skill dependencies require a protected transaction');
       const original=ctx.coreManifest.find(item=>item.name===entry.name);
       if(original?.existedBefore && (!original.backedUp || !original.dependencies))throw Error('original skill dependency backup is incomplete');
       const modules=path.join(skillDir,'node_modules');
@@ -463,25 +462,6 @@ export function step6_installSkillDeps(ctx, deps = {}) {
 
 
 /**
- * Resolve a script path in the globally installed package.
- * Reads the package name from package.json to avoid hardcoding.
- * @returns {string|null} Absolute path to the script, or null if not found.
- */
-function resolveInstalledPackageScript(...parts) {
-  try {
-    // import.meta.dirname points to cli/lib/, go up two levels to package root
-    const pkgPath = path.join(import.meta.dirname, '..', '..', 'package.json');
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    const pkgName = pkg.name || 'zylos';
-    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }).trim();
-    const script = path.join(npmRoot, pkgName, ...parts);
-    return fs.existsSync(script) ? script : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Step 11: start core services
  */
 export function step11_startCoreServices(ctx, deps = {}) {
@@ -503,16 +483,24 @@ export function step11_startCoreServices(ctx, deps = {}) {
   // re-evaluates env vars (e.g. ZYLOS_PACKAGE_ROOT) when services restart.
   // `pm2 restart <name>` reuses PM2's cached config and never picks up new env.
   let ecosystemPath = null;
-  const ecosystemTemplateSrc = ctx.tempDir
-    ? path.join(ctx.tempDir, 'templates', 'pm2', 'ecosystem.config.cjs')
-    : null;
+  const packageRoot=ctx.packageRoot || (ctx.journal?.initialIdentity?.packageJson
+    ? path.dirname(ctx.journal.initialIdentity.packageJson) : null);
+  const ecosystemTemplateSrc = packageRoot
+    ? path.join(packageRoot, 'templates', 'pm2', 'ecosystem.config.cjs')
+    : ctx.tempDir ? path.join(ctx.tempDir, 'templates', 'pm2', 'ecosystem.config.cjs') : null;
   const pm2Dir = path.join(zylosDir, 'pm2');
   const ecosystemDest = deps.ecosystemPath ?? getCoreEcosystemPath();
   if (ecosystemTemplateSrc && fsApi.existsSync(ecosystemTemplateSrc)) {
     try {
+      if(packageRoot){
+        const metadata=JSON.parse(fsApi.readFileSync(path.join(packageRoot,'package.json'),'utf8'));
+        if(metadata.version!==(ctx.to || ctx.journal?.to))throw Error('installed target package version changed');
+        const installed=ctx.journal?.initialIdentity?.packageJson;
+        if(installed && fsApi.realpathSync(packageRoot)!==fsApi.realpathSync(path.dirname(installed)))throw Error('installed target package location changed');
+      }
       fsApi.mkdirSync(pm2Dir, { recursive: true });
-      if(ctx.preInstallProtection)ctx.journal=maintenance.read(path.join(ctx.transactionDir,'journal.json'));
-      if(ctx.preInstallProtection&&!ctx.journal.initialIdentity.ecosystemHash){
+      ctx.journal=maintenance.read(path.join(ctx.transactionDir,'journal.json'));
+      if(!ctx.journal.initialIdentity.ecosystemHash){
         const staging=path.join(ctx.transactionDir,'new-ecosystem.cjs'),intendedHash=maintenance.hash(ecosystemTemplateSrc);
         const stat = file => {
           try { return fsApi.lstatSync(file); }
@@ -556,8 +544,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
       }else fsApi.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
       ecosystemPath = ecosystemDest;
     } catch(error) {
-      if(ctx.preInstallProtection)return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
-      // Non-fatal — if copy fails, we can still use an already-deployed ecosystem file below.
+      return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
     }
   } else if (fsApi.existsSync(ecosystemDest)) {
     // No new template available; use the existing ecosystem file
@@ -670,18 +657,60 @@ export function step12_verifyServices(ctx, deps = {}) {
   return { step: 12, name: 'verify_services', status: 'failed', error: `Timed out after ${TIMEOUT_MS / 1000}s`, duration: Date.now() - startTime };
 }
 
+function stageSkillBaselines(ctx) {
+  const m = maintenanceFor(ctx);
+  const base = path.join(ctx.transactionDir, 'skill-baselines');
+  fs.mkdirSync(base, { mode: 0o700 });
+  const items = [];
+  for (const baseline of ctx.pendingBaselines || []) {
+    const skill = path.basename(baseline.destDir);
+    if (baseline.destDir !== path.join(ctx.journal.skillsDir, skill)) throw Error('invalid skill baseline destination');
+    const source = path.join(base, skill);
+    fs.mkdirSync(source, { mode: 0o700 });
+    for (const file of Object.keys(baseline.manifest.files)) {
+      const target = path.resolve(source, file);
+      if (!target.startsWith(source + path.sep)) throw Error('invalid skill baseline path');
+      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      fs.copyFileSync(path.join(baseline.srcDir, file), target);
+    }
+    if (JSON.stringify(generateManifest(source).files) !== JSON.stringify(baseline.manifest.files)) throw Error('skill baseline source changed');
+    items.push({ skill, manifest: baseline.manifest });
+  }
+  m.fsyncTree(base);
+  m.fsyncDir(ctx.transactionDir);
+  m.update(ctx.transactionDir, ctx.journal, { skillBaselines: { formatVersion: 1, items } });
+}
+
+function pendingSkillBaselines(ctx) {
+  const saved = ctx.journal.skillBaselines;
+  if (saved?.formatVersion !== 1 || !Array.isArray(saved.items)) throw Error('durable skill baselines are unavailable');
+  const base = path.join(ctx.transactionDir, 'skill-baselines');
+  const m = maintenanceFor(ctx);
+  m.privatePath(base, { directory: true });
+  return saved.items.map(({ skill, manifest }) => {
+    if (typeof skill !== 'string' || !skill || skill === '.' || skill === '..' || path.basename(skill) !== skill) throw Error('invalid durable skill baseline');
+    const srcDir = path.join(base, skill);
+    m.privatePath(srcDir, { directory: true });
+    if (JSON.stringify(generateManifest(srcDir).files) !== JSON.stringify(manifest?.files)) throw Error(`durable skill baseline is corrupt: ${skill}`);
+    return { destDir: path.join(ctx.journal.skillsDir, skill), srcDir, manifest };
+  });
+}
+
 /** Commit every Core Skill baseline after the complete self-upgrade succeeds. */
 function step13_commitSkillBaselines(ctx) {
   const startTime = Date.now();
   try {
-    for (const baseline of ctx.pendingBaselines || []) {
+    const baselines = pendingSkillBaselines(ctx);
+    for (const baseline of baselines) {
       saveMergeBaseline(baseline.destDir, baseline.srcDir, baseline.manifest);
+      maintenanceFor(ctx).fsyncTree(path.join(baseline.destDir, '.zylos'));
+      maintenanceFor(ctx).fsyncDir(baseline.destDir);
     }
     return {
       step: 13,
       name: 'commit_skill_baselines',
       status: 'done',
-      message: `${(ctx.pendingBaselines || []).length} committed`,
+      message: `${baselines.length} committed`,
       duration: Date.now() - startTime,
     };
   } catch (err) {
@@ -704,8 +733,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
       action: 'self_upgrade',
       success: false,
       ...protectionResult(ctx),
-      preInstallProtection:!!ctx.preInstallProtection,
-      ...(ctx.protectionUnavailableReason ? {protectionUnavailableReason:ctx.protectionUnavailableReason} : {}),
+      preInstallProtection:true,
       from: ctx.from,
       to: null,
       failedStep: failedStep.step,
@@ -719,9 +747,6 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
   const templatesDir = ctx.tempDir ? path.join(ctx.tempDir, 'templates') : null;
   const templates = listTemplateFiles(templatesDir);
 
-  // Runtime preparation already reconciled settings before publication.
-  const migrationHints = [];
-
   const settingsChanged = ctx.settingsChanged ?? false;
 
   return {
@@ -734,39 +759,13 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     backupDir: ctx.backupDir,
     dbBackupDir: ctx.dbBackupDir || null,
     databases: ctx.databases || ctx.databasePreflight?.databases || ctx.dbManifest?.databases || null,
-    preInstallProtection: Boolean(ctx.preInstallProtection),
+    preInstallProtection: true,
     transactionDir: ctx.transactionDir || null,
     cleanupWarnings: ctx.cleanupWarnings || [],
     templates,
-    migrationHints,
     settingsChanged,
     mergeConflicts: ctx.mergeConflicts.length > 0 ? ctx.mergeConflicts : null,
     mergedFiles: ctx.mergedFiles.length > 0 ? ctx.mergedFiles : null,
-  };
-}
-
-export function createFinalizeState(ctx) {
-  return {
-    schemaVersion: 2,
-    ...(ctx.snapshotFormatVersion ? {snapshotFormatVersion:ctx.snapshotFormatVersion} : {}),
-    ...(ctx.databaseMode ? {databaseMode:ctx.databaseMode} : {}),
-    ...protectionResult(ctx),
-    ...(ctx.preInstallProtection ? {
-      preInstallProtection: true,
-      transactionDir: ctx.transactionDir,
-      transactionId: ctx.transactionId,
-      coreManifest: ctx.coreManifest,
-      dbBackupDir: ctx.dbBackupDir,
-      dbManifest:ctx.dbManifest,
-    } : {}),
-    tempDir: ctx.tempDir,
-    backupDir: ctx.backupDir,
-    servicesWereRunning: ctx.servicesWereRunning,
-    from: ctx.from,
-    to: ctx.to,
-    newVersion: ctx.newVersion,
-    mode: ctx.mode,
-    ...(typeof ctx.firstDashboardTakeover==='boolean' ? {firstDashboardTakeover:ctx.firstDashboardTakeover} : {}),
   };
 }
 
@@ -846,9 +845,9 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     ctx.error=error.message;
     const failed={step:error.step ?? null,name:error.finalizeStepName || 'finalize',status:'failed',error:error.message};
     steps.push(failed);
-    if(ctx.preInstallProtection) recordClosedFinalizationFailure(ctx,error,{stopServices:deps.stopServices,requireClosed:true});
+    recordClosedFinalizationFailure(ctx,error,{stopServices:deps.stopServices,requireClosed:true});
     return {...buildSelfUpgradeResult(ctx,failed,null,false),code:error.code,completion,...(ctx.isolationError ? {isolationError:ctx.isolationError} : {}),
-      ...(ctx.preInstallProtection ? {recovery_required:true,next:finalizationNext(ctx)} : {next:'把 CLI 装回原版本，处理失败原因后再重新升级'})};
+      recovery_required:true,next:finalizationNext(ctx)};
   };
   try {
     await run(4,'session_threshold_defaults',()=> (deps.updateConfig || updateZylosConfigLocked)(
@@ -867,7 +866,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       return {status:'skipped',message:'existing working state preserved for mode conversion'};
     });
     await run(13,'commit_skill_baselines',()=> (deps.commitBaselines || step13_commitSkillBaselines)(ctx));
-    if(ctx.preInstallProtection) await run(7,'publish_maintenance_reader',()=> (deps.refreshMaintenanceReader || refreshMaintenanceReader)(ctx));
+    await run(7,'publish_maintenance_reader',()=> (deps.refreshMaintenanceReader || refreshMaintenanceReader)(ctx));
     await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(ctx));
     await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(ctx));
   } catch(error) {return fail(error);}
@@ -936,7 +935,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   } catch(error) {ctx.checkpointAudit={state:'incomplete',error:error.message};}
   completion.install='done';
   ctx.completion=completion;
-  if(ctx.preInstallProtection) (deps.protectedSuccess || protectedSuccess)(ctx);
+  (deps.protectedSuccess || protectedSuccess)(ctx);
   return {...buildSelfUpgradeResult(ctx,null),completion,dashboard,sessionRestart:ctx.restart,checkpointAudit:ctx.checkpointAudit,
     modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || [],...(ctx.dashboardCopy ? {dashboardCopy:ctx.dashboardCopy} : {})};
 }
@@ -968,7 +967,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.firstTakeover = state.firstTakeover === true;
   ctx.firstDashboardTakeover = state.firstDashboardTakeover;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
-  if(ctx.preInstallProtection){
+  {
     try {
       const maintenance=maintenanceFor(ctx);
       ctx.journal=maintenance.transaction(ctx.zylosDir,ctx.transactionDir);
@@ -1008,17 +1007,14 @@ function finalizationFailure(ctx, error, step = 5) {
   ctx.steps.push(failed);
   let closed = false;
   let recoveryError;
-  if (ctx.preInstallProtection) {
-    try {
-      closed = recordClosedFinalizationFailure(ctx,error);
-    } catch (failure) {
-      recoveryError = failure.message;
-    }
+  try {
+    closed = recordClosedFinalizationFailure(ctx,error);
+  } catch (failure) {
+    recoveryError = failure.message;
   }
   const guidance = recoveryError ? {recovery_required:true, recoveryError,
       next:'Repair the upgrade transaction journal before attempting recovery or resuming finalization.'} :
-      closed ? {recovery_required:true, next:finalizationNext(ctx)} :
-      !ctx.preInstallProtection ? {next:'把 CLI 装回原版本，处理失败原因后再重新升级'} : {};
+      closed ? {recovery_required:true, next:finalizationNext(ctx)} : {};
   return {...buildSelfUpgradeResult(ctx, failed, null, false), code:error.code, ...guidance,
     ...((error.next || guidance.next) ? {next:[error.next,guidance.next].filter(Boolean).join(' ')} : {})};
 }
@@ -1048,7 +1044,7 @@ async function finalizeInstalledUpgrade(ctx, deps) {
   try {
     (deps.assertDashboardUninstalled || assertDashboardUninstalled)(ctx.zylosDir);
     let manifest;
-    if (ctx.preInstallProtection) {
+    {
       const m = maintenanceFor(ctx);
       const j = m.transaction(ctx.zylosDir, ctx.transactionDir);
       if (j.transactionId !== ctx.transactionId || j.installationIntent !== true || classifyCutoff(j) !== 'none' || j.phase !== 'installing') throw Error('invalid initial finalizer transaction');
@@ -1068,8 +1064,11 @@ async function finalizeInstalledUpgrade(ctx, deps) {
       ctx.steps.push(result);
       if(result.status==='failed') throw Object.assign(Error(result.error), {step:result.step});
     }
+    // Resume runs in a fresh process and must retain the authoritative merge
+    // bases even if the download directory disappears after the cutoff.
+    stageSkillBaselines(ctx);
     await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx);
-    (deps.dataReady || protectedDataReady)(ctx,{deferPublication:true});
+    (deps.dataReady || protectedDataReady)(ctx);
     const prepared=await (deps.prepareRuntime || prepareUpgradeRuntime)(ctx);
     ctx.preparationWarnings=prepared.warnings;
     const workDir=ctx.transactionDir;
@@ -1139,16 +1138,4 @@ export function cleanupTemp(tempDir) {
   }
 
   fs.rmSync(tempDir, { recursive: true, force: true });
-}
-
-// Also clean up backup dirs after successful upgrade
-export function cleanupBackup(backupDir) {
-  if(!backupDir||!fs.existsSync(backupDir))return;
-  const resolved=fs.realpathSync(backupDir);
-  const roots=getAllowedTmpRoots();
-  if(!roots.some(root=>resolved.startsWith(root+path.sep)&&path.basename(resolved).startsWith('zylos-core-backup-'))) {
-    // Protected code cleanup is performed only by the verified transaction success path.
-    return;
-  }
-  fs.rmSync(resolved,{recursive:true,force:true});
 }

@@ -320,38 +320,36 @@ function terminalPending(dir, j, error) {
   return {attempted:false, completed:false, stage:j.phase, error, recovery_required:true};
 }
 function validateReady(dir, j) {
-  const restored = j.phase.startsWith('restored');
   let verified = false;
   try {
-    const snapshot = restored && j.databaseMode !== 'unchanged' ? validateSnapshot(dir, j) : null;
+    const snapshot = j.databaseMode !== 'unchanged' ? validateSnapshot(dir, j) : null;
     m.update(dir, j, {
-      phase: restored ? 'restored_verifying' : 'new_verifying'
+      phase: 'restored_verifying'
     });
-    if (restored) m.restoreOriginalPackage(dir, j);
+    m.restoreOriginalPackage(dir, j);
     m.start(j);
     m.verifyServices(j);
     if (j.databaseMode !== 'unchanged') {
       // Normal startup may create missing DBs/write data: use current compatibility, never old hashes.
-      const checked = m.preflight(dir, j, snapshot, {liveRestored:restored});
+      const checked = m.preflight(dir, j, snapshot, {liveRestored:true});
       if (checked.success === false) throw Error(checked.error || 'started code/data incompatible');
     }
     verified = true;
     m.update(dir, j, {
-      phase: restored ? 'restored_complete' : 'upgrade_complete',
+      phase: 'restored_complete',
       terminalEvidence: {
         verified: true,
         kind: 'code_data_services'
       },
       cleanup: {
-        complete: restored,
-        ...(restored ? {} : {codeRemoved:false}),
+        complete: true,
         servicesRestored: true
       }
     });
     const cleanup = m.finishTerminal(dir, j);
     return {
-      attempted: restored,
-      completed: restored,
+      attempted: true,
+      completed: true,
       stage: j.phase,
       recovery_required: false,
       ...cleanup
@@ -362,12 +360,7 @@ function validateReady(dir, j) {
     if (verified) return fail(dir, saved, e.message);
     m.marker(j.zylosDir, dir, j);
     m.stop(j);
-    if (restored) return fail(dir, j, e.message);
-    m.update(dir, j, {
-      phase: 'restoring',
-      error: e.message
-    });
-    return null;
+    return fail(dir, j, e.message);
   }
 }
 function resume(dir, {hooks = {}, ownership} = {}) {

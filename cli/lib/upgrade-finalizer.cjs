@@ -13,8 +13,8 @@ function members(group) {
   return result.stdout.split('\n').map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/))
     .filter(Boolean).filter(row => Number(row[2]) === group && Number(row[1]) !== result.pid && !row[3].startsWith('Z'));
 }
-function quiesce(_dir, j, {terminate = false, kind = 'finalizer'} = {}) {
-  if (!['finalizer', 'installer'].includes(kind)) throw Error('unsupported contained process kind');
+function quiesce(_dir, j, {terminate = false, kind = 'installer'} = {}) {
+  if (kind !== 'installer') throw Error('unsupported contained process kind');
   if (j[kind+'ExitConfirmed'] && !j[kind+'ExitUnconfirmed'] || !j[kind+'Started'] && !j[kind+'ExitUnconfirmed']) return {confirmed:true};
   const pid = j[kind+'Pid'];
   if (!Number.isSafeInteger(pid) || pid <= 1) return {
@@ -51,9 +51,8 @@ if (require.main === module && process.argv[2] === 'installer') {
     const m = require('./maintenance.cjs');
     const dir = path.resolve(process.argv[3]), token = process.argv[4];
     const j = m.read(path.join(dir, 'journal.json'));
-    if (!j.installerStarted || j.installerPid !== null || token !== j.installerToken ||
-        m.hash(__filename) !== j.recoveryHashes?.['finalizer.cjs'] ||
-        m.hash(path.join(dir, 'maintenance.cjs')) !== j.recoveryHashes?.['maintenance.cjs']) throw Error('installer launch identity rejected');
+    m.validateRecoveryFiles(dir, j, ['finalizer.cjs', 'maintenance.cjs']);
+    if (!j.installerStarted || j.installerPid !== null || token !== j.installerToken) throw Error('installer launch identity rejected');
     const options = JSON.parse(fs.readFileSync(0, 'utf8'));
     m.privatePath(options.npmCli);
     if (!path.isAbsolute(options.npmCli) || path.basename(options.npmCli) !== 'npm-cli.js') throw Error('untrusted npm CLI');

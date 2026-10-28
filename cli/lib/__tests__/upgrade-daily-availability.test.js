@@ -8,6 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {savePm2ProcessList} from '../pm2-save.js';
 import {discoverUpgradeContext} from '../runtime/upgrade-context.js';
 import {runUpgradeEntry} from '../upgrade-entry.js';
+import {recoverBeforeUpgrade} from '../upgrade-discovery.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 function fixture(t) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-daily-')));
@@ -18,7 +19,7 @@ function fixture(t) {
  }
  const dir=path.join(root,'.backup/self-upgrade/active');fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const digest='a'.repeat(64);
- const j={formatVersion:1,transactionId:'active',zylosDir:root,phase:'new_data_ready',installationIntent:true,
+ const j={formatVersion:1,transactionId:'active',zylosDir:root,phase:'restored_data_ready',installationIntent:true,
   nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/active'),snapshotManifestHash:digest,
   coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
   initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:digest,cliRoot:path.join(root,'cli'),cliHash:digest,
@@ -30,6 +31,57 @@ function writeUsingOwners(root) {
  const code=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';for(const db of [getDb(),scheduler(),openDb()]){db.exec('CREATE TABLE IF NOT EXISTS daily_probe(value TEXT)');db.prepare('INSERT INTO daily_probe VALUES (?)').run('written');}close();`;
  return spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:root}});
 }
+for (const phase of ['upgrade_complete','restored_complete','aborted_before_install']) test(`completed legacy three-database ${phase} history permits upgrade admission`, t => {
+ const f=fixture(t);
+ f.j.phase=phase;
+ f.j.initialIdentity.databases.pop();
+ f.j.installationIntent=phase!=='aborted_before_install';
+ f.j.cleanup={complete:true,servicesRestored:true};
+ f.j.terminalEvidence={verified:true,kind:f.j.installationIntent?'code_data_services':'original_deployment_and_readonly_data'};
+ f.save();
+ assert.deepEqual(m.discover(f.root),{marker:null,candidates:[],diagnostics:[],blocked:false});
+ for (const corrupt of [j=>{j.cleanup.complete=false;},j=>{j.phase='installing';},j=>{j.terminalEvidence.verified=false;},j=>{j.recoveryHashes={};}]) {
+  const saved=structuredClone(f.j);corrupt(f.j);f.save();
+  assert.equal(m.discover(f.root).blocked,true);
+  Object.assign(f.j,saved);delete f.j.recoveryHashes;
+ }
+});
+
+test('three real historical terminal journal shapes permit upgrade and startup after path sanitization', async t => {
+ const f=fixture(t);
+ fs.rmSync(f.dir,{recursive:true});
+ const fixtures=new URL('./helpers/legacy-journals/',import.meta.url);
+ const files=fs.readdirSync(fixtures).filter(name=>name.endsWith('.json'));
+ assert.equal(files.length,3);
+ for(const file of files) {
+  const historical=JSON.parse(fs.readFileSync(new URL(file,fixtures),'utf8'));
+  const originalRoot=historical.zylosDir;
+  const relocate=value=>Array.isArray(value)?value.map(relocate):value&&typeof value==='object'
+   ?Object.fromEntries(Object.entries(value).map(([key,item])=>[key,relocate(item)]))
+   :typeof value==='string'?value.replaceAll(originalRoot,f.root):value;
+  const journal=relocate(historical);
+  const dir=path.join(f.root,'.backup/self-upgrade',journal.transactionId);
+  m.durable(path.join(dir,'journal.json'),journal);
+  assert.equal(journal.initialIdentity.databases.length,3);
+  assert.equal(Object.hasOwn(journal,'recoveryHashes'),false);
+  assert.equal(m.discover(f.root).blocked,false);
+  assert.deepEqual(recoverBeforeUpgrade(f.root),{active:false});
+  assert.equal(discoverUpgradeContext(f.root).active,false);
+  let inspected=false;
+  const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.root,installedRoot:f.root,zylosDir:f.root},{
+   inspect:()=>{inspected=true;throw Object.assign(Error('inspection boundary'),{code:'INSPECTION_REACHED'});}
+  });
+  assert.equal(inspected,true);
+  assert.equal(result.code,'INSPECTION_REACHED');
+  journal.cleanup.complete=false;
+  m.durable(path.join(dir,'journal.json'),journal);
+  assert.equal(m.discover(f.root).blocked,true,'unfinished history must still block upgrades');
+  journal.cleanup.complete=true;
+  m.durable(path.join(dir,'journal.json'),journal);
+ }
+ assert.deepEqual(m.discover(f.root).candidates,[]);
+ assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));
+});
 for(const damage of ['malformed','missing','oversized','unknown-entry','dangling-backup'])test(`unmarked ${damage} history cannot stop ordinary database writes or startup`,t=>{
  const f=fixture(t);
  if(damage==='malformed')fs.writeFileSync(path.join(f.dir,'journal.json'),'{');

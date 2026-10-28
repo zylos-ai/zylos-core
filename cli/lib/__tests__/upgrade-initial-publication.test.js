@@ -44,7 +44,7 @@ test('ordinary unconfigured adoption deploys bootstrap and atomically publishes 
   const current = m.transaction(f.root, f.ctx.transactionDir);
   assert.equal(current.phase, 'preparing');
   assert.equal(current.installationIntent, false);
-  if (process.platform === 'darwin') {
+  if (!m.canRecognizeProcesses()) {
     assert.equal(f.ctx.releaseControl.withOwnership(f.ctx.transactionDir, () => 'owned'), 'owned');
     assert.throws(() => m.acquire(f.ctx.transactionDir), /admission retained/);
   } else assert.equal(m.alive(m.read(path.join(f.ctx.transactionDir, 'controller.json'))), true);
@@ -115,7 +115,7 @@ test('symlink deployment root records canonical transaction identities', t => {
   assert.equal(m.discover(alias).diagnostics.length, 0);
 });
 
-test('data-ready publication refreshes parent context before later durable writes', t => {
+test('data-ready refreshes context while retaining installing isolation', t => {
   const f = fixture(t);
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
   attachSnapshot(f);
@@ -124,9 +124,10 @@ test('data-ready publication refreshes parent context before later durable write
   m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
   m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
   try { protectedDataReady(f.ctx,{migrate:()=>({databases:[]}),verify:()=>({databases:[]})}); } finally { active.preflight = preflight; }
-  assert.equal(f.ctx.journal.phase, 'new_data_ready');
+  assert.equal(f.ctx.journal.phase, 'installing');
   m.update(f.ctx.transactionDir, f.ctx.journal, { ecosystemCreationIntent: { test: true } });
-  assert.equal(m.read(path.join(f.ctx.transactionDir, 'journal.json')).phase, 'new_data_ready');
+  assert.equal(m.read(path.join(f.ctx.transactionDir, 'journal.json')).phase, 'installing');
+  assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);
 });
 
 for (const from of ['0.9.3', '1.0.0']) test(`data-ready derives first takeover from durable source ${from}`, t => {
@@ -156,9 +157,9 @@ test('controller acquisition failure removes only its unpublished staging attemp
   fs.mkdirSync(stagingRoot, {recursive:true, mode:0o700});
   const unrelated = path.join(stagingRoot, 'prior-attempt');
   fs.mkdirSync(unrelated, {mode:0o700});fs.writeFileSync(path.join(unrelated, 'note'), 'keep');
+  const admission = m.canRecognizeProcesses() ? '/controller.guard' : '/controller.json';
   const open = fs.openSync;
   fs.openSync = (file, ...args) => {
-    const admission = process.platform === 'darwin' ? '/controller.json' : '/controller.guard';
     if (String(file).endsWith(admission)) throw Error('injected controller failure');
     return open(file, ...args);
   };

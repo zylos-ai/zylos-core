@@ -78,6 +78,9 @@ for (const damage of ['missing', 'hash', 'traversal', 'symlink']) test(`all mate
   if (damage === 'traversal') target.beforeFile = '../outside';
   if (damage === 'symlink') { fs.unlinkSync(file); fs.symlinkSync(path.join(f.ctx.zylosDir, '.claude/settings.json'), file); }
   assert.equal((await publishPostCutoff(f.ctx, f.options)).lastError.code, 'material_corrupt');
+  const durable = JSON.parse(fs.readFileSync(path.join(f.ctx.transactionDir, 'journal.json'), 'utf8')).postCutoff.items.hooks;
+  assert.equal(durable.state, 'failed');
+  assert.equal(durable.lastError.code, 'material_corrupt');
   assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, 'CLAUDE.md'), 'utf8'), 'old instructions');
 });
 
@@ -109,8 +112,8 @@ test('Codex partial failure preserves writer-reported target ids without attribu
   assert.equal(result.ok, false);
   assert.equal(result.writtenTargets.includes('t04'), true);
   assert.equal(result.writtenTargets.includes('t05'), false);
-  assert.equal(f.ctx.persisted.has('journal.items.hooks.t04'), true);
-  assert.equal(f.ctx.persisted.has('journal.items.hooks.t05'), false);
+  assert.equal(f.ctx.persisted.has('t04'), true);
+  assert.equal(f.ctx.persisted.has('t05'), false);
 });
 
 test('exact Dashboard command removal preserves mixed user hooks and similar commands', () => {

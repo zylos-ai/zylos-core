@@ -148,3 +148,19 @@ test('a concurrent ecosystem appearing during exclusive publication is preserved
   assert.deepEqual(f.calls, []);
   assert.equal(f.run().status, 'failed');
 });
+
+for(const valid of [true,false])test(`fresh resume ${valid?'uses':'rejects changed'} installed target without download`,t=>{
+  const f=fixture(t),installed=path.join(f.root,'installed');
+  fs.mkdirSync(path.join(installed,'templates/pm2'),{recursive:true});
+  fs.copyFileSync(f.template,path.join(installed,'templates/pm2/ecosystem.config.cjs'));
+  fs.writeFileSync(path.join(installed,'package.json'),JSON.stringify({version:valid?'1.0.0':'2.0.0'}));
+  const journal={to:'1.0.0',initialIdentity:{ecosystemHash:null,packageJson:path.join(installed,'package.json')}};
+  maintenance.durable(path.join(f.transactionDir,'journal.json'),journal);
+  f.ctx.tempDir=path.join(f.root,'missing-download');
+  f.ctx.journal=journal;
+  const result=f.run();
+  assert.equal(result.status,valid?'done':'failed');
+  assert.deepEqual(f.calls,valid?['scheduler']:[]);
+  if(valid)assert.deepEqual(fs.readFileSync(f.destination),fs.readFileSync(f.template));
+  else {assert.match(result.error,/target package version changed/);assert.equal(fs.existsSync(f.destination),false);}
+});

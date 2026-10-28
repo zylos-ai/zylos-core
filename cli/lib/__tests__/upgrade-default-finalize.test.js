@@ -11,6 +11,10 @@ import { prepareUpgradeRuntime } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff } from '../upgrade-post-cutoff.js';
 import { commitCutoff } from '../upgrade-cutoff.js';
 import { resumeFinalize } from '../upgrade-resume.js';
+import { migrateDatabase } from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
+import * as c4Schema from '../../../skills/comm-bridge/scripts/c4-schema.js';
+import * as schedulerSchema from '../../../skills/scheduler/scripts/schema.js';
+import * as webSchema from '../../../skills/web-console/scripts/schema.js';
 
 const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
@@ -18,12 +22,17 @@ const Database = require(path.join(packageRoot, 'skills/comm-bridge/node_modules
 
 function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(temporaryBase, 'default-finalizer-')));
-  const previousHome = process.env.HOME, previousPm2Home = process.env.PM2_HOME;
+  const previousHome = process.env.HOME, previousPm2Home = process.env.PM2_HOME, previousPath = process.env.PATH;
   process.env.HOME = home;
   process.env.PM2_HOME = path.join(home, '.pm2');
+  const bin = path.join(home, 'bin'), pm2Calls = path.join(home, 'pm2-calls');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'pm2'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(pm2Calls)}, JSON.stringify(process.argv.slice(2))+'\\n');process.stderr.write('unexpected fixture PM2 invocation');process.exit(91);\n`, {mode:0o700});
+  process.env.PATH = bin + path.delimiter + previousPath;
   t.after(() => {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     if (previousPm2Home === undefined) delete process.env.PM2_HOME; else process.env.PM2_HOME = previousPm2Home;
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
   });
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const root = path.join(home, 'zylos');
@@ -55,7 +64,13 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {
   }
   // Exercise the real owner migration engine to create valid databases before
   // snapshotting; later assertions inspect real native SQLite state.
-  runCoreDbWorker({ action: 'ordinary-migrate', zylosDir: root, schemaRoot: skillsDir, formatVersion: 1 });
+  for (const [index,item] of LEGACY_CORE_DATABASES.entries()) {
+    const file=path.join(root,item.source);
+    fs.mkdirSync(path.dirname(file),{recursive:true});
+    const db=new Database(file);
+    try {migrateDatabase(db,[c4Schema,schedulerSchema,webSchema][index],{allowNew:true,strict:false});}
+    finally {db.close();}
+  }
   const database = new Database(path.join(root, 'comm-bridge/c4.db'));
   database.prepare('INSERT INTO checkpoints(id, summary) VALUES (?, ?)').run(17, 'keep current data');
   database.close();
@@ -124,7 +139,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {
   const load = () => m.transaction(root, dir);
   const resume = (overrides = {}) => resumeUpgradeFinalization({ zylosDir: root, transactionDir: dir,
     transactionId: 'tx', journal: load(), maintenance: m }, { ...deps, ...overrides });
-  return { root, home, dir, state, deps, calls, m, write, load, resume,
+  return { root, home, dir, state, deps, calls, m, write, load, resume, pm2Calls,
     read: relative => fs.readFileSync(path.join(root, relative), 'utf8'),
     run: overrides => runSelfUpgradeFinalize(state, { ...deps, ...overrides }) };
 }
@@ -136,6 +151,15 @@ function assertDataPreserved(f) {
   assert.equal(f.read('ZYLOS.md'), 'private user instructions\r\n');
   assert.equal(f.read('memory/state.md'), 'preserve working state\n');
 }
+
+test('default finalizer fixture PM2 shim cannot launch a daemon', t => {
+  const f = fixture(t);
+  const out = spawnSync('pm2', ['jlist'], {encoding:'utf8'});
+  assert.equal(out.status, 91);
+  assert.match(out.stderr, /unexpected fixture PM2 invocation/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.pm2Calls, 'utf8').trim()), ['jlist']);
+  assert.equal(fs.existsSync(path.join(f.home, '.pm2')), false);
+});
 
 test('default protected initial finalizer publishes real preparation, closes journal and runs tail', async t => {
   const f = fixture(t);
@@ -257,12 +281,16 @@ test('real finalizer stdout remains JSON when publication changes global Codex c
   const child=path.join(f.home,'finalizer-entry.mjs');
   const moduleUrl=new URL('../self-upgrade.js',import.meta.url).href;
   fs.writeFileSync(child,`
-    import {mock} from 'node:test';
+    import fs from 'node:fs';
+    import {createRequire} from 'node:module';
     import * as upgrade from ${JSON.stringify(moduleUrl)};
     import {prepareUpgradeRuntime} from ${JSON.stringify(new URL('../upgrade-runtime-preparation.js',import.meta.url).href)};
     const root=${JSON.stringify(f.root)},home=${JSON.stringify(f.home)};
-    const injected=mock.module(${JSON.stringify(moduleUrl)},{namedExports:{...upgrade,
-      runSelfUpgradeFinalize:state=>upgrade.runSelfUpgradeFinalize(state,{
+    const state=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+    const m=createRequire(import.meta.url)(root+'/.zylos/upgrade/maintenance.cjs');
+    const release=m.acquire(state.transactionDir);
+    try {
+      const result=await upgrade.runSelfUpgradeFinalize(state,{
         zylosDir:root,syncSkills:()=>({step:5,status:'done'}),
         installDependencies:()=>({step:6,status:'done'}),prepareRuntimeClis:()=>{},
         prepareRuntime:ctx=>prepareUpgradeRuntime(ctx,{packageRoot:${JSON.stringify(packageRoot)},homeDir:home,stopFailureSupported:false}),
@@ -271,13 +299,14 @@ test('real finalizer stdout remains JSON when publication changes global Codex c
         dashboardOwner:{copyDashboardDb:()=>({ok:true}),applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:'done'}),verifyDashboard:()=>({state:'ready',errors:[]})},
         readModeStatus:()=>({sessionMode:null,transition:null}),readMode:()=>({mode:null,keyPresent:false}),readTransition:()=>null,
         restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],
-      })}});
-    await import(${JSON.stringify(new URL('../self-upgrade-finalize.js',import.meta.url).href)});
-    injected.restore();
+      });
+      process.stdout.write(JSON.stringify(result)+'\\n');
+      process.exitCode=result.success?0:1;
+    } finally {release();}
   `);
   const stateFile=path.join(f.home,'finalize-state.json');
   fs.writeFileSync(stateFile,JSON.stringify(f.state));
-  const output=spawnSync(process.execPath,['--experimental-test-module-mocks',child,stateFile],{
+  const output=spawnSync(process.execPath,[child,stateFile],{
     encoding:'utf8',timeout:15000,env:{...process.env,HOME:f.home,ZYLOS_DIR:f.root,PM2_HOME:path.join(f.home,'.pm2')}});
   assert.equal(output.status,0,output.stderr+'\n'+output.stdout);
   const result=JSON.parse(output.stdout);

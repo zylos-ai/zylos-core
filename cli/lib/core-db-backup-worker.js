@@ -123,7 +123,7 @@ function authorizeMigration(input) {
   return j;
 }
 export async function execute(input) {
-  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','ordinary-migrate','rehearse','version-probe'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
+  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','rehearse','version-probe'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
   if(input.action==='snapshot' && input.formatVersion!==undefined && input.formatVersion!==2) throw Error('New database snapshots require formatVersion 2');
   if(input.action==='probe') {
     const Database=createRequire(import.meta.url)(input.driverPath); const db=new Database(':memory:');
@@ -182,19 +182,12 @@ export async function execute(input) {
     }
     return {databases:rows,needsMigration:rows.some(row=>row.needsMigration)};
   }
-  if(input.action==='ordinary-migrate' && input.firstTakeover===true) throw Error('ordinary migration cannot skip Dashboard owner');
   if(input.action==='upgrade-migrate') {
     const transaction=authorizeMigration(input);
     if(input.firstTakeover===true && transaction.from!=='0.9.3') throw Error('first takeover requires original version 0.9.3');
     input={...input,firstTakeover:transaction.from==='0.9.3'};
   }
-  const engine=['offline-preflight','upgrade-migrate','ordinary-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;
-  const authorizeOrdinary=()=>{
-    if(input.transactionDir || input.transactionId || input.manifest) throw Error('ordinary migration cannot use protected transaction material');
-    if(typeof engine.assertCoreDatabaseAvailable!=='function') throw Error('Ordinary migration availability guard unavailable');
-    engine.assertCoreDatabaseAvailable(input.zylosDir);
-  };
-  if(input.action==='ordinary-migrate') authorizeOrdinary();
+  const engine=['offline-preflight','upgrade-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;
   if(input.action==='rehearse') {
     if (!input.schemaRoot || !input.driverRoot || !input.rehearsalDir) throw Error('Rehearsal requires target schema, installed driver, and private copy roots');
     const directory=input.rehearsalDir;
@@ -247,7 +240,7 @@ export async function execute(input) {
   };
   const rows=[];
   for(const item of databases) {
-    if(skipDashboard(item) && ['offline-preflight','upgrade-migrate','ordinary-migrate'].includes(input.action)) {
+    if(skipDashboard(item) && ['offline-preflight','upgrade-migrate'].includes(input.action)) {
       // First takeover protects the legacy bytes without imposing the new owner contract.
       const source=path.join(input.zylosDir,item.source),absent=missing(source);
       const snapshotRow=input.manifest?.databases?.find(row=>row.source===item.source);
@@ -282,11 +275,9 @@ export async function execute(input) {
       if(state.userVersion!==expected.userVersion) throw new Error('Snapshot user_version mismatch');
       rows.push({...expected,...state});continue;
     }
-    if(['upgrade-migrate','ordinary-migrate'].includes(input.action)) {
-      // Recheck the durable capability before each owner. Ordinary openers keep
-      // rejecting this same installing marker throughout all three migrations.
-      if(input.action==='upgrade-migrate') authorizeMigration(input);
-      else authorizeOrdinary();
+    if(input.action==='upgrade-migrate') {
+      // Recheck the durable capability before each owner.
+      authorizeMigration(input);
       const absent=missing(source), mod=await ownerSchema(input,item);
       if(item.owner==='dashboard') {
         await inspectDashboardFile(mod,source,absent);

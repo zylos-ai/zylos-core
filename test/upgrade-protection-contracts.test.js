@@ -23,10 +23,16 @@ test('100 verified terminal directories do not hide one active transaction',()=>
  transaction('active','restoring');
  const result=m.discover(root);expect(result.diagnostics).toEqual([]);expect(result.candidates.map(c=>c.journal.transactionId)).toEqual(['active']);expect(result.blocked).toBe(true);
 });
-test('full data ready allows normal DB access while recovery remains discoverable',()=>{
- for(const phase of ['new_data_ready','new_verifying','restored_data_ready','restored_verifying']) {
+test('restored data ready allows normal DB access while recovery remains discoverable',()=>{
+ for(const phase of ['restored_data_ready','restored_verifying']) {
   const {dir,journal}=transaction('ready',phase);m.marker(root,dir,journal);
   expect(m.discover(root).blocked).toBe(false);expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
+ }
+});
+test('removed new-generation READY phases keep normal DB access isolated',()=>{
+ for(const phase of ['new_data_ready','new_verifying']) {
+  const {dir,journal}=transaction('obsolete-ready',phase);m.marker(root,dir,journal);
+  expect(m.discover(root).blocked).toBe(true);expect(()=>m.assertCoreDatabaseAvailable(root)).toThrow();
  }
 });
 test('unmarked preparation stays visible to explicit discovery without gating ordinary writes',()=>{

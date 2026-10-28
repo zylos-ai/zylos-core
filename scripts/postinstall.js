@@ -142,7 +142,7 @@ function main() {
     return;
   }
 
-  if (!process.env.ZYLOS_SKIP_POSTINSTALL) {
+  if (process.env.ZYLOS_SKIP_POSTINSTALL !== '1') {
     syncSkills();
     try { deployUpgradeBootstrap(ZYLOS_DIR); }
     catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }

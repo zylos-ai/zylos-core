@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const cp = require('node:child_process');
 const {isDeepStrictEqual} = require('node:util');
 const SELF_HASH = crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
-const READY = new Set(['new_data_ready', 'new_verifying', 'restored_data_ready', 'restored_verifying']);
+const READY = new Set(['restored_data_ready', 'restored_verifying']);
 const TERMINAL = new Set(['upgrade_complete', 'restored_complete', 'aborted_before_install']);
 const DB_PATHS = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'];
 const DASHBOARD_DB = 'components/dashboard/dashboard.db';
@@ -17,9 +17,11 @@ function databasePaths(formatVersion) {
   if (formatVersion === 2) return [...DB_PATHS, DASHBOARD_DB];
   throw Error('unsupported snapshot manifest format');
 }
-function originalDatabasePaths(j) {
+function originalDatabasePaths(j, {completedHistory = false} = {}) {
   const paths = j.initialIdentity?.databases?.map(d => d?.source);
-  const expected = databasePaths(2);
+  const legacyComplete = completedHistory && TERMINAL.has(j.phase) && j.cleanup?.complete === true &&
+    j.cleanup.servicesRestored === true && !Object.hasOwn(j, 'recoveryHashes') && paths?.length === DB_PATHS.length;
+  const expected = databasePaths(legacyComplete ? 1 : 2);
   if (!paths || paths.length !== expected.length || paths.some((p,i) => p !== expected[i])) throw Error('invalid data-ready original database collection');
   return expected;
 }
@@ -46,12 +48,10 @@ function fsyncFd(fd) {
   // F_FULLFSYNC but may fall back; success does not identify the sync level.
   return fs.fsyncSync(fd);
 }
-function platformSupported(platform = process.platform) {
-  return platform === process.platform && ['linux', 'darwin'].includes(platform);
-}
 function assertProcessView() {
-  const own = identity(), parent = identity(process.ppid);
-  if (own.unsupported || own.absent || parent.unsupported || parent.absent) throw Error('process view incomplete; writer exit cannot be confirmed');
+  const own = identity(), parent = process.ppid === 0 ? null : identity(process.ppid);
+  // A parent outside this PID namespace is reported as PID 0 and has no /proc entry.
+  if (own.unsupported || own.absent || parent && (parent.unsupported || parent.absent)) throw Error('process view incomplete; writer exit cannot be confirmed');
   const mounts = fs.readFileSync('/proc/mounts', 'utf8');
   if (mounts.split('\n').some(line => /\sproc\s/.test(line) && /(?:^|,)hidepid=(?!0(?:,|$))/.test(line.split(' ')[3] || ''))) throw Error('restricted process view; writer exit cannot be confirmed');
   for (const pid of fs.readdirSync('/proc').filter(name => /^\d+$/.test(name))) {
@@ -120,13 +120,13 @@ function transaction(root, dir) {
   return j;
 }
 function validateOriginalJournal(j, {
-  completeBackups = false
+  completeBackups = false, completedHistory = false
 } = {}) {
   const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   const absolute = value => typeof value === 'string' && path.isAbsolute(value) && path.resolve(value) === value;
   const i = j.initialIdentity;
   if (!i || typeof i !== 'object' || Array.isArray(i) || !absolute(j.nodePath) || i.nodePath !== j.nodePath || j.skillsDir !== path.join(j.zylosDir, '.claude', 'skills')) throw Error('invalid data-ready original deployment identity');
-  const databases = originalDatabasePaths(j);
+  const databases = originalDatabasePaths(j, {completedHistory});
   if (!absolute(i.packageJson) || !digest(i.packageHash) || !absolute(i.cliRoot) || !digest(i.cliHash) || !absolute(i.workerPath) || !digest(i.workerHash) || i.ecosystemHash !== null && !digest(i.ecosystemHash) || !Array.isArray(i.databases) || i.databases.length !== databases.length || i.databases.some((d, index) => !d || d.source !== databases[index] || typeof d.exists !== 'boolean')) throw Error('incomplete data-ready original identity');
   if (!Array.isArray(j.coreManifest) || !j.coreManifest.length || j.coreManifest.length > 256) throw Error('incomplete data-ready core manifest');
   const members = new Set();
@@ -136,13 +136,13 @@ function validateOriginalJournal(j, {
   }
   if (!Array.isArray(j.originalServices) || j.originalServices.some(s => !s || typeof s.name !== 'string' || !s.name || typeof s.script !== 'string' || !path.isAbsolute(s.script))) throw Error('invalid data-ready original service set');
 }
-function validateReadyJournal(j) {
+function validateReadyJournal(j, {completedHistory = false} = {}) {
   // data_ready releases normal business writers. Check durable records, never
   // current DB hashes: legitimate writes after data_ready must remain valid.
   if (j.installationIntent !== true) throw Error('invalid data-ready installation identity');
   if (j.dbBackupDir !== path.join(j.zylosDir, '.backup', 'db', j.transactionId) || typeof j.snapshotManifestHash !== 'string' || !/^[a-f0-9]{64}$/.test(j.snapshotManifestHash)) throw Error('invalid data-ready installation/material identity');
   validateOriginalJournal(j, {
-    completeBackups: true
+    completeBackups: true, completedHistory
   });
 }
 function terminalValid(j) {
@@ -152,7 +152,7 @@ function terminalValid(j) {
   const cleanupPending = j.phase === 'upgrade_complete' && j.cleanup?.complete === false && j.cleanup.codeRemoved === false;
   if (!TERMINAL.has(j.phase) || !cleanupPending && j.cleanup?.complete !== true || j.cleanup?.servicesRestored !== true || j.terminalEvidence?.verified !== true) return false;
   try {
-    if (j.phase === 'aborted_before_install') validateOriginalJournal(j);else validateReadyJournal(j);
+    if (j.phase === 'aborted_before_install') validateOriginalJournal(j, {completedHistory:true});else validateReadyJournal(j, {completedHistory:true});
   } catch {
     return false;
   }
@@ -196,7 +196,7 @@ function hasRecoveryHistory(root) {
     const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
     const absolute = value => typeof value === 'string' && path.isAbsolute(value) && path.resolve(value) === value;
     let dbs;
-    try { dbs = originalDatabasePaths(j); } catch { return false; }
+    try { dbs = originalDatabasePaths(j, {completedHistory:true}); } catch { return false; }
     if (!j || j.formatVersion !== 1 || j.transactionId !== id || j.zylosDir !== fs.realpathSync(root) ||
         !['upgrade_complete', 'restored_complete', 'aborted_before_install'].includes(j.phase) ||
         j.cleanup?.complete !== true || j.cleanup.servicesRestored !== true || j.terminalEvidence?.verified !== true ||
@@ -679,7 +679,7 @@ function start(j) {
     privatePath(ecosystem);
     // The new finalizer may intentionally regenerate the ecosystem. Abort and
     // restored deployments must use the byte-verified original configuration.
-    if (!['new_data_ready', 'new_verifying', 'upgrade_complete'].includes(j.phase) && hash(ecosystem) !== originalHash) throw Error('original ecosystem identity changed');
+    if (j.phase !== 'upgrade_complete' && hash(ecosystem) !== originalHash) throw Error('original ecosystem identity changed');
     for (const saved of original) command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env']);
   }
 }
@@ -883,12 +883,15 @@ function finishTerminal(dir, j) {
   return {complete:true, warnings:[]};
 }
 
-function runInstaller(dir, j, {stage, npmCli, args, cwd, timeout = 180000}) {
-  for (const name of ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs']) {
+function validateRecoveryFiles(dir, j, names = ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs']) {
+  for (const name of names) {
     const file = path.join(dir, name);
     privatePath(file);
-    if (hash(file) !== j.recoveryHashes?.[name]) throw Error('transaction recovery material changed: ' + name);
+    if (!/^[a-f0-9]{64}$/.test(j.recoveryHashes?.[name] || '') || hash(file) !== j.recoveryHashes[name]) throw Error('transaction recovery material changed: ' + name);
   }
+}
+function runInstaller(dir, j, {stage, npmCli, args, cwd, timeout = 180000}) {
+  validateRecoveryFiles(dir, j);
   privatePath(npmCli);
   if (path.basename(npmCli) !== 'npm-cli.js' || !path.isAbsolute(npmCli)) throw Error('untrusted npm CLI');
   const token = crypto.randomBytes(24).toString('hex');
@@ -917,27 +920,27 @@ function restoreOriginalPackage(dir, j) {
   if (hash(j.initialIdentity.packageJson) !== j.initialIdentity.packageHash || treeHash(j.initialIdentity.cliRoot) !== j.initialIdentity.cliHash) throw Error('restored installed package identity mismatch');
 }
 function verifyFinalizerExit(dir, j) {
-  for (const kind of ['installer', 'finalizer']) {
+  // Legacy detached-finalizer records require manual recovery; new transactions
+  // never launch a finalizer child and cannot safely interpret its ownership.
+  if (j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed) throw Error('legacy finalizer requires manual recovery');
+  for (const kind of ['installer']) {
     const started = kind + 'Started', confirmed = kind + 'ExitConfirmed', unconfirmed = kind + 'ExitUnconfirmed';
     if (!j[unconfirmed] && (!j[started] || j[confirmed])) continue;
     const descriptorFile = path.join(dir, 'descriptor.json');
-    if (kind === 'finalizer' || fs.existsSync(descriptorFile)) validateDescriptor(dir, j, read(descriptorFile));
-    for (const name of ['runner.cjs', 'finalizer.cjs', 'maintenance.cjs']) {
-      privatePath(path.join(dir, name));
-      if (!/^[a-f0-9]{64}$/.test(j.recoveryHashes?.[name] || '') || hash(path.join(dir, name)) !== j.recoveryHashes[name]) throw Error('transaction recovery material changed: ' + name);
-    }
+    if (fs.existsSync(descriptorFile)) validateDescriptor(dir, j, read(descriptorFile));
+    validateRecoveryFiles(dir, j);
     const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:kind==='installer', kind});
     if (!result.confirmed) throw Error(result.error || kind + ' exit requires verification before resume');
     update(dir, j, {[unconfirmed]:false, [confirmed]:true});
   }
 }
 module.exports = {
+  validateRecoveryFiles,
   runInstaller,
   restoreOriginalPackage,
   verifyFinalizerExit,
   classifyCutoff,
   fsyncFd,
-  platformSupported,
   canRecognizeProcesses,
   preflightExternalTools,
   transaction,

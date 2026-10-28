@@ -129,7 +129,7 @@ They do not inspect indexes, triggers, or views, and a core table rebuild can
 lose user-created indexes or triggers. A same-count edit can change row meaning
 without being detected, so review dependent objects and relevant content.
 
-When migration is needed, both protected and backup-only self-upgrades rehearse
+When migration is needed, protected self-upgrades rehearse
 the target migration chain on isolated SQLite backup copies before service stop.
 A passed rehearsal is only an early warning check. After service stop, the
 updater takes and verifies the authoritative snapshots and reruns the full
@@ -202,10 +202,10 @@ Deploy templates according to the decisions made in Step 2:
 - Changed files: follow user's choice (overwrite or keep)
 - Unchanged files: skip
 
-### Step 5: Review Conflicts + Restart
+### Step 5: Review Conflicts + Completion
 
 1. **If `mergeConflicts` exists**: Review each conflict. Read backup and installed versions, re-apply local changes.
-2. If the upgrade changed hooks or skills, execute `restart-claude` to load new configuration.
+2. Read the CLI's completion and restart result. Protected Core upgrade submits its own restart request; follow any reported recovery action without submitting another restart.
 
 ## C4 Mode — Component Upgrade
 
@@ -333,5 +333,5 @@ User: `upgrade zylos confirm`
    an incompatibility, resolve it before retrying; no schema-extension flag bypasses it.
 2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
 3. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
-4. If hooks/skills changed, execute restart-claude
+4. Read the CLI completion and restart result; protected Core upgrade submits its own restart request. Follow its reported recovery action without submitting another restart.
 5. Reply with version change and change summary

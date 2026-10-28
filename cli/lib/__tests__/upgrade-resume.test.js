@@ -177,6 +177,7 @@ test('persisted tracks intermediate durable changes but excludes in-memory mutat
   const f=fixture(t);
   f.journal={...f.journal,probe:'original'};
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+    ctx.maintenance.update(f.dir,ctx.journal,{updatedAt:'2026-01-01T00:00:00.000Z'});
     ctx.maintenance.update(f.dir,ctx.journal,{probe:'intermediate'});
     ctx.maintenance.update(f.dir,ctx.journal,{probe:'original'});
     ctx.journal.inMemoryOnly=true;
@@ -190,6 +191,9 @@ test('persisted tracks intermediate durable changes but excludes in-memory mutat
   assert.ok(result.error.persisted.includes('journal.probe'));
   assert.equal(result.error.persisted.includes('journal.inMemoryOnly'),false);
   assert.equal(result.error.persisted.includes('journal.neverSaved'),false);
+  assert.equal(result.error.persisted.includes('journal.transactionId'),false);
+  assert.equal(result.error.persisted.includes('journal.zylosDir'),false);
+  assert.equal(result.error.persisted.includes('journal.updatedAt'),false);
 });
 
 test('persisted includes a journal replacement even when a later durability check fails',async t=>{
@@ -331,7 +335,7 @@ test('real partial publication reports retained replace bytes when a later targe
   assert.equal(result.ok,false);
   assert.equal(result.data.core.failedItems[0].targetId,'t02');
   assert.ok(result.error.persisted.includes('journal.postCutoff.items.hooks.attempts'));
-  assert.ok(result.error.persisted.includes('journal.items.hooks.t01'));
+  assert.ok(result.error.persisted.includes('t01'));
   assert.equal(fs.readFileSync(path.join(f.root,'CLAUDE.md'),'utf8'),'new');
   assert.equal(fs.readFileSync(path.join(f.root,'AGENTS.md'),'utf8'),'conflict');
 });
@@ -345,7 +349,7 @@ test('resume does not attribute unrelated target mutations to the finalizer',asy
     return {success:false,error:'controlled failure'};
   }});
   assert.equal(result.ok,false);
-  assert.equal(result.error.persisted.some(field=>field.startsWith('journal.items.hooks.')),false);
+  assert.equal(result.error.persisted.some(field=>/^t\d+(?:-\d+)?$/.test(field)),false);
   assert.equal(result.error.persisted.includes('journal.phase'),true);
   assert.equal(result.error.persisted.includes('journal'),false);
 });

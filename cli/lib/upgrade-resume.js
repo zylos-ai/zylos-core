@@ -45,6 +45,7 @@ export function locateFinalize(root, m = maintenance, { readManifest = true } = 
 
 function recordChanges(before,after,changes) {
   const walk = (previous, current, key) => {
+    if (key === 'journal.updatedAt') return;
     if (JSON.stringify(previous) === JSON.stringify(current)) return;
     const object=value=>value!==null && typeof value==='object' && !Array.isArray(value);
     if ((object(previous) || previous === undefined) && (object(current) || current === undefined)) {

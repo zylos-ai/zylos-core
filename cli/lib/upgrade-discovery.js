@@ -18,11 +18,8 @@ export function recoverBeforeUpgrade(root, deps = {}) {
   const {dir, journal} = found.candidates[0];
   const controller = path.join(dir, 'controller.json');
   if (fs.existsSync(controller) && m.alive(m.read(controller))) reject('An upgrade controller is still running.');
-  for (const name of ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs']) {
-    const file = path.join(dir, name);
-    m.privatePath(file);
-    if (!/^[a-f0-9]{64}$/.test(journal.recoveryHashes?.[name] || '') || m.hash(file) !== journal.recoveryHashes[name]) reject('Transaction recovery material changed: ' + name);
-  }
+  try {m.validateRecoveryFiles(dir, journal);}
+  catch(error) {reject(error.message);}
   const child = (deps.spawn ?? spawnSync)(process.execPath, [path.join(dir, 'runner.cjs'), 'resume', '--transaction-dir', dir],
     {encoding:'utf8', env:{...process.env}, maxBuffer:4*1024*1024});
   if (child.error) reject(child.error.message);

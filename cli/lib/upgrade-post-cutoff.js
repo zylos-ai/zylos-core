@@ -183,8 +183,8 @@ async function publishPrepared(ctx, { installHook = installCoreCodexHook,
   const writtenTargets = new Set();
   const recordWrite = targetId => {
     writtenTargets.add(targetId);
-    ctx.persisted?.add(`journal.items.hooks.${targetId}`);
-    ctx.recordPersisted?.(`journal.items.hooks.${targetId}`);
+    ctx.persisted?.add(targetId);
+    ctx.recordPersisted?.(targetId);
   };
   const result = values => ({ ...values, writtenTargets: [...writtenTargets] });
   const save = changes => {

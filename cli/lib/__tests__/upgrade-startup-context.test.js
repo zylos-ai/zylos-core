@@ -54,6 +54,7 @@ function publishedTransaction(t) {
 }
 
 test('startup runs the published transaction runner before a stable bootstrap or marker exists', {skip:process.platform!=='linux'}, t => {
+ t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
  const f=publishedTransaction(t);
  assert.equal(fs.existsSync(path.join(f.root,'.zylos')),false);
  assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
@@ -85,6 +86,8 @@ test('completed historical transactions with retained recovery files leave ordin
 });
 
 test('startup observes a live published controller without executing its recovery runner', {skip:process.platform!=='linux'}, t => {
+ t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
+ t.mock.method(maintenance,'alive',()=>true);
  const f=publishedTransaction(t);
  maintenance.durable(path.join(f.dir,'controller.json'),maintenance.identity());
  const context=discoverUpgradeContext(f.root);
@@ -94,6 +97,7 @@ test('startup observes a live published controller without executing its recover
 });
 
 test('startup rejects modified transaction recovery and unrecognizable ownership without executing code', {skip:process.platform!=='linux'}, t => {
+ t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
  for(const attack of ['modified-runner','unknown-process']) {
   const f=publishedTransaction(t),recognize=maintenance.canRecognizeProcesses;
   if(attack==='modified-runner')fs.appendFileSync(path.join(f.dir,'runner.cjs'),'\n// changed');
@@ -108,7 +112,7 @@ test('startup rejects modified transaction recovery and unrecognizable ownership
 
 test('startup diagnostics preserve active READY availability despite unrelated damaged history', t => {
  const f=publishedTransaction(t),digest='a'.repeat(64);
- Object.assign(f.journal,{phase:'new_data_ready',installationIntent:true,skillsDir:path.join(f.root,'.claude/skills'),dbBackupDir:path.join(f.root,'.backup/db/tx'),snapshotManifestHash:digest,
+ Object.assign(f.journal,{phase:'restored_data_ready',installationIntent:true,skillsDir:path.join(f.root,'.claude/skills'),dbBackupDir:path.join(f.root,'.backup/db/tx'),snapshotManifestHash:digest,
   coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
   initialIdentity:{nodePath:process.execPath,packageJson:path.join(f.root,'package.json'),packageHash:digest,cliRoot:path.join(f.root,'cli'),cliHash:digest,workerPath:path.join(f.root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:maintenance.databasePaths(2).map(source=>({source,exists:true}))}});
  maintenance.update(f.dir,f.journal);maintenance.marker(f.root,f.dir,f.journal);

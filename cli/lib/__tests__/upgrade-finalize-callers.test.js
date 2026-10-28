@@ -17,6 +17,19 @@ function fixture(t, config = {}) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const calls = [];
   const ctx = { zylosDir: root, from: 'old', to: 'new', steps: [], mergedFiles: [], mergeConflicts: [] };
+  const journal = { phase: 'compensation_closed' };
+  Object.assign(ctx, {
+    preInstallProtection: true,
+    transactionDir: path.join(root, 'transaction'),
+    journal,
+    maintenance: {
+      canRecognizeProcesses: () => true,
+      transaction: () => journal,
+      classifyCutoff: () => 'closed',
+      stop: () => {},
+      update: (_dir, current, changes) => Object.assign(current, changes),
+    },
+  });
   let now = 0;
   const budget = {
     deadlineAt: 10000,
@@ -30,6 +43,8 @@ function fixture(t, config = {}) {
     budget,
     ensureMemoryMigration: () => { calls.push('ensure'); },
     commitBaselines: () => { calls.push('baselines'); },
+    refreshMaintenanceReader: () => {},
+    protectedSuccess: () => {},
     startServices: () => { calls.push('start'); },
     verifyServices: () => { calls.push('verify'); },
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },

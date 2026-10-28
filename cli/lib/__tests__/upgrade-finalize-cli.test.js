@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseUpgradeFinalizeOptions, formatFinalizeResult, formatSelfUpgradeCompletion, formatC4Reply } from '../../commands/component.js';
+import { parseUpgradeFinalizeOptions, formatFinalizeResult, formatSelfUpgradeCompletion } from '../../commands/component.js';
 
 const modulePath = fileURLToPath(new URL('../../commands/component.js', import.meta.url));
 
-test('text and JSON reply report independent outcomes without promising restart readiness', () => {
+test('completion formatter reports independent outcomes without promising restart readiness', () => {
   const result = { success: true, from: '0.9.0', to: '0.9.2', settingsChanged: true,
     completion: { install: 'done', dashboard: 'degraded', sessionRestart: 'manual_required', modeTransition: 'unknown' },
     dashboard: { errors: [{ item: 'route', code: 'ROUTE_FAILED', message: 'reload failed' }] },
@@ -17,40 +17,38 @@ test('text and JSON reply report independent outcomes without promising restart 
     modeStatus: { state: 'unavailable', error: { message: 'P10 unavailable' } },
     next: 'Resolve the failure before restarting.' };
   const text = formatSelfUpgradeCompletion(result);
-  const json = JSON.parse(JSON.stringify({ ...result, reply: formatC4Reply('self-upgrade', result) }));
+  const json = JSON.parse(JSON.stringify(result));
   for (const expected of ['Installation: done', 'Dashboard: degraded', 'Session restart: manual_required',
     'Mode transition: unknown', 'ROUTE_FAILED: reload failed', 'TIMEOUT: submission timed out',
     'Mode status: unavailable: P10 unavailable', 'Manual runtime restart required', result.next]) {
     assert.ok(text.includes(expected), expected);
-    assert.ok(json.reply.includes(expected), expected);
   }
   assert.deepEqual(json.completion, result.completion);
   assert.equal(Object.hasOwn(json, 'instructionFilesRebuilt'), false);
-  assert.doesNotMatch(json.reply, /No action needed|restart automatically|ready/i);
+  assert.doesNotMatch(text, /No action needed|restart automatically|ready/i);
 });
 
 test('accepted restart and legacy settings results never invent readiness or automatic submission', () => {
   const accepted = { success: true, completion: { install: 'done', dashboard: 'ready', sessionRestart: 'accepted', modeTransition: 'in_progress' },
     sessionRestart: { ok: true, data: { result: 'accepted' } }, settingsChanged: true };
-  const reply = formatC4Reply('self-upgrade', accepted);
+  const reply = formatSelfUpgradeCompletion(accepted);
   assert.match(reply, /Session restart: accepted/);
   assert.doesNotMatch(reply, /Manual runtime restart|No action needed|restart automatically/);
-  const legacy = formatC4Reply('self-upgrade', { success: true, settingsChanged: true });
+  const legacy = formatSelfUpgradeCompletion({ success: true, settingsChanged: true });
   assert.match(legacy, /Restart the runtime to load/);
   assert.doesNotMatch(legacy, /No action needed|restart automatically/);
 });
 
 test('failed upgrade replies retain completion and forward repair guidance', () => {
-  const reply = formatC4Reply('self-upgrade', { success: false, error: 'service start failed',
+  const reply = formatSelfUpgradeCompletion({ success: false, error: 'service start failed',
     completion: { install: 'pending', dashboard: 'degraded', sessionRestart: 'manual_required', modeTransition: 'unknown' },
     next: 'Run zylos upgrade --resume-finalize.' });
-  assert.match(reply, /upgrade failed: service start failed/);
   assert.match(reply, /Installation: pending/);
   assert.match(reply, /--resume-finalize/);
 });
 
 test('unknown restart result retains request identity and forbids automatic resubmission', () => {
-  const reply = formatC4Reply('self-upgrade', { success: true,
+  const reply = formatSelfUpgradeCompletion({ success: true,
     completion: { sessionRestart: 'manual_required' },
     sessionRestart: { ok: false, requestId: 'restart-uncertain', error: { code: 'restart_result_unknown', message: 'No reply' } } });
   assert.match(reply, /Restart request: restart-uncertain/);
@@ -76,7 +74,7 @@ test('thin CLI forwards downloaded executable output and exit status without ano
       mock.module(${JSON.stringify(new URL('../self-upgrade.js', import.meta.url).href)}, {namedExports: {
         checkForCoreUpdates: () => ({success:true,hasUpdate:true,current:'0.9.3',latest:'0.9.4'}),
         downloadCoreToTemp: () => ({success:true,tempDir:${JSON.stringify(root)}}),
-        readChangelog: () => '', cleanupTemp() {}, cleanupBackup() {}
+        readChangelog: () => '', cleanupTemp() {}
       }});
       mock.module(${JSON.stringify(new URL('../request-runtime-restart.js', import.meta.url).href)}, {namedExports: {
         requestRuntimeRestart: () => { restartCalls++; return {ok:true}; }

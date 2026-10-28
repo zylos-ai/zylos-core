@@ -98,12 +98,7 @@ function bootstrap(root, {
     if (!m.canRecognizeProcesses()) return {...out, recovery_required:true, error:'interrupted upgrade requires manual recovery because process identities cannot be recognized; automatic resume is unavailable'};
     const candidate = d.candidates[0];
     const runner = path.join(candidate.dir, 'runner.cjs');
-    m.privatePath(runner);
-    for (const name of ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs']) {
-      const file = path.join(candidate.dir, name);
-      m.privatePath(file);
-      if (!/^[a-f0-9]{64}$/.test(candidate.journal.recoveryHashes?.[name] || '') || m.hash(file) !== candidate.journal.recoveryHashes[name]) throw Error('transaction recovery material changed: ' + name);
-    }
+    m.validateRecoveryFiles(candidate.dir, candidate.journal);
     const r = require(runner);
     return {
       active: true,
