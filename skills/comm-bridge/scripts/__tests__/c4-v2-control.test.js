@@ -107,7 +107,7 @@ test('DM27 manual expire only active rows and target APIs reject ambiguous shape
     else assert.throws(() => s.expireControlById(r.id), { code: 'CONTROL_NOT_ACTIVE' });
   }
   assert.throws(() => s.expireControlById(99999), { code: 'CONTROL_NOT_ACTIVE' });
-  for (const invalid of [{}, { sessionGroup: 'a', machine: true }, { machine: false }, { allSessionGroups: false }, { sessionGroup: '*' }]) for (const method of ['countNonTerminalControls', 'expirePendingControls']) assert.throws(() => s[method](invalid));
+  for (const invalid of [{}, { sessionGroup: 'a', machine: true }, { machine: false }, { allSessionGroups: false }, { sessionGroup: '*' }]) for (const method of ['countNonTerminalControls', 'expirePendingControls', 'listRunningControlsWithoutDeadline']) assert.throws(() => s[method](invalid));
 });
 test('IB12 stale targeted running control ends without retry or another claim', t => {
   let now = NOW;
@@ -200,3 +200,56 @@ for (const reason of ['upgrade', 'auth', 'mode_switch', 'model_config']) {
     assert.deepEqual(rows(), before, 'invalid retry preserves existing fence');
   });
 }
+
+test('listRunningControlsWithoutDeadline selects three scopes, only running NULL-deadline rows, ordered ids and empty after ack', t => {
+  const { store, db } = fixture(t, single);
+  const insert = db.prepare("INSERT INTO control_queue(id,raw_content,content,status,ack_deadline_at,created_at,updated_at,session_group) VALUES(?,'work','work',?,?,?, ?,?)");
+  // Deliberately insert non-monotonic ids; status/deadline predicates must both apply.
+  const controls = [
+    [90, 'running', null, null], [50, 'running', null, 'a'], [20, 'running', null, 'b'],
+    [10, 'running', null, null], [30, 'running', null, 'a'],
+    [15, 'running', NOW + 10, null], [25, 'running', NOW + 10, 'a'], [35, 'running', NOW + 10, 'b'],
+    [45, 'pending', null, null], [55, 'pending', null, 'a'], [65, 'pending', null, 'b'],
+    [5, 'done', null, null], [6, 'timeout', null, 'a'], [7, 'failed', null, 'b'],
+  ];
+  for (const [id, status, deadline, group] of controls) insert.run(id, status, deadline, NOW, NOW, group);
+  const cases = [[{ machine: true }, [10, 90]], [{ sessionGroup: 'a' }, [30, 50]], [{ allSessionGroups: true }, [20, 30, 50]]];
+  const before = db.prepare('SELECT * FROM control_queue ORDER BY id').all(); const changes = db.prepare('SELECT total_changes() n').get().n;
+  for (const [target, expected] of cases) assert.deepEqual(store.listRunningControlsWithoutDeadline(target), expected);
+  assert.deepEqual(store.listRunningControlsWithoutDeadline({ sessionGroup: 'absent' }), []);
+  assert.deepEqual(db.prepare('SELECT * FROM control_queue ORDER BY id').all(), before);
+  assert.equal(db.prepare('SELECT total_changes() n').get().n, changes);
+  // Model completed ACKs between reads, including the finite-deadline running rows.
+  db.prepare("UPDATE control_queue SET status='done',updated_at=? WHERE status='running'").run(NOW + 1);
+  for (const [target] of cases) assert.deepEqual(store.listRunningControlsWithoutDeadline(target), []);
+});
+
+test('listRunningControlsWithoutDeadline uses one SELECT on a readonly connection and performs no writes', t => {
+  const { store, filename } = fixture(t, single, true);
+  const running = add(store, 'a', 'read only'); store.claimControl(running.id);
+  const queries = [];
+  const readonly = new Database(filename, { readonly: true, fileMustExist: true, verbose: sql => queries.push(sql) }); t.after(() => readonly.close());
+  const reader = createStore(readonly, single);
+  assert.deepEqual(reader.listRunningControlsWithoutDeadline({ sessionGroup: 'a' }), [running.id]);
+  assert.equal(queries.length, 1); assert.match(queries[0], /^SELECT id FROM control_queue /); assert.match(queries[0], /ORDER BY id$/);
+  assert.equal(readonly.prepare('SELECT total_changes() n').get().n, 0);
+});
+
+test('listRunningControlsWithoutDeadline propagates read failures and normalizes injected SQLITE_BUSY', () => {
+  for (const code of ['SQLITE_BUSY', 'SQLITE_BUSY_SNAPSHOT', 'SQLITE_IOERR_READ']) {
+    const failure = Object.assign(new Error('injected read failure'), { code }); let statements = 0;
+    const store = createStore({ prepare(sql) { statements++; assert.match(sql, /^SELECT id FROM control_queue /); return { all() { throw failure; } }; } });
+    assert.throws(() => store.listRunningControlsWithoutDeadline({ machine: true }), error => {
+      if (code.startsWith('SQLITE_BUSY')) { assert.equal(error.code, 'DB_BUSY'); assert.equal(error.cause, failure); }
+      else assert.equal(error, failure);
+      return true;
+    });
+    assert.equal(statements, 1);
+  }
+});
+
+test('listRunningControlsWithoutDeadline is exposed through the public c4-db facade', async () => {
+  const facade = await import('../c4-db.js');
+  assert.equal(typeof facade.listRunningControlsWithoutDeadline, 'function');
+  assert.deepEqual(facade.listRunningControlsWithoutDeadline({ machine: true }), []);
+});

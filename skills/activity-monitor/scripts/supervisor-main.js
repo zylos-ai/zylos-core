@@ -19,7 +19,9 @@ import { RestartRequestStore } from './restart-request-store.js';
 import { findMatchingToolRule } from './tool-rules.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
-const { zylosRoot } = await loadCoreModule('session-group-paths.js');
+const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
+const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
+const { zylosRoot, LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 const { matchClaudeScreen } = await loadCoreModule('heartbeat/claude-probe.js');
 const { matchCodexScreen } = await loadCoreModule('heartbeat/codex-probe.js');
@@ -77,7 +79,18 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('P04 pool configuration reader','eviction');}
       return configuration;
     },
-    advanceAutomaticMigration:async()=>{throw unavailable('P10 automatic migration owner');},
+    legacyPresent:async()=>{
+      let connection;
+      try {
+        connection=await openTmuxConnection(baseScenes.connectionOptions ?? {});
+        for(const tmuxName of LEGACY_TMUX_NAMES) {
+          const target=await observeSessionTarget({sessionGroup:null,tmuxName,connection});
+          if(target.present)return true;
+        }
+        return false;
+      } catch(error) { if(error.code==='TMUX_NO_SERVER')return false;throw error; }
+      finally {await connection?.close();}
+    },
     resolveTargetRuntime:async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).mode==='single'?null:group),
     checkAuth:runtime=>getSessionAdapter(runtime).checkAuth(),
     matchScreen:(runtime,screen)=>(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),

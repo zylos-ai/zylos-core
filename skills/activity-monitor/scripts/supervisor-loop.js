@@ -67,7 +67,7 @@ export class SupervisorLoop {
     let context;
     await d.lifecycleSerial(async () => {
       // Sample all round authorities and scenes while socket admission is excluded.
-      this.configuration = await d.readConfiguration();
+      this.configuration = await d.readConfiguration(transition);
       context = { configuration: this.configuration, transition,
         fences: await d.listDrainFences(), restartRequests: [] };
       try { context.restartRequests = await d.readRestartRequests(); }

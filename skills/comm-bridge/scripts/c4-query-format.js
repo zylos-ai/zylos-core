@@ -22,7 +22,8 @@ function pageLimit(value, fallback, maximum) {
   return limit;
 }
 const time = value => new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(value) ? value : value.replace(' ', 'T') + 'Z').toISOString().replace('.000Z', 'Z');
-const scopeFor = (transition, row) => transition.target_mode === 'single' ? '*' : row.session_group || 'origin';
+export const binaryCompare = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
+export const scopeFor = (transition, row) => transition.target_mode === 'single' ? '*' : row.session_group || 'origin';
 export function formatAbsorbedPage({ transition, rows }, { group, after = 0, limit: requested, json = false } = {}) {
   const limit = pageLimit(requested, 20, 100);
   if (!Number.isSafeInteger(after) || after < 0) throw dataError('INVALID_ARGS', 'Invalid page boundary');
@@ -57,29 +58,31 @@ export function formatAbsorbedFull(snapshot, options = {}) {
   }
   return json ? envelope(data) : `absorbed-full run=${data.runId} id=${data.id} field=${data.field} bytes=${data.bytes}\ndata: ${escapeText(data.data)}\nend id=${data.id} field=${data.field}\n`;
 }
-export function formatAbsorbedSummary({ transition, rows }, { scopeAfter, limit: requested, json = false } = {}) {
-  const limit = pageLimit(requested, 50, 200), byScope = new Map();
+export function absorbedSummaryItems({ transition, rows }) {
+  const byScope = new Map();
   for (const row of rows) {
     const scope = scopeFor(transition, row);
     if (!byScope.has(scope)) byScope.set(scope, []);
     byScope.get(scope).push(row);
   }
-  const binary = (a,b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
-  const scopes = [...byScope.keys()].sort(binary);
-  const pending = scopes.filter(s => scopeAfter === undefined || binary(s, scopeAfter) > 0);
-  const items = pending.slice(0, limit).map(scope => {
+  return [...byScope.keys()].sort(binaryCompare).map(scope => {
     const messages = byScope.get(scope), item = { scope, count: messages.length, firstId: messages[0].id, lastId: messages.at(-1).id };
     if (transition.target_mode === 'single') {
       const counts = new Map();
       for (const row of messages) counts.set(row.session_group, (counts.get(row.session_group) ?? 0) + 1);
-      const groups = [...counts.keys()].sort(binary);
+      const groups = [...counts.keys()].sort(binaryCompare);
       item.bySourceGroup = Object.fromEntries(groups.slice(0, 50).map(g => [g, counts.get(g)]));
       if (groups.length > 50) item.bySourceGroupMore = groups.length - 50;
     }
     return item;
   });
+}
+export function formatAbsorbedSummary(snapshot, { scopeAfter, limit: requested, json = false } = {}) {
+  const limit = pageLimit(requested, 50, 200), summaries = absorbedSummaryItems(snapshot);
+  const pending = summaries.filter(item => scopeAfter === undefined || binaryCompare(item.scope, scopeAfter) > 0);
+  const items = pending.slice(0, limit);
   const nextScope = items.length && pending.length > items.length ? items.at(-1).scope : null;
-  const data = { runId: transition.run_id, phase: transition.phase, total: rows.length, scopes: scopes.length, items, count: items.length, nextScope };
+  const data = { runId: snapshot.transition.run_id, phase: snapshot.transition.phase, total: snapshot.rows.length, scopes: summaries.length, items, count: items.length, nextScope };
   if (json) return envelope(data);
   return `absorbed-summary run=${data.runId} phase=${data.phase} total=${data.total} scopes=${data.scopes}\n` + items.map(i =>
     `scope=${i.scope} count=${i.count} firstId=${i.firstId} lastId=${i.lastId}${i.bySourceGroup === undefined ? '' : ` bySourceGroup=${Object.entries(i.bySourceGroup).map(([g,n]) => `${g}:${n}`).join(',')}${i.bySourceGroupMore ? `,+${i.bySourceGroupMore} more` : ''}`}\n`

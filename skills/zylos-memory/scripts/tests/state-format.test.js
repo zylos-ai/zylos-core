@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseStateHeader, validateStateDocument, renderStateSkeleton } from '../state-format.js';
+import { parseStateHeader, validateStateDocument, renderStateSkeleton, inboxSegmentName } from '../state-format.js';
 
 const scope = 'telegram:g-123';
 const syncedAt = '2026-10-19T05:30:02Z';
@@ -114,4 +114,16 @@ test('IB-48 absorbed title and rows appear at the start of Pending in the full d
 
 ## Commitments
 `);
+});
+
+test('inbox segment names match a complete filename and only positive suffixes', () => {
+  const segment = '20261019T053002123Z';
+  for (const id of [segment, `${segment}-1`, `${segment}-12`]) {
+    assert.equal(inboxSegmentName.exec(`inbox.${id}.md`)?.[1], id);
+  }
+  assert.equal(inboxSegmentName.test(`inbox.${segment}.md.bak`), false);
+  assert.equal(inboxSegmentName.test(`inbox.${segment}-0.md`), false);
+  assert.equal(inboxSegmentName.test(`inbox.${segment}-01.md`), false);
+  const zeroSuffixHeader = renderStateSkeleton(base).replace('inbox_committed= ', `inbox_committed=${segment}-0 `);
+  assert.equal(parseStateHeader(zeroSuffixHeader, { scope }).valid, false);
 });

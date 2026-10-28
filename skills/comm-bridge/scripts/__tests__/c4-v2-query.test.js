@@ -209,6 +209,15 @@ test('gating is empty; summary scope order and single target aggregation follow 
   const single = absorb(store, 'multi', 'single');
   assert.deepEqual(JSON.parse(query.absorbed({ runId: single, summary: true, json: true })).data.items[0].bySourceGroup, { 'foo:z': 1 });
 });
+test('summary scope order and continuation use BINARY rather than locale collation', t => {
+  const { store, query } = fixture(t);
+  for (const groupName of ['a', 'B']) store.insertConversation('in', 'foo', 'e', 'x', { groupName });
+  const runId = absorb(store);
+  const summary = JSON.parse(query.absorbed({ runId, summary: true, json: true })).data;
+  assert.deepEqual(summary.items.map(item => item.scope), ['foo:B', 'foo:a']);
+  const next = JSON.parse(query.absorbed({ runId, summary: true, scopeAfter: 'foo:B', json: true })).data;
+  assert.deepEqual(next.items.map(item => item.scope), ['foo:a']);
+});
 test('mismatch error lists exactly first 20 ids and retains total count', () => {
   const ids = Array.from({ length: 10000 }, (_, i) => i + 1);
   for (const json of [false, true]) {
@@ -232,8 +241,10 @@ test('summary defaults to 50 scopes and paginates up to 200 in BINARY order with
       if (json) {
         const { data } = JSON.parse(output);
         assert.ok(data.count > 0 && data.count <= 17);
+        assert.equal(data.scopes, 205);
         scopes.push(...data.items.map(x => x.scope)); scopeAfter = data.nextScope ?? undefined;
       } else {
+        assert.match(output.split('\n')[0], / scopes=205$/);
         const page = [...output.matchAll(/^scope=(\S+) count=/gm)].map(m => m[1]);
         scopes.push(...page);
         const footer = output.match(/count=(\d+) nextScope=(\S+)\n$/);

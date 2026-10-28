@@ -30,6 +30,9 @@ function walk(dir, files = []) {
 
 function isNodeTest(file) {
   const rel = path.relative(ROOT, file).split(path.sep).join('/');
+  // These integration entries use Jest and are selected by jest.config.js.
+  if (rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js'
+      || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js') return false;
   if (rel.startsWith('cli/lib/__tests__/')) return true;
   if (rel.startsWith('cli/lib/runtime/__tests__/')) return true;
   if (rel.startsWith('skills/activity-monitor/scripts/__tests__/')) return true;

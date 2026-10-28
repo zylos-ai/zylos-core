@@ -5,9 +5,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { runDirFromEnv, groupMemoryDir, groupRunDir, zylosRoot } from './session-group-paths.js';
 import { withMemoryLock as memoryLock } from '../../skills/zylos-memory/scripts/sync-lock.js';
+import { inboxSegmentName as segmentName } from '../../skills/zylos-memory/scripts/state-format.js';
 
 const OUTPUT_LIMIT = 32 * 1024;
-const segmentName = /^inbox\.(\d{8}T\d{9}Z(?:-[1-9]\d*)?)\.md$/;
 const fail = (code, message, parts = []) => Object.assign(new Error(message), { code, parts, persisted: [] });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const metadata = bytes => ({ bytes: bytes.length, sha256: hash(bytes) });

@@ -458,6 +458,7 @@ export const claimControl = (...args) => store.claimControl(...args);
 export const expirePendingControls = (...args) => store.expirePendingControls(...args);
 export const expireStaleRunningControls = (...args) => store.expireStaleRunningControls(...args);
 export const countNonTerminalControls = (...args) => store.countNonTerminalControls(...args);
+export const listRunningControlsWithoutDeadline = (...args) => store.listRunningControlsWithoutDeadline(...args);
 export const expireControlById = (...args) => store.expireControlById(...args);
 export const failStaleTargetControl = (...args) => store.failStaleTargetControl(...args);
 export const setDrainFence = (...args) => store.setDrainFence(...args);

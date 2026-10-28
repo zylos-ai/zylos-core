@@ -5,12 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
-function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,checkAuth=async()=>({status:'uncertain'})}={}) {
+function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'})}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
  const calls=[],db={getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
- const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration:async()=>({mode:'multi',runtime:'claude',capacity:2}),readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
 test('T01 assembly: restore health before admission; no-launch empty round executes',async t=>{
@@ -181,6 +181,110 @@ test('C3 each unavailable dependency logs once while unrelated failures remain v
  const report=supervisor.loop.deps.reportError;
  for(const dependency of ['P04 pool','P07 Sync','P10 migration'])for(let i=0;i<3;i++)report(Object.assign(new Error(dependency),{code:'DEPENDENCY_UNAVAILABLE'}),{phase:'fixture',sessionGroup:String(i)});
  for(let i=0;i<2;i++)report(Object.assign(new Error('unrelated failure'),{code:'EIO'}));
- assert.equal(calls.filter(row=>row.error==='DEPENDENCY_UNAVAILABLE').length,4);
+ assert.equal(calls.filter(row=>row.error==='DEPENDENCY_UNAVAILABLE').length,3);
  assert.equal(calls.filter(row=>row.error==='EIO').length,2);
+});
+
+
+test('IB-37 real supervisor rounds deduplicate configuration read failures and reset on recovery', async t => {
+  let failure = null;
+  const { supervisor, root, calls, db } = fixture(t, {
+    readConfiguration: async () => {
+      if (failure) throw failure;
+      return { mode: 'multi', runtime: 'claude', capacity: 2 };
+    },
+  });
+  await supervisor.loop.start();
+  let transitionReads = 0;
+  supervisor.loop.deps.getModeTransition = () => { transitionReads++; return null; };
+  db.getModeTransition = () => { throw new Error('configuration wrapper must not query D9'); };
+  for (const code of ['EACCES', 'EACCES', 'EIO', 'EIO', 'EACCES']) {
+    failure = Object.assign(new Error(code), { code });
+    await supervisor.loop.tick();
+  }
+  assert.equal(transitionReads, 5, 'one loop authority read; failed configuration wrapper must not query D9');
+  const events = () => fs.readFileSync(path.join(root, 'activity-monitor/supervisor-events.jsonl'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line)).filter(row => row.event === 'auto_migration_skipped');
+  assert.deepEqual(events().map(row => [row.session_group, row.reason]), [['*', 'EACCES'], ['*', 'EIO'], ['*', 'EACCES']]);
+  assert.deepEqual(calls.filter(row => row.phase === 'round').map(row => row.error), ['EACCES', 'EACCES', 'EIO', 'EIO', 'EACCES']);
+  failure = null; await supervisor.loop.tick();
+  failure = Object.assign(new Error('again'), { code: 'EACCES' });
+  await supervisor.loop.tick(); await supervisor.loop.tick();
+  assert.equal(events().length, 4);
+  assert.equal(events().at(-1).reason, 'EACCES');
+});
+
+
+test('IB-37 open transition configuration failure does not emit automatic-migration skip', async t => {
+  let failure = null;
+  const { supervisor, root, calls, db } = fixture(t, {
+    readConfiguration: async () => {
+      if (failure) throw failure;
+      return { mode: 'multi', runtime: 'claude', capacity: 2 };
+    },
+  });
+  await supervisor.loop.start();
+  const transition = { run_id: 'open', source_mode: 'single', target_mode: 'multi', phase: 'gating', reason: null };
+  supervisor.loop.deps.getModeTransition = () => transition;
+  // The real transition advance fails its F1 read; the round then reads F1 too.
+  supervisor.modeSwitch.readMode = () => { throw Object.assign(new Error('unreadable mode'), { code: 'EIO' }); };
+  db.getModeTransition = () => transition;
+  db.setModeTransitionPhase = (runId, phase, { reason }) => { transition.reason = reason; };
+  failure = Object.assign(new Error('unreadable configuration'), { code: 'EIO' });
+  await supervisor.loop.tick(); await supervisor.loop.tick();
+  assert.equal(transition.reason, 'config_unreadable');
+  assert.equal(calls.filter(row => row.phase === 'round' && row.error === 'EIO').length, 2);
+  const events = fs.readFileSync(path.join(root, 'activity-monitor/supervisor-events.jsonl'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events.some(row => row.event === 'auto_migration_skipped'), false);
+  assert.equal(events.filter(row => row.event === 'transition_blocked').length, 1);
+});
+
+test('T01 unreadable startup configuration stops before transition sampling or migration diagnostics', async t => {
+  const failure = Object.assign(new Error('unreadable startup configuration'), { code: 'EIO' });
+  const { supervisor, root, calls, db } = fixture(t, { readConfiguration: async () => { throw failure; } });
+  let transitionReads = 0;
+  db.getModeTransition = () => { transitionReads++; return null; };
+  await supervisor.loop.start();
+  assert.equal(supervisor.loop.configurationError, failure);
+  assert.equal(supervisor.admission.open, false);
+  assert.equal(transitionReads, 0);
+  assert.equal(calls.filter(row => row.phase === 'configuration' && row.error === 'EIO').length, 1);
+  assert.equal(fs.existsSync(path.join(root, 'activity-monitor/supervisor-events.jsonl')), false);
+});
+
+test('IB-37 configuration recovery during an open transition resets automatic-skip deduplication', async t => {
+  let failure = null, transition = null;
+  const { supervisor, root, db } = fixture(t, {
+    readMode: () => {
+      if (failure) throw failure;
+      return { mode: 'single' };
+    },
+    readConfiguration: async () => {
+      if (failure) throw failure;
+      return { mode: 'single', runtime: 'claude', capacity: 2 };
+    },
+  });
+  db.getModeTransition = () => transition;
+  supervisor.loop.deps.getModeTransition = () => transition;
+  db.setModeTransitionPhase = (runId, phase, { reason }) => { transition.reason = reason; };
+  db.setDrainFence = () => {};
+  db.listRunningControlsWithoutDeadline = scope => scope.machine ? [1] : [];
+  const events = () => fs.readFileSync(path.join(root, 'activity-monitor/supervisor-events.jsonl'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line)).filter(row => row.event === 'auto_migration_skipped');
+  await supervisor.loop.start();
+  failure = Object.assign(new Error('unreadable configuration'), { code: 'EIO' });
+  await supervisor.loop.tick();
+  assert.equal(events().length, 1);
+  transition = { run_id: 'open', source_mode: 'single', target_mode: 'multi', phase: 'gating', reason: null };
+  await supervisor.loop.tick();
+  assert.equal(transition.reason, 'config_unreadable');
+  failure = null;
+  await supervisor.loop.tick();
+  assert.equal(transition.reason, 'running_control_without_deadline:machine:1');
+  assert.equal(events().length, 1);
+  transition = null;
+  failure = Object.assign(new Error('same failure after transition'), { code: 'EIO' });
+  await supervisor.loop.tick(); await supervisor.loop.tick();
+  assert.deepEqual(events().map(row => [row.session_group, row.reason]), [['*', 'EIO'], ['*', 'EIO']]);
 });
