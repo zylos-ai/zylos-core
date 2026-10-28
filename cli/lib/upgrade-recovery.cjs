@@ -64,6 +64,7 @@ function originalVerified(dir, j) {
       zylosDir: j.zylosDir,
       schemaRoot: j.skillsDir,
       firstTakeover: j.firstTakeover === true,
+      dashboardOwnerManaged: j.dashboardOwnerManaged === true,
       expectedDatabases: expected,
       formatVersion: m.originalDatabasePaths(j).length === 4 ? 2 : 1
     })], {

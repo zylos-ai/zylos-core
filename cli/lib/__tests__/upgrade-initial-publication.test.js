@@ -134,9 +134,12 @@ for (const from of ['0.9.3', '1.0.0']) for (const firstTakeover of [false,true])
   const f = fixture(t);
   f.ctx.from = from;
   f.ctx.firstTakeover = firstTakeover;
+  f.ctx.dashboardOwnerManaged = !firstTakeover;
   beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir});
   assert.equal(f.ctx.journal.firstTakeover,firstTakeover);
+  assert.equal(f.ctx.journal.dashboardOwnerManaged,!firstTakeover);
   f.ctx.firstTakeover = !firstTakeover;
+  f.ctx.dashboardOwnerManaged = firstTakeover;
   attachSnapshot(f);
   const active = maintenanceFor(f.ctx), preflight = active.preflight;
   active.preflight = () => ({success:true});
@@ -146,7 +149,7 @@ for (const from of ['0.9.3', '1.0.0']) for (const firstTakeover of [false,true])
   try {
     protectedDataReady(f.ctx, {migrate:()=>{}, verify: payload => {
       checked = true;
-      assert.equal(payload.firstTakeover, firstTakeover);
+      assert.equal(payload.dashboardOwnerManaged, !firstTakeover);
       assert.equal(payload.requireCurrent, true);
       return {databases:[]};
     }});

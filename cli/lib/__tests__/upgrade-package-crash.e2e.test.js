@@ -11,7 +11,7 @@ for (const stage of ['before', 'after']) test(`T10 real npm SIGKILL ${stage} ins
   skip: process.env.ZYLOS_RUN_PACKAGE_CRASH_E2E !== '1', timeout: 1200000,
 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `package-crash-${stage}-`));
-  t.diagnostic(`Isolated fixture retained at ${root}`);
+  t.diagnostic(`Isolated fixture (retained on failure) at ${root}`);
   const f = createProtectedPackageCrashFixture(root), { target } = await f.build();
   const original = f.logicalDatabases();
   assert.ok(Object.values(original).every(db => db.integrity === 'ok' && db.version === 1));
@@ -44,4 +44,5 @@ for (const stage of ['before', 'after']) test(`T10 real npm SIGKILL ${stage} ins
   assert.match(JSON.stringify(next['comm-bridge/c4.db']), /T10 durable business row/);
   assert.equal(f.journal().filter(item => item.journal.phase === 'upgrade_complete').length, 1);
   assert.match(fs.readFileSync(f.calls, 'utf8'), /pm2 stop activity-monitor/);
+  fs.rmSync(root,{recursive:true});
 });

@@ -7,17 +7,20 @@ const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
 import {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest} from './core-db-backup-worker.js';
 export {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest};
 const WORKER=fileURLToPath(new URL('./core-db-backup-worker.js',import.meta.url));
-export function inspectFirstDashboardTakeover(zylosDir) {
-  const marker=path.join(zylosDir,'.claude/skills/dashboard/.zylos/core-managed.json');
+export function inspectFirstDashboardTakeover(installedRoot) {
+  const directory=path.join(installedRoot,'skills/dashboard');
   try {
-    const stat=fs.lstatSync(marker);
-    if(!stat.isFile() || stat.isSymbolicLink()) throw Error('Dashboard core-managed marker must be a regular file');
-    fs.accessSync(marker,fs.constants.R_OK);
+    const stat=fs.lstatSync(directory);
+    if(!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Installed Dashboard must be a regular directory');
+    fs.accessSync(directory,fs.constants.R_OK);
     return false;
   } catch(error) {
     if(error.code==='ENOENT')return true;
-    throw Object.assign(Error(`Cannot inspect Dashboard takeover marker: ${error.message}`),{code:'DASHBOARD_TAKEOVER_INVALID'});
+    throw Object.assign(Error(`Cannot inspect installed Dashboard: ${error.message}`),{code:'DASHBOARD_TAKEOVER_INVALID'});
   }
+}
+export function inspectDashboardOwnerManaged(zylosDir, options={}) {
+  return runCoreDbWorker({action:'dashboard-state',zylosDir,...options}).dashboardOwnerManaged;
 }
 function syncDir(dir){const fd=fs.openSync(dir,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
 function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
@@ -47,7 +50,7 @@ export function probeCoreDbSnapshotSync(zylosDir) {
 }
 // Run before any service is stopped or maintenance marker is published. This
 // opens existing databases read-only using the installed Core native driver.
-export function preflightCoreDbUpgrade(zylosDir, {firstTakeover=false}={}) {
+export function preflightCoreDbUpgrade(zylosDir, {dashboardOwnerManaged=true,driverRoot,schemaRoot}={}) {
   let destination = zylosDir;
   for (const relative of ['.backup', '.backup/db']) {
     const file = path.join(zylosDir, relative);
@@ -60,13 +63,13 @@ export function preflightCoreDbUpgrade(zylosDir, {firstTakeover=false}={}) {
   }
   probeCoreDbSnapshotSync(zylosDir);
   if (destination !== zylosDir) probeCoreDbSnapshotSync(destination);
-  return runCoreDbWorker({action:'offline-preflight',zylosDir,formatVersion:2,firstTakeover});
+  return runCoreDbWorker({action:'offline-preflight',zylosDir,formatVersion:2,dashboardOwnerManaged,driverRoot,schemaRoot});
 }
 // Pure owner inspection decides compatibility; Dashboard owns its separate
 // schema_migrations authority and never uses user_version for admission.
-export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),firstTakeover=false}={}) {
+export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),dashboardOwnerManaged=true}={}) {
   const schemaRoot=path.join(tempDir,'skills');
-  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot,formatVersion:2,firstTakeover});
+  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot,formatVersion:2,dashboardOwnerManaged});
 }
 // Clear a fixed-name rehearsal left by an interrupted upgrade, plus older
 // random-name copies. Refuse ambiguous paths before stopping services.
@@ -96,7 +99,7 @@ export function cleanupCoreDbRehearsals(zylosDir) {
 // Run the downloaded release's real migration code against SQLite online
 // backup copies while services are still running. This is an early warning;
 // the stopped, snapshotted databases are migrated and checked again later.
-export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup,firstTakeover=false}={}) {
+export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup,dashboardOwnerManaged=true}={}) {
   const schemaRoot=path.join(tempDir,'skills');
   const workerPath=path.join(tempDir,'cli','lib','core-db-backup-worker.js');
   if (!fs.existsSync(workerPath) || !fs.existsSync(path.join(schemaRoot,'comm-bridge','scripts','sqlite-schema.js'))) {
@@ -123,7 +126,7 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
     const rehearsalDir=path.join(zylosDir,'.backup','db','.rehearsal');
     fs.mkdirSync(rehearsalDir,{mode:0o700});
     fs.chmodSync(rehearsalDir,0o700);
-    try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir,formatVersion:2,firstTakeover},{workerPath});}
+    try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir,formatVersion:2,dashboardOwnerManaged},{workerPath});}
     finally {fs.rmSync(rehearsalDir,{recursive:true,force:true});}
   } finally {
     for (const directory of created.reverse()) {

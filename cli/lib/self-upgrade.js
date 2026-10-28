@@ -733,6 +733,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
       action: 'self_upgrade',
       success: false,
       ...protectionResult(ctx),
+      warnings: ctx.runtimeWarnings || [],
       preInstallProtection:true,
       from: ctx.from,
       to: null,
@@ -753,6 +754,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     action: 'self_upgrade',
     success: true,
     ...protectionResult(ctx),
+    warnings: ctx.runtimeWarnings || [],
     from: ctx.from,
     to: ctx.to,
     steps: ctx.steps,
@@ -948,6 +950,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.maintenance = deps.maintenance;
   ctx.packageRoot = state.packageRoot;
   ctx.firstTakeover = state.firstTakeover === true;
+  ctx.dashboardOwnerManaged = state.dashboardOwnerManaged === true;
   ctx.firstDashboardTakeover = state.firstDashboardTakeover;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
   {
@@ -1018,6 +1021,7 @@ async function finalizeInstalledUpgrade(ctx, deps) {
       ctx.dbManifest=manifest;
       ctx.databaseMode=j.databaseMode || ctx.databaseMode;
       ctx.firstTakeover=j.firstTakeover===true;
+      ctx.dashboardOwnerManaged=j.dashboardOwnerManaged===true;
       ctx.firstDashboardTakeover=ctx.firstTakeover && fs.existsSync(path.join(ctx.tempDir,'skills/dashboard'));
       ctx.servicesWereRunning=j.originalServices.map(service=>service.name);
     }
@@ -1030,9 +1034,10 @@ async function finalizeInstalledUpgrade(ctx, deps) {
     // bases even if the download directory disappears after the cutoff.
     stageSkillBaselines(ctx);
     const runtimeClis=await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx);
+    ctx.runtimeWarnings=runtimeClis?.warnings || [];
     (deps.dataReady || protectedDataReady)(ctx);
     const prepared=await (deps.prepareRuntime || prepareUpgradeRuntime)(ctx);
-    ctx.preparationWarnings=[...(runtimeClis?.warnings || []), ...(prepared.warnings || [])];
+    ctx.preparationWarnings=prepared.warnings || [];
     const workDir=ctx.transactionDir;
     if (!workDir) throw Error('finalizer preparation directory is unavailable');
     const preparation=(deps.stage || preparePostCutoff)({transactionDir:workDir,zylosDir:ctx.zylosDir,...prepared});

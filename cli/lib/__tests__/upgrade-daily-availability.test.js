@@ -9,9 +9,10 @@ import {savePm2ProcessList} from '../pm2-save.js';
 import {discoverUpgradeContext} from '../runtime/upgrade-context.js';
 import {runUpgradeEntry} from '../upgrade-entry.js';
 import {recoverBeforeUpgrade} from '../upgrade-discovery.js';
+import {upgradeSelfCore} from '../../commands/component.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 function fixture(t) {
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-daily-')));
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_DAILY_TEST_TMPDIR || os.tmpdir(),'upgrade-daily-')));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
  for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-bootstrap.cjs','bootstrap.cjs']]) {
@@ -40,48 +41,108 @@ for (const phase of ['upgrade_complete','restored_complete','aborted_before_inst
  f.j.terminalEvidence={verified:true,kind:f.j.installationIntent?'code_data_services':'original_deployment_and_readonly_data'};
  f.save();
  assert.deepEqual(m.discover(f.root),{marker:null,candidates:[],diagnostics:[],blocked:false});
- for (const corrupt of [j=>{j.cleanup.complete=false;},j=>{j.phase='installing';},j=>{j.terminalEvidence.verified=false;},j=>{j.recoveryHashes={};}]) {
+ for (const corrupt of [...(phase==='upgrade_complete'?[]:[j=>{j.cleanup.complete=false;}]),j=>{j.phase='installing';},j=>{j.terminalEvidence.verified=false;},j=>{j.recoveryHashes={};},j=>{j.compensationCutoff={};}]) {
   const saved=structuredClone(f.j);corrupt(f.j);f.save();
   assert.equal(m.discover(f.root).blocked,true);
-  Object.assign(f.j,saved);delete f.j.recoveryHashes;
+  Object.assign(f.j,saved);delete f.j.recoveryHashes;delete f.j.compensationCutoff;
  }
 });
 
-test('three real historical terminal journal shapes permit upgrade and startup after path sanitization', async t => {
+test('historical terminal journal shapes with retained scripts permit upgrade and startup despite incomplete cleanup', async t => {
  const f=fixture(t);
  fs.rmSync(f.dir,{recursive:true});
  const fixtures=new URL('./helpers/legacy-journals/',import.meta.url);
  const files=fs.readdirSync(fixtures).filter(name=>name.endsWith('.json'));
  assert.equal(files.length,3);
- for(const file of files) {
-  const historical=JSON.parse(fs.readFileSync(new URL(file,fixtures),'utf8'));
+ const journals=files.map(file=>JSON.parse(fs.readFileSync(new URL(file,fixtures),'utf8')));
+ // The 0.9.3 case is a shape stand-in, not a real historical release run.
+ journals.push({...structuredClone(journals.at(-1)),transactionId:'legacy-092-093-shape',from:'0.9.2',to:'0.9.3'});
+ for(const historical of journals) {
   const originalRoot=historical.zylosDir;
   const relocate=value=>Array.isArray(value)?value.map(relocate):value&&typeof value==='object'
    ?Object.fromEntries(Object.entries(value).map(([key,item])=>[key,relocate(item)]))
    :typeof value==='string'?value.replaceAll(originalRoot,f.root):value;
   const journal=relocate(historical);
+  journal.dbBackupDir=path.join(f.root,'.backup/db',journal.transactionId);
   const dir=path.join(f.root,'.backup/self-upgrade',journal.transactionId);
-  m.durable(path.join(dir,'journal.json'),journal);
+  fs.mkdirSync(dir,{recursive:true,mode:0o700});
+  const sentinel=path.join(f.root,'historical-script-executed');
+  for(const name of ['runner.cjs','maintenance.cjs'])fs.writeFileSync(path.join(dir,name),
+   `require('node:fs').writeFileSync(${JSON.stringify(sentinel)},'unexpected');throw Error('historical recovery must not execute');`,{mode:0o600});
+  const manifest={formatVersion:1,function:'core-self-upgrade-db',status:'complete',id:journal.transactionId,
+   databases:journal.initialIdentity.databases.map(d=>({source:d.source,status:'missing',file:null,bytes:0,sha256:null,userVersion:null,integrityCheck:null}))};
+  m.durable(path.join(journal.dbBackupDir,'manifest.json'),manifest);
+  journal.snapshotManifestHash=m.hash(path.join(journal.dbBackupDir,'manifest.json'));
   assert.equal(journal.initialIdentity.databases.length,3);
   assert.equal(Object.hasOwn(journal,'recoveryHashes'),false);
-  assert.equal(m.discover(f.root).blocked,false);
-  assert.deepEqual(recoverBeforeUpgrade(f.root),{active:false});
-  assert.equal(discoverUpgradeContext(f.root).active,false);
-  let inspected=false;
-  const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.root,installedRoot:f.root,zylosDir:f.root},{
-   inspect:()=>{inspected=true;throw Object.assign(Error('inspection boundary'),{code:'INSPECTION_REACHED'});}
-  });
-  assert.equal(inspected,true);
-  assert.equal(result.code,'INSPECTION_REACHED');
-  journal.cleanup.complete=false;
-  m.durable(path.join(dir,'journal.json'),journal);
-  assert.equal(m.discover(f.root).blocked,true,'unfinished history must still block upgrades');
-  journal.cleanup.complete=true;
-  m.durable(path.join(dir,'journal.json'),journal);
+  for(const complete of [true,false]) {
+   journal.cleanup.complete=complete;
+   m.durable(path.join(dir,'journal.json'),journal);
+   const before=fs.readFileSync(path.join(dir,'journal.json'));
+   assert.deepEqual(m.discover(f.root),{marker:null,candidates:[],diagnostics:[],blocked:false});
+   assert.deepEqual(recoverBeforeUpgrade(f.root),{active:false});
+   assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
+   let inspected=false;
+   const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.root,installedRoot:f.root,zylosDir:f.root},{
+    inspect:()=>{inspected=true;throw Object.assign(Error('inspection boundary'),{code:'INSPECTION_REACHED'});}
+   });
+   assert.equal(inspected,true);
+   assert.equal(result.code,'INSPECTION_REACHED');
+   let checked=false,delegated=false;
+   assert.equal(await upgradeSelfCore({skipConfirm:true},{zylosDir:f.root,
+    checkForCoreUpdates(){checked=true;return {success:true,current:'0.9.3',latest:'0.9.4',hasUpdate:true};},
+    downloadCoreToTemp(){return {success:true,tempDir:f.root};},
+    runDownloadedUpgrade(){delegated=true;return 0;},cleanupCoreTemp(){},console:{log(){},error(){}}}),true);
+   assert.equal(checked,true);assert.equal(delegated,true);
+   const written=writeUsingOwners(f.root);assert.equal(written.status,0,written.stderr);
+   assert.deepEqual(fs.readFileSync(path.join(dir,'journal.json')),before);
+   assert.equal(fs.existsSync(sentinel),false);
+  }
  }
  assert.deepEqual(m.discover(f.root).candidates,[]);
  assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));
+ const damaged=path.join(f.root,'.backup/self-upgrade/damaged');fs.mkdirSync(damaged);
+ fs.writeFileSync(path.join(damaged,'journal.json'),'{');
+ const mixed=m.discover(f.root);
+ assert.equal(mixed.blocked,true);assert.ok(mixed.diagnostics.length>0);
+ assert.deepEqual(mixed.candidates,[],'a full scan must not rediscover clean legacy history as unfinished');
 });
+
+const realOpeners=[
+ ['C4','./skills/comm-bridge/scripts/c4-db.js','getDb','comm-bridge/c4.db'],
+ ['Scheduler','./skills/scheduler/scripts/database.js','getDb','scheduler/scheduler.db'],
+ ['Web Console','./skills/web-console/scripts/db.js','openDb','web-console/web-console.db'],
+];
+const cutoffShapes=[
+ ['closed hooks pending','compensation_closed','pending',true,false],
+ ['closed hooks done','compensation_closed','done',true,true],
+ ['recovery closed hooks done','recovery_required','done',true,true],
+ ['recovery closed hooks pending','recovery_required','pending',true,false],
+ ['invalid cutoff hooks done','compensation_closed','done',false,false],
+];
+for(const [shape,phase,hooks,validCutoff,allowed] of cutoffShapes)for(const [owner,module,entry,source] of realOpeners)
+ test(`IF-50 actual ${owner} opener: ${shape}`,t=>{
+  const f=fixture(t);
+  const seed=writeUsingOwners(f.root);assert.equal(seed.status,0,seed.stderr);
+  Object.assign(f.j,{phase,...(phase==='recovery_required'?{resumePhase:'compensation_closed'}:{}),
+   postCutoff:{items:{hooks:{state:hooks}}},compensationCutoff:{formatVersion:1,closed:true,
+    transactionId:validCutoff?f.j.transactionId:'wrong-transaction',snapshotManifestHash:f.j.snapshotManifestHash,
+    closedAt:'2026-10-28T00:00:00.000Z',writer:'finalizer'}});
+  f.save();m.marker(f.root,f.dir,f.j);
+  const journalBefore=fs.readFileSync(path.join(f.dir,'journal.json'));
+  const markerBefore=fs.readFileSync(path.join(f.stable,'active.json'));
+  const databaseBytes=()=>Object.fromEntries(m.DB_PATHS.flatMap(db=>['','-wal','-shm'].map(suffix=>db+suffix))
+   .filter(db=>fs.existsSync(path.join(f.root,db))).map(db=>[db,fs.readFileSync(path.join(f.root,db))]));
+  const before=databaseBytes();
+  const code=`import {${entry} as open} from ${JSON.stringify(module)};try{const db=open();db.prepare('INSERT INTO daily_probe VALUES (?)').run('IF-50');console.log(db.prepare('SELECT COUNT(*) AS n FROM daily_probe').get().n);db.close();}catch(error){console.error(error.code+': '+error.message);process.exitCode=1;}`;
+  const result=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:f.root}});
+  if(allowed) {assert.equal(result.status,0,result.stderr);assert.equal(result.stdout.trim(),'2');}
+  else {assert.equal(result.status,1,result.stderr);assert.match(result.stderr,/ZYLOS_MAINTENANCE/);assert.deepEqual(databaseBytes(),before);}
+  assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),journalBefore,'open must not change any journal field');
+  assert.deepEqual(fs.readFileSync(path.join(f.stable,'active.json')),markerBefore);
+  assert.equal(m.read(path.join(f.dir,'journal.json')).phase,phase);
+  assert.equal(fs.existsSync(path.join(f.root,source)),true);
+ });
 for(const damage of ['malformed','missing','oversized','unknown-entry','dangling-backup'])test(`unmarked ${damage} history cannot stop ordinary database writes or startup`,t=>{
  const f=fixture(t);
  if(damage==='malformed')fs.writeFileSync(path.join(f.dir,'journal.json'),'{');

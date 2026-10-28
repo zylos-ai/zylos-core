@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
+import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { renderInstruction } from './runtime/assembler.mjs';
 import { instructionPaths, readInstructionFormatVersion, CURRENT_INSTRUCTION_FORMAT_VERSION,
   hasSplitTransactionResidue, activateMigratedSplitInstructions } from './runtime/instruction-builder.js';
@@ -18,12 +20,38 @@ import { installClaude, installCodex } from './runtime-setup.js';
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
+function readRuntimeOverrides(ctx) {
+  const file = path.join(ctx.zylosDir, 'comm-bridge/c4.db');
+  try { fs.lstatSync(file); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const installed = createRequire(path.join(ctx.zylosDir, '.claude/skills/comm-bridge/package.json'));
+  const Database = installed('better-sqlite3');
+  const db = new Database(file, { readonly: true, fileMustExist: true, timeout: 5000 });
+  try {
+    // Pre-multi databases have no D10 overrides. Never migrate during preparation.
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_runtime_overrides'").get()) return [];
+    return createStore(db).listGroupRuntimeOverrides();
+  } finally { db.close(); }
+}
+
 export async function prepareUpgradeRuntimeClis(ctx, {
-  prepare, exists = commandExists, install = { claude: installClaude, codex: installCodex } } = {}) {
+  prepare, exists = commandExists, install = { claude: installClaude, codex: installCodex },
+  listRuntimeOverrides = readRuntimeOverrides } = {}) {
   const config = readConfigStrict(path.join(ctx.zylosDir, '.zylos/config.json'));
   if (config.state === 'error') throw config.error;
-  const runtime = config.state === 'ok' ? config.config.runtime || 'claude' : 'claude';
+  const current = config.state === 'ok' ? config.config : {};
+  const runtime = current.runtime ?? 'claude';
   if (!['claude', 'codex'].includes(runtime)) throw Error('Unsupported preparation runtime');
+  if (current.session_mode !== undefined && !['single', 'multi'].includes(current.session_mode)) throw Error('Unsupported preparation session mode');
+  const required = new Set([runtime]);
+  if (current.session_mode === 'multi') {
+    const overrides = await listRuntimeOverrides(ctx);
+    if (!Array.isArray(overrides)) throw Error('Invalid runtime overrides');
+    for (const item of overrides) {
+      if (!['claude', 'codex'].includes(item?.runtime)) throw Error('Unsupported preparation group runtime');
+      required.add(item.runtime);
+    }
+  }
   const prepareClis = prepare || (await import('../commands/init.js')).prepareInitRuntimeClis;
   const result = await prepareClis({
     exists,
@@ -32,11 +60,12 @@ export async function prepareUpgradeRuntimeClis(ctx, {
     }])),
   });
   if (!result || !Array.isArray(result.failed) || !Array.isArray(result.completed) ||
-      result.failed.some(item => item.item === `${runtime}.cli`) || !result.completed.includes(`${runtime}.cli`)) {
+      [...required].some(name => result.failed.some(item => item.item === `${name}.cli`) || !result.completed.includes(`${name}.cli`))) {
     throw Object.assign(Error(`Runtime CLI preparation incomplete: ${result?.failed?.map(item => `${item.item}: ${item.message}`).join('; ') || 'invalid preparation result'}`),
       { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
   }
-  result.warnings = result.failed.map(item => `Optional runtime CLI ${item.item}: ${item.message}`);
+  result.warnings = result.failed.map(item => ({ code: 'RUNTIME_CLI_UNAVAILABLE',
+    runtime: item.item.replace(/\.cli$/, ''), message: item.message }));
   return result;
 }
 

@@ -98,7 +98,7 @@ export async function resumeFinalize(root,{status=false}={},deps={}) {
       dbManifest:verified.dbManifest,preInstallProtection:true,maintenance:m,originalServices:current.originalServices,from:current.from,to:current.to};
     const result=await finalize(ctx);
     const saved=m.transaction(root,candidate.dir),data=finalizeStatus(saved);
-    for(const key of ['completion','sessionRestart','checkpointAudit','modeStatus','preparationWarnings']) {
+    for(const key of ['completion','sessionRestart','checkpointAudit','modeStatus','preparationWarnings','warnings']) {
       if(Object.hasOwn(result,key)) data[key]=result[key];
     }
     // Only this invocation's runtime verification can establish readiness.

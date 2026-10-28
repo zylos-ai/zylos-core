@@ -8,6 +8,9 @@ import {pathToFileURL} from 'node:url';
 import cp,{spawn,spawnSync} from 'node:child_process';
 import {LEGACY_CORE_DATABASES as CORE_DATABASES,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,runCoreDbWorker} from '../core-db-backup.js';
 import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
+import {runUpgradeEntry} from '../upgrade-entry.js';
+import {runSelfUpgradeFinalize} from '../self-upgrade.js';
+import {generateManifest} from '../manifest.js';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
 import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
@@ -78,7 +81,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  // Match saveProtectedCode: the disposable code root is private.
  fs.chmodSync(path.join(dir,'code'),0o700);
  const packageJson=path.join(root,'package.json');fs.writeFileSync(packageJson,'{}');const originalCli=path.join(root,'baseline-cli');fs.mkdirSync(originalCli,{mode:0o700});
- const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',firstTakeover:!dashboard,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshotResult.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
+ const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',firstTakeover:!dashboard,dashboardOwnerManaged:false,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshotResult.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
  // Package restoration has already completed in this database recovery fixture;
  // dedicated package tests exercise the installer and preservation failures.
  const originalArchive=path.join(dir,'original.tgz');fs.writeFileSync(originalArchive,'retained fixture package',{mode:0o600});
@@ -106,6 +109,55 @@ function unchanged(f) {
  f.m.preflight=()=>{throw Error('database preflight must not run');};
  f.m.worker=()=>{throw Error('database worker must not run');};
 }
+
+for (const mutation of ['source', 'manifest']) test(`N4 ${mutation} mutation before baseline staging rejects before cutoff and compensates code/data`, async t => {
+ const f=await fixture(t);
+ const download=path.join(f.root,'download'),source=path.join(download,'skills/comm-bridge');
+ fs.mkdirSync(source,{recursive:true});
+ const sourceFile=path.join(source,'SKILL.md');fs.writeFileSync(sourceFile,'target baseline\n');
+ const expected=generateManifest(source);
+ const originalSnapshot=f.snapshot.manifest.databases.find(item=>item.source==='comm-bridge/c4.db');
+ const beforeCode=fs.readFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json'));
+ let prepareCalls=0,cutoffCalls=0,recoveryCalls=0;
+ const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:download,
+   installedRoot:f.root,zylosDir:f.root},{
+   maintenance:{...f.m,discover:()=>({candidates:[],diagnostics:[]})},
+   inspect:()=>({zylosDir:f.root,skillsDir:f.j.skillsDir,tempDir:download,from:'0.9.3',to:'0.9.4',
+     transactionId:'tx',transactionDir:f.dir,journal:f.load(),maintenance:f.m,steps:[]}),
+   resolveNpm:()=>'/unused/npm-cli.js',begin:()=>{},savePackage:()=>{},saveCode:()=>{},prepare:()=>{},install:()=>{},
+   finalize:()=>runSelfUpgradeFinalize({schemaVersion:2,preInstallProtection:true,zylosDir:f.root,
+     transactionId:'tx',transactionDir:f.dir,tempDir:download},{
+     maintenance:f.m,assertDashboardUninstalled:()=>{},
+     syncSkills:ctx=>{
+       change(f);
+       ctx.pendingBaselines=[{destDir:path.join(f.j.skillsDir,'comm-bridge'),srcDir:source,manifest:expected}];
+       return {step:5,status:'done'};
+     },
+     installDependencies:()=>{
+       if(mutation==='source')fs.writeFileSync(sourceFile,'changed after manifest generation\n');
+       else expected.files['SKILL.md']='0'.repeat(64);
+       return {step:6,status:'done'};
+     },
+     prepareRuntimeClis:()=>{prepareCalls++;throw Error('must reject before runtime preparation');},
+     commitCutoff:()=>{cutoffCalls++;throw Error('must reject before cutoff');},
+   }),
+   recover:()=>{
+     recoveryCalls++;
+     assert.equal(f.load().phase,'installing');
+     assert.equal(f.m.classifyCutoff(f.load()),'none');
+     return f.r.resume(f.dir);
+   },
+ });
+ assert.equal(result.success,false,JSON.stringify(result));
+ assert.match(result.error,/skill baseline source changed/);
+ assert.equal(prepareCalls,0);assert.equal(cutoffCalls,0);assert.equal(recoveryCalls,1);
+ assert.equal(result.rollback.attempted,true);assert.equal(result.rollback.completed,true,JSON.stringify(result));
+ assert.equal(result.recovery_required,false);
+ assert.equal(f.load().phase,'restored_complete');
+ assert.equal(f.m.hash(f.db('comm-bridge/c4.db')),originalSnapshot.sha256);
+ assert.deepEqual(fs.readFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json')),beforeCode);
+ assert.deepEqual(f.calls,['stop','start','verify']);
+});
 
 for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects ${corrupt?'untrusted':'closed'} cutoff before any step`, async t => {
  const f=await fixture(t);
@@ -309,6 +361,7 @@ for(const dashboard of [false,true])test(`format 2 compensation ${dashboard?'res
 });
 test('M23 Dashboard controlled migration rejects an owner still needing migration', async t => {
  const f=await fixture(t,{formatVersion:2,dashboard:true});
+ f.m.update(f.dir,f.j,{dashboardOwnerManaged:true});
  const owner=path.join(f.dashboardRoot,'src/lib/schema-owner.js');
  fs.writeFileSync(owner,fs.readFileSync(owner,'utf8').replace("throw Error('recovery must not migrate Dashboard');",''));
  const file=f.db('components/dashboard/dashboard.db');

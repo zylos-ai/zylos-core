@@ -92,7 +92,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
   m.runInstaller = () => { calls.push('npm'); return ''; };
   const tempDir = path.join(home, 'download');
   fs.mkdirSync(path.join(tempDir, 'skills/dashboard'), {recursive:true});
-  const state = { schemaVersion: 1, from: '0.9.3', to: '0.9.4', tempDir, zylosDir:root, firstTakeover };
+  const state = { schemaVersion: 1, from: '0.9.3', to: '0.9.4', tempDir, zylosDir:root, firstTakeover, dashboardOwnerManaged:false };
   let dir, journal;
   if (protectedUpgrade) {
     dir = path.join(root, '.backup/self-upgrade/tx');
@@ -111,7 +111,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     fs.writeFileSync(packageJson, '{}'); fs.mkdirSync(cliRoot);
     journal = { formatVersion: 1, transactionId: 'tx', zylosDir: root, skillsDir,
       nodePath: process.execPath, phase: 'installing', installationIntent: true,
-      databaseMode: 'migrate', firstTakeover, dbBackupDir: snapshot.dbBackupDir,
+      databaseMode: 'migrate', firstTakeover, dashboardOwnerManaged:false, dbBackupDir: snapshot.dbBackupDir,
       snapshotManifestHash: m.hash(path.join(snapshot.dbBackupDir, 'manifest.json')),
       from: '0.9.3', to: '0.9.4', originalServices: [],
       coreManifest: LEGACY_CORE_DATABASES.map(item => ({ name: item.owner, existedBefore: true,
@@ -568,9 +568,9 @@ test('optional runtime CLI warning survives successful finalization alongside pr
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(f.load().phase, 'upgrade_complete');
   assert.deepEqual(result.preparationWarnings, [
-    'Optional runtime CLI codex.cli: CLI installation failed or command not on PATH',
     'Existing preparation warning',
   ]);
+  assert.deepEqual(result.warnings,[{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'}]);
   assert.equal(f.calls.filter(call => call === 'restart').length, 1);
   assertDataPreserved(f);
 });

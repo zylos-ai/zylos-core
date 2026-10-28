@@ -17,10 +17,16 @@ function databasePaths(formatVersion) {
   if (formatVersion === 2) return [...DB_PATHS, DASHBOARD_DB];
   throw Error('unsupported snapshot manifest format');
 }
+function legacyUpgradeHistory(j) {
+  const paths = j.initialIdentity?.databases?.map(d => d?.source);
+  return j.formatVersion === 1 && j.phase === 'upgrade_complete' &&
+    !Object.hasOwn(j, 'compensationCutoff') && !Object.hasOwn(j, 'recoveryHashes') &&
+    paths?.length === DB_PATHS.length && paths.every((p, i) => p === DB_PATHS[i]);
+}
 function originalDatabasePaths(j, {completedHistory = false} = {}) {
   const paths = j.initialIdentity?.databases?.map(d => d?.source);
-  const legacyComplete = completedHistory && TERMINAL.has(j.phase) && j.cleanup?.complete === true &&
-    j.cleanup.servicesRestored === true && !Object.hasOwn(j, 'recoveryHashes') && paths?.length === DB_PATHS.length;
+  const legacyComplete = completedHistory && (legacyUpgradeHistory(j) || TERMINAL.has(j.phase) && j.cleanup?.complete === true &&
+    j.cleanup.servicesRestored === true && !Object.hasOwn(j, 'compensationCutoff') && !Object.hasOwn(j, 'recoveryHashes') && paths?.length === DB_PATHS.length);
   const expected = databasePaths(legacyComplete ? 1 : 2);
   if (!paths || paths.length !== expected.length || paths.some((p,i) => p !== expected[i])) throw Error('invalid data-ready original database collection');
   return expected;
@@ -147,9 +153,9 @@ function validateReadyJournal(j, {completedHistory = false} = {}) {
 }
 function terminalValid(j) {
   // A verified success awaiting code cleanup must never authorize compensation.
-  // Legacy complete terminals remain readable; only this explicit new shape
-  // permits incomplete cleanup to retain terminal authority.
-  const cleanupPending = j.phase === 'upgrade_complete' && j.cleanup?.complete === false && j.cleanup.codeRemoved === false;
+  // Historical upgrades retained their runner and maintenance after success;
+  // their cleanup progress does not make the deployment unfinished again.
+  const cleanupPending = legacyUpgradeHistory(j) || j.phase === 'upgrade_complete' && j.cleanup?.complete === false && j.cleanup.codeRemoved === false;
   if (!TERMINAL.has(j.phase) || !cleanupPending && j.cleanup?.complete !== true || j.cleanup?.servicesRestored !== true || j.terminalEvidence?.verified !== true) return false;
   try {
     if (j.phase === 'aborted_before_install') validateOriginalJournal(j, {completedHistory:true});else validateReadyJournal(j, {completedHistory:true});
@@ -199,7 +205,7 @@ function hasRecoveryHistory(root) {
     try { dbs = originalDatabasePaths(j, {completedHistory:true}); } catch { return false; }
     if (!j || j.formatVersion !== 1 || j.transactionId !== id || j.zylosDir !== fs.realpathSync(root) ||
         !['upgrade_complete', 'restored_complete', 'aborted_before_install'].includes(j.phase) ||
-        j.cleanup?.complete !== true || j.cleanup.servicesRestored !== true || j.terminalEvidence?.verified !== true ||
+        !legacyUpgradeHistory(j) && j.cleanup?.complete !== true || j.cleanup?.servicesRestored !== true || j.terminalEvidence?.verified !== true ||
         j.terminalServicesStopped || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed ||
         j.installerStarted && !j.installerExitConfirmed || j.finalizerStarted && !j.finalizerExitConfirmed) return false;
     const aborted = j.phase === 'aborted_before_install', i = j.initialIdentity;
@@ -310,7 +316,7 @@ function discover(root, {
         const dir = path.join(active, ent.name);
         try {
           const j = transaction(root, dir);
-          if (!terminalValid(j) || j.cleanup.complete !== true || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed || j.terminalServicesStopped || marker?.transactionId === j.transactionId) addCandidate({
+          if (!terminalValid(j) || !legacyUpgradeHistory(j) && j.cleanup.complete !== true || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed || j.terminalServicesStopped || marker?.transactionId === j.transactionId) addCandidate({
             dir,
             journal: j
           });
@@ -812,6 +818,7 @@ function preflight(dir, j, expected) {
     zylosDir: j.zylosDir,
     schemaRoot: j.skillsDir,
     firstTakeover: j.firstTakeover === true,
+    dashboardOwnerManaged: j.dashboardOwnerManaged === true,
     manifest: restored ? expected : undefined,
     expectedDatabases: presence,
     formatVersion: originalDatabasePaths(j).length === 4 ? 2 : 1
@@ -947,6 +954,7 @@ module.exports = {
   DB_PATHS,
   databasePaths,
   originalDatabasePaths,
+  legacyUpgradeHistory,
   READY,
   TERMINAL,
   hash,

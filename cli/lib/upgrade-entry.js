@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateUpgradeHandoff } from './upgrade-admission.js';
-import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover } from './core-db-backup.js';
+import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
 
@@ -52,14 +52,15 @@ export function inspectUpgradeSource(input, deps = {}) {
       if(!stat.isDirectory() || stat.isSymbolicLink())throw Object.assign(Error('Installed core skill node_modules must be a real directory or absent: '+name),{code:'INVALID_CORE_DEPENDENCIES'});
     } catch(error) {if(error.code!=='ENOENT')throw error;}
   }
-  const firstTakeover = inspectFirstDashboardTakeover(zylosDir);
-  const options = {driverRoot:skillsDir, firstTakeover};
+  const firstTakeover = inspectFirstDashboardTakeover(coreDir);
+  const dashboardOwnerManaged = inspectDashboardOwnerManaged(zylosDir,{driverRoot:skillsDir});
+  const options = {driverRoot:skillsDir, schemaRoot:path.join(tempDir,'skills'), firstTakeover, dashboardOwnerManaged};
   const versions = (deps.probe ?? probeCoreDbVersions)(zylosDir, tempDir, options);
-  if (!versions || !Array.isArray(versions.databases) || versions.databases.length !== (firstTakeover ? 3 : 4) || typeof versions.needsMigration !== 'boolean') throw new Error('Invalid database version probe result');
-  (deps.preflight ?? preflightCoreDbUpgrade)(zylosDir, {firstTakeover});
+  if (!versions || !Array.isArray(versions.databases) || versions.databases.length !== (dashboardOwnerManaged ? 4 : 3) || typeof versions.needsMigration !== 'boolean') throw new Error('Invalid database version probe result');
+  (deps.preflight ?? preflightCoreDbUpgrade)(zylosDir, options);
   if (versions.needsMigration) (deps.rehearse ?? rehearseCoreDbUpgrade)(zylosDir, tempDir, options);
   return {coreDir, tempDir, zylosDir, skillsDir, from:source.version, to:target.version, newVersion:target.version,
-    firstTakeover, snapshotFormatVersion:2, databaseMode:versions.needsMigration ? 'migrate' : 'unchanged',
+    firstTakeover, dashboardOwnerManaged, snapshotFormatVersion:2, databaseMode:versions.needsMigration ? 'migrate' : 'unchanged',
     databaseVersions:versions, mode:'merge', steps:[], servicesWereRunning:[], servicesStopped:[],
     mergeConflicts:[], mergedFiles:[], maintenance:deps.maintenance ?? maintenance};
 }
@@ -85,7 +86,7 @@ async function finalizeTarget(ctx) {
   const module = await import(pathToFileURL(path.join(ctx.coreDir, 'cli/lib/self-upgrade.js')).href);
   return module.runSelfUpgradeFinalize({schemaVersion:2, preInstallProtection:true,
     tempDir:ctx.tempDir, packageRoot:ctx.coreDir, zylosDir:ctx.zylosDir, from:ctx.from, to:ctx.to,
-    newVersion:ctx.to, mode:ctx.mode, firstTakeover:ctx.firstTakeover, databaseMode:ctx.databaseMode,
+    newVersion:ctx.to, mode:ctx.mode, firstTakeover:ctx.firstTakeover, dashboardOwnerManaged:ctx.dashboardOwnerManaged, databaseMode:ctx.databaseMode,
     transactionDir:ctx.transactionDir, transactionId:ctx.transactionId, coreManifest:ctx.coreManifest,
     dbBackupDir:ctx.dbBackupDir, dbManifest:ctx.dbManifest, backupDir:ctx.backupDir,
     servicesWereRunning:ctx.servicesWereRunning, protectedNpmCli:ctx.protectedNpmCli}, {maintenance:maintenanceFor(ctx), zylosDir:ctx.zylosDir});

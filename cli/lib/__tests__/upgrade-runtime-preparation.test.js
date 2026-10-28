@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff, validatePostCutoff, publishRuntimePreparation } from '../upgrade-post-cutoff.js';
 import { loadInstructionCatalog, migrationPromptPath, sha256 } from '../instruction-migration.js';
@@ -44,7 +45,8 @@ for (const runtime of ['claude', 'codex']) {
     assert.deepEqual(calls, [optional]);
     assert.deepEqual(result.completed, [`${runtime}.cli`]);
     assert.equal(result.failed.length, 1);
-    assert.match(result.warnings[0], new RegExp(`Optional runtime CLI ${optional}\\.cli`));
+    assert.deepEqual(result.warnings, [{ code: 'RUNTIME_CLI_UNAVAILABLE', runtime: optional,
+      message: 'CLI installation failed or command not on PATH' }]);
   });
 
   test(`${runtime} active CLI failure still rejects when optional CLI is ready`, async t => {
@@ -56,6 +58,61 @@ for (const runtime of ['claude', 'codex']) {
     }), { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
   });
 }
+
+test('multi includes persisted D10 group runtimes in the required CLI set without database writes', async t => {
+  const f = fixture(t);
+  f.write('.zylos/config.json', JSON.stringify({ runtime: 'claude', session_mode: 'multi' }));
+  const ownerRoot = path.join(packageRoot, 'skills/comm-bridge');
+  const Database = createRequire(path.join(ownerRoot, 'package.json'))('better-sqlite3');
+  f.write('.claude/skills/comm-bridge/package.json', '{}');
+  fs.symlinkSync(path.join(ownerRoot, 'node_modules'), path.join(f.zylosDir, '.claude/skills/comm-bridge/node_modules'), 'dir');
+  const database = path.join(f.zylosDir, 'comm-bridge/c4.db');
+  fs.mkdirSync(path.dirname(database), { recursive: true });
+  const db = new Database(database);
+  db.exec("CREATE TABLE group_runtime_overrides(session_group TEXT PRIMARY KEY,runtime TEXT); INSERT INTO group_runtime_overrides VALUES('test:group','codex')");
+  db.close();
+  const before = fs.readFileSync(database);
+  await assert.rejects(prepareUpgradeRuntimeClis(f.ctx, {
+    exists: name => name === 'claude', install: { codex: () => false },
+  }), { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
+  assert.deepEqual(fs.readFileSync(database), before);
+  assert.equal(fs.existsSync(`${database}-wal`), false);
+  assert.equal(fs.existsSync(`${database}-shm`), false);
+  const result = await prepareUpgradeRuntimeClis(f.ctx, { exists: () => true });
+  assert.deepEqual(result.completed, ['claude.cli', 'codex.cli']);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('single does not consume D10 overrides and preserves optional failure warnings', async t => {
+  const f = fixture(t);
+  f.write('.zylos/config.json', JSON.stringify({ runtime: 'claude', session_mode: 'single' }));
+  const result = await prepareUpgradeRuntimeClis(f.ctx, {
+    listRuntimeOverrides() { throw Error('single must not read D10'); },
+    exists: runtime => runtime === 'claude', install: { codex: () => false },
+  });
+  assert.equal(result.warnings[0].runtime, 'codex');
+});
+
+test('multi with no database does not create one and treats the other CLI as optional', async t => {
+  const f = fixture(t);
+  f.write('.zylos/config.json', JSON.stringify({ runtime: 'claude', session_mode: 'multi' }));
+  const result = await prepareUpgradeRuntimeClis(f.ctx, {
+    exists: runtime => runtime === 'claude', install: { codex: () => false },
+  });
+  assert.equal(result.warnings[0].runtime, 'codex');
+  assert.equal(fs.existsSync(path.join(f.zylosDir, 'comm-bridge')), false);
+});
+
+test('unreadable or unsupported multi overrides reject before any CLI installation', async t => {
+  const f = fixture(t);
+  f.write('.zylos/config.json', JSON.stringify({ runtime: 'claude', session_mode: 'multi' }));
+  for (const listRuntimeOverrides of [() => { throw Error('D10 read failed'); }, () => [{ runtime: 'unknown' }]]) {
+    let called = false;
+    await assert.rejects(prepareUpgradeRuntimeClis(f.ctx, { listRuntimeOverrides,
+      prepare: () => { called = true; } }));
+    assert.equal(called, false);
+  }
+});
 
 test('CLI preparation rejects unreadable runtime configuration before installing', async t => {
   const f = fixture(t);
@@ -228,7 +285,7 @@ for (const mode of ['split', 'automatic-A']) {
     const workDir = path.join(f.root, 'publication'); fs.mkdirSync(workDir);
     const preparation = preparePostCutoff({ ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
     const published = await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation });
-    assert.equal(published.ok, true);
+    assert.equal(published.ok, true, JSON.stringify(published.lastError));
     assert.equal(isMigrationPending({ migrationPromptPath: path.join(f.zylosDir, promptRelative) }), false);
     assert.equal((await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation })).ok, true);
   });

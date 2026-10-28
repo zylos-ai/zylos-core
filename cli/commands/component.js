@@ -225,6 +225,9 @@ export function formatSelfUpgradeCompletion(data) {
   for (const warning of data.preparationWarnings || []) {
     lines.push(`Preparation warning: ${typeof warning === 'string' ? warning : warning.message || warning.code || JSON.stringify(warning)}`);
   }
+  for (const warning of data.warnings || []) {
+    lines.push(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}`);
+  }
   if (data.checkpointAudit?.state === 'incomplete') {
     lines.push(`Checkpoint audit: incomplete${data.checkpointAudit.error ? ': ' + data.checkpointAudit.error : ''}`);
   } else if (data.checkpointAudit?.items?.length) {

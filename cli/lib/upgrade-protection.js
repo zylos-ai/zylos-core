@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, inspectFirstDashboardTakeover } from './core-db-backup.js';
+import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -103,7 +103,8 @@ export function beginUpgrade(ctx, {
     nodePath: process.execPath,
     from: ctx.from,
     to: ctx.to,
-    firstTakeover: typeof ctx.firstTakeover === 'boolean' ? ctx.firstTakeover : inspectFirstDashboardTakeover(zylosDir),
+    firstTakeover: typeof ctx.firstTakeover === 'boolean' ? ctx.firstTakeover : inspectFirstDashboardTakeover(ctx.coreDir),
+    dashboardOwnerManaged: typeof ctx.dashboardOwnerManaged === 'boolean' ? ctx.dashboardOwnerManaged : inspectDashboardOwnerManaged(zylosDir),
     phase: 'preparing',
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
     installationIntent: false,
@@ -268,6 +269,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     toVersion: j.to,
     formatVersion: ctx.snapshotFormatVersion ?? 2,
     firstTakeover: j.firstTakeover === true,
+    dashboardOwnerManaged: j.dashboardOwnerManaged === true,
     verifySnapshot
   });
   ctx.dbBackupDir = snapshot.dbBackupDir;
@@ -411,7 +413,7 @@ export function protectedDataReady(ctx, overrides = {}) {
   if (j.databaseMode !== 'unchanged') {
     const manifest = maintenance.read(path.join(j.dbBackupDir,'manifest.json'));
     (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId,manifest});
-    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,firstTakeover:j.firstTakeover===true,manifest});
+    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,dashboardOwnerManaged:j.dashboardOwnerManaged===true,manifest});
     ctx.databases=verified?.databases || null;
     const checked = maintenance.preflight(dir, j, null);
     if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');

@@ -28,7 +28,7 @@ function hasTransactionHistory(root) {
     try {
       const journal = maintenance.transaction(root, dir);
       return (journal.recoveryHashes || publishedRecovery) && (
-        !maintenance.terminalValid(journal) || !journal.cleanup.complete ||
+        !maintenance.terminalValid(journal) || !journal.cleanup.complete && !maintenance.legacyUpgradeHistory(journal) ||
         journal.installerExitUnconfirmed || journal.finalizerExitUnconfirmed ||
         journal.installerStarted && !journal.installerExitConfirmed ||
         journal.finalizerStarted && !journal.finalizerExitConfirmed ||

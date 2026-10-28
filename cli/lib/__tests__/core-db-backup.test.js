@@ -14,8 +14,8 @@ import {LEGACY_CORE_DATABASES as CORE_DATABASES,cleanupCoreDbRehearsals,createCo
 // Legacy owner tests remain three-database cases; every new snapshot is format 2.
 const createCoreDbSnapshot=options=>snapshot(options);
 const runCoreDbWorker=(payload,options)=>worker({formatVersion:payload.action==='snapshot'?2:1,...payload},options);
-const probeCoreDbVersions=(root,target,options)=>probeVersions(root,target,{...options,firstTakeover:true});
-const rehearseCoreDbUpgrade=(root,target,options)=>rehearse(root,target,{...options,firstTakeover:true});
+const probeCoreDbVersions=(root,target,options)=>probeVersions(root,target,{...options,dashboardOwnerManaged:false});
+const rehearseCoreDbUpgrade=(root,target,options)=>rehearse(root,target,{...options,dashboardOwnerManaged:false});
 const installed=process.env.CORE_DB_TEST_SKILL || path.join(os.homedir(),'zylos','.claude','skills','comm-bridge');
 const currentVersions=[C4_VERSION,SCHEDULER_VERSION,WEB_VERSION];
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
@@ -314,7 +314,7 @@ test('controlled installed migration requires installing identity, preserves sna
  fs.mkdirSync(path.join(dir,'.zylos/upgrade'),{recursive:true,mode:0o700});
  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(dir,'.zylos/upgrade/maintenance.cjs'));
  fs.chmodSync(path.join(dir,'.zylos/upgrade/maintenance.cjs'),0o600);
- const j={formatVersion:1,from:'0.9.4',firstTakeover:true,transactionId,zylosDir:dir,skillsDir:schemaRoot,phase:'installing',installationIntent:true,initialIdentity:{},dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json'))};
+ const j={formatVersion:1,from:'0.9.4',firstTakeover:true,dashboardOwnerManaged:false,transactionId,zylosDir:dir,skillsDir:schemaRoot,phase:'installing',installationIntent:true,initialIdentity:{},dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json'))};
  const digest='a'.repeat(64);
  Object.assign(j,{nodePath:process.execPath,coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[]});
  j.initialIdentity={nodePath:process.execPath,cliRoot:path.join(dir,'package/cli'),cliHash:digest,packageJson:path.join(dir,'package/package.json'),packageHash:digest,workerPath:path.join(dir,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:['comm-bridge/c4.db','scheduler/scheduler.db'].includes(source)}))};
@@ -325,9 +325,9 @@ test('controlled installed migration requires installing identity, preserves sna
 
  assert.throws(()=>m.assertCoreDatabaseAvailable(dir),/maintenance|upgrade|blocked/i);
  assert.throws(()=>runCoreDbWorker({...payload,transactionId:'other'}),/identity mismatch/);
- const withoutTakeover={...j};delete withoutTakeover.firstTakeover;
+ const withoutTakeover={...j};delete withoutTakeover.dashboardOwnerManaged;
  m.durable(path.join(transactionDir,'journal.json'),withoutTakeover);
- assert.throws(()=>runCoreDbWorker({...payload,firstTakeover:true}),/persisted Dashboard takeover state/);
+ assert.throws(()=>runCoreDbWorker({...payload,dashboardOwnerManaged:false}),/persisted Dashboard owner state/);
  m.durable(path.join(transactionDir,'journal.json'),j);
  const result=runCoreDbWorker(payload);
  assert.equal(result.databases.length,3);assert.deepEqual(result.databases.map(row=>row.userVersion),currentVersions);

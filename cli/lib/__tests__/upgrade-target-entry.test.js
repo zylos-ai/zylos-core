@@ -32,14 +32,14 @@ test('target checks reject old sources and standalone Dashboard before touching 
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
 });
 
-test('0.9.4 prechecks derive first takeover from deployment state and rehearse before transaction creation', t => {
+test('0.9.4 prechecks freeze package and database decisions before transaction creation', t => {
   const input = fixture(t,'0.9.4');
   const calls = [];
   const ctx = inspectUpgradeSource(input, {
     probe(root, target, options) {
       calls.push('probe');assert.equal(options.firstTakeover,true);
-      const marker=path.join(root,'.claude/skills/dashboard/.zylos/core-managed.json');
-      fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'{}');
+      assert.equal(options.dashboardOwnerManaged,false);
+      fs.mkdirSync(path.join(input.installedRoot,'skills/dashboard'),{recursive:true});
       return {databases:[{},{},{}],needsMigration:true};
     },
     preflight(root, options) {calls.push('preflight'); assert.equal(options.firstTakeover, true);},
@@ -48,19 +48,42 @@ test('0.9.4 prechecks derive first takeover from deployment state and rehearse b
   assert.deepEqual(calls, ['probe', 'preflight', 'rehearse']);
   assert.equal(ctx.snapshotFormatVersion, 2);
   assert.equal(ctx.firstTakeover,true);
+  assert.equal(ctx.dashboardOwnerManaged,false);
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
   input.fromVersion = '1.0.0';
   assert.throws(() => inspectUpgradeSource(input), {code:'INVALID_UPGRADE_HANDOFF'});
 });
 
-test('existing Dashboard takeover marker selects all four owners regardless of source version',t=>{
-  const input=fixture(t),marker=path.join(input.zylosDir,'.claude/skills/dashboard/.zylos/core-managed.json');
-  fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'{}');
-  const ctx=inspectUpgradeSource(input,{probe(root,target,options){assert.equal(options.firstTakeover,false);return {databases:[{},{},{},{}],needsMigration:false};},preflight(root,options){assert.equal(options.firstTakeover,false);}});
-  assert.equal(ctx.firstTakeover,false);
-  fs.unlinkSync(marker);fs.symlinkSync('missing',marker);
-  assert.throws(()=>inspectUpgradeSource(input),{code:'DASHBOARD_TAKEOVER_INVALID'});
+for(const bundled of [false,true]) for(const version of [13,20]) test(`independent takeover: bundled=${bundled}, schema=${version}`,t=>{
+  const input=fixture(t,'0.9.4'),installed=path.resolve('skills/comm-bridge');
+  const Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');
+  const driver=path.join(input.zylosDir,'.claude/skills/comm-bridge');
+  fs.mkdirSync(driver,{recursive:true});fs.writeFileSync(path.join(driver,'package.json'),'{}');
+  fs.symlinkSync(path.join(installed,'node_modules'),path.join(driver,'node_modules'));
+  const database=path.join(input.zylosDir,'components/dashboard/dashboard.db');
+  fs.mkdirSync(path.dirname(database),{recursive:true});
+  const db=new Database(database);db.exec('CREATE TABLE schema_migrations(version INTEGER); PRAGMA user_version=99');
+  db.prepare('INSERT INTO schema_migrations VALUES (?)').run(version);db.close();
+  if(bundled)fs.mkdirSync(path.join(input.installedRoot,'skills/dashboard'),{recursive:true});
+  const marker=path.join(input.zylosDir,'.claude/skills/dashboard/.zylos/core-managed.json');
+  fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'ignored old marker');
+  const before=fs.readFileSync(database),seen=[];
+  const check=options=>{assert.equal(options.firstTakeover,!bundled);assert.equal(options.dashboardOwnerManaged,version>=20);};
+  const ctx=inspectUpgradeSource(input,{
+    probe(root,target,options){check(options);seen.push('probe');return {databases:Array.from({length:version>=20?4:3},()=>({})),needsMigration:true};},
+    preflight(root,options){check(options);seen.push('preflight');},
+    rehearse(root,target,options){check(options);seen.push('rehearse');}
+  });
+  assert.deepEqual(seen,['probe','preflight','rehearse']);
+  assert.equal(ctx.firstTakeover,!bundled);assert.equal(ctx.dashboardOwnerManaged,version>=20);
+  assert.deepEqual(fs.readFileSync(database),before);
   assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
+});
+
+test('invalid installed Dashboard directory rejects independently of old marker',t=>{
+  const input=fixture(t),directory=path.join(input.installedRoot,'skills/dashboard');
+  fs.mkdirSync(path.dirname(directory));fs.symlinkSync('missing',directory);
+  assert.throws(()=>inspectUpgradeSource(input),{code:'DASHBOARD_TAKEOVER_INVALID'});
 });
 
 for(const kind of ['file','symlink','dangling'])test(`T09 rejects ${kind} skill dependencies before probes or transaction writes`,t=>{
