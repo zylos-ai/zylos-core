@@ -156,23 +156,46 @@ test('missing Dashboard stays absent through version inspection, rehearsal and d
   assert.throws(()=>runCoreDbWorker({...payload,action:'offline-preflight',manifest:snapshot.manifest}),/Expected missing database exists/);
 });
 
-test('controlled upgrade leaves missing Dashboard creation to its first ordinary open',t=>{
-  const {root,source,schemaRoot,driverRoot}=fixture(t);
+function controlledMigration(t, dashboardOwnerManaged) {
+  const f=fixture(t),{root,schemaRoot,driverRoot}=f;
   for(const name of ['comm-bridge','scheduler','web-console','dashboard'])fs.cpSync(path.join(schemaRoot,name),path.join(driverRoot,name),{recursive:true,dereference:true,filter:file=>!file.split(path.sep).includes('node_modules')});
   const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'deferred-dashboard'});
   const m=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
   const transactionDir=path.join(root,'.backup/self-upgrade/deferred-dashboard'),digest='a'.repeat(64);
   fs.mkdirSync(transactionDir,{recursive:true,mode:0o700});fs.mkdirSync(path.join(root,'.zylos/upgrade'),{recursive:true,mode:0o700});
   fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(root,'.zylos/upgrade/maintenance.cjs'));fs.chmodSync(path.join(root,'.zylos/upgrade/maintenance.cjs'),0o600);
-  const j={formatVersion:1,from:'0.9.4',firstTakeover:false,dashboardOwnerManaged:true,transactionId:'deferred-dashboard',zylosDir:root,skillsDir:driverRoot,phase:'installing',installationIntent:true,nodePath:process.execPath,
+  const j={formatVersion:1,from:'0.9.4',firstTakeover:false,dashboardOwnerManaged,transactionId:'deferred-dashboard',zylosDir:root,skillsDir:driverRoot,phase:'installing',installationIntent:true,nodePath:process.execPath,
     dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json')),originalServices:[],coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],
     initialIdentity:{nodePath:process.execPath,cliRoot:path.join(root,'package/cli'),cliHash:digest,packageJson:path.join(root,'package/package.json'),packageHash:digest,workerPath:path.join(root,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:false}))}};
   m.durable(path.join(transactionDir,'journal.json'),j);m.marker(root,transactionDir,j);
-  const result=runCoreDbWorker({action:'upgrade-migrate',zylosDir:root,schemaRoot:driverRoot,transactionDir,transactionId:j.transactionId,firstTakeover:true});
+  return {...f, request:{action:'upgrade-migrate',zylosDir:root,schemaRoot:driverRoot,transactionDir,transactionId:j.transactionId}};
+}
+
+test('controlled upgrade leaves missing Dashboard creation to its first ordinary open',t=>{
+  const {root,source,driverRoot,request}=controlledMigration(t,true);
+  const result=runCoreDbWorker({...request,firstTakeover:true});
   assert.equal(result.databases[3].status,'missing');assert.equal(result.databases[3].ownerSkipped,undefined);
   assert.equal(fs.existsSync(source),false);
   assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:driverRoot,requireCurrent:true}).databases[3].status,'missing');
   assert.equal(fs.existsSync(source),false);
+});
+
+for(const managed of [false,true]) test(`controlled migration uses persisted Dashboard owner state ${managed} despite caller disagreement`,t=>{
+  const {source,database,driverRoot,request}=controlledMigration(t,managed);
+  database(13).close();
+  const before=fs.readFileSync(source);
+  const owner=path.join(driverRoot,'dashboard/src/lib/schema-owner.js');
+  const calls=path.join(driverRoot,'dashboard/migration-calls');
+  fs.appendFileSync(owner,`\nimport fs from 'node:fs';\nconst migrate=dashboardSchemaOwner.migrate;dashboardSchemaOwner.migrate=db=>{fs.appendFileSync(${JSON.stringify(calls)},'migrate\\n');return migrate(db);};\n`);
+  const result=runCoreDbWorker({...request,dashboardOwnerManaged:!managed});
+  const row=result.databases.find(item=>item.source==='components/dashboard/dashboard.db');
+  const db=new Database(source,{readonly:true,fileMustExist:true});
+  try {assert.equal(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version,managed?20:13);}
+  finally {db.close();}
+  assert.equal(row.ownerSkipped,managed?undefined:true);
+  assert.equal(fs.existsSync(calls),managed);
+  if(managed)assert.equal(fs.readFileSync(calls,'utf8'),'migrate\n');
+  else assert.deepEqual(fs.readFileSync(source),before);
 });
 
 test('missing Dashboard never loads its owner or creates a database before cutoff',t=>{

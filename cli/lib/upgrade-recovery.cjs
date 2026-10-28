@@ -56,15 +56,14 @@ function originalVerified(dir, j) {
   let result;
   if (fs.existsSync(path.join(dir, 'descriptor.json'))) result = m.preflight(dir, j, {
     databases: expected
-  });else {
+  }, {originalDeployment:true});else {
     const cp = require('node:child_process');
     if (m.hash(j.initialIdentity.workerPath) !== j.initialIdentity.workerHash) throw Error('original readonly worker identity changed');
     const r = cp.spawnSync(j.nodePath, [j.initialIdentity.workerPath, JSON.stringify({
       action: 'offline-preflight',
       zylosDir: j.zylosDir,
       schemaRoot: j.skillsDir,
-      firstTakeover: j.firstTakeover === true,
-      dashboardOwnerManaged: j.dashboardOwnerManaged === true,
+      dashboardOwnerManaged: j.dashboardOwnerManaged === true && j.firstTakeover !== true,
       expectedDatabases: expected,
       formatVersion: m.originalDatabasePaths(j).length === 4 ? 2 : 1
     })], {
@@ -331,7 +330,7 @@ function validateReady(dir, j) {
     m.verifyServices(j);
     if (j.databaseMode !== 'unchanged') {
       // Normal startup may create missing DBs/write data: use current compatibility, never old hashes.
-      const checked = m.preflight(dir, j, null);
+      const checked = m.preflight(dir, j, null, {originalDeployment:true});
       if (checked.success === false) throw Error(checked.error || 'started code/data incompatible');
     }
     verified = true;
@@ -444,7 +443,7 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
       restoreCore(dir, j);
       replaceDatabases(dir, j, snapshot);
       m.restoreOriginalPackage(dir, j);
-      const checked = m.preflight(dir, j, snapshot);
+      const checked = m.preflight(dir, j, snapshot, {originalDeployment:true});
       if (checked.success === false) throw Error(checked.error || 'restored preflight failed');
     }
     m.update(dir, j, {

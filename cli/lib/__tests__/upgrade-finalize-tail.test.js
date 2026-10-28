@@ -71,6 +71,20 @@ function deps(calls, extras={}) {
     ...extras,
   };
 }
+for(const failing of [false,true]) test(`finalization retains optional runtime warnings on ${failing?'failure':'success'}`,async t=>{
+  const ctx=fixture(t),calls=[];
+  ctx.runtimeWarnings=[{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'}];
+  const result=await completeUpgradeFinalization(ctx,deps(calls,failing?{
+    ensureMemoryMigration(){throw Object.assign(Error('memory prerequisite unavailable'),{code:'MEMORY_UNAVAILABLE'});}
+  }:{}));
+  assert.equal(result.success,!failing);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)).warnings,ctx.runtimeWarnings);
+  if(failing){
+    assert.equal(result.code,'MEMORY_UNAVAILABLE');
+    assert.equal(result.recovery_required,true);
+    assert.equal(calls.includes('start'),false);
+  }
+});
 test('tail preserves W1 and follows F1, W7, services, restart and audit order',async t=>{
   const ctx=fixture(t),calls=[];
   const state='# Old user-owned state\n';

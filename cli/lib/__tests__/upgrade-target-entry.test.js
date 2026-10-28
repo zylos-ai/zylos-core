@@ -37,12 +37,12 @@ test('0.9.4 prechecks freeze package and database decisions before transaction c
   const calls = [];
   const ctx = inspectUpgradeSource(input, {
     probe(root, target, options) {
-      calls.push('probe');assert.equal(options.firstTakeover,true);
+      calls.push('probe');
       assert.equal(options.dashboardOwnerManaged,false);
       fs.mkdirSync(path.join(input.installedRoot,'skills/dashboard'),{recursive:true});
       return {databases:[{},{},{}],needsMigration:true};
     },
-    preflight(root, options) {calls.push('preflight'); assert.equal(options.firstTakeover, true);},
+    preflight() {calls.push('preflight');},
     rehearse(root, target, options) {calls.push('rehearse'); assert.equal(options.driverRoot, path.join(input.zylosDir, '.claude/skills'));}
   });
   assert.deepEqual(calls, ['probe', 'preflight', 'rehearse']);
@@ -68,7 +68,7 @@ for(const bundled of [false,true]) for(const version of [13,20]) test(`independe
   const marker=path.join(input.zylosDir,'.claude/skills/dashboard/.zylos/core-managed.json');
   fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'ignored old marker');
   const before=fs.readFileSync(database),seen=[];
-  const check=options=>{assert.equal(options.firstTakeover,!bundled);assert.equal(options.dashboardOwnerManaged,version>=20);};
+  const check=options=>{assert.equal(options.dashboardOwnerManaged,version>=20);};
   const ctx=inspectUpgradeSource(input,{
     probe(root,target,options){check(options);seen.push('probe');return {databases:Array.from({length:version>=20?4:3},()=>({})),needsMigration:true};},
     preflight(root,options){check(options);seen.push('preflight');},

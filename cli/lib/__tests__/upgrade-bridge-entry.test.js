@@ -34,7 +34,7 @@ test('schema probe rejects old installed caller before schema or driver access',
   assert.doesNotThrow(() => rejectLegacySchemaProbe(['node', worker, '{"action":"snapshot"}']));
 });
 
-test('A09 importing the actual target schema rejects a legacy version-probe caller', t => {
+test('importing the actual target schema rejects a legacy version-probe caller', t => {
   const root = fixture(t), worker = path.join(root, 'cli/lib/core-db-backup-worker.js');
   fs.mkdirSync(path.dirname(worker), {recursive:true});
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({version:'0.9.2'}));
@@ -44,7 +44,7 @@ test('A09 importing the actual target schema rejects a legacy version-probe call
   assert.match(child.stderr, /UPGRADE_SOURCE_TOO_OLD/);
 });
 
-test('A13 thin entry refuses recovery failure before checking or downloading updates', async () => {
+test('thin entry refuses recovery failure before checking or downloading updates', async () => {
   const {upgradeSelfCore} = await import('../../commands/component.js');
   let checked = false;
   const result = await upgradeSelfCore({skipConfirm:true}, {
@@ -63,6 +63,10 @@ test('actual preinstall rejects legacy upgrades and allows fresh/new upgrades wi
   delete env.ZYLOS_UPGRADE_FROM_VERSION;
   const run = extra => spawnSync(process.execPath, [script], { env: { ...env, ...extra }, encoding: 'utf8' });
   assert.equal(run({}).status, 0);
+  for (const value of ['', '0', 'true', '01', ' 1']) {
+    const child=run({ZYLOS_SKIP_POSTINSTALL:value,ZYLOS_UPGRADE_FROM_VERSION:'0.9.2'});
+    assert.equal(child.status,0,child.stderr);
+  }
   for (const version of [undefined, '0.5.0', '0.8.3', '0.9.0', '0.9.1', '0.9.2']) {
     const child = run({ ZYLOS_SKIP_POSTINSTALL: '1', ...(version ? { ZYLOS_UPGRADE_FROM_VERSION: version } : {}) });
     assert.equal(child.status, 1);

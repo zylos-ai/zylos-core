@@ -950,7 +950,6 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.maintenance = deps.maintenance;
   ctx.packageRoot = state.packageRoot;
   ctx.firstTakeover = state.firstTakeover === true;
-  ctx.dashboardOwnerManaged = state.dashboardOwnerManaged === true;
   ctx.firstDashboardTakeover = state.firstDashboardTakeover;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
   {
@@ -1021,7 +1020,6 @@ async function finalizeInstalledUpgrade(ctx, deps) {
       ctx.dbManifest=manifest;
       ctx.databaseMode=j.databaseMode || ctx.databaseMode;
       ctx.firstTakeover=j.firstTakeover===true;
-      ctx.dashboardOwnerManaged=j.dashboardOwnerManaged===true;
       ctx.firstDashboardTakeover=ctx.firstTakeover && fs.existsSync(path.join(ctx.tempDir,'skills/dashboard'));
       ctx.servicesWereRunning=j.originalServices.map(service=>service.name);
     }

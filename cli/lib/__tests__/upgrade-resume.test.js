@@ -104,6 +104,17 @@ test('successful resume uses the shared finalizer Dashboard result directly',asy
   assert.deepEqual(result.data.dashboard.errors,[]);
 });
 
+for(const success of [false,true]) test(`resume retains structured runtime warnings after ${success?'successful':'failed'} finalization`,async t=>{
+  const f=fixture(t);
+  const warnings=[{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'}];
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+    f.m.update(f.dir,ctx.journal,{phase:success?'upgrade_complete':'recovery_required',resumePhase:'compensation_closed'});
+    return {success,warnings,...(success?{}:{error:'memory prerequisite unavailable',code:'MEMORY_UNAVAILABLE'})};
+  }});
+  assert.equal(result.ok,success);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)).data.warnings,warnings);
+});
+
 test('snapshot hash drift is rejected before any modifications even when closed facts agree',async t=>{
   const f=fixture(t);fs.appendFileSync(path.join(f.db,'manifest.json'),' ');
   await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m}),{code:'CUTOFF_UNTRUSTED'});

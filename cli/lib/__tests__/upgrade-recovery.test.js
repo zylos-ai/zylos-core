@@ -111,27 +111,30 @@ function unchanged(f) {
 }
 
 for(const firstTakeover of [false,true]) for(const dashboardOwnerManaged of [false,true]) {
- test(`K2h compensation preflight uses persisted owner=${dashboardOwnerManaged}, takeover=${firstTakeover}`,async t=>{
+ test(`original deployment preflight uses persisted owner=${dashboardOwnerManaged}, takeover=${firstTakeover}`,async t=>{
   const f=await fixture(t,{dashboard:true});
   f.m.update(f.dir,f.j,{firstTakeover,dashboardOwnerManaged});
-  const result=f.m.preflight(f.dir,f.load(),null);
+  if(firstTakeover)fs.rmSync(f.dashboardRoot,{recursive:true});
+  const result=f.m.preflight(f.dir,f.load(),null,{originalDeployment:true});
   const row=result.databases.find(item=>item.source==='components/dashboard/dashboard.db');
-  assert.equal(row.ownerSkipped===true,!dashboardOwnerManaged);
-  assert.equal(row.currentVersion,dashboardOwnerManaged?12:undefined);
+  const usesOwner=dashboardOwnerManaged&&!firstTakeover;
+  assert.equal(row.ownerSkipped===true,!usesOwner);
+  assert.equal(row.currentVersion,usesOwner?12:undefined);
  });
- test(`K2i original verification uses persisted owner=${dashboardOwnerManaged}, takeover=${firstTakeover}`,async t=>{
+ test(`original verification uses persisted owner=${dashboardOwnerManaged}, takeover=${firstTakeover}`,async t=>{
   const f=await fixture(t,{dashboard:true});
   f.m.update(f.dir,f.j,{firstTakeover,dashboardOwnerManaged,installationIntent:false,phase:'prepared'});
   // Exercise the original-worker path, independently of descriptor preflight.
   fs.renameSync(path.join(f.dir,'descriptor.json'),path.join(f.dir,'descriptor.held.json'));
   const owner=path.join(f.dashboardRoot,'src/lib/schema-owner.js');
-  fs.writeFileSync(owner,"export const dashboardSchemaOwner={inspectSchema(){throw Error('K2i persisted owner invoked');},migrate(){throw Error('must not migrate');}};");
-  if(dashboardOwnerManaged)assert.throws(()=>f.r.originalVerified(f.dir,f.load()),/K2i persisted owner invoked/);
+  if(firstTakeover)fs.rmSync(f.dashboardRoot,{recursive:true});
+  else fs.writeFileSync(owner,"export const dashboardSchemaOwner={inspectSchema(){throw Error('persisted owner invoked');},migrate(){throw Error('must not migrate');}};");
+  if(dashboardOwnerManaged&&!firstTakeover)assert.throws(()=>f.r.originalVerified(f.dir,f.load()),/persisted owner invoked/);
   else assert.doesNotThrow(()=>f.r.originalVerified(f.dir,f.load()));
  });
 }
 
-for (const mutation of ['source', 'manifest']) test(`N4 ${mutation} mutation before baseline staging rejects before cutoff and compensates code/data`, async t => {
+for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before baseline staging rejects before cutoff and compensates code/data`, async t => {
  const f=await fixture(t);
  const download=path.join(f.root,'download'),source=path.join(download,'skills/comm-bridge');
  fs.mkdirSync(source,{recursive:true});

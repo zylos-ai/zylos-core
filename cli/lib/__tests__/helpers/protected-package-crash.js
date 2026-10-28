@@ -12,7 +12,7 @@ const nodeBin = path.dirname(process.execPath);
 // Real npm and SQLite; all package, deployment, cache and process state belongs
 // to this fixture. The historical source is v0.9.2 relabelled 0.9.3, not a
 // claim that the unreleased historical 0.9.3 package has been exercised.
-export function createProtectedPackageCrashFixture(root) {
+export function createProtectedPackageCrashFixture(root, { managedDashboard = false } = {}) {
   const home = path.join(root, 'home'), zylos = path.join(home, 'zylos');
   const prefix = path.join(root, 'prefix'), bin = path.join(root, 'bin');
   const core = path.join(prefix, 'lib/node_modules/zylos');
@@ -63,7 +63,7 @@ fs.writeFileSync(file,JSON.stringify(state));
   }
   function logicalDatabases() {
     const script = `const fs=require('node:fs'),path=require('node:path'),D=require(${JSON.stringify(path.join(skills, 'comm-bridge/node_modules/better-sqlite3'))});
-const result={};for(const rel of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db']){
+const result={};for(const rel of ${JSON.stringify(['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db', ...(managedDashboard ? ['components/dashboard/dashboard.db'] : [])])}){
  const db=new D(path.join(${JSON.stringify(zylos)},rel),{readonly:true});
  const tables=db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name").all();
  result[rel]={version:db.pragma('user_version',{simple:true}),integrity:db.pragma('integrity_check',{simple:true}),tables:tables.map(t=>({schema:t,rows:db.prepare('SELECT * FROM '+JSON.stringify(t.name)).all().map(r=>JSON.stringify(r)).sort()}))};db.close();
@@ -105,6 +105,13 @@ for(const [rel,owner]of [['comm-bridge/c4.db','comm-bridge/scripts/c4-schema.js'
 }
 const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(17,'T10 durable business row');db.close();`;
     run(process.execPath, ['--input-type=module', '-e', init]);
+    if (managedDashboard) {
+      assert.equal(fs.existsSync(path.join(core, 'skills/dashboard')), false);
+      assert.equal(fs.existsSync(path.join(skills, 'dashboard')), false);
+      const database = path.join(zylos, 'components/dashboard/dashboard.db');
+      fs.mkdirSync(path.dirname(database), { recursive: true });
+      run(process.execPath, ['-e', `const D=require(${JSON.stringify(path.join(skills, 'comm-bridge/node_modules/better-sqlite3'))});const db=new D(${JSON.stringify(database)});db.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);INSERT INTO schema_migrations VALUES (20);CREATE TABLE events(value TEXT);INSERT INTO events VALUES ('T10 preserved Dashboard row')");db.close();`]);
+    }
     assert.equal(version(), '0.9.3');
     const target = path.join(root, 'target');
     fs.cpSync(repository, target, { recursive: true, verbatimSymlinks: true, filter: file => {
@@ -113,6 +120,15 @@ const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prep
     } });
     const targetPkg = JSON.parse(fs.readFileSync(path.join(target, 'package.json')));
     targetPkg.version = '1.0.0'; write(path.join(target, 'package.json'), JSON.stringify(targetPkg, null, 2));
+    if (managedDashboard) {
+      write(path.join(target, 'skills/dashboard/package.json'), '{"name":"fixture-dashboard","type":"module"}\n');
+      // The target supplies the new owner; the original package and deployed
+      // skills deliberately have none. The worker provides a native SQLite handle.
+      write(path.join(target, 'skills/dashboard/src/lib/schema-owner.js'), `export const dashboardSchemaOwner={
+ inspectSchema(db){const currentVersion=db.prepare('SELECT MAX(version) AS n FROM schema_migrations').get().n;db.prepare('SELECT value FROM events').all();return {currentVersion,targetVersion:21,needsMigration:currentVersion!==21};},
+ migrate(db){db.prepare('INSERT OR IGNORE INTO schema_migrations VALUES (?)').run(21);}
+};\n`);
+    }
     return { source, target };
   }
   function handoff(target, name) {
@@ -120,8 +136,10 @@ const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prep
     fs.cpSync(target, tempDir, { recursive: true, verbatimSymlinks: true });
     return { schemaVersion: 1, fromVersion: '0.9.3', tempDir, installedRoot: core, zylosDir: zylos };
   }
-  function entry(input) {
-    const result = run(process.execPath, [path.join(input.tempDir, 'cli/lib/upgrade-entry.js')], { input: JSON.stringify(input), allowFailure: true, timeout: 900000 });
+  function entry(input, { failureStage } = {}) {
+    const module = pathToFileURL(path.join(input.tempDir, 'cli/lib/upgrade-entry.js')).href;
+    const args = failureStage ? ['--input-type=module', '-e', `import fs from 'node:fs';const {runUpgradeEntry,installUpgradeTarget}=await import(${JSON.stringify(module)});const input=JSON.parse(fs.readFileSync(0,'utf8'));const result=await runUpgradeEntry(input,{install(ctx){${failureStage === 'after' ? 'installUpgradeTarget(ctx);' : ''}throw Error(${JSON.stringify('T10 injected ' + failureStage + ' installation failure')});}});console.log(JSON.stringify(result));process.exitCode=result.success?0:1;`] : [path.join(input.tempDir, 'cli/lib/upgrade-entry.js')];
+    const result = run(process.execPath, args, { input: JSON.stringify(input), allowFailure: true, timeout: 900000 });
     assert.ok(result.stdout.trim(), result.stderr);
     return { status: result.status, result: JSON.parse(result.stdout.trim().split('\n').at(-1)) };
   }

@@ -149,17 +149,17 @@ export async function execute(input) {
     databases=databasesForFormat(input.formatVersion ?? (rows?.length===3 ? 1 : 2));
     if(!Array.isArray(rows)||rows.length!==databases.length||databases.some((item,index)=>rows[index]?.source!==item.source||!['complete','missing'].includes(rows[index].status))) throw Error('Invalid original database presence evidence');
   } else databases=input.manifest ? validateSnapshotManifest(input.manifest) : databasesForFormat(input.formatVersion ?? 2);
-  const inspectDashboard=async (owner,db,absent) => {
+  const inspectDashboard=async (owner,db) => {
     const state=await owner.inspectSchema(db);
-    if(!state||!Number.isInteger(state.targetVersion)||state.targetVersion<0||(!absent&&(!Number.isInteger(state.currentVersion)||state.currentVersion<0))||typeof state.needsMigration!=='boolean') throw Error('Invalid dashboard schema inspection');
+    if(!state||!Number.isInteger(state.targetVersion)||state.targetVersion<0||!Number.isInteger(state.currentVersion)||state.currentVersion<0||typeof state.needsMigration!=='boolean') throw Error('Invalid dashboard schema inspection');
     if(state.currentVersion>state.targetVersion) throw Error(`SCHEMA_TOO_NEW dashboard: schema version ${state.currentVersion} exceeds supported ${state.targetVersion}`);
-    if(input.requireCurrent && !absent && state.needsMigration) throw Error('Database migrations remain before data-ready');
+    if(input.requireCurrent && state.needsMigration) throw Error('Database migrations remain before data-ready');
     return state;
   };
-  const inspectDashboardFile=async (owner,file,absent) => {
+  const inspectDashboardFile=async (owner,file) => {
     const Database=driver(input);
-    const db=new Database(absent?':memory:':file,{readonly:!absent,fileMustExist:!absent,timeout:5000});
-    try {return await inspectDashboard(owner,db,absent);} finally {db.close();}
+    const db=new Database(file,{readonly:true,fileMustExist:true,timeout:5000});
+    try {return await inspectDashboard(owner,db);} finally {db.close();}
   };
   const skipDashboard=item=>input.dashboardOwnerManaged===false && item.owner==='dashboard';
   if(input.action==='version-probe') {
@@ -173,9 +173,9 @@ export async function execute(input) {
       }
       const mod=await ownerSchema(input,item);
       if(item.owner==='dashboard') {
-        const source=path.join(input.zylosDir,item.source),absent=missing(source);
-        const state=await inspectDashboardFile(mod,source,absent);
-        rows.push({source:item.source,status:absent?'missing':'present',fromVersion:state.currentVersion,toVersion:state.targetVersion,needsMigration:state.needsMigration});
+        const source=path.join(input.zylosDir,item.source);
+        const state=await inspectDashboardFile(mod,source);
+        rows.push({source:item.source,status:'present',fromVersion:state.currentVersion,toVersion:state.targetVersion,needsMigration:state.needsMigration});
         continue;
       }
       const target=mod.SUPPORTED_SCHEMA_VERSION;
@@ -216,14 +216,14 @@ export async function execute(input) {
         const mod=await ownerSchema(input,item),Database=driver(input,item);
         const absent=missing(source);
         if(item.owner==='dashboard') {
-          const before=await inspectDashboardFile(mod,source,absent);
+          const before=await inspectDashboardFile(mod,source);
           const target=path.join(directory,'dashboard.db');
-          if(!absent) {const live=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});try {await live.backup(target);}finally{live.close();}}
-          const copy=new Database(target,{fileMustExist:!absent,timeout:5000});
+          const live=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});try {await live.backup(target);}finally{live.close();}
+          const copy=new Database(target,{fileMustExist:true,timeout:5000});
           let after;
-          try {await mod.migrate(copy);after=await inspectDashboard(mod,copy,false);} finally {copy.close();}
+          try {await mod.migrate(copy);after=await inspectDashboard(mod,copy);} finally {copy.close();}
           if(after.needsMigration) throw Error('SCHEMA_MIGRATION_FAILED dashboard rehearsal remains incomplete');
-          reports.push({source:item.source,status:absent?'missing':'present',fromVersion:before.currentVersion,toVersion:after.currentVersion});
+          reports.push({source:item.source,status:'present',fromVersion:before.currentVersion,toVersion:after.currentVersion});
           continue;
         }
         if(absent && !mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
@@ -296,11 +296,11 @@ export async function execute(input) {
       if(item.owner==='dashboard' && absent) {rows.push({source:item.source,status:'missing'});continue;}
       const mod=await ownerSchema(input,item);
       if(item.owner==='dashboard') {
-        await inspectDashboardFile(mod,source,absent);
+        await inspectDashboardFile(mod,source);
         fs.mkdirSync(path.dirname(source),{recursive:true});
-        const Database=driver(input),db=new Database(source,{fileMustExist:!absent,timeout:5000});
+        const Database=driver(input),db=new Database(source,{fileMustExist:true,timeout:5000});
         let state;
-        try {await mod.migrate(db);state=await inspectDashboard(mod,db,false);}
+        try {await mod.migrate(db);state=await inspectDashboard(mod,db);}
         catch(error) {throw Error(`SCHEMA_MIGRATION_FAILED ${item.source}: ${error.message}`);}
         finally {db.close();}
         if(state.needsMigration) throw Error('SCHEMA_MIGRATION_FAILED dashboard migration remains incomplete');
@@ -324,16 +324,14 @@ export async function execute(input) {
       if(expected?.status==='missing' && !absent) throw Error(`Expected missing database exists: ${source}`);
       if(absent) {rows.push({source:item.source,status:'missing'});continue;}
       const mod=await ownerSchema(input,item);
-      if(standaloneSnapshot && !absent) {
+      if(standaloneSnapshot) {
         if(expected?.status!=='backed_up') throw Error('Missing standalone restored snapshot evidence');
         withStandaloneReadonly(driver(input,item),source,expected.sha256,inspectConnection);
       }
-      const state=await inspectDashboardFile(mod,source,absent);
-      if(!absent) {
-        const db=new (driver(input,item))(source,{readonly:true,fileMustExist:true,timeout:5000});
-        try {inspectConnection(db);}finally{db.close();}
-      }
-      rows.push({source:item.source,status:absent?'missing':'present',...state});
+      const state=await inspectDashboardFile(mod,source);
+      const db=new (driver(input,item))(source,{readonly:true,fileMustExist:true,timeout:5000});
+      try {inspectConnection(db);}finally{db.close();}
+      rows.push({source:item.source,status:'present',...state});
       continue;
     }
     if(missing(source)) {

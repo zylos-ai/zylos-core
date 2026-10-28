@@ -269,7 +269,6 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     fromVersion: j.from,
     toVersion: j.to,
     formatVersion: ctx.snapshotFormatVersion ?? 2,
-    firstTakeover: j.firstTakeover === true,
     dashboardOwnerManaged: j.dashboardOwnerManaged === true,
     verifySnapshot
   });
@@ -303,7 +302,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
   });
   maintenance.validateDescriptor(dir, j, descriptor);
   if (j.databaseMode !== 'unchanged') {
-    const checked = maintenance.preflight(dir, j, snapshot.manifest);
+    const checked = maintenance.preflight(dir, j, snapshot.manifest, {originalDeployment:true});
     if (checked.success === false) throw Error(checked.error || 'saved readonly worker self-check failed');
   }
   maintenance.update(dir, j, {

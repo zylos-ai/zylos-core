@@ -807,7 +807,7 @@ function validateDescriptor(dir, j, d) {
   }
 
 }
-function preflight(dir, j, expected) {
+function preflight(dir, j, expected, {originalDeployment = false} = {}) {
   const restored = expected?.status === 'complete' && expected.databases.every(database =>
     database.status === 'missing' || j.dbRestore?.[database.source]?.complete === true);
   const presence = expected && !restored ? expected.databases.map(database => ({
@@ -817,8 +817,7 @@ function preflight(dir, j, expected) {
     action: 'offline-preflight',
     zylosDir: j.zylosDir,
     schemaRoot: j.skillsDir,
-    firstTakeover: j.firstTakeover === true,
-    dashboardOwnerManaged: j.dashboardOwnerManaged === true,
+    dashboardOwnerManaged: j.dashboardOwnerManaged === true && !(originalDeployment && j.firstTakeover === true),
     manifest: restored ? expected : undefined,
     expectedDatabases: presence,
     formatVersion: originalDatabasePaths(j).length === 4 ? 2 : 1

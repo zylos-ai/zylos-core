@@ -121,7 +121,7 @@ const cutoffShapes=[
  ['invalid cutoff hooks done','compensation_closed','done',false,false],
 ];
 for(const [shape,phase,hooks,validCutoff,allowed] of cutoffShapes)for(const [owner,module,entry,source] of realOpeners)
- test(`IF-50 actual ${owner} opener: ${shape}`,t=>{
+ test(`actual ${owner} opener: ${shape}`,t=>{
   const f=fixture(t);
   const seed=writeUsingOwners(f.root);assert.equal(seed.status,0,seed.stderr);
   Object.assign(f.j,{phase,...(phase==='recovery_required'?{resumePhase:'compensation_closed'}:{}),

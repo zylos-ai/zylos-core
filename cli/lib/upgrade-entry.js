@@ -54,7 +54,7 @@ export function inspectUpgradeSource(input, deps = {}) {
   }
   const firstTakeover = inspectFirstDashboardTakeover(coreDir);
   const dashboardOwnerManaged = inspectDashboardOwnerManaged(zylosDir,{driverRoot:skillsDir});
-  const options = {driverRoot:skillsDir, schemaRoot:path.join(tempDir,'skills'), firstTakeover, dashboardOwnerManaged};
+  const options = {driverRoot:skillsDir, schemaRoot:path.join(tempDir,'skills'), dashboardOwnerManaged};
   const versions = (deps.probe ?? probeCoreDbVersions)(zylosDir, tempDir, options);
   if (!versions || !Array.isArray(versions.databases) || versions.databases.length !== (dashboardOwnerManaged ? 4 : 3) || typeof versions.needsMigration !== 'boolean') throw new Error('Invalid database version probe result');
   (deps.preflight ?? preflightCoreDbUpgrade)(zylosDir, options);

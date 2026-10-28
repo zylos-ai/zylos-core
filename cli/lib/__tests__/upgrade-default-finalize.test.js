@@ -50,10 +50,8 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
   write('memory/state.md', 'preserve working state\n');
   const skillsDir = path.join(root, '.claude/skills');
   if (!firstTakeover) {
-    write('.claude/skills/dashboard/.zylos/core-managed.json', '{}\n');
     write('.claude/skills/dashboard/package.json', '{"type":"module"}\n');
     write('.claude/skills/dashboard/src/lib/schema-owner.js', `export const dashboardSchemaOwner = {
-      supportsNewDatabase() { return true; },
       inspectSchema() { return {currentVersion:0,targetVersion:0,needsMigration:false}; },
       migrate() { throw Error('missing Dashboard must not be created before cutoff'); }
     };\n`);
@@ -215,17 +213,16 @@ test('Dashboard takeover uses the persisted entry fact independently of source v
   assert.ok(f.calls.includes('route'));
 });
 
-test('Dashboard core-managed marker skips first registration on subsequent upgrades', async t => {
+test('persisted subsequent takeover skips first registration', async t => {
   const f=fixture(t,{firstTakeover:false});
   const result=await f.run();
   assert.equal(result.success,true,JSON.stringify(result));
   assert.equal(f.load().dashboardInstall,null);
-  assert.equal(f.read('.claude/skills/dashboard/.zylos/core-managed.json'),'{}\n');
   for(const call of ['dashboard-copy','registration','route']) assert.equal(f.calls.includes(call),false,call);
   assert.ok(f.calls.includes('dashboard-verify'));
 });
 
-test('target without Dashboard creates no takeover work even with no live marker', async t => {
+test('target without Dashboard creates no takeover work', async t => {
   const f=fixture(t);
   fs.rmdirSync(path.join(f.state.tempDir,'skills/dashboard'));
   const result=await f.run();
@@ -234,10 +231,9 @@ test('target without Dashboard creates no takeover work even with no live marker
   for(const call of ['dashboard-copy','registration','route']) assert.equal(f.calls.includes(call),false,call);
 });
 
-test('finalization does not recompute the persisted takeover fact from a changed marker', async t => {
+test('finalization does not recompute the persisted takeover fact from changed deployed files', async t => {
   const f=fixture(t);
-  f.write('.claude/skills/dashboard/.zylos/other.json','{}\n');
-  fs.symlinkSync('other.json',path.join(f.root,'.claude/skills/dashboard/.zylos/core-managed.json'));
+  f.write('.claude/skills/dashboard/package.json','{"type":"module"}\n');
   const result=await f.run();
   assert.equal(result.success,true,JSON.stringify(result));
   assert.equal(f.load().firstTakeover,true);
