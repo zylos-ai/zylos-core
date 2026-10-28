@@ -119,10 +119,41 @@ test('standalone restored Dashboard is hash checked during first takeover',t=>{
   const {root,source,database,payload}=fixture(t);database().close();
   const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'restore'});
   fs.copyFileSync(path.join(snapshot.dbBackupDir,'dashboard.db'),source);
-  const request={...payload,action:'offline-preflight',manifest:snapshot.manifest,firstTakeover:true,standaloneRestored:true};
+  const request={...payload,action:'offline-preflight',manifest:snapshot.manifest,firstTakeover:true};
   assert.equal(runCoreDbWorker(request).databases[3].status,'present');
   const db=new Database(source);db.exec("INSERT INTO events VALUES ('changed')");db.close();
   assert.throws(()=>runCoreDbWorker(request),/hash mismatch/);
+});
+
+test('missing Dashboard stays absent through version inspection, rehearsal and data-ready checks',t=>{
+  const {root,target,source,driverRoot,payload}=fixture(t);
+  assert.equal(probeCoreDbVersions(root,target,{driverRoot}).databases[3].status,'missing');
+  assert.equal(rehearseCoreDbUpgrade(root,target,{driverRoot}).databases[3].status,'missing');
+  assert.equal(runCoreDbWorker({...payload,action:'offline-preflight'}).databases[3].status,'missing');
+  assert.equal(fs.existsSync(source),false);
+  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'missing-preserved'});
+  assert.equal(runCoreDbWorker({...payload,action:'offline-preflight',manifest:snapshot.manifest}).databases[3].status,'missing');
+  fs.mkdirSync(path.dirname(source),{recursive:true});fs.writeFileSync(source,'unexpected database');
+  assert.throws(()=>runCoreDbWorker({...payload,action:'offline-preflight',manifest:snapshot.manifest}),/Expected missing database exists/);
+});
+
+test('controlled upgrade leaves missing Dashboard creation to its first ordinary open',t=>{
+  const {root,source,schemaRoot,driverRoot}=fixture(t);
+  for(const name of ['comm-bridge','scheduler','web-console','dashboard'])fs.cpSync(path.join(schemaRoot,name),path.join(driverRoot,name),{recursive:true,dereference:true,filter:file=>!file.split(path.sep).includes('node_modules')});
+  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'deferred-dashboard'});
+  const m=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
+  const transactionDir=path.join(root,'.backup/self-upgrade/deferred-dashboard'),digest='a'.repeat(64);
+  fs.mkdirSync(transactionDir,{recursive:true,mode:0o700});fs.mkdirSync(path.join(root,'.zylos/upgrade'),{recursive:true,mode:0o700});
+  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(root,'.zylos/upgrade/maintenance.cjs'));fs.chmodSync(path.join(root,'.zylos/upgrade/maintenance.cjs'),0o600);
+  const j={formatVersion:1,from:'0.9.4',firstTakeover:false,transactionId:'deferred-dashboard',zylosDir:root,skillsDir:driverRoot,phase:'installing',installationIntent:true,nodePath:process.execPath,
+    dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json')),originalServices:[],coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],
+    initialIdentity:{nodePath:process.execPath,cliRoot:path.join(root,'package/cli'),cliHash:digest,packageJson:path.join(root,'package/package.json'),packageHash:digest,workerPath:path.join(root,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:false}))}};
+  m.durable(path.join(transactionDir,'journal.json'),j);m.marker(root,transactionDir,j);
+  const result=runCoreDbWorker({action:'upgrade-migrate',zylosDir:root,schemaRoot:driverRoot,transactionDir,transactionId:j.transactionId,firstTakeover:true});
+  assert.equal(result.databases[3].status,'missing');assert.equal(result.databases[3].ownerSkipped,undefined);
+  assert.equal(fs.existsSync(source),false);
+  assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:driverRoot,requireCurrent:true}).databases[3].status,'missing');
+  assert.equal(fs.existsSync(source),false);
 });
 
 test('missing Dashboard creation support is checked without creating a business file',t=>{

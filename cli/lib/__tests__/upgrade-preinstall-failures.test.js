@@ -11,9 +11,13 @@ import {runUpgradeEntry} from '../upgrade-entry.js';
 
 const require=createRequire(import.meta.url);
 const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'));
+function dependencyDirectory(source,destination) {
+  fs.mkdirSync(destination,{recursive:true});
+  for(const name of fs.readdirSync(source))fs.symlinkSync(path.join(source,name),path.join(destination,name));
+}
 
 function fixture(t, fault) {
-  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-preinstall-failure-')));
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_RECOVERY_TEST_TMPDIR || os.tmpdir(),'upgrade-preinstall-failure-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const skillsDir=path.join(root,'.claude/skills'),tempDir=path.join(root,'new-package');
   const packageRoot=path.join(root,'installed-package');
@@ -38,7 +42,7 @@ function fixture(t, fault) {
   for (const [owner,schema] of [['comm-bridge','c4-schema.js'],['scheduler','schema.js'],['web-console','schema.js']]) {
     const dest=path.join(skillsDir,owner);fs.mkdirSync(path.join(dest,'scripts'),{recursive:true});
     fs.writeFileSync(path.join(dest,'package.json'),'{"type":"module"}');
-    fs.symlinkSync(path.resolve('skills',owner,'node_modules'),path.join(dest,'node_modules'));
+    dependencyDirectory(path.resolve('skills',owner,'node_modules'),path.join(dest,'node_modules'));
     fs.writeFileSync(path.join(dest,'scripts',schema),`export const supportsNewDatabase=true;export const TABLES={preserved:['value']};export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();return {version:0,empty:false,extensions:{tables:[],columns:[]}};}`);
   fs.writeFileSync(path.join(dest,'scripts/sqlite-schema.js'),'export {}; // pre-chain compatibility fixture');
   }

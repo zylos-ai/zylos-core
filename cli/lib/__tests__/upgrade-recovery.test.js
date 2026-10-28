@@ -22,6 +22,10 @@ const test = (name, options, fn) => nativeTest(name, {
 }, typeof options === 'function' ? options : fn);
 const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'));
 const currentVersions=[C4_VERSION,SCHEDULER_VERSION,WEB_VERSION];
+function dependencyDirectory(source, destination) {
+ fs.mkdirSync(destination,{recursive:true});
+ for(const name of fs.readdirSync(source))fs.symlinkSync(path.join(source,name),path.join(destination,name));
+}
 function interceptSync(check) {
  const sync=fs.fsyncSync;
  fs.fsyncSync=fd=>{check(fd);return sync(fd);};
@@ -43,7 +47,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dst));
  const m=require(path.join(stable,'maintenance.cjs')),r=require(path.join(stable,'recovery.cjs'));
  const skillsDir=path.join(root,'.claude/skills');
- for(const item of CORE_DATABASES){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');fs.symlinkSync(path.resolve('skills/comm-bridge/node_modules'),path.join(owner,'node_modules'));
+ for(const item of CORE_DATABASES){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');dependencyDirectory(path.resolve('skills/comm-bridge/node_modules'),path.join(owner,'node_modules'));
   fs.copyFileSync(path.resolve('skills',item.owner,item.schema),path.join(owner,item.schema));
   const migration=item.owner==='comm-bridge'?'c4-migrations.js':'migrations.js';
   fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
@@ -68,12 +72,13 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  const snapshotResult=snapshot({zylosDir:root,transactionId:'tx',formatVersion}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
- const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner)),dependencies:{kind:'symlink',target:fs.readlinkSync(path.join(skillsDir,item.owner,'node_modules'))}}));
+ const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner)),dependencies:{kind:'directory',sha256:m.treeHash(path.join(skillsDir,item.owner,'node_modules'),{excludeNodeModules:false,includeModes:true})}}));
  for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,filter:p=>!p.split(path.sep).includes('node_modules')});
+ for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name,'node_modules'),path.join(dir,'code/dependencies',e.name),{recursive:true,verbatimSymlinks:true});
  // Match saveProtectedCode: the disposable code root is private.
  fs.chmodSync(path.join(dir,'code'),0o700);
  const packageJson=path.join(root,'package.json');fs.writeFileSync(packageJson,'{}');const originalCli=path.join(root,'baseline-cli');fs.mkdirSync(originalCli,{mode:0o700});
- const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshotResult.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
+ const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',firstTakeover:!dashboard,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshotResult.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
  // Package restoration has already completed in this database recovery fixture;
  // dedicated package tests exercise the installer and preservation failures.
  const originalArchive=path.join(dir,'original.tgz');fs.writeFileSync(originalArchive,'retained fixture package',{mode:0o600});
@@ -116,15 +121,17 @@ for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects $
  assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),before);
 });
 
-for(const failure of [null,'thresholds','ensure','state'])test(`closed writer isolation survives publication until prerequisites ${failure?'fail at '+failure:'succeed'}`,async t=>{
+for(const failure of [null,'thresholds','ensure','state'])test(`closed writer access follows hooks completion when prerequisites ${failure?'fail at '+failure:'succeed'}`,async t=>{
  const f=await fixture(t);
  const cutoff={formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'};
  f.m.update(f.dir,f.j,{phase:'compensation_closed',compensationCutoff:cutoff,postCutoff:{items:{hooks:{state:'pending'}}},dashboardInstall:null});
- f.m.update(f.dir,f.j,{postCutoff:{items:{hooks:{state:'done'}}}});
  const stable=path.join(f.root,'.zylos/upgrade/maintenance.cjs');
  const before=fs.readFileSync(stable);
  const blocked=()=>assert.throws(()=>require(stable).assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});
  blocked();
+ f.m.update(f.dir,f.j,{postCutoff:{items:{hooks:{state:'done'}}}});
+ const available=()=>assert.doesNotThrow(()=>require(stable).assertCoreDatabaseAvailable(f.root));
+ available();
  if(failure==='state')fs.mkdirSync(path.join(f.root,'memory/state.md'),{recursive:true});
  const {completeUpgradeFinalization}=await import('../self-upgrade.js');
  const ctx={zylosDir:f.root,transactionDir:f.dir,transactionId:'tx',journal:f.j,maintenance:f.m,preInstallProtection:true,
@@ -132,20 +139,20 @@ for(const failure of [null,'thresholds','ensure','state'])test(`closed writer is
    budget:{check(){},remaining:()=>100000,deadlineAt:Date.now()+100000}};
  let started=0;
  const result=await completeUpgradeFinalization(ctx,{
-   updateConfig:()=>{blocked();if(failure==='thresholds')throw Error('threshold failure');},
-   ensureMemoryMigration:()=>{blocked();if(failure==='ensure')throw Error('ensure failure');},
-   commitBaselines:()=>{blocked();return {status:'done'};},
+   updateConfig:()=>{available();if(failure==='thresholds')throw Error('threshold failure');},
+   ensureMemoryMigration:()=>{available();if(failure==='ensure')throw Error('ensure failure');},
+   commitBaselines:()=>{available();return {status:'done'};},
    startServices:()=>{assert.doesNotThrow(()=>require(stable).assertCoreDatabaseAvailable(f.root));started++;return {status:'done'};},
    verifyServices:()=>({status:'done'}),dashboardOwner:{verifyDashboard:()=>({state:'ready',errors:[]})},
    readMode:()=>({mode:'single',keyPresent:true}),readTransition:()=>null,restart:()=>({ok:true}),audit:()=>[],protectedSuccess:()=>{}
  });
  assert.equal(result.success,!failure,JSON.stringify(result));
  assert.equal(started,failure?0:1);
- if(failure){blocked();assert.deepEqual(fs.readFileSync(stable),before);}
+ if(failure){available();assert.deepEqual(fs.readFileSync(stable),before);}
  else {
    assert.doesNotThrow(()=>require(stable).assertCoreDatabaseAvailable(f.root));
    f.m.update(f.dir,f.j,{phase:'recovery_required',resumePhase:'compensation_closed'});
-   blocked();
+   available();
  }
 });
 
@@ -276,7 +283,7 @@ test('A12/A14/A15: complete compensation restores old code/data, preserves rescu
  const original=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(result.stage,'restored_complete');assert.ok(!fs.existsSync(f.db('scheduler/scheduler.db')));assert.ok(!fs.existsSync(f.db('comm-bridge/c4.db-wal')));
  const archived=path.join(f.root,'.backup/self-upgrade/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
 });
-for(const dashboard of [false,true])test(`format 2 compensation ${dashboard?'restores backed up Dashboard':'preserves Dashboard created after a missing snapshot'}`,async t=>{
+for(const dashboard of [false,true])test(`format 2 compensation ${dashboard?'restores backed up Dashboard':'refuses unexpected Dashboard created after a missing snapshot'}`,async t=>{
  const f=await fixture(t,{formatVersion:2,dashboard});
  assert.equal(f.snapshot.manifest.formatVersion,2);assert.equal(f.snapshot.manifest.databases.length,4);
  const file=f.db('components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});
@@ -288,9 +295,16 @@ for(const dashboard of [false,true])test(`format 2 compensation ${dashboard?'res
  const before=[file,file+'-wal',file+'-shm'].map(p=>fs.readFileSync(p));
  change(f);
  const result=f.r.resume(f.dir);
+ if(!dashboard){
+  assert.equal(result.recovery_required,true,JSON.stringify(result));
+  assert.match(result.error,/Expected missing database exists/);
+  assert.deepEqual([file,file+'-wal',file+'-shm'].map(p=>fs.readFileSync(p)),before);
+  assert.equal(f.load().dbRestore?.['components/dashboard/dashboard.db'],undefined);
+  assert.deepEqual(f.calls,['stop','stop']);
+  return;
+ }
  assert.equal(result.stage,'restored_complete',JSON.stringify(result));assert.equal(result.recovery_required,false);
  if(dashboard){assert.deepEqual(fs.readFileSync(file),original);assert.equal(fs.existsSync(file+'-wal'),false);assert.equal(fs.existsSync(file+'-shm'),false);assert.equal(f.load().dbRestore['components/dashboard/dashboard.db'].complete,true);}
- else {assert.deepEqual([file,file+'-wal',file+'-shm'].map(p=>fs.readFileSync(p)),before);assert.equal(f.load().dbRestore?.['components/dashboard/dashboard.db'],undefined);}
  assert.deepEqual(f.calls,['stop','start','verify']);
 });
 test('M23 Dashboard controlled migration rejects an owner still needing migration', async t => {

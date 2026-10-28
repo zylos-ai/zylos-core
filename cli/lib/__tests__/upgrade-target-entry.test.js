@@ -32,19 +32,45 @@ test('target checks reject old sources and standalone Dashboard before touching 
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
 });
 
-test('prechecks derive first takeover from validated installed source and rehearse before transaction creation', t => {
-  const input = fixture(t);
+test('0.9.4 prechecks derive first takeover from deployment state and rehearse before transaction creation', t => {
+  const input = fixture(t,'0.9.4');
   const calls = [];
   const ctx = inspectUpgradeSource(input, {
-    probe(root, target, options) {calls.push('probe'); assert.equal(options.firstTakeover, true); return {databases:[{},{},{}], needsMigration:true};},
+    probe(root, target, options) {
+      calls.push('probe');assert.equal(options.firstTakeover,true);
+      const marker=path.join(root,'.claude/skills/dashboard/.zylos/core-managed.json');
+      fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'{}');
+      return {databases:[{},{},{}],needsMigration:true};
+    },
     preflight(root, options) {calls.push('preflight'); assert.equal(options.firstTakeover, true);},
     rehearse(root, target, options) {calls.push('rehearse'); assert.equal(options.driverRoot, path.join(input.zylosDir, '.claude/skills'));}
   });
   assert.deepEqual(calls, ['probe', 'preflight', 'rehearse']);
   assert.equal(ctx.snapshotFormatVersion, 2);
+  assert.equal(ctx.firstTakeover,true);
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
   input.fromVersion = '1.0.0';
   assert.throws(() => inspectUpgradeSource(input), {code:'INVALID_UPGRADE_HANDOFF'});
+});
+
+test('existing Dashboard takeover marker selects all four owners regardless of source version',t=>{
+  const input=fixture(t),marker=path.join(input.zylosDir,'.claude/skills/dashboard/.zylos/core-managed.json');
+  fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'{}');
+  const ctx=inspectUpgradeSource(input,{probe(root,target,options){assert.equal(options.firstTakeover,false);return {databases:[{},{},{},{}],needsMigration:false};},preflight(root,options){assert.equal(options.firstTakeover,false);}});
+  assert.equal(ctx.firstTakeover,false);
+  fs.unlinkSync(marker);fs.symlinkSync('missing',marker);
+  assert.throws(()=>inspectUpgradeSource(input),{code:'DASHBOARD_TAKEOVER_INVALID'});
+  assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
+});
+
+for(const kind of ['file','symlink','dangling'])test(`T09 rejects ${kind} skill dependencies before probes or transaction writes`,t=>{
+  const input=fixture(t),declared=path.join(input.tempDir,'skills/comm-bridge'),modules=path.join(input.zylosDir,'.claude/skills/comm-bridge/node_modules');
+  fs.mkdirSync(declared,{recursive:true});fs.mkdirSync(path.dirname(modules),{recursive:true});
+  if(kind==='file')fs.writeFileSync(modules,'invalid');
+  else {const target=path.join(input.zylosDir,'dependency-target');if(kind==='symlink')fs.mkdirSync(target);fs.symlinkSync(target,modules);}
+  assert.throws(()=>inspectUpgradeSource(input,{probe(){assert.fail('probe must not run');}}),{code:'INVALID_CORE_DEPENDENCIES'});
+  assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
+  assert.equal(fs.existsSync(path.join(input.zylosDir,'.zylos')),false);
 });
 
 function pipeline(input, failAt) {
@@ -134,7 +160,9 @@ test('downloaded precheck uses real installed SQLite without target dependencies
     fs.cpSync(origin,path.join(input.tempDir,'skills',name),{recursive:true,filter});
     fs.cpSync(origin,path.join(input.zylosDir,'.claude/skills',name),{recursive:true,filter});
   }
-  fs.symlinkSync(path.join(installed,'node_modules'),path.join(input.zylosDir,'.claude/skills/comm-bridge/node_modules'));
+  const modules=path.join(input.zylosDir,'.claude/skills/comm-bridge/node_modules');
+  fs.mkdirSync(modules);
+  for(const name of fs.readdirSync(path.join(installed,'node_modules')))fs.symlinkSync(path.join(installed,'node_modules',name),path.join(modules,name));
   const file=path.join(input.zylosDir,'comm-bridge/c4.db');
   fs.mkdirSync(path.dirname(file),{recursive:true});
   const db=new Database(file);

@@ -63,7 +63,7 @@ function originalVerified(dir, j) {
       action: 'offline-preflight',
       zylosDir: j.zylosDir,
       schemaRoot: j.skillsDir,
-      firstTakeover: j.from === '0.9.3',
+      firstTakeover: j.firstTakeover === true,
       expectedDatabases: expected,
       formatVersion: m.originalDatabasePaths(j).length === 4 ? 2 : 1
     })], {
@@ -172,17 +172,17 @@ function restoreCore(dir, j) {
   j.codeRestore ||= {};
   const dependencyState=(entry,skill) => {
     const saved=entry.dependencies,modules=path.join(skill,'node_modules');
-    if(!saved || !['missing','directory','symlink'].includes(saved.kind))throw Error('missing original skill dependency evidence: '+entry.name);
+    if(!saved || !['missing','directory'].includes(saved.kind))throw Error('missing original skill dependency evidence: '+entry.name);
     const backup=path.join(dir,'code','dependencies',entry.name);
     if(saved.kind==='directory') {
       if(typeof saved.sha256!=='string' || !/^[a-f0-9]{64}$/.test(saved.sha256))throw Error('invalid original skill dependency hash');
       m.privatePath(backup,{directory:true});
       if(fs.realpathSync(backup)!==path.resolve(backup))throw Error('redirected skill dependency backup: '+entry.name);
       if(m.treeHash(backup,{excludeNodeModules:false,includeModes:true})!==saved.sha256)throw Error('skill dependency backup changed: '+entry.name);
-    } else if(saved.kind==='symlink' && typeof saved.target!=='string')throw Error('invalid original skill dependency link');
+    }
     let stat;
     try {stat=fs.lstatSync(modules);} catch(error) {if(error.code!=='ENOENT')throw error;}
-    const matches=saved.kind==='missing' ? !stat : saved.kind==='symlink' ? !!stat?.isSymbolicLink()&&fs.readlinkSync(modules)===saved.target : !!stat?.isDirectory()&&!stat.isSymbolicLink()&&m.treeHash(modules,{excludeNodeModules:false,includeModes:true})===saved.sha256;
+    const matches=saved.kind==='missing' ? !stat : !!stat?.isDirectory()&&!stat.isSymbolicLink()&&m.treeHash(modules,{excludeNodeModules:false,includeModes:true})===saved.sha256;
     return {saved,modules,backup,matches};
   };
   for (const e of j.coreManifest) {
@@ -200,7 +200,6 @@ function restoreCore(dir, j) {
       if(!dependencies.matches) {
         fs.rmSync(dependencies.modules,{recursive:true,force:true});
         if(dependencies.saved.kind==='directory')fs.cpSync(dependencies.backup,dependencies.modules,{recursive:true,verbatimSymlinks:true});
-        else if(dependencies.saved.kind==='symlink')fs.symlinkSync(dependencies.saved.target,dependencies.modules);
         m.fsyncTree(p);
         if(!dependencyState(e,p).matches)throw Error('skill dependency restore verification failed: '+e.name);
       }
@@ -331,7 +330,7 @@ function validateReady(dir, j) {
     m.verifyServices(j);
     if (j.databaseMode !== 'unchanged') {
       // Normal startup may create missing DBs/write data: use current compatibility, never old hashes.
-      const checked = m.preflight(dir, j, snapshot, {liveRestored:true});
+      const checked = m.preflight(dir, j, null);
       if (checked.success === false) throw Error(checked.error || 'started code/data incompatible');
     }
     verified = true;

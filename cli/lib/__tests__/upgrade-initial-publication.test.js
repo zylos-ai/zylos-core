@@ -130,11 +130,13 @@ test('data-ready refreshes context while retaining installing isolation', t => {
   assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);
 });
 
-for (const from of ['0.9.3', '1.0.0']) test(`data-ready derives first takeover from durable source ${from}`, t => {
+for (const from of ['0.9.3', '1.0.0']) for (const firstTakeover of [false,true]) test(`data-ready uses persisted takeover=${firstTakeover} from source ${from}`, t => {
   const f = fixture(t);
   f.ctx.from = from;
-  f.ctx.firstTakeover = from !== '0.9.3';
+  f.ctx.firstTakeover = firstTakeover;
   beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir});
+  assert.equal(f.ctx.journal.firstTakeover,firstTakeover);
+  f.ctx.firstTakeover = !firstTakeover;
   attachSnapshot(f);
   const active = maintenanceFor(f.ctx), preflight = active.preflight;
   active.preflight = () => ({success:true});
@@ -144,7 +146,7 @@ for (const from of ['0.9.3', '1.0.0']) test(`data-ready derives first takeover f
   try {
     protectedDataReady(f.ctx, {migrate:()=>{}, verify: payload => {
       checked = true;
-      assert.equal(payload.firstTakeover, from === '0.9.3');
+      assert.equal(payload.firstTakeover, firstTakeover);
       assert.equal(payload.requireCurrent, true);
       return {databases:[]};
     }});

@@ -260,7 +260,7 @@ test('resume confirms process exit, isolates writers, and passes persistent cont
     return {success:true};
   }});
   assert.equal(result.ok,true);assert.equal(result.data.next,null);
-  assert.deepEqual(f.calls,['lock','quiesce','update','marker','stop','finalize','update','unlock']);
+  assert.deepEqual(f.calls,['lock','quiesce','marker','stop','finalize','update','unlock']);
 });
 
 test('terminal execution only finishes cleanup and does not quiesce or resume services',async t=>{
@@ -269,11 +269,10 @@ test('terminal execution only finishes cleanup and does not quiesce or resume se
   assert.deepEqual(f.calls,['lock','cleanup','unlock']);
 });
 
-for(const corrupt of [false,true]) test(`resume revokes a previously published stable reader ${corrupt?'even when publication materials are corrupt':'before stopping writers'}`,async t=>{
+for(const corrupt of [false,true]) test(`resume preserves default reader access ${corrupt?'when publication materials are corrupt':'while stopping writers'}`,async t=>{
   const f=fixture(t),stable=path.join(f.root,'.zylos/upgrade/maintenance.cjs');
   fs.mkdirSync(path.dirname(stable),{recursive:true});
-  fs.writeFileSync(stable,fs.readFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),'utf8')+
-    '\nmodule.exports.assertCoreDatabaseAvailable = root => assertCoreDatabaseAvailable(root, {postCutoffReady:true});\n');
+  fs.writeFileSync(stable,fs.readFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),'utf8'));
   const preparation=preparePostCutoff({transactionDir:f.dir,zylosDir:f.root,homeDir:f.root,runtime:'claude',
     replacements:[{path:'CLAUDE.md',content:'published'}]});
   f.journal={...f.journal,postCutoff:{...preparation,items:{hooks:{...preparation.items.hooks,state:'done'}}}};
@@ -286,10 +285,10 @@ for(const corrupt of [false,true]) test(`resume revokes a previously published s
   const update=f.m.update;
   f.m.update=(...args)=>{update(...args);save();};
   let stopped=0;
-  f.m.stop=()=>{stopped++;assert.throws(()=>reader.assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});};
+  f.m.stop=()=>{stopped++;assert.doesNotThrow(()=>reader.assertCoreDatabaseAvailable(f.root));};
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
-    assert.equal(f.journal.phase,'recovery_required');
-    assert.throws(()=>reader.assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});
+    assert.equal(f.journal.phase,'compensation_closed');
+    assert.doesNotThrow(()=>reader.assertCoreDatabaseAvailable(f.root));
     if(corrupt) {
       const publication=await publishPostCutoff(ctx,{persist:(j,changes)=>f.m.update(f.dir,j,changes)});
       assert.equal(publication.ok,false);
@@ -303,7 +302,7 @@ for(const corrupt of [false,true]) test(`resume revokes a previously published s
     assert.equal(Object.hasOwn(f.journal,'finalizeError'),false);
   }
   assert.equal(stopped,1,'existing writers must stop even when publication materials are corrupt');
-  assert.throws(()=>reader.assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});
+  assert.doesNotThrow(()=>reader.assertCoreDatabaseAvailable(f.root));
 });
 
 test('fresh Dashboard observation preserves errors supplied by the shared finalizer',async t=>{
@@ -350,6 +349,6 @@ test('resume does not attribute unrelated target mutations to the finalizer',asy
   }});
   assert.equal(result.ok,false);
   assert.equal(result.error.persisted.some(field=>/^t\d+(?:-\d+)?$/.test(field)),false);
-  assert.equal(result.error.persisted.includes('journal.phase'),true);
+  assert.equal(result.error.persisted.includes('journal.phase'),false);
   assert.equal(result.error.persisted.includes('journal'),false);
 });

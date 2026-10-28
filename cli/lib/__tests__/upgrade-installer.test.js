@@ -21,10 +21,10 @@ function fixture(t,body){
  return {root,dir,j,npmCli,helper,ctx:{transactionDir:dir,journal:j},read:()=>m.read(path.join(dir,'journal.json'))};
 }
 test('protected npm runs directly under original Node with durable started evidence',t=>{
- const f=fixture(t,`const fs=require('node:fs');const dir=process.argv[2];const j=JSON.parse(fs.readFileSync(dir+'/journal.json'));if(!j.installerStarted||!Number.isSafeInteger(j.installerPid)||j.installerPid<=1||j.installerIdentity.pid!==j.installerPid||j.installerToken!==process.env.ZYLOS_UPGRADE_INSTALLER_TOKEN||process.env.ZYLOS_PROTECTED_INSTALL!=='1'||process.env.ZYLOS_SKIP_POSTINSTALL!=='1'||process.env.ZYLOS_UPGRADE_FROM_VERSION!=='0.9.3')process.exit(9);process.stdout.write(JSON.stringify({node:process.execPath,args:process.argv.slice(2),stage:j.installerStage,ci:process.env.CI}));`);
+ const f=fixture(t,`const fs=require('node:fs');const dir=process.argv[2];const j=JSON.parse(fs.readFileSync(dir+'/journal.json'));if(!j.installerStarted||!Number.isSafeInteger(j.installerPid)||j.installerPid<=1||j.installerIdentity.pid!==j.installerPid||Object.hasOwn(j,'installerToken')||process.env.ZYLOS_UPGRADE_INSTALLER_TOKEN!==undefined||process.env.ZYLOS_PROTECTED_INSTALL!=='1'||process.env.ZYLOS_SKIP_POSTINSTALL!=='1'||process.env.ZYLOS_UPGRADE_FROM_VERSION!=='0.9.3')process.exit(9);process.stdout.write(JSON.stringify({node:process.execPath,args:process.argv.slice(2),stage:j.installerStage,ci:process.env.CI}));`);
  const output=runInstaller(f.ctx,{stage:'pack',npmCli:f.npmCli,args:[f.dir],cwd:f.root});const seen=JSON.parse(output);assert.equal(seen.node,process.execPath);assert.equal(seen.stage,'pack');assert.equal(seen.ci,process.env.CI);assert.deepEqual(seen.args,[f.dir]);assert.equal(f.read().installerExitConfirmed,true);assert.equal(f.read().installerExitUnconfirmed,false);
  runInstaller(f.ctx,{stage:'install',npmCli:f.npmCli,args:[f.dir],cwd:f.root});assert.equal(f.read().installerStage,'install');
- const restored=JSON.parse(runInstaller(f.ctx,{stage:'restore-original-package',npmCli:f.npmCli,args:[f.dir],cwd:f.root}));assert.equal(restored.ci,'1');
+ const restored=JSON.parse(runInstaller(f.ctx,{stage:'restore-original-package',npmCli:f.npmCli,args:[f.dir],cwd:f.root}));assert.equal(restored.ci,process.env.CI);
 });
 for(const exitCode of [0,2])test(`all npm exits quiesce descendants before returning (exit=${exitCode})`,t=>{
  const f=fixture(t,`const cp=require('node:child_process');const child=cp.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();process.stdout.write('fixture.tgz\\n');process.exit(${exitCode});`);
@@ -54,6 +54,24 @@ test('interruption before launcher identity publication stays fail closed withou
  assert.notEqual(f.read().installerExitConfirmed,true);
 });
 
+test('dead installer leader with surviving members requires manual recovery without signalling them',async t=>{
+ const f=fixture(t,`require('node:fs').writeFileSync(process.argv[2],String(process.pid));setInterval(()=>{},1000);`),ready=path.join(f.root,'started'),launcher=path.join(f.root,'controller.mjs');
+ fs.writeFileSync(launcher,`import {createRequire} from 'node:module';const m=createRequire(import.meta.url)(${JSON.stringify(path.resolve('cli/lib/upgrade-maintenance.cjs'))});m.runInstaller(${JSON.stringify(f.dir)},${JSON.stringify(f.j)},{stage:'install',npmCli:${JSON.stringify(f.npmCli)},args:[${JSON.stringify(ready)}],cwd:${JSON.stringify(f.root)}});`);
+ const controller=spawn(process.execPath,[launcher],{stdio:'ignore'});
+ t.after(()=>{try{controller.kill('SIGKILL');}catch{}});
+ const deadline=Date.now()+7000;
+ while(!fs.existsSync(ready)){if(Date.now()>deadline)throw Error('npm did not start');await new Promise(resolve=>setTimeout(resolve,20));}
+ const saved=f.read(),npmPid=Number(fs.readFileSync(ready,'utf8'));
+ const exited=new Promise(resolve=>controller.once('exit',resolve));controller.kill('SIGKILL');await exited;
+ process.kill(saved.installerPid,'SIGKILL');
+ while(!m.identity(saved.installerPid).absent && Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20));
+ const result=f.helper.quiesce(f.dir,saved,{terminate:true});
+ assert.equal(result.confirmed,false);assert.match(result.error,/manual recovery/);
+ assert.doesNotThrow(()=>process.kill(npmPid,0));
+ assert.throws(()=>m.verifyFinalizerExit(f.dir,saved),/manual recovery/);
+ assert.notEqual(f.read().installerExitConfirmed,true);
+});
+
 test('pre-descriptor exit verification rejects changed frozen material',t=>{
  const f=fixture(t,'// not launched');fs.unlinkSync(path.join(f.dir,'descriptor.json'));
  m.update(f.dir,f.j,{installerStarted:true,installerPid:null,installerExitConfirmed:false});
@@ -65,7 +83,7 @@ test('installer PID reuse is rejected before signalling an unrelated group',t=>{
  const f=fixture(t,'// not launched');
  const unrelated=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});
  t.after(()=>{try{process.kill(-unrelated.pid,'SIGKILL');}catch{}});
- const j={installerStarted:true,installerPid:unrelated.pid,installerIdentity:{pid:unrelated.pid,start:'wrong',boot:'wrong'},installerToken:'a'.repeat(48)};
+ const j={installerStarted:true,installerPid:unrelated.pid,installerIdentity:{pid:unrelated.pid,start:'wrong',boot:'wrong'}};
  assert.equal(f.helper.quiesce(f.dir,j,{kind:'installer',terminate:true}).confirmed,false);
  assert.equal(f.helper.quiesce(f.dir,{...j,installerIdentity:null},{kind:'installer',terminate:true}).confirmed,false);
  assert.doesNotThrow(()=>process.kill(unrelated.pid,0));

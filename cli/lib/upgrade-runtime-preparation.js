@@ -20,6 +20,10 @@ const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
 export async function prepareUpgradeRuntimeClis(ctx, {
   prepare, exists = commandExists, install = { claude: installClaude, codex: installCodex } } = {}) {
+  const config = readConfigStrict(path.join(ctx.zylosDir, '.zylos/config.json'));
+  if (config.state === 'error') throw config.error;
+  const runtime = config.state === 'ok' ? config.config.runtime || 'claude' : 'claude';
+  if (!['claude', 'codex'].includes(runtime)) throw Error('Unsupported preparation runtime');
   const prepareClis = prepare || (await import('../commands/init.js')).prepareInitRuntimeClis;
   const result = await prepareClis({
     exists,
@@ -27,11 +31,12 @@ export async function prepareUpgradeRuntimeClis(ctx, {
       return install[runtime]();
     }])),
   });
-  if (!result || !Array.isArray(result.failed) || result.failed.length ||
-      !['claude.cli', 'codex.cli'].every(item => result.completed?.includes(item))) {
+  if (!result || !Array.isArray(result.failed) || !Array.isArray(result.completed) ||
+      result.failed.some(item => item.item === `${runtime}.cli`) || !result.completed.includes(`${runtime}.cli`)) {
     throw Object.assign(Error(`Runtime CLI preparation incomplete: ${result?.failed?.map(item => `${item.item}: ${item.message}`).join('; ') || 'invalid preparation result'}`),
       { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
   }
+  result.warnings = result.failed.map(item => `Optional runtime CLI ${item.item}: ${item.message}`);
   return result;
 }
 

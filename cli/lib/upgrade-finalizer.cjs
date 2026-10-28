@@ -28,10 +28,7 @@ function quiesce(_dir, j, {terminate = false, kind = 'installer'} = {}) {
       const m = require('./maintenance.cjs');
       const observed = m.identity(pid), saved = j.installerIdentity;
       const same = saved.pid === pid && !observed.unsupported && !observed.absent && observed.start === saved.start && observed.boot === saved.boot;
-      const token = j.installerToken;
-      const inherited = !same && process.platform === 'linux' && typeof token === 'string' && /^[a-f0-9]{48}$/.test(token) && current.every(row =>
-        fs.readFileSync('/proc/' + row[1] + '/environ').includes(Buffer.from('ZYLOS_UPGRADE_INSTALLER_TOKEN=' + token + '\0')));
-      if (!same && !inherited) return {confirmed:false,error:'installer process identity changed or cannot be verified'};
+      if (!same) return {confirmed:false,error:'installer process identity changed or cannot be verified; manual recovery required'};
     } catch (error) { return {confirmed:false,error:error.message}; }
   }
   if (terminate) {
@@ -49,10 +46,10 @@ module.exports = {members,quiesce};
 if (require.main === module && process.argv[2] === 'installer') {
   try {
     const m = require('./maintenance.cjs');
-    const dir = path.resolve(process.argv[3]), token = process.argv[4];
+    const dir = path.resolve(process.argv[3]);
     const j = m.read(path.join(dir, 'journal.json'));
     m.validateRecoveryFiles(dir, j, ['finalizer.cjs', 'maintenance.cjs']);
-    if (!j.installerStarted || j.installerPid !== null || token !== j.installerToken) throw Error('installer launch identity rejected');
+    if (!j.installerStarted || j.installerPid !== null) throw Error('installer launch identity rejected');
     const options = JSON.parse(fs.readFileSync(0, 'utf8'));
     m.privatePath(options.npmCli);
     if (!path.isAbsolute(options.npmCli) || path.basename(options.npmCli) !== 'npm-cli.js') throw Error('untrusted npm CLI');

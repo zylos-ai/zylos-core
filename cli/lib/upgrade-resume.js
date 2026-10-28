@@ -87,9 +87,6 @@ export async function resumeFinalize(root,{status=false}={},deps={}) {
     before=structuredClone(j);
     if(j.phase==='upgrade_complete') return {ok:true,data:finalizeStatus(j),cleanup:m.finishTerminal(candidate.dir,j)};
     (deps.quiesce ?? m.verifyFinalizerExit)(candidate.dir,j,m);
-    // A previous finalizer may have released the stable reader before crashing.
-    // Revoke that release durably before stopping or rechecking any writers.
-    if(j.phase==='compensation_closed') m.update(candidate.dir,j,{phase:'recovery_required',resumePhase:'compensation_closed'});
     m.marker(root,candidate.dir,j);
     m.stop(j);
     isolated=true;

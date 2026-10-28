@@ -143,7 +143,7 @@ export async function execute(input) {
     const state=await owner.inspectSchema(db);
     if(!state||!Number.isInteger(state.targetVersion)||state.targetVersion<0||(!absent&&(!Number.isInteger(state.currentVersion)||state.currentVersion<0))||typeof state.needsMigration!=='boolean') throw Error('Invalid dashboard schema inspection');
     if(state.currentVersion>state.targetVersion) throw Error(`SCHEMA_TOO_NEW dashboard: schema version ${state.currentVersion} exceeds supported ${state.targetVersion}`);
-    if(input.requireCurrent && (absent||state.needsMigration)) throw Error('Database migrations remain before data-ready');
+    if(input.requireCurrent && !absent && state.needsMigration) throw Error('Database migrations remain before data-ready');
     return state;
   };
   const inspectDashboardFile=async (owner,file,absent) => {
@@ -184,8 +184,8 @@ export async function execute(input) {
   }
   if(input.action==='upgrade-migrate') {
     const transaction=authorizeMigration(input);
-    if(input.firstTakeover===true && transaction.from!=='0.9.3') throw Error('first takeover requires original version 0.9.3');
-    input={...input,firstTakeover:transaction.from==='0.9.3'};
+    if(typeof transaction.firstTakeover!=='boolean')throw Error('controlled migration requires persisted Dashboard takeover state');
+    input={...input,firstTakeover:transaction.firstTakeover};
   }
   const engine=['offline-preflight','upgrade-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;
   if(input.action==='rehearse') {
@@ -239,19 +239,18 @@ export async function execute(input) {
     return mod.inspectSchema(db,{...options,strict:true});
   };
   const rows=[];
+  const standaloneSnapshot=input.action==='offline-preflight' && input.manifest?.status==='complete' && input.requireCurrent!==true;
   for(const item of databases) {
     if(skipDashboard(item) && ['offline-preflight','upgrade-migrate'].includes(input.action)) {
       // First takeover protects the legacy bytes without imposing the new owner contract.
       const source=path.join(input.zylosDir,item.source),absent=missing(source);
-      const snapshotRow=input.manifest?.databases?.find(row=>row.source===item.source);
-      if(input.action==='offline-preflight' && (input.standaloneRestored===true || input.liveRestored===true) && snapshotRow?.status==='missing') {rows.push({...snapshotRow});continue;}
-      const expected=input.action==='offline-preflight' && (input.requireCurrent || input.liveRestored) ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(row=>row.source===item.source);
+      const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(row=>row.source===item.source);
       if(input.action==='offline-preflight') {
         if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
         if(expected?.status==='missing' && !absent) throw Error(`Expected missing database exists: ${source}`);
         if(!absent) {
           const Database=driver(input);
-          if(input.standaloneRestored===true) {
+          if(standaloneSnapshot) {
             if(expected?.status!=='backed_up') throw Error('Missing standalone restored snapshot evidence');
             withStandaloneReadonly(Database,source,expected.sha256,inspectConnection);
           } else {
@@ -263,7 +262,7 @@ export async function execute(input) {
       rows.push({source:item.source,status:absent?'missing':'present',ownerSkipped:true});
       continue;
     }
-    const expected=input.action==='offline-preflight' && (input.requireCurrent || input.liveRestored) ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(r=>r.source===item.source);
+    const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(r=>r.source===item.source);
     const source=path.join(input.zylosDir,item.source);
     if(input.action==='verify') {
       if(!expected) throw new Error(`Missing manifest entry: ${item.source}`);
@@ -280,6 +279,7 @@ export async function execute(input) {
       authorizeMigration(input);
       const absent=missing(source), mod=await ownerSchema(input,item);
       if(item.owner==='dashboard') {
+        if(absent) {rows.push({source:item.source,status:'missing'});continue;}
         await inspectDashboardFile(mod,source,absent);
         fs.mkdirSync(path.dirname(source),{recursive:true});
         const Database=driver(input),db=new Database(source,{fileMustExist:!absent,timeout:5000});
@@ -303,15 +303,11 @@ export async function execute(input) {
       continue;
     }
     if(input.action==='offline-preflight' && item.owner==='dashboard') {
-      // A missing Dashboard was never protected by this transaction. Recovery
-      // must not inspect or reject a Dashboard subsequently created in place.
-      const snapshotRow=input.manifest?.databases?.find(row=>row.source===item.source);
-      if((input.standaloneRestored===true || input.liveRestored===true) && snapshotRow?.status==='missing') {rows.push({...snapshotRow});continue;}
       const absent=missing(source);
       if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
       if(expected?.status==='missing' && !absent) throw Error(`Expected missing database exists: ${source}`);
       const mod=await ownerSchema(input,item);
-      if(input.standaloneRestored===true && !absent) {
+      if(standaloneSnapshot && !absent) {
         if(expected?.status!=='backed_up') throw Error('Missing standalone restored snapshot evidence');
         withStandaloneReadonly(driver(input,item),source,expected.sha256,inspectConnection);
       }
@@ -340,7 +336,7 @@ export async function execute(input) {
     if(input.action==='offline-preflight') {
       const mod=await ownerSchema(input,item);
       let state;
-      if (input.standaloneRestored === true) {
+      if (standaloneSnapshot) {
         if (input.manifest?.status !== 'complete' || expected?.status !== 'backed_up' || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Missing standalone restored snapshot evidence');
         state = withStandaloneReadonly(Database, source, expected.sha256, db => {const layout=plan(db,mod); return {...inspectConnection(db),extensions:layout.extensions};});
       } else {

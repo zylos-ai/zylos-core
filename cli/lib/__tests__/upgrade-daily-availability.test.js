@@ -126,6 +126,18 @@ for(const phase of ['preparing','stopping','offline','installing','restoring','r
  for(const source of m.DB_PATHS)assert.equal(fs.existsSync(path.join(f.root,source)),false);
 });
 
+for(const phase of ['compensation_closed','recovery_required'])for(const hooks of ['done','pending','failed'])test(`default reader checks cutoff and hooks for ${phase}/${hooks}`,t=>{
+ const f=fixture(t);
+ Object.assign(f.j,{phase,resumePhase:'compensation_closed',postCutoff:{items:{hooks:{state:hooks}}},
+  compensationCutoff:{formatVersion:1,closed:true,transactionId:f.j.transactionId,snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-28T00:00:00.000Z',writer:'finalizer'}});
+ f.save();m.marker(f.root,f.dir,f.j);
+ assert.equal(m.discoverActive(f.root).blocked,hooks!=='done');
+ if(hooks==='done')assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));
+ else assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});
+ f.j.compensationCutoff.transactionId='other';f.save();
+ assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});
+});
+
 test('malformed active journal stays blocked while abandoned unmarked preparation permits daily use but rejects upgrade',async t=>{
  const f=fixture(t);f.j.phase='preparing';f.j.installationIntent=false;f.save();
  assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));

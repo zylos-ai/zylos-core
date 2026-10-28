@@ -336,7 +336,7 @@ function discover(root, {
 // The active marker is published before stopping writers and retained until
 // terminal cleanup. Daily checks read only its one referenced journal; old
 // backups and unrelated transaction damage cannot change availability.
-function discoverActive(root, {postCutoffReady = false} = {}) {
+function discoverActive(root) {
   if (!hasRecoveryMaterials(root)) return {marker:null, candidates:[], diagnostics:[], blocked:false};
   const candidates = [], diagnostics = [];
   let marker = null;
@@ -352,10 +352,10 @@ function discoverActive(root, {postCutoffReady = false} = {}) {
     blocked: diagnostics.length > 0 || candidates.some(({journal:j}) =>
       j.installerExitUnconfirmed || j.finalizerExitUnconfirmed ||
       TERMINAL.has(j.phase) && (j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed) ||
-      !READY.has(j.phase) && !(postCutoffReady && j.phase === 'compensation_closed' && classifyCutoff(j) === 'closed' && j.postCutoff?.items?.hooks?.state === 'done') && !terminalValid(j) && !provisionalAbortValid(j))};
+      !READY.has(j.phase) && !((j.phase === 'compensation_closed' || j.phase === 'recovery_required' && j.resumePhase === 'compensation_closed') && classifyCutoff(j) === 'closed' && j.postCutoff?.items?.hooks?.state === 'done') && !terminalValid(j) && !provisionalAbortValid(j))};
 }
-function assertCoreDatabaseAvailable(root, options) {
-  const d = discoverActive(root, options);
+function assertCoreDatabaseAvailable(root) {
+  const d = discoverActive(root);
   if (d.blocked) {
     const e = Error('core database maintenance: ' + (d.diagnostics.join('; ') || d.candidates.map(c => `${c.journal.transactionId}:${c.journal.phase}`).join('; ')));
     e.code = 'ZYLOS_MAINTENANCE';
@@ -801,18 +801,20 @@ function validateDescriptor(dir, j, d) {
   }
 
 }
-function preflight(dir, j, expected, {liveRestored = false} = {}) {
-  const original = expected && expected.status !== 'complete';
+function preflight(dir, j, expected) {
+  const restored = expected?.status === 'complete' && expected.databases.every(database =>
+    database.status === 'missing' || j.dbRestore?.[database.source]?.complete === true);
+  const presence = expected && !restored ? expected.databases.map(database => ({
+    source: database.source, status: database.status === 'missing' ? 'missing' : 'complete'
+  })) : undefined;
   return worker(dir, j, {
     action: 'offline-preflight',
     zylosDir: j.zylosDir,
     schemaRoot: j.skillsDir,
-    firstTakeover: j.from === '0.9.3',
-    manifest: original ? undefined : expected,
-    expectedDatabases: original ? expected.databases : undefined,
-    liveRestored,
-    formatVersion: originalDatabasePaths(j).length === 4 ? 2 : 1,
-    standaloneRestored: !liveRestored && j.installationIntent === true && ['installing', 'restoring', 'restored_data_ready', 'restored_verifying'].includes(j.phase) && expected?.status === 'complete' && expected.databases.every(database => database.source === DASHBOARD_DB && database.status === 'missing' || j.dbRestore?.[database.source]?.complete === true)
+    firstTakeover: j.firstTakeover === true,
+    manifest: restored ? expected : undefined,
+    expectedDatabases: presence,
+    formatVersion: originalDatabasePaths(j).length === 4 ? 2 : 1
   });
 }
 function renameIntent(dir, j, key, source, dest, expectedHash) {
@@ -894,12 +896,9 @@ function runInstaller(dir, j, {stage, npmCli, args, cwd, timeout = 180000}) {
   validateRecoveryFiles(dir, j);
   privatePath(npmCli);
   if (path.basename(npmCli) !== 'npm-cli.js' || !path.isAbsolute(npmCli)) throw Error('untrusted npm CLI');
-  const token = crypto.randomBytes(24).toString('hex');
-  update(dir, j, {installerStarted:true, installerStage:stage, installerPid:null, installerIdentity:null, installerToken:token, installerExitConfirmed:false, installerExitUnconfirmed:false});
-  // Source packages predate the protected-install flag; CI suppresses their
-  // postinstall only during restoration. Target npm keeps inherited CI.
-  const result = cp.spawnSync(j.nodePath, [path.join(dir, 'finalizer.cjs'), 'installer', dir, token], {cwd,
-    input:JSON.stringify({npmCli,args,timeout}), env:{...process.env, ...(stage==='restore-original-package' ? {CI:'1'} : {}), ZYLOS_PROTECTED_INSTALL:'1', ZYLOS_SKIP_POSTINSTALL:'1', ZYLOS_UPGRADE_FROM_VERSION:j.from, ZYLOS_UPGRADE_INSTALLER_TOKEN:token},
+  update(dir, j, {installerStarted:true, installerStage:stage, installerPid:null, installerIdentity:null, installerExitConfirmed:false, installerExitUnconfirmed:false});
+  const result = cp.spawnSync(j.nodePath, [path.join(dir, 'finalizer.cjs'), 'installer', dir], {cwd,
+    input:JSON.stringify({npmCli,args,timeout}), env:{...process.env, ZYLOS_PROTECTED_INSTALL:'1', ZYLOS_SKIP_POSTINSTALL:'1', ZYLOS_UPGRADE_FROM_VERSION:j.from},
     encoding:'utf8', stdio:['pipe','pipe','pipe'], detached:true, timeout:timeout+10000, killSignal:'SIGKILL', maxBuffer:4*1024*1024});
   Object.assign(j, read(path.join(dir, 'journal.json')));
   const confirmed = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:true, kind:'installer'});

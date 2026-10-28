@@ -788,24 +788,7 @@ async function installedDashboardOwner(ctx) {
 function refreshMaintenanceReader(ctx) {
   const m=maintenanceFor(ctx), j=m.transaction(ctx.zylosDir,ctx.transactionDir);
   if(!['compensation_closed','recovery_required'].includes(j.phase) || classifyCutoff(j)!=='closed' || j.postCutoff?.items?.hooks?.state!=='done') throw Error('Core publication is not ready for service access');
-  // Keep the per-transaction frozen controller untouched. Newly started owners
-  // need the target reader at the stable path to recognize the cutoff phase.
-  const stable=path.join(ctx.zylosDir,'.zylos/upgrade/maintenance.cjs');
-  m.privatePath(path.dirname(stable),{directory:true});
-  m.privatePath(stable);
-  const staging=stable+'.'+process.pid+'.'+Date.now()+'.staging';
-  // The initial frozen reader keeps closed transactions isolated. Publish this
-  // capability only after the mandatory tail prerequisites have succeeded.
-  const source=fs.readFileSync(path.join(import.meta.dirname,'upgrade-maintenance.cjs'),'utf8');
-  fs.writeFileSync(staging,source+'\nmodule.exports.assertCoreDatabaseAvailable = root => assertCoreDatabaseAvailable(root, {postCutoffReady:true});\n',{flag:'wx',mode:0o600});
-  fs.chmodSync(staging,0o600);
-  const fd=fs.openSync(staging,'r');
-  try {m.fsyncFd(fd);} finally {fs.closeSync(fd);}
-  fs.renameSync(staging,stable);
-  m.fsyncDir(path.dirname(stable));
-  if(j.phase==='recovery_required') m.update(ctx.transactionDir,j,{phase:'compensation_closed'});
   ctx.journal=j;
-  delete finalizerRequire.cache[stable];
 }
 
 export function readUpgradeModeStatus(zylosDir, {execute=execFileSync} = {}) {
@@ -1019,27 +1002,6 @@ function finalizationFailure(ctx, error, step = 5) {
     ...((error.next || guidance.next) ? {next:[error.next,guidance.next].filter(Boolean).join(' ')} : {})};
 }
 
-function needsDashboardTakeover(ctx) {
-  const target = path.join(ctx.tempDir, 'skills/dashboard');
-  try {
-    if (!fs.lstatSync(target).isDirectory()) throw Error('Target Dashboard must be a directory');
-  } catch (error) {
-    if (error.code === 'ENOENT') return false;
-    throw error;
-  }
-  const marker = path.join(ctx.journal.skillsDir, 'dashboard/.zylos/core-managed.json');
-  try {
-    if (!fs.lstatSync(marker).isFile()) throw Error('Dashboard core-managed marker must be a regular file');
-    fs.accessSync(marker, fs.constants.R_OK);
-    return false;
-  } catch (error) {
-    if (error.code === 'ENOENT') return true;
-    throw Object.assign(Error(`Cannot inspect Dashboard takeover marker: ${error.message}`), {
-      code: 'DASHBOARD_TAKEOVER_INVALID',
-    });
-  }
-}
-
 async function finalizeInstalledUpgrade(ctx, deps) {
   try {
     (deps.assertDashboardUninstalled || assertDashboardUninstalled)(ctx.zylosDir);
@@ -1050,13 +1012,13 @@ async function finalizeInstalledUpgrade(ctx, deps) {
       if (j.transactionId !== ctx.transactionId || j.installationIntent !== true || classifyCutoff(j) !== 'none' || j.phase !== 'installing') throw Error('invalid initial finalizer transaction');
       m.validateOriginalJournal(j, {completeBackups:true});
       manifest = loadSnapshotManifest(j, m);
-      (deps.verifySnapshot || runCoreDbWorker)({action:'verify',zylosDir:ctx.zylosDir,dbBackupDir:j.dbBackupDir,manifest});
       ctx.journal=j;
       ctx.coreManifest=j.coreManifest;
       ctx.dbBackupDir=j.dbBackupDir;
       ctx.dbManifest=manifest;
       ctx.databaseMode=j.databaseMode || ctx.databaseMode;
-      ctx.firstDashboardTakeover=needsDashboardTakeover(ctx);
+      ctx.firstTakeover=j.firstTakeover===true;
+      ctx.firstDashboardTakeover=ctx.firstTakeover && fs.existsSync(path.join(ctx.tempDir,'skills/dashboard'));
       ctx.servicesWereRunning=j.originalServices.map(service=>service.name);
     }
     for (const [fn, options] of [[deps.syncSkills || step5_syncCoreSkills, deps.step5], [deps.installDependencies || step6_installSkillDeps, deps.step6]]) {
@@ -1067,10 +1029,10 @@ async function finalizeInstalledUpgrade(ctx, deps) {
     // Resume runs in a fresh process and must retain the authoritative merge
     // bases even if the download directory disappears after the cutoff.
     stageSkillBaselines(ctx);
-    await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx);
+    const runtimeClis=await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx);
     (deps.dataReady || protectedDataReady)(ctx);
     const prepared=await (deps.prepareRuntime || prepareUpgradeRuntime)(ctx);
-    ctx.preparationWarnings=prepared.warnings;
+    ctx.preparationWarnings=[...(runtimeClis?.warnings || []), ...(prepared.warnings || [])];
     const workDir=ctx.transactionDir;
     if (!workDir) throw Error('finalizer preparation directory is unavailable');
     const preparation=(deps.stage || preparePostCutoff)({transactionDir:workDir,zylosDir:ctx.zylosDir,...prepared});

@@ -217,15 +217,15 @@ function protectedReaderFixture(t,{phase='recovery_required',hooks='done',corrup
   return {ctx,journal,stable};
 }
 
-test('closed recovery resumes through actual maintenance reader refresh before services',async t=>{
+test('closed recovery preserves the default reader and recovery phase before services',async t=>{
   const {ctx,journal,stable}=protectedReaderFixture(t),calls=[];
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
     refreshMaintenanceReader:undefined,
-    startServices:()=>{assert.ok(fs.readFileSync(stable,'utf8').startsWith(fs.readFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),'utf8')));assert.match(fs.readFileSync(stable,'utf8'),/postCutoffReady:true/);calls.push('start');return {status:'done'};},
+    startServices:()=>{assert.equal(fs.readFileSync(stable,'utf8'),'old stable reader');calls.push('start');return {status:'done'};},
     protectedSuccess:()=>{calls.push('success');}
   }));
   assert.equal(result.success,true);
-  assert.equal(journal.phase,'compensation_closed');
+  assert.equal(journal.phase,'recovery_required');
   assert.equal(calls.includes('start'),true);
 });
 

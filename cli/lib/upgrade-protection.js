@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from './core-db-backup.js';
+import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, inspectFirstDashboardTakeover } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -103,6 +103,7 @@ export function beginUpgrade(ctx, {
     nodePath: process.execPath,
     from: ctx.from,
     to: ctx.to,
+    firstTakeover: typeof ctx.firstTakeover === 'boolean' ? ctx.firstTakeover : inspectFirstDashboardTakeover(zylosDir),
     phase: 'preparing',
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
     installationIntent: false,
@@ -220,13 +221,11 @@ export function saveProtectedCode(ctx) {
     let dependencyStat;
     try {dependencyStat=fs.lstatSync(modules);} catch(error) {if(error.code!=='ENOENT')throw error;}
     if(!dependencyStat) e.dependencies={kind:'missing'};
-    else if(dependencyStat.isSymbolicLink()) e.dependencies={kind:'symlink',target:fs.readlinkSync(modules)};
     else {
-      if(!dependencyStat.isDirectory())throw Error('invalid original skill dependencies: '+e.name);
+      if(!dependencyStat.isDirectory() || dependencyStat.isSymbolicLink())throw Error('invalid original skill dependencies: '+e.name);
       const dependencyBackup=path.join(ctx.backupDir,'dependencies',e.name);
-      const originalHash=maintenance.treeHash(modules,{excludeNodeModules:false,includeModes:true});
       fs.cpSync(modules,dependencyBackup,{recursive:true,verbatimSymlinks:true});
-      if(maintenance.treeHash(dependencyBackup,{excludeNodeModules:false,includeModes:true})!==originalHash || maintenance.treeHash(modules,{excludeNodeModules:false,includeModes:true})!==originalHash)throw Error('skill dependencies changed during backup: '+e.name);
+      const originalHash=maintenance.treeHash(dependencyBackup,{excludeNodeModules:false,includeModes:true});
       maintenance.fsyncTree(dependencyBackup);
       maintenance.fsyncDir(path.dirname(dependencyBackup));
       e.dependencies={kind:'directory',sha256:originalHash};
@@ -268,7 +267,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     fromVersion: j.from,
     toVersion: j.to,
     formatVersion: ctx.snapshotFormatVersion ?? 2,
-    firstTakeover: j.from === '0.9.3',
+    firstTakeover: j.firstTakeover === true,
     verifySnapshot
   });
   ctx.dbBackupDir = snapshot.dbBackupDir;
@@ -412,7 +411,7 @@ export function protectedDataReady(ctx, overrides = {}) {
   if (j.databaseMode !== 'unchanged') {
     const manifest = maintenance.read(path.join(j.dbBackupDir,'manifest.json'));
     (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId,manifest});
-    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,firstTakeover:j.from==='0.9.3',manifest});
+    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,firstTakeover:j.firstTakeover===true,manifest});
     ctx.databases=verified?.databases || null;
     const checked = maintenance.preflight(dir, j, null);
     if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');

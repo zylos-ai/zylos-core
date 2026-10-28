@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateUpgradeHandoff } from './upgrade-admission.js';
-import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade } from './core-db-backup.js';
+import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
 
@@ -40,7 +40,19 @@ export function inspectUpgradeSource(input, deps = {}) {
       code:'DASHBOARD_STILL_INSTALLED', next:'Run zylos uninstall dashboard --yes while retaining its data.'
     });
   }
-  const firstTakeover = input.fromVersion === '0.9.3';
+  const declaredSkills=new Set();
+  for(const packageRoot of [coreDir,tempDir]) {
+    const directory=path.join(packageRoot,'skills');
+    try {for(const entry of fs.readdirSync(directory,{withFileTypes:true}))if(entry.isDirectory())declaredSkills.add(entry.name);}
+    catch(error) {if(error.code!=='ENOENT')throw error;}
+  }
+  for(const name of declaredSkills) {
+    try {
+      const stat=fs.lstatSync(path.join(skillsDir,name,'node_modules'));
+      if(!stat.isDirectory() || stat.isSymbolicLink())throw Object.assign(Error('Installed core skill node_modules must be a real directory or absent: '+name),{code:'INVALID_CORE_DEPENDENCIES'});
+    } catch(error) {if(error.code!=='ENOENT')throw error;}
+  }
+  const firstTakeover = inspectFirstDashboardTakeover(zylosDir);
   const options = {driverRoot:skillsDir, firstTakeover};
   const versions = (deps.probe ?? probeCoreDbVersions)(zylosDir, tempDir, options);
   if (!versions || !Array.isArray(versions.databases) || versions.databases.length !== (firstTakeover ? 3 : 4) || typeof versions.needsMigration !== 'boolean') throw new Error('Invalid database version probe result');

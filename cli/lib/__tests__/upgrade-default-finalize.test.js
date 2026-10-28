@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import { runSelfUpgradeFinalize, resumeUpgradeFinalization } from '../self-upgrade.js';
 import { LEGACY_CORE_DATABASES, createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from '../core-db-backup.js';
-import { prepareUpgradeRuntime } from '../upgrade-runtime-preparation.js';
+import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff } from '../upgrade-post-cutoff.js';
 import { commitCutoff } from '../upgrade-cutoff.js';
 import { resumeFinalize } from '../upgrade-resume.js';
@@ -20,7 +20,7 @@ const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
 const Database = require(path.join(packageRoot, 'skills/comm-bridge/node_modules/better-sqlite3'));
 
-function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {}) {
+function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firstTakeover = true } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(temporaryBase, 'default-finalizer-')));
   const previousHome = process.env.HOME, previousPm2Home = process.env.PM2_HOME, previousPath = process.env.PATH;
   process.env.HOME = home;
@@ -49,6 +49,15 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {
   write('.zylos/config.json', '{"runtime":"claude"}\n');
   write('memory/state.md', 'preserve working state\n');
   const skillsDir = path.join(root, '.claude/skills');
+  if (!firstTakeover) {
+    write('.claude/skills/dashboard/.zylos/core-managed.json', '{}\n');
+    write('.claude/skills/dashboard/package.json', '{"type":"module"}\n');
+    write('.claude/skills/dashboard/src/lib/schema-owner.js', `export const dashboardSchemaOwner = {
+      supportsNewDatabase() { return true; },
+      inspectSchema() { return {currentVersion:0,targetVersion:0,needsMigration:false}; },
+      migrate() { throw Error('missing Dashboard must not be created before cutoff'); }
+    };\n`);
+  }
   for (const owner of LEGACY_CORE_DATABASES.map(item => item.owner)) {
     const source = path.join(packageRoot, 'skills', owner), target = path.join(skillsDir, owner);
     fs.mkdirSync(target, { recursive: true });
@@ -83,7 +92,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {
   m.runInstaller = () => { calls.push('npm'); return ''; };
   const tempDir = path.join(home, 'download');
   fs.mkdirSync(path.join(tempDir, 'skills/dashboard'), {recursive:true});
-  const state = { schemaVersion: 1, from: '0.9.3', to: '0.9.4', tempDir, zylosDir:root, firstTakeover:true };
+  const state = { schemaVersion: 1, from: '0.9.3', to: '0.9.4', tempDir, zylosDir:root, firstTakeover };
   let dir, journal;
   if (protectedUpgrade) {
     dir = path.join(root, '.backup/self-upgrade/tx');
@@ -102,7 +111,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {
     fs.writeFileSync(packageJson, '{}'); fs.mkdirSync(cliRoot);
     journal = { formatVersion: 1, transactionId: 'tx', zylosDir: root, skillsDir,
       nodePath: process.execPath, phase: 'installing', installationIntent: true,
-      databaseMode: 'migrate', dbBackupDir: snapshot.dbBackupDir,
+      databaseMode: 'migrate', firstTakeover, dbBackupDir: snapshot.dbBackupDir,
       snapshotManifestHash: m.hash(path.join(snapshot.dbBackupDir, 'manifest.json')),
       from: '0.9.3', to: '0.9.4', originalServices: [],
       coreManifest: LEGACY_CORE_DATABASES.map(item => ({ name: item.owner, existedBefore: true,
@@ -191,7 +200,7 @@ test('default finalizer reports unknown when P10 status cannot be read', async t
   assertDataPreserved(f);
 });
 
-test('Dashboard takeover uses live absence independently of the source version and database flag', async t => {
+test('Dashboard takeover uses the persisted entry fact independently of source version and caller override', async t => {
   const f=fixture(t);
   const journal=f.load();
   f.m.update(f.dir,journal,{from:'0.9.4'});
@@ -207,8 +216,7 @@ test('Dashboard takeover uses live absence independently of the source version a
 });
 
 test('Dashboard core-managed marker skips first registration on subsequent upgrades', async t => {
-  const f=fixture(t);
-  f.write('.claude/skills/dashboard/.zylos/core-managed.json','{}\n');
+  const f=fixture(t,{firstTakeover:false});
   const result=await f.run();
   assert.equal(result.success,true,JSON.stringify(result));
   assert.equal(f.load().dashboardInstall,null);
@@ -226,15 +234,14 @@ test('target without Dashboard creates no takeover work even with no live marker
   for(const call of ['dashboard-copy','registration','route']) assert.equal(f.calls.includes(call),false,call);
 });
 
-test('unsafe Dashboard takeover marker fails before skill synchronization or cutoff', async t => {
+test('finalization does not recompute the persisted takeover fact from a changed marker', async t => {
   const f=fixture(t);
   f.write('.claude/skills/dashboard/.zylos/other.json','{}\n');
   fs.symlinkSync('other.json',path.join(f.root,'.claude/skills/dashboard/.zylos/core-managed.json'));
-  const result=await f.run({syncSkills:()=>{assert.fail('unsafe marker reached skill sync');}});
-  assert.equal(result.success,false);
-  assert.equal(result.code,'DASHBOARD_TAKEOVER_INVALID');
-  assert.equal(f.m.classifyCutoff(f.load()),'none');
-  assert.equal(f.calls.length,0);
+  const result=await f.run();
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.load().firstTakeover,true);
+  assert.ok(f.calls.includes('registration'));
 });
 
 test('default finalizer loads IB-66 from the CLI module without loading the Dashboard service package', async t => {
@@ -534,6 +541,37 @@ test('declared damaged snapshot never falls back to ordinary finalization', asyn
   assert.deepEqual(f.calls, []);
   assert.equal(f.read('CLAUDE.md'), 'old Claude output');
   assert.equal(fs.existsSync(path.join(f.dir, 'runtime-preparation')), false);
+  assertDataPreserved(f);
+});
+
+test('finalizer loads the hashed manifest without repeating full snapshot verification', async t => {
+  const f = fixture(t);
+  const result = await f.run({verifySnapshot() { assert.fail('snapshot contents were already verified before installation'); }});
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(f.load().phase, 'upgrade_complete');
+  assertDataPreserved(f);
+});
+
+test('optional runtime CLI warning survives successful finalization alongside preparation warnings', async t => {
+  const f = fixture(t);
+  f.m.update(f.dir, f.load(), { firstTakeover: true });
+  const result = await f.run({
+    prepareRuntimeClis: ctx => prepareUpgradeRuntimeClis(ctx, {
+      exists: runtime => runtime === 'claude',
+      install: { codex: () => false, claude: () => { throw Error('active CLI must be preserved'); } },
+    }),
+    prepareRuntime: ctx => {
+      const prepared = f.deps.prepareRuntime(ctx);
+      return { ...prepared, warnings: [...prepared.warnings, 'Existing preparation warning'] };
+    },
+  });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(f.load().phase, 'upgrade_complete');
+  assert.deepEqual(result.preparationWarnings, [
+    'Optional runtime CLI codex.cli: CLI installation failed or command not on PATH',
+    'Existing preparation warning',
+  ]);
+  assert.equal(f.calls.filter(call => call === 'restart').length, 1);
   assertDataPreserved(f);
 });
 

@@ -7,6 +7,18 @@ const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
 import {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest} from './core-db-backup-worker.js';
 export {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest};
 const WORKER=fileURLToPath(new URL('./core-db-backup-worker.js',import.meta.url));
+export function inspectFirstDashboardTakeover(zylosDir) {
+  const marker=path.join(zylosDir,'.claude/skills/dashboard/.zylos/core-managed.json');
+  try {
+    const stat=fs.lstatSync(marker);
+    if(!stat.isFile() || stat.isSymbolicLink()) throw Error('Dashboard core-managed marker must be a regular file');
+    fs.accessSync(marker,fs.constants.R_OK);
+    return false;
+  } catch(error) {
+    if(error.code==='ENOENT')return true;
+    throw Object.assign(Error(`Cannot inspect Dashboard takeover marker: ${error.message}`),{code:'DASHBOARD_TAKEOVER_INVALID'});
+  }
+}
 function syncDir(dir){const fd=fs.openSync(dir,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
 function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
 export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath,timeout=120000}={}) {

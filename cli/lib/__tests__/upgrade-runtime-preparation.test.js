@@ -10,9 +10,10 @@ import { isMigrationPending } from '../../../skills/activity-monitor/scripts/ses
 
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
 
-test('upgrade reuses P06 CLI preparation without login or touching the running runtime', async () => {
+test('upgrade reuses P06 CLI preparation without login or touching the running runtime', async t => {
+  const f = fixture(t);
   const installed = new Set(['claude']), calls = [];
-  const result = await prepareUpgradeRuntimeClis({}, {
+  const result = await prepareUpgradeRuntimeClis(f.ctx, {
     exists: runtime => installed.has(runtime),
     install: { claude() { throw Error('existing runtime must not be replaced'); },
       codex() { calls.push('install-codex'); installed.add('codex'); return true; } },
@@ -23,9 +24,45 @@ test('upgrade reuses P06 CLI preparation without login or touching the running r
   assert.equal(calls.filter(item => item === 'install-codex').length, 1);
 });
 
-test('runtime preparation refuses failed install', async () => {
-  await assert.rejects(prepareUpgradeRuntimeClis({}, { exists: () => false,
+test('runtime preparation refuses failed install', async t => {
+  const f = fixture(t);
+  await assert.rejects(prepareUpgradeRuntimeClis(f.ctx, { exists: () => false,
     install: { claude: () => false, codex: () => false } }), { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
+});
+
+for (const runtime of ['claude', 'codex']) {
+  test(`${runtime} active CLI permits optional runtime install failure with a warning`, async t => {
+    const f = fixture(t);
+    f.write('.zylos/config.json', JSON.stringify({ runtime }));
+    const calls = [];
+    const optional = runtime === 'claude' ? 'codex' : 'claude';
+    const result = await prepareUpgradeRuntimeClis(f.ctx, {
+      exists: name => name === runtime,
+      install: { [runtime]: () => { throw Error('active CLI must be preserved'); },
+        [optional]: () => { calls.push(optional); return false; } },
+    });
+    assert.deepEqual(calls, [optional]);
+    assert.deepEqual(result.completed, [`${runtime}.cli`]);
+    assert.equal(result.failed.length, 1);
+    assert.match(result.warnings[0], new RegExp(`Optional runtime CLI ${optional}\\.cli`));
+  });
+
+  test(`${runtime} active CLI failure still rejects when optional CLI is ready`, async t => {
+    const f = fixture(t);
+    f.write('.zylos/config.json', JSON.stringify({ runtime }));
+    await assert.rejects(prepareUpgradeRuntimeClis(f.ctx, {
+      exists: name => name !== runtime,
+      install: { [runtime]: () => false },
+    }), { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
+  });
+}
+
+test('CLI preparation rejects unreadable runtime configuration before installing', async t => {
+  const f = fixture(t);
+  f.write('.zylos/config.json', '{');
+  let called = false;
+  await assert.rejects(prepareUpgradeRuntimeClis(f.ctx, { prepare: () => { called = true; } }));
+  assert.equal(called, false);
 });
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-preparation-'));

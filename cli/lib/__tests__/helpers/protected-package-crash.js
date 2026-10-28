@@ -83,6 +83,12 @@ const result={};for(const rel of ['comm-bridge/c4.db','scheduler/scheduler.db','
     run('tar', ['-x', '-C', source], { input: archive });
     const file = path.join(source, 'package.json'), pkg = JSON.parse(fs.readFileSync(file));
     pkg.version = '0.9.3'; write(file, JSON.stringify(pkg, null, 2));
+    // Model the required 0.9.3 bridge guard explicitly; v0.9.2 lacks it.
+    const postinstall = path.join(source, 'scripts/postinstall.js');
+    const postinstallSource = fs.readFileSync(postinstall, 'utf8');
+    const protectedGuard = "if (process.env.ZYLOS_PROTECTED_INSTALL === '1') process.exit(0);\n";
+    const firstLine = postinstallSource.startsWith('#!') ? postinstallSource.indexOf('\n') + 1 : 0;
+    write(postinstall, postinstallSource.slice(0, firstLine) + protectedGuard + postinstallSource.slice(firstLine));
     const packs = path.join(root, 'packs'); fs.mkdirSync(packs);
     npm(['pack', '--ignore-scripts', '--pack-destination', packs], { cwd: source });
     npm(['install', '-g', path.join(packs, 'zylos-0.9.3.tgz')]);

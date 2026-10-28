@@ -23,7 +23,6 @@ function fixture(t,{dependency='directory',body='process.stdout.write("installed
  fs.writeFileSync(path.join(skill,'package.json'),JSON.stringify({dependencies:{dep:'v1'}}));fs.writeFileSync(path.join(skill,'code.js'),'original code');
  const outside=path.join(root,'outside');fs.mkdirSync(outside);fs.writeFileSync(path.join(outside,'untouched'),'outside original');
  if(dependency==='directory') {fs.mkdirSync(path.join(skill,'node_modules/dep'),{recursive:true});fs.writeFileSync(path.join(skill,'node_modules/dep/index.js'),'module.exports="v1";');fs.mkdirSync(path.join(skill,'node_modules/.bin'));fs.symlinkSync('../dep/index.js',path.join(skill,'node_modules/.bin/dep'));}
- if(dependency==='symlink')fs.symlinkSync(outside,path.join(skill,'node_modules'));
  for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs'],['upgrade-recovery.cjs','runner.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dest));
  const npmCli=path.join(root,'npm-cli.js');fs.writeFileSync(npmCli,body);
  const j={formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:true,initialIdentity:{ecosystemHash:null},originalServices:[],coreManifest:[{name:'core',existedBefore:true,backedUp:false,originalHash:m.treeHash(skill)}],originalPackage:{npmCli},recoveryHashes:Object.fromEntries(['maintenance.cjs','finalizer.cjs','runner.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};
@@ -53,11 +52,13 @@ test('originally missing dependencies remove target-installed modules during com
  f.recovery.restoreCore(f.dir,f.j);assert.equal(fs.existsSync(path.join(f.skill,'node_modules')),false);assert.doesNotThrow(()=>f.recovery.restoreCore(f.dir,f.j));
 });
 
-test('dependency symlink rejects installation and restores original link without changing outside files',t=>{
- const f=fixture(t,{dependency:'symlink',body:`require('node:fs').writeFileSync('executed','bad');`});
- const result=step6_installSkillDeps(f.ctx);assert.equal(result.status,'failed');assert.match(result.error,/real directory/);assert.notEqual(f.read().installerStarted,true);
- fs.unlinkSync(path.join(f.skill,'node_modules'));fs.mkdirSync(path.join(f.skill,'node_modules'));fs.writeFileSync(path.join(f.skill,'node_modules/target'),'new');
- f.recovery.restoreCore(f.dir,f.j);assert.equal(fs.readlinkSync(path.join(f.skill,'node_modules')),f.outside);assert.equal(fs.readFileSync(path.join(f.outside,'untouched'),'utf8'),'outside original');assert.equal(fs.existsSync(path.join(f.skill,'executed')),false);
+test('removed dependency symlink evidence cannot authorize compensation',t=>{
+ const f=fixture(t);
+ f.j.coreManifest[0].dependencies={kind:'symlink',target:f.outside};
+ fs.writeFileSync(path.join(f.skill,'code.js'),'target code');
+ assert.throws(()=>f.recovery.restoreCore(f.dir,f.j),/missing original skill dependency evidence/);
+ assert.equal(fs.readFileSync(path.join(f.skill,'code.js'),'utf8'),'target code');
+ assert.equal(fs.readFileSync(path.join(f.outside,'untouched'),'utf8'),'outside original');
 });
 
 test('changed dependency backup refuses compensation before replacing live code or dependencies',t=>{
