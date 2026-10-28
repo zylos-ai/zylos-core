@@ -142,7 +142,7 @@ export function readCodexHooksConfig(filePath) {
   return config;
 }
 
-export function installCoreCodexHook({ zylosDir }) {
+export function installCoreCodexHook({ zylosDir, onWrite = () => {} }) {
   const filePath = codexHooksPath(zylosDir);
   const config = readCodexHooksConfig(filePath);
   config.hooks = isSection(config.hooks) ? config.hooks : {};
@@ -181,6 +181,7 @@ export function installCoreCodexHook({ zylosDir }) {
   if (changed) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n');
+    onWrite(filePath);
   }
 
   return { path: filePath, changed, commands };

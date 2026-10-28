@@ -3,9 +3,8 @@
 /**
  * Post-install self-upgrade finalizer.
  *
- * The parent upgrader process runs steps 1-4 using the currently loaded code,
- * installs the new package, then invokes this script from the newly installed
- * package so steps 5-13 use the new implementation.
+ * Diagnostic entry for protected target-version state. The normal target entry
+ * calls the installed finalizer in process while retaining transaction ownership.
  */
 
 import fs from 'node:fs';
@@ -20,7 +19,7 @@ if (!statePath) {
 
 try {
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-  const result = runSelfUpgradeFinalize(state);
+  const result = await runSelfUpgradeFinalize(state);
   console.log(JSON.stringify(result));
   process.exit(result.success ? 0 : 1);
 } catch (err) {

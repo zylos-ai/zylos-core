@@ -6,11 +6,38 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
+const {isDeepStrictEqual} = require('node:util');
 const SELF_HASH = crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
 const READY = new Set(['new_data_ready', 'new_verifying', 'restored_data_ready', 'restored_verifying']);
 const TERMINAL = new Set(['upgrade_complete', 'restored_complete', 'aborted_before_install']);
 const DB_PATHS = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'];
+const DASHBOARD_DB = 'components/dashboard/dashboard.db';
+function databasePaths(formatVersion) {
+  if (formatVersion === 1) return DB_PATHS;
+  if (formatVersion === 2) return [...DB_PATHS, DASHBOARD_DB];
+  throw Error('unsupported snapshot manifest format');
+}
+function originalDatabasePaths(j) {
+  const paths = j.initialIdentity?.databases?.map(d => d?.source);
+  const expected = databasePaths(2);
+  if (!paths || paths.length !== expected.length || paths.some((p,i) => p !== expected[i])) throw Error('invalid data-ready original database collection');
+  return expected;
+}
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/;
+function classifyCutoff(j) {
+  const present = Object.prototype.hasOwnProperty.call(j, 'compensationCutoff');
+  const closedPhase = j.phase === 'compensation_closed' || j.phase === 'recovery_required' && j.resumePhase === 'compensation_closed';
+  if (!present) return closedPhase ? 'untrusted' : 'none';
+  if (!closedPhase && j.phase !== 'upgrade_complete') return 'untrusted';
+  const c = j.compensationCutoff;
+  const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  if (!c || c.formatVersion !== 1 || c.closed !== true || c.transactionId !== j.transactionId ||
+      !digest(c.snapshotManifestHash) || c.snapshotManifestHash !== j.snapshotManifestHash ||
+      c.writer !== 'finalizer' || typeof c.closedAt !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(c.closedAt) ||
+      !Number.isFinite(Date.parse(c.closedAt))) return 'untrusted';
+  return 'closed';
+}
 function hash(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
@@ -20,11 +47,24 @@ function fsyncFd(fd) {
   return fs.fsyncSync(fd);
 }
 function platformSupported(platform = process.platform) {
+  return platform === process.platform && ['linux', 'darwin'].includes(platform);
+}
+function assertProcessView() {
+  const own = identity(), parent = identity(process.ppid);
+  if (own.unsupported || own.absent || parent.unsupported || parent.absent) throw Error('process view incomplete; writer exit cannot be confirmed');
+  const mounts = fs.readFileSync('/proc/mounts', 'utf8');
+  if (mounts.split('\n').some(line => /\sproc\s/.test(line) && /(?:^|,)hidepid=(?!0(?:,|$))/.test(line.split(' ')[3] || ''))) throw Error('restricted process view; writer exit cannot be confirmed');
+  for (const pid of fs.readdirSync('/proc').filter(name => /^\d+$/.test(name))) {
+    try { fs.readFileSync('/proc/' + pid + '/stat'); fs.readFileSync('/proc/' + pid + '/cmdline'); }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ESRCH') throw Error('process view incomplete; writer exit cannot be confirmed'); }
+  }
+}
+function canRecognizeProcesses(platform = process.platform) {
   try {
-    if (platform !== process.platform || !['linux', 'darwin'].includes(platform)) return false;
-    if (platform === 'darwin') return true; // Node admission; no crash takeover.
+    if (platform !== process.platform || platform !== 'linux') return false;
     const owner = identity();
     if (owner.unsupported || owner.absent || !owner.boot || !owner.start) return false;
+    assertProcessView();
     controllerFlock();
     return true;
   } catch { return false; }
@@ -86,7 +126,8 @@ function validateOriginalJournal(j, {
   const absolute = value => typeof value === 'string' && path.isAbsolute(value) && path.resolve(value) === value;
   const i = j.initialIdentity;
   if (!i || typeof i !== 'object' || Array.isArray(i) || !absolute(j.nodePath) || i.nodePath !== j.nodePath || j.skillsDir !== path.join(j.zylosDir, '.claude', 'skills')) throw Error('invalid data-ready original deployment identity');
-  if (!absolute(i.packageJson) || !digest(i.packageHash) || !absolute(i.cliRoot) || !digest(i.cliHash) || !absolute(i.workerPath) || !digest(i.workerHash) || i.ecosystemHash !== null && !digest(i.ecosystemHash) || !Array.isArray(i.databases) || i.databases.length !== DB_PATHS.length || i.databases.some((d, index) => !d || d.source !== DB_PATHS[index] || typeof d.exists !== 'boolean')) throw Error('incomplete data-ready original identity');
+  const databases = originalDatabasePaths(j);
+  if (!absolute(i.packageJson) || !digest(i.packageHash) || !absolute(i.cliRoot) || !digest(i.cliHash) || !absolute(i.workerPath) || !digest(i.workerHash) || i.ecosystemHash !== null && !digest(i.ecosystemHash) || !Array.isArray(i.databases) || i.databases.length !== databases.length || i.databases.some((d, index) => !d || d.source !== databases[index] || typeof d.exists !== 'boolean')) throw Error('incomplete data-ready original identity');
   if (!Array.isArray(j.coreManifest) || !j.coreManifest.length || j.coreManifest.length > 256) throw Error('incomplete data-ready core manifest');
   const members = new Set();
   for (const e of j.coreManifest) {
@@ -154,7 +195,8 @@ function hasRecoveryHistory(root) {
   const cleanTerminal = (j, id) => {
     const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
     const absolute = value => typeof value === 'string' && path.isAbsolute(value) && path.resolve(value) === value;
-    const dbs = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'];
+    let dbs;
+    try { dbs = originalDatabasePaths(j); } catch { return false; }
     if (!j || j.formatVersion !== 1 || j.transactionId !== id || j.zylosDir !== fs.realpathSync(root) ||
         !['upgrade_complete', 'restored_complete', 'aborted_before_install'].includes(j.phase) ||
         j.cleanup?.complete !== true || j.cleanup.servicesRestored !== true || j.terminalEvidence?.verified !== true ||
@@ -294,7 +336,7 @@ function discover(root, {
 // The active marker is published before stopping writers and retained until
 // terminal cleanup. Daily checks read only its one referenced journal; old
 // backups and unrelated transaction damage cannot change availability.
-function discoverActive(root) {
+function discoverActive(root, {postCutoffReady = false} = {}) {
   if (!hasRecoveryMaterials(root)) return {marker:null, candidates:[], diagnostics:[], blocked:false};
   const candidates = [], diagnostics = [];
   let marker = null;
@@ -310,10 +352,10 @@ function discoverActive(root) {
     blocked: diagnostics.length > 0 || candidates.some(({journal:j}) =>
       j.installerExitUnconfirmed || j.finalizerExitUnconfirmed ||
       TERMINAL.has(j.phase) && (j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed) ||
-      !READY.has(j.phase) && !terminalValid(j) && !provisionalAbortValid(j))};
+      !READY.has(j.phase) && !(postCutoffReady && j.phase === 'compensation_closed' && classifyCutoff(j) === 'closed' && j.postCutoff?.items?.hooks?.state === 'done') && !terminalValid(j) && !provisionalAbortValid(j))};
 }
-function assertCoreDatabaseAvailable(root) {
-  const d = discoverActive(root);
+function assertCoreDatabaseAvailable(root, options) {
+  const d = discoverActive(root, options);
   if (d.blocked) {
     const e = Error('core database maintenance: ' + (d.diagnostics.join('; ') || d.candidates.map(c => `${c.journal.transactionId}:${c.journal.phase}`).join('; ')));
     e.code = 'ZYLOS_MAINTENANCE';
@@ -376,7 +418,7 @@ function controllerFlock() {
 function preflightExternalTools(platform = process.platform) {
   const node = fs.realpathSync(process.execPath), stat = fs.statSync(node);
   if (!stat.isFile() || !(stat.mode & 0o111)) throw Error('untrusted recovery Node executable');
-  if (platform === 'linux') controllerFlock();
+  if (canRecognizeProcesses(platform)) controllerFlock();
 }
 function serializedController(dir, operation, value) {
   if (operation === 'release' && !fs.existsSync(dir)) return;
@@ -458,7 +500,7 @@ function acquireMac(dir, {publishedDir} = {}) {
 function acquire(dir, {
   publishedDir
 } = {}) {
-  if (process.platform === 'darwin') return acquireMac(dir, {publishedDir});
+  if (!canRecognizeProcesses()) return acquireMac(dir, {publishedDir});
   const value = {
     ...identity(),
     token: crypto.randomBytes(16).toString('hex')
@@ -503,6 +545,32 @@ function acquire(dir, {
   };
 }
 function update(dir, j, changes = {}) {
+  const savedFile = path.join(dir, 'journal.json');
+  if (fs.existsSync(savedFile)) {
+    const saved = read(savedFile);
+    const cutoff = classifyCutoff(saved);
+    const next = {...j, ...changes};
+    if (cutoff !== 'none') {
+      if (JSON.stringify(saved.compensationCutoff) !== JSON.stringify(next.compensationCutoff)) throw Error('cutoff facts are immutable');
+      if (cutoff === 'closed' && classifyCutoff(next) !== 'closed') throw Error('cannot reopen compensation after cutoff');
+      if (cutoff === 'closed') {
+        const inputs = value => {
+          const copy = structuredClone(value);
+          for (const item of Object.values(copy?.items || {})) {
+            for (const field of ['state','attempts','lastError','warnings']) delete item[field];
+          }
+          return copy;
+        };
+        if (!isDeepStrictEqual(inputs(saved.postCutoff),inputs(next.postCutoff)) ||
+            !isDeepStrictEqual(inputs(saved.dashboardInstall),inputs(next.dashboardInstall))) throw Error('cutoff publication inputs are immutable');
+      }
+      if (cutoff === 'untrusted' && (next.phase !== saved.phase || next.resumePhase !== saved.resumePhase)) throw Error('untrusted cutoff requires manual recovery');
+    } else if (Object.prototype.hasOwnProperty.call(next, 'compensationCutoff') &&
+        (classifyCutoff(next) !== 'closed' || next.phase !== 'compensation_closed' ||
+         next.postCutoff?.items?.hooks?.state !== 'pending' || !Object.prototype.hasOwnProperty.call(next, 'dashboardInstall'))) {
+      throw Error('cutoff must atomically publish phase and publication inputs');
+    }
+  }
   Object.assign(j, changes, {
     updatedAt: new Date().toISOString()
   });
@@ -555,7 +623,7 @@ function services(j) {
   }));
 }
 function stop(j) {
-  if (process.platform === 'darwin') return stopBackupOnly(j);
+  if (!canRecognizeProcesses()) return stopObserved(j);
   for (const p of services(j)) if (!['stopped', 'errored'].includes(p.status)) command('pm2', ['stop', p.name]);
   if (services(j).some(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0)) throw Error('managed services not confirmed stopped');
   const knownNames = /\/(?:c4-(?:send|db|control|enqueue|queue)|scheduler|database|usage-monitor|core-db-backup-worker)\.(?:js|mjs)(?:\s|$)/;
@@ -568,10 +636,14 @@ function stop(j) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
 }
-// Backup-only never makes PID ownership decisions or kills processes. PM2
-// confirms its managed writers stopped; ps drains known one-shot writers by
-// observation, without requiring /proc or the Mac identity capability.
-function stopBackupOnly(j) {
+// Live ownership never reclaims a controller or kills observed writers. PM2
+// stops managed services and ps drains known one-shot writers; an incomplete
+// Linux process view cannot establish writer quiescence.
+function stopObserved(j) {
+  // A successful but incomplete Linux ps view cannot prove writer quiescence.
+  if (process.platform === 'linux') {
+    assertProcessView();
+  }
   for (const p of services(j)) if (!['stopped', 'errored'].includes(p.status)) command('pm2', ['stop', p.name]);
   if (services(j).some(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0)) throw Error('managed services not confirmed stopped');
   const knownNames = /\/(?:c4-(?:send|db|control|enqueue|queue)|scheduler|database|usage-monitor|core-db-backup-worker)\.(?:js|mjs)(?:\s|$)/;
@@ -623,15 +695,17 @@ function verifyServices(j) {
   } while (Date.now() < deadline);
   throw Error('original services did not become online');
 }
-function treeHash(dir) {
+function treeHash(dir, {excludeNodeModules = true, includeModes = false} = {}) {
   const h = crypto.createHash('sha256');
+  if (includeModes) h.update('root-mode:' + (fs.statSync(dir).mode & 0o7777) + '\0');
   function walk(current, prefix = '') {
     for (const n of fs.readdirSync(current).sort()) {
-      if (!prefix && n === 'node_modules') continue;
+      if (excludeNodeModules && !prefix && n === 'node_modules') continue;
       const p = path.join(current, n),
         rel = prefix + n,
         s = fs.lstatSync(p);
       h.update(rel + '\0');
+      if (includeModes && !s.isSymbolicLink()) h.update('mode:' + (s.mode & 0o7777) + '\0');
       if (s.isSymbolicLink()) h.update('link:' + fs.readlinkSync(p));else if (s.isDirectory()) {
         h.update('dir');
         walk(p, rel + '/');
@@ -727,13 +801,18 @@ function validateDescriptor(dir, j, d) {
   }
 
 }
-function preflight(dir, j, expected) {
+function preflight(dir, j, expected, {liveRestored = false} = {}) {
+  const original = expected && expected.status !== 'complete';
   return worker(dir, j, {
     action: 'offline-preflight',
     zylosDir: j.zylosDir,
     schemaRoot: j.skillsDir,
-    manifest: expected,
-    standaloneRestored: j.installationIntent === true && ['installing', 'restoring'].includes(j.phase) && expected?.status === 'complete' && expected.databases.every(database => j.dbRestore?.[database.source]?.complete === true)
+    firstTakeover: j.from === '0.9.3',
+    manifest: original ? undefined : expected,
+    expectedDatabases: original ? expected.databases : undefined,
+    liveRestored,
+    formatVersion: originalDatabasePaths(j).length === 4 ? 2 : 1,
+    standaloneRestored: !liveRestored && j.installationIntent === true && ['installing', 'restoring', 'restored_data_ready', 'restored_verifying'].includes(j.phase) && expected?.status === 'complete' && expected.databases.every(database => database.source === DASHBOARD_DB && database.status === 'missing' || j.dbRestore?.[database.source]?.complete === true)
   });
 }
 function renameIntent(dir, j, key, source, dest, expectedHash) {
@@ -804,12 +883,68 @@ function finishTerminal(dir, j) {
   return {complete:true, warnings:[]};
 }
 
+function runInstaller(dir, j, {stage, npmCli, args, cwd, timeout = 180000}) {
+  for (const name of ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs']) {
+    const file = path.join(dir, name);
+    privatePath(file);
+    if (hash(file) !== j.recoveryHashes?.[name]) throw Error('transaction recovery material changed: ' + name);
+  }
+  privatePath(npmCli);
+  if (path.basename(npmCli) !== 'npm-cli.js' || !path.isAbsolute(npmCli)) throw Error('untrusted npm CLI');
+  const token = crypto.randomBytes(24).toString('hex');
+  update(dir, j, {installerStarted:true, installerStage:stage, installerPid:null, installerIdentity:null, installerToken:token, installerExitConfirmed:false, installerExitUnconfirmed:false});
+  // Source packages predate the protected-install flag; CI suppresses their
+  // postinstall only during restoration. Target npm keeps inherited CI.
+  const result = cp.spawnSync(j.nodePath, [path.join(dir, 'finalizer.cjs'), 'installer', dir, token], {cwd,
+    input:JSON.stringify({npmCli,args,timeout}), env:{...process.env, ...(stage==='restore-original-package' ? {CI:'1'} : {}), ZYLOS_PROTECTED_INSTALL:'1', ZYLOS_SKIP_POSTINSTALL:'1', ZYLOS_UPGRADE_FROM_VERSION:j.from, ZYLOS_UPGRADE_INSTALLER_TOKEN:token},
+    encoding:'utf8', stdio:['pipe','pipe','pipe'], detached:true, timeout:timeout+10000, killSignal:'SIGKILL', maxBuffer:4*1024*1024});
+  Object.assign(j, read(path.join(dir, 'journal.json')));
+  const confirmed = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:true, kind:'installer'});
+  update(dir, j, {installerExitConfirmed:confirmed.confirmed, installerExitUnconfirmed:!confirmed.confirmed});
+  if (!confirmed.confirmed) throw Error(confirmed.error || 'installer exit unconfirmed');
+  if (result.error || result.status !== 0) throw Error(result.error?.message || result.stderr?.trim() || 'npm ' + stage + ' failed');
+  return result.stdout;
+}
+function restoreOriginalPackage(dir, j) {
+  const original = j.originalPackage;
+  if (!original || original.sourceVersion !== j.from || typeof original.path !== 'string' || path.dirname(original.path) !== path.resolve(dir) || !original.path.endsWith('.tgz')) throw Error('original package preservation evidence missing');
+  privatePath(original.path);
+  if (hash(original.path) !== original.sha256) throw Error('original package archive changed');
+  if (!j.originalPackageRestored) {
+    runInstaller(dir, j, {stage:'restore-original-package', npmCli:original.npmCli, args:['install', '-g', original.path], cwd:dir});
+    update(dir, j, {originalPackageRestored:true});
+  }
+  if (hash(j.initialIdentity.packageJson) !== j.initialIdentity.packageHash || treeHash(j.initialIdentity.cliRoot) !== j.initialIdentity.cliHash) throw Error('restored installed package identity mismatch');
+}
+function verifyFinalizerExit(dir, j) {
+  for (const kind of ['installer', 'finalizer']) {
+    const started = kind + 'Started', confirmed = kind + 'ExitConfirmed', unconfirmed = kind + 'ExitUnconfirmed';
+    if (!j[unconfirmed] && (!j[started] || j[confirmed])) continue;
+    const descriptorFile = path.join(dir, 'descriptor.json');
+    if (kind === 'finalizer' || fs.existsSync(descriptorFile)) validateDescriptor(dir, j, read(descriptorFile));
+    for (const name of ['runner.cjs', 'finalizer.cjs', 'maintenance.cjs']) {
+      privatePath(path.join(dir, name));
+      if (!/^[a-f0-9]{64}$/.test(j.recoveryHashes?.[name] || '') || hash(path.join(dir, name)) !== j.recoveryHashes[name]) throw Error('transaction recovery material changed: ' + name);
+    }
+    const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:kind==='installer', kind});
+    if (!result.confirmed) throw Error(result.error || kind + ' exit requires verification before resume');
+    update(dir, j, {[unconfirmed]:false, [confirmed]:true});
+  }
+}
 module.exports = {
+  runInstaller,
+  restoreOriginalPackage,
+  verifyFinalizerExit,
+  classifyCutoff,
   fsyncFd,
   platformSupported,
+  canRecognizeProcesses,
   preflightExternalTools,
   transaction,
+  validateOriginalJournal,
   DB_PATHS,
+  databasePaths,
+  originalDatabasePaths,
   READY,
   TERMINAL,
   hash,
@@ -831,7 +966,7 @@ module.exports = {
   unmark,
   services,
   stop,
-  stopBackupOnly,
+  stopObserved,
   start,
   verifyServices,
   target,

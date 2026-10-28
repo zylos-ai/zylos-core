@@ -1,10 +1,45 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { recoverBeforeUpgrade } from '../upgrade-discovery.js';
 const require = createRequire(import.meta.url);
+const maintenance = require('../upgrade-maintenance.cjs');
 
-// Ordinary entrypoints only consult the explicit active marker. Historical
-// transactions are inspected by upgrade admission and explicit recovery tools.
+function hasTransactionHistory(root) {
+  for (const relative of ['.backup', '.backup/self-upgrade']) {
+    let stat;
+    try { stat = fs.lstatSync(path.join(root, relative)); }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+  }
+  const directory = path.join(root, '.backup/self-upgrade');
+  const entries = fs.readdirSync(directory, {withFileTypes:true});
+  if (entries.length > 10000) throw Error('upgrade startup transaction scan budget exhausted');
+  const active = maintenance.hasRecoveryMaterials(root);
+  // Historical backups without this transaction-runner protocol cannot
+  // authorize recovery during ordinary startup.
+  return entries.some(entry => {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) return false;
+    const dir = path.join(directory, entry.name);
+    const publishedRecovery = ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs'].some(name => {
+      try { fs.lstatSync(path.join(dir, name)); return true; }
+      catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    });
+    try {
+      const journal = maintenance.transaction(root, dir);
+      return (journal.recoveryHashes || publishedRecovery) && (
+        !maintenance.terminalValid(journal) || !journal.cleanup.complete ||
+        journal.installerExitUnconfirmed || journal.finalizerExitUnconfirmed ||
+        journal.installerStarted && !journal.installerExitConfirmed ||
+        journal.finalizerStarted && !journal.finalizerExitConfirmed ||
+        journal.terminalServicesStopped || active
+      );
+    } catch { return publishedRecovery; }
+  });
+}
+
+// Stable bootstrap discovery follows the active marker. The separate history
+// scan also catches transaction-local publication interrupted before it exists.
 function hasRecoveryMaterials(root) {
   const present = file => {
     try { return fs.lstatSync(file); }
@@ -37,6 +72,28 @@ export function upgradeDiscoveryFailure() {
 export function discoverUpgradeContext(root) {
   try {
     root = fs.realpathSync(root);
+    if (hasTransactionHistory(root)) {
+      const found = maintenance.discover(root);
+      const failed = () => ({...upgradeDiscoveryFailure(),
+        blocked:maintenance.hasRecoveryMaterials(root) ? maintenance.discoverActive(root).blocked : true});
+      if (found.diagnostics.length || found.candidates.length !== 1) return failed();
+      const controller = path.join(found.candidates[0].dir, 'controller.json');
+      if (maintenance.canRecognizeProcesses() && fs.existsSync(controller) && maintenance.alive(maintenance.read(controller))) {
+        return {...upgradeDiscoveryFailure(), blocked:found.blocked, controllerAlive:true, observing:true, recovery_required:false};
+      }
+      // A transaction can be published before its stable bootstrap or active
+      // marker. Its verified recovery closure owns interrupted installation.
+      // Reuse this discovery for delegation; the helper's final read still
+      // checks durable state after the recovery child exits.
+      let initialDiscovery = true;
+      const recoveryMaintenance = {...maintenance, discover: deployment => {
+        if (initialDiscovery) { initialDiscovery = false; return found; }
+        return maintenance.discover(deployment);
+      }};
+      try { recoverBeforeUpgrade(root, {maintenance:recoveryMaintenance}); }
+      catch { return failed(); }
+      return {active:false, blocked:false};
+    }
     if (!hasRecoveryMaterials(root)) return { active: false, blocked: false };
     const directory = path.join(root, '.zylos', 'upgrade');
     const entry = path.join(directory, 'bootstrap.cjs');

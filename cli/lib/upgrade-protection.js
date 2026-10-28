@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, probeCoreDbSnapshotSync } from './core-db-backup.js';
+import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -14,9 +14,10 @@ function recoveryFiles(runnerName = 'runner.cjs') {
 
   return files;
 }
-export function deployUpgradeBootstrap(root) {
+export function deployUpgradeBootstrap(root, {transactionDir} = {}) {
   const prior = maintenance.discover(root);
-  if (prior.candidates.length || prior.diagnostics.length || prior.marker) throw Error('cannot replace stable bootstrap during an unresolved upgrade');
+  const own = transactionDir && prior.candidates.length === 1 && prior.candidates[0].dir === transactionDir && !prior.marker;
+  if (prior.diagnostics.length || !own && (prior.candidates.length || prior.marker)) throw Error('cannot replace stable bootstrap during an unresolved upgrade');
   root = fs.realpathSync(root);
   const meta = path.join(root, '.zylos');
   if (!fs.existsSync(meta)) fs.mkdirSync(meta, {
@@ -106,7 +107,7 @@ export function beginUpgrade(ctx, {
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
     installationIntent: false,
     automaticCompensation: true,
-    automaticResume: process.platform !== 'darwin',
+    automaticResume: maintenance.canRecognizeProcesses(),
     coreManifest: manifest,
     originalServices: maintenance.services({
       skillsDir
@@ -121,7 +122,7 @@ export function beginUpgrade(ctx, {
       workerPath: path.join(ctx.coreDir, 'cli', 'lib', 'core-db-backup-worker.js'),
       workerHash: maintenance.hash(path.join(ctx.coreDir, 'cli', 'lib', 'core-db-backup-worker.js')),
       ecosystemHash: fs.existsSync(ecosystem) ? maintenance.hash(ecosystem) : null,
-      databases: maintenance.DB_PATHS.map(source => ({
+      databases: maintenance.databasePaths(ctx.snapshotFormatVersion ?? 2).map(source => ({
         source,
         exists: fs.existsSync(path.join(zylosDir, source))
       }))
@@ -132,17 +133,7 @@ export function beginUpgrade(ctx, {
   };
   // The existing machine startup chain launches the runtime; this entry only
   // supplies durable file discovery before normal C4/session imports.
-  deployUpgradeBootstrap(zylosDir);
-  ctx.frozenRecoveryPath = path.join(zylosDir, '.zylos', 'upgrade', 'recovery.cjs');
-  ctx.frozenRecoveryHash = maintenance.hash(ctx.frozenRecoveryPath);
   let controllerMaintenance = maintenance;
-  if (process.platform === 'darwin') {
-    const frozen = path.join(zylosDir, '.zylos', 'upgrade', 'maintenance.cjs');
-    maintenance.privatePath(frozen);
-    if (maintenance.hash(frozen) !== maintenance.hash(path.join(library, 'upgrade-maintenance.cjs'))) throw Error('frozen maintenance source mismatch');
-    controllerMaintenance = require(frozen);
-    ctx.maintenance = controllerMaintenance;
-  }
   const activeRoot = path.dirname(dir);
   const stagingRoot = path.join(zylosDir, '.backup', 'self-upgrade-staging');
   for (const base of [activeRoot, stagingRoot]) {
@@ -164,6 +155,17 @@ export function beginUpgrade(ctx, {
   // Publish only after a complete durable journal and live controller exist.
   let release;
   try {
+    for (const [src, name] of recoveryFiles()) {
+      const file = path.join(staging, name);
+      fs.copyFileSync(path.join(library, src), file, fs.constants.COPYFILE_EXCL);
+      fs.chmodSync(file, 0o600);
+      const fd = fs.openSync(file, 'r');
+      try { maintenance.fsyncFd(fd); } finally { fs.closeSync(fd); }
+    }
+    maintenance.fsyncDir(staging);
+    j.recoveryHashes = Object.fromEntries(recoveryFiles().map(([, name]) => [name, maintenance.hash(path.join(staging, name))]));
+    controllerMaintenance = require(path.join(staging, 'maintenance.cjs'));
+    ctx.maintenance = controllerMaintenance;
     maintenance.update(staging, j);
     release = controllerMaintenance.acquire(staging, {publishedDir: dir});
     fs.renameSync(staging, dir);
@@ -189,56 +191,10 @@ export function beginUpgrade(ctx, {
   ctx.backupDir = path.join(dir, 'code');
   ctx.servicesWereRunning = j.originalServices.map(s => s.name);
   ctx.preInstallProtection = true;
+  ctx.frozenRecoveryPath = path.join(dir, 'runner.cjs');
+  ctx.frozenRecoveryHash = maintenance.hash(ctx.frozenRecoveryPath);
+  deployUpgradeBootstrap(zylosDir, {transactionDir:dir});
   return j;
-}
-export function beginBackupOnly(ctx, {zylosDir, skillsDir}) {
-  zylosDir = fs.realpathSync(zylosDir);
-  const expectedSkills = path.join(zylosDir, '.claude', 'skills');
-  if (fs.realpathSync(skillsDir) !== fs.realpathSync(expectedSkills)) throw Error('skills directory is outside deployment layout');
-  const found = maintenance.discover(zylosDir);
-  if (found.candidates.length || found.diagnostics.length || found.marker) throw Error('unresolved prior upgrade transaction');
-  ctx.backupOnly = true;
-  ctx.preInstallServicesRestored = true; // No service stop or installation has occurred.
-  ctx.backupOnlyRoot = zylosDir;
-  ctx.backupOnlySkillsDir = expectedSkills;
-  ctx.preInstallProtection = false;
-  ctx.protectionUnavailableReason = 'automatic recovery unavailable; a verified preinstall database snapshot is required; database recovery is manual';
-}
-export function prepareBackupOnlyInstall(ctx, deps = {}) {
-  const zylosDir = ctx.backupOnlyRoot, skillsDir = ctx.backupOnlySkillsDir;
-  (deps.probeSnapshotSync ?? probeCoreDbSnapshotSync)(zylosDir);
-  const j = {zylosDir, skillsDir, initialIdentity: {ecosystemHash: null}};
-  const services = (deps.services ?? maintenance.services)(j);
-  j.originalServices = services.filter(s => s.status === 'online');
-  ctx.servicesWereRunning = j.originalServices.map(s => s.name);
-  try {
-    ctx.preInstallServicesRestored = false;
-    // stop may partially succeed before throwing; the cleanup covers it too.
-    (deps.stop ?? maintenance.stopBackupOnly)(j);
-    ctx.servicesStopped = [...ctx.servicesWereRunning];
-    const verifySnapshot=deps.verifySnapshot ?? runCoreDbWorker;
-    const snapshot = (deps.snapshot ?? createCoreDbSnapshot)({
-      zylosDir, transactionId: 'backup-' + Date.now() + '-' + crypto.randomBytes(6).toString('hex'),
-      fromVersion: ctx.from, toVersion: ctx.to, verifySnapshot
-    });
-    ctx.dbBackupDir = snapshot.dbBackupDir;
-    ctx.dbManifest = snapshot.manifest;
-    ctx.backupWarnings = snapshot.warnings;
-    if (deps.snapshot) verifySnapshot({action:'verify', zylosDir, dbBackupDir:snapshot.dbBackupDir, manifest:snapshot.manifest});
-    ctx.dbSnapshotVerified = true;
-  } catch (error) {
-    // This boundary precedes npm and only reads business databases. Restore
-    // exactly the previously online records, never a service already stopped.
-    try {
-      (deps.start ?? maintenance.start)(j);
-      (deps.verifyServices ?? maintenance.verifyServices)(j);
-      ctx.preInstallServicesRestored = true;
-    } catch (cleanupError) {
-      ctx.preInstallServicesRestored = false;
-      error.message += '; original service restart failed: ' + cleanupError.message;
-    }
-    throw error;
-  }
 }
 export function saveProtectedCode(ctx) {
   const maintenance = maintenanceFor(ctx);
@@ -260,6 +216,21 @@ export function saveProtectedCode(ctx) {
     if (maintenance.treeHash(dest) !== e.originalHash) throw Error('core backup changed during copy');
     maintenance.fsyncTree(dest);
     maintenance.fsyncDir(path.dirname(dest));
+    const modules=path.join(p,'node_modules');
+    let dependencyStat;
+    try {dependencyStat=fs.lstatSync(modules);} catch(error) {if(error.code!=='ENOENT')throw error;}
+    if(!dependencyStat) e.dependencies={kind:'missing'};
+    else if(dependencyStat.isSymbolicLink()) e.dependencies={kind:'symlink',target:fs.readlinkSync(modules)};
+    else {
+      if(!dependencyStat.isDirectory())throw Error('invalid original skill dependencies: '+e.name);
+      const dependencyBackup=path.join(ctx.backupDir,'dependencies',e.name);
+      const originalHash=maintenance.treeHash(modules,{excludeNodeModules:false,includeModes:true});
+      fs.cpSync(modules,dependencyBackup,{recursive:true,verbatimSymlinks:true});
+      if(maintenance.treeHash(dependencyBackup,{excludeNodeModules:false,includeModes:true})!==originalHash || maintenance.treeHash(modules,{excludeNodeModules:false,includeModes:true})!==originalHash)throw Error('skill dependencies changed during backup: '+e.name);
+      maintenance.fsyncTree(dependencyBackup);
+      maintenance.fsyncDir(path.dirname(dependencyBackup));
+      e.dependencies={kind:'directory',sha256:originalHash};
+    }
     e.backedUp = true;
     maintenance.update(dir, j);
   }
@@ -281,7 +252,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
   const maintenance = maintenanceFor(ctx);
   const j = ctx.journal,
     dir = ctx.transactionDir;
-  const deps = prepareRecoveryDependencies(dir, j.zylosDir);
+  const deps = prepareRecoveryDependencies(dir, j.zylosDir, {driverRoot:ctx.coreDir});
   maintenance.marker(j.zylosDir, dir, j);
   maintenance.update(dir, j, {
     phase: 'stopping'
@@ -296,6 +267,8 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     transactionId: j.transactionId,
     fromVersion: j.from,
     toVersion: j.to,
+    formatVersion: ctx.snapshotFormatVersion ?? 2,
+    firstTakeover: j.from === '0.9.3',
     verifySnapshot
   });
   ctx.dbBackupDir = snapshot.dbBackupDir;
@@ -308,18 +281,6 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     dbBackupDir: snapshot.dbBackupDir,
     snapshotManifestHash: maintenance.hash(path.join(snapshot.dbBackupDir, 'manifest.json'))
   });
-  for (const [src, name] of recoveryFiles()) {
-    const file = path.join(dir, name);
-    fs.copyFileSync(path.join(library, src), file);
-    fs.chmodSync(file, 0o600);
-    const fd = fs.openSync(file, 'r');
-    try {
-      maintenance.fsyncFd(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
-  maintenance.fsyncDir(dir);
   const descriptor = {
     formatVersion: 1,
     transactionId: j.transactionId,
@@ -372,6 +333,16 @@ export function recovery(ctx) {
     saved = maintenance.transaction(root, dir);
     ctx.journal = saved;
     ctx.transactionDir = dir;
+    const cutoff = maintenance.classifyCutoff(saved);
+    if (cutoff === 'untrusted') throw Object.assign(Error('untrusted cutoff requires manual recovery'), {code:'CUTOFF_UNTRUSTED'});
+    if (cutoff === 'closed' && saved.phase !== 'upgrade_complete') {
+      maintenance.marker(root,dir,saved);
+      let error = 'compensation is closed; use zylos upgrade --resume-finalize';
+      try { maintenance.stop(saved); } catch (cause) { error += '; isolation: ' + cause.message; }
+      maintenance.update(dir,saved,{phase:'recovery_required',resumePhase:'compensation_closed',error});
+      if (maintenance.canRecognizeProcesses()) release();
+      return {attempted:false,completed:false,stage:'compensation_closed',error,recovery_required:true};
+    }
     // This entry is the parent's explicit failed-upgrade path, whereas direct
     // bootstrap resume is interruption continuation. A failed new finalizer
     // after data_ready must compensate, even if a later startup retry could
@@ -401,7 +372,7 @@ export function recovery(ctx) {
           error
         });
       }
-      if (process.platform !== 'darwin') release();
+      if (maintenance.canRecognizeProcesses()) release();
       return {
         attempted: false,
         completed: false,
@@ -419,19 +390,25 @@ export function recovery(ctx) {
       });
       maintenance.stop(saved);
     }
-    if (process.platform !== 'darwin') release();
+    if (maintenance.terminalValid(saved)) {
+      const cleanup = maintenance.finishTerminal(dir, saved);
+      release();
+      return {attempted:saved.phase === 'restored_complete', completed:saved.phase === 'restored_complete', stage:saved.phase, recovery_required:false, ...cleanup};
+    }
+    if (maintenance.canRecognizeProcesses()) release();
     // A lost finalizer response cannot authorize compensation of an already
     // verified terminal. Resume its saved runner for cleanup/exit verification.
-    let runner = path.join(root, '.zylos', 'upgrade', 'recovery.cjs');
+    let runner = path.join(dir, 'runner.cjs');
+    if (maintenance.hash(runner) !== saved.recoveryHashes?.['runner.cjs']) throw Error('transaction recovery runner changed');
     if (saved.installationIntent && !maintenance.terminalValid(saved)) {
       const descriptor = maintenance.read(path.join(dir, 'descriptor.json'));
       maintenance.validateDescriptor(dir, saved, descriptor);
       runner = descriptor.runnerPath;
     }
-    if (process.platform === 'darwin') {
+    if (!maintenance.canRecognizeProcesses()) {
       if (typeof ctx.releaseControl?.withOwnership !== 'function') throw Error('live controller ownership unavailable; manual recovery required');
       maintenance.privatePath(runner);
-      if (runner === path.join(root, '.zylos', 'upgrade', 'recovery.cjs') && (runner !== ctx.frozenRecoveryPath || maintenance.hash(runner) !== ctx.frozenRecoveryHash)) throw Error('frozen recovery runner changed');
+      if (runner !== ctx.frozenRecoveryPath || maintenance.hash(runner) !== ctx.frozenRecoveryHash) throw Error('transaction recovery runner changed');
       // Frozen runner/maintenance are loaded from retained recovery material,
       // never the npm-replaced package. No parent/child ownership gap exists.
       const result = require(runner).resume(dir, {ownership: ctx.releaseControl.withOwnership});
@@ -462,7 +439,7 @@ export function recovery(ctx) {
     }
   } catch (error) {
     try {
-      if (process.platform !== 'darwin') release();
+      if (maintenance.canRecognizeProcesses()) release();
     } catch {}
     return {
       attempted: false,
@@ -481,8 +458,9 @@ export function protectedDataReady(ctx, overrides = {}) {
   // This function runs in the newly installed finalizer. Use its worker, not
   // the frozen snapshot worker whose code predates the installed migrations.
   if (j.databaseMode !== 'unchanged') {
-    (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
-    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true});
+    const manifest = maintenance.read(path.join(j.dbBackupDir,'manifest.json'));
+    (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId,manifest});
+    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,firstTakeover:j.from==='0.9.3',manifest});
     ctx.databases=verified?.databases || null;
     const checked = maintenance.preflight(dir, j, null);
     if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');
@@ -490,7 +468,7 @@ export function protectedDataReady(ctx, overrides = {}) {
   const current=maintenance.transaction(j.zylosDir,dir);
   const marker=maintenance.read(path.join(j.zylosDir,'.zylos/upgrade/active.json'));
   if(current.phase!=='installing' || current.installationIntent!==true || current.transactionId!==j.transactionId || marker.transactionId!==j.transactionId || marker.transactionDir!==dir) throw Error('active migration transaction changed before data-ready');
-  maintenance.update(dir, current, {
+  if (!overrides.deferPublication) maintenance.update(dir, current, {
     phase: 'new_data_ready'
   });
   ctx.journal = current;

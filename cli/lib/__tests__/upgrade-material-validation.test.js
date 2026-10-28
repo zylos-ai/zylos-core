@@ -92,7 +92,7 @@ test('absent recovery directories permit ordinary database access',t=>{
 function readyFixture(t){
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-ready-identity-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
-  const j={formatVersion:1,transactionId:'tx',zylosDir:root,phase:'new_data_ready',installationIntent:true,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:'a'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}],originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:m.DB_PATHS.map(source=>({source,exists:true}))}};
+  const j={formatVersion:1,transactionId:'tx',zylosDir:root,phase:'new_data_ready',installationIntent:true,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:'a'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}],originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:[...m.DB_PATHS,'components/dashboard/dashboard.db'].map(source=>({source,exists:true}))}};
   return {root,dir,j,save:()=>m.durable(path.join(dir,'journal.json'),j)};
 }
 const badReadyRecords={
@@ -105,7 +105,7 @@ const badReadyRecords={
   'missing snapshot hash':j=>delete j.snapshotManifestHash,
   'incomplete core backup':j=>j.coreManifest[0].backedUp=false,
   'duplicate core member':j=>j.coreManifest.push({...j.coreManifest[0]}),
-  'missing database identity':j=>j.initialIdentity.databases.pop(),
+  'missing Dashboard database identity':j=>j.initialIdentity.databases.pop(),
   'missing original service set':j=>delete j.originalServices,
 };
 for(const [label,alter] of Object.entries(badReadyRecords))test(`data-ready ${label} stays isolated without touching business files`,t=>{

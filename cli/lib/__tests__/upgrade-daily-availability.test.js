@@ -7,7 +7,7 @@ import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {savePm2ProcessList} from '../pm2-save.js';
 import {discoverUpgradeContext} from '../runtime/upgrade-context.js';
-import {runSelfUpgrade} from '../self-upgrade.js';
+import {runUpgradeEntry} from '../upgrade-entry.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 function fixture(t) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-daily-')));
@@ -22,7 +22,7 @@ function fixture(t) {
   nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/active'),snapshotManifestHash:digest,
   coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
   initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:digest,cliRoot:path.join(root,'cli'),cliHash:digest,
-   workerPath:path.join(root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:m.DB_PATHS.map(source=>({source,exists:true}))}};
+   workerPath:path.join(root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:true}))}};
  function save(){m.durable(path.join(dir,'journal.json'),j);}
  save();return {root,dir,stable,j,save};
 }
@@ -53,7 +53,12 @@ for(const damage of ['malformed','missing','oversized','unknown-entry','dangling
 });
 
 test('active READY ignores unrelated corrupt history, allows real writes, and still suppresses PM2 save',t=>{
- const f=fixture(t);m.marker(f.root,f.dir,f.j);
+ const f=fixture(t);
+ for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','runner.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]) {
+  fs.copyFileSync(path.resolve('cli/lib',src),path.join(f.dir,dest));fs.chmodSync(path.join(f.dir,dest),0o600);
+ }
+ f.j.recoveryHashes=Object.fromEntries(['maintenance.cjs','runner.cjs','finalizer.cjs'].map(name=>[name,m.hash(path.join(f.dir,name))]));
+ f.save();m.marker(f.root,f.dir,f.j);
  const old=path.join(f.root,'.backup/self-upgrade/old');fs.mkdirSync(old,{mode:0o700});fs.writeFileSync(path.join(old,'journal.json'),'{');
  assert.equal(m.discover(f.root).blocked,true);
  assert.equal(m.discoverActive(f.root).blocked,false);
@@ -69,11 +74,11 @@ for(const phase of ['preparing','stopping','offline','installing','restoring','r
  for(const source of m.DB_PATHS)assert.equal(fs.existsSync(path.join(f.root,source)),false);
 });
 
-test('malformed active journal stays blocked while abandoned unmarked preparation permits daily use but rejects upgrade',t=>{
+test('malformed active journal stays blocked while abandoned unmarked preparation permits daily use but rejects upgrade',async t=>{
  const f=fixture(t);f.j.phase='preparing';f.j.installationIntent=false;f.save();
  assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));
  let preflight=false;
- const result=runSelfUpgrade({newVersion:'fixture'},{zylosDir:f.root,protectionSupported:()=>true,getCurrentVersion:()=>({success:true,version:'old'}),preflightCoreDbUpgrade:()=>{preflight=true;}});
+ const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.root,installedRoot:f.root,zylosDir:f.root},{preflight:()=>{preflight=true;}});
  assert.equal(result.success,false);assert.equal(result.recovery_required,true);assert.equal(preflight,false);
  m.marker(f.root,f.dir,f.j);fs.writeFileSync(path.join(f.dir,'journal.json'),'{');
  assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);assert.equal(discoverUpgradeContext(f.root).blocked,true);

@@ -16,7 +16,6 @@ Expected output:
 == service restart ==
 == runtime switch ==
 == component rollback restart ==
-== self-upgrade rollback restart ==
 E2E OK
 ```
 
@@ -33,8 +32,10 @@ The script creates a temporary fake home directory, a fake `pm2` binary, and a f
 3. `rollback()` in `cli/lib/upgrade.js`
    Confirms component rollback restart uses the component's own `ecosystem.config.cjs` when it exists, instead of plain `pm2 restart`.
 
-4. `rollbackSelf()` in `cli/lib/self-upgrade.js`
-   Confirms self-upgrade rollback restores the previously backed-up core `pm2/ecosystem.config.cjs` before restarting services.
+Core self-upgrade now uses transaction recovery. The historical `rollbackSelf()`
+case was retired with the old parent orchestration. Its protected replacement is
+covered by `cli/lib/__tests__/upgrade-recovery.test.js` through the isolated Node
+runner; this manual harness does not verify upgrade recovery.
 
 ## Manual Review Notes
 
@@ -42,16 +43,16 @@ The harness is intentionally PM2-free:
 
 - `pm2` is replaced with a fake binary that logs every invocation
 - assertions are made against the captured PM2 command log
-- the script fails immediately if a required ecosystem restart is missing, if an unexpected plain `pm2 restart` appears, or if self-upgrade rollback fails to restore the backed-up ecosystem file before restart
+- the script fails immediately if a required ecosystem restart is missing or an unexpected plain `pm2 restart` appears
 
 ## Related Unit Tests
 
 Run the node:test subset used for this change:
 
 ```bash
-node --test \
+node scripts/run-node-tests.js \
   cli/lib/__tests__/pm2.test.js \
-  cli/lib/__tests__/self-upgrade.test.js \
+  cli/lib/__tests__/upgrade-recovery.test.js \
   cli/lib/__tests__/runtime-setup.test.js \
   cli/lib/__tests__/codex.test.js \
   cli/lib/__tests__/fs-utils.test.js \

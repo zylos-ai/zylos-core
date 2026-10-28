@@ -41,13 +41,22 @@ test('M4 upgrade submission retries only connects with a 30s total budget and 1s
   }
 });
 
-test('M4 upgrade total budget respects an earlier deadline and never exceeds 30 seconds',async()=>{
-  for(const [deadlineAt,expected] of [[500,500],[100000,30100]]) {
+test('M4 upgrade submission uses its own 30 second window regardless of an obsolete parent deadline',async()=>{
+  for(const [deadlineAt,expected] of [[500,30100],[100000,30100]]) {
     let deadline;
     await requestRuntimeRestart({...base,afterServiceRestart:true,deadlineAt,
       send:async(_request,options)=>{deadline=options.deadlineAt;return {kind:'connect_failed',sent:false};}});
     assert.equal(deadline,expected);
   }
+});
+
+test('upgrade submission window starts after the ordinary mode and transition reads',async()=>{
+  let now=100;
+  const result=await requestRuntimeRestart({...base,now:()=>now,afterServiceRestart:true,
+    readMode:()=>{now+=5000;return {mode:'multi'};},readTransition:()=>{now+=5000;return null;},
+    send:async(_request,options)=>{assert.equal(options.deadlineAt,40100);assert.equal(Object.hasOwn(options,'replyMaxMs'),false);return {kind:'accepted',sent:true,reply:{result:'accepted',runCount:1}};}
+  });
+  assert.equal(result.ok,true);
 });
 
 test('M4 upgrade retries never repeat a connected uncertain or refused request',async()=>{

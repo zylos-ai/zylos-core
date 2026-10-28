@@ -42,7 +42,7 @@ function readyJournal(f, phase = 'new_data_ready', extra = {}) {
       cliRoot: path.join(f.root, 'original-cli'), cliHash: digest,
       workerPath: path.join(f.root, 'original-cli/lib/worker.js'), workerHash: digest,
       ecosystemHash: null,
-      databases: ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'].map(source => ({ source, exists: true })),
+      databases: ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db', 'components/dashboard/dashboard.db'].map(source => ({ source, exists: true })),
     },
     ...extra,
   });
@@ -90,10 +90,26 @@ test('live controller is observed without entering resume', {skip:process.platfo
 
 test('once resumes exactly the attributed transaction and does not launch a runtime', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
-  fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'exports.resume = dir => ({resumed: dir});');
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'throw Error("stable recovery must not execute");');
+  fs.writeFileSync(path.join(dir, 'runner.cjs'), 'exports.resume = dir => ({resumed: dir});');
+  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-finalizer.cjs','finalizer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+  const journal = m.read(path.join(dir, 'journal.json'));
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   const out = f.api.bootstrap(f.root, {once: true});
   assert.equal(out.resumed, dir);
   assert.equal(out.launched, undefined);
+});
+
+test('once rejects changed transaction recovery code before executing it', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal();
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-finalizer.cjs','finalizer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+  fs.writeFileSync(path.join(dir, 'runner.cjs'), 'exports.resume = () => ({resumed:true});');
+  const journal = m.read(path.join(dir, 'journal.json'));
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
+  fs.appendFileSync(path.join(dir, 'runner.cjs'), '\nthrow Error("changed runner executed");');
+  assert.throws(() => f.api.bootstrap(f.root, {once:true}), /transaction recovery material changed/);
 });
 
 test('stale or invalid controller material leaves an isolated recovery cue', t => {

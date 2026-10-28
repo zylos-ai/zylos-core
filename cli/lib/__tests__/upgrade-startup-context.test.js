@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt} from '../runtime/upgrade-context.js';
+import {createRequire} from 'node:module';
+import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt,discoverUpgradeContext} from '../runtime/upgrade-context.js';
+const maintenance = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 test('Codex recovery replaces the sole positional startup prompt and shell quoting preserves hostile text',()=>{
  const prompt="recovery $(false) `false` 'quotes'\nnext line";
  const args=applyUpgradePrompt(['--no-daemon','old startup prompt'],prompt,1);
@@ -36,6 +38,84 @@ test('unmarked historical transactions do not require stable startup helpers', t
   if (missing === '.zylos/upgrade') fs.mkdirSync(path.join(root,'.zylos'),{mode:0o700});
   assert.equal(upgradeStartupPrompt(root), null);
  }
+});
+
+function publishedTransaction(t) {
+ const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-startup-published-')));
+ t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const dir = path.join(root,'.backup/self-upgrade/tx');
+ fs.mkdirSync(dir,{recursive:true,mode:0o700});
+ const executed = path.join(root,'recovery-executed');
+ for (const [source,name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
+ fs.writeFileSync(path.join(dir,'runner.cjs'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(executed)},JSON.stringify(process.argv.slice(2)));fs.rmSync(${JSON.stringify(dir)},{recursive:true});console.log(JSON.stringify({recovery_required:false,stage:'aborted_before_install'}));`);
+ const journal={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:false,initialIdentity:{},recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name=>[name,maintenance.hash(path.join(dir,name))]))};
+ maintenance.update(dir,journal);
+ return {root,dir,journal,executed};
+}
+
+test('startup runs the published transaction runner before a stable bootstrap or marker exists', {skip:process.platform!=='linux'}, t => {
+ const f=publishedTransaction(t);
+ assert.equal(fs.existsSync(path.join(f.root,'.zylos')),false);
+ assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
+ assert.deepEqual(JSON.parse(fs.readFileSync(f.executed,'utf8')),['resume','--transaction-dir',f.dir]);
+});
+
+test('pre-marker recovery material remains isolated with corrupt or absent journal publication', t => {
+ for (const damage of ['corrupt','missing','partial-recovery']) {
+  const f=publishedTransaction(t);
+  if(damage==='corrupt')fs.writeFileSync(path.join(f.dir,'journal.json'),'{broken');
+  else fs.unlinkSync(path.join(f.dir,'journal.json'));
+  if(damage==='partial-recovery')for(const name of ['runner.cjs','finalizer.cjs'])fs.unlinkSync(path.join(f.dir,name));
+  const context=discoverUpgradeContext(f.root);
+  assert.equal(context.active,true);assert.equal(context.blocked,true);assert.equal(context.recovery_required,true);
+  assert.equal(fs.existsSync(f.executed),false);
+ }
+});
+
+test('completed historical transactions with retained recovery files leave ordinary startup untouched', t => {
+ const f=publishedTransaction(t),digest='a'.repeat(64);
+ Object.assign(f.journal,{phase:'aborted_before_install',skillsDir:path.join(f.root,'.claude/skills'),
+  coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
+  initialIdentity:{nodePath:process.execPath,packageJson:path.join(f.root,'package.json'),packageHash:digest,cliRoot:path.join(f.root,'cli'),cliHash:digest,workerPath:path.join(f.root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:maintenance.databasePaths(2).map(source=>({source,exists:true}))},
+  cleanup:{complete:true,servicesRestored:true},terminalEvidence:{verified:true,kind:'original_deployment_and_readonly_data'}});
+ maintenance.update(f.dir,f.journal);
+ assert.equal(maintenance.terminalValid(f.journal),true);
+ assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
+ assert.equal(fs.existsSync(f.executed),false);
+});
+
+test('startup observes a live published controller without executing its recovery runner', {skip:process.platform!=='linux'}, t => {
+ const f=publishedTransaction(t);
+ maintenance.durable(path.join(f.dir,'controller.json'),maintenance.identity());
+ const context=discoverUpgradeContext(f.root);
+ assert.equal(context.controllerAlive,true);
+ assert.equal(context.observing,true);
+ assert.equal(fs.existsSync(f.executed),false);
+});
+
+test('startup rejects modified transaction recovery and unrecognizable ownership without executing code', {skip:process.platform!=='linux'}, t => {
+ for(const attack of ['modified-runner','unknown-process']) {
+  const f=publishedTransaction(t),recognize=maintenance.canRecognizeProcesses;
+  if(attack==='modified-runner')fs.appendFileSync(path.join(f.dir,'runner.cjs'),'\n// changed');
+  else maintenance.canRecognizeProcesses=()=>false;
+  let context;
+  try{context=discoverUpgradeContext(f.root);}finally{maintenance.canRecognizeProcesses=recognize;}
+  assert.equal(context.recovery_required,true);
+  assert.equal(context.blocked,true);
+  assert.equal(fs.existsSync(f.executed),false);
+ }
+});
+
+test('startup diagnostics preserve active READY availability despite unrelated damaged history', t => {
+ const f=publishedTransaction(t),digest='a'.repeat(64);
+ Object.assign(f.journal,{phase:'new_data_ready',installationIntent:true,skillsDir:path.join(f.root,'.claude/skills'),dbBackupDir:path.join(f.root,'.backup/db/tx'),snapshotManifestHash:digest,
+  coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
+  initialIdentity:{nodePath:process.execPath,packageJson:path.join(f.root,'package.json'),packageHash:digest,cliRoot:path.join(f.root,'cli'),cliHash:digest,workerPath:path.join(f.root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:maintenance.databasePaths(2).map(source=>({source,exists:true}))}});
+ maintenance.update(f.dir,f.journal);maintenance.marker(f.root,f.dir,f.journal);
+ const unrelated=path.join(f.root,'.backup/self-upgrade/old');fs.mkdirSync(unrelated);fs.writeFileSync(path.join(unrelated,'journal.json'),'{');
+ const context=discoverUpgradeContext(f.root);
+ assert.equal(context.active,true);assert.equal(context.blocked,false);assert.equal(context.recovery_required,true);
+ assert.equal(fs.existsSync(f.executed),false);
 });
 
  test('nonblocking recovery cue remains available alongside normal context', t => {

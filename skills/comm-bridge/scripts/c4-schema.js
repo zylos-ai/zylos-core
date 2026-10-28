@@ -1,6 +1,9 @@
 import { migrateSchema } from './c4-migrations.js';
 import { migrateToV2 } from './c4-migrations-v2.js';
 import { inspectLayout } from './sqlite-schema.js';
+import { rejectLegacySchemaProbe } from './upgrade-admission.js';
+
+rejectLegacySchemaProbe();
 
 export const SUPPORTED_SCHEMA_VERSION = 2;
 export const supportsNewDatabase = true;

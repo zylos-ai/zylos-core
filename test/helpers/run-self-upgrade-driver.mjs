@@ -1,103 +1,64 @@
 /**
- * Isolated #717 self-upgrade seam.
- *
- * This drives the real old-launcher runSelfUpgrade() orchestration, the real
- * finalizer state serialization/restore APIs, real step 5 smart merge, and
- * the old launcher's printStep callback. The installed-finalizer boundary is
- * injected, as are npm and PM2 effects, so the host installation is never
- * touched.
- *
- * argv: <package-temp-dir> <success|json|later-failure|no-conflict>
- * stdout: one JSON object containing the result and captured launcher output
+ * Protected entry controller with real step 5 merge. Package/service operations
+ * and compensation are local fixtures, not real installation/recovery evidence.
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { runUpgradeEntry } from '../../cli/lib/upgrade-entry.js';
+import { step5_syncCoreSkills } from '../../cli/lib/self-upgrade.js';
+import { printStep } from '../../cli/commands/component.js';
 
 const [tempDir, scenario] = process.argv.slice(2);
 const zylosDir = process.env.ZYLOS_DIR;
-if (!tempDir || !scenario || !zylosDir) {
-  throw new Error('Usage: run-self-upgrade-driver.mjs <tempDir> <scenario> with ZYLOS_DIR');
-}
-
-const {
-  cleanupBackup,
-  createFinalizeState,
-  runSelfUpgrade,
-  runSelfUpgradeFinalize,
-  step5_syncCoreSkills,
-  step1_backupCoreSkills,
-  step2_preUpgradeHook,
-  step3_stopCoreServices,
-  step4_npmInstallGlobal,
-} = await import('../../cli/lib/self-upgrade.js');
-const { printStep } = await import('../../cli/commands/component.js');
-
-const transactionBackupDir = path.join(zylosDir, 'zylos-core-backup-717-transaction');
-const npmCommands = [];
-const stoppedServices = [];
+if (!tempDir || !scenario || !zylosDir) throw Error('Expected tempDir, scenario and ZYLOS_DIR');
+const skillsDir = path.join(zylosDir, '.claude/skills');
+const transactionBackupDir = path.join(zylosDir, '.backup/self-upgrade/conflict-fixture/code');
+const operations = [];
 const launcherOutput = [];
 const originalLog = console.log;
 console.log = (...args) => launcherOutput.push(args.join(' '));
-
 let result;
 try {
-  result = runSelfUpgrade({
-    tempDir,
-    newVersion: '0.5.4-test',
-    mode: 'merge',
-    onStep: scenario === 'json' ? undefined : printStep,
-  }, {
-    // Explicitly exercise the legacy #717 seam; default runs use v2 protection.
-    preInstallSteps: [
-      ctx=>step1_backupCoreSkills(ctx,{zylosDir,skillsDir:path.join(zylosDir,'.claude','skills'),backupDir:transactionBackupDir}),
-      step2_preUpgradeHook,
-      ctx=>step3_stopCoreServices(ctx,{getSkillsServices:()=>[{name:'fixture-service',status:'online'}],stopService:name=>stoppedServices.push(name)}),
-      ctx=>step4_npmInstallGlobal(ctx,{execSync:command=>{npmCommands.push(command);return command.startsWith('npm pack')?'zylos-fixture.tgz\n':'';}}),
-    ],
-    getCurrentVersion: () => ({ success: true, version: '0.5.3' }),
-    step1: {
-      zylosDir,
-      skillsDir: path.join(zylosDir, '.claude', 'skills'),
-      backupDir: transactionBackupDir,
+  result = await runUpgradeEntry({schemaVersion:1, fromVersion:'0.9.3',
+    installedRoot:tempDir, tempDir, zylosDir}, {
+    maintenance:{discover:() => ({candidates:[], diagnostics:[], marker:null})},
+    inspect:() => ({tempDir, zylosDir, skillsDir, mode:'merge'}),
+    resolveNpm:() => '/fixture/npm-cli.js',
+    begin(ctx) {
+      ctx.preInstallProtection = true;
+      ctx.transactionId = 'conflict-fixture';
+      ctx.transactionDir = path.dirname(transactionBackupDir);
+      fs.mkdirSync(ctx.transactionDir, {recursive:true});
+      fs.writeFileSync(path.join(ctx.transactionDir, 'journal.json'), JSON.stringify({
+        transactionId:ctx.transactionId, phase:'installing', installationIntent:true,
+      }));
+      ctx.releaseControl = () => operations.push('release');
     },
-    step3: {
-      getSkillsServices: () => [{ name: 'fixture-service', status: 'online' }],
-      stopService: (name) => stoppedServices.push(name),
+    savePackage:() => operations.push('save-package'),
+    saveCode() {
+      fs.cpSync(skillsDir, path.join(transactionBackupDir, 'skills'), {recursive:true});
+      operations.push('save-code');
     },
-    step4: {
-      execSync: (command) => {
-        npmCommands.push(command);
-        return command.startsWith('npm pack') ? 'zylos-fixture.tgz\n' : '';
-      },
+    prepare:() => operations.push('snapshot-and-stop'),
+    install:() => operations.push('install'),
+    finalize(ctx) {
+      const step = step5_syncCoreSkills(ctx, {zylosDir});
+      if (scenario !== 'json') printStep(step);
+      if (step.status === 'failed') throw Error(step.error);
+      if (scenario === 'later-failure') return {success:false, failedStep:6,
+        error:'injected dependency installation failure', mergeConflicts:ctx.mergeConflicts};
+      // Protected terminal cleanup can remove code while retaining conflicts.
+      fs.rmSync(transactionBackupDir, {recursive:true, force:true});
+      return {success:true, mergeConflicts:ctx.mergeConflicts.length ? ctx.mergeConflicts : null};
     },
-    runInstalledFinalizer: (ctx) => {
-      const steps = [
-        (finalizerCtx) => step5_syncCoreSkills(finalizerCtx, { zylosDir }),
-      ];
-      if (scenario === 'later-failure') {
-        steps.push(() => ({
-          step: 6,
-          name: 'install_skill_dependencies',
-          status: 'failed',
-          error: 'injected later failure',
-        }));
-      }
-      return runSelfUpgradeFinalize(createFinalizeState(ctx), { steps });
+    recover() {
+      operations.push('compensate');
+      fs.rmSync(skillsDir, {recursive:true, force:true});
+      fs.cpSync(path.join(transactionBackupDir, 'skills'), skillsDir, {recursive:true});
+      return {attempted:true, completed:true, recovery_required:false};
     },
   });
-
-  // Match component.js: legacy success cleanup applies to both output modes.
-  if (result.success && !result.preInstallProtection && result.backupDir) {
-    cleanupBackup(result.backupDir);
-  }
 } finally {
   console.log = originalLog;
 }
-
-originalLog(JSON.stringify({
-  result,
-  launcherOutput,
-  npmCommands,
-  stoppedServices,
-  transactionBackupDir,
-}));
+originalLog(JSON.stringify({result, launcherOutput, operations, transactionBackupDir}));

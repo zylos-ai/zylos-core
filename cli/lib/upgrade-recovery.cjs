@@ -63,9 +63,9 @@ function originalVerified(dir, j) {
       action: 'offline-preflight',
       zylosDir: j.zylosDir,
       schemaRoot: j.skillsDir,
-      manifest: {
-        databases: expected
-      }
+      firstTakeover: j.from === '0.9.3',
+      expectedDatabases: expected,
+      formatVersion: m.originalDatabasePaths(j).length === 4 ? 2 : 1
     })], {
       encoding: 'utf8',
       timeout: 120000
@@ -112,8 +112,10 @@ function abort(dir, j) {
 function validateSnapshot(dir, j) {
   const file = path.join(j.dbBackupDir, 'manifest.json');
   const manifest = m.read(file);
-  if (m.hash(file) !== j.snapshotManifestHash || manifest.id !== j.transactionId || manifest.status !== 'complete') throw Error('snapshot manifest identity mismatch');
-  if (manifest.databases.length !== 3 || manifest.databases.some((d, i) => d.source !== m.DB_PATHS[i])) throw Error('snapshot database manifest incomplete');
+  if (manifest.formatVersion !== 2 || m.hash(file) !== j.snapshotManifestHash || manifest.id !== j.transactionId || manifest.status !== 'complete') throw Error('snapshot manifest identity mismatch');
+  const sources = m.databasePaths(manifest.formatVersion);
+  if (!Array.isArray(manifest.databases) || manifest.databases.length !== sources.length || manifest.databases.some((d, i) => d.source !== sources[i])) throw Error('snapshot database manifest incomplete');
+  if (sources.some((source,i) => j.initialIdentity.databases[i]?.source !== source) || j.initialIdentity.databases.length !== sources.length) throw Error('snapshot and original database identity differ');
   m.worker(dir, j, {
     action: 'verify',
     zylosDir: j.zylosDir,
@@ -130,7 +132,7 @@ function rescue(dir, j) {
     mode: 0o700
   });
   // Strict stopped/known-worker-exited gate ran before this physical file capture.
-  for (const source of m.DB_PATHS) for (const suffix of ['', '-wal', '-shm']) {
+  for (const source of m.originalDatabasePaths(j)) for (const suffix of ['', '-wal', '-shm']) {
     const key = source + suffix,
       p = path.join(j.zylosDir, key),
       dest = path.join(root, key.replaceAll('/', '_'));
@@ -168,17 +170,40 @@ function rescue(dir, j) {
 }
 function restoreCore(dir, j) {
   j.codeRestore ||= {};
+  const dependencyState=(entry,skill) => {
+    const saved=entry.dependencies,modules=path.join(skill,'node_modules');
+    if(!saved || !['missing','directory','symlink'].includes(saved.kind))throw Error('missing original skill dependency evidence: '+entry.name);
+    const backup=path.join(dir,'code','dependencies',entry.name);
+    if(saved.kind==='directory') {
+      if(typeof saved.sha256!=='string' || !/^[a-f0-9]{64}$/.test(saved.sha256))throw Error('invalid original skill dependency hash');
+      m.privatePath(backup,{directory:true});
+      if(fs.realpathSync(backup)!==path.resolve(backup))throw Error('redirected skill dependency backup: '+entry.name);
+      if(m.treeHash(backup,{excludeNodeModules:false,includeModes:true})!==saved.sha256)throw Error('skill dependency backup changed: '+entry.name);
+    } else if(saved.kind==='symlink' && typeof saved.target!=='string')throw Error('invalid original skill dependency link');
+    let stat;
+    try {stat=fs.lstatSync(modules);} catch(error) {if(error.code!=='ENOENT')throw error;}
+    const matches=saved.kind==='missing' ? !stat : saved.kind==='symlink' ? !!stat?.isSymbolicLink()&&fs.readlinkSync(modules)===saved.target : !!stat?.isDirectory()&&!stat.isSymbolicLink()&&m.treeHash(modules,{excludeNodeModules:false,includeModes:true})===saved.sha256;
+    return {saved,modules,backup,matches};
+  };
   for (const e of j.coreManifest) {
     const p = m.target(j, e.name),
       backup = path.join(dir, 'code', 'skills', e.name),
       state = j.codeRestore[e.name];
     if (e.existedBefore) {
       if (!e.backedUp || !fs.existsSync(backup) || m.treeHash(backup) !== e.originalHash) throw Error('invalid core backup: ' + e.name);
+      const dependencies=dependencyState(e,p);
       if (state?.complete) {
-        if (!fs.existsSync(p) || m.treeHash(p) !== e.originalHash) throw Error('completed core restore changed: ' + e.name);
+        if (!fs.existsSync(p) || m.treeHash(p) !== e.originalHash || !dependencies.matches) throw Error('completed core restore changed: ' + e.name);
         continue;
       }
       m.sync(backup, p);
+      if(!dependencies.matches) {
+        fs.rmSync(dependencies.modules,{recursive:true,force:true});
+        if(dependencies.saved.kind==='directory')fs.cpSync(dependencies.backup,dependencies.modules,{recursive:true,verbatimSymlinks:true});
+        else if(dependencies.saved.kind==='symlink')fs.symlinkSync(dependencies.saved.target,dependencies.modules);
+        m.fsyncTree(p);
+        if(!dependencyState(e,p).matches)throw Error('skill dependency restore verification failed: '+e.name);
+      }
       if (m.treeHash(p) !== e.originalHash) throw Error('core restore verification failed');
     } else if (fs.existsSync(p)) {
       const ownership = path.join(p, '.zylos', 'upgrade-owner.json');
@@ -239,6 +264,7 @@ function restoreCore(dir, j) {
 function replaceDatabases(dir, j, manifest) {
   j.dbRestore ||= {};
   for (const d of manifest.databases) {
+    if (d.source === 'components/dashboard/dashboard.db' && d.status === 'missing') continue;
     const target = path.join(j.zylosDir, d.source),
       state = j.dbRestore[d.source] || (j.dbRestore[d.source] = {
         complete: false
@@ -297,14 +323,16 @@ function validateReady(dir, j) {
   const restored = j.phase.startsWith('restored');
   let verified = false;
   try {
+    const snapshot = restored && j.databaseMode !== 'unchanged' ? validateSnapshot(dir, j) : null;
     m.update(dir, j, {
       phase: restored ? 'restored_verifying' : 'new_verifying'
     });
+    if (restored) m.restoreOriginalPackage(dir, j);
     m.start(j);
     m.verifyServices(j);
     if (j.databaseMode !== 'unchanged') {
       // Normal startup may create missing DBs/write data: use current compatibility, never old hashes.
-      const checked = m.preflight(dir, j, null);
+      const checked = m.preflight(dir, j, snapshot, {liveRestored:restored});
       if (checked.success === false) throw Error(checked.error || 'started code/data incompatible');
     }
     verified = true;
@@ -342,37 +370,9 @@ function validateReady(dir, j) {
     return null;
   }
 }
-function finalizerDescriptor(dir, j) {
-  const d = m.read(path.join(dir, 'descriptor.json'));
-  m.validateDescriptor(dir, j, d);
-  return d;
-}
-function verifyFinalizerExit(dir, j) {
-  for (const kind of ['installer', 'finalizer']) {
-    const started = kind + 'Started',
-      confirmed = kind + 'ExitConfirmed',
-      unconfirmed = kind + 'ExitUnconfirmed';
-    if (j[unconfirmed] || j[started] && !j[confirmed]) {
-      const d = finalizerDescriptor(dir, j);
-      for (const name of ['finalizer.cjs', 'maintenance.cjs']) {
-        if (!d.hashes?.[name]) throw Error('missing trusted finalizer exit verification material: ' + name);
-        m.privatePath(path.join(dir, name));
-      }
-      const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {
-        terminate: false,
-        kind
-      });
-      if (!result.confirmed) throw Error(result.error || kind + ' exit requires verification before resume');
-      m.update(dir, j, {
-        [unconfirmed]: false,
-        [confirmed]: true
-      });
-    }
-  }
-}
 function resume(dir, {hooks = {}, ownership} = {}) {
-  if (process.platform === 'darwin') {
-    if (typeof ownership !== 'function') throw Error('interrupted macOS upgrade requires manual recovery; automatic resume is unavailable');
+  if (!m.canRecognizeProcesses()) {
+    if (typeof ownership !== 'function') throw Error('interrupted upgrade requires manual recovery because process identities cannot be recognized; automatic resume is unavailable');
     return ownership(path.resolve(dir), () => resumeWithControl(dir, {hooks}, () => () => {}));
   }
   return resumeWithControl(dir, {hooks}, transactionDir => m.acquire(transactionDir));
@@ -403,7 +403,12 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     // Journal identity and phase are authoritative only while holding the
     // controller. Never restore using the pre-lock snapshot.
     j = m.transaction(root, dir);
-    verifyFinalizerExit(dir, j);
+    const cutoff = m.classifyCutoff(j);
+    if (cutoff === 'untrusted') throw Object.assign(Error('untrusted cutoff requires manual recovery'), {code: 'CUTOFF_UNTRUSTED'});
+    if (cutoff === 'closed' && j.phase !== 'upgrade_complete') {
+      return fail(dir, j, 'compensation is closed; use zylos upgrade --resume-finalize');
+    }
+    m.verifyFinalizerExit(dir, j);
     if (m.terminalValid(j)) {
       if (j.terminalServicesStopped) {
         m.start(j);
@@ -439,11 +444,13 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     m.validateDescriptor(dir, j, d);
     if (j.databaseMode === 'unchanged') {
       restoreCore(dir, j);
+      m.restoreOriginalPackage(dir, j);
     } else {
       const snapshot = validateSnapshot(dir, j);
       rescue(dir, j);
       restoreCore(dir, j);
       replaceDatabases(dir, j, snapshot);
+      m.restoreOriginalPackage(dir, j);
       const checked = m.preflight(dir, j, snapshot);
       if (checked.success === false) throw Error(checked.error || 'restored preflight failed');
     }
@@ -453,7 +460,7 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     return validateReady(dir, j);
   } catch (e) {
     // Invalid identity under the lock must not write through untrusted paths.
-    if (!j || j.zylosDir !== root || j.transactionId !== path.basename(dir)) throw e;
+    if (!j || j.zylosDir !== root || j.transactionId !== path.basename(dir) || m.classifyCutoff(j) === 'untrusted') throw e;
     if (m.terminalValid(j)) return terminalPending(dir, j, e.message);
     return fail(dir, j, e.message);
   } finally {
