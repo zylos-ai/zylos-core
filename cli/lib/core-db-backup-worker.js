@@ -297,7 +297,6 @@ export async function execute(input) {
       const mod=await ownerSchema(input,item);
       if(item.owner==='dashboard') {
         await inspectDashboardFile(mod,source);
-        fs.mkdirSync(path.dirname(source),{recursive:true});
         const Database=driver(input),db=new Database(source,{fileMustExist:true,timeout:5000});
         let state;
         try {await mod.migrate(db);state=await inspectDashboard(mod,db);}

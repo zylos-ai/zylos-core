@@ -11,6 +11,7 @@ import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
 import {runUpgradeEntry} from '../upgrade-entry.js';
 import {runSelfUpgradeFinalize} from '../self-upgrade.js';
 import {generateManifest} from '../manifest.js';
+import {beginUpgrade,maintenance as protectionMaintenance,prepareProtectedInstall,protectedDataReady} from '../upgrade-protection.js';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
 import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
@@ -37,7 +38,7 @@ function interceptSync(check) {
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
 // rescue, rename intents, isolation discovery, and terminal marker removal are real.
-async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=false}={}) {
+async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=false,dashboardVersion=12}={}) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_RECOVERY_TEST_TMPDIR || os.tmpdir(),'upgrade-recovery-')));
  const previousHome=process.env.HOME,previousPm2Home=process.env.PM2_HOME;
  process.env.HOME=root;process.env.PM2_HOME=path.join(root,'.pm2');
@@ -71,7 +72,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  const dashboardRoot=path.join(skillsDir,'dashboard');fs.mkdirSync(path.join(dashboardRoot,'src/lib'),{recursive:true});
  fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
  fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`export const dashboardSchemaOwner={supportsNewDatabase(){return true;},inspectSchema(db){const currentVersion=db.prepare("SELECT name FROM sqlite_master WHERE name='schema_migrations'").get()?db.prepare('SELECT MAX(version) AS n FROM schema_migrations').get().n:null;return {currentVersion,targetVersion:20,needsMigration:currentVersion!==20};},migrate(){throw Error('recovery must not migrate Dashboard');}};`);
- if(dashboard){const file=path.join(root,'components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});const db=new Database(file);db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);INSERT INTO schema_migrations VALUES (12);CREATE TABLE events(value TEXT);INSERT INTO events VALUES (\'original\')');db.close();}
+ if(dashboard){const file=path.join(root,'components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});const db=new Database(file);db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);CREATE TABLE events(value TEXT);INSERT INTO events VALUES (\'original\')');db.prepare('INSERT INTO schema_migrations VALUES (?)').run(dashboardVersion);db.close();}
  const snapshotResult=snapshot({zylosDir:root,transactionId:'tx',formatVersion}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
@@ -109,6 +110,81 @@ function unchanged(f) {
  f.m.preflight=()=>{throw Error('database preflight must not run');};
  f.m.worker=()=>{throw Error('database worker must not run');};
 }
+
+async function originalDashboardTakeover(t) {
+ const f=await fixture(t,{dashboard:true,dashboardVersion:20});
+ fs.rmSync(f.dashboardRoot,{recursive:true});
+ f.m.update(f.dir,f.j,{firstTakeover:true,dashboardOwnerManaged:true});
+ return f;
+}
+
+test('protected preparation checks an original deployment without a Dashboard owner',async t=>{
+ const f=await originalDashboardTakeover(t);
+ f.m.update(f.dir,f.j,{installationIntent:false,phase:'code_saved'});
+ assert.doesNotThrow(()=>f.r.originalVerified(f.dir,f.load()));
+ fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
+ fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
+ const before=fs.readFileSync(f.db('components/dashboard/dashboard.db'));
+ const ctx={maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:2};
+ assert.doesNotThrow(()=>prepareProtectedInstall(ctx));
+ assert.equal(f.load().phase,'prepared');
+ assert.equal(ctx.dbSnapshotVerified,true);
+ assert.deepEqual(fs.readFileSync(f.db('components/dashboard/dashboard.db')),before);
+ assert.equal(fs.existsSync(f.dashboardRoot),false);
+});
+
+test('post-install compensation and restored startup accept an original deployment without a Dashboard owner',async t=>{
+ const f=await originalDashboardTakeover(t);
+ const dashboardFile=f.db('components/dashboard/dashboard.db');
+ const saved=f.snapshot.manifest.databases.find(row=>row.source==='components/dashboard/dashboard.db');
+ const changed=new Database(dashboardFile);changed.exec("UPDATE events SET value='new-generation'");changed.close();
+ change(f);
+ const phases=[],update=f.m.update;
+ f.m.update=(dir,j,changes)=>{if(changes?.phase)phases.push(changes.phase);return update(dir,j,changes);};
+ const result=f.r.resume(f.dir);
+ assert.equal(result.completed,true,JSON.stringify(result));
+ assert.equal(result.recovery_required,false,JSON.stringify(result));
+ assert.equal(f.load().phase,'restored_complete');
+ assert.ok(phases.includes('restored_data_ready'));
+ assert.ok(phases.includes('restored_verifying'));
+ assert.equal(f.m.hash(dashboardFile),saved.sha256);
+ const restored=new Database(dashboardFile,{readonly:true,fileMustExist:true});
+ try {assert.deepEqual(restored.prepare('SELECT value FROM events').all(),[{value:'original'}]);}
+ finally {restored.close();}
+ assert.equal(fs.existsSync(f.dashboardRoot),false);
+ assert.ok(f.calls.includes('start'));assert.ok(f.calls.includes('verify'));
+});
+
+test('beginning persists both true Dashboard decisions in the published journal',async t=>{
+ const f=await originalDashboardTakeover(t),root=path.join(f.root,'fresh');
+ const coreDir=path.join(root,'package'),skillsDir=path.join(root,'.claude/skills');
+ fs.mkdirSync(path.join(coreDir,'skills/core'),{recursive:true});
+ fs.mkdirSync(path.join(coreDir,'cli/lib'),{recursive:true});
+ fs.mkdirSync(path.join(skillsDir,'core'),{recursive:true});
+ fs.writeFileSync(path.join(coreDir,'package.json'),'{}');
+ fs.copyFileSync(path.resolve('cli/lib/core-db-backup-worker.js'),path.join(coreDir,'cli/lib/core-db-backup-worker.js'));
+ const services=protectionMaintenance.services;
+ protectionMaintenance.services=()=>[];
+ const ctx={coreDir,tempDir:coreDir,from:'0.9.3',to:'1.0.0',firstTakeover:true,dashboardOwnerManaged:true};
+ try {
+  beginUpgrade(ctx,{zylosDir:root,skillsDir});
+  const journal=ctx.maintenance.read(path.join(ctx.transactionDir,'journal.json'));
+  assert.equal(journal.firstTakeover,true);assert.equal(journal.dashboardOwnerManaged,true);
+ } finally {ctx.releaseControl?.();protectionMaintenance.services=services;}
+});
+
+test('data-ready preserves a legacy Dashboard without invoking its owner on subsequent takeover',async t=>{
+ const f=await fixture(t,{dashboard:true,dashboardVersion:13});
+ const calls=path.join(f.root,'dashboard-owner-calls');
+ fs.writeFileSync(path.join(f.dashboardRoot,'src/lib/schema-owner.js'),`import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(calls)},'loaded');throw Error('legacy Dashboard owner must not load');`);
+ f.m.update(f.dir,f.j,{firstTakeover:false,dashboardOwnerManaged:false});
+ const before=fs.readFileSync(f.db('components/dashboard/dashboard.db'));
+ const ctx={maintenance:f.m,transactionDir:f.dir,transactionId:'tx'};
+ assert.doesNotThrow(()=>protectedDataReady(ctx));
+ assert.equal(ctx.databases.find(row=>row.source==='components/dashboard/dashboard.db').ownerSkipped,true);
+ assert.equal(fs.existsSync(calls),false);
+ assert.deepEqual(fs.readFileSync(f.db('components/dashboard/dashboard.db')),before);
+});
 
 for(const firstTakeover of [false,true]) for(const dashboardOwnerManaged of [false,true]) {
  test(`original deployment preflight uses persisted owner=${dashboardOwnerManaged}, takeover=${firstTakeover}`,async t=>{

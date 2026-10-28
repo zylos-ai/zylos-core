@@ -269,7 +269,6 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     fromVersion: j.from,
     toVersion: j.to,
     formatVersion: ctx.snapshotFormatVersion ?? 2,
-    dashboardOwnerManaged: j.dashboardOwnerManaged === true,
     verifySnapshot
   });
   ctx.dbBackupDir = snapshot.dbBackupDir;

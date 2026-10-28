@@ -125,8 +125,8 @@ test('unmanaged Dashboard skips owner actions but still snapshots its bytes',t=>
   assert.equal(runCoreDbWorker({...payload,action:'offline-preflight',dashboardOwnerManaged:false}).databases[3].ownerSkipped,true);
   assert.equal(createCoreDbSnapshot({zylosDir:root,transactionId:'takeover'}).manifest.databases[3].status,'backed_up');
   assert.deepEqual(fs.readFileSync(source),before);
-  assert.throws(()=>runCoreDbWorker({...payload,action:'ordinary-migrate',firstTakeover:true}),/Unknown action/);
-  assert.throws(()=>runCoreDbWorker({...payload,action:'upgrade-migrate',firstTakeover:true}),/requires transaction identity/);
+  assert.throws(()=>runCoreDbWorker({...payload,action:'ordinary-migrate'}),/Unknown action/);
+  assert.throws(()=>runCoreDbWorker({...payload,action:'upgrade-migrate'}),/requires transaction identity/);
 });
 
 test('first takeover rejects corrupt Dashboard bytes even without an owner',t=>{
@@ -173,7 +173,7 @@ function controlledMigration(t, dashboardOwnerManaged) {
 
 test('controlled upgrade leaves missing Dashboard creation to its first ordinary open',t=>{
   const {root,source,driverRoot,request}=controlledMigration(t,true);
-  const result=runCoreDbWorker({...request,firstTakeover:true});
+  const result=runCoreDbWorker(request);
   assert.equal(result.databases[3].status,'missing');assert.equal(result.databases[3].ownerSkipped,undefined);
   assert.equal(fs.existsSync(source),false);
   assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:driverRoot,requireCurrent:true}).databases[3].status,'missing');
