@@ -2,17 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { submit, lookupModeSwitch } from '../lib/am-sock-client.js';
 
 const failure = (code, message, persisted = []) => ({ ok: false, error: { code, message, persisted } });
+const defaultReadStatus = async () => (await import('../lib/session-mode-status.js')).readSessionModeStatus();
 
 /** A switch submits once. A lost response can only be resolved by observation. */
 export async function executeSessionMode(args, {
   send = submit, lookup = lookupModeSwitch, now = Date.now, requestId = randomUUID,
-  deadlineAt,
+  deadlineAt, readStatus = defaultReadStatus,
 } = {}) {
   const jsonFlags = args.filter(arg => arg === '--json').length;
   const positional = args.filter(arg => arg !== '--json');
   const [command, target] = positional;
+  if (jsonFlags <= 1 && command === 'status' && positional.length === 1) {
+    try { return { ok: true, data: await readStatus() }; }
+    catch (error) { return failure(error.code ?? 'READ_FAILED', error.message ?? String(error)); }
+  }
   if (jsonFlags > 1 || command !== 'switch' || positional.length !== 2 || !['single', 'multi'].includes(target)) {
-    return failure('INVALID_ARGUMENT', 'Usage: zylos session-mode switch <single|multi> [--json]');
+    return failure('INVALID_ARGUMENT', 'Usage: zylos session-mode switch <single|multi> [--json] | status [--json]');
   }
   const deadline = deadlineAt ?? now() + 10000;
   let response;
@@ -47,6 +52,10 @@ export async function sessionModeCommand(args, dependencies) {
   const result = await executeSessionMode(args, dependencies);
   if (args.includes('--json')) console.log(JSON.stringify(result));
   else if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
+  else if (args.filter(arg => arg !== '--json')[0] === 'status') {
+    const { formatSessionModeStatus } = await import('../lib/session-mode-status.js');
+    console.log(formatSessionModeStatus(result.data));
+  }
   else if (result.data.observed) console.log(`OK: observed ${result.data.observed} for ${result.data.target}`);
   else console.log(`OK: mode switch ${result.data.result}${result.data.runId ? ` (${result.data.runId})` : ''}`);
   if (!result.ok) process.exitCode = 1;
