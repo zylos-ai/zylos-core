@@ -18,6 +18,13 @@ const Database = require(path.join(packageRoot, 'skills/comm-bridge/node_modules
 
 function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir() } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(temporaryBase, 'default-finalizer-')));
+  const previousHome = process.env.HOME, previousPm2Home = process.env.PM2_HOME;
+  process.env.HOME = home;
+  process.env.PM2_HOME = path.join(home, '.pm2');
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousPm2Home === undefined) delete process.env.PM2_HOME; else process.env.PM2_HOME = previousPm2Home;
+  });
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const root = path.join(home, 'zylos');
   const write = (relative, bytes) => {
@@ -142,9 +149,19 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assert.equal(JSON.parse(f.read('.zylos/config.json')).new_session_threshold, 70);
   assert.equal(result.settingsChanged, true);
   assert.equal(Object.hasOwn(result, 'instructionFilesRebuilt'), false);
-  assert.equal(result.completion.modeTransition, 'unknown');
+  assert.equal(result.completion.modeTransition, 'pending_auto');
   assert.ok(f.calls.indexOf('start') > f.calls.indexOf('ensure-memory'));
   assert.ok(f.calls.indexOf('restart') > f.calls.indexOf('verify'));
+  assertDataPreserved(f);
+});
+
+test('default finalizer reports unknown when P10 status cannot be read', async t => {
+  const f = fixture(t);
+  const result = await f.run({ readModeStatus: () => {
+    throw Object.assign(Error('injected P10 status failure'), { code: 'P10_STATUS_UNAVAILABLE' });
+  } });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.completion.modeTransition, 'unknown');
   assertDataPreserved(f);
 });
 

@@ -27,6 +27,12 @@ function interceptSync(check) {
 // rescue, rename intents, isolation discovery, and terminal marker removal are real.
 async function fixture(t,{missing=false,wal=false,formatVersion=1,dashboard=false}={}) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_RECOVERY_TEST_TMPDIR || os.tmpdir(),'upgrade-recovery-')));
+ const previousHome=process.env.HOME,previousPm2Home=process.env.PM2_HOME;
+ process.env.HOME=root;process.env.PM2_HOME=path.join(root,'.pm2');
+ t.after(()=>{
+  if(previousHome===undefined)delete process.env.HOME;else process.env.HOME=previousHome;
+  if(previousPm2Home===undefined)delete process.env.PM2_HOME;else process.env.PM2_HOME=previousPm2Home;
+ });
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dst));
