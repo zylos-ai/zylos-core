@@ -1,0 +1,9 @@
+web_sharing "on"
+session_serialization false
+disable_session_metadata true
+pane_frames false
+show_startup_tips false
+show_release_notes false
+log_user 1
+// Disable default background plugins: Observer uses exactly one terminal pane.
+load_plugins {}

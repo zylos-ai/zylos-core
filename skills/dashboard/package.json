@@ -1,0 +1,44 @@
+{
+  "name": "zylos-dashboard",
+  "version": "0.6.9",
+  "description": "Read-only observability dashboard for a local Zylos agent.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "find src hooks public/js -name '*.js' -print0 | xargs -0 -n1 node --check && find src/lib -name '*.cjs' -print0 | xargs -0 -n1 node --check",
+    "test": "node --test",
+    "test:acceptance": "ACCEPTANCE=1 node --test test/acceptance-phase2a.test.js",
+    "smoke": "node src/index.js --smoke",
+    "smoke:api": "node scripts/smoke-api.js",
+    "build:redaction": "node scripts/build-redaction-rules.js"
+  },
+  "keywords": [
+    "zylos",
+    "dashboard",
+    "observability"
+  ],
+  "author": "Zylos AI",
+  "license": "MIT",
+  "homepage": "https://github.com/zylos-ai/zylos-dashboard",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zylos-ai/zylos-dashboard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zylos-ai/zylos-dashboard/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0",
+    "chart.js": "4.4.9",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "date-fns": "^4.1.0"
+  },
+  "devDependencies": {
+    "regexpu-core": "6.4.0",
+    "smol-toml": "1.9.0"
+  }
+}

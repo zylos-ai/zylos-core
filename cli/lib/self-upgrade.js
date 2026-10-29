@@ -470,10 +470,6 @@ export function step11_startCoreServices(ctx, deps = {}) {
   const restartFn = deps.restartManagedProcess ?? createPm2Helpers({exec}).restartManagedProcess;
   const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
 
-  if (ctx.servicesWereRunning.length === 0) {
-    return { step: 11, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
-  }
-
   // Deploy the new ecosystem.config.cjs from the upgraded package so PM2
   // re-evaluates env vars (e.g. ZYLOS_PACKAGE_ROOT) when services restart.
   // `pm2 restart <name>` reuses PM2's cached config and never picks up new env.
@@ -546,6 +542,10 @@ export function step11_startCoreServices(ctx, deps = {}) {
     ecosystemPath = ecosystemDest;
   }
   ecosystemPath = ecosystemPath ?? ecosystemDest;
+
+  if (ctx.servicesWereRunning.length === 0) {
+    return { step: 11, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
+  }
 
   const started = [];
   const failed = [];
@@ -790,8 +790,14 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       return {status:'skipped',message:'existing working state preserved for mode conversion'};
     });
     await run(7,'verify_publication_for_services',()=> (deps.verifyPublicationForServices || verifyPublicationForServices)(ctx));
-    await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(ctx));
-    await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(ctx));
+    // Dashboard availability is independent of Core publication.
+    const coreCtx={...ctx,servicesWereRunning:(ctx.servicesWereRunning || []).filter(name=>name!=='zylos-dashboard')};
+    try {
+      await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(coreCtx));
+      await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(coreCtx));
+    } finally {
+      ctx.journal=coreCtx.journal;
+    }
   } catch(error) {return fail(error);}
 
   let dashboard;
@@ -804,7 +810,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   }
   try {
     const owner=deps.dashboardOwner || await installedDashboardOwner(ctx);
-    if(ctx.firstDashboardTakeover){
+    if(ctx.journal?.firstTakeover){
       for(const [item,name] of [['registration','applyDashboardRegistration'],['route','applyDashboardRoute']]) {
         const saved=ctx.journal?.dashboardInstall?.items?.[item];
         if (item==='registration' && saved?.state==='done') continue;
@@ -825,6 +831,12 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
           dashboardFailure(item,error);
         }
       }
+    }
+    if(!ctx.journal?.firstTakeover && (ctx.servicesWereRunning || []).includes('zylos-dashboard')) {
+      try {
+        const restored=await owner.restoreDashboardService({zylosDir:root});
+        if(restored?.state!=='done') throw Object.assign(Error(restored?.error?.message || 'Dashboard restore failed'),{code:'registration_failed'});
+      } catch(error) {dashboardFailure('registration',{code:'registration_failed',message:error.message});}
     }
     dashboard=await owner.verifyDashboard({zylosDir:root});
   } catch(error) {dashboardFailure('dashboard',error);}

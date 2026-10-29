@@ -37,7 +37,7 @@ test('service verification uses only its local poll and PM2 limits',()=>{
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-tail-'));
   fs.mkdirSync(path.join(root,'memory'),{recursive:true});
-  const ctx={zylosDir:root,from:'old',to:'new',tempDir:null,servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
+  const ctx={zylosDir:root,from:'0.9.3',to:'new',tempDir:null,servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
   ctx.journal={phase:'compensation_closed'};
   ctx.transactionDir=path.join(root,'transaction');
   ctx.maintenance={transaction:()=>ctx.journal,classifyCutoff:()=> 'closed',
@@ -166,8 +166,8 @@ test('restart path read errors are reported without submitting; audit failure is
 });
 for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dashboard ${failing || 'success'} preserves independent outcomes`,async t=>{
   const ctx=fixture(t),calls=[];
-  ctx.firstDashboardTakeover=true;
-  if(failing==='dbCopy')ctx.journal={dashboardInstall:{dbCopy:{ok:false,error:{code:'COPY_FAILED',message:'copy denied'}}}};
+  ctx.journal.firstTakeover=true;
+  if(failing==='dbCopy')ctx.journal.dashboardInstall={dbCopy:{ok:false,error:{code:'COPY_FAILED',message:'copy denied'}}};
   const action=item=>()=>{calls.push(item);if(failing===item)throw Object.assign(Error(`${item} denied`),{code:'DASHBOARD_FAILED'});return {state:item==='verify'?'ready':'done',errors:[]};};
   const result=await completeUpgradeFinalization(ctx,deps(calls,{dashboardOwner:{applyDashboardRegistration:action('registration'),applyDashboardRoute:action('route'),verifyDashboard:action('verify')}}));
   assert.equal(result.success,true);
@@ -181,7 +181,7 @@ for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dash
 
 test('Dashboard owns verification timeout and receives no overall deadline',async t=>{
   const ctx=fixture(t),calls=[];
-  ctx.firstDashboardTakeover=true;
+  ctx.journal.firstTakeover=true;
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
     dashboardOwner:{applyDashboardRegistration:()=>{calls.push('registration');return {state:'done'};},applyDashboardRoute:()=>{calls.push('route');return {state:'done'};},verifyDashboard:options=>{assert.deepEqual(options,{zylosDir:ctx.zylosDir});calls.push('dashboardVerify');return {state:'ready'};}}
   }));
@@ -219,7 +219,7 @@ test('closed recovery preserves the default reader and recovery phase before ser
 
 test('Dashboard persists independent failure and retries it without repeating completed registration',async t=>{
   const {ctx,journal}=protectedReaderFixture(t),calls=[];
-  ctx.firstDashboardTakeover=true;
+  ctx.journal.firstTakeover=true;
   journal.dashboardInstall={dbCopy:{ok:true,error:null},items:Object.fromEntries(['registration','route'].map(item=>[item,{state:'pending',attempts:0,lastError:null}]))};
   let registrationFails=true;
   const d=deps(calls,{protectedSuccess:()=>{},dashboardOwner:{
@@ -254,4 +254,128 @@ test('untrusted recovery cutoff cannot refresh stable reader or start services',
   await assert.rejects(()=>completeUpgradeFinalization(ctx,deps(calls,{verifyPublicationForServices:undefined})),/publication is not ready/);
   assert.equal(calls.includes('start'),false);
   assert.equal(fs.readFileSync(stable,'utf8'),'old stable reader');
+});
+
+test('later upgrade restores Dashboard only after required services with independent timeouts',async t=>{
+  const ctx=fixture(t),calls=[];
+  ctx.servicesWereRunning=['c4-dispatcher','zylos-dashboard','scheduler'];
+  const original=[...ctx.servicesWereRunning];
+  const d=deps(calls,{
+    startServices:c=>{calls.push('core-start');assert.deepEqual(c.servicesWereRunning,['c4-dispatcher','scheduler']);return {status:'done'};},
+    verifyServices:c=>{calls.push('core-verify');assert.deepEqual(c.servicesWereRunning,['c4-dispatcher','scheduler']);return {status:'done'};},
+    dashboardOwner:{
+      restoreDashboardService:options=>{calls.push('dashboard-restore');assert.deepEqual(options,{zylosDir:ctx.zylosDir});return {state:'done'};},
+      verifyDashboard:options=>{calls.push('dashboard-verify');assert.deepEqual(options,{zylosDir:ctx.zylosDir});return {state:'ready',errors:[]};},
+      applyDashboardRegistration:()=>assert.fail('later upgrade must not register'),
+      applyDashboardRoute:()=>assert.fail('later upgrade must not route')
+    }
+  });
+  const result=await completeUpgradeFinalization(ctx,d);
+  assert.equal(result.success,true);
+  assert.equal(result.completion.dashboard,'ready');
+  assert.deepEqual(ctx.servicesWereRunning,original);
+  assert.deepEqual(calls.filter(x=>/^(core|dashboard)-/.test(x)),['core-start','core-verify','dashboard-restore','dashboard-verify']);
+});
+
+for(const kind of ['failed','throw']) test(`Dashboard restore ${kind} is degraded without Core isolation`,async t=>{
+  const {ctx}=protectedReaderFixture(t),calls=[];
+  ctx.servicesWereRunning=['c4-dispatcher','zylos-dashboard'];
+  let stops=0;
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{
+    stopServices:()=>{stops++;},protectedSuccess:()=>{},
+    startServices:c=>{assert.deepEqual(c.servicesWereRunning,['c4-dispatcher']);return {status:'done'};},
+    verifyServices:c=>{assert.deepEqual(c.servicesWereRunning,['c4-dispatcher']);return {status:'done'};},
+    dashboardOwner:{
+      restoreDashboardService:()=>{if(kind==='throw')throw Error('Dashboard start denied');return {state:'failed',error:{message:'Dashboard start denied'}};},
+      verifyDashboard:()=>{calls.push('dashboard-verify');return {state:'ready',errors:[]};}
+    }
+  }));
+  assert.equal(result.success,true);
+  assert.equal(result.completion.install,'done');
+  assert.equal(result.completion.dashboard,'degraded');
+  assert.equal(result.dashboard.errors[0].code,'registration_failed');
+  assert.equal(stops,0);
+  assert.ok(calls.includes('dashboard-verify'));
+  assert.ok(calls.includes('restart'));
+});
+
+test('required service failure still enters protected Core isolation',async t=>{
+  const {ctx,journal}=protectedReaderFixture(t),calls=[];
+  ctx.servicesWereRunning=['c4-dispatcher','zylos-dashboard'];
+  let stops=0;
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{
+    stopServices:()=>{stops++;},
+    startServices:c=>{assert.deepEqual(c.servicesWereRunning,['c4-dispatcher']);return {status:'failed',error:'required service unavailable'};},
+    dashboardOwner:{restoreDashboardService:()=>assert.fail('must not restore Dashboard')}
+  }));
+  assert.equal(result.success,false);
+  assert.equal(result.completion.install,'pending');
+  assert.equal(stops,1);
+  assert.equal(journal.phase,'recovery_required');
+  assert.equal(calls.includes('restart'),false);
+});
+
+test('Dashboard absent from original running set is verified without starting',async t=>{
+  const ctx=fixture(t),calls=[];
+  ctx.servicesWereRunning=['c4-dispatcher'];
+  let restoreCalls=0;
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{
+    dashboardOwner:{restoreDashboardService:()=>{restoreCalls++;return {state:'done'};},verifyDashboard:()=>({state:'degraded',errors:[]})}
+  }));
+  assert.equal(restoreCalls,0);
+  assert.equal(result.success,true);
+});
+
+test('installation reads the journal first-takeover decision independently of legacy context',async t=>{
+  for(const firstTakeover of [true,false]){
+    const ctx=fixture(t),calls=[];
+    ctx.journal.firstTakeover=firstTakeover;
+    ctx.firstDashboardTakeover=!firstTakeover;
+    ctx.servicesWereRunning=['zylos-dashboard'];
+    const result=await completeUpgradeFinalization(ctx,deps(calls,{
+      dashboardOwner:{
+        applyDashboardRegistration:()=>{calls.push('register');return {state:'done'};},
+        applyDashboardRoute:()=>{calls.push('route');return {state:'done'};},
+        restoreDashboardService:()=>{calls.push('restore');return {state:'done'};},
+        verifyDashboard:()=>{calls.push('health');return {state:'ready'};}
+      }
+    }));
+    assert.equal(result.success,true);
+    assert.deepEqual(calls.filter(x=>['register','route','restore','health'].includes(x)),firstTakeover?['register','route','health']:['restore','health']);
+  }
+});
+
+test('long preceding steps do not suppress Dashboard restore or verification',async t=>{
+  const ctx=fixture(t),calls=[];
+  ctx.servicesWereRunning=['zylos-dashboard'];
+  let now=1000;t.mock.method(Date,'now',()=>now);
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{
+    verifyServices:()=>{now+=120000;return {status:'done'};},
+    dashboardOwner:{
+      restoreDashboardService:options=>{assert.deepEqual(options,{zylosDir:ctx.zylosDir});calls.push('restore');return {state:'done'};},
+      verifyDashboard:options=>{assert.deepEqual(options,{zylosDir:ctx.zylosDir});calls.push('health');return {state:'ready'};}
+    }
+  }));
+  assert.equal(result.success,true);assert.equal(result.completion.dashboard,'ready');
+  assert.deepEqual(calls.filter(x=>['restore','health'].includes(x)),['restore','health']);
+});
+
+test('empty Core running set still publishes the protected ecosystem before Dashboard registration',t=>{
+ const ctx=fixture(t),root=ctx.zylosDir;
+ const packageRoot=path.join(root,'package'),template=path.join(packageRoot,'templates/pm2/ecosystem.config.cjs');
+ fs.mkdirSync(path.dirname(template),{recursive:true});fs.writeFileSync(path.join(packageRoot,'package.json'),JSON.stringify({version:'new'}));
+ const bytes='module.exports={apps:[{name:"zylos-dashboard"}]};\n';fs.writeFileSync(template,bytes);
+ const target=path.join(root,'pm2/ecosystem.config.cjs');
+ ctx.packageRoot=packageRoot;
+ ctx.maintenance=maintenance;
+ ctx.journal.initialIdentity={ecosystemHash:null};
+ fs.mkdirSync(ctx.transactionDir);fs.writeFileSync(path.join(ctx.transactionDir,'journal.json'),JSON.stringify(ctx.journal));
+ const options={zylosDir:root,ecosystemPath:target,execSync:()=>assert.fail('no Core processes should start')};
+ {const result=step11_startCoreServices(ctx,options);assert.equal(result.status,'skipped',JSON.stringify(result));}
+ assert.equal(fs.readFileSync(target,'utf8'),bytes);
+ const journal=JSON.parse(fs.readFileSync(path.join(ctx.transactionDir,'journal.json')));
+ assert.equal(journal.ecosystemCreationIntent.originalMissing,true);
+ assert.equal(journal.ecosystemCreationIntent.target,target);
+ {const result=step11_startCoreServices(ctx,options);assert.equal(result.status,'skipped',JSON.stringify(result));}
+ assert.equal(fs.readFileSync(target,'utf8'),bytes);
 });

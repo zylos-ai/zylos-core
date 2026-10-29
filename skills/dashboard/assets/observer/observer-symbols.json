@@ -1,0 +1,57 @@
+{
+  "family": "Zylos Observer Symbols",
+  "sources": [
+    {
+      "family": "NotoSansSymbols2",
+      "version": "2.008",
+      "url": "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansSymbols2/unhinted/ttf/NotoSansSymbols2-Regular.ttf",
+      "sha256": "c4a0a80f0041ce4be81e2478faad22776d23edb98ae3f0d19bd37044820ecf9d",
+      "copyright": [
+        "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)"
+      ]
+    },
+    {
+      "family": "NotoSansSymbols",
+      "version": "2.003",
+      "url": "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansSymbols/unhinted/ttf/NotoSansSymbols-Regular.ttf",
+      "sha256": "6eea9cb4cd39269ea9f95ba5c2735f80ae74049dfc9e1a7c932a5cfc8f0c3030",
+      "copyright": [
+        "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)"
+      ]
+    },
+    {
+      "family": "NotoSansMath",
+      "version": "3.000",
+      "url": "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/unhinted/ttf/NotoSansMath-Regular.ttf",
+      "sha256": "b127e84699212b6b2ef50aff58e0ebebeec04ffe6db1b9eb9e209c8c3d97b4aa",
+      "copyright": [
+        "Copyright 2022 Google LLC. All Rights Reserved."
+      ]
+    }
+  ],
+  "codepoints": 647,
+  "missing": [
+    "U+23BA",
+    "U+23BB",
+    "U+23BC",
+    "U+23BD",
+    "U+23EB",
+    "U+23EC",
+    "U+23F0",
+    "U+2705",
+    "U+270A",
+    "U+2728",
+    "U+274C",
+    "U+274E",
+    "U+2754",
+    "U+2755",
+    "U+2795",
+    "U+2796",
+    "U+2797",
+    "U+27B0",
+    "U+27BF"
+  ],
+  "sha256": "3f4cbf93d2ca9cd89cd21ab3de53caf90f4a4fb72f00d2c49819f75167a49b26",
+  "build": "fontTools 4.60.2",
+  "normalization": "1000 UPM, 600 advance; uniform scaling, horizontal centering, original vertical center"
+}

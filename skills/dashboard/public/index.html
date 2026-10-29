@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-base-path="__BASE_PATH__" data-remote-access="__REMOTE_ACCESS__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zylos Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="__ASSET_ROOT__/css/style.css?v=54">
+<link rel="stylesheet" href="__ASSET_ROOT__/themes/light.css?v=2">
+<script src="__ASSET_ROOT__/vendor/chart.umd.js"></script>
+<script src="__ASSET_ROOT__/js/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="__ASSET_ROOT__/js/markdown-it.min.js"></script>
+<script type="module" src="__ASSET_ROOT__/js/app.js?v=80"></script>
+</head>
+<body>
+<header class="app-header">
+  <div class="header-left">
+    <p class="eyebrow" data-i18n="app.title">Zylos Dashboard</p>
+    <span class="header-version" id="dashboard-version" hidden></span>
+  </div>
+  <div class="header-actions">
+    <button class="header-icon-btn" id="fleet-manage-btn" type="button" data-i18n-title="fleet_manage.open">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M9 13v2"/><path d="M15 13v2"/></svg>
+    </button>
+    <button class="fleet-sound-toggle" id="fleet-sound-toggle" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+    <span class="connection-pill" id="connection-status" data-state="connecting" data-i18n="status.connecting">Connecting</span>
+    <button class="lang-btn" id="locale-toggle" type="button" data-i18n="lang.switch">中文</button>
+    <button class="lang-btn logout-btn" id="logout-btn" type="button" data-i18n="action.logout">Logout</button>
+  </div>
+</header>
+
+<div class="view-stack" id="view-stack">
+<!-- Agent Fleet — top-level landing view in multi-agent mode -->
+<section class="fleet-view app-view" id="fleet-view" hidden>
+  <div class="agent-fleet-head">
+    <div>
+      <h1 data-i18n="agent_fleet.title">Agent Fleet</h1>
+      <p data-i18n="agent_fleet.subtitle">Operational fleet status</p>
+    </div>
+    <div class="agent-fleet-head-side">
+      <time class="freshness" id="fleet-updated">--</time>
+    </div>
+  </div>
+  <div id="agent-fleet-root"></div>
+</section>
+
+<!-- Single-agent dashboard / agent-detail view -->
+<div class="agent-detail app-view" id="agent-detail">
+<button class="back-to-fleet" id="back-to-fleet" type="button" hidden data-i18n="agent_fleet.back_to_fleet">← Fleet</button>
+
+<nav class="tab-bar" aria-label="Dashboard sections">
+  <button class="tab active" type="button" data-tab="overview" data-i18n="tab.overview">Overview</button>
+  <button class="tab" type="button" data-tab="memory" data-i18n="tab.memory">Memory</button>
+  <button class="tab" id="observer-tab" type="button" data-tab="observer" data-i18n="tab.observer" hidden>Observer</button>
+  <button class="tab" type="button" data-tab="trends" data-i18n="tab.trends">Trends</button>
+  <span class="tab-bar-agent" id="tab-bar-agent-name" hidden></span>
+</nav>
+
+<main>
+  <section class="tab-panel active" id="tab-overview">
+    <div class="overview-grid">
+
+      <!-- Runtime Info Bar -->
+      <div class="info-bar" id="info-bar"></div>
+
+      <!-- ① Live Runtime State -->
+      <section class="card runtime-card" aria-labelledby="runtime-title">
+        <div class="card-head">
+          <h2 id="runtime-title" data-i18n="block.runtime">Runtime State</h2>
+          <time class="freshness" id="state-updated">--</time>
+        </div>
+        <div class="runtime-split">
+          <div class="runtime-left">
+            <div class="mascot-area" id="mascot-area">
+              <div class="mascot-sprite" id="mascot-sprite"></div>
+              <p class="state-label" id="state-title">--</p>
+            </div>
+            <span class="state-dot state-unknown" id="state-dot" aria-hidden="true" hidden></span>
+          </div>
+          <div class="runtime-right">
+            <div class="activity-head">
+              <span class="kv-label" data-i18n="label.activity">Current Activity</span>
+            </div>
+            <div class="assistant-message" id="assistant-message" hidden></div>
+            <p class="activity-fallback" id="activity-fallback">--</p>
+            <div class="tool-feed" id="tool-feed"></div>
+          </div>
+          <div class="runtime-subagents" id="subagent-section" hidden>
+            <div class="activity-head subagent-head">
+              <span class="kv-label" data-i18n="label.subagents">Subagents</span>
+              <span class="tool-badge subagent-badge" id="subagent-count" hidden>0</span>
+            </div>
+            <div id="subagent-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ② Capacity & Cost -->
+      <section class="card" aria-labelledby="capacity-title">
+        <div class="card-head">
+          <h2 id="capacity-title" data-i18n="block.capacity">Capacity & Cost</h2>
+          <time class="freshness" id="metrics-updated">--</time>
+        </div>
+        <div class="metric-stack">
+          <article class="metric-bar-row">
+            <div class="metric-bar-head">
+              <span class="metric-label-group">
+                <span class="metric-label" data-i18n="label.context">Context</span>
+                <button class="tip-btn tip-btn-inline" id="context-tip" type="button" aria-label="Context threshold info">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </button>
+                <div class="tip-popover" id="context-popover" hidden>
+                  <p data-i18n="tip.threshold"></p>
+                </div>
+              </span>
+              <strong class="metric-value" id="metric-context-value">--</strong>
+            </div>
+            <div class="progress-wrap">
+              <span class="threshold-label" id="metric-context-threshold-label"></span>
+              <div class="progress">
+                <span class="progress-fill" id="metric-context-bar"></span>
+              </div>
+              <span class="threshold-marker" id="metric-context-threshold" hidden></span>
+            </div>
+            <small class="metric-source" id="metric-context-source">--</small>
+          </article>
+          <article class="metric-bar-row">
+            <div class="metric-bar-head">
+              <span class="metric-label" data-i18n="label.rate_limit_5h">5h Rate Limit</span>
+              <strong class="metric-value" id="metric-rate-5h-value">--</strong>
+            </div>
+            <div class="progress"><span class="progress-fill" id="metric-rate-5h-bar"></span></div>
+            <span class="metric-reset" id="metric-rate-5h-reset"></span>
+          </article>
+          <article class="metric-bar-row">
+            <div class="metric-bar-head">
+              <span class="metric-label" data-i18n="label.rate_limit_7d">7d Rate Limit</span>
+              <strong class="metric-value" id="metric-rate-7d-value">--</strong>
+            </div>
+            <div class="progress"><span class="progress-fill" id="metric-rate-7d-bar"></span></div>
+            <span class="metric-reset" id="metric-rate-7d-reset"></span>
+          </article>
+          <div class="cost-cards">
+            <span class="metric-label" data-i18n="label.cost">Cost</span>
+            <button class="tip-btn" id="cost-tip" type="button" aria-label="Cost info">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="tip-popover" id="cost-popover" hidden>
+              <p data-i18n="tip.cost">Estimated cost based on token pricing for the current model. Calculated from actual input/output token consumption.</p>
+            </div>
+            <div class="cost-grid">
+              <div class="cost-card">
+                <strong class="cost-amount" id="metric-cost-session">--</strong>
+                <small id="metric-cost-session-label" data-i18n="cost.session">session</small>
+              </div>
+              <div class="cost-card">
+                <strong class="cost-amount" id="metric-cost-today">--</strong>
+                <small data-i18n="cost.today">today</small>
+              </div>
+              <div class="cost-card">
+                <strong class="cost-amount" id="metric-cost-7d">--</strong>
+                <small data-i18n="cost.7d">7 days</small>
+              </div>
+            </div>
+          </div>
+          <div class="tokens-section">
+            <span class="metric-label" data-i18n="metric.tokens">Tokens</span>
+            <div class="tokens-row">
+              <div class="tokens-bar-wrap">
+                <div class="tokens-stacked-bar" id="tokens-bar">
+                  <div class="tokens-bar-input" id="tokens-bar-input"></div>
+                  <div class="tokens-bar-output" id="tokens-bar-output"></div>
+                </div>
+                <div class="tokens-bar-legend">
+                  <span class="tokens-legend-item"><span class="legend-dot input"></span>↑<span id="metric-tokens-input">--</span></span>
+                  <span class="tokens-legend-item"><span class="legend-dot output"></span>↓<span id="metric-tokens-output">--</span></span>
+                  <small data-i18n="cost.session">session</small>
+                </div>
+              </div>
+              <div class="tokens-cache-wrap">
+                <div class="ring-wrap ring-sm">
+                  <svg class="ring-svg" viewBox="0 0 56 56">
+                    <circle class="ring-bg" cx="28" cy="28" r="22"/>
+                    <circle class="ring-fill ring-cache" id="cache-ring" cx="28" cy="28" r="22"/>
+                  </svg>
+                  <span class="ring-value ring-value-sm" id="metric-tokens-cache">--</span>
+                </div>
+                <small data-i18n="metric.cache_hit">cache hit</small>
+              </div>
+            </div>
+            <div class="tokens-periods">
+              <div class="tokens-period-row">
+                <span class="metric-value-sub" id="metric-tokens-today">--</span>
+                <div class="tokens-mini-bar" id="tokens-bar-today"><div class="tokens-bar-input"></div><div class="tokens-bar-output"></div></div>
+                <small data-i18n="cost.today">today</small>
+              </div>
+              <div class="tokens-period-row">
+                <span class="metric-value-sub" id="metric-tokens-7d">--</span>
+                <div class="tokens-mini-bar" id="tokens-bar-7d"><div class="tokens-bar-input"></div><div class="tokens-bar-output"></div></div>
+                <small data-i18n="cost.7d">7 days</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ③ Runtime -->
+      <section class="card" aria-labelledby="health-title">
+        <div class="card-head">
+          <h2 id="health-title" data-i18n="block.health">Runtime</h2>
+          <time class="freshness" id="health-updated">--</time>
+        </div>
+        <div class="gauge-grid">
+          <article class="gauge">
+            <span class="metric-label" data-i18n="label.pm2">PM2 Services</span>
+            <div class="ring-wrap">
+              <svg class="ring-svg" viewBox="0 0 80 80">
+                <circle class="ring-bg" cx="40" cy="40" r="34"/>
+                <circle class="ring-fill" id="pm2-ring" cx="40" cy="40" r="34"/>
+              </svg>
+              <strong class="ring-value" id="system-pm2">--</strong>
+            </div>
+            <div class="gauge-detail" id="pm2-down-list"></div>
+          </article>
+          <article class="gauge">
+            <span class="metric-label" data-i18n="label.cpu">CPU</span>
+            <div class="ring-wrap">
+              <svg class="ring-svg" viewBox="0 0 80 80">
+                <circle class="ring-bg" cx="40" cy="40" r="34"/>
+                <circle class="ring-fill" id="cpu-ring" cx="40" cy="40" r="34"/>
+              </svg>
+              <strong class="ring-value" id="system-cpu">--</strong>
+            </div>
+          </article>
+          <article class="gauge">
+            <span class="metric-label" data-i18n="label.memory">Memory</span>
+            <div class="ring-wrap">
+              <svg class="ring-svg" viewBox="0 0 80 80">
+                <circle class="ring-bg" cx="40" cy="40" r="34"/>
+                <circle class="ring-fill" id="mem-ring" cx="40" cy="40" r="34"/>
+              </svg>
+              <strong class="ring-value" id="system-memory">--</strong>
+            </div>
+            <div class="gauge-detail" id="mem-detail"></div>
+          </article>
+          <article class="gauge">
+            <span class="metric-label" data-i18n="label.disk">Disk</span>
+            <div class="ring-wrap">
+              <svg class="ring-svg" viewBox="0 0 80 80">
+                <circle class="ring-bg" cx="40" cy="40" r="34"/>
+                <circle class="ring-fill" id="disk-ring" cx="40" cy="40" r="34"/>
+              </svg>
+              <strong class="ring-value" id="system-disk">--</strong>
+            </div>
+          </article>
+          <article class="gauge gauge-wide latency-section latency-card">
+            <div class="latency-head">
+              <span class="metric-label" data-i18n="metric.latency">Latency</span>
+              <button class="tip-btn tip-btn-inline" id="latency-tip" type="button" aria-label="Latency info">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </button>
+              <div class="tip-popover" id="latency-popover" hidden>
+                <p data-i18n="tip.latency">Latest completed turn latency. First token is time until the assistant starts responding; Full turn is total turn duration including tools, tests, and deploys.</p>
+              </div>
+            </div>
+            <div class="latency-grid">
+              <div class="latency-item">
+                <small data-i18n="metric.ttft">First token</small>
+                <strong class="latency-value" id="metric-ttft">--</strong>
+              </div>
+              <div class="latency-item">
+                <small data-i18n="metric.turn_duration">Full turn</small>
+                <strong class="latency-value" id="metric-turn-duration">--</strong>
+              </div>
+            </div>
+          </article>
+          <article class="gauge gauge-wide scheduler-card">
+            <div class="scheduler-head">
+              <span class="metric-label" data-i18n="label.scheduler">Scheduler</span>
+              <span class="scheduler-count" id="scheduler-count"></span>
+            </div>
+            <div class="scheduler-timeline" id="scheduler-timeline"></div>
+          </article>
+        </div>
+        <div class="runtime-subsection">
+          <div class="subsection-head">
+            <h3 id="comm-title"><span data-i18n="block.communication">Communication</span> <span class="card-sub" data-i18n="block.communication_sub">(today)</span></h3>
+            <time class="freshness" id="comm-updated">--</time>
+          </div>
+          <div class="comm-channels" id="comm-channels"></div>
+          <div class="comm-pending" id="comm-pending"></div>
+        </div>
+      </section>
+
+      <!-- ④ Current Work Timeline -->
+      <section class="card timeline-card" aria-labelledby="timeline-title">
+        <div class="card-head">
+          <h2 id="timeline-title"><span data-i18n="block.timeline">Current Work Timeline</span> <span class="card-sub" data-i18n="block.timeline_sub">(last 30 min)</span></h2>
+          <time class="freshness" id="timeline-updated">--</time>
+        </div>
+        <div class="timeline-list" id="timeline-list">
+          <p class="empty-state" data-i18n="timeline.empty">No recent activity</p>
+        </div>
+      </section>
+
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-memory" hidden>
+    <div class="memory-layout">
+      <aside class="memory-tree-card" aria-labelledby="memory-title">
+        <div class="memory-head">
+          <h2 id="memory-title" data-i18n="memory.title">Memory</h2>
+          <div class="memory-head-actions">
+            <button class="memory-refresh" id="memory-fold" type="button" data-i18n-title="memory.collapse_all"></button>
+            <button class="memory-refresh" id="memory-refresh" type="button" data-i18n-title="memory.refresh">↻</button>
+          </div>
+        </div>
+        <div class="memory-tree" id="memory-tree"></div>
+      </aside>
+      <section class="memory-viewer" aria-labelledby="memory-file-title">
+        <div class="memory-viewer-head">
+          <div>
+            <h2 id="memory-file-title" data-i18n="memory.select_file">Select a file</h2>
+            <div class="memory-meta" id="memory-meta"></div>
+          </div>
+          <div class="memory-viewer-actions">
+            <div class="memory-toggle" role="group" aria-label="Memory view mode">
+              <button class="memory-mode active" id="memory-rendered-btn" type="button" data-mode="rendered" data-i18n="memory.rendered">Rendered</button>
+              <button class="memory-mode" id="memory-raw-btn" type="button" data-mode="raw" data-i18n="memory.raw">Raw</button>
+            </div>
+            <div class="memory-edit-actions">
+              <button class="memory-action" id="memory-edit-btn" type="button" data-i18n="memory.edit">Edit</button>
+              <button class="memory-action primary" id="memory-save-btn" type="button" data-i18n="memory.save" hidden>Save</button>
+              <button class="memory-action" id="memory-reset-btn" type="button" data-i18n="memory.reset" hidden>Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div class="memory-status" id="memory-status"></div>
+        <div class="memory-content" id="memory-content"></div>
+      </section>
+    </div>
+  </section>
+
+  <section class="tab-panel observer-panel" id="tab-observer" hidden>
+    <div class="observer-toolbar">
+      <div>
+        <h2 data-i18n="observer.title">Terminal Observer</h2>
+        <p id="observer-target"></p>
+      </div>
+      <div class="observer-toolbar-actions">
+        <form class="observer-size-form" id="observer-size-form" novalidate>
+          <label><span data-i18n="observer.size.cols">Width</span>
+            <input type="number" id="observer-size-cols" min="20" max="500" step="1" value="120" required></label>
+          <span aria-hidden="true">×</span>
+          <label><span data-i18n="observer.size.rows">Height</span>
+            <input type="number" id="observer-size-rows" min="5" max="200" step="1" value="50" required></label>
+          <button class="action-btn" type="submit" id="observer-size-apply" data-i18n="observer.size.apply" data-i18n-title="observer.size.hint">Set size</button>
+          <span class="observer-size-status" id="observer-size-status" role="status" aria-live="polite"></span>
+        </form>
+        <div class="observer-view-switch" role="group" aria-label="Observer view">
+          <button class="action-btn" data-observer-view="live" aria-pressed="true" data-i18n="observer.history.live">Live terminal</button>
+          <button class="action-btn" data-observer-view="history" aria-pressed="false" data-i18n="observer.history.title">History</button>
+        </div>
+      </div>
+    </div>
+    <div class="observer-notice" id="observer-notice" data-state="idle" data-i18n="observer.connecting">Connecting to read-only terminal…</div>
+    <div id="observer-history" hidden></div>
+    <div class="observer-frame-shell">
+      <iframe id="observer-frame" title="Read-only terminal observer" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-trends" hidden>
+    <div class="trends-layout">
+      <div class="trends-controls">
+        <div class="range-buttons">
+          <button class="range-btn active" data-range="24h" data-i18n="trends.24h_short">24h</button>
+          <button class="range-btn" data-range="7d" data-i18n="trends.7d_short">7d</button>
+          <button class="range-btn" data-range="30d" data-i18n="trends.30d_short">30d</button>
+        </div>
+        <div class="date-picker">
+          <input type="date" id="trend-start" />
+          <span class="date-sep">&mdash;</span>
+          <input type="date" id="trend-end" />
+          <button class="range-btn" id="trend-custom" data-i18n="trends.apply">Apply</button>
+        </div>
+      </div>
+      <div class="chart-grid">
+        <section class="card chart-card">
+          <h2 data-i18n="trends.tokens">Token Usage</h2>
+          <div class="chart-total" id="chart-tokens-total"></div>
+          <div class="chart-wrap"><canvas id="chart-tokens"></canvas></div>
+        </section>
+        <section class="card chart-card">
+          <div class="chart-head-row">
+            <h2 data-i18n="trends.cost">Cost</h2>
+            <button class="tip-btn" id="cost-trend-tip" type="button" aria-label="Cost info">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="tip-popover" id="cost-trend-popover" hidden>
+              <p data-i18n="tip.cost">Estimated cost based on token pricing for the current model. Calculated from actual input/output token consumption.</p>
+            </div>
+          </div>
+          <div class="chart-total" id="chart-cost-total"></div>
+          <div class="chart-wrap"><canvas id="chart-cost"></canvas></div>
+        </section>
+        <section class="card chart-card">
+          <h2 data-i18n="trends.messages">Message Throughput</h2>
+          <div class="chart-wrap"><canvas id="chart-messages"></canvas></div>
+        </section>
+        <section class="card chart-card">
+          <h2 data-i18n="trends.projects">Project Distribution</h2>
+          <button class="tip-btn" id="projects-tip" type="button" aria-label="Info">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          <div class="tip-popover" id="projects-popover" hidden>
+            <p data-i18n="tip.projects">Ranked by tool call count (Read, Edit, Write, etc.) per project in the selected period.</p>
+          </div>
+          <div class="chart-wrap"><canvas id="chart-projects"></canvas></div>
+        </section>
+      </div>
+    </div>
+  </section>
+</main>
+</div>
+</div>
+</body>
+</html>

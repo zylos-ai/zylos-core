@@ -6,6 +6,7 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const TEST_ROOTS = [
+  path.join(ROOT, 'skills', 'dashboard', 'test'),
   path.join(ROOT, 'cli', 'lib', '__tests__'),
   path.join(ROOT, 'cli', 'lib', 'runtime', '__tests__'),
   path.join(ROOT, 'skills', 'activity-monitor', 'scripts', '__tests__'),
@@ -33,6 +34,7 @@ function isNodeTest(file) {
   // These integration entries use Jest and are selected by jest.config.js.
   if (rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js'
       || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js') return false;
+  if (rel.startsWith('skills/dashboard/test/')) return true;
   if (rel.startsWith('cli/lib/__tests__/')) return true;
   if (rel.startsWith('cli/lib/runtime/__tests__/')) return true;
   if (rel.startsWith('skills/activity-monitor/scripts/__tests__/')) return true;
@@ -70,10 +72,19 @@ if (testFiles.length === 0) {
 console.log(`Running ${testFiles.length} Node test files`);
 const environment = createTestEnvironment();
 try {
-  const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...testFiles], {
-    stdio: 'inherit',
-  });
-  process.exitCode = result.status ?? 1;
+  const dashboardRoot = path.join(ROOT, 'skills', 'dashboard');
+  const dashboardFiles = testFiles.filter(file => file.startsWith('skills/dashboard/test/'));
+  const coreFiles = testFiles.filter(file => !file.startsWith('skills/dashboard/test/'));
+  for (const [cwd, files] of [[ROOT, coreFiles], [dashboardRoot, dashboardFiles]]) {
+    if (!files.length) continue;
+    const env = { ...process.env };
+    // Runtime identity belongs to each fixture, never the agent running tests.
+    for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP']) delete env[key];
+    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...files.map(file => path.relative(cwd, path.join(ROOT, file)))], {
+      stdio: 'inherit', cwd, env,
+    });
+    if (result.status !== 0) process.exitCode = result.status ?? 1;
+  }
 } finally {
   environment.cleanup();
 }

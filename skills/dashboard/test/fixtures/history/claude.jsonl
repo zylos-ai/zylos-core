@@ -1,0 +1,11 @@
+{"type":"user","timestamp":"2026-09-27T01:00:00Z","message":{"content":"[TG DM from Owner] first message"}}
+{"type":"attachment","timestamp":"2026-09-27T01:00:01Z","attachment":{"type":"queued_command","prompt":"[OPENMAX GROUP: example from Owner] message while busy","source_uuid":"fixture","commandMode":"prompt","origin":{},"humanTurn":true}}
+{"type":"assistant","timestamp":"2026-09-27T01:00:04Z","message":{"id":"reply-1","content":[{"type":"text","text":"Part one"}]}}
+{"type":"assistant","timestamp":"2026-09-27T01:00:03Z","message":{"id":"reply-1","content":[{"type":"text","text":"Part two"}]}}
+{"type":"assistant","timestamp":"2026-09-27T01:00:05Z","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"printf fixture"}}]}}
+{"type":"user","timestamp":"2026-09-27T01:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"fixture","is_error":false}]},"toolUseResult":{"stdout":"fixture","stderr":"","interrupted":false}}
+{"type":"user","isMeta":true,"message":{"content":"injected context"}}
+{"type":"attachment","attachment":{"type":"context","content":"environment"}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-09-27T01:00:08Z"}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"opaque"}]}}
+{"type":"user","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERg=="}}]}}
