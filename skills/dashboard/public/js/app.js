@@ -5,6 +5,12 @@ import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=2'
 import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import { priceWithEditedBaseRates } from './pricing-form.js';
+import {
+  beginStateRequest,
+  captureMetricTarget,
+  isMetricTargetCurrent,
+  isStateRequestCurrent,
+} from './response-order.js';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
 const ASSET_ROOT = `${BASE_PATH}/_assets`;
@@ -1874,11 +1880,9 @@ async function resolveMemoryConflict(action) {
 }
 
 async function refreshState() {
-  const request = state.stateRequest = (state.stateRequest || 0) + 1;
-  const revision = state.stateRevision || 0;
-  const navigation = state.navigationGeneration;
+  const request = beginStateRequest(state);
   const data = await fetchJson('/api/state');
-  if (request !== state.stateRequest || revision !== (state.stateRevision || 0) || navigation !== state.navigationGeneration) return;
+  if (!isStateRequestCurrent(state, request)) return;
   if (!data || typeof data !== 'object') return;
   state.dashboardState = data;
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
@@ -1892,8 +1896,8 @@ async function refreshState() {
 }
 
 async function refreshMetrics() {
-  const target = JSON.stringify([state.navigationGeneration, state.dashboardState?.runId, state.dashboardState?.sessionId]);
-  const stillCurrent = () => target === JSON.stringify([state.navigationGeneration, state.dashboardState?.runId, state.dashboardState?.sessionId]);
+  const target = captureMetricTarget(state);
+  const stillCurrent = () => isMetricTargetCurrent(state, target);
   const results = await Promise.allSettled(METRICS.map(async (n) => [n, await fetchJson(`/api/metrics/${n}`)]));
   if (!stillCurrent()) return;
   let changed = false;
@@ -2423,8 +2427,10 @@ function applySse(name, data) {
   if (name === 'state_change') {
     state.stateRevision = (state.stateRevision || 0) + 1;
     const prevRi = state.dashboardState?.runtime_info;
-    const prevSessionId = state.dashboardState?.sessionId;
-    const prevRunId = state.dashboardState?.runId;
+    const prevSessionId = state.dashboardState?.sessionId ?? state.dashboardState?.session?.session_id;
+    const prevRunId = state.dashboardState?.runId ?? state.dashboardState?.run_id;
+    const nextSessionId = data.sessionId ?? data.session?.session_id;
+    const nextRunId = data.runId ?? data.run_id;
     // The SSE state payload carries only raw state — the agent identity color
     // (hue) is added by /api/state, not by the broadcast. Preserve it across SSE
     // updates so the single-agent mascot stays tinted to match its Agent Fleet
@@ -2432,7 +2438,7 @@ function applySse(name, data) {
     const prevAgent = state.dashboardState?.agent;
     state.dashboardState = data;
     if (!data.runtime_info && prevRi) {
-      const sessionChanged = data.sessionId !== prevSessionId || data.runId !== prevRunId;
+      const sessionChanged = nextSessionId !== prevSessionId || nextRunId !== prevRunId;
       state.dashboardState.runtime_info = sessionChanged
         ? { ...prevRi, runtime: data.runtime || 'unknown', model: null, model_id: null, effort: null, service_tier: null }
         : prevRi;
@@ -2492,7 +2498,7 @@ function connectSse() {
   };
 
   for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet', 'history_changed']) {
-    source.addEventListener(ev, (e) => {
+    state.eventSource.addEventListener(ev, (e) => {
       if (state.eventSource !== source) return;
       try { applySse(ev, JSON.parse(e.data)); renderConnection('live'); }
       catch { renderConnection('degraded'); }
@@ -4268,9 +4274,11 @@ async function openActionsModal() {
   if (remoteIsReadOnly()) return;
   const modal = createActionsModal();
   modal.hidden = false;
-  refreshModeStatus();
-  clearInterval(modeStatusTimer);
-  modeStatusTimer = setInterval(refreshModeStatus, 2000);
+  if (typeof refreshModeStatus === 'function') {
+    refreshModeStatus();
+    if (typeof clearInterval === 'function') clearInterval(modeStatusTimer);
+    if (typeof setInterval === 'function') modeStatusTimer = setInterval(refreshModeStatus, 2000);
+  }
 
   const statusEl = modal.querySelector('#action-status');
   statusEl.hidden = true;

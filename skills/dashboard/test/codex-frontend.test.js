@@ -53,7 +53,7 @@ function actionsHarness(meta) {
     return elements.get(selector);
   };
   const modal = { querySelector: get };
-  const context = vm.createContext({ state: {}, refreshModeStatus() {}, modeStatusTimer: null, clearInterval() {}, setInterval() {}, createActionsModal: () => modal, updateRestartDot() {},
+  const context = vm.createContext({ state: {}, createActionsModal: () => modal, updateRestartDot() {},
     fetchJson: async () => meta, document: { createElement: element }, t: translate, effortLabel: value => value,
     remoteIsReadOnly: () => false });
   vm.runInContext(app.slice(app.indexOf('async function openActionsModal()'), app.indexOf('function closeActionsModal()')), context);
@@ -194,14 +194,14 @@ for (const runtime of ['claude', 'codex']) {
 }
 
 test('raw SSE session switch clears Codex runtime identity while preserving configuration', () => {
-  const context = vm.createContext({ state: { dashboardState: { runId: 'R1', sessionId: 'old', runtime_info: {
+  const context = vm.createContext({ state: { dashboardState: { session: { session_id: 'old' }, runtime_info: {
     runtime: 'codex', model: 'old-model', model_id: 'old-model', effort: 'high', service_tier: 'priority', configured_model: 'configured'
   } } }, applyRuntimeVisibility() {}, renderInfoBar() {}, renderState() {}, renderHealth() {},
   updateRestartDot() {}, refreshTimeline() {}, Date });
   vm.runInContext(app.slice(app.indexOf('function applySse('), app.indexOf("  } else if (name === 'metric_update')")) + '\n  }\n}', context);
-  context.applySse('state_change', { runId: 'R1', sessionId: 'old' });
+  context.applySse('state_change', { session: { session_id: 'old' } });
   assert.equal(context.state.dashboardState.runtime_info.model, 'old-model');
-  context.applySse('state_change', { runId: 'R2', sessionId: 'new' });
+  context.applySse('state_change', { session: { session_id: 'new' } });
   const info = context.state.dashboardState.runtime_info;
   for (const key of ['model', 'model_id', 'effort', 'service_tier']) assert.equal(info[key], null);
   assert.equal(info.configured_model, 'configured');

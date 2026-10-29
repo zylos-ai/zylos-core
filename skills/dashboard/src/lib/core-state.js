@@ -14,8 +14,8 @@ export function projectOrigin(sessionGroup, observation) {
 }
 
 export class CoreState {
-  constructor({ load = loadCoreModule, onChange = () => {} } = {}) {
-    this.load = load; this.onChange = onChange;
+  constructor({ onChange = () => {} } = {}) {
+    this.onChange = onChange;
     this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: 'not_sampled', identity: null, status: { valid: false }, usage: { valid: false }, runId: null, sessionId: null };
     this.costKey = null; this.pending = null;
   }
@@ -26,7 +26,7 @@ export class CoreState {
   }
   async _read() {
     try {
-      const [{ readSessionMode }, reader, paths] = await Promise.all([this.load('config.js'), this.load('session-state-reader.js'), this.load('session-group-paths.js')]);
+      const [{ readSessionMode }, reader, paths] = await Promise.all([loadCoreModule('config.js'), loadCoreModule('session-state-reader.js'), loadCoreModule('session-group-paths.js')]);
       const { mode } = readSessionMode();
       const group = mode === 'multi' ? 'origin' : null;
       const observation = await reader.readSessionState(group, { freshnessMs: 5000 });
