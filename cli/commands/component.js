@@ -405,6 +405,12 @@ export async function upgradeComponent(args) {
   }
 
   // Verify component is installed (both in components.json and skill directory)
+  if (target === 'dashboard') {
+    const result = { action: 'upgrade', success: false, component: target, error: 'core_managed', message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
+    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
+    process.exitCode = 1;
+    return;
+  }
   const components = loadComponents();
   const skillDir = path.join(SKILLS_DIR, target);
 
@@ -869,7 +875,7 @@ function cleanOldBackups(skillDir) {
  */
 async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval, beta = false, mode = 'merge' }) {
   const components = loadComponents();
-  const names = Object.keys(components);
+  const names = Object.keys(components).filter(name => name !== 'dashboard');
 
   if (names.length === 0) {
     if (jsonOutput) {
@@ -1190,6 +1196,14 @@ export async function uninstallComponent(args) {
     process.exit(1);
   }
 
+  if (target === 'dashboard') {
+    const result = { action: checkOnly ? 'uninstall_check' : 'uninstall', success: false, component: target,
+      error: 'core_managed', message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
+    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
+    process.exitCode = 1;
+    return;
+  }
+
   if (checkOnly) {
     return handleUninstallCheck(target, { jsonOutput });
   }
@@ -1483,6 +1497,14 @@ export async function infoComponent(args) {
   if (!target) {
     console.error('Usage: zylos info <name> [--json]');
     process.exit(1);
+  }
+
+  if (target === 'dashboard') {
+    const result = { action: 'info', success: false, component: target, error: 'core_managed',
+      message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
+    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
+    process.exitCode = 1;
+    return;
   }
 
   const components = loadComponents();

@@ -12,9 +12,12 @@ const os = require('os');
 const fs = require('fs');
 
 const HOME = os.homedir();
-const ZYLOS_DIR = path.join(HOME, 'zylos');
+// Match the CLI instance root (cli/lib/config.js), including non-default installs.
+// Keeping one root for every service prevents a custom instance from starting
+// Core services or loading component registrations from the default instance.
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(HOME, 'zylos');
 const ZYLOS_META_DIR = path.join(ZYLOS_DIR, '.zylos');
-const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
+const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 const BIN_DIR = path.join(ZYLOS_DIR, 'bin');
 const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 
@@ -67,7 +70,7 @@ try {
 
 // Core service names — components must not collide with these
 const CORE_SERVICE_NAMES = new Set([
-  'scheduler', 'web-console', 'c4-dispatcher', 'activity-monitor', 'caddy',
+  'scheduler', 'web-console', 'c4-dispatcher', 'activity-monitor', 'caddy', 'zylos-dashboard',
 ]);
 
 // Parse SKILL.md YAML frontmatter service block.
@@ -190,6 +193,23 @@ function loadComponentServices() {
 
 module.exports = {
   apps: [
+    {
+      name: 'zylos-dashboard',
+      script: path.join(SKILLS_DIR, 'dashboard', 'src', 'index.js'),
+      cwd: path.join(SKILLS_DIR, 'dashboard'),
+      env: {
+        PATH: ENHANCED_PATH,
+        NODE_ENV: 'production',
+        ZYLOS_DIR,
+        ZYLOS_PACKAGE_ROOT,
+      },
+      autorestart: true,
+      max_restarts: 10,
+      min_uptime: '10s',
+      error_file: path.join(ZYLOS_DIR, 'components', 'dashboard', 'logs', 'error.log'),
+      out_file: path.join(ZYLOS_DIR, 'components', 'dashboard', 'logs', 'out.log'),
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    },
     {
       name: 'scheduler',
       script: path.join(SKILLS_DIR, 'scheduler', 'scripts', 'daemon.js'),

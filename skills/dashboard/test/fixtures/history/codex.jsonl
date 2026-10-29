@@ -1,0 +1,13 @@
+{"type":"session_meta","timestamp":"2026-09-27T01:00:00Z","payload":{"id":"codex-main","source":"cli","cli_version":"0.157.0"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"type":"turn_context","payload":{"turn_id":"turn-1","model":"fixture-model"}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"injected instructions"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for fixture"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"[TG DM from Owner] run both commands"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"functions.exec","call_id":"call-1","input":"await tools.exec_command({cmd: \"echo one\"}); await tools.exec_command({cmd: \"echo two\"});"}}
+{"type":"event_msg","payload":{"type":"item_completed","thread_id":"codex-main","turn_id":"turn-1","item":{"type":"CommandExecution","id":"cmd-1","command":["zsh","-lc","echo one"],"cwd":"/fixture","status":"completed","stdout":"one","stderr":"","aggregated_output":"one complete","exit_code":0,"formatted_output":"one"}}}
+{"type":"event_msg","payload":{"type":"item_completed","thread_id":"codex-main","turn_id":"turn-1","item":{"type":"CommandExecution","id":"cmd-2","command":["zsh","-lc","echo two"],"cwd":"/fixture","status":"completed","stdout":"two","stderr":"","aggregated_output":"two complete","exit_code":0,"formatted_output":"two"}}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":"Warning: truncated output"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Complete."}]}}
+{"type":"compacted","payload":{"message":"Context compacted"}}
+{"type":"response_item","payload":{"type":"reasoning","encrypted_content":"opaque"}}

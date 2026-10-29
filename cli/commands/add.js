@@ -151,7 +151,7 @@ export async function addComponent(args) {
 
   // 1. Resolve target
   const resolved = await resolveTarget(target, { branch, file });
-  if (resolved.name === 'internal' || resolved.name === 'void') {
+  if (['internal', 'void', 'dashboard'].includes(resolved.name)) {
     fileFlagError('reserved_name', `Component name "${resolved.name}" is reserved for a built-in channel.`);
     return;
   }

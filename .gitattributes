@@ -7,3 +7,5 @@
 **/__tests__ export-ignore
 **/*.test.js export-ignore
 /skills/zylos-memory/scripts/tests export-ignore
+
+/skills/dashboard/test export-ignore

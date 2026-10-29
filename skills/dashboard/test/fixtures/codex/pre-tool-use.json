@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "codex-session-1",
+  "turn_id": "codex-turn-1",
+  "transcript_path": "/tmp/zylos-dashboard-codex/rollout-codex-session-1.jsonl",
+  "model": "gpt-5.3-codex",
+  "permission_mode": "default",
+  "tool_name": "functions.exec_command",
+  "tool_use_id": "call-1",
+  "tool_input": {
+    "cmd": "[REDACTED_COMMAND]"
+  }
+}

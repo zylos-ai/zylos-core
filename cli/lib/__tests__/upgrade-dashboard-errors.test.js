@@ -11,7 +11,7 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
     t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     const error={code:`${item}_original_code`,message:`${item} original diagnostic`};
     const ctx={zylosDir:root,firstDashboardTakeover:true,from:'old',to:'new',mergeConflicts:[],mergedFiles:[],
-      journal:{dashboardInstall:{items:{registration:{state:'pending',attempts:0},route:{state:'pending',attempts:0}}}},
+      journal:{firstTakeover:true,dashboardInstall:{items:{registration:{state:'pending',attempts:0},route:{state:'pending',attempts:0}}}},
       maintenance:{canRecognizeProcesses:()=>true,update(_dir,journal,changes){Object.assign(journal,changes);}}};
     const fail=()=>{
       if(response==='throw') throw Object.assign(Error(error.message),error);

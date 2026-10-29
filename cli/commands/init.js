@@ -1,3 +1,4 @@
+import { applyDashboardRoute } from '../lib/dashboard-install.js';
 import { savePm2ProcessList } from '../lib/pm2-save.js';
 import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
 import { githubUrl } from '../lib/upstreams.js';
@@ -1063,10 +1064,15 @@ function initializeDatabases() {
  * Prepare and start core services via PM2 ecosystem config.
  * @returns {number} Number of services successfully started
  */
-function startCoreServices(webPassword = null) {
+export function startCoreServices(webPassword = null) {
   installSkillDependencies();
   ensureWebConsolePassword(webPassword);
+  try {
+    execFileSync(process.execPath, [path.join(SKILLS_DIR, 'dashboard', 'hooks', 'post-install.js')], { stdio: 'inherit', env: { ...process.env, ZYLOS_DIR } });
+  } catch (err) { console.log(`  ${warn(`Dashboard configuration failed: ${err.message}`)}`); }
   initializeDatabases();
+  const dashboardRoute = applyDashboardRoute({ zylosDir: ZYLOS_DIR });
+  if (dashboardRoute.state !== 'done') console.log(`  ${warn('Dashboard route requires attention: ' + dashboardRoute.error?.message)}`);
 
   const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
   if (!fs.existsSync(ecosystemPath)) {
