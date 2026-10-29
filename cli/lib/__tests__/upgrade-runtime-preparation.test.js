@@ -5,11 +5,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
-import { preparePostCutoff, validatePostCutoff, publishRuntimePreparation } from '../upgrade-post-cutoff.js';
+import { preparePostCutoff, validatePostCutoff, publishPostCutoff } from '../upgrade-post-cutoff.js';
 import { loadInstructionCatalog, migrationPromptPath, sha256 } from '../instruction-migration.js';
 import { isMigrationPending } from '../../../skills/activity-monitor/scripts/session-start-prompt.js';
 
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
+
+function publishRuntimePreparation({workDir, zylosDir, preparation}, options = {}) {
+  const transactionId = 'runtime-preparation-test';
+  const snapshotManifestHash = 'a'.repeat(64);
+  const journal = {transactionId, zylosDir, phase:'compensation_closed', snapshotManifestHash,
+    compensationCutoff:{formatVersion:1, closed:true, transactionId, snapshotManifestHash,
+      writer:'finalizer', closedAt:new Date().toISOString()}, postCutoff:preparation};
+  return publishPostCutoff({transactionDir:workDir, transactionId, journal}, {
+    persist:(current, changes)=>Object.assign(current, changes), ...options,
+  });
+}
 
 test('upgrade reuses P06 CLI preparation without login or touching the running runtime', async t => {
   const f = fixture(t);

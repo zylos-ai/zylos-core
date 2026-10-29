@@ -101,42 +101,32 @@ test('thin CLI forwards downloaded executable output and exit status without ano
   }
 });
 
-test('self upgrade and forward repair have no overall deadline option', () => {
-  for (const command of ['--self', '--resume-finalize']) {
-    assert.equal(Object.hasOwn(parseUpgradeFinalizeOptions([command]), 'finalizeTimeoutMs'), false);
-    for (const seconds of ['60', '900', '3600']) assert.throws(
-      () => parseUpgradeFinalizeOptions([command, '--finalize-timeout', seconds, '--json']), {code:'INVALID_ARGS'});
-  }
+test('forward repair supports read-only status output', () => {
   assert.equal(parseUpgradeFinalizeOptions(['--resume-finalize', '--status', '--json']).status, true);
 });
 
-test('invalid timeout forms and incompatible commands are rejected', () => {
+test('incompatible forward repair commands are rejected', () => {
   const cases = [
     ['--status'], ['--self', '--status'],
     ['--resume-finalize', '--self'], ['--resume-finalize', '--check'],
     ['--resume-finalize', '--branch', 'main'], ['--resume-finalize', 'component'],
-    ['--self', '--finalize-timeout'], ['--resume-finalize', '--finalize-timeout'],
-    ['--self', '--finalize-timeout=60'],
-    ['--self', '--finalize-timeout', '60', '--finalize-timeout', '900'],
-    ...['59', '3601', '60.5', 'abc', '-60', 'Infinity'].map(value => ['--self', '--finalize-timeout', value]),
-    ...[['--self', '--check'], ['--all'], ['example'], ['--resume-finalize', '--status']]
-      .map(command => [...command, '--finalize-timeout', '600']),
+    ['--resume-finalize', '--unknown-option'],
   ];
   for (const args of cases) assert.throws(() => parseUpgradeFinalizeOptions(args), { code: 'INVALID_ARGS' }, args.join(' '));
 });
 
-test('removed timeout fails before discovering corrupt transaction material or writing files', () => {
+test('invalid options fail before discovering corrupt transaction material or writing files', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-cli-invalid-'));
   try {
     fs.mkdirSync(path.join(root, '.zylos'));
     fs.writeFileSync(path.join(root, '.zylos', 'upgrade-maintenance.json'), '{corrupt');
     const before = fs.readdirSync(root, { recursive: true });
     const child = spawnSync(process.execPath, ['--input-type=module', '-e',
-      `const {upgradeComponent}=await import(${JSON.stringify(modulePath)});await upgradeComponent(['--resume-finalize','--status','--finalize-timeout','600','--json']);`],
+      `const {upgradeComponent}=await import(${JSON.stringify(modulePath)});await upgradeComponent(['--resume-finalize','--status','--unknown-option','--json']);`],
     { encoding: 'utf8', env: { ...process.env, ZYLOS_DIR: root } });
     assert.equal(child.status, 1, child.stderr);
     assert.deepEqual(JSON.parse(child.stdout), { ok: false, error: {
-      code: 'INVALID_ARGS', message: '--finalize-timeout is no longer supported; upgrade steps have individual timeouts.', persisted: [],
+      code: 'INVALID_ARGS', message: '--resume-finalize accepts only --status and --json.', persisted: [],
     } });
     assert.deepEqual(fs.readdirSync(root, { recursive: true }), before);
     assert.equal(fs.readFileSync(path.join(root, '.zylos', 'upgrade-maintenance.json'), 'utf8'), '{corrupt');

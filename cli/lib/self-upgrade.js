@@ -16,11 +16,7 @@ import { copyTree } from './fs-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { getCoreEcosystemPath, createPm2Helpers } from './pm2.js';
-import { createRequire } from 'node:module';
-
-const finalizerRequire=createRequire(import.meta.url);
-
-import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade, runCoreDbWorker } from './core-db-backup.js';
+import { runCoreDbWorker, assertDashboardUninstalled as assertIndependentDashboardUninstalled } from './core-db-backup.js';
 import { recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 import { updateZylosConfigLocked, readSessionMode } from './config.js';
@@ -29,7 +25,7 @@ import { requestRuntimeRestart } from './request-runtime-restart.js';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { classifyCutoff, commitCutoff } from './upgrade-cutoff.js';
-import { preparePostCutoff, publishPostCutoff, publishRuntimePreparation } from './upgrade-post-cutoff.js';
+import { preparePostCutoff, publishPostCutoff } from './upgrade-post-cutoff.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runtime-preparation.js';
 
 const REPO = 'zylos-ai/zylos-core';
@@ -723,7 +719,7 @@ function step13_commitSkillBaselines(ctx) {
 // ---------------------------------------------------------------------------
 
 function protectionResult(ctx) {
-  return {automaticCompensation:true, automaticResume:maintenanceFor(ctx).canRecognizeProcesses(),
+  return {compensationSupported:true, automaticResume:maintenanceFor(ctx).canRecognizeProcesses(),
     databaseMode:ctx.databaseMode || 'migrate', dbSnapshotVerified:ctx.dbSnapshotVerified===true,
     databases:ctx.databases || ctx.databasePreflight?.databases || null};
 }
@@ -734,7 +730,8 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
       success: false,
       ...protectionResult(ctx),
       warnings: ctx.runtimeWarnings || [],
-      preInstallProtection:true,
+      dashboard: ctx.dashboard || {state:'degraded',errors:[]},
+      upgradeProtected:true,
       from: ctx.from,
       to: null,
       failedStep: failedStep.step,
@@ -761,7 +758,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     backupDir: ctx.backupDir,
     dbBackupDir: ctx.dbBackupDir || null,
     databases: ctx.databases || ctx.databasePreflight?.databases || ctx.dbManifest?.databases || null,
-    preInstallProtection: true,
+    upgradeProtected: true,
     transactionDir: ctx.transactionDir || null,
     cleanupWarnings: ctx.cleanupWarnings || [],
     templates,
@@ -772,14 +769,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
 }
 
 export function assertDashboardUninstalled(zylosDir = ZYLOS_DIR) {
-  const file = path.join(zylosDir,'.zylos','components.json');
-  let components;
-  try { components=JSON.parse(fs.readFileSync(file,'utf8')); }
-  catch (error) { if(error.code==='ENOENT')return; throw error; }
-  if (components.dashboard) throw Object.assign(Error('Uninstall the independent Dashboard while retaining its data before upgrading: zylos uninstall dashboard --yes'), {
-    code:'DASHBOARD_STILL_INSTALLED',
-    next:'Run zylos uninstall dashboard --yes while retaining its data before retrying the upgrade.'
-  });
+  return assertIndependentDashboardUninstalled(zylosDir);
 }
 
 async function installedDashboardOwner(ctx) {
@@ -787,7 +777,7 @@ async function installedDashboardOwner(ctx) {
   return import(pathToFileURL(path.join(root,'cli/lib/dashboard-install.js')).href);
 }
 
-function refreshMaintenanceReader(ctx) {
+function verifyPublicationForServices(ctx) {
   const m=maintenanceFor(ctx), j=m.transaction(ctx.zylosDir,ctx.transactionDir);
   if(!['compensation_closed','recovery_required'].includes(j.phase) || classifyCutoff(j)!=='closed' || j.postCutoff?.items?.hooks?.state!=='done') throw Error('Core publication is not ready for service access');
   ctx.journal=j;
@@ -851,7 +841,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       return {status:'skipped',message:'existing working state preserved for mode conversion'};
     });
     await run(13,'commit_skill_baselines',()=> (deps.commitBaselines || step13_commitSkillBaselines)(ctx));
-    await run(7,'refresh_maintenance_reader',()=> (deps.refreshMaintenanceReader || refreshMaintenanceReader)(ctx));
+    await run(7,'verify_publication_for_services',()=> (deps.verifyPublicationForServices || verifyPublicationForServices)(ctx));
     await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(ctx));
     await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(ctx));
   } catch(error) {return fail(error);}
@@ -926,47 +916,20 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
 }
 
 export function runSelfUpgradeFinalize(state = {}, deps = {}) {
-  if (state.schemaVersion !== 2 || state.preInstallProtection !== true) {
-    return {
-      action: 'self_upgrade',
-      success: false,
-      from: state.from || null,
-      to: null,
-      failedStep: 5,
-      error: 'Finalization requires the protected target-upgrade transaction.',
-      steps: [],
-      rollback: { performed: false, steps: [] },
-    };
-  }
-
   const ctx = createContext({
     tempDir: state.tempDir,
-    newVersion: state.newVersion || state.to,
-    mode: state.mode,
+    newVersion: state.to,
+    mode: 'merge',
   });
   ctx.databaseMode = 'migrate';
-  ctx.preInstallProtection = true;
   ctx.zylosDir = deps.zylosDir || state.zylosDir || ZYLOS_DIR;
   ctx.maintenance = deps.maintenance;
   ctx.packageRoot = state.packageRoot;
-  ctx.firstTakeover = state.firstTakeover === true;
-  ctx.firstDashboardTakeover = state.firstDashboardTakeover;
-  ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
-  {
-    try {
-      const maintenance=maintenanceFor(ctx);
-      ctx.journal=maintenance.transaction(ctx.zylosDir,ctx.transactionDir);
-      if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');
-      const cutoff=maintenance.classifyCutoff(ctx.journal);
-      if(cutoff!=='none')throw Error(cutoff==='closed' ? 'compensation is closed; use forward finalization' : 'untrusted cutoff requires manual recovery');
-    }
-    catch(error){return {success:false,error:error.message,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};}
-  }
-  ctx.backupDir = state.backupDir || null;
-  ctx.servicesWereRunning = Array.isArray(state.servicesWereRunning) ? [...state.servicesWereRunning] : [];
+  ctx.transactionDir=state.transactionDir;
+  ctx.transactionId=state.transactionId;
+  ctx.backupDir = ctx.transactionDir ? path.join(ctx.transactionDir,'code') : null;
   ctx.from = state.from || null;
-  ctx.snapshotFormatVersion = state.snapshotFormatVersion ?? state.dbManifest?.formatVersion;
-  ctx.to = state.to || state.newVersion || null;
+  ctx.to = state.to || null;
 
   return finalizeInstalledUpgrade(ctx, deps);
 }
@@ -993,6 +956,7 @@ function finalizationFailure(ctx, error, step = 5) {
   let closed = false;
   let recoveryError;
   try {
+    if (!ctx.journal) throw Error('Finalizer transaction has not been validated.');
     closed = recordClosedFinalizationFailure(ctx,error);
   } catch (failure) {
     recoveryError = failure.message;
@@ -1011,7 +975,9 @@ async function finalizeInstalledUpgrade(ctx, deps) {
     {
       const m = maintenanceFor(ctx);
       const j = m.transaction(ctx.zylosDir, ctx.transactionDir);
-      if (j.transactionId !== ctx.transactionId || j.installationIntent !== true || classifyCutoff(j) !== 'none' || j.phase !== 'installing') throw Error('invalid initial finalizer transaction');
+      const cutoff=classifyCutoff(j);
+      if(cutoff!=='none') throw Error(cutoff==='closed' ? 'compensation is closed; use forward finalization' : 'untrusted cutoff requires manual recovery');
+      if (j.transactionId !== ctx.transactionId || j.installationIntent !== true || j.phase !== 'installing') throw Error('invalid initial finalizer transaction');
       m.validateOriginalJournal(j, {completeBackups:true});
       manifest = loadSnapshotManifest(j, m);
       ctx.journal=j;
@@ -1033,6 +999,7 @@ async function finalizeInstalledUpgrade(ctx, deps) {
     stageSkillBaselines(ctx);
     const runtimeClis=await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx);
     ctx.runtimeWarnings=runtimeClis?.warnings || [];
+    maintenanceFor(ctx).update(ctx.transactionDir,ctx.journal,{runtimeWarnings:ctx.runtimeWarnings});
     (deps.dataReady || protectedDataReady)(ctx);
     const prepared=await (deps.prepareRuntime || prepareUpgradeRuntime)(ctx);
     ctx.preparationWarnings=prepared.warnings || [];
@@ -1065,7 +1032,7 @@ function publishedSettingsChanged(preparation) {
 /** Forward repair consumes only durable publication inputs, never migrations. */
 export async function resumeUpgradeFinalization(ctx, deps = {}) {
   ctx.steps ||= [];
-  ctx.preInstallProtection=true;
+  ctx.runtimeWarnings ||= ctx.journal.runtimeWarnings || [];
   ctx.from ||= ctx.journal.from;
   ctx.to ||= ctx.journal.to;
   ctx.servicesWereRunning ||= ctx.journal.originalServices.map(service=>service.name);

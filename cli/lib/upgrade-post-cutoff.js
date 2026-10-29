@@ -68,14 +68,14 @@ export function removeLegacyDashboardHooks(config, zylosDir) {
 }
 
 /** Stage already-rendered P06 instruction/settings bytes without writing shared files. */
-export function preparePostCutoff({ transactionDir, zylosDir, replacements, runtime = 'claude', homeDir = os.homedir(), ordinary = false }) {
+export function preparePostCutoff({ transactionDir, zylosDir, replacements, runtime = 'claude', homeDir = os.homedir() }) {
   const codexGlobalDir = path.join(path.resolve(homeDir), '.codex');
   const targets = [];
   const add = (root, relative, kind, content, id) => {
     const file = contained(root === 'zylos' ? zylosDir : codexGlobalDir, relative);
     if (targets.some(t => path.resolve(t.root === 'zylos' ? zylosDir : codexGlobalDir, t.path) === file)) return;
     const before = existing(file);
-    const beforeFile = before === null ? null : `${ordinary ? 'runtime-preparation' : 'post-cutoff'}/before/${root}/${relative}`;
+    const beforeFile = before === null ? null : `post-cutoff/before/${root}/${relative}`;
     if (beforeFile) atomicBytes(contained(transactionDir, beforeFile), before);
     const stagedFile = content === undefined ? null : `runtime-preparation/final/${root}/${relative}`;
     const bytes = content === undefined ? null : Buffer.from(content);
@@ -164,14 +164,6 @@ export async function publishPostCutoff(ctx, options = {}) {
     throw failure('CUTOFF_UNTRUSTED', undefined, 'publication requires verified cutoff identity');
   }
   return publishPrepared(ctx, options);
-}
-
-/** The same file reconciliation, with results held only in this invocation. */
-export async function publishRuntimePreparation({ workDir, zylosDir, preparation }, options = {}) {
-  const state = {zylosDir, postCutoff: preparation};
-  return publishPrepared({transactionDir:workDir, journal:state}, {
-    ...options, persist: (current, changes) => Object.assign(current, changes)
-  });
 }
 
 async function publishPrepared(ctx, { installHook = installCoreCodexHook,

@@ -421,10 +421,9 @@ function controllerFlock() {
   }
   throw Error('trusted Linux flock executable unavailable');
 }
-function preflightExternalTools(platform = process.platform) {
+function preflightExternalTools() {
   const node = fs.realpathSync(process.execPath), stat = fs.statSync(node);
   if (!stat.isFile() || !(stat.mode & 0o111)) throw Error('untrusted recovery Node executable');
-  if (canRecognizeProcesses(platform)) controllerFlock();
 }
 function serializedController(dir, operation, value) {
   if (operation === 'release' && !fs.existsSync(dir)) return;
@@ -768,12 +767,22 @@ function sync(src, dest) {
 function worker(dir, j, payload) {
   const d = read(path.join(dir, 'descriptor.json'));
   validateDescriptor(dir, j, d);
-  return JSON.parse(command(d.nodePath, [d.workerPath, JSON.stringify({
+  const result=cp.spawnSync(d.nodePath, [d.workerPath, JSON.stringify({
     ...payload,
     driverPath: d.driverPath
   })], {
+    encoding:'utf8',
     timeout: 120000
-  }));
+  });
+  let response;
+  try {response=JSON.parse(result.stdout);} catch {}
+  if(result.error || result.status!==0 || response?.success===false) {
+    throw Object.assign(Error(response?.error?.message || result.error?.message || 'SQLite worker failed'), {
+      code:response?.error?.code || 'UPGRADE_FAILED'
+    });
+  }
+  if(!response)throw Error('Invalid SQLite worker response');
+  return response;
 }
 function validateDescriptor(dir, j, d) {
   dir = path.resolve(dir);
@@ -820,7 +829,7 @@ function preflight(dir, j, expected, {originalDeployment = false} = {}) {
     dashboardOwnerManaged: j.dashboardOwnerManaged === true && !(originalDeployment && j.firstTakeover === true),
     manifest: restored ? expected : undefined,
     expectedDatabases: presence,
-    formatVersion: originalDatabasePaths(j).length === 4 ? 2 : 1
+    formatVersion: 2
   });
 }
 function renameIntent(dir, j, key, source, dest, expectedHash) {
@@ -928,15 +937,13 @@ function verifyFinalizerExit(dir, j) {
   // Legacy detached-finalizer records require manual recovery; new transactions
   // never launch a finalizer child and cannot safely interpret its ownership.
   if (j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed) throw Error('legacy finalizer requires manual recovery');
-  for (const kind of ['installer']) {
-    const started = kind + 'Started', confirmed = kind + 'ExitConfirmed', unconfirmed = kind + 'ExitUnconfirmed';
-    if (!j[unconfirmed] && (!j[started] || j[confirmed])) continue;
+  if (j.installerExitUnconfirmed || j.installerStarted && !j.installerExitConfirmed) {
     const descriptorFile = path.join(dir, 'descriptor.json');
     if (fs.existsSync(descriptorFile)) validateDescriptor(dir, j, read(descriptorFile));
     validateRecoveryFiles(dir, j);
-    const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:kind==='installer', kind});
-    if (!result.confirmed) throw Error(result.error || kind + ' exit requires verification before resume');
-    update(dir, j, {[unconfirmed]:false, [confirmed]:true});
+    const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:true, kind:'installer'});
+    if (!result.confirmed) throw Error(result.error || 'installer exit requires verification before resume');
+    update(dir, j, {installerExitUnconfirmed:false, installerExitConfirmed:true});
   }
 }
 module.exports = {

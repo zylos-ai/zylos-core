@@ -25,7 +25,7 @@ try {
     inspect:() => ({tempDir, zylosDir, skillsDir, mode:'merge'}),
     resolveNpm:() => '/fixture/npm-cli.js',
     begin(ctx) {
-      ctx.preInstallProtection = true;
+      ctx.upgradeProtected = true;
       ctx.transactionId = 'conflict-fixture';
       ctx.transactionDir = path.dirname(transactionBackupDir);
       fs.mkdirSync(ctx.transactionDir, {recursive:true});

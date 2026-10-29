@@ -3,18 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import vm from 'node:vm';
-import {fileURLToPath} from 'node:url';
+import cp from 'node:child_process';
 import {createRequire} from 'node:module';
 const m = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
 function processView(t, {ppid = 0, parentReadable = true, hidepid = false, unreadableWriter = false} = {}) {
   const read = fs.readFileSync, readdir = fs.readdirSync, realpath = fs.realpathSync, stat = fs.statSync;
-  const filename = fileURLToPath(new URL('../upgrade-maintenance.cjs', import.meta.url));
-  const isolated = {exports:{}};
-  vm.runInNewContext(read(filename, 'utf8'), {module:isolated, exports:isolated.exports,
-    require:createRequire(import.meta.url), __filename:filename,
-    process:{pid:process.pid,ppid,platform:process.platform}});
+  const parent = Object.getOwnPropertyDescriptor(process, 'ppid');
+  Object.defineProperty(process, 'ppid', {configurable:true,enumerable:true,get:()=>ppid});
   fs.readFileSync = (file, ...args) => {
     const name = String(file);
     if (name === '/proc/mounts') return `proc /proc proc rw,hidepid=${hidepid ? '2' : '0'} 0 0\n`;
@@ -32,9 +28,10 @@ function processView(t, {ppid = 0, parentReadable = true, hidepid = false, unrea
   fs.realpathSync = (file, ...args) => ['/usr/bin/flock', '/bin/flock'].includes(file) ? '/fixture/flock' : realpath(file, ...args);
   fs.statSync = (file, ...args) => file === '/fixture/flock' ? {isFile:()=>true,mode:0o755} : stat(file, ...args);
   t.after(() => {
+    Object.defineProperty(process, 'ppid', parent);
     fs.readFileSync = read; fs.readdirSync = readdir; fs.realpathSync = realpath; fs.statSync = stat;
   });
-  return isolated.exports;
+  return m;
 }
 
 test('Linux PID namespace root recognizes a complete process view without a visible parent', {skip:process.platform !== 'linux'}, t => {
@@ -81,18 +78,14 @@ test('Linux without trusted flock selects the live ownership route', {skip:proce
   finally { fs.realpathSync = realpath; }
 });
 
-test('F06 restricted Linux stop refuses an incomplete writer view before any PM2 command', {skip:process.platform !== 'linux'}, () => {
-  const filename = fileURLToPath(new URL('../upgrade-maintenance.cjs', import.meta.url));
-  const isolated = {exports:{}}, calls = [];
-  const restrictedFs = {...fs, readFileSync(file, ...args) {
+test('restricted Linux stop refuses an incomplete writer view before any PM2 command', {skip:process.platform !== 'linux'}, t => {
+  const calls = [], read = fs.readFileSync, spawn = cp.spawnSync;
+  fs.readFileSync = (file, ...args) => {
     if (String(file).startsWith('/proc/')) throw Object.assign(Error('restricted fixture'), {code:'EACCES'});
-    return fs.readFileSync(file, ...args);
-  }};
-  const localRequire = createRequire(import.meta.url);
-  const require = name => name === 'node:fs' ? restrictedFs : name === 'node:child_process' ? {
-    spawnSync(command) {calls.push(command); return {status:0,stdout:command === 'pm2' ? '[]' : '',stderr:''};},
-  } : localRequire(name);
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {module:isolated,exports:isolated.exports,require,__filename:filename,process});
-  assert.throws(() => isolated.exports.stop({zylosDir:'/isolated',skillsDir:'/isolated/skills'}), /process view incomplete/);
+    return read(file, ...args);
+  };
+  cp.spawnSync = command => {calls.push(command); return {status:0,stdout:'[]',stderr:''};};
+  t.after(() => {fs.readFileSync = read; cp.spawnSync = spawn;});
+  assert.throws(() => m.stop({zylosDir:'/isolated',skillsDir:'/isolated/skills'}), /process view incomplete/);
   assert.deepEqual(calls, []);
 });

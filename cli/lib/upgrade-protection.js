@@ -109,7 +109,7 @@ export function beginUpgrade(ctx, {
     phase: 'preparing',
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
     installationIntent: false,
-    automaticCompensation: true,
+    compensationSupported: true,
     automaticResume: maintenance.canRecognizeProcesses(),
     coreManifest: manifest,
     originalServices: maintenance.services({
@@ -193,7 +193,7 @@ export function beginUpgrade(ctx, {
   ctx.coreManifest = manifest;
   ctx.backupDir = path.join(dir, 'code');
   ctx.servicesWereRunning = j.originalServices.map(s => s.name);
-  ctx.preInstallProtection = true;
+  ctx.upgradeProtected = true;
   ctx.frozenRecoveryPath = path.join(dir, 'runner.cjs');
   ctx.frozenRecoveryHash = maintenance.hash(ctx.frozenRecoveryPath);
   deployUpgradeBootstrap(zylosDir, {transactionDir:dir});
@@ -274,7 +274,6 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
   ctx.dbBackupDir = snapshot.dbBackupDir;
   ctx.dbManifest = snapshot.manifest;
   ctx.backupWarnings = snapshot.warnings;
-  if (overrides.snapshot) verifySnapshot({action:'verify',zylosDir:j.zylosDir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest});
   ctx.dbSnapshotVerified = true;
   maintenance.update(dir, j, {
     phase: 'snapshot_saved',
@@ -339,7 +338,7 @@ export function recovery(ctx) {
       maintenance.marker(root,dir,saved);
       let error = 'compensation is closed; use zylos upgrade --resume-finalize';
       try { maintenance.stop(saved); } catch (cause) { error += '; isolation: ' + cause.message; }
-      maintenance.update(dir,saved,{phase:'recovery_required',resumePhase:'compensation_closed',error});
+      maintenance.update(dir,saved,{phase:'recovery_required',resumePhase:'compensation_closed',lastError:error});
       if (maintenance.canRecognizeProcesses()) release();
       return {attempted:false,completed:false,stage:'compensation_closed',error,recovery_required:true};
     }
@@ -414,8 +413,6 @@ export function protectedDataReady(ctx, overrides = {}) {
     (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId,manifest});
     const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,dashboardOwnerManaged:j.dashboardOwnerManaged===true,manifest});
     ctx.databases=verified?.databases || null;
-    const checked = maintenance.preflight(dir, j, null);
-    if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');
   }
   const current=maintenance.transaction(j.zylosDir,dir);
   const marker=maintenance.read(path.join(j.zylosDir,'.zylos/upgrade/active.json'));

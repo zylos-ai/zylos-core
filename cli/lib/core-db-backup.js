@@ -7,6 +7,15 @@ const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
 import {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest} from './core-db-backup-worker.js';
 export {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest};
 const WORKER=fileURLToPath(new URL('./core-db-backup-worker.js',import.meta.url));
+export function assertDashboardUninstalled(zylosDir) {
+  let registry;
+  try { registry=JSON.parse(fs.readFileSync(path.join(zylosDir,'.zylos','components.json'),'utf8')); }
+  catch(error) {if(error.code==='ENOENT')return;throw error;}
+  if(Object.hasOwn(registry.components || registry,'dashboard')) throw Object.assign(Error('Uninstall standalone Dashboard before upgrading.'), {
+    code:'DASHBOARD_STILL_INSTALLED',
+    next:'Run zylos uninstall dashboard --yes while retaining its data before retrying the upgrade.'
+  });
+}
 export function inspectFirstDashboardTakeover(installedRoot) {
   const directory=path.join(installedRoot,'skills/dashboard');
   try {
@@ -26,7 +35,13 @@ function syncDir(dir){const fd=fs.openSync(dir,'r');try{maintenance.fsyncFd(fd);
 function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
 export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath,timeout=120000}={}) {
   const result=spawnSync(nodePath,[workerPath,JSON.stringify(payload)],{encoding:'utf8',timeout,maxBuffer:4*1024*1024,windowsHide:true});
-  if(result.error||result.status!==0) throw new Error(`SQLite ${payload.action} failed: ${result.error?.message || result.stderr || `exit ${result.status}`}`);
+  if(result.error||result.status!==0) {
+    let failure;
+    try {failure=JSON.parse(result.stdout).error;} catch {}
+    throw Object.assign(new Error(failure?.message || `SQLite ${payload.action} failed: ${result.error?.code || `exit ${result.status}`}`), {
+      code:failure?.code || 'UPGRADE_FAILED'
+    });
+  }
   try{return JSON.parse(result.stdout);}catch{throw new Error('Invalid SQLite worker response');}
 }
 function validComplete(manifest) {

@@ -32,6 +32,16 @@ export function validateSnapshotManifest(manifest) {
   return items;
 }
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+function schemaError(message, code, cause) {
+  return Object.assign(new Error(message), {code:cause?.code === 'SCHEMA_TOO_NEW' ? cause.code : code});
+}
+function failureResult(error) {
+  // Dependency loaders can put source paths and require stacks in message.
+  const message=String(error.message || error).split('\n')[0]
+    .replace(/(^|[\s('"`])(?:file:\/\/)?(?:[A-Za-z]:[\\/]|\/)[^\s'"`,;:)]+/g,'$1<path>');
+  const code=['SCHEMA_TOO_NEW','SCHEMA_MIGRATION_FAILED'].includes(error.code) ? error.code : 'UPGRADE_FAILED';
+  return {ok:false,error:{code,message}};
+}
 function driver(input) {
   if(input.driverPath) return createRequire(import.meta.url)(input.driverPath);
   const root=input.driverRoot || path.join(input.zylosDir,'.claude','skills');
@@ -152,7 +162,7 @@ export async function execute(input) {
   const inspectDashboard=async (owner,db) => {
     const state=await owner.inspectSchema(db);
     if(!state||!Number.isInteger(state.targetVersion)||state.targetVersion<0||!Number.isInteger(state.currentVersion)||state.currentVersion<0||typeof state.needsMigration!=='boolean') throw Error('Invalid dashboard schema inspection');
-    if(state.currentVersion>state.targetVersion) throw Error(`SCHEMA_TOO_NEW dashboard: schema version ${state.currentVersion} exceeds supported ${state.targetVersion}`);
+    if(state.currentVersion>state.targetVersion) throw schemaError(`SCHEMA_TOO_NEW dashboard: schema version ${state.currentVersion} exceeds supported ${state.targetVersion}`,'SCHEMA_TOO_NEW');
     if(input.requireCurrent && state.needsMigration) throw Error('Database migrations remain before data-ready');
     return state;
   };
@@ -191,7 +201,7 @@ export async function execute(input) {
       let current;
       try {current=mod.inspectSchema(db,{allowNew:false,strict:false}).version;} finally {db.close();}
       if(!Number.isInteger(current)||current<0) throw Error(`${item.source}: invalid schema version ${current}`);
-      if(current>target) throw Error(`${item.source}: schema version ${current} exceeds supported ${target}; restore compatible code/data`);
+      if(current>target) throw schemaError(`${item.source}: schema version ${current} exceeds supported ${target}; restore compatible code/data`,'SCHEMA_TOO_NEW');
       rows.push({source:item.source,status:'present',fromVersion:current,toVersion:target,needsMigration:current<target});
     }
     return {databases:rows,needsMigration:rows.some(row=>row.needsMigration)};
@@ -221,8 +231,10 @@ export async function execute(input) {
           const live=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});try {await live.backup(target);}finally{live.close();}
           const copy=new Database(target,{fileMustExist:true,timeout:5000});
           let after;
-          try {await mod.migrate(copy);after=await inspectDashboard(mod,copy);} finally {copy.close();}
-          if(after.needsMigration) throw Error('SCHEMA_MIGRATION_FAILED dashboard rehearsal remains incomplete');
+          try {await mod.migrate(copy);after=await inspectDashboard(mod,copy);}
+          catch(error) {throw schemaError(`SCHEMA_MIGRATION_FAILED dashboard rehearsal: ${error.message}`,'SCHEMA_MIGRATION_FAILED',error);}
+          finally {copy.close();}
+          if(after.needsMigration) throw schemaError('SCHEMA_MIGRATION_FAILED dashboard rehearsal remains incomplete','SCHEMA_MIGRATION_FAILED');
           reports.push({source:item.source,status:'present',fromVersion:before.currentVersion,toVersion:after.currentVersion});
           continue;
         }
@@ -238,7 +250,7 @@ export async function execute(input) {
           const start=copy.pragma('user_version',{simple:true});
           const result=engine.migrateDatabase(copy,mod,{allowNew:absent,strict:false});
           reports.push({source:item.source,status:absent?'missing':'present',fromVersion:start,toVersion:result.version,extensions:result.extensions});
-        } catch(error) {throw Error(`${item.source}: rehearsal failed: ${error.message}`);} finally {copy.close();}
+        } catch(error) {throw schemaError(`${item.source}: rehearsal failed: ${error.message}`,'SCHEMA_MIGRATION_FAILED',error);} finally {copy.close();}
       }
       return {databases:reports};
     } finally {fs.rmSync(directory,{recursive:true,force:true});}
@@ -300,9 +312,9 @@ export async function execute(input) {
         const Database=driver(input),db=new Database(source,{fileMustExist:true,timeout:5000});
         let state;
         try {await mod.migrate(db);state=await inspectDashboard(mod,db);}
-        catch(error) {throw Error(`SCHEMA_MIGRATION_FAILED ${item.source}: ${error.message}`);}
+        catch(error) {throw schemaError(`SCHEMA_MIGRATION_FAILED ${item.source}: ${error.message}`,'SCHEMA_MIGRATION_FAILED',error);}
         finally {db.close();}
-        if(state.needsMigration) throw Error('SCHEMA_MIGRATION_FAILED dashboard migration remains incomplete');
+        if(state.needsMigration) throw schemaError('SCHEMA_MIGRATION_FAILED dashboard migration remains incomplete','SCHEMA_MIGRATION_FAILED');
         rows.push({source:item.source,status:'present',...state});
         continue;
       }
@@ -314,6 +326,7 @@ export async function execute(input) {
       fs.mkdirSync(path.dirname(source),{recursive:true});
       const db=new Database(source,{fileMustExist:!absent,timeout:5000});
       try {const layout=engine.migrateDatabase(db,mod,{allowNew:absent,strict:true});rows.push({source:item.source,status:'present',...inspectConnection(db),extensions:layout.extensions});}
+      catch(error) {throw schemaError(`${item.source}: migration failed: ${error.message}`,'SCHEMA_MIGRATION_FAILED',error);}
       finally {db.close();}
       continue;
     }
@@ -385,8 +398,8 @@ function isMainModule() {
   catch { return false; }
 }
 if(isMainModule()) {
-  const timer=setTimeout(()=>{process.stderr.write('SQLite worker deadline exceeded\n');process.exit(1);},90000);
+  const timer=setTimeout(()=>{process.stdout.write(JSON.stringify(failureResult(Error('SQLite worker deadline exceeded')))+'\n');process.exit(1);},90000);
   try {process.stdout.write(JSON.stringify(await execute(JSON.parse(process.argv[2]))));}
-  catch(error){process.stderr.write(error.stack+'\n');process.exitCode=1;}
+  catch(error){process.stdout.write(JSON.stringify(failureResult(error))+'\n');process.exitCode=1;}
   finally{clearTimeout(timer);}
 }

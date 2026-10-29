@@ -6,10 +6,10 @@ const base={now:()=>100,deadlineAt:1000,requestId:'producer',readMode:()=>({mode
   enqueueExit:()=>{throw new Error('wrong fallback');}};
 test('IB-40 producer uses supervisor in multi and transition, single exit only in steady single',async()=>{
   const sent=[];const send=async(...args)=>{sent.push(args);return {kind:'accepted',sent:true,reply:{result:'accepted',runCount:3}};};
-  for(const [mode,transition] of [['multi',null],['single',{phase:'gating'}]]) {
+  for(const [mode,transition] of [['multi',null],['single',{phase:'gating'}],[null,{phase:'gating'}]]) {
     const result=await requestRuntimeRestart({...base,readMode:()=>({mode}),readTransition:()=>transition,send});assert.equal(result.data.runCount,3);
   }
-  assert.equal(sent.length,2);assert.deepEqual(sent[0],[{version:1,type:'restart_all',requestId:'producer',reason:'upgrade'},{deadlineAt:1000}]);
+  assert.equal(sent.length,3);assert.deepEqual(sent[0],[{version:1,type:'restart_all',requestId:'producer',reason:'upgrade'},{deadlineAt:1000}]);
   let exits=0;const single=await requestRuntimeRestart({...base,readMode:()=>({mode:'single'}),send:()=>{throw new Error('must not send');},enqueueExit:()=>{exits++;return 'control 1';}});
   assert.equal(exits,1);assert.equal(single.data.result,'exit_enqueued');
 });

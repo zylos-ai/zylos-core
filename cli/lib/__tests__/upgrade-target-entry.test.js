@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import { inspectUpgradeSource, runUpgradeEntry, installUpgradeTarget } from '../upgrade-entry.js';
+import {assertDashboardUninstalled} from '../core-db-backup.js';
 
 function fixture(t, version = '0.9.3') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-target-entry-'));
@@ -30,6 +31,20 @@ test('target checks reject old sources and standalone Dashboard before touching 
   fs.writeFileSync(path.join(input.zylosDir, '.zylos/components.json'), JSON.stringify({components:{dashboard:{version:'1'}}}));
   assert.throws(() => inspectUpgradeSource(input, deps), error => error.code === 'DASHBOARD_STILL_INSTALLED' && /zylos uninstall dashboard --yes/.test(error.next));
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
+});
+
+test('all upgrade entrypoints share flat and nested standalone Dashboard rejection',async t=>{
+  const input=fixture(t),file=path.join(input.zylosDir,'.zylos/components.json');
+  const {assertDashboardUninstalled:finalizerCheck}=await import('../self-upgrade.js');
+  fs.mkdirSync(path.dirname(file));
+  for(const registry of [{dashboard:{}},{components:{dashboard:{}}}]) {
+    fs.writeFileSync(file,JSON.stringify(registry));
+    for(const check of [assertDashboardUninstalled,finalizerCheck])assert.throws(()=>check(input.zylosDir),{code:'DASHBOARD_STILL_INSTALLED'});
+  }
+  for(const registry of [{},{components:{}}]) {
+    fs.writeFileSync(file,JSON.stringify(registry));
+    for(const check of [assertDashboardUninstalled,finalizerCheck])assert.doesNotThrow(()=>check(input.zylosDir));
+  }
 });
 
 test('0.9.4 prechecks freeze package and database decisions before transaction creation', t => {
@@ -102,7 +117,7 @@ function pipeline(input, failAt) {
   const step = name => () => {calls.push(name); if (name === failAt) throw Error(name);};
   const deps = {maintenance:{discover:() => ({candidates:[], diagnostics:[], marker:null})},
     inspect:() => ctx, resolveNpm:() => '/fixture/npm-cli.js',
-    begin(context) {calls.push('begin'); context.transactionDir = '/fixture/transaction'; context.preInstallProtection = true;},
+    begin(context) {calls.push('begin'); context.transactionDir = '/fixture/transaction'; context.upgradeProtected = true;},
     savePackage:step('savePackage'), saveCode:step('saveCode'), prepare:step('prepare'), install:step('install'),
     finalize:() => {calls.push('finalize'); return {success:true};},
     recover:() => {calls.push('recover'); return {attempted:true, completed:true};}};
@@ -117,7 +132,7 @@ test('protected entry saves original package before code, stops, snapshot and in
   assert.deepEqual(f.calls, ['begin', 'savePackage', 'saveCode', 'prepare', 'install', 'finalize', 'release']);
 });
 
-test('A04 rejected prechecks never create a transaction or request compensation', async t => {
+test('rejected prechecks never create a transaction or request compensation', async t => {
   const input = fixture(t), f = pipeline(input);
   f.deps.inspect = () => { throw Object.assign(Error('precheck rejected'), {code:'PRECHECK_REJECTED'}); };
   const result = await runUpgradeEntry(input, f.deps);

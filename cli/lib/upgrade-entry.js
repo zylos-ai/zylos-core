@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateUpgradeHandoff } from './upgrade-admission.js';
-import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged } from './core-db-backup.js';
+import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged, assertDashboardUninstalled } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
 
@@ -27,19 +27,18 @@ export function inspectUpgradeSource(input, deps = {}) {
   validateUpgradeHandoff(input);
   const tempDir = fs.realpathSync(input.tempDir);
   const coreDir = fs.realpathSync(input.installedRoot);
-  const zylosDir = fs.realpathSync(input.zylosDir);
+  let zylosDir;
+  try { zylosDir=fs.realpathSync(input.zylosDir); }
+  catch(error) {
+    if(error.code!=='ENOENT')throw error;
+    throw Object.assign(Error('Zylos deployment directory is missing. Initialize this deployment before upgrading.'), {code:'ZYLOS_NOT_INITIALIZED'});
+  }
   const source = JSON.parse(fs.readFileSync(path.join(coreDir, 'package.json'), 'utf8'));
   const target = JSON.parse(fs.readFileSync(path.join(tempDir, 'package.json'), 'utf8'));
   if (source.version !== input.fromVersion) throw Object.assign(new Error('Installed source version does not match upgrade handoff.'), {code:'INVALID_UPGRADE_HANDOFF'});
   if (source.name !== target.name || typeof target.version !== 'string') throw Object.assign(new Error('Downloaded target package identity does not match installed Core.'), {code:'INVALID_UPGRADE_HANDOFF'});
   const skillsDir = path.join(zylosDir, '.claude', 'skills');
-  const registry = path.join(zylosDir, '.zylos', 'components.json');
-  if (fs.existsSync(registry)) {
-    const installed = JSON.parse(fs.readFileSync(registry, 'utf8'));
-    if (Object.hasOwn(installed.components || installed, 'dashboard')) throw Object.assign(new Error('Uninstall standalone Dashboard before upgrading.'), {
-      code:'DASHBOARD_STILL_INSTALLED', next:'Run zylos uninstall dashboard --yes while retaining its data.'
-    });
-  }
+  assertDashboardUninstalled(zylosDir);
   const declaredSkills=new Set();
   for(const packageRoot of [coreDir,tempDir]) {
     const directory=path.join(packageRoot,'skills');
@@ -84,12 +83,9 @@ async function finalizeTarget(ctx) {
   const metadata = JSON.parse(fs.readFileSync(path.join(ctx.coreDir, 'package.json'), 'utf8'));
   if (metadata.version !== ctx.to) throw new Error('Installed target version does not match the downloaded package.');
   const module = await import(pathToFileURL(path.join(ctx.coreDir, 'cli/lib/self-upgrade.js')).href);
-  return module.runSelfUpgradeFinalize({schemaVersion:2, preInstallProtection:true,
+  return module.runSelfUpgradeFinalize({
     tempDir:ctx.tempDir, packageRoot:ctx.coreDir, zylosDir:ctx.zylosDir, from:ctx.from, to:ctx.to,
-    newVersion:ctx.to, mode:ctx.mode, firstTakeover:ctx.firstTakeover, dashboardOwnerManaged:ctx.dashboardOwnerManaged, databaseMode:ctx.databaseMode,
-    transactionDir:ctx.transactionDir, transactionId:ctx.transactionId, coreManifest:ctx.coreManifest,
-    dbBackupDir:ctx.dbBackupDir, dbManifest:ctx.dbManifest, backupDir:ctx.backupDir,
-    servicesWereRunning:ctx.servicesWereRunning, protectedNpmCli:ctx.protectedNpmCli}, {maintenance:maintenanceFor(ctx), zylosDir:ctx.zylosDir});
+    transactionDir:ctx.transactionDir, transactionId:ctx.transactionId}, {maintenance:maintenanceFor(ctx), zylosDir:ctx.zylosDir});
 }
 
 export async function runUpgradeEntry(input, deps = {}) {
@@ -119,7 +115,7 @@ export async function runUpgradeEntry(input, deps = {}) {
   } catch (error) {
     const rollback = ctx?.transactionDir ? (deps.recover ?? recovery)(ctx) : {attempted:false, completed:false, performed:false};
     return {action:'self_upgrade', success:false, code:error.code || 'UPGRADE_FAILED', error:error.message,
-      next:error.next, persisted:error.persisted || [], preInstallProtection:!!ctx?.preInstallProtection,
+      next:error.next, persisted:error.persisted || [], upgradeProtected:!!ctx?.upgradeProtected,
       transactionDir:ctx?.transactionDir, rollback:{...rollback, performed:!!rollback.attempted},
       recovery_required:rollback.recovery_required || error.recovery_required || false};
   }
@@ -136,6 +132,7 @@ if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process
   } catch (error) {
     result = {success:false, code:error.code || 'INVALID_UPGRADE_HANDOFF', error:error.message, persisted:[]};
   }
+  for(const warning of result.warnings || []) process.stderr.write(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}\n`);
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exitCode = result.success ? 0 : 1;
 }

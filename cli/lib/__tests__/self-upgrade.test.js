@@ -6,18 +6,20 @@ const {
 } = await import('../self-upgrade.js');
 
 describe('self-upgrade finalizer handoff', () => {
-  for (const state of [
-    {schemaVersion: 1}, {schemaVersion: 1, transactionDir: '/untrusted'},
-    {schemaVersion: 2}, {schemaVersion: 3, preInstallProtection: true},
-  ]) it('rejects unsupported or unprotected finalization before any writes', async () => {
+  for (const defect of ['missing journal', 'foreign transaction', 'missing intent', 'wrong phase']) it(`rejects ${defect} before any writes`, async () => {
     let calls = 0;
-    const result = await runSelfUpgradeFinalize(state, {
+    const journal={transactionId:defect==='foreign transaction'?'other':'tx',installationIntent:defect!=='missing intent',phase:defect==='wrong phase'?'prepared':'installing'};
+    const result = await runSelfUpgradeFinalize({transactionId:'tx',transactionDir:'/untrusted'}, {
       syncSkills() { calls++; throw Error('must not execute'); },
-      maintenance: { transaction() { calls++; throw Error('must not inspect'); } },
+      maintenance: {
+        transaction() {if(defect==='missing journal')throw Error('missing journal');return journal;},
+        canRecognizeProcesses:()=>true,
+      },
     });
     assert.equal(result.success, false);
-    assert.match(result.error, /protected target-upgrade transaction/);
+    assert.match(result.error, /missing journal|invalid initial finalizer transaction/);
     assert.equal(calls, 0);
     assert.deepEqual(result.rollback, {performed: false, steps: []});
+    assert.equal(result.recovery_required,true);
   });
 });

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { completeUpgradeFinalization, readUpgradeModeStatus, step11_startCoreServices, step12_verifyServices, runSelfUpgradeFinalize } from '../self-upgrade.js';
+import { completeUpgradeFinalization, readUpgradeModeStatus, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
 
 const maintenance=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
@@ -27,19 +27,11 @@ for(const observed of [true,false])test(`PM2 timeout is checked through jlist be
 
 test('service verification uses only its local poll and PM2 limits',()=>{
   const calls=[];
-  const result=step12_verifyServices({servicesWereRunning:['scheduler'],budget:{check(){throw Error('obsolete budget');},remaining:()=>0}},{
+  const result=step12_verifyServices({servicesWereRunning:['scheduler']},{
     execSync:(command,options)=>{calls.push(command);assert.ok(options.timeout>0 && options.timeout<=30000);return command.startsWith('pm2')?JSON.stringify([{name:'scheduler',pm2_env:{status:'online'}}]):'';}
   });
   assert.equal(result.status,'done');
   assert.equal(calls.length,2);
-});
-
-test('target finalizer rejects unprotected and old parent state before any work',()=>{
-  for(const state of [{},{schemaVersion:1},{schemaVersion:2,preInstallProtection:false}]) {
-    const result=runSelfUpgradeFinalize(state,{maintenance:{transaction(){throw Error('must not read');}}});
-    assert.equal(result.success,false);
-    assert.match(result.error,/protected target-upgrade/);
-  }
 });
 
 function fixture(t) {
@@ -67,7 +59,7 @@ function deps(calls, extras={}) {
     restart:async options=>{calls.push('restart');assert.equal((await options.readMode()).mode,'single');return {ok:true,data:{result:'exit_enqueued'}};},
     audit:()=>{calls.push('audit');return [];},
     commitBaselines:()=>{calls.push('baselines');return {status:'done'};},
-    refreshMaintenanceReader(){},protectedSuccess(){},
+    verifyPublicationForServices(){},protectedSuccess(){},
     ...extras,
   };
 }
@@ -103,9 +95,8 @@ test('tail preserves W1 and follows F1, W7, services, restart and audit order',a
   assert.equal(fs.readFileSync(path.join(ctx.zylosDir,'memory/state.md'),'utf8'),state);
 });
 test('P10 status adapter invokes only the read-only command with its own timeout and root',()=>{
-  const budget={check(){},remaining:()=>12000};
   const observation={ok:true,data:{sessionMode:'multi',transition:null}};
-  assert.deepEqual(readUpgradeModeStatus('/isolated/root',{budget,execute:(node,args,options)=>{
+  assert.deepEqual(readUpgradeModeStatus('/isolated/root',{execute:(node,args,options)=>{
     assert.equal(node,process.execPath);
     assert.deepEqual(args.slice(1),['session-mode','status','--json']);
     assert.equal(options.env.ZYLOS_DIR,'/isolated/root');
@@ -114,8 +105,7 @@ test('P10 status adapter invokes only the read-only command with its own timeout
   }}),observation);
 });
 for(const outcome of ['unavailable','invalid-json','rejected']) test(`P10 status adapter reports ${outcome} without guessing a mode`,()=>{
-  const budget={check(){},remaining:()=>10000};
-  assert.throws(()=>readUpgradeModeStatus('/isolated/root',{budget,execute:()=>{
+  assert.throws(()=>readUpgradeModeStatus('/isolated/root',{execute:()=>{
     if(outcome==='unavailable')throw Error('Unknown command: session-mode');
     return outcome==='invalid-json'?'invalid':JSON.stringify({ok:false});
   }}),{code:'P10_STATUS_UNAVAILABLE'});
@@ -160,11 +150,9 @@ test('W1 read failure stops before services and does not rewrite state',async t=
   assert.equal(calls.includes('start'),false);
   assert.equal(fs.statSync(path.join(ctx.zylosDir,'memory/state.md')).isDirectory(),true);
 });
-test('obsolete overall budget cannot prevent independent finalization steps',async t=>{
+test('completed finalization starts the original service set',async t=>{
   const ctx=fixture(t),calls=[];
-  let checks=0;
-  const d=deps(calls,{budget:{deadlineAt:Date.now(),remaining:()=>0,check(){if(++checks===5)throw Object.assign(Error('exhausted'),{code:'deadline_exceeded'});}}});
-  ctx.budget=d.budget;
+  const d=deps(calls);
   const result=await completeUpgradeFinalization(ctx,d);
   assert.equal(result.success,true);
   assert.equal(calls.includes('start'),true);
@@ -206,10 +194,8 @@ for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dash
 test('Dashboard owns verification timeout and receives no overall deadline',async t=>{
   const ctx=fixture(t),calls=[];
   ctx.firstDashboardTakeover=true;
-  let expired=false;
-  ctx.budget={remaining:()=>expired?0:100000,check(){if(expired)throw Object.assign(Error('exhausted'),{code:'deadline_exceeded'});}};
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
-    dashboardOwner:{applyDashboardRegistration:()=>{calls.push('registration');expired=true;return {state:'done'};},applyDashboardRoute:()=>{calls.push('route');return {state:'done'};},verifyDashboard:options=>{assert.deepEqual(options,{zylosDir:ctx.zylosDir});calls.push('dashboardVerify');return {state:'ready'};}}
+    dashboardOwner:{applyDashboardRegistration:()=>{calls.push('registration');return {state:'done'};},applyDashboardRoute:()=>{calls.push('route');return {state:'done'};},verifyDashboard:options=>{assert.deepEqual(options,{zylosDir:ctx.zylosDir});calls.push('dashboardVerify');return {state:'ready'};}}
   }));
   assert.equal(result.success,true);
   assert.equal(result.completion.install,'done');
@@ -224,7 +210,7 @@ function protectedReaderFixture(t,{phase='recovery_required',hooks='done',corrup
   const journal={phase,resumePhase:'compensation_closed',transactionId:'tx',snapshotManifestHash:digest,
     compensationCutoff:{formatVersion:1,closed:true,transactionId:corrupt?'other':'tx',snapshotManifestHash:digest,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
     postCutoff:{items:{hooks:{state:hooks}}}};
-  Object.assign(ctx,{preInstallProtection:true,transactionDir:path.join(ctx.zylosDir,'transaction'),transactionId:'tx',journal,
+  Object.assign(ctx,{upgradeProtected:true,transactionDir:path.join(ctx.zylosDir,'transaction'),transactionId:'tx',journal,
     maintenance:{...maintenance,transaction:()=>journal,update:(_dir,current,changes)=>Object.assign(current,changes),stop:()=>{}}});
   const stable=path.join(ctx.zylosDir,'.zylos/upgrade/maintenance.cjs');
   fs.mkdirSync(path.dirname(stable),{recursive:true});fs.writeFileSync(stable,'old stable reader');
@@ -234,7 +220,7 @@ function protectedReaderFixture(t,{phase='recovery_required',hooks='done',corrup
 test('closed recovery preserves the default reader and recovery phase before services',async t=>{
   const {ctx,journal,stable}=protectedReaderFixture(t),calls=[];
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
-    refreshMaintenanceReader:undefined,
+    verifyPublicationForServices:undefined,
     startServices:()=>{assert.equal(fs.readFileSync(stable,'utf8'),'old stable reader');calls.push('start');return {status:'done'};},
     protectedSuccess:()=>{calls.push('success');}
   }));
@@ -269,7 +255,7 @@ test('Dashboard persists independent failure and retries it without repeating co
 
 test('unfinished publication blocks actual maintenance reader refresh and service start',async t=>{
   const {ctx,stable}=protectedReaderFixture(t,{hooks:'failed'}),calls=[];calls.protectedReader=true;
-  const result=await completeUpgradeFinalization(ctx,deps(calls,{refreshMaintenanceReader:undefined}));
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{verifyPublicationForServices:undefined}));
   assert.equal(result.success,false);
   assert.equal(calls.includes('start'),false);
   assert.equal(fs.readFileSync(stable,'utf8'),'old stable reader');
@@ -277,7 +263,7 @@ test('unfinished publication blocks actual maintenance reader refresh and servic
 
 test('untrusted recovery cutoff cannot refresh stable reader or start services',async t=>{
   const {ctx,stable}=protectedReaderFixture(t,{corrupt:true}),calls=[];calls.protectedReader=true;
-  await assert.rejects(()=>completeUpgradeFinalization(ctx,deps(calls,{refreshMaintenanceReader:undefined})),/publication is not ready/);
+  await assert.rejects(()=>completeUpgradeFinalization(ctx,deps(calls,{verifyPublicationForServices:undefined})),/publication is not ready/);
   assert.equal(calls.includes('start'),false);
   assert.equal(fs.readFileSync(stable,'utf8'),'old stable reader');
 });

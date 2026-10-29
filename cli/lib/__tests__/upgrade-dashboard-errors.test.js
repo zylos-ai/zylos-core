@@ -11,7 +11,6 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
     t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     const error={code:`${item}_original_code`,message:`${item} original diagnostic`};
     const ctx={zylosDir:root,firstDashboardTakeover:true,from:'old',to:'new',mergeConflicts:[],mergedFiles:[],
-      budget:{check(){},remaining:()=>60000,deadlineAt:Date.now()+60000},
       journal:{dashboardInstall:{items:{registration:{state:'pending',attempts:0},route:{state:'pending',attempts:0}}}},
       maintenance:{canRecognizeProcesses:()=>true,update(_dir,journal,changes){Object.assign(journal,changes);}}};
     const fail=()=>{
@@ -25,7 +24,7 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
     else owner[item==='registration'?'applyDashboardRegistration':'applyDashboardRoute']=fail;
     const result=await completeUpgradeFinalization(ctx,{
       dashboardOwner:owner,updateConfig:()=>{},ensureMemoryMigration:()=>{},commitBaselines:()=>{},
-      refreshMaintenanceReader:()=>{},protectedSuccess:()=>{},
+      verifyPublicationForServices:()=>{},protectedSuccess:()=>{},
       startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
       readModeStatus:()=>({sessionMode:'single',transition:null}),readMode:()=>({mode:'single'}),readTransition:()=>null,
       restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],

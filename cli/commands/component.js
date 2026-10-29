@@ -252,7 +252,6 @@ export function parseUpgradeFinalizeOptions(args) {
   const resume = args.includes('--resume-finalize');
   const status = args.includes('--status');
   const invalid = message => { throw Object.assign(new Error(message), { code: 'INVALID_ARGS', persisted: [] }); };
-  if (args.some(arg => arg === '--finalize-timeout' || arg.startsWith('--finalize-timeout='))) invalid('--finalize-timeout is no longer supported; upgrade steps have individual timeouts.');
   if (status && !resume) invalid('--status requires --resume-finalize.');
   if (resume) {
     const allowed = new Set(['--resume-finalize', '--status', '--json']);
@@ -1090,9 +1089,18 @@ export function runDownloadedUpgrade(handoff, { spawn = spawnSync } = {}) {
   return child.status ?? 1;
 }
 
-export async function upgradeSelfCore({ branch, beta = false, jsonOutput = false, skipConfirm = false } = {}, deps = {}) {
+export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutput = false, skipConfirm = false } = {}, deps = {}) {
+  const output = deps.console ?? globalThis.console;
+  if(mode!=='merge') {
+    const failure={success:false,code:'INVALID_ARGS',error:'Core self-upgrade supports only --mode merge.',persisted:[]};
+    if(jsonOutput)output.log(JSON.stringify(failure));
+    else output.error(failure.error);
+    return false;
+  }
   try {
-    (deps.recoverBeforeUpgrade ?? recoverBeforeUpgrade)(deps.zylosDir ?? ZYLOS_DIR);
+    const root=deps.zylosDir ?? ZYLOS_DIR;
+    if(!fs.existsSync(root))throw Object.assign(Error('Zylos deployment directory is missing. Initialize this deployment before upgrading.'),{code:'ZYLOS_NOT_INITIALIZED'});
+    (deps.recoverBeforeUpgrade ?? recoverBeforeUpgrade)(root);
   } catch (error) {
     const output = deps.console ?? globalThis.console;
     if (jsonOutput) output.log(JSON.stringify({success:false, code:error.code, error:error.message, recovery_required:true}));
@@ -1100,7 +1108,6 @@ export async function upgradeSelfCore({ branch, beta = false, jsonOutput = false
     return false;
   }
   const check = (deps.checkForCoreUpdates ?? checkForCoreUpdates)({ branch, beta });
-  const output = deps.console ?? globalThis.console;
   if (!check.success) {
     if (jsonOutput) output.log(JSON.stringify(check));
     else output.error(check.message || check.error);

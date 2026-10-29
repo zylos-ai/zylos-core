@@ -101,7 +101,7 @@ test('readonly WAL backup includes latest committed rows and independent frozen 
 });
 test('driver missing fails before publication and preserves staging',t=>{
  const dir=fixture(t);fs.mkdirSync(path.join(dir,'comm-bridge'));fs.writeFileSync(path.join(dir,'comm-bridge/c4.db'),'unreadable');
- assert.throws(()=>createCoreDbSnapshot({zylosDir:dir,transactionId:'no-driver'}),/SQLite snapshot failed/);
+ assert.throws(()=>createCoreDbSnapshot({zylosDir:dir,transactionId:'no-driver'}),error=>error.code==='SNAPSHOT_FAILED' && /Cannot find module 'better-sqlite3'/.test(error.message));
  assert.ok(!fs.existsSync(path.join(dir,'.backup/db/no-driver')));
 });
 
@@ -199,10 +199,10 @@ test('rehearsal worker receives a private backup path and parent removes it on f
   const payload=JSON.parse(process.argv[2]);
   const stat=fs.lstatSync(payload.rehearsalDir);
   fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({path:payload.rehearsalDir,mode:stat.mode&0o777,isDirectory:stat.isDirectory()}));
-  process.stderr.write('injected rehearsal failure');
+  process.stdout.write(JSON.stringify({ok:false,error:{code:'SCHEMA_MIGRATION_FAILED',message:'injected rehearsal failure'}}));
   process.exit(1);
  `);
- assert.throws(()=>rehearseCoreDbUpgrade(dir,target),/injected rehearsal failure/);
+ assert.throws(()=>rehearseCoreDbUpgrade(dir,target),error=>error.code==='SCHEMA_MIGRATION_FAILED' && /injected rehearsal failure/.test(error.message));
  const result=JSON.parse(fs.readFileSync(observed,'utf8'));
  assert.equal(result.path,path.join(dir,'.backup/db/.rehearsal'));
  assert.equal(result.mode,0o700);

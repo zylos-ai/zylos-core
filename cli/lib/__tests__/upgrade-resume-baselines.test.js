@@ -52,14 +52,14 @@ function fixture(t, { added = false } = {}) {
       compensationCutoff: { formatVersion: 1, transactionId: 'tx', snapshotManifestHash: journal.snapshotManifestHash,
         closed: true, closedAt: new Date().toISOString(), writer: 'finalizer' } }),
     publish: () => ({ ok: false, lastError: { code: 'INJECTED_CUTOFF_FAILURE', reason: 'publication interrupted' } }),
-    updateConfig: () => {}, ensureMemoryMigration: () => {}, refreshMaintenanceReader: () => {},
+    updateConfig: () => {}, ensureMemoryMigration: () => {}, verifyPublicationForServices: () => {},
     startServices: () => { starts++; return { status: 'done' }; }, verifyServices: () => ({ status: 'done' }),
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },
     readModeStatus: () => ({ sessionMode: 'single', transition: null }),
     readMode: () => ({ mode: 'single' }), readTransition: () => null,
     restart: () => ({ ok: true, data: { result: 'exit_enqueued' } }), audit: () => [],
     protectedSuccess: ctx => m.update(dir, ctx.journal, { phase: 'upgrade_complete' }) };
-  const initial = () => runSelfUpgradeFinalize({ schemaVersion: 2, preInstallProtection: true,
+  const initial = () => runSelfUpgradeFinalize({
     zylosDir: root, transactionId: 'tx', transactionDir: dir, tempDir: download }, deps);
   const resume = () => resumeFinalize(root, {}, { maintenance: m, quiesce: () => {},
     finalize: ctx => {

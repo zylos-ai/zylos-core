@@ -12,7 +12,7 @@ test('protected dependency install does not touch component or user skill packag
  for(const name of ['core-old','core-new','component','user-skill']){fs.mkdirSync(path.join(root,name));fs.writeFileSync(path.join(root,name,'package.json'),JSON.stringify({dependencies:{dependency:'1'}}));fs.writeFileSync(path.join(root,name,'package-lock.json'),'untouched');}
  const installs=[];
  const journal={skillsDir:root,originalPackage:{npmCli:'/trusted/npm-cli.js'}};
- const result=step6_installSkillDeps({preInstallProtection:true,transactionDir:'/private/tx',journal,maintenance:{runInstaller:(dir,j,options)=>{assert.equal(dir,'/private/tx');assert.equal(j,journal);assert.equal(options.npmCli,'/trusted/npm-cli.js');assert.equal(options.stage,'skill-deps:'+path.basename(options.cwd));assert.equal(options.timeout,180000);assert.deepEqual(options.args,['install','--omit=dev']);installs.push(path.basename(options.cwd));}},coreManifest:[{name:'core-old'},{name:'core-new'}]}, {skillsDir:root});
+ const result=step6_installSkillDeps({upgradeProtected:true,transactionDir:'/private/tx',journal,maintenance:{runInstaller:(dir,j,options)=>{assert.equal(dir,'/private/tx');assert.equal(j,journal);assert.equal(options.npmCli,'/trusted/npm-cli.js');assert.equal(options.stage,'skill-deps:'+path.basename(options.cwd));assert.equal(options.timeout,180000);assert.deepEqual(options.args,['install','--omit=dev']);installs.push(path.basename(options.cwd));}},coreManifest:[{name:'core-old'},{name:'core-new'}]}, {skillsDir:root});
  assert.equal(result.status,'done');assert.deepEqual(installs.sort(),['core-new','core-old']);
  for(const name of ['component','user-skill'])assert.equal(fs.readFileSync(path.join(root,name,'package-lock.json'),'utf8'),'untouched');
 });
@@ -27,7 +27,7 @@ function fixture(t,{dependency='directory',body='process.stdout.write("installed
  const npmCli=path.join(root,'npm-cli.js');fs.writeFileSync(npmCli,body);
  const j={formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:true,initialIdentity:{ecosystemHash:null},originalServices:[],coreManifest:[{name:'core',existedBefore:true,backedUp:false,originalHash:m.treeHash(skill)}],originalPackage:{npmCli},recoveryHashes:Object.fromEntries(['maintenance.cjs','finalizer.cjs','runner.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};
  m.update(dir,j);
- const ctx={preInstallProtection:true,transactionDir:dir,journal:j,coreManifest:j.coreManifest,maintenance:m,backupDir:path.join(dir,'code')};
+ const ctx={upgradeProtected:true,transactionDir:dir,journal:j,coreManifest:j.coreManifest,maintenance:m,backupDir:path.join(dir,'code')};
  saveProtectedCode(ctx);
  const recovery=require(path.join(dir,'runner.cjs')),helper=require(path.join(dir,'finalizer.cjs'));
  t.after(()=>{try{const saved=m.read(path.join(dir,'journal.json'));if(saved.installerPid)process.kill(-saved.installerPid,'SIGKILL');}catch{}fs.rmSync(root,{recursive:true,force:true});});

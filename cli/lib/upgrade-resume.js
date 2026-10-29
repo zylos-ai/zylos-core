@@ -20,6 +20,7 @@ export function finalizeStatus(journal) {
     transactionId:journal.transactionId,
     core:{state:failedItems.length?'failed':journal.phase==='upgrade_complete'?'done':hooks?.state==='done'?'pending':hooks?.state || 'pending',failedItems,warnings:hooks?.warnings || []},
     dashboard:{state:'degraded',errors},
+    warnings:journal.runtimeWarnings || [],
     next:journal.phase==='upgrade_complete'?null:'Repair the reported failure, then run zylos upgrade --resume-finalize.'
   };
 }
@@ -95,14 +96,14 @@ export async function resumeFinalize(root,{status=false}={},deps={}) {
     const current=verified.journal;
     const finalize=deps.finalize ?? (await import('./self-upgrade.js')).resumeUpgradeFinalization;
     const ctx={transactionDir:candidate.dir,transactionId:j.transactionId,zylosDir:path.resolve(root),journal:current,persisted,recordPersisted:field=>persisted.add(field),
-      dbManifest:verified.dbManifest,preInstallProtection:true,maintenance:m,originalServices:current.originalServices,from:current.from,to:current.to};
+      dbManifest:verified.dbManifest,maintenance:m,originalServices:current.originalServices,from:current.from,to:current.to};
     const result=await finalize(ctx);
     const saved=m.transaction(root,candidate.dir),data=finalizeStatus(saved);
     for(const key of ['completion','sessionRestart','checkpointAudit','modeStatus','preparationWarnings','warnings']) {
       if(Object.hasOwn(result,key)) data[key]=result[key];
     }
     // Only this invocation's runtime verification can establish readiness.
-    if(result.success && result.dashboard) {
+    if(result.dashboard) {
       data.dashboard=result.dashboard;
     }
     if(result.success) return {ok:true,data};

@@ -120,7 +120,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
         workerHash: m.hash(closure.workerPath), ecosystemHash: null,
         databases: snapshot.manifest.databases.map(item => ({ source: item.source, exists: item.status !== 'missing' })) } };
     m.update(dir, journal); m.marker(root, dir, journal);
-    Object.assign(state, { schemaVersion: 2, preInstallProtection: true, transactionId: 'tx', transactionDir: dir });
+    Object.assign(state, { transactionId: 'tx', transactionDir: dir });
   }
   const dashboardOwner = {
     copyDashboardDb: () => { calls.push('dashboard-copy'); return { ok: true }; },
@@ -319,7 +319,7 @@ test('real finalizer stdout remains JSON when publication changes global Codex c
   assert.match(updated,/preserve-my-model/);
 });
 
-test('N37 NOT_RESUMABLE after acquiring the forward-repair lock is preserved', async t => {
+test('NOT_RESUMABLE after acquiring the forward-repair lock is preserved', async t => {
   const f=fixture(t);
   const interrupted=await f.run({publication:{afterStep(step){if(step==='t02')throw Error('pause publication');}}});
   assert.equal(interrupted.success,false);
@@ -345,7 +345,7 @@ test('independent Dashboard rejects protected finalization before any writes',as
   const result=await f.run();
   assert.equal(result.success,false);
   assert.equal(result.code,'DASHBOARD_STILL_INSTALLED');
-  assert.match(result.error,/zylos uninstall dashboard --yes/);
+  assert.match(result.error,/Uninstall standalone Dashboard/);
   assert.match(result.next,/zylos uninstall dashboard --yes/);
   assert.deepEqual(f.calls,[]);
   assert.equal(f.read('.claude/settings.json'),before);
@@ -441,11 +441,11 @@ for (const [fault, step, code] of [
   assertDataPreserved(f);
 });
 
-test('unprotected finalizer state rejects before migration or publication', async t => {
+test('missing transaction journal rejects before migration or publication', async t => {
   const f = fixture(t, { protectedUpgrade: false });
   const result = await f.run();
   assert.equal(result.success, false, JSON.stringify(result));
-  assert.match(result.error,/protected target-upgrade transaction/);
+  assert.match(result.error,/ENOENT/);
   assert.equal(fs.existsSync(path.join(f.root, '.backup/self-upgrade')), false);
   assert.equal(fs.existsSync(path.join(f.root, '.backup/db')), false);
   assert.equal(f.read('CLAUDE.md'), 'old Claude output');
@@ -585,6 +585,46 @@ test('runtime CLI preparation failure stops before migration, cutoff and live pu
   assert.equal(f.read('CLAUDE.md'), 'old Claude output');
   assert.equal(f.calls.includes('start'), false);
   assertDataPreserved(f);
+});
+
+test('runtime warning survives a fresh process status and forward repair', async t => {
+  const f = fixture(t);
+  const warning = {code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'};
+  const initial = await f.run({
+    prepareRuntimeClis: () => ({warnings:[warning]}),
+    ensureMemoryMigration: () => { throw Error('memory preparation interrupted'); },
+  });
+  assert.equal(initial.success,false);
+  assert.deepEqual(f.load().runtimeWarnings,[warning]);
+  const resumeModule = new URL('../upgrade-resume.js',import.meta.url).href;
+  const child = spawnSync(process.execPath,['--input-type=module','-e',`
+    import {resumeFinalize} from ${JSON.stringify(resumeModule)};
+    const result=await resumeFinalize(process.argv[1],{status:true});
+    process.stdout.write(JSON.stringify(result));
+  `,f.root],{encoding:'utf8'});
+  assert.equal(child.status,0,child.stderr);
+  const status=JSON.parse(child.stdout);
+  assert.deepEqual(status.data.warnings,[warning]);
+  assert.equal(status.data.dashboard.state,'degraded');
+  const repaired=await f.resume();
+  assert.equal(repaired.success,true,JSON.stringify(repaired));
+  assert.deepEqual(repaired.warnings,[warning]);
+});
+
+test('late finalization failure preserves the current Dashboard readiness observation', async t => {
+  const f=fixture(t);
+  const failed=await f.run({protectedSuccess:()=>{throw Error('terminal journal write interrupted');}});
+  assert.equal(failed.success,false);
+  assert.equal(failed.dashboard.state,'ready');
+  assert.deepEqual(failed.dashboard.errors,[]);
+  assert.equal(f.calls.includes('dashboard-verify'),true);
+  const resumed=await resumeFinalize(f.root,{}, {
+    maintenance:f.m,quiesce:()=>{},
+    finalize:ctx=>resumeUpgradeFinalization(ctx,{...f.deps,protectedSuccess:()=>{throw Error('terminal journal write interrupted');}}),
+  });
+  assert.equal(resumed.ok,false);
+  assert.equal(resumed.data.dashboard.state,'ready');
+  assert.deepEqual(resumed.data.dashboard.errors,[]);
 });
 
 test('finalizer returns the original failure when its journal becomes unreadable', async t => {

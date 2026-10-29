@@ -28,7 +28,6 @@ export async function requestRuntimeRestart({ now = Date.now, deadlineAt, afterS
     const output = await enqueueExit();
     return {ok:true,data:{result:'exit_enqueued',mode:'single',output}};
   }
-  if (!['single','multi'].includes(mode.mode)) throw Object.assign(Error('session mode is not available'),{code:'CONFIG_INVALID'});
   if (afterServiceRestart) deadline = now() + 30000;
   const result = await send({version:1,type:'restart_all',requestId,reason:'upgrade'},{deadlineAt:deadline, ...(afterServiceRestart ? {connectRetryEveryMs:1000} : {})});
   if (result.kind === 'accepted') return {ok:true,data:{result:result.reply.result,requestId,runCount:result.reply.runCount}};

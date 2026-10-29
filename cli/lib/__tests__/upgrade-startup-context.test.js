@@ -61,6 +61,16 @@ test('startup runs the published transaction runner before a stable bootstrap or
  assert.deepEqual(JSON.parse(fs.readFileSync(f.executed,'utf8')),['resume','--transaction-dir',f.dir]);
 });
 
+test('read-only discovery preserves published recovery material without executing the runner', t => {
+ const f=publishedTransaction(t);
+ const before=fs.readFileSync(path.join(f.dir,'journal.json'),'utf8');
+ const context=discoverUpgradeContext(f.root,{recover:false});
+ assert.equal(context.active,true);
+ assert.equal(context.candidates.length,1);
+ assert.equal(fs.existsSync(f.executed),false);
+ assert.equal(fs.readFileSync(path.join(f.dir,'journal.json'),'utf8'),before);
+});
+
 test('pre-marker recovery material remains isolated with corrupt or absent journal publication', t => {
  for (const damage of ['corrupt','missing','partial-recovery']) {
   const f=publishedTransaction(t);

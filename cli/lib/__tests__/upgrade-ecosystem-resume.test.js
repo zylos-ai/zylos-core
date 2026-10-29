@@ -18,7 +18,7 @@ function fixture(t) {
   fs.mkdirSync(transactionDir);
   fs.writeFileSync(template, 'module.exports = { apps: [] };\n');
   maintenance.durable(path.join(transactionDir, 'journal.json'), { initialIdentity: { ecosystemHash: null } });
-  const ctx = { tempDir: path.join(root, 'package'), transactionDir, preInstallProtection: true, servicesWereRunning: ['scheduler'] };
+  const ctx = { tempDir: path.join(root, 'package'), transactionDir, upgradeProtected: true, servicesWereRunning: ['scheduler'] };
   const calls = [];
   const run = (overrides = {}) => step11_startCoreServices(ctx, {
     zylosDir: root, ecosystemPath: destination,

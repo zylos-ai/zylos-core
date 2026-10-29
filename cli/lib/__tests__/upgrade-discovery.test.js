@@ -15,7 +15,7 @@ function fixture() {
   return {m, dir, finish:() => {complete = true;}};
 }
 
-test('A12 a live controller prevents runner execution even with valid recovery hashes', t => {
+test('a live controller prevents runner execution even with valid recovery hashes', t => {
   const f = fixture(), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'discovery-live-'));
   t.after(() => fs.rmSync(dir, {recursive:true, force:true}));
   fs.writeFileSync(path.join(dir, 'controller.json'), '{}');

@@ -111,7 +111,7 @@ test('retired capability configuration does not gate protected publication', t =
   fs.mkdirSync(path.join(f.root, '.zylos/upgrade'), { mode: 0o700 });
   m.durable(path.join(f.root, '.zylos/upgrade/capability.json'), { formatVersion: 1 });
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
-  assert.equal(f.ctx.preInstallProtection, true);
+  assert.equal(f.ctx.upgradeProtected, true);
 });
 
 test('symlink deployment root records canonical transaction identities', t => {
@@ -185,7 +185,7 @@ test('controller acquisition failure removes only its unpublished staging attemp
   assert.deepEqual(fs.readdirSync(path.join(f.root, '.backup/self-upgrade')), []);
   assert.equal(m.discover(f.root).blocked, false);
   beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir});
-  assert.equal(f.ctx.preInstallProtection, true);
+  assert.equal(f.ctx.upgradeProtected, true);
 });
 
 test('migration failure retains installing isolation and never reaches READY', t => {

@@ -69,7 +69,7 @@ export function upgradeDiscoveryFailure() {
 // Validate every module imported during discovery before executing any code.
 // The deployment owner controls these files; links and writable files cannot
 // authorize startup code, even when discovery itself would throw safely.
-export function discoverUpgradeContext(root) {
+export function discoverUpgradeContext(root, {recover = true} = {}) {
   try {
     root = fs.realpathSync(root);
     if (hasTransactionHistory(root)) {
@@ -77,6 +77,7 @@ export function discoverUpgradeContext(root) {
       const failed = () => ({...upgradeDiscoveryFailure(),
         blocked:maintenance.hasRecoveryMaterials(root) ? maintenance.discoverActive(root).blocked : true});
       if (found.diagnostics.length || found.candidates.length !== 1) return failed();
+      if (!recover) return {active:true, ...found};
       const controller = path.join(found.candidates[0].dir, 'controller.json');
       if (maintenance.canRecognizeProcesses() && fs.existsSync(controller) && maintenance.alive(maintenance.read(controller))) {
         return {...upgradeDiscoveryFailure(), blocked:found.blocked, controllerAlive:true, observing:true, recovery_required:false};
@@ -116,7 +117,7 @@ export function discoverUpgradeContext(root) {
     // These paths can be replaced between upgrades in the same process.
     delete require.cache[entry];
     delete require.cache[path.join(directory, 'maintenance.cjs')];
-    return require(entry).bootstrap(root);
+    return require(entry).bootstrap(root, {status:!recover});
   } catch {
     return upgradeDiscoveryFailure();
   }

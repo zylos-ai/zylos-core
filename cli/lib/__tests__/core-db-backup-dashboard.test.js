@@ -78,8 +78,12 @@ test('Dashboard online snapshot includes WAL rows and normalizes only the copy',
 
 test('Dashboard owner version rejects future schemas without writing the database',t=>{
   const {root,target,source,database,driverRoot,payload}=fixture(t);database(99).close();const before=fs.readFileSync(source);
-  assert.throws(()=>probeCoreDbVersions(root,target,{driverRoot}),/SCHEMA_TOO_NEW.*99.*20/);
-  assert.throws(()=>runCoreDbWorker({...payload,action:'offline-preflight'}),/SCHEMA_TOO_NEW.*99.*20/);
+  for(const run of [()=>probeCoreDbVersions(root,target,{driverRoot}),()=>runCoreDbWorker({...payload,action:'offline-preflight'})]) assert.throws(run,error=>{
+    assert.equal(error.code,'SCHEMA_TOO_NEW');
+    assert.match(error.message,/SCHEMA_TOO_NEW.*99.*20/);
+    assert.doesNotMatch(error.message,/\n|\/home\/|file:\/\//);
+    return true;
+  });
   assert.deepEqual(fs.readFileSync(source),before);
 });
 
@@ -178,6 +182,25 @@ test('controlled upgrade leaves missing Dashboard creation to its first ordinary
   assert.equal(fs.existsSync(source),false);
   assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:driverRoot,requireCurrent:true}).databases[3].status,'missing');
   assert.equal(fs.existsSync(source),false);
+});
+
+test('controlled Dashboard migration preserves too-new rejection and classifies migration failure',t=>{
+  const {source,database,driverRoot,request}=controlledMigration(t,true);
+  database(99).close();
+  const tooNew=fs.readFileSync(source);
+  assert.throws(()=>runCoreDbWorker(request),{code:'SCHEMA_TOO_NEW'});
+  assert.deepEqual(fs.readFileSync(source),tooNew);
+  const db=new Database(source);db.exec('DELETE FROM schema_migrations; INSERT INTO schema_migrations VALUES(19)');db.close();
+  const before=fs.readFileSync(source);
+  const owner=path.join(driverRoot,'dashboard/src/lib/schema-owner.js');
+  fs.appendFileSync(owner,"\ndashboardSchemaOwner.migrate=()=>{throw Object.assign(Error('fixture migration failed'),{code:'SQLITE_ERROR'});};\n");
+  assert.throws(()=>runCoreDbWorker(request),error=>{
+    assert.equal(error.code,'SCHEMA_MIGRATION_FAILED');
+    assert.match(error.message,/fixture migration failed/);
+    assert.doesNotMatch(error.message,/\n|\/home\/|file:\/\//);
+    return true;
+  });
+  assert.deepEqual(fs.readFileSync(source),before);
 });
 
 for(const managed of [false,true]) test(`controlled migration uses persisted Dashboard owner state ${managed} despite caller disagreement`,t=>{

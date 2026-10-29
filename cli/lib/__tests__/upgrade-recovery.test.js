@@ -71,7 +71,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  const dir=path.join(root,'.backup/self-upgrade','tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const dashboardRoot=path.join(skillsDir,'dashboard');fs.mkdirSync(path.join(dashboardRoot,'src/lib'),{recursive:true});
  fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
- fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`export const dashboardSchemaOwner={supportsNewDatabase(){return true;},inspectSchema(db){const currentVersion=db.prepare("SELECT name FROM sqlite_master WHERE name='schema_migrations'").get()?db.prepare('SELECT MAX(version) AS n FROM schema_migrations').get().n:null;return {currentVersion,targetVersion:20,needsMigration:currentVersion!==20};},migrate(){throw Error('recovery must not migrate Dashboard');}};`);
+ fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`export const dashboardSchemaOwner={inspectSchema(db){const currentVersion=db.prepare("SELECT name FROM sqlite_master WHERE name='schema_migrations'").get()?db.prepare('SELECT MAX(version) AS n FROM schema_migrations').get().n:null;return {currentVersion,targetVersion:20,needsMigration:currentVersion!==20};},migrate(){throw Error('recovery must not migrate Dashboard');}};`);
  if(dashboard){const file=path.join(root,'components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});const db=new Database(file);db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);CREATE TABLE events(value TEXT);INSERT INTO events VALUES (\'original\')');db.prepare('INSERT INTO schema_migrations VALUES (?)').run(dashboardVersion);db.close();}
  const snapshotResult=snapshot({zylosDir:root,transactionId:'tx',formatVersion}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
@@ -225,7 +225,7 @@ for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before
    inspect:()=>({zylosDir:f.root,skillsDir:f.j.skillsDir,tempDir:download,from:'0.9.3',to:'0.9.4',
      transactionId:'tx',transactionDir:f.dir,journal:f.load(),maintenance:f.m,steps:[]}),
    resolveNpm:()=>'/unused/npm-cli.js',begin:()=>{},savePackage:()=>{},saveCode:()=>{},prepare:()=>{},install:()=>{},
-   finalize:()=>runSelfUpgradeFinalize({schemaVersion:2,preInstallProtection:true,zylosDir:f.root,
+   finalize:()=>runSelfUpgradeFinalize({zylosDir:f.root,
      transactionId:'tx',transactionDir:f.dir,tempDir:download},{
      maintenance:f.m,assertDashboardUninstalled:()=>{},
      syncSkills:ctx=>{
@@ -264,8 +264,8 @@ for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects $
  f.m.update(f.dir,f.j,{phase:'compensation_closed',compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},postCutoff:{items:{hooks:{state:'pending'}}},dashboardInstall:null});
  if(corrupt){f.j.compensationCutoff.snapshotManifestHash='0'.repeat(64);f.m.durable(path.join(f.dir,'journal.json'),f.j);}
  const before=fs.readFileSync(path.join(f.dir,'journal.json'));
- const script=`const state=JSON.parse(process.argv[1]);process.argv[1]=undefined;const {runSelfUpgradeFinalize}=await import(${JSON.stringify(pathToFileURL(path.resolve('cli/lib/self-upgrade.js')).href)});let calls=0;const result=runSelfUpgradeFinalize(state,{steps:[()=>{calls++;throw Error('must not execute');}]});console.log(JSON.stringify({result,calls}));`;
- const child=spawnSync(process.execPath,['--input-type=module','-e',script,JSON.stringify({schemaVersion:2,preInstallProtection:true,transactionDir:f.dir,transactionId:'tx'})],{env:{...process.env,ZYLOS_DIR:f.root},encoding:'utf8'});
+ const script=`const state=JSON.parse(process.argv[1]);process.argv[1]=undefined;const {runSelfUpgradeFinalize}=await import(${JSON.stringify(pathToFileURL(path.resolve('cli/lib/self-upgrade.js')).href)});let calls=0;const result=await runSelfUpgradeFinalize(state,{syncSkills:()=>{calls++;throw Error('must not execute');}});console.log(JSON.stringify({result,calls}));`;
+ const child=spawnSync(process.execPath,['--input-type=module','-e',script,JSON.stringify({transactionDir:f.dir,transactionId:'tx'})],{env:{...process.env,ZYLOS_DIR:f.root},encoding:'utf8'});
  assert.equal(child.status,0,child.stderr);
  const {result,calls}=JSON.parse(child.stdout);
  assert.equal(calls,0);assert.equal(result.success,false);assert.equal(result.recovery_required,true);
@@ -286,9 +286,9 @@ for(const failure of [null,'thresholds','ensure','state'])test(`closed writer ac
  available();
  if(failure==='state')fs.mkdirSync(path.join(f.root,'memory/state.md'),{recursive:true});
  const {completeUpgradeFinalization}=await import('../self-upgrade.js');
- const ctx={zylosDir:f.root,transactionDir:f.dir,transactionId:'tx',journal:f.j,maintenance:f.m,preInstallProtection:true,
+ const ctx={zylosDir:f.root,transactionDir:f.dir,transactionId:'tx',journal:f.j,maintenance:f.m,upgradeProtected:true,
    from:'old',to:'new',steps:[],servicesWereRunning:[],mergeConflicts:[],mergedFiles:[],
-   budget:{check(){},remaining:()=>100000,deadlineAt:Date.now()+100000}};
+   };
  let started=0;
  const result=await completeUpgradeFinalization(ctx,{
    updateConfig:()=>{available();if(failure==='thresholds')throw Error('threshold failure');},
@@ -430,7 +430,7 @@ test('interrupted data-ready upgrade resumes while retaining an extra column',as
  finally {retained.close();}
 });
 
-test('A12/A14/A15: complete compensation restores old code/data, preserves rescue, removes sidecars and retains terminal materials',async t=>{
+test('complete compensation restores old code/data, preserves rescue, removes sidecars and retains terminal materials',async t=>{
  const f=await fixture(t,{missing:true});change(f);fs.mkdirSync(path.dirname(f.db('scheduler/scheduler.db')),{recursive:true});fs.writeFileSync(f.db('scheduler/scheduler.db'),'new-db');
  const original=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(result.stage,'restored_complete');assert.ok(!fs.existsSync(f.db('scheduler/scheduler.db')));assert.ok(!fs.existsSync(f.db('comm-bridge/c4.db-wal')));
  const archived=path.join(f.root,'.backup/self-upgrade/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
@@ -459,7 +459,7 @@ for(const dashboard of [false,true])test(`format 2 compensation ${dashboard?'res
  if(dashboard){assert.deepEqual(fs.readFileSync(file),original);assert.equal(fs.existsSync(file+'-wal'),false);assert.equal(fs.existsSync(file+'-shm'),false);assert.equal(f.load().dbRestore['components/dashboard/dashboard.db'].complete,true);}
  assert.deepEqual(f.calls,['stop','start','verify']);
 });
-test('M23 Dashboard controlled migration rejects an owner still needing migration', async t => {
+test('Dashboard controlled migration rejects an owner still needing migration', async t => {
  const f=await fixture(t,{formatVersion:2,dashboard:true});
  f.m.update(f.dir,f.j,{dashboardOwnerManaged:true});
  const owner=path.join(f.dashboardRoot,'src/lib/schema-owner.js');
@@ -471,7 +471,7 @@ test('M23 Dashboard controlled migration rejects an owner still needing migratio
  assert.equal(f.load().phase,'installing');
 });
 
-test('M24 Dashboard controlled migration requires transaction identity before invoking its owner', async t => {
+test('Dashboard controlled migration requires transaction identity before invoking its owner', async t => {
  const f=await fixture(t,{formatVersion:2,dashboard:true});
  const file=f.db('components/dashboard/dashboard.db');
  const before=fs.readFileSync(file);
@@ -480,7 +480,7 @@ test('M24 Dashboard controlled migration requires transaction identity before in
  assert.equal(f.load().phase,'installing');
 });
 
-test('M18 snapshot and original database identities must agree before compensation', async t => {
+test('snapshot and original database identities must agree before compensation', async t => {
  const f=await fixture(t,{formatVersion:2});
  f.j.initialIdentity.databases.pop();
  f.m.durable(path.join(f.dir,'journal.json'),f.j);
@@ -526,21 +526,21 @@ for(const phase of ['rescue','restore'])test(`${phase} staging platform sync fai
  const result=f.r.resume(f.dir);assert.equal(result.stage,'restored_complete',JSON.stringify(result));assert.equal(result.completed,true);
  assert.equal(f.m.hash(source),snapshot.sha256);assert.equal(f.m.hash(rescue),originalHash);
 });
-test('A14/A28: damaged snapshot is rejected before rescue or replacement',async t=>{
+test('damaged snapshot is rejected before rescue or replacement',async t=>{
  const f=await fixture(t);change(f);const before=fs.readFileSync(f.db('comm-bridge/c4.db'));fs.appendFileSync(path.join(f.snapshot.dbBackupDir,f.snapshot.manifest.databases[0].file),'bad');
  const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/hash mismatch/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));assert.ok(!f.calls.includes('start'));assert.equal(f.m.discover(f.root).blocked,true);
 });
-test('A26: crash after physical DB rename but before done journal resumes existing intent without recapturing rescue',async t=>{
+test('crash after physical DB rename but before done journal resumes existing intent without recapturing rescue',async t=>{
  const f=await fixture(t);change(f);f.r.rescue(f.dir,f.j);f.r.restoreCore(f.dir,f.j);
  const real=f.m.renameIntent;let crashed=false;f.m.renameIntent=(dir,j,key,...args)=>{const result=real(dir,j,key,...args);if(!crashed&&key==='install_comm-bridge_c4.db'){crashed=true;j.actions[key].done=false;f.m.update(dir,j);throw Error('simulated power loss after install rename');}return result;};
  assert.throws(()=>f.r.replaceDatabases(f.dir,f.j,f.snapshot.manifest),/power loss/);const rescueHash=f.m.hash(path.join(f.dir,'rescue/comm-bridge_c4.db'));f.m.renameIntent=real;
  const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(f.m.hash(path.join(f.root,'.backup/self-upgrade/tx/rescue/comm-bridge_c4.db')),rescueHash);
 });
-test('A26: partial rescue resumes recorded generation and refuses changed rescue evidence',async t=>{
+test('partial rescue resumes recorded generation and refuses changed rescue evidence',async t=>{
  const f=await fixture(t);change(f);const real=f.m.renameIntent;let crashed=false;f.m.renameIntent=(dir,j,key,...args)=>{const result=real(dir,j,key,...args);if(!crashed&&key==='rescue_comm-bridge_c4.db'){crashed=true;throw Error('simulated crash');}return result;};assert.throws(()=>f.r.rescue(f.dir,f.j),/crash/);f.m.renameIntent=real;
  fs.appendFileSync(path.join(f.dir,'rescue/comm-bridge_c4.db'),'tampered');const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/rescue hash conflict/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
 });
-for(const phase of ['restored_data_ready','restored_verifying'])test(`A16/A27: ${phase} resumes validation and retains valid normal writes`,async t=>{
+for(const phase of ['restored_data_ready','restored_verifying'])test(`${phase} resumes validation and retains valid normal writes`,async t=>{
  const f=await fixture(t);
  const snapshotHash=f.m.hash(f.db('comm-bridge/c4.db'));
  f.m.start=()=>{
@@ -554,37 +554,37 @@ for(const phase of ['restored_data_ready','restored_verifying'])test(`A16/A27: $
  assert.notEqual(f.m.hash(f.db('comm-bridge/c4.db')),snapshotHash);
  assert.deepEqual(f.calls,['start','verify']);
 });
-test('A27: restored verification failure isolates without a second database replacement',async t=>{
+test('restored verification failure isolates without a second database replacement',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));f.m.verifyServices=()=>{throw Error('service failed');};
  const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.equal(f.load().resumePhase,'restored_verifying');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));assert.equal(f.m.discover(f.root).blocked,true);
 });
-test('A24/A29: trusted preinstall abort verifies original data without snapshot restore',async t=>{
+test('trusted preinstall abort verifies original data without snapshot restore',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));assert.equal(result.attempted,false);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));assert.equal(f.m.discover(f.root).blocked,false);
 });
-test('R3: group-writable original npm CLI root permits verified preinstall abort',async t=>{
+test('group-writable original npm CLI root permits verified preinstall abort',async t=>{
  const f=await fixture(t);fs.chmodSync(f.j.initialIdentity.cliRoot,0o775);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});
  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);
  assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));assert.equal(result.recovery_required,false);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(f.m.discover(f.root).blocked,false);
 });
-test('A25: interrupted original service restart only resumes verified abort cleanup',async t=>{
+test('interrupted original service restart only resumes verified abort cleanup',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});let first=true;f.m.start=()=>{f.calls.push('start');if(first){first=false;throw Error('start interrupted');}};
  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));assert.equal(f.r.resume(f.dir).recovery_required,true);assert.equal(f.load().resumePhase,'aborted_before_install');assert.equal(f.m.discover(f.root).blocked,true);assert.equal(f.r.resume(f.dir).stage,'aborted_before_install');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
 });
-test('A13: failed stop verification refuses physical replacement and service start',async t=>{
+test('failed stop verification refuses physical replacement and service start',async t=>{
  const f=await fixture(t);change(f);const before=fs.readFileSync(f.db('comm-bridge/c4.db'));f.m.stop=()=>{f.calls.push('stop');throw Error('PM2 stop not confirmed');};const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/not confirmed/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));assert.ok(!f.calls.includes('start'));
 });
-test('A29: initial journal without descriptor or snapshots aborts through trusted original readonly worker',async t=>{
+test('initial journal without descriptor or snapshots aborts through trusted original readonly worker',async t=>{
  const f=await fixture(t);const descriptor=f.m.read(path.join(f.dir,'descriptor.json'));f.j.initialIdentity.workerPath=descriptor.workerPath;f.j.initialIdentity.workerHash=f.m.hash(descriptor.workerPath);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});fs.unlinkSync(path.join(f.dir,'descriptor.json'));fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
  const db=new Database(f.db('comm-bridge/c4.db'));db.pragma('journal_mode=WAL');db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(4,'pre-stop-commit');db.pragma('wal_checkpoint(TRUNCATE)');db.close();
  const result=f.r.resume(f.dir);assert.equal(result.stage,'aborted_before_install');assert.equal(result.recovery_required,false);const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT summary FROM checkpoints WHERE id=4').get().summary,'pre-stop-commit');read.close();
 });
-for(const action of ['terminal-write','marker-remove'])test(`A25: abort ${action} interruption stays isolated then continues without replacement`,async t=>{
+for(const action of ['terminal-write','marker-remove'])test(`abort ${action} interruption stays isolated then continues without replacement`,async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});let first=true;const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
  if(action==='terminal-write'){const real=f.m.update;f.m.update=(dir,j,changes={})=>{if(first&&changes.phase==='aborted_before_install'){first=false;throw Error('terminal fsync failed');}return real(dir,j,changes);};}
  else{const real=fs.unlinkSync;t.after(()=>{fs.unlinkSync=real;});fs.unlinkSync=file=>{if(first&&file===path.join(f.root,'.zylos/upgrade/active.json')){first=false;throw Error('marker remove failed');}return real(file);};}
  assert.equal(f.r.resume(f.dir).recovery_required,true);assert.equal(f.m.discover(f.root).blocked,action==='terminal-write');if(action==='terminal-write')assert.ok(!f.calls.includes('start'));else assert.ok(f.calls.includes('start'));assert.equal(f.r.resume(f.dir).stage,'aborted_before_install');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));
 });
-test('A26: partial core restore skips verified completed members after interruption',async t=>{
+test('partial core restore skips verified completed members after interruption',async t=>{
  const f=await fixture(t);change(f);f.r.rescue(f.dir,f.j);const real=f.m.sync,seen=[];let crash=true;f.m.sync=(src,dest)=>{seen.push(path.basename(dest));real(src,dest);if(crash&&path.basename(dest)==='scheduler'){crash=false;throw Error('core-copy crash');}};
  assert.throws(()=>f.r.restoreCore(f.dir,f.j),/core-copy crash/);assert.equal(f.load().codeRestore['comm-bridge'].complete,true);seen.length=0;const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.deepEqual(seen,['scheduler','web-console']);
 });

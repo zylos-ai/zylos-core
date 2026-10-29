@@ -100,12 +100,36 @@ test('thin entry forwards handoff, preserves environment and has no whole-comman
   assert.throws(() => runDownloadedUpgrade(handoff, { spawn() { assert.fail('incomplete package executed'); } }));
 });
 
-test('up-to-date path never invokes removed same-version retry or downloader', async () => {
+test('up-to-date path never invokes removed same-version retry or downloader', async t => {
   const { upgradeSelfCore } = await import('../../commands/component.js');
   assert.equal(await upgradeSelfCore({ skipConfirm: true }, {
+    zylosDir:fixture(t),
     checkForCoreUpdates: () => ({ success: true, current: '1.0.0', latest: '1.0.0', hasUpdate: false }),
     selectSameVersionRetry() { assert.fail('removed retry was invoked'); },
     downloadCoreToTemp() { assert.fail('up-to-date downloaded'); },
     console: { log() {} },
   }), true);
+});
+
+test('thin entry reports a missing deployment before checking or downloading', async t => {
+  const {upgradeSelfCore}=await import('../../commands/component.js');
+  const output=[];
+  assert.equal(await upgradeSelfCore({skipConfirm:true,jsonOutput:true},{
+    zylosDir:path.join(fixture(t),'missing'),
+    checkForCoreUpdates(){assert.fail('missing deployment checked updates');},
+    console:{log(value){output.push(JSON.parse(value));}}
+  }),false);
+  assert.equal(output[0].code,'ZYLOS_NOT_INITIALIZED');
+  assert.match(output[0].error,/Initialize this deployment/);
+  assert.doesNotMatch(output[0].error,/ENOENT|at |\/home\//);
+});
+
+test('overwrite mode is rejected before recovery or downloading', async () => {
+  const {upgradeSelfCore}=await import('../../commands/component.js');
+  const output=[];
+  assert.equal(await upgradeSelfCore({mode:'overwrite',jsonOutput:true},{
+    recoverBeforeUpgrade(){assert.fail('unsupported mode ran recovery');},
+    console:{log(value){output.push(JSON.parse(value));}}
+  }),false);
+  assert.deepEqual(output,[{success:false,code:'INVALID_ARGS',error:'Core self-upgrade supports only --mode merge.',persisted:[]}]);
 });

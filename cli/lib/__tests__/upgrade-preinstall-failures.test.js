@@ -33,7 +33,6 @@ function fixture(t, fault) {
   fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`import {createRequire} from 'node:module';
   const Database=createRequire(${JSON.stringify(path.resolve('skills/comm-bridge/package.json'))})('better-sqlite3');
   export const dashboardSchemaOwner={
-    supportsNewDatabase(){return true;},
     inspectSchema(file){const db=new Database(file,{readonly:true,fileMustExist:true});try{db.prepare('SELECT value FROM preserved').get();return {currentVersion:1,targetVersion:1,needsMigration:false};}finally{db.close();}},
     migrate(){throw Error('preinstall verification must not migrate Dashboard');}
   };`);
@@ -79,7 +78,7 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
     install:()=>{installerCalls++;throw Error('installer must not run');},
     finalize:()=>{finalizerCalls++;throw Error('finalizer must not run');},
   });
-  assert.equal(result.preInstallProtection,true,JSON.stringify(result));
+  assert.equal(result.upgradeProtected,true,JSON.stringify(result));
   assert.equal(result.success,false);
   const restrictedView = /(?:restricted|incomplete) process view|process view incomplete/.test(result.error);
   if (restrictedView) assert.equal(m.canRecognizeProcesses(),false);

@@ -13,7 +13,7 @@ function fail(dir, j, error) {
   m.update(dir, j, {
     resumePhase: j.phase === 'recovery_required' ? j.resumePhase : j.phase,
     phase: 'recovery_required',
-    error
+    lastError: error
   });
   return {
     attempted: !!j.installationIntent,
@@ -65,12 +65,16 @@ function originalVerified(dir, j) {
       schemaRoot: j.skillsDir,
       dashboardOwnerManaged: j.dashboardOwnerManaged === true && j.firstTakeover !== true,
       expectedDatabases: expected,
-      formatVersion: m.originalDatabasePaths(j).length === 4 ? 2 : 1
+      formatVersion: 2
     })], {
       encoding: 'utf8',
       timeout: 120000
     });
-    if (r.error || r.status !== 0) throw Error(r.error?.message || r.stderr || 'original readonly verification failed');
+    if (r.error || r.status !== 0) {
+      let failure;
+      try {failure=JSON.parse(r.stdout).error;} catch {}
+      throw Object.assign(Error(failure?.message || r.error?.message || 'original readonly verification failed'),{code:failure?.code || 'UPGRADE_FAILED'});
+    }
     result = JSON.parse(r.stdout);
   }
   if (result.success === false) throw Error(result.error || 'original readonly preflight failed');
@@ -321,7 +325,6 @@ function terminalPending(dir, j, error) {
 function validateReady(dir, j) {
   let verified = false;
   try {
-    const snapshot = j.databaseMode !== 'unchanged' ? validateSnapshot(dir, j) : null;
     m.update(dir, j, {
       phase: 'restored_verifying'
     });

@@ -14,8 +14,12 @@ export async function recoveryCommand(args, {root = ZYLOS_DIR} = {}) {
     throw Error('Dedicated recovery supervisor configuration and verification have been removed. Use the existing PM2/activity-monitor boot chain; zylos recovery status and resume remain available.');
   }
   if (!['status', 'resume'].includes(sub)) throw Error('unknown recovery command; use status or resume');
-  const context = discoverUpgradeContext(root);
-  if (!context.active || (sub === 'status' && context.recovery_required)) {
+  const context = discoverUpgradeContext(root, {recover:sub === 'resume'});
+  if (sub === 'status') {
+    console.log(JSON.stringify(context, null, 2));
+    return;
+  }
+  if (!context.active) {
     console.log(JSON.stringify(context, null, 2));
     return;
   }
@@ -25,7 +29,7 @@ export async function recoveryCommand(args, {root = ZYLOS_DIR} = {}) {
     return;
   }
   const entry = path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs');
-  const result = require(entry).bootstrap(root, {status: sub === 'status', once: sub === 'resume'});
+  const result = require(entry).bootstrap(root, {once:true});
   console.log(JSON.stringify(result, null, 2));
   if (result.recovery_required) process.exitCode = 1;
 }

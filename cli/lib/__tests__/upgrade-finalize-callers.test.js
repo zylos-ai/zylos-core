@@ -19,7 +19,7 @@ function fixture(t, config = {}) {
   const ctx = { zylosDir: root, from: 'old', to: 'new', steps: [], mergedFiles: [], mergeConflicts: [] };
   const journal = { phase: 'compensation_closed' };
   Object.assign(ctx, {
-    preInstallProtection: true,
+    upgradeProtected: true,
     transactionDir: path.join(root, 'transaction'),
     journal,
     maintenance: {
@@ -30,20 +30,10 @@ function fixture(t, config = {}) {
       update: (_dir, current, changes) => Object.assign(current, changes),
     },
   });
-  let now = 0;
-  const budget = {
-    deadlineAt: 10000,
-    remaining: () => budget.deadlineAt - now,
-    check() {
-      if (budget.remaining() <= 0) throw Object.assign(Error('budget exhausted'), { code: 'deadline_exceeded' });
-    },
-  };
-  ctx.budget = budget;
   const deps = {
-    budget,
     ensureMemoryMigration: () => { calls.push('ensure'); },
     commitBaselines: () => { calls.push('baselines'); },
-    refreshMaintenanceReader: () => {},
+    verifyPublicationForServices: () => {},
     protectedSuccess: () => {},
     startServices: () => { calls.push('start'); },
     verifyServices: () => { calls.push('verify'); },
@@ -58,7 +48,7 @@ function fixture(t, config = {}) {
     },
     audit: () => { calls.push('audit'); return []; },
   };
-  return { ctx, deps, calls, configFile, read: () => JSON.parse(fs.readFileSync(configFile, 'utf8')), advance: ms => { now += ms; } };
+  return { ctx, deps, calls, configFile, read: () => JSON.parse(fs.readFileSync(configFile, 'utf8')) };
 }
 
 test('F1 actual caller preserves a preexisting threshold and inserts the other default', async t => {
@@ -122,7 +112,7 @@ test('F1 controlled after-rename failure preserves committed defaults and invoke
   const f = fixture(t, { new_session_threshold: 30 });
   const journal = { phase: 'compensation_closed' };
   Object.assign(f.ctx, {
-    preInstallProtection: true,
+    upgradeProtected: true,
     transactionDir: path.join(f.ctx.zylosDir, 'transaction'),
     maintenance: {
       canRecognizeProcesses: () => true,
@@ -182,22 +172,19 @@ test('F1 controlled before-rename failure leaves original config and prevents su
   assert.deepEqual(f.calls, []);
 });
 
-test('obsolete overall deadline cannot prevent the first F1 caller action', async t => {
+test('F1 caller updates both session thresholds before starting services', async t => {
   const f = fixture(t);
-  f.advance(10000);
   const result = await completeUpgradeFinalization(f.ctx, f.deps);
   assert.equal(result.success, true);
   assert.deepEqual(f.read(), { new_session_threshold: 70, codex_new_session_threshold: 75 });
   assert.equal(f.calls.includes('start'),true);
 });
 
-test('F1 lock window is independent and later steps continue after an obsolete deadline', async t => {
+test('F1 caller uses the configured lock window and continues finalization', async t => {
   const f = fixture(t);
-  f.advance(9000);
   f.deps.updateConfig = (update, options) => {
     assert.equal(options.waitMs, 2000);
     assert.equal(Object.hasOwn(options, 'deadlineAt'), false);
-    f.advance(2000);
     return updateZylosConfigLocked(update, options);
   };
   const result = await completeUpgradeFinalization(f.ctx, f.deps);
@@ -206,14 +193,12 @@ test('F1 lock window is independent and later steps continue after an obsolete d
   assert.equal(f.calls.includes('start'),true);
 });
 
-test('transition read uses ordinary DB limits and cannot exhaust a shared finalization deadline', async t => {
+test('transition read uses ordinary DB limits before restart and audit', async t => {
   const f = fixture(t);
   let readFinished = false;
-  f.deps.readMode = () => { f.advance(9000); return { mode: 'single', keyPresent: true }; };
+  f.deps.readMode = () => ({ mode: 'single', keyPresent: true });
   f.deps.readTransition = (...args) => {
     assert.deepEqual(args, []);
-    assert.equal(f.deps.budget.remaining(), 1000);
-    f.advance(2000);
     readFinished = true;
     return null;
   };
@@ -224,24 +209,18 @@ test('transition read uses ordinary DB limits and cannot exhaust a shared finali
   assert.equal(result.checkpointAudit.state, 'complete');
   assert.equal(f.calls.includes('restart'), true);
   assert.equal(f.calls.includes('audit'), true);
-  assert.equal(f.deps.budget.deadlineAt, 10000);
 });
 
-test('controlled audit read started with 1s left returns its real result after 2s without refreshing budget', async t => {
+test('controlled audit returns the actual findings after restart submission', async t => {
   const f = fixture(t);
   const findings = [{ code: 'CHECKPOINT_WARNING' }];
-  f.deps.restart = () => { f.advance(9000); return { ok: true, data: { result: 'exit_enqueued' } }; };
   f.deps.audit = (...args) => {
     assert.deepEqual(args, []);
-    assert.equal(f.deps.budget.remaining(), 1000);
-    f.advance(2000);
     return findings;
   };
   const result = await completeUpgradeFinalization(f.ctx, f.deps);
   assert.equal(result.success, true);
   assert.deepEqual(result.checkpointAudit, { state: 'complete', items: findings });
-  assert.equal(f.deps.budget.remaining(), -1000);
-  assert.equal(f.deps.budget.deadlineAt, 10000);
 });
 
 for (const read of ['readMode', 'readTransition']) {

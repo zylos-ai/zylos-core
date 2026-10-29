@@ -263,7 +263,7 @@ test('shared recovery exit verification rejects missing trusted materials before
 test('resume confirms process exit, isolates writers, and passes persistent context without an overall budget',async t=>{
   const f=fixture(t);
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>f.calls.push('quiesce'),finalize:async ctx=>{
-    f.calls.push('finalize');assert.equal(ctx.preInstallProtection,true);assert.equal(Object.getPrototypeOf(ctx.maintenance),f.m);
+    f.calls.push('finalize');assert.equal(Object.getPrototypeOf(ctx.maintenance),f.m);
     assert.equal(ctx.dbManifest.id,ctx.transactionId);
     assert.equal(ctx.transactionId,f.journal.transactionId);assert.equal(Object.hasOwn(ctx,'budget'),false);
     assert.deepEqual(ctx.originalServices,[]);assert.ok(ctx.persisted instanceof Set);

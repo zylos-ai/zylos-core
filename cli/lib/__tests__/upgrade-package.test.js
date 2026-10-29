@@ -84,7 +84,7 @@ for (const mismatch of ['package', 'cli']) test(`B07 successful installer cannot
   assert.equal(f.j.installerExitConfirmed, true);
 });
 
-test('B10 failed original-package installation never publishes the restored flag', t => {
+test('failed original-package installation never publishes the restored flag', t => {
   const f = restorationFixture(t, 'process.exit(12);');
   assert.throws(() => m.restoreOriginalPackage(f.dir, f.j));
   assert.equal(f.j.originalPackageRestored, undefined);
