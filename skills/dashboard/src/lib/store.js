@@ -39,34 +39,6 @@ export class Store {
 
     this._nextSeq = this.db.prepare('SELECT COALESCE(MAX(event_seq), 0) + 1 AS seq FROM runtime_events');
 
-    this._queryEvents = this.db.prepare(`
-      SELECT * FROM runtime_events
-      WHERE timestamp >= @since AND timestamp <= @until
-      ORDER BY event_seq ASC
-      LIMIT @limit OFFSET @offset
-    `);
-
-    this._queryEventsDesc = this.db.prepare(`
-      SELECT * FROM runtime_events
-      WHERE timestamp >= @since AND timestamp <= @until
-      ORDER BY event_seq DESC
-      LIMIT @limit OFFSET @offset
-    `);
-
-    this._queryEventsByType = this.db.prepare(`
-      SELECT * FROM runtime_events
-      WHERE timestamp >= @since AND timestamp <= @until AND event_type = @event_type
-      ORDER BY event_seq ASC
-      LIMIT @limit OFFSET @offset
-    `);
-
-    this._queryEventsByTypeDesc = this.db.prepare(`
-      SELECT * FROM runtime_events
-      WHERE timestamp >= @since AND timestamp <= @until AND event_type = @event_type
-      ORDER BY event_seq DESC
-      LIMIT @limit OFFSET @offset
-    `);
-
     this._latestEventByType = this.db.prepare(`
       SELECT * FROM runtime_events WHERE event_type = ? ORDER BY event_seq DESC LIMIT 1
     `);
@@ -368,7 +340,7 @@ export class Store {
       ingest_id: event.ingest_id,
       event_seq: seq,
       timestamp: event.timestamp,
-      runtime: event.runtime || (event.source === 'core-log' ? 'unknown' : 'claude'),
+      runtime: event.runtime || 'claude',
       session_id: event.session_id || null,
       session_group: event.session_group ?? null,
       run_id: event.run_id ?? null,
@@ -479,7 +451,7 @@ export class Store {
 
   latestMetric({ name, source, since, until, runtime = null }) {
     const row = this._latestMetric.get({ name, source, runtime,
-      since: since || '1970-01-01T00:00:00.000Z', until: until || '2099-12-31T23:59:59Z' });
+      since: since || '1970-01-01T00:00:00Z', until: until || '2099-12-31T23:59:59Z' });
     return row ? { ...row, dimensions: row.dimensions ? JSON.parse(row.dimensions) : null } : null;
   }
 

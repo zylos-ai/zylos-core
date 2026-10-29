@@ -177,15 +177,14 @@ test('positive append/rename controls and negative generation/anchor controls ex
   assert.throws(()=>replacement(g,old,'anchor_mismatch'),assert.AssertionError); // old-generation key collision loses new observation
 });
 
-test('health snapshot reports actual scheduled lifecycle, empty successful scan, error and recovery',async t=>{
-  const f=fixture(t);assert.deepEqual(f.importer.snapshot(),{running:false,lastPollAt:null,lastSuccessAt:null,lastError:null});
-  f.importer.start();await f.importer.poll();assert.equal(f.importer.snapshot().running,true);assert.ok(f.importer.snapshot().lastSuccessAt);
-  const discover=f.importer.discover.bind(f.importer);f.importer.discover=async()=>{throw Object.assign(new Error('fixture'),{code:'EACCES'});};
-  await assert.rejects(f.importer.poll(),{code:'EACCES'});assert.equal(f.importer.snapshot().lastError,'EACCES');
-  assert.equal(f.store.getHistoryDiagnostics().find(row=>row.name==='core-log').extra.reason,'import_failed');
-  f.importer.discover=discover;await f.importer.poll();assert.equal(f.importer.snapshot().lastError,null);
+test('poll discovery failures persist a diagnostic that successful discovery clears',async t=>{
+  const f=fixture(t);await f.importer.poll();
   assert.ok(!f.store.getHistoryDiagnostics().some(row=>row.name==='core-log'));
-  await f.importer.stop();assert.equal(f.importer.snapshot().running,false);
+  const discover=f.importer.discover.bind(f.importer);f.importer.discover=async()=>{throw Object.assign(new Error('fixture'),{code:'EACCES'});};
+  await assert.rejects(f.importer.poll(),{code:'EACCES'});
+  assert.equal(f.store.getHistoryDiagnostics().find(row=>row.name==='core-log').extra.reason,'import_failed');
+  f.importer.discover=discover;await f.importer.poll();
+  assert.ok(!f.store.getHistoryDiagnostics().some(row=>row.name==='core-log'));
 });
 
 test('Supervisor diagnostics preserve explicit producer IDs, never infer missing identity from another record',async t=>{
@@ -209,7 +208,7 @@ test('health observations retain their type and never inflate activity counts', 
   }
 });
 
-test('diagnostic free text and F14 details use Sanitizer before indexing and again at output', async t => {
+test('diagnostic free text and receive rejection details use Sanitizer before indexing and again at output', async t => {
   const f = fixture(t); const secret = 'sk-' + 'a'.repeat(24);
   f.write(JSON.stringify({ v: 1, ts: 1, event: 'post_tool_failure', error: secret, reason: secret,
     reason_code: 'rejected', channel: 'telegram', endpoint: '123', detail: `failed: ${secret}` }) + '\n');
@@ -222,16 +221,18 @@ test('diagnostic free text and F14 details use Sanitizer before indexing and aga
 });
 
 test('source recovery clears only current failures; historical gaps remain; quiet scans make zero writes', async t => {
-  const f = fixture(t); await f.read();
+  const f = fixture(t);
+  const absent = path.join(f.root, 'absent', 'events.jsonl');
+  await f.importer.importStream({ stream: 'events:origin', file: absent });
   assert.equal(f.store.getHistoryDiagnostics({ stream: 'events:origin' }).length, 1);
   f.write(line('ok') + '{bad}\n'); await f.read();
   const diagnostics = f.store.getHistoryDiagnostics({ sessionGroup: 'origin' });
   assert.deepEqual(diagnostics.map(row => row.extra.reason), ['malformed_line']);
   const before = f.store.db.prepare('SELECT total_changes() AS n').get().n;
-  await f.read(); await f.importer.importStream({ stream: 'missing', file: path.join(f.root, 'missing.jsonl') });
+  await f.read(); await f.importer.importStream({ stream: 'missing', file: path.join(f.root, 'missing', 'events.jsonl') });
   const firstMissing = f.store.db.prepare('SELECT total_changes() AS n').get().n;
   assert.equal(firstMissing, before + 1);
-  await f.read(); await f.importer.importStream({ stream: 'missing', file: path.join(f.root, 'missing.jsonl') });
+  await f.read(); await f.importer.importStream({ stream: 'missing', file: path.join(f.root, 'missing', 'events.jsonl') });
   assert.equal(f.store.db.prepare('SELECT total_changes() AS n').get().n, firstMissing);
 });
 
@@ -240,10 +241,9 @@ test('single-stream failures affect health and recover without erasing historica
   f.importer.discover = async () => [{ stream: 'events:origin', file: f.file }];
   const statFile = f.importer.statFile;
   f.importer.statFile = async () => { throw Object.assign(new Error('fixture'), { code: 'EACCES' }); };
-  await f.importer.poll(); assert.equal(f.importer.snapshot().lastError, 'EACCES'); assert.equal(f.importer.snapshot().lastSuccessAt, null);
+  await f.importer.poll();
   assert.equal(f.store.getHistoryDiagnostics()[0].extra.reason, 'read_failed');
   f.importer.statFile = statFile; await f.importer.poll();
-  assert.equal(f.importer.snapshot().lastError, null); assert.ok(f.importer.snapshot().lastSuccessAt);
   assert.equal(f.store.getHistoryDiagnostics().length, 0);
 });
 
@@ -287,26 +287,27 @@ for (const status of ['done', 'gap', 'source_missing']) test(`new generation pre
 });
 
 
-test('beforeCommit rollback oracle rejects a writer split into two committed transactions', async t => {
-  async function rollbackOracle(split) {
-    const f = fixture(t); f.write(line('a'));
-    const transaction = callback => ({ immediate() {
-      f.store.db.exec('BEGIN IMMEDIATE');
-      try { const result = callback(); f.store.db.exec('COMMIT'); return result; }
-      catch (error) { if (f.store.db.inTransaction) f.store.db.exec('ROLLBACK'); throw error; }
-    } });
-    const importer = new CoreLogImporter({ store: f.store, zylosDir: f.root, transaction,
-      transactionObserver(point) {
-        if (split && point === 'afterInsert') { f.store.db.exec('COMMIT'); f.store.db.exec('BEGIN IMMEDIATE'); }
-        if (point === 'beforeCommit') throw new Error('rollback');
-      } });
-    try {
-      await assert.rejects(importer.importFile('events:origin', f.file), /rollback/);
-      assert.equal(f.events().length, 0); assert.equal(f.rows().length, 0);
-    } finally { await importer.stop(); }
-  }
-  await rollbackOracle(false);
-  await assert.rejects(rollbackOracle(true), assert.AssertionError);
+test('every committed batch publishes its events and cursor together', async t => {
+  const f = fixture(t, { batchLines: 1 });
+  f.write(line('a') + line('b'));
+  let commits = 0;
+  f.importer.transaction = callback => ({ immediate() {
+    const result = f.store.db.transaction(callback).immediate();
+    commits++;
+    assert.equal(f.store.db.inTransaction, false);
+    for (const event of f.events()) {
+      if (event.source !== 'core-log') continue;
+      const [, stream, dev, ino, generation, offset] = event.ingest_id.match(/^core:(.*):(\d+):(\d+):g(\d+):(\d+)$/);
+      const cursor = f.rows().find(row => row.stream === stream && row.file_dev === Number(dev)
+        && row.file_ino === Number(ino) && row.generation === Number(generation));
+      assert.ok(cursor, 'each committed event has its committed cursor');
+      assert.ok(Number(offset) < cursor.byte_offset, 'no committed event starts at or beyond its cursor');
+    }
+    return result;
+  } });
+  await f.read();
+  assert.equal(commits, 2, 'the importer uses the supplied transaction boundary for every batch');
+  assert.equal(f.events().length, 2); assert.equal(f.rows()[0].byte_offset, 256);
 });
 
 test('content-only redaction preserves real identities through indexing and output', async t => {
@@ -340,14 +341,16 @@ test('import-side engine redaction runs after Sanitizer and cannot modify identi
 
 test('rotation between directory listing and open is reconciled before declaring a gap', async t => {
   const f = fixture(t); f.write(line('e1')); await f.read(); f.append(line('e2'));
-  let rotated = false;
+  let rotated = false, scans = 0;
   f.importer.readDirectory = async dir => {
+    scans++;
     const names = fs.readdirSync(dir);
     if (!rotated) { rotated = true; fs.renameSync(f.file, path.join(f.root, 'events.100.jsonl')); f.write(line('e3')); }
     return names;
   };
   await f.read();
   assert.deepEqual(f.events().map(event => event.event_type), ['e1', 'e2', 'e3']);
+  assert.equal(scans, 2, 'the missing active identity requires a fresh injected directory scan');
   assert.ok(!f.diagnostics().some(item => item.reason === 'file_missing'));
 });
 
@@ -358,7 +361,7 @@ for (const absentDirectory of [false, true]) test(`read failure recovers when so
   const stat = f.importer.statFile; f.importer.statFile = async () => { throw Object.assign(new Error('fixture'), { code: 'EACCES' }); };
   await f.importer.poll(); assert.ok(f.store.getHistoryDiagnostics().some(row => row.extra.reason === 'read_failed'));
   f.importer.statFile = stat; fs.unlinkSync(file); if (absentDirectory) fs.rmdirSync(directory);
-  await f.importer.poll(); assert.equal(f.importer.snapshot().lastError, null);
+  await f.importer.poll();
   assert.ok(!f.store.getHistoryDiagnostics().some(row => row.extra.reason === 'read_failed'));
   fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(file, line('b'));
   f.importer.statFile = async () => { throw Object.assign(new Error('fixture'), { code: 'EACCES' }); };
@@ -380,17 +383,26 @@ test('cursor recheck prevents a stale batch from moving a farther competing curs
   const f = fixture(t, { batchLines: 1 }); f.write(line('a')); await f.read();
   f.append(line('b') + line('c') + line('d'));
   const normalize = f.importer.normalize.bind(f.importer); let advanced = false;
+  let lastCommittedOffset = f.rows()[0].byte_offset;
+  let commits = 0;
+  f.importer.transactionObserver = point => {
+    if (point !== 'afterCommit') return;
+    const offset = f.rows()[0].byte_offset;
+    assert.ok(offset >= lastCommittedOffset, 'a committed cursor never moves backward');
+    lastCommittedOffset = offset; commits++;
+  };
   f.importer.normalize = async (...args) => {
     const result = await normalize(...args);
     if (!advanced) {
       advanced = true;
-      const other = new CoreLogImporter({ store: f.store, zylosDir: f.root });
+      const other = new CoreLogImporter({ store: f.store, zylosDir: f.root, transactionObserver: f.importer.transactionObserver });
       await other.importFile('events:origin', f.file); await other.stop();
       assert.equal(f.rows()[0].byte_offset, 512);
     }
     return result;
   };
   await f.read(); assert.equal(f.rows()[0].byte_offset, 512); assert.equal(f.events().length, 4);
+  assert.equal(commits, 1); assert.equal(lastCommittedOffset, 512);
 });
 
 test('rotation expiring after a partial batch marks the consumed prefix as a gap', async t => {
@@ -413,4 +425,35 @@ test('malformed engine results fail closed and produce redaction_failed diagnost
     assert.ok(!JSON.stringify(f.events()).includes('private-text'));
     assert.ok(f.diagnostics().some(item => item.reason === 'redaction_failed'));
   }
+});
+
+
+test('session filter distinguishes sessions sharing one run and descending pagination keeps newest first', async t => {
+  const f = fixture(t);
+  for (const [id, session] of [['a', 's1'], ['b', 's2'], ['c', 's1']]) {
+    assert.equal(f.store.insertEvent({ id, ingest_id: id, timestamp: '2026-01-01', event_type: 'stop', category: 'turn',
+      runtime: 'claude', run_id: 'shared-run', session_id: session }).inserted, true);
+  }
+  assert.deepEqual(f.store.queryEvents({ runId: 'shared-run', sessionId: 's1' }).map(row => row.id), ['a', 'c']);
+  assert.deepEqual(f.store.queryEvents({ order: 'desc', limit: 2 }).map(row => row.id), ['c', 'b']);
+});
+
+test('receive group rejection keeps an explicitly empty group unassigned', async t => {
+  const f = fixture(t);
+  f.write(JSON.stringify({ v: 1, ts: 1, event: 'group_rejected', session_group: '', reason_code: 'invalid_group' }) + '\n');
+  await f.importer.importStream({ stream: 'receive', file: f.file });
+  assert.equal(f.events().length, 1); assert.equal(f.events()[0].session_group, null);
+  assert.equal(f.store.queryEvents({ sessionGroup: null }).length, 1);
+});
+
+test('byte budget commits complete lines in bounded batches independently of the line count', async t => {
+  const offsets = [], counts = [];
+  const f = fixture(t, { batchLines: 200, batchBytes: 4096 });
+  f.write(line('a', 2048) + line('b', 2048) + line('c', 2048));
+  f.importer.transactionObserver = point => {
+    if (point === 'afterCommit') { offsets.push(f.rows()[0].byte_offset); counts.push(f.events().length); }
+  };
+  await f.read();
+  assert.deepEqual(offsets, [4096, 6144]); assert.deepEqual(counts, [2, 3]);
+  assert.deepEqual(f.events().map(event => event.event_type), ['a', 'b', 'c']);
 });

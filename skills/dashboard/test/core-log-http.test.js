@@ -107,6 +107,20 @@ test('timeline HTTP preserves scoped pagination, unassigned history, cap and red
         assert.equal(chunk.done, false);
         received += new TextDecoder().decode(chunk.value);
       }
+      const secretFile = path.join(root, 'secret-enums.jsonl');
+      fs.writeFileSync(secretFile, JSON.stringify({ v: 1, ts: 2, event: diagnosticSecret,
+        runtime: diagnosticSecret, session_group: 'enum-check', requestId: run, sessionGroup: group }) + '\n');
+      await importer.importFile('router', secretFile);
+      const enumSaved = store.queryEvents({ sessionGroup: 'enum-check' });
+      const enumHistory = await get('session_group=enum-check');
+      assert.equal(enumSaved.length, 1);
+      for (const records of [enumSaved, enumHistory.events]) {
+        assert.equal(JSON.stringify(records).includes(diagnosticSecret), false);
+        assert.equal(records[0].runtime, 'unknown');
+        assert.equal(records[0].event_type, 'unknown');
+        assert.equal(records[0].metadata.requestId, run);
+        assert.equal(records[0].metadata.sessionGroup, group);
+      }
       const query = new URLSearchParams({ session_group: group, run_id: run, session_id: session });
       const history = await get(query);
       assert.equal(history.count, 1);

@@ -24,6 +24,10 @@ const DIAGNOSTIC_FIELDS = ['decision', 'reason', 'request_id', 'conversation_id'
   'capacity', 'busy', 'idle', 'queue_depth', 'from', 'to', 'error_code', 'error',
   'requestId', 'runId', 'sessionId', 'oldSessionId', 'sessionGroup',
   'type', 'reason_code', 'channel', 'endpoint', 'detail'];
+const IDENTITY_FIELDS = new Set(['sessionGroup', 'runId', 'sessionId', 'oldSessionId',
+  'target_run_id', 'requestId', 'request_id', 'control_id', 'conversation_id']);
+const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]+$/.test(value)
+  ? value : typeof value === 'number' && Number.isFinite(value) ? value : null;
 const string = value => typeof value === 'string' && value.length > 0 ? value : null;
 
 /** Serial, restartable observer. Never drives current state or Core decisions. */
@@ -48,9 +52,6 @@ export class CoreLogImporter {
     this.stopping = false;
     this.running = null;
     this.timer = null;
-    this.lastPollAt = null;
-    this.lastSuccessAt = null;
-    this.lastError = null;
     this.current = store.db.prepare(`SELECT * FROM core_log_cursors
       WHERE stream = ? AND file_dev = ? AND file_ino = ? ORDER BY generation DESC LIMIT 1`);
     this.cursors = store.db.prepare(`SELECT c.* FROM core_log_cursors c WHERE stream = ?
@@ -82,44 +83,28 @@ export class CoreLogImporter {
     if (this.ownsRedactor) this.redactor.close();
   }
 
-  snapshot() {
-    return { running: !!this.timer && !this.stopping, lastPollAt: this.lastPollAt,
-      lastSuccessAt: this.lastSuccessAt, lastError: this.lastError };
-  }
-
   poll() {
     if (this.stopping) return Promise.resolve();
-    this.running ??= this._poll().then(errors => {
-      this.lastPollAt = new Date().toISOString();
-      this.lastError = errors[0] || null;
-      if (!errors.length && !this.stopping) {
-        this.lastSuccessAt = this.lastPollAt;
-      }
-    }, error => {
-      this.lastPollAt = new Date().toISOString();
-      this.lastError = error.code || 'import_failed';
-      this.health('core-log', 'error', { reason: 'import_failed', error_code: this.lastError });
+    this.running ??= this._poll().catch(error => {
+      this.health('core-log', 'error', { reason: 'import_failed', error_code: error.code || 'import_failed' });
       throw error;
     }).finally(() => { this.running = null; });
     return this.running;
   }
 
   async _poll() {
-    const errors = [];
     const sources = await this.discover();
     this.recoverHealth('core-log');
     for (const source of sources) {
       if (this.stopping) break;
       try { await this.importStream(source); }
       catch (error) {
-        errors.push(error.code || 'read_failed');
         this.health(`core:${source.stream}`, 'error', {
           stream: source.stream, reason: 'read_failed', error_code: error.code || 'read_failed',
         });
       }
       await yieldLoop();
     }
-    return errors;
   }
 
   async discover() {
@@ -222,13 +207,13 @@ export class CoreLogImporter {
           }
         }
       }).immediate();
-      if (!opened.length) this.diagnostic(stream, 'source_missing');
+      if (!opened.length && cursors.length) this.diagnostic(stream, 'source_missing');
       for (const { handle, name } of opened) {
         if (this.stopping) return;
         await this.importFile(stream, path.join(dir, name), name !== path.basename(file), handle);
       }
       if (!this.stopping) {
-        if (opened.length) this.recoverHealth(`core:${stream}:source_missing`);
+        if (opened.length || !cursors.length) this.recoverHealth(`core:${stream}:source_missing`);
         this.recoverHealth(`core:${stream}`);
       }
     } finally {
@@ -302,7 +287,10 @@ export class CoreLogImporter {
     const metadata = { ...safe.metadata, stream, v: row.v };
     for (const key of DIAGNOSTIC_FIELDS) {
       const value = row[key];
-      if (typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) metadata[key] = value;
+      if (IDENTITY_FIELDS.has(key)) {
+        const id = identifier(value);
+        if (id !== null) metadata[key] = id;
+      } else if (typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) metadata[key] = value;
     }
     const event = {
       id: randomUUID(), ingest_id: ingestId, timestamp: new Date(row.ts).toISOString(),
@@ -314,8 +302,14 @@ export class CoreLogImporter {
       duration_ms: Number.isFinite(row.duration_ms) ? row.duration_ms : null,
       metadata, source: 'core-log', confidence: 'actual',
     };
-    const result = await this.redactContents([event], ingestId);
-    return { event: result.value[0], warning: result.failed ? 'redaction_failed' : row.v > 1 ? 'unknown_version' : null };
+    for (const field of ['event_type', 'runtime']) {
+      const value = event[field];
+      if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(value) || this.sanitizer.redactCredentials(value) !== value) {
+        metadata[field] = value;
+        event[field] = 'unknown';
+      }
+    }
+    return { event, warning: row.v > 1 ? 'unknown_version' : null };
   }
 
   sanitizeValue(value) {
@@ -330,18 +324,25 @@ export class CoreLogImporter {
       const gap = Object.hasOwn(record, 'extra');
       const field = gap ? 'extra' : 'metadata';
       const { stream, ...text } = record[field] || {};
-      return { field, stream, payload: gap ? { extra: text } : { metadata: text, summary: record.summary } };
+      const identities = {};
+      for (const key of IDENTITY_FIELDS) {
+        if (!Object.hasOwn(text, key)) continue;
+        const id = identifier(text[key]);
+        if (id !== null) identities[key] = id;
+        delete text[key];
+      }
+      return { field, stream, identities, payload: gap ? { extra: text } : { metadata: text, summary: record.summary } };
     });
     const result = await this.redactor.redactValue(this.sanitizeValue(parts.map(part => part.payload)), context);
     const valid = Array.isArray(result.value) && result.value.length === records.length
       && result.value.every(item => item && typeof item === 'object' && !Array.isArray(item));
     return { value: records.map((record, index) => {
-      const { field, stream } = parts[index];
+      const { field, stream, identities } = parts[index];
       const content = valid ? result.value[index] : {};
       const details = content[field] && typeof content[field] === 'object' && !Array.isArray(content[field]) ? content[field] : {};
       return { ...record,
         ...(field === 'metadata' ? { summary: typeof content.summary === 'string' || content.summary === null ? content.summary : UNAVAILABLE } : {}),
-        [field]: { ...details, ...(stream !== undefined ? { stream } : {}) },
+        [field]: { ...details, ...identities, ...(stream !== undefined ? { stream } : {}) },
       };
     }), failed: result.failed || !valid };
   }
@@ -380,6 +381,15 @@ export class CoreLogImporter {
         for (const line of batch.lines) {
           const key = `core:${stream}:${stat.dev}:${stat.ino}:g${generation}:${line.offset}`;
           prepared.push({ ...await this.normalize(line.text, stream, key), offset: line.offset });
+        }
+        const eventItems = prepared.filter(item => item.event);
+        if (eventItems.length) {
+          const result = await this.redactContents(eventItems.map(item => item.event),
+            `core:${stream}:${stat.dev}:${stat.ino}:g${generation}:${offset}:${batch.offset}`);
+          for (const [index, item] of eventItems.entries()) {
+            item.event = result.value[index];
+            if (result.failed) item.warning = 'redaction_failed';
+          }
         }
         const row = { stream, file_dev: stat.dev, file_ino: stat.ino, generation, ...anchor,
           file_name: path.basename(file), byte_offset: batch.offset,

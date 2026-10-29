@@ -999,7 +999,6 @@ async function handleApi(req, res, pathname, url) {
       uptimeSeconds: Math.round(process.uptime()),
       phase: 'phase2a',
       event_loop: eventLoopMonitor.snapshot(),
-      core_importer: coreLogImporter.snapshot(),
       source: sourceHealth
     });
     return true;

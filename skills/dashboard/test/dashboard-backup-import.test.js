@@ -75,7 +75,8 @@ test('snapshot sees whole100 or whole120 batch; physical restore resumes to170, 
   f.importer.transactionObserver=point=>{if(point==='beforeCommit'){pre=f.snapshot('before');const db=new Database(pre.copy,{readonly:true});assert.equal(db.prepare('SELECT count(*) n FROM runtime_events').get().n,100);assert.equal(db.prepare('SELECT byte_offset n FROM core_log_cursors').get().n,Buffer.byteLength(lines(0,100)));db.close();}if(point==='afterCommit')post=f.snapshot('after');};
   await f.import();f.importer.transactionObserver=undefined;
   // Snapshot publication retires older groups; assert the pre-commit view while it exists above.
-  const postDb=new Database(post.copy,{readonly:true});assert.equal(postDb.prepare('SELECT count(*) n FROM runtime_events').get().n,120);postDb.close();
+  const postDb=new Database(post.copy,{readonly:true});assert.equal(postDb.prepare('SELECT count(*) n FROM runtime_events').get().n,120);
+  assert.equal(postDb.prepare('SELECT byte_offset n FROM core_log_cursors').get().n,Buffer.byteLength(lines(0,120)));postDb.close();
   assert.ok(pre);fs.appendFileSync(f.file,lines(120,50));await f.import();assert.equal(f.count(),170);
   await f.restore(post);assert.equal(f.count(),120);await f.import();assert.equal(f.count(),170);
   assert.equal(f.cursors().length,1);assert.equal(f.cursors()[0].generation,1);
@@ -94,6 +95,11 @@ for(const scenario of ['rotation','same-identity-replacement','new-identity-repl
     assert.equal(f.count(),scenario==='rotation'?120:scenario==='expired-cursor'?210:200);
     if(scenario==='same-identity-replacement') {
       assert.deepEqual(f.cursors().map(c=>c.generation),[1,2]);assert.equal(f.cursors()[0].status,'gap');
+      assert.deepEqual(f.store.getSourceHealth().filter(row=>row.extra.reason==='anchor_mismatch').map(row=>row.extra.reason),['anchor_mismatch']);
+      const imported=f.store.queryEvents({limit:1000});
+      assert.deepEqual(imported.filter(row=>row.ingest_id.includes(':g2:')).map(row=>row.event_type),Array.from({length:100},(_,n)=>`event${1000+n}`));
+      assert.equal(new Set(imported.map(row=>row.ingest_id)).size,200);
+      assert.deepEqual(imported.filter(row=>row.ingest_id.includes(':g1:')).map(row=>row.event_type),Array.from({length:100},(_,n)=>`event${n}`));
     }else if(scenario!=='rotation') {
       assert.ok(f.cursors().every(c=>c.generation===1));assert.equal(f.cursors().filter(c=>c.status==='gap').length,1);
     }
