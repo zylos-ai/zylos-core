@@ -49,6 +49,12 @@ for (const kind of ['ambiguous','unrecognizable','changed','failed','remaining']
   assert.throws(()=>recoverBeforeUpgrade('/isolated',{maintenance:f.m,spawn() {
     calls++;
     return {status:kind==='failed'?1:0,stdout:JSON.stringify({recovery_required:kind==='failed'})};
-  }}),error=>error.recovery_required===true);
+  }}),error=>{
+    assert.equal(error.code,kind==='unrecognizable'?'MANUAL_RECOVERY_REQUIRED':'UPGRADE_RECOVERY_REQUIRED');
+    assert.equal(error.recovery_required,true);
+    assert.deepEqual(error.persisted,[]);
+    assert.match(error.next,/zylos recovery status.*zylos recovery resume/);
+    return true;
+  });
   assert.equal(calls,['failed','remaining'].includes(kind)?1:0);
 });

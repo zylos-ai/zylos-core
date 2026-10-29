@@ -421,10 +421,6 @@ function controllerFlock() {
   }
   throw Error('trusted Linux flock executable unavailable');
 }
-function preflightExternalTools() {
-  const node = fs.realpathSync(process.execPath), stat = fs.statSync(node);
-  if (!stat.isFile() || !(stat.mode & 0o111)) throw Error('untrusted recovery Node executable');
-}
 function serializedController(dir, operation, value) {
   if (operation === 'release' && !fs.existsSync(dir)) return;
   privatePath(dir, {
@@ -776,7 +772,7 @@ function worker(dir, j, payload) {
   });
   let response;
   try {response=JSON.parse(result.stdout);} catch {}
-  if(result.error || result.status!==0 || response?.success===false) {
+  if(result.error || result.status!==0) {
     throw Object.assign(Error(response?.error?.message || result.error?.message || 'SQLite worker failed'), {
       code:response?.error?.code || 'UPGRADE_FAILED'
     });
@@ -954,7 +950,6 @@ module.exports = {
   classifyCutoff,
   fsyncFd,
   canRecognizeProcesses,
-  preflightExternalTools,
   transaction,
   validateOriginalJournal,
   DB_PATHS,

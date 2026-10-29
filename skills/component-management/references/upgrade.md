@@ -146,10 +146,10 @@ wrong-owner entry blocks cleanup. Formal snapshot groups are unaffected.
 
 An installed older updater runs preflight before the target release is installed.
 It may reject extra tables or columns and cannot use the new release's rules.
-If this blocks first adoption, follow
-[First adoption](https://github.com/zylos-ai/zylos-core/blob/main/docs/self-upgrade-recovery.md#first-adoption): verify a
-complete backup and row accounting, then use an operator-approved temporary
-relocation plan before running the old CLI. Do not discard the extension data.
+For supported source versions and recovery boundaries, see
+[Self-upgrade and recovery](https://github.com/zylos-ai/zylos-core/blob/main/docs/self-upgrade-recovery.md).
+Older installations first use `zylos upgrade --self --branch release/0.9`;
+retain complete backups and extension data when handling an old updater's rejection.
 
 ### Step 1: Check + Download to Temp
 

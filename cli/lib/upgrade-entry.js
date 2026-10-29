@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { validateUpgradeHandoff } from './upgrade-admission.js';
+import { validateUpgradeHandoff, upgradeFailureCode } from './upgrade-admission.js';
 import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged, assertDashboardUninstalled } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
@@ -92,10 +92,12 @@ export async function runUpgradeEntry(input, deps = {}) {
   let ctx;
   try {
     validateUpgradeHandoff(input);
+    if (!fs.existsSync(input.zylosDir)) throw Object.assign(Error('Zylos deployment directory is missing. Initialize this deployment before upgrading.'), {code:'ZYLOS_NOT_INITIALIZED'});
     const m = deps.maintenance ?? maintenance;
     const prior = m.discover(input.zylosDir);
     if (prior.candidates.length || prior.diagnostics.length || prior.marker) {
-      throw Object.assign(new Error('Unfinished upgrade requires recovery before another installation.'), {code:'UPGRADE_RECOVERY_REQUIRED', recovery_required:true});
+      throw Object.assign(new Error('Unfinished upgrade requires recovery before another installation.'), {code:'UPGRADE_RECOVERY_REQUIRED', recovery_required:true,
+        next:'Run zylos recovery status, then zylos recovery resume before upgrading.'});
     }
     ctx = (deps.inspect ?? inspectUpgradeSource)(input, deps);
     ctx.protectedNpmCli = (deps.resolveNpm ?? resolveUpgradeNpmCli)();
@@ -114,7 +116,7 @@ export async function runUpgradeEntry(input, deps = {}) {
     return result;
   } catch (error) {
     const rollback = ctx?.transactionDir ? (deps.recover ?? recovery)(ctx) : {attempted:false, completed:false, performed:false};
-    return {action:'self_upgrade', success:false, code:error.code || 'UPGRADE_FAILED', error:error.message,
+    return {action:'self_upgrade', success:false, code:upgradeFailureCode(error), error:error.message,
       next:error.next, persisted:error.persisted || [], upgradeProtected:!!ctx?.upgradeProtected,
       transactionDir:ctx?.transactionDir, rollback:{...rollback, performed:!!rollback.attempted},
       recovery_required:rollback.recovery_required || error.recovery_required || false};
@@ -130,7 +132,7 @@ if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process
     process.env.ZYLOS_DIR = input.zylosDir;
     result = await runUpgradeEntry(input);
   } catch (error) {
-    result = {success:false, code:error.code || 'INVALID_UPGRADE_HANDOFF', error:error.message, persisted:[]};
+    result = {success:false, code:error instanceof SyntaxError ? 'INVALID_UPGRADE_HANDOFF' : upgradeFailureCode(error), error:error.message, persisted:[]};
   }
   for(const warning of result.warnings || []) process.stderr.write(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}\n`);
   process.stdout.write(JSON.stringify(result) + '\n');

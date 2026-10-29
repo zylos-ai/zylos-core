@@ -30,10 +30,8 @@ function fixture(t, fault) {
   const dashboardRoot=path.join(packageRoot,'skills/dashboard');fs.mkdirSync(path.join(dashboardRoot,'src/lib'),{recursive:true});
   fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
   fs.symlinkSync(path.resolve('skills/comm-bridge/node_modules'),path.join(dashboardRoot,'node_modules'));
-  fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`import {createRequire} from 'node:module';
-  const Database=createRequire(${JSON.stringify(path.resolve('skills/comm-bridge/package.json'))})('better-sqlite3');
-  export const dashboardSchemaOwner={
-    inspectSchema(file){const db=new Database(file,{readonly:true,fileMustExist:true});try{db.prepare('SELECT value FROM preserved').get();return {currentVersion:1,targetVersion:1,needsMigration:false};}finally{db.close();}},
+  fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`export const dashboardSchemaOwner={
+    inspectSchema(db){db.prepare('SELECT value FROM preserved').get();return {currentVersion:1,targetVersion:1,needsMigration:false};},
     migrate(){throw Error('preinstall verification must not migrate Dashboard');}
   };`);
   fs.mkdirSync(path.join(skillsDir,'comm-bridge'),{recursive:true});

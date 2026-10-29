@@ -25,6 +25,7 @@ import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
 import { resumeFinalize } from '../lib/upgrade-resume.js';
 import { recoverBeforeUpgrade } from '../lib/upgrade-discovery.js';
+import { upgradeFailureCode } from '../lib/upgrade-admission.js';
 
 /**
  * Print a single upgrade step result in real time.
@@ -211,7 +212,7 @@ export function formatSelfUpgradeCompletion(data) {
     const detail = item.message || item.location;
     lines.push(`Dashboard ${item.item || 'error'}: ${item.code || 'failed'}${detail ? ': ' + detail : ''}`);
   }
-  const restart = data.sessionRestart || data.runtimeRestart;
+  const restart = data.sessionRestart;
   if (restart?.requestId || restart?.data?.requestId) lines.push(`Restart request: ${restart.requestId || restart.data.requestId}`);
   if (restart?.ok === false) {
     lines.push(`Session restart failed: ${restart.error?.code || 'RESTART_UNAVAILABLE'}${restart.error?.message ? ': ' + restart.error.message : ''}`);
@@ -233,7 +234,6 @@ export function formatSelfUpgradeCompletion(data) {
   } else if (data.checkpointAudit?.items?.length) {
     lines.push(`Checkpoint audit: ${JSON.stringify(data.checkpointAudit.items)}`);
   }
-  if (data.dashboardCopy?.state === 'skipped') lines.push(`Dashboard database: not copied${data.dashboardCopy.reason ? ': ' + data.dashboardCopy.reason : ''}`);
   if (data.settingsChanged) {
     lines.push('Hook settings updated.');
     if (!data.completion && !restart) lines.push('Restart the runtime to load the updated configuration.');
@@ -364,6 +364,11 @@ export async function upgradeComponent(args) {
 
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
+    if (mode !== 'merge') {
+      await upgradeSelfCore({ mode, jsonOutput });
+      process.exit(1);
+      return;
+    }
     if (checkOnly) {
       return handleSelfCheckOnly({ jsonOutput, branch, beta });
     }
@@ -1103,7 +1108,8 @@ export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', js
     (deps.recoverBeforeUpgrade ?? recoverBeforeUpgrade)(root);
   } catch (error) {
     const output = deps.console ?? globalThis.console;
-    if (jsonOutput) output.log(JSON.stringify({success:false, code:error.code, error:error.message, recovery_required:true}));
+    if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:error.message,
+      persisted:error.persisted || [], recovery_required:error.recovery_required === true, ...(error.next ? {next:error.next} : {})}));
     else output.error(error.message);
     return false;
   }

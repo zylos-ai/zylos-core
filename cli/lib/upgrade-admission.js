@@ -1,7 +1,14 @@
 import path from 'node:path';
+import { getSystemErrorMap } from 'node:util';
 import { assertSupportedUpgradeVersion } from '../../skills/comm-bridge/scripts/upgrade-admission.js';
 
 export { assertSupportedUpgradeVersion, assertSupportedUpgradeVersion as assertSupportedUpgradeSource, MINIMUM_UPGRADE_VERSION, UPGRADE_BRIDGE_COMMAND } from '../../skills/comm-bridge/scripts/upgrade-admission.js';
+
+const systemErrorCodes = new Set([...getSystemErrorMap().values()].map(([code]) => code));
+
+export function upgradeFailureCode(error) {
+  return typeof error.code === 'string' && error.code && !systemErrorCodes.has(error.code) ? error.code : 'UPGRADE_FAILED';
+}
 
 export function validateUpgradeHandoff(input) {
   const invalid = message => { throw Object.assign(new Error(message), { code: 'INVALID_UPGRADE_HANDOFF', persisted: [] }); };

@@ -120,8 +120,31 @@ test('thin entry reports a missing deployment before checking or downloading', a
     console:{log(value){output.push(JSON.parse(value));}}
   }),false);
   assert.equal(output[0].code,'ZYLOS_NOT_INITIALIZED');
+  assert.deepEqual(output[0].persisted,[]);
+  assert.equal(output[0].recovery_required,false);
   assert.match(output[0].error,/Initialize this deployment/);
   assert.doesNotMatch(output[0].error,/ENOENT|at |\/home\//);
+});
+
+test('thin entry retains recovery guidance and empty persisted list', async t => {
+  const {upgradeSelfCore}=await import('../../commands/component.js');
+  const output=[];
+  assert.equal(await upgradeSelfCore({skipConfirm:true,jsonOutput:true},{
+    zylosDir:fixture(t),
+    recoverBeforeUpgrade(){throw Object.assign(Error('unfinished upgrade'),{code:'UPGRADE_RECOVERY_REQUIRED',recovery_required:true,next:'Run zylos recovery resume.'});},
+    checkForCoreUpdates(){assert.fail('recovery rejection checked updates');},
+    console:{log(value){output.push(JSON.parse(value));}}
+  }),false);
+  assert.equal(output[0].code,'UPGRADE_RECOVERY_REQUIRED');
+  assert.deepEqual(output[0].persisted,[]);
+  assert.equal(output[0].recovery_required,true);
+  assert.match(output[0].next,/recovery resume/);
+});
+
+test('self check rejects overwrite before update discovery', () => {
+  const child=spawnSync(process.execPath,[path.resolve('cli/zylos.js'),'upgrade','--self','--check','--mode','overwrite','--json'],{encoding:'utf8'});
+  assert.equal(child.status,1,child.stderr);
+  assert.deepEqual(JSON.parse(child.stdout),{success:false,code:'INVALID_ARGS',error:'Core self-upgrade supports only --mode merge.',persisted:[]});
 });
 
 test('overwrite mode is rejected before recovery or downloading', async () => {

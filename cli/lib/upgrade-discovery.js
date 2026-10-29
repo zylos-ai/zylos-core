@@ -11,7 +11,8 @@ export function recoverBeforeUpgrade(root, deps = {}) {
   const found = m.discover(root);
   if (!found.candidates.length && !found.diagnostics.length && !found.marker) return {active:false};
   const reject = (message, code = 'UPGRADE_RECOVERY_REQUIRED') => {
-    throw Object.assign(new Error(message), {code, recovery_required:true, persisted:[]});
+    throw Object.assign(new Error(message), {code, recovery_required:true, persisted:[],
+      next:'Run zylos recovery status, then zylos recovery resume; preserve ambiguous materials for inspection.'});
   };
   if (found.diagnostics.length || found.candidates.length !== 1) reject('Upgrade recovery materials are ambiguous; preserve them for inspection.');
   if (!m.canRecognizeProcesses()) reject('Process identity cannot be verified; interrupted upgrade requires manual recovery.', 'MANUAL_RECOVERY_REQUIRED');

@@ -16,7 +16,7 @@ import { copyTree } from './fs-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { getCoreEcosystemPath, createPm2Helpers } from './pm2.js';
-import { runCoreDbWorker, assertDashboardUninstalled as assertIndependentDashboardUninstalled } from './core-db-backup.js';
+import { assertDashboardUninstalled as assertIndependentDashboardUninstalled } from './core-db-backup.js';
 import { recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 import { updateZylosConfigLocked, readSessionMode } from './config.js';
@@ -912,7 +912,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   ctx.completion=completion;
   (deps.protectedSuccess || protectedSuccess)(ctx);
   return {...buildSelfUpgradeResult(ctx,null),completion,dashboard,sessionRestart:ctx.restart,checkpointAudit:ctx.checkpointAudit,
-    modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || [],...(ctx.dashboardCopy ? {dashboardCopy:ctx.dashboardCopy} : {})};
+    modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || []};
 }
 
 export function runSelfUpgradeFinalize(state = {}, deps = {}) {
@@ -956,8 +956,7 @@ function finalizationFailure(ctx, error, step = 5) {
   let closed = false;
   let recoveryError;
   try {
-    if (!ctx.journal) throw Error('Finalizer transaction has not been validated.');
-    closed = recordClosedFinalizationFailure(ctx,error);
+    if (ctx.journal) closed = recordClosedFinalizationFailure(ctx,error);
   } catch (failure) {
     recoveryError = failure.message;
   }

@@ -155,7 +155,38 @@ test('entry refuses ambiguous prior transactions without inspecting, installing,
   f.deps.inspect = () => assert.fail('prechecks must not run');
   const result = await runUpgradeEntry(input, f.deps);
   assert.equal(result.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(result.next,/zylos recovery status.*zylos recovery resume/);
+  assert.equal(result.recovery_required,true);
+  assert.deepEqual(result.persisted,[]);
   assert.deepEqual(f.calls, []);
+});
+
+test('target rejects missing deployment before recovery discovery', async t => {
+  const input=fixture(t);
+  input.zylosDir=path.join(input.zylosDir,'missing');
+  const result=await runUpgradeEntry(input,{maintenance:{discover(){assert.fail('missing deployment was discovered');}}});
+  assert.equal(result.code,'ZYLOS_NOT_INITIALIZED');
+  assert.match(result.error,/Initialize this deployment/);
+  assert.deepEqual(result.persisted,[]);
+  assert.equal(result.recovery_required,false);
+  assert.equal(result.rollback.attempted,false);
+});
+
+test('downloaded executable keeps malformed JSON classified as invalid handoff', () => {
+  const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:'{',encoding:'utf8'});
+  assert.equal(child.status,1,child.stderr);
+  const result=JSON.parse(child.stdout);
+  assert.equal(result.code,'INVALID_UPGRADE_HANDOFF');
+  assert.deepEqual(result.persisted,[]);
+});
+
+for(const code of [undefined,'','ENOENT','EACCES','EIO','SCHEMA_TOO_NEW','SCHEMA_MIGRATION_FAILED','SETTINGS_UNREADABLE']) test(`entry normalizes system errno and preserves domain code: ${code}`,async t=>{
+  const input=fixture(t),f=pipeline(input);
+  f.deps.inspect=()=>{throw Object.assign(Error('precheck failed'),{code});};
+  const result=await runUpgradeEntry(input,f.deps);
+  assert.equal(result.code,!code || ['ENOENT','EACCES','EIO'].includes(code)?'UPGRADE_FAILED':code);
+  assert.deepEqual(result.persisted,[]);
+  assert.deepEqual(f.calls,[]);
 });
 
 test('target packing precedes installation intent and rejects unsafe npm archive filenames', t => {

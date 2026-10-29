@@ -62,10 +62,15 @@ function fixture(t, { added = false } = {}) {
   const initial = () => runSelfUpgradeFinalize({
     zylosDir: root, transactionId: 'tx', transactionDir: dir, tempDir: download }, deps);
   const resume = () => resumeFinalize(root, {}, { maintenance: m, quiesce: () => {},
-    finalize: ctx => {
+    finalize: async ctx => {
       assert.equal(Object.hasOwn(ctx, 'pendingBaselines'), false);
       assert.equal(Object.hasOwn(ctx, 'tempDir'), false);
-      return resumeUpgradeFinalization(ctx, { ...deps, publish: () => ({ ok: true }) });
+      const result = await resumeUpgradeFinalization(ctx, { ...deps, publish: () => ({ ok: true }) });
+      if (result.success) {
+        assert.equal(result.steps.find(item => item.step === 13)?.name, 'commit_skill_baselines');
+        assert.equal(result.steps.find(item => item.step === 13)?.status, 'done');
+      }
+      return result;
     } });
   return { initial, resume, load, dir, download, target, source, get starts() { return starts; } };
 }

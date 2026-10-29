@@ -20,6 +20,20 @@ describe('self-upgrade finalizer handoff', () => {
     assert.match(result.error, /missing journal|invalid initial finalizer transaction/);
     assert.equal(calls, 0);
     assert.deepEqual(result.rollback, {performed: false, steps: []});
-    assert.equal(result.recovery_required,true);
+    assert.equal(Object.hasOwn(result,'recovery_required'),false);
+    assert.equal(Object.hasOwn(result,'recoveryError'),false);
+    assert.equal(Object.hasOwn(result,'next'),false);
+  });
+
+  it('rejects Dashboard admission before journal validation without recovery guidance', async () => {
+    const result=await runSelfUpgradeFinalize({transactionId:'tx',transactionDir:'/untrusted'}, {
+      assertDashboardUninstalled() {throw Object.assign(Error('Dashboard is still installed'),{code:'DASHBOARD_STILL_INSTALLED'});},
+      maintenance:{transaction(){assert.fail('admission failure read a transaction');},canRecognizeProcesses:()=>true},
+    });
+    assert.equal(result.success,false);
+    assert.equal(result.code,'DASHBOARD_STILL_INSTALLED');
+    assert.equal(Object.hasOwn(result,'recovery_required'),false);
+    assert.equal(Object.hasOwn(result,'recoveryError'),false);
+    assert.equal(Object.hasOwn(result,'next'),false);
   });
 });

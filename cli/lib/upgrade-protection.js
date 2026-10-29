@@ -109,7 +109,6 @@ export function beginUpgrade(ctx, {
     phase: 'preparing',
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
     installationIntent: false,
-    compensationSupported: true,
     automaticResume: maintenance.canRecognizeProcesses(),
     coreManifest: manifest,
     originalServices: maintenance.services({

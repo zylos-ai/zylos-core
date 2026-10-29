@@ -20,14 +20,17 @@ function fixture(t,body){
  t.after(()=>{try{const saved=m.read(path.join(dir,'journal.json'));if(saved.installerPid)process.kill(-saved.installerPid,'SIGKILL');}catch{}fs.rmSync(root,{recursive:true,force:true});});
  return {root,dir,j,npmCli,helper,ctx:{transactionDir:dir,journal:j},read:()=>m.read(path.join(dir,'journal.json'))};
 }
-for(const ci of [undefined,'xyz'])test(`protected npm preserves inherited CI=${ci} under original Node with durable started evidence`,t=>{
+for(const ci of [undefined,'','0','false','xyz'])test(`protected npm preserves inherited CI=${ci} under original Node with durable started evidence`,t=>{
  const previous=process.env.CI;
  if(ci===undefined)delete process.env.CI;else process.env.CI=ci;
  t.after(()=>{if(previous===undefined)delete process.env.CI;else process.env.CI=previous;});
  const f=fixture(t,`const fs=require('node:fs');const dir=process.argv[2];const j=JSON.parse(fs.readFileSync(dir+'/journal.json'));if(!j.installerStarted||!Number.isSafeInteger(j.installerPid)||j.installerPid<=1||j.installerIdentity.pid!==j.installerPid||Object.hasOwn(j,'installerToken')||process.env.ZYLOS_UPGRADE_INSTALLER_TOKEN!==undefined||process.env.ZYLOS_PROTECTED_INSTALL!=='1'||process.env.ZYLOS_SKIP_POSTINSTALL!=='1'||process.env.ZYLOS_UPGRADE_FROM_VERSION!=='0.9.3')process.exit(9);process.stdout.write(JSON.stringify({node:process.execPath,args:process.argv.slice(2),stage:j.installerStage,ci:process.env.CI}));`);
- const output=runInstaller(f.ctx,{stage:'pack',npmCli:f.npmCli,args:[f.dir],cwd:f.root});const seen=JSON.parse(output);assert.equal(seen.node,process.execPath);assert.equal(seen.stage,'pack');assert.equal(seen.ci,process.env.CI);assert.deepEqual(seen.args,[f.dir]);assert.equal(f.read().installerExitConfirmed,true);assert.equal(f.read().installerExitUnconfirmed,false);
- runInstaller(f.ctx,{stage:'install',npmCli:f.npmCli,args:[f.dir],cwd:f.root});assert.equal(f.read().installerStage,'install');
- const restored=JSON.parse(runInstaller(f.ctx,{stage:'restore-original-package',npmCli:f.npmCli,args:[f.dir],cwd:f.root}));assert.equal(restored.ci,process.env.CI);
+ const output=runInstaller(f.ctx,{stage:'save-original-package',npmCli:f.npmCli,args:[f.dir],cwd:f.root});const seen=JSON.parse(output);assert.equal(seen.node,process.execPath);assert.equal(seen.stage,'save-original-package');assert.equal(seen.ci,process.env.CI);assert.deepEqual(seen.args,[f.dir]);assert.equal(f.read().installerExitConfirmed,true);assert.equal(f.read().installerExitUnconfirmed,false);
+ for(const stage of ['pack-target','install','skill-deps:example','restore-original-package']) {
+  const seen=JSON.parse(runInstaller(f.ctx,{stage,npmCli:f.npmCli,args:[f.dir],cwd:f.root}));
+  assert.equal(seen.stage,stage);assert.equal(seen.ci,process.env.CI);
+  assert.equal(f.read().installerStage,stage);assert.equal(f.read().installerExitConfirmed,true);
+ }
 });
 for(const exitCode of [0,2])test(`all npm exits quiesce descendants before returning (exit=${exitCode})`,t=>{
  const f=fixture(t,`const cp=require('node:child_process');const child=cp.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();process.stdout.write('fixture.tgz\\n');process.exit(${exitCode});`);

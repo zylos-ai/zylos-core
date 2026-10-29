@@ -44,6 +44,7 @@ function installedPostinstallPath() {
 function runPostinstall(zylosDir, npmEnv = {}, extraEnv = {}, scriptPath = POSTINSTALL_PATH) {
   assert.notEqual(path.dirname(zylosDir), os.tmpdir(), 'Postinstall HOME must not be the shared temporary directory');
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_')));
+  delete env.ZYLOS_PROTECTED_INSTALL;
   execFileSync(process.execPath, [scriptPath], {
     stdio: 'pipe',
     env: {
@@ -152,10 +153,10 @@ describe('postinstall local install guard', () => {
     assert.equal(settingsSynced(zylosDir), true);
   });
 
-  for (const value of ['', '0', 'true', '01', ' 1']) it(`does not suppress shared writes for protected flag ${JSON.stringify(value)}`, () => {
+  for (const value of [undefined, '', '0', 'false', 'true', '01', ' 1']) it(`does not suppress shared writes for protected flag ${JSON.stringify(value)}`, () => {
     const zylosDir = fixtureZylosDir();
     runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' },
-      { ZYLOS_SKIP_POSTINSTALL: '', ZYLOS_PROTECTED_INSTALL: value });
+      { ZYLOS_SKIP_POSTINSTALL: '', ...(value === undefined ? {} : { ZYLOS_PROTECTED_INSTALL: value }) });
     assert.equal(skillsSynced(zylosDir), true);
     assert.equal(settingsSynced(zylosDir), true);
     assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), true);
@@ -173,6 +174,14 @@ describe('postinstall local install guard', () => {
   it('preserves shared files when the installer supplies the legacy CI suppression', () => {
     const zylosDir = fixtureZylosDir();
     runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' }, { CI: '1' });
+    assert.equal(skillsSynced(zylosDir), false);
+    assert.equal(settingsSynced(zylosDir), false);
+    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), false);
+  });
+
+  for (const value of ['0', 'false']) it(`preserves legacy truthy CI suppression for ${JSON.stringify(value)}`, () => {
+    const zylosDir = fixtureZylosDir();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' }, { CI: value });
     assert.equal(skillsSynced(zylosDir), false);
     assert.equal(settingsSynced(zylosDir), false);
     assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), false);

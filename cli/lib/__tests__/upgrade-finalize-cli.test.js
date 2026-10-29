@@ -66,7 +66,6 @@ test('thin CLI forwards downloaded executable output and exit status without ano
     sessionRestart: { ok: false, error: { code: 'SUBMISSION_FAILED', message: 'entry unavailable' } },
     publication: { warnings: [{ targetId: 't04', code: 'CONFIG_WARNING', error: 'global configuration not published' }] },
     checkpointAudit: { state: 'incomplete', error: 'DB_BUSY' },
-    dashboardCopy: { state: 'skipped', reason: 'No protected transaction.' },
     next: 'Resolve the restart error.' };
   for (const json of [false, true]) {
     const script = `

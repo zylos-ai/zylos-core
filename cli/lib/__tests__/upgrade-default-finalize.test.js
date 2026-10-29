@@ -188,6 +188,19 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assertDataPreserved(f);
 });
 
+test('upgrade preparation rejects malformed settings before cutoff and preserves live settings', async t => {
+  const f = fixture(t);
+  const malformed = '{invalid settings';
+  f.write('.claude/settings.json', malformed);
+  const result = await f.run();
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'SETTINGS_UNREADABLE');
+  assert.equal(f.read('.claude/settings.json'), malformed);
+  assert.equal(f.load().compensationCutoff, undefined);
+  assert.equal(f.calls.includes('start'), false);
+  assert.equal(f.calls.includes('restart'), false);
+});
+
 test('default finalizer reports unknown when P10 status cannot be read', async t => {
   const f = fixture(t);
   const result = await f.run({ readModeStatus: () => {

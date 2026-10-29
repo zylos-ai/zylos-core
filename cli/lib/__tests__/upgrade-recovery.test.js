@@ -210,6 +210,43 @@ for(const firstTakeover of [false,true]) for(const dashboardOwnerManaged of [fal
  });
 }
 
+for(const item of CORE_DATABASES) test(`${item.owner} controlled migration preserves structured migration failure`,async t=>{
+ const f=await fixture(t),schema=path.join(f.j.skillsDir,item.owner,item.schema);
+ fs.writeFileSync(schema,`export const SUPPORTED_SCHEMA_VERSION=1,supportsNewDatabase=true,TABLES={};
+ export function inspectSchema(db){return {version:db.pragma('user_version',{simple:true}),empty:false,extensions:{tables:[],columns:[]}};}
+ export const MIGRATIONS={0:{to:1,migrate(){throw Error('controlled migration fixture failure');}}};`);
+ const db=new Database(f.db(item.source));db.pragma('user_version=0');db.close();
+ assert.throws(()=>runCoreDbWorker({action:'upgrade-migrate',zylosDir:f.root,schemaRoot:f.j.skillsDir,
+  transactionDir:f.dir,transactionId:'tx',manifest:f.snapshot.manifest}),error=>{
+   assert.equal(error.code,'SCHEMA_MIGRATION_FAILED');
+   assert.match(error.message,/controlled migration fixture failure/);
+   return true;
+  });
+});
+
+test('frozen worker preserves structured schema rejection across its subprocess boundary',async t=>{
+ const f=await fixture(t),db=new Database(f.db('comm-bridge/c4.db'));
+ db.pragma('user_version=999');db.close();
+ assert.throws(()=>f.m.worker(f.dir,f.load(),{action:'offline-preflight',zylosDir:f.root,
+  schemaRoot:f.j.skillsDir,dashboardOwnerManaged:false,formatVersion:2}),error=>{
+   assert.equal(error.code,'SCHEMA_TOO_NEW');
+   assert.match(error.message,/999/);
+   return true;
+  });
+});
+
+test('original deployment verification preserves structured schema rejection without a descriptor',async t=>{
+ const f=await fixture(t);
+ f.m.update(f.dir,f.j,{installationIntent:false,phase:'prepared'});
+ fs.renameSync(path.join(f.dir,'descriptor.json'),path.join(f.dir,'descriptor.held.json'));
+ const db=new Database(f.db('comm-bridge/c4.db'));db.pragma('user_version=999');db.close();
+ assert.throws(()=>f.r.originalVerified(f.dir,f.load()),error=>{
+  assert.equal(error.code,'SCHEMA_TOO_NEW');
+  assert.match(error.message,/999/);
+  return true;
+ });
+});
+
 for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before baseline staging rejects before cutoff and compensates code/data`, async t => {
  const f=await fixture(t);
  const download=path.join(f.root,'download'),source=path.join(download,'skills/comm-bridge');
@@ -268,7 +305,10 @@ for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects $
  const child=spawnSync(process.execPath,['--input-type=module','-e',script,JSON.stringify({transactionDir:f.dir,transactionId:'tx'})],{env:{...process.env,ZYLOS_DIR:f.root},encoding:'utf8'});
  assert.equal(child.status,0,child.stderr);
  const {result,calls}=JSON.parse(child.stdout);
- assert.equal(calls,0);assert.equal(result.success,false);assert.equal(result.recovery_required,true);
+ assert.equal(calls,0);assert.equal(result.success,false);
+ assert.equal(result.recovery_required,undefined);
+ assert.equal(result.recoveryError,undefined);
+ assert.equal(result.next,undefined);
  assert.match(result.error,corrupt?/untrusted cutoff/:/compensation is closed/);
  assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),before);
 });
