@@ -35,7 +35,7 @@ export class CoreLogImporter {
   constructor({ store, zylosDir, sanitizer = new Sanitizer(zylosDir), redactor,
     batchLines = 200, batchBytes = 256 * 1024, intervalMs = 1000,
     onImport = () => {}, statFile = handle => handle.stat(), transactionObserver,
-    readDirectory = dir => fs.readdir(dir), transaction = callback => store.db.transaction(callback) } = {}) {
+    readDirectory = dir => fs.readdir(dir) } = {}) {
     this.store = store;
     this.zylosDir = zylosDir;
     this.sanitizer = sanitizer;
@@ -48,7 +48,6 @@ export class CoreLogImporter {
     this.statFile = statFile;
     this.transactionObserver = transactionObserver;
     this.readDirectory = readDirectory;
-    this.transaction = transaction;
     this.stopping = false;
     this.running = null;
     this.timer = null;
@@ -396,7 +395,7 @@ export class CoreLogImporter {
           status: rotated && (batch.offset === stat.size || batch.offset === offset) ? 'done' : 'active' };
         if (!reason && old && Object.entries(row).every(([key, value]) => old[key] === value)) break;
         let inserted = 0;
-        const committed = this.transaction(() => {
+        const committed = this.store.db.transaction(() => {
           const now = this.current.get(stream, stat.dev, stat.ino);
           if (JSON.stringify(now) !== JSON.stringify(old)) return false;
           if (reason) this.mark.run('gap', stream, stat.dev, stat.ino, old.generation);

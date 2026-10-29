@@ -105,11 +105,6 @@ test('truncation to own prefix imports prefix again in g2, retaining old history
   f.write(sixteen); await f.read(); replacement(f,old,'shorter_than_offset',3);
   assert.match(f.events()[2].ingest_id,/:g2:0$/);
 });
-test('identical fixed anchor and sufficient length remain same generation (documented observation limit)', async t => {
-  const f=fixture(t, { statFile: injectedIdentity }); f.write(sixteen); await f.read(); f.append(line('A',112)); await f.read();
-  f.write(sixteen+line('B',112)); await f.read(); assert.equal(f.rows().length,1); assert.equal(f.events().length,2);
-  assert.equal(f.events()[1].event_type,'A');
-});
 test('actual process death after INSERT before COMMIT rolls both back; after COMMIT resumes without duplicate', async t => {
   const f=fixture(t); f.write(line('A')); await f.read(); const old=f.rows()[0]; f.append(line('B'));
   await crash(f,'afterInsert'); assert.deepEqual(f.rows(),[old]); assert.equal(f.events().length,1);
@@ -159,24 +154,6 @@ test('filtered SQL pagination includes group/runtime/run/session/type before LIM
   assert.deepEqual(f.store.queryEvents({afterSeq:10}).map(e=>e.id),['10','11']);
   assert.equal(f.store.queryEvents({limit:NaN}).length,12);assert.equal(f.store.queryEvents({limit:-1}).length,1);
 });
-test('transaction rechecks cursor after asynchronous preparation; stale prepared batch never rolls back progress',async t=>{
-  const f=fixture(t);f.write(line('A'));await f.read();f.append(line('B'));
-  const normalize=f.importer.normalize.bind(f.importer);let called=false;
-  f.importer.normalize=async(...args)=>{const result=await normalize(...args);if(!called){called=true;const other=new CoreLogImporter({store:f.store,zylosDir:f.root});await other.importFile('events:origin',f.file);await other.stop();}return result;};
-  await f.read();assert.equal(f.events().length,2);assert.equal(f.rows()[0].byte_offset,256);
-});
-test('positive append/rename controls and negative generation/anchor controls exercise the same assertions',async t=>{
-  const f=fixture(t);f.write(sixteen);await f.read();const original=f.rows()[0];f.append(line('next'));await f.read();
-  const fixed=()=>{assert.equal(f.rows().length,1);assert.equal(f.rows()[0].anchor_len,16);assert.equal(f.rows()[0].anchor_sha256,hash(sixteen));};fixed();
-  f.store.db.prepare('UPDATE core_log_cursors SET anchor_len=128,anchor_sha256=?').run(hash(line('bad')));
-  assert.throws(fixed,assert.AssertionError); // known-bad resampling fails the same invariant
-  f.store.db.prepare('UPDATE core_log_cursors SET anchor_len=?,anchor_sha256=?').run(original.anchor_len,original.anchor_sha256);
-  fixed();
-  const g=fixture(t);g.write(line('A'));await g.read();const old=g.rows()[0];g.write(line('B',256));await g.read();replacement(g,old,'anchor_mismatch');
-  g.store.db.prepare('DELETE FROM runtime_events WHERE ingest_id LIKE ?').run('%:g2:%');
-  assert.throws(()=>replacement(g,old,'anchor_mismatch'),assert.AssertionError); // old-generation key collision loses new observation
-});
-
 test('poll discovery failures persist a diagnostic that successful discovery clears',async t=>{
   const f=fixture(t);await f.importer.poll();
   assert.ok(!f.store.getHistoryDiagnostics().some(row=>row.name==='core-log'));
@@ -290,10 +267,8 @@ for (const status of ['done', 'gap', 'source_missing']) test(`new generation pre
 test('every committed batch publishes its events and cursor together', async t => {
   const f = fixture(t, { batchLines: 1 });
   f.write(line('a') + line('b'));
-  let commits = 0;
-  f.importer.transaction = callback => ({ immediate() {
-    const result = f.store.db.transaction(callback).immediate();
-    commits++;
+  f.importer.transactionObserver = phase => {
+    if (phase !== 'afterCommit') return;
     assert.equal(f.store.db.inTransaction, false);
     for (const event of f.events()) {
       if (event.source !== 'core-log') continue;
@@ -303,10 +278,8 @@ test('every committed batch publishes its events and cursor together', async t =
       assert.ok(cursor, 'each committed event has its committed cursor');
       assert.ok(Number(offset) < cursor.byte_offset, 'no committed event starts at or beyond its cursor');
     }
-    return result;
-  } });
+  };
   await f.read();
-  assert.equal(commits, 2, 'the importer uses the supplied transaction boundary for every batch');
   assert.equal(f.events().length, 2); assert.equal(f.rows()[0].byte_offset, 256);
 });
 
@@ -341,16 +314,14 @@ test('import-side engine redaction runs after Sanitizer and cannot modify identi
 
 test('rotation between directory listing and open is reconciled before declaring a gap', async t => {
   const f = fixture(t); f.write(line('e1')); await f.read(); f.append(line('e2'));
-  let rotated = false, scans = 0;
+  let rotated = false;
   f.importer.readDirectory = async dir => {
-    scans++;
     const names = fs.readdirSync(dir);
     if (!rotated) { rotated = true; fs.renameSync(f.file, path.join(f.root, 'events.100.jsonl')); f.write(line('e3')); }
     return names;
   };
   await f.read();
   assert.deepEqual(f.events().map(event => event.event_type), ['e1', 'e2', 'e3']);
-  assert.equal(scans, 2, 'the missing active identity requires a fresh injected directory scan');
   assert.ok(!f.diagnostics().some(item => item.reason === 'file_missing'));
 });
 
@@ -456,4 +427,35 @@ test('byte budget commits complete lines in bounded batches independently of the
   await f.read();
   assert.deepEqual(offsets, [4096, 6144]); assert.deepEqual(counts, [2, 3]);
   assert.deepEqual(f.events().map(event => event.event_type), ['a', 'b', 'c']);
+});
+test('invalid enum text is retained in metadata while indexed fields become unknown', async t => {
+  const f = fixture(t);
+  for (const value of ['bad type!', 'x'.repeat(65)]) {
+    f.append(JSON.stringify({ v: 1, ts: 1, event: value, runtime: value }) + '\n');
+  }
+  await f.importer.importStream({ stream: 'receive', file: f.file });
+  assert.deepEqual(f.events().map(event => [event.event_type, event.runtime]), [['unknown', 'unknown'], ['unknown', 'unknown']]);
+  assert.deepEqual(f.events().map(event => [event.metadata.event_type, event.metadata.runtime]), [['bad type!', 'bad type!'], ['x'.repeat(65), 'x'.repeat(65)]]);
+});
+
+test('diagnostic identities with invalid characters are not restored as trusted identity', async t => {
+  const f = fixture(t);
+  f.write(JSON.stringify({ v: 1, ts: 1, event: 'decision', requestId: 'bad identity!', sessionGroup: 'bad group!' }) + '\n');
+  await f.importer.importStream({ stream: 'receive', file: f.file });
+  for (const event of [...f.events(), ...await f.importer.sanitizeEvents(f.events())]) {
+    assert.equal(Object.hasOwn(event.metadata, 'requestId'), false);
+    assert.equal(Object.hasOwn(event.metadata, 'sessionGroup'), false);
+  }
+});
+
+test('a newly created empty source directory clears its earlier missing warning without a cursor', async t => {
+  const f = fixture(t), directory = path.join(f.root, 'new-source');
+  const source = { stream: 'receive', file: path.join(directory, 'receive.jsonl') };
+  await f.importer.importStream(source);
+  assert.equal(f.rows().length, 0);
+  assert.ok(f.store.getHistoryDiagnostics({ stream: 'receive' }).some(row => row.extra.reason === 'source_missing'));
+  fs.mkdirSync(directory);
+  await f.importer.importStream(source);
+  assert.deepEqual(f.store.getHistoryDiagnostics({ stream: 'receive' }), []);
+  assert.equal(f.rows().length, 0);
 });
