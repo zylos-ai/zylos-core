@@ -176,6 +176,20 @@ test('C4Reader — missing db returns safe defaults', () => {
   }
 });
 
+test('C4Reader — a readable database with an invalid queue schema reports a read failure', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-reader-schema-'));
+  const commDir = path.join(tmpDir, 'comm-bridge');
+  fs.mkdirSync(commDir, { recursive: true });
+  new Database(path.join(commDir, 'c4.db')).close();
+  const reader = new C4Reader(tmpDir);
+  try {
+    assert.deepEqual(reader.getPendingQueue(), { depth: null, oldest_age_s: null, error: 'READ_FAILED' });
+  } finally {
+    reader.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('average response matches the previous SQL on ties, channels and cutoff; caches for 60s', t => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-27T12:00:00Z') });
   const f = makeFixture();

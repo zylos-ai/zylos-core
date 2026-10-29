@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createConsoleStatusReader } from '../scripts/session-status.js';
+import { createConsoleStatusReader } from '../session-status.js';
 
 test('Console status keeps startup, missing, and running identities distinct', async () => {
   let observation = { identity: { present: true, runId: 'R1' }, status: { valid: false, reason: 'starting' } };

@@ -7,6 +7,7 @@ import {
   isMetricTargetCurrent,
   isStateRequestCurrent,
 } from '../public/js/response-order.js';
+import { refreshDashboardState } from '../public/js/state-refresh.js';
 
 test('an unrelated same-run SSE observation does not discard a newer full response', () => {
   const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };
@@ -23,6 +24,24 @@ test('a response for the previous running identity is stale after SSE replacemen
   state.dashboardState = { runId: 'R2', sessionId: 'S2', updated_at: '2026-01-01T00:00:02Z' };
   assert.equal(applyStateResponse(state, request, { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:01Z' }), false);
   assert.equal(state.dashboardState.runId, 'R2');
+});
+
+test('an older same-run HTTP response cannot overwrite a newer SSE state', () => {
+  const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };
+  const request = beginStateRequest(state);
+  state.dashboardState = { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:02Z', state: 'IDLE' };
+  assert.equal(applyStateResponse(state, request, { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:01Z', state: 'BUSY' }), false);
+  assert.equal(state.dashboardState.state, 'IDLE');
+});
+
+test('the real refresh helper routes fetched state through response ordering', async () => {
+  const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };
+  let resolveResponse;
+  const pending = refreshDashboardState(state, () => new Promise(resolve => { resolveResponse = resolve; }));
+  state.dashboardState = { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:02Z', state: 'IDLE' };
+  resolveResponse({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:01Z', state: 'BUSY' });
+  assert.equal(await pending, null);
+  assert.equal(state.dashboardState.state, 'IDLE');
 });
 
 test('only the newest overlapping state request remains current', () => {
@@ -45,6 +64,13 @@ test('metric responses are bound to navigation and running identity', () => {
   const target = captureMetricTarget(state);
   assert.equal(isMetricTargetCurrent(state, target), true);
   state.dashboardState = { runId: 'R2', sessionId: 'S2' };
+  assert.equal(isMetricTargetCurrent(state, target), false);
+});
+
+test('metric responses are invalidated when only the run changes', () => {
+  const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1' } };
+  const target = captureMetricTarget(state);
+  state.dashboardState = { runId: 'R2', sessionId: 'S1' };
   assert.equal(isMetricTargetCurrent(state, target), false);
 });
 

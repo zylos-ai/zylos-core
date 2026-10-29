@@ -130,8 +130,9 @@ export class ObserverManager {
 
   async createLease(context, { target = this.target, runId } = {}) {
     this._requireAdmin(context);
+    if (this.resolveOrigin && (typeof runId !== 'string' || !runId)) throw new ObserverManagerError('target_mismatch', 'Refresh and confirm the current Origin run');
     const origin = this.resolveOrigin ? await this.resolveOrigin() : null;
-    if (origin && (!runId || origin.runId !== runId)) throw new ObserverManagerError('target_mismatch', 'Refresh and confirm the current Origin run');
+    if (this.resolveOrigin && (!origin?.runId || origin.runId !== runId)) throw new ObserverManagerError('target_mismatch', 'Refresh and confirm the current Origin run');
     if (target !== this.target) throw new ObserverManagerError('target_mismatch', 'Observer target is not this producer');
     if (this._shuttingDown || this._lifecycleTransitions > 0) {
       throw new ObserverManagerError('operation_obsolete', 'Observer lifecycle is changing');
@@ -155,7 +156,8 @@ export class ObserverManager {
       if (epoch !== this._epoch || active !== this.containment.active || active.generation !== this.generation) {
         throw new ObserverManagerError('operation_obsolete', 'Observer lease start was superseded');
       }
-      if (origin && active.originRunId !== origin.runId) throw new ObserverManagerError('target_mismatch', 'Origin changed during Observer attachment');
+      const currentOrigin = this.resolveOrigin ? await this.resolveOrigin() : null;
+      if (this.resolveOrigin && (!currentOrigin?.runId || currentOrigin.runId !== origin.runId || active.originRunId !== origin.runId)) throw new ObserverManagerError('target_mismatch', 'Origin changed during Observer attachment');
       const id = crypto.randomBytes(24).toString('base64url');
       const createdAt = this.now();
       const lease = {

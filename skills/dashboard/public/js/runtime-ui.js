@@ -21,14 +21,14 @@ export function modelOptionState(meta) {
   };
 }
 
-export function effortOptionState(meta, modelId, currentEffort = meta.current_effort) {
+export function effortOptionState(meta, modelId, currentEffort = meta.current_effort, effortLabel = value => value) {
   const list = meta.efforts_by_model?.[modelId] || meta.efforts_by_model?.['*'] || [];
   const unavailable = meta.runtime === 'codex' && !list.includes(currentEffort);
   return {
     hidden: !list.length && meta.runtime !== 'codex',
     disabled: !list.length,
     options: [
-      ...(unavailable ? [{ value: '', labelKey: currentEffort ? 'actions.effort_unavailable' : 'actions.unset', labelParams: currentEffort ? { value: currentEffort } : undefined, disabled: true, selected: true }] : []),
+      ...(unavailable ? [{ value: '', labelKey: currentEffort ? 'actions.effort_unavailable' : 'actions.unset', labelParams: currentEffort ? { value: effortLabel(currentEffort) } : undefined, disabled: true, selected: true }] : []),
       ...list.map(value => ({ value, selected: value === currentEffort })),
     ],
   };

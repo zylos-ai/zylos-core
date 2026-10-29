@@ -4,10 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import Database from '../../../skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';
 import { isolatedTmux, tmuxClientEnv } from '../../../test/helpers/isolated-tmux.js';
 import { CoreState } from '../../../skills/dashboard/src/lib/core-state.js';
+import { createCoreStateChangePublisher } from '../../../skills/dashboard/src/lib/core-state-publisher.js';
+import { SseHub } from '../../../skills/dashboard/src/lib/sse.js';
 import { handleCoreAction } from '../../../skills/dashboard/src/lib/core-actions.js';
 import { createConsoleStatusReader } from '../../../skills/web-console/scripts/session-status.js';
 import { readSessionMode } from '../config.js';
@@ -17,12 +19,12 @@ import { lookupRestartRequest } from '../am-sock-client.js';
 const root = process.env.ZYLOS_DIR;
 const write = (file, data) => { fs.mkdirSync(path.dirname(file), { recursive:true }); fs.writeFileSync(file, typeof data === 'string' ? data : JSON.stringify(data)); };
 const runDir = group => path.join(root,'activity-monitor/session-groups',group);
-function sample(group, runId, sessionId, state='busy') {
+function sample(group, runId, sessionId, state='busy', extra={}) {
   write(path.join(runDir(group),'current-session.json'), {runId,sessionId,ts:Date.now(),startupControlIds:[]});
-  write(path.join(runDir(group),'agent-status.json'), {runId,sessionId,state,active_tool_details:[{id:'tool',name:'Read',startedAt:Date.now()}]});
+  write(path.join(runDir(group),'agent-status.json'), {runId,sessionId,state,active_tool_details:[{id:'tool',name:'Read',startedAt:1}],...extra});
 }
 
-test('real Core reader, targeted control CLI and Sock retain Origin boundaries', async t => {
+test('real Core reader, targeted control CLI and Sock retain Origin boundaries', { timeout: 20000 }, async t => {
   const fixture=isolatedTmux(t,{prefix:'dashboard-boundary-'});
   const prior = {PATH:process.env.PATH,TMUX:process.env.TMUX,TMUX_TMPDIR:process.env.TMUX_TMPDIR};
   const env=tmuxClientEnv(fixture); Object.assign(process.env,{PATH:env.PATH,TMUX:env.TMUX,TMUX_TMPDIR:env.TMUX_TMPDIR});
@@ -34,10 +36,19 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
     fixture.tmux('-f','/dev/null','new-session','-d','-s',`zylos-group-${group}`,'-e',`ZYLOS_RUN_ID=${run}`,'-e',`ZYLOS_SESSION_GROUP=${group}`,'-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}','sleep','120');
     sample(group,run,session);
   }
-  const changes=[];const core=new CoreState({onChange:state=>changes.push(state)});
+  const changes=[]; const sseChunks=[]; const sse=new SseHub();
+  const response=new EventEmitter(); response.writeHead=()=>{}; response.write=chunk=>{sseChunks.push(chunk);return true;}; response.end=()=>{};
+  sse.addClient(response); t.after(()=>{response.emit('close');sse.closeAll();});
+  let core; let fleetBroadcasts=0;
+  const publish=createCoreStateChangePublisher({sse,buildStatePayload:()=>core.getState(),scheduleFleetStateBroadcast:()=>{fleetBroadcasts++;}});
+  core=new CoreState({onChange:state=>{changes.push(state);publish();}});
   let current=await core.refresh();assert.equal(current.runId,'R1');assert.equal(current.state,'BUSY');assert.equal(current.running_tools[0].tool_name,'Read');
+  assert(sseChunks.some(chunk=>chunk.includes('event: state_change')&&chunk.includes('"runId":"R1"')));assert.equal(fleetBroadcasts,1);
   assert.equal('identity' in current,false);assert.equal('status' in current,false);assert.equal('usage' in current,false);
   const firstCostKey=core.costKey;assert.ok(firstCostKey);await core.refresh();assert.equal(changes.length,1);
+  sample('origin','R1','S1','busy',{last_check:Date.now(),inactive_seconds:1});await core.refresh();assert.equal(changes.length,1);
+  sample('origin','R1','S1','idle',{last_check:Date.now(),inactive_seconds:0});await core.refresh();assert.equal(changes.length,2);assert.equal(changes.at(-1).state,'IDLE');
+  sample('origin','R1','S1','busy',{last_check:Date.now(),inactive_seconds:0});await core.refresh();assert.equal(changes.length,3);
   const consoleStatus=createConsoleStatusReader({readSessionMode,readSessionState,getChannelNamespace:()=>({namespace:'clone-console'})});
   assert.equal((await consoleStatus()).runId,'RC');
   write(path.join(root,'activity-monitor/agent-status.json'),{state:'WRONG_GLOBAL'});
@@ -56,14 +67,14 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   assert.equal(db.prepare('SELECT count(*) n FROM control_queue').get().n,3);
   assert.equal((await handleCoreAction('interrupt',{}, {zylosDir:root})).error,'TARGET_REQUIRED');
   assert.equal((await handleCoreAction('interrupt',{...target,sessionGroup:'other'}, {zylosDir:root})).error,'TARGET_SCOPE_MISMATCH');
-  current=await core.refresh();assert.equal(current.runId,'R2');assert.equal(current.sessionId,'S2');assert.notEqual(core.costKey,firstCostKey);
+  const beforeRunChange=changes.length;current=await core.refresh();assert.equal(current.runId,'R2');assert.equal(current.sessionId,'S2');assert.notEqual(core.costKey,firstCostKey);assert.equal(changes.length,beforeRunChange+1);
   fixture.tmux('set-environment','-u','-t','zylos-group-clone-console','ZYLOS_RUN_ID');
   await core.refresh();assert.equal(core.costKey,null);
   fixture.tmux('set-environment','-t','zylos-group-clone-console','ZYLOS_RUN_ID','RC');
   await core.refresh();assert.ok(core.costKey);
   const file=path.join(runDir('origin'),'agent-status.json');fs.utimesSync(file,new Date(0),new Date(0));
   assert.equal((await core.refresh()).reason,'stale');
-  write(file,'{broken');assert.equal((await core.refresh()).reason,'unparseable');
+  write(file,'{broken');const unreadable=await core.refresh();assert.equal(unreadable.reason,'unparseable');assert.equal(unreadable.sessionGroup,'origin');
   const secondCostKey=core.costKey;sample('origin','R2','S3');assert.equal((await core.refresh()).sessionId,'S3');assert.notEqual(core.costKey,secondCostKey);
   assert.equal((await consoleStatus()).runId,'RC');
   db.prepare('INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)').run('clone-console','web-console');
@@ -82,9 +93,13 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   write(path.join(root,'.zylos/config.json'),{session_mode:'single'});assert.equal((await consoleStatus()).runId,'R2');
   assert.equal((await (await fetch(base+'/api/status')).json()).runId,'R2');
 
-  const socketPath=path.join(root,'activity-monitor/am.sock');let requests=0;
-  const server=net.createServer(socket=>socket.once('data',data=>{requests++;const request=JSON.parse(data.toString());assert.equal(request.expectedRunId,'R2');socket.end(JSON.stringify({...request,ok:true,result:'accepted'})+'\n');}));
+  const socketPath=path.join(root,'activity-monitor/am.sock');let requests=0;let reply=false;
+  fs.rmSync(socketPath,{force:true});
+  const missing=await handleCoreAction('restart-session',{runId:'R2',sessionId:'S3'},{zylosDir:root});assert.equal(missing.submission,'not_submitted');assert.equal(missing.completion,'unknown');
+  const server=net.createServer(socket=>socket.once('data',data=>{requests++;const request=JSON.parse(data.toString());assert.equal(request.expectedRunId,'R2');if(reply)socket.end(JSON.stringify({...request,ok:true,result:'accepted'})+'\n');}));
   await new Promise(resolve=>server.listen(socketPath,resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
-  const restarted=await handleCoreAction('restart-session',{runId:'R2',sessionId:'S3'},{zylosDir:root});assert.equal(restarted.submission,'accepted');assert.equal(requests,1);
-  assert.equal(await lookupRestartRequest(restarted.requestId,{deadlineAt:Date.now()+1000}),'unknown');assert.equal(requests,1);
+  const uncertain=await handleCoreAction('restart-session',{runId:'R2',sessionId:'S3'},{zylosDir:root});assert.equal(uncertain.submission,'unknown');assert.equal(uncertain.completion,'unknown');assert.equal(uncertain.error,'deadline_exceeded');
+  reply=true;
+  const restarted=await handleCoreAction('restart-session',{runId:'R2',sessionId:'S3'},{zylosDir:root});assert.equal(restarted.submission,'accepted');assert.equal(requests,2);
+  assert.equal(await lookupRestartRequest(restarted.requestId,{deadlineAt:Date.now()+1000}),'unknown');assert.equal(requests,2);
 });

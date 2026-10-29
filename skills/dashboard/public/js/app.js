@@ -6,13 +6,12 @@ import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.j
 import { createFleetSounds } from './fleet-sounds.js';
 import { priceWithEditedBaseRates } from './pricing-form.js';
 import {
-  beginStateRequest,
-  applyStateResponse,
   captureMetricTarget,
   isMetricTargetCurrent,
 } from './response-order.js';
+import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult } from './action-result.js';
-import { pendingDepthValue, stateTitleKey } from './state-presentation.js';
+import { pendingDepthValue, sessionBlockTitleKey, stateTitleKey } from './state-presentation.js';
 import {
   effortOptionState,
   mergeRuntimeInfo,
@@ -437,7 +436,10 @@ function mascotClass(agentState) {
 
 function renderState() {
   const title = $('#runtime-title');
-  if (title) { title.removeAttribute('data-i18n'); title.textContent = t(state.dashboardState?.sessionGroup === 'origin' ? 'block.origin' : 'block.single_session'); }
+  if (title) {
+    title.removeAttribute('data-i18n');
+    title.textContent = t(sessionBlockTitleKey(state.dashboardState?.sessionGroup));
+  }
   const p = state.dashboardState;
   // Same octopus mascot set + mood logic as Agent Fleet (busy with no visible
   // tool = thinking), so the agent looks identical in its tile and its detail.
@@ -1873,10 +1875,8 @@ async function resolveMemoryConflict(action) {
 }
 
 async function refreshState() {
-  const request = beginStateRequest(state);
-  const data = await fetchJson('/api/state');
-  if (!data || typeof data !== 'object') return;
-  if (!applyStateResponse(state, request, data)) return;
+  const data = await refreshDashboardState(state, fetchJson);
+  if (!data) return;
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
   if (data.new_session_threshold) {
     state.newSessionThreshold = data.new_session_threshold;
@@ -4302,7 +4302,7 @@ async function openActionsModal() {
 
     effortSel._currentEffort = meta.current_effort;
     modal._renderEffortOptions = (modelId) => {
-      const effortState = effortOptionState(meta, modelId, effortSel._currentEffort);
+      const effortState = effortOptionState(meta, modelId, effortSel._currentEffort, effortLabel);
       effortSel.innerHTML = '';
       effortSel.disabled = effortState.disabled;
       effortField.hidden = effortState.hidden;
@@ -4483,7 +4483,7 @@ async function execAction(action, body) {
     });
     const result = await r.json();
     if (action === 'restart-session' && result.requestId) {
-      pendingManualRestart = ['accepted', 'unknown'].includes(result.submission) ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
+      pendingManualRestart = result.submission === 'unknown' ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
       if (pendingManualRestart) refreshModeStatus();
     }
     if (result.ok && result.detached) {

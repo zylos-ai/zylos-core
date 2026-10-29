@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import test from 'node:test';
 import { handleAction } from '../src/lib/actions.js';
 
-function fixture(t, failContent = null) {
+function fixture(t, failContent = null, failureReply = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-chop-chop-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const scripts = path.join(root, '.claude/skills/comm-bridge/scripts');
@@ -18,8 +18,8 @@ function fixture(t, failContent = null) {
     const content = args[args.indexOf('--content') + 1];
     fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, content, time: Date.now() }) + '\\n');
     if (content === ${JSON.stringify(failContent)}) {
-      process.stderr.write('fixture queue failure');
-      process.exitCode = 1;
+      if (${JSON.stringify(failureReply)}) console.log(${JSON.stringify(failureReply)});
+      else { process.stderr.write('fixture queue failure'); process.exitCode = 1; }
     } else console.log(JSON.stringify({ok:true,data:{id:1}}));
   `);
   return {
@@ -57,8 +57,18 @@ test('continue failure reports partial execution instead of success', async t =>
   assert.equal(result.ok, false);
   assert.equal(result.steps[0].submission, 'submitted');
   assert.equal(result.steps[1].submission, 'unknown');
-  assert.match(result.message, /unknown/);
+  assert.equal(result.messageKey, 'result.control_unknown');
   assert.deepEqual(f.records().map(r => r.content), ['[KEYSTROKE]Escape', 'continue']);
+});
+
+test('target rejection reports only a current run supplied by the backend', async t => {
+  const missing = fixture(t, 'continue', JSON.stringify({ ok: false, error: { code: 'TARGET_NOT_RUNNING' } }));
+  const noCurrent = await handleAction('chop-chop', missing.body, missing.config);
+  assert.equal(noCurrent.messageParams.runId, 'unknown');
+
+  const changed = fixture(t, 'continue', JSON.stringify({ ok: false, error: { code: 'TARGET_MISMATCH', runId: 'replacement-run' } }));
+  const current = await handleAction('chop-chop', changed.body, changed.config);
+  assert.equal(current.messageParams.runId, 'replacement-run');
 });
 
 test('identical concurrent chop-chop calls queue only one control pair', async t => {

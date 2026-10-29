@@ -528,5 +528,6 @@
   "actions.submission_rejected": "rejected",
   "actions.submission_unknown": "unknown",
   "block.single_session": "Single session",
-  "block.origin": "Origin"
+  "block.origin": "Origin",
+  "block.unknown_session": "Unknown session"
 }

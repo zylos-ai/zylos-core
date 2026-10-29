@@ -55,6 +55,7 @@ import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
 import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
 import { buildRestartStatus } from './lib/core-actions.js';
+import { createCoreStateChangePublisher } from './lib/core-state-publisher.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
 import { applyVersionUpdateFields, codexRuntimeFields } from './lib/runtime-info.js';
@@ -210,10 +211,7 @@ function broadcastFleetState() {
 }
 
 const scheduleFleetStateBroadcast = createCoalescedBroadcast(broadcastFleetState);
-publishCoreStateChange = () => {
-  sse.broadcast('state_change', buildApiStatePayload());
-  scheduleFleetStateBroadcast();
-};
+publishCoreStateChange = createCoreStateChangePublisher({ sse, buildStatePayload: buildApiStatePayload, scheduleFleetStateBroadcast });
 
 // 6b. Version checker (polls GitHub + npm registry every 12h)
 const versionChecker = new VersionChecker({

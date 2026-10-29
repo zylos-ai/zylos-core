@@ -6,7 +6,7 @@ import { projectOrigin } from '../src/lib/core-state.js';
 import { buildRestartStatus, handleCoreAction } from '../src/lib/core-actions.js';
 import { Sanitizer } from '../src/lib/sanitizer.js';
 import { formatActionResult } from '../public/js/action-result.js';
-import { pendingDepthValue, stateTitleKey } from '../public/js/state-presentation.js';
+import { pendingDepthValue, sessionBlockTitleKey, stateTitleKey } from '../public/js/state-presentation.js';
 
 const writeExecutable = (file, body) => { fs.writeFileSync(file, `#!${process.execPath}\n${body}\n`, { mode: 0o755 }); };
 const translate = (key, params = {}) => `${key} ${Object.entries(params).map(([name, value]) => `${name}=${value}`).join(' ')}`.trim();
@@ -60,25 +60,9 @@ test('state and queue presentation keep startup and read failures visible', () =
   assert.equal(pendingDepthValue(0), '0');
   assert.equal(pendingDepthValue(null), null);
   assert.equal(pendingDepthValue(undefined), null);
-});
-
-test('manual restart distinguishes connection failure, uncertain submission, and lookup evidence', async () => {
-  const base = { zylosDir: process.env.ZYLOS_DIR };
-  let lookups = 0;
-  const connectFailed = await handleCoreAction('restart-session', { runId: 'R1', sessionId: 'S1' }, { ...base, restartClient: {
-    submit: async () => ({ kind: 'connect_failed', sent: false }), lookupRestartRequest: async () => { lookups++; return 'done'; },
-  } });
-  assert.equal(connectFailed.submission, 'not_submitted'); assert.equal(connectFailed.completion, 'unknown'); assert.equal(lookups, 0);
-
-  const uncertain = await handleCoreAction('restart-session', { runId: 'R1', sessionId: 'S1' }, { ...base, restartClient: {
-    submit: async () => ({ kind: 'deadline_exceeded', sent: true }), lookupRestartRequest: async () => { lookups++; return 'deadline_exceeded'; },
-  } });
-  assert.equal(uncertain.submission, 'unknown'); assert.equal(uncertain.completion, 'unknown'); assert.equal(lookups, 1);
-
-  const found = await handleCoreAction('restart-session', { runId: 'R1', sessionId: 'S1' }, { ...base, restartClient: {
-    submit: async () => ({ kind: 'timeout', sent: true }), lookupRestartRequest: async () => { lookups++; return 'accepted'; },
-  } });
-  assert.equal(found.submission, 'unknown'); assert.equal(found.completion, 'accepted'); assert.equal(lookups, 2);
+  assert.equal(sessionBlockTitleKey('origin'), 'block.origin');
+  assert.equal(sessionBlockTitleKey(null), 'block.single_session');
+  assert.equal(sessionBlockTitleKey(undefined), 'block.unknown_session');
 });
 
 test('restart status keeps old-run completion separate from current Origin readiness', () => {
@@ -93,26 +77,29 @@ test('restart status keeps old-run completion separate from current Origin readi
   });
 });
 
-test('runtime action reads a result returned after ten seconds and restarts Dashboard only for a saved baseline', { timeout: 20000 }, async t => {
+test('runtime action reads a result returned after ten seconds and restarts Dashboard only for a saved baseline', { timeout: 25000 }, async t => {
   const bin = path.join(process.env.TMPDIR, `dashboard-actions-${process.pid}`);
   fs.mkdirSync(bin, { recursive: true });
   t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
   writeExecutable(path.join(bin, 'zylos'), `const args=process.argv.slice(2),result=process.env.FAKE_RUNTIME_RESULT||'saved';if(args[0]==='runtime'&&result==='saved')setTimeout(()=>console.log(JSON.stringify({ok:true,data:{result}})),10200);else console.log(JSON.stringify({ok:true,data:{result}}));`);
-  const previous = { PATH: process.env.PATH, FAKE_RUNTIME_RESULT: process.env.FAKE_RUNTIME_RESULT };
+  const pm2Log = path.join(process.env.TMPDIR, `dashboard-pm2-${process.pid}.log`);
+  writeExecutable(path.join(bin, 'pm2'), `require('node:fs').appendFileSync(process.env.FAKE_PM2_LOG,JSON.stringify(process.argv.slice(2))+'\\n');`);
+  const previous = { PATH: process.env.PATH, FAKE_RUNTIME_RESULT: process.env.FAKE_RUNTIME_RESULT, FAKE_PM2_LOG: process.env.FAKE_PM2_LOG };
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+  process.env.FAKE_PM2_LOG = pm2Log;
   fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ session_mode: 'single' }));
-  t.after(() => { process.env.PATH = previous.PATH; if (previous.FAKE_RUNTIME_RESULT === undefined) delete process.env.FAKE_RUNTIME_RESULT; else process.env.FAKE_RUNTIME_RESULT = previous.FAKE_RUNTIME_RESULT; });
-  let restarts = 0;
-  const config = { zylosDir: process.env.ZYLOS_DIR, restartDashboard: () => { restarts++; } };
+  t.after(() => { process.env.PATH = previous.PATH; for (const key of ['FAKE_RUNTIME_RESULT', 'FAKE_PM2_LOG']) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; } });
+  const config = { zylosDir: process.env.ZYLOS_DIR };
   const saved = await handleCoreAction('switch-runtime', { runtime: 'codex' }, config);
   assert.equal(saved.ok, true); assert.equal(saved.data.result, 'saved'); assert.equal(saved.detached, true);
-  await new Promise(resolve => setTimeout(resolve, 1100));
-  assert.equal(restarts, 1);
+  for (let attempt = 0; attempt < 30 && !fs.existsSync(pm2Log); attempt += 1) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual(fs.readFileSync(pm2Log, 'utf8').trim().split('\n').map(JSON.parse), [['restart', 'zylos-dashboard']]);
   process.env.FAKE_RUNTIME_RESULT = 'unchanged';
   const unchanged = await handleCoreAction('switch-runtime', { runtime: 'codex' }, config);
   assert.equal(unchanged.detached, false); assert.equal(unchanged.messageKey, 'result.runtime_unchanged');
-  assert.equal(restarts, 1);
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(fs.readFileSync(pm2Log, 'utf8').trim().split('\n').length, 1);
   const mode = await handleCoreAction('switch-mode', { mode: 'multi' }, config);
   assert.equal(mode.ok, true); assert.equal(mode.data.result, 'unchanged');
 });

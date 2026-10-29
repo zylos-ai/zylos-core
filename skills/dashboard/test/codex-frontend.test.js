@@ -72,11 +72,11 @@ test('configured unknown choices are preserved without inventing effort support'
   const model = modelOptionState(meta);
   assert.equal(model.custom, true);
   assert.equal(model.customValue, 'relay-model');
-  assert.deepEqual(effortOptionState(meta, 'relay-model'), {
+  assert.deepEqual(effortOptionState(meta, 'relay-model', meta.current_effort, value => value === 'ultra' ? 'Maximum' : value), {
     hidden: false,
     disabled: true,
     options: [{
-      value: '', labelKey: 'actions.effort_unavailable', labelParams: { value: 'ultra' },
+      value: '', labelKey: 'actions.effort_unavailable', labelParams: { value: 'Maximum' },
       disabled: true, selected: true,
     }],
   });

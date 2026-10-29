@@ -6,6 +6,23 @@ const publicIdentity = identity => Object.fromEntries(
   ['present', 'tmuxName', 'runId', 'createdAt', 'runtime', 'ready', 'sessionId']
     .map(key => [key, identity?.[key] ?? null])
 );
+const VOLATILE_KEYS = new Set(['updated_at', 'sampledAt', 'sampled_at', 'last_check', 'inactive_seconds']);
+function stableBusinessValue(value) {
+  if (Array.isArray(value)) return value.map(stableBusinessValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !VOLATILE_KEYS.has(key))
+    .map(([key, item]) => [key, stableBusinessValue(item)]));
+}
+function businessSource(projected, observation, accountUsage) {
+  const usage = observation?.usage?.valid ? observation.usage.value : null;
+  return stableBusinessValue({
+    projected,
+    contextPct: usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null),
+    rateLimitPct: accountUsage?.five_hour?.used_percentage ?? accountUsage?.fiveHour?.usedPercentage ?? null,
+    rateLimit7dPct: accountUsage?.seven_day?.used_percentage ?? accountUsage?.sevenDay?.usedPercentage ?? null,
+  });
+}
 export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitizer(process.env.ZYLOS_DIR || process.cwd())) {
   const { identity, status, usage } = observation;
   const state = !identity.present ? 'OFFLINE' : status.reason === 'starting' ? 'STARTING' : !status.valid ? 'UNKNOWN' : String(status.value.state || 'unknown').toUpperCase();
@@ -32,6 +49,8 @@ export class CoreState {
     this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: 'not_sampled', ready: false, runId: null, sessionId: null };
     this.observation = null;
     this.lastSource = null;
+    this.lastSessionMode = undefined;
+    this.lastSessionGroup = null;
     this.costKey = null; this.pending = null;
   }
   refresh() {
@@ -43,7 +62,10 @@ export class CoreState {
     try {
       const [{ readSessionMode }, reader, paths] = await Promise.all([loadCoreModule('config.js'), loadCoreModule('session-state-reader.js'), loadCoreModule('session-group-paths.js')]);
       const { mode } = readSessionMode();
+      if (!['single', 'multi'].includes(mode)) throw Object.assign(new Error('Session mode is unavailable'), { code: 'mode_unavailable' });
       const group = mode === 'multi' ? 'origin' : null;
+      this.lastSessionMode = mode;
+      this.lastSessionGroup = group;
       const observation = await reader.readSessionState(group, { freshnessMs: 5000 });
       try {
       const groups = mode === 'multi' ? await paths.listGroupTmuxSessions() : [{ sessionGroup: null }];
@@ -55,12 +77,13 @@ export class CoreState {
       this.costKey = observation.status.reason === 'identity_changed' || observation.identity.runtime === 'unknown' ? null : JSON.stringify(identities.sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
       } catch { this.costKey = null; }
       const accountUsage = await reader.readAccountUsage(observation.identity.runtime).catch(() => null);
-      const source = { observation, accountUsage };
+      const projected = projectOrigin(group, observation, this.sanitizer);
+      const source = businessSource(projected, observation, accountUsage);
       this.observation = observation;
       this.accountUsage = accountUsage;
       if (!isDeepStrictEqual(source, this.lastSource)) {
         this.lastSource = source;
-        this.snapshot = projectOrigin(group, observation, this.sanitizer);
+        this.snapshot = projected;
         this.onChange(this.snapshot);
       }
     } catch (error) {
@@ -70,7 +93,7 @@ export class CoreState {
       const source = { error: { code: error.code || 'read_failed', message: error.message } };
       if (!isDeepStrictEqual(source, this.lastSource)) {
         this.lastSource = source;
-        this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: source.error.code, message: source.error.message, ready: false, runId: null, sessionId: null };
+        this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: source.error.code, message: source.error.message, ready: false, runId: null, sessionId: null, sessionGroup: this.lastSessionMode === undefined ? undefined : this.lastSessionGroup };
         this.onChange(this.snapshot);
       }
     }

@@ -476,6 +476,8 @@ test('Core Origin lease pins the confirmed run and retires on replacement or unk
   const f = fixture({ resolveOrigin: async () => { if (!runId) throw new Error('unknown identity'); return { runId, tmuxName: 'zylos-group-origin' }; } });
   f.coordinator.firstLease = async () => { f.containment.active={generation:5,originRunId:runId}; return f.containment.active; };
   try {
+    await assert.rejects(f.manager.createLease(context('admin')),{code:'target_mismatch'});
+    assert.equal(f.counts().starts,0);
     await assert.rejects(f.manager.createLease(context('admin'),{runId:'old'}),{code:'target_mismatch'});
     const lease=await f.manager.createLease(context('admin'),{runId});
     assert.equal(lease.runId,'origin-A'); assert(f.manager.consumeTicket(lease.ticket,lease.id,context('admin')));
@@ -485,5 +487,23 @@ test('Core Origin lease pins the confirmed run and retires on replacement or unk
     assert.equal(next.runId,'origin-B');
     runId=null; await f.manager.revalidate();
     assert.equal(f.manager.leases.size,0); assert.equal(f.containment.active,null);
+  } finally { await f.manager.shutdown(); }
+});
+
+test('Origin replacement during attachment rejects the pending Observer lease', async () => {
+  let runId = 'origin-A';
+  let finishStart;
+  const f = fixture({ resolveOrigin: async () => ({ runId, tmuxName: 'zylos-group-origin' }) });
+  f.coordinator.firstLease = () => new Promise(resolve => {
+    f.containment.active = { generation: 5, originRunId: 'origin-A' };
+    finishStart = () => resolve(f.containment.active);
+  });
+  try {
+    const pending = f.manager.createLease(context('admin'), { runId: 'origin-A' });
+    await new Promise(resolve => setImmediate(resolve));
+    runId = 'origin-B';
+    finishStart();
+    await assert.rejects(pending, { code: 'target_mismatch' });
+    assert.equal(f.manager.leases.size, 0);
   } finally { await f.manager.shutdown(); }
 });

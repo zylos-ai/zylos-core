@@ -12,8 +12,7 @@ function envelope(text) {
 }
 
 function restartDashboard() {
-  const script = `const {spawn}=require('node:child_process');const child=spawn('pm2',['restart','zylos-dashboard'],{detached:true,stdio:'ignore'});child.on('error',()=>{});child.unref();`;
-  const child = spawn(process.execPath, ['-e', script], { detached: true, stdio: 'ignore' });
+  const child = spawn('pm2', ['restart', 'zylos-dashboard'], { detached: true, stdio: 'ignore' });
   child.on('error', () => {});
   child.unref();
 }
@@ -47,7 +46,7 @@ async function control(content, target, zylosDir) {
   if (target.sessionId) args.push('--expected-session', target.sessionId);
   const reply = await command(process.execPath, args);
   if (reply.ok && !Number.isSafeInteger(reply.data?.id)) return { ok: false, unknown: true, error: { code: 'RESULT_UNKNOWN' } };
-  return { ...reply, controlId: reply.data?.id ?? null, submission: reply.ok ? 'submitted' : reply.unknown ? 'unknown' : 'rejected', rejectionCode: reply.error?.code ?? null, targetChanged: isTargetError(reply.error?.code), currentRunId: reply.error?.currentRunId ?? reply.error?.runId ?? reply.error?.details?.currentRunId ?? null };
+  return { ...reply, controlId: reply.data?.id ?? null, submission: reply.ok ? 'submitted' : reply.unknown ? 'unknown' : 'rejected', rejectionCode: reply.error?.code ?? null, targetChanged: isTargetError(reply.error?.code), currentRunId: reply.error?.runId ?? null };
 }
 
 export async function handleCoreAction(action, body, config) {
@@ -64,10 +63,10 @@ export async function handleCoreAction(action, body, config) {
     await delay(500);
     const second = await control('continue', target, config.zylosDir);
     second.control = 'continue';
-    return { ...second, steps: [first, second], messageKey: second.ok ? 'result.controls_submitted' : second.targetChanged ? 'result.control_target_changed' : second.unknown ? 'result.control_unknown' : 'result.control_rejected', messageParams: { code: second.rejectionCode || 'unknown', runId: second.currentRunId || target.runId || 'unknown' }, refreshState: second.targetChanged };
+    return { ...second, steps: [first, second], messageKey: second.ok ? 'result.controls_submitted' : second.targetChanged ? 'result.control_target_changed' : second.unknown ? 'result.control_unknown' : 'result.control_rejected', messageParams: { code: second.rejectionCode || 'unknown', runId: second.currentRunId || 'unknown' }, refreshState: second.targetChanged };
   }
   if (action === 'restart-session') {
-    const { submit, lookupRestartRequest } = config.restartClient || await loadCoreModule('am-sock-client.js');
+    const { submit, lookupRestartRequest } = await loadCoreModule('am-sock-client.js');
     const requestId = crypto.randomUUID();
     const deadlineAt = Date.now() + 10000;
     const request = { version: 1, type: 'manual_restart', requestId, ...(target.runId ? { expectedRunId: target.runId } : {}), ...(target.sessionId ? { expectedSessionId: target.sessionId } : {}) };
@@ -90,7 +89,7 @@ export async function handleCoreAction(action, body, config) {
     const unchanged = result.ok && result.data?.result === 'unchanged';
     if (saved) {
       setTimeout(() => {
-        (config.restartDashboard || restartDashboard)();
+        restartDashboard();
       }, 1000).unref?.();
     }
     return { ...result, detached: saved, messageKey: saved ? 'result.runtime_saved' : unchanged ? 'result.runtime_unchanged' : 'result.runtime_unknown', messageParams: { value: body.runtime } };

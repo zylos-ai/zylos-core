@@ -528,5 +528,6 @@
   "actions.submission_rejected": "已拒绝",
   "actions.submission_unknown": "未知",
   "block.single_session": "唯一会话",
-  "block.origin": "Origin"
+  "block.origin": "Origin",
+  "block.unknown_session": "会话未知"
 }

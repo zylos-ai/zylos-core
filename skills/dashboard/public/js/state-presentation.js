@@ -14,3 +14,9 @@ export function stateTitleKey(value, mood) {
 export function pendingDepthValue(depth) {
   return Number.isSafeInteger(depth) && depth >= 0 ? String(depth) : null;
 }
+
+export function sessionBlockTitleKey(sessionGroup) {
+  if (sessionGroup === 'origin') return 'block.origin';
+  if (sessionGroup === null) return 'block.single_session';
+  return 'block.unknown_session';
+}

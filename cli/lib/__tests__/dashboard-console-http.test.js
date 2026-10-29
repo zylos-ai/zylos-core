@@ -39,7 +39,10 @@ test('Console HTTP, initial WebSocket and polling share current session response
   const messages=[]; ws.on('message',data=>messages.push(JSON.parse(data)));
   for(let n=0;n<30&&!messages.length;n++)await pause(20);
   assert.deepEqual(messages.find(m=>m.type==='status')?.data,expected);
-  fs.writeFileSync(fixture, JSON.stringify({identity:{present:true,runId:'R2'},status:{valid:false,reason:'identity_changed'}}));
+  fs.writeFileSync(fixture, JSON.stringify({identity:{present:true,runId:'R2'},status:{valid:true,value:{state:'busy',extra:'preserved'}}}));
+  for(let n=0;n<50&&!messages.some(m=>m.data?.runId==='R2');n++)await pause(20);
+  assert.deepEqual(messages.find(m=>m.data?.runId==='R2')?.data,{...expected,runId:'R2'});
+  fs.writeFileSync(fixture, JSON.stringify({identity:{present:true,runId:'R3'},status:{valid:false,reason:'identity_changed'}}));
   for(let n=0;n<50&&!messages.some(m=>m.data?.reason==='identity_changed');n++)await pause(20);
   const unknown={state:'unknown',reason:'identity_changed',sessionGroup:null};
   assert.deepEqual(messages.find(m=>m.data?.reason==='identity_changed')?.data,unknown);
