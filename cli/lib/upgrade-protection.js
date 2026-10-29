@@ -10,7 +10,7 @@ export const maintenance = require('./upgrade-maintenance.cjs');
 export function maintenanceFor(ctx) { return ctx.maintenance || maintenance; }
 const library = import.meta.dirname;
 function recoveryFiles(runnerName = 'runner.cjs') {
-  const files = [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', runnerName], ['upgrade-finalizer.cjs', 'finalizer.cjs']];
+  const files = [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', runnerName], ['upgrade-installer.cjs', 'installer.cjs']];
 
   return files;
 }
@@ -51,7 +51,7 @@ export function deployUpgradeBootstrap(root, {transactionDir} = {}) {
   }
   // Stable paths are reused by later attempts in a long-lived process. Drop
   // the previous generation only after every replacement is durable.
-  for (const name of ['maintenance.cjs', 'recovery.cjs', 'finalizer.cjs', 'bootstrap.cjs']) {
+  for (const name of ['maintenance.cjs', 'recovery.cjs', 'installer.cjs', 'bootstrap.cjs']) {
     delete require.cache[path.join(dest, name)];
   }
   return path.join(dest, 'bootstrap.cjs');
@@ -91,7 +91,7 @@ export function beginUpgrade(ctx, {
       name,
       existedBefore: fs.existsSync(p),
       backedUp: false,
-      originalHash: fs.existsSync(p) ? maintenance.treeHash(p) : null
+      originalHash: fs.existsSync(p) ? maintenance.treeHash(p, {excludeNodeModules:false}) : null
     };
   });
   const packageJson = path.join(ctx.coreDir, 'package.json'),
@@ -210,27 +210,10 @@ export function saveProtectedCode(ctx) {
     if (!e.existedBefore) continue;
     const p = maintenance.target(j, e.name),
       dest = path.join(ctx.backupDir, 'skills', e.name);
-    fs.cpSync(p, dest, {
-      recursive: true,
-      verbatimSymlinks: true,
-      filter: s => path.relative(p, s).split(path.sep)[0] !== 'node_modules'
-    });
-    if (maintenance.treeHash(dest) !== e.originalHash) throw Error('core backup changed during copy');
+    maintenance.copyTreePreservingModes(p, dest);
+    if (maintenance.treeHash(dest, {excludeNodeModules:false}) !== e.originalHash) throw Error('core backup changed during copy');
     maintenance.fsyncTree(dest);
     maintenance.fsyncDir(path.dirname(dest));
-    const modules=path.join(p,'node_modules');
-    let dependencyStat;
-    try {dependencyStat=fs.lstatSync(modules);} catch(error) {if(error.code!=='ENOENT')throw error;}
-    if(!dependencyStat) e.dependencies={kind:'missing'};
-    else {
-      if(!dependencyStat.isDirectory())throw Error('invalid original skill dependencies: '+e.name);
-      const dependencyBackup=path.join(ctx.backupDir,'dependencies',e.name);
-      fs.cpSync(modules,dependencyBackup,{recursive:true,verbatimSymlinks:true});
-      const originalHash=maintenance.treeHash(dependencyBackup,{excludeNodeModules:false,includeModes:true});
-      maintenance.fsyncTree(dependencyBackup);
-      maintenance.fsyncDir(path.dirname(dependencyBackup));
-      e.dependencies={kind:'directory',sha256:originalHash};
-    }
     e.backedUp = true;
     maintenance.update(dir, j);
   }
@@ -288,7 +271,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     runnerPath: path.join(dir, 'runner.cjs'),
     driverClosureRoot: deps.driverClosureRoot,
     hashes: {
-      'finalizer.cjs': maintenance.hash(path.join(dir, 'finalizer.cjs')),
+      'installer.cjs': maintenance.hash(path.join(dir, 'installer.cjs')),
       'maintenance.cjs': maintenance.hash(path.join(dir, 'maintenance.cjs')),
       'runner.cjs': maintenance.hash(path.join(dir, 'runner.cjs'))
     }

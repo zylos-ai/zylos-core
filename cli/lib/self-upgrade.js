@@ -431,13 +431,11 @@ export function step6_installSkillDeps(ctx, deps = {}) {
       if (!pkg.dependencies || Object.keys(pkg.dependencies).length === 0) continue;
 
       if (!ctx.transactionDir || !ctx.journal) throw Error('skill dependencies require a protected transaction');
-      const original=ctx.coreManifest.find(item=>item.name===entry.name);
-      if(original?.existedBefore && (!original.backedUp || !original.dependencies))throw Error('original skill dependency backup is incomplete');
       const modules=path.join(skillDir,'node_modules');
       let moduleStat;
       try {moduleStat=fs.lstatSync(modules);} catch(error) {if(error.code!=='ENOENT')throw error;}
       if(moduleStat && (!moduleStat.isDirectory() || moduleStat.isSymbolicLink())) throw Error('skill node_modules must be a real directory');
-      const npmCli=ctx.protectedNpmCli || ctx.journal.originalPackage?.npmCli;
+      const npmCli=ctx.protectedNpmCli;
       maintenanceFor(ctx).runInstaller(ctx.transactionDir,ctx.journal,{
         stage:'skill-deps:'+entry.name,npmCli,args:['install','--omit=dev'],cwd:skillDir,timeout:180000,
       });
@@ -654,64 +652,14 @@ export function step12_verifyServices(ctx, deps = {}) {
   return { step: 12, name: 'verify_services', status: 'failed', error: `Timed out after ${TIMEOUT_MS / 1000}s`, duration: Date.now() - startTime };
 }
 
-function stageSkillBaselines(ctx) {
-  const m = maintenanceFor(ctx);
-  const base = path.join(ctx.transactionDir, 'skill-baselines');
-  fs.mkdirSync(base, { mode: 0o700 });
-  const items = [];
+function commitSkillBaselines(ctx) {
   for (const baseline of ctx.pendingBaselines || []) {
-    const skill = path.basename(baseline.destDir);
-    if (baseline.destDir !== path.join(ctx.journal.skillsDir, skill)) throw Error('invalid skill baseline destination');
-    const source = path.join(base, skill);
-    fs.mkdirSync(source, { mode: 0o700 });
-    for (const file of Object.keys(baseline.manifest.files)) {
-      const target = path.resolve(source, file);
-      if (!target.startsWith(source + path.sep)) throw Error('invalid skill baseline path');
-      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-      fs.copyFileSync(path.join(baseline.srcDir, file), target);
+    if (JSON.stringify(generateManifest(baseline.srcDir).files) !== JSON.stringify(baseline.manifest.files)) {
+      throw Error('skill baseline source changed before commit');
     }
-    if (JSON.stringify(generateManifest(source).files) !== JSON.stringify(baseline.manifest.files)) throw Error('skill baseline source changed');
-    items.push({ skill, manifest: baseline.manifest });
-  }
-  m.fsyncTree(base);
-  m.fsyncDir(ctx.transactionDir);
-  m.update(ctx.transactionDir, ctx.journal, { skillBaselines: { formatVersion: 1, items } });
-}
-
-function pendingSkillBaselines(ctx) {
-  const saved = ctx.journal.skillBaselines;
-  if (saved?.formatVersion !== 1 || !Array.isArray(saved.items)) throw Error('durable skill baselines are unavailable');
-  const base = path.join(ctx.transactionDir, 'skill-baselines');
-  const m = maintenanceFor(ctx);
-  m.privatePath(base, { directory: true });
-  return saved.items.map(({ skill, manifest }) => {
-    if (typeof skill !== 'string' || !skill || skill === '.' || skill === '..' || path.basename(skill) !== skill) throw Error('invalid durable skill baseline');
-    const srcDir = path.join(base, skill);
-    m.privatePath(srcDir, { directory: true });
-    if (JSON.stringify(generateManifest(srcDir).files) !== JSON.stringify(manifest?.files)) throw Error(`durable skill baseline is corrupt: ${skill}`);
-    return { destDir: path.join(ctx.journal.skillsDir, skill), srcDir, manifest };
-  });
-}
-
-/** Commit every Core Skill baseline after the complete self-upgrade succeeds. */
-function step13_commitSkillBaselines(ctx) {
-  const startTime = Date.now();
-  try {
-    const baselines = pendingSkillBaselines(ctx);
-    for (const baseline of baselines) {
-      saveMergeBaseline(baseline.destDir, baseline.srcDir, baseline.manifest);
-      maintenanceFor(ctx).fsyncTree(path.join(baseline.destDir, '.zylos'));
-      maintenanceFor(ctx).fsyncDir(baseline.destDir);
-    }
-    return {
-      step: 13,
-      name: 'commit_skill_baselines',
-      status: 'done',
-      message: `${baselines.length} committed`,
-      duration: Date.now() - startTime,
-    };
-  } catch (err) {
-    return { step: 13, name: 'commit_skill_baselines', status: 'failed', error: err.message, duration: Date.now() - startTime };
+    saveMergeBaseline(baseline.destDir, baseline.srcDir, baseline.manifest);
+    maintenanceFor(ctx).fsyncTree(path.join(baseline.destDir, '.zylos'));
+    maintenanceFor(ctx).fsyncDir(baseline.destDir);
   }
 }
 
@@ -791,10 +739,10 @@ export function readUpgradeModeStatus(zylosDir, {execute=execFileSync} = {}) {
       timeout:5000
     });
     const result=JSON.parse(output);
-    if(result?.ok!==true) throw Error('P10 status command did not succeed');
+    if(result?.ok!==true) throw Error('session-mode status command did not succeed');
     return result;
   } catch(cause) {
-    throw Object.assign(Error('P10 session-mode status is unavailable or could not be read.',{cause}),{code:'P10_STATUS_UNAVAILABLE'});
+    throw Object.assign(Error('session-mode status is unavailable or could not be read.',{cause}),{code:'SESSION_MODE_STATUS_UNAVAILABLE'});
   }
 }
 
@@ -841,7 +789,6 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       catch(error){if(error.code!=='ENOENT')throw error;}
       return {status:'skipped',message:'existing working state preserved for mode conversion'};
     });
-    await run(13,'commit_skill_baselines',()=> (deps.commitBaselines || step13_commitSkillBaselines)(ctx));
     await run(7,'verify_publication_for_services',()=> (deps.verifyPublicationForServices || verifyPublicationForServices)(ctx));
     await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(ctx));
     await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(ctx));
@@ -888,11 +835,11 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     const status=await (deps.readModeStatus || (()=>readUpgradeModeStatus(root)))();
     const data=status?.ok===true ? status.data : status;
     if(!data || !Object.hasOwn(data,'sessionMode') || ![null,'single','multi'].includes(data.sessionMode) ||
-        !Object.hasOwn(data,'transition') || data.transition!==null && typeof data.transition!=='object') throw Error('Invalid P10 session-mode status');
+        !Object.hasOwn(data,'transition') || data.transition!==null && typeof data.transition!=='object') throw Error('Invalid session-mode status');
     ctx.modeStatus={state:'observed',sessionMode:data.sessionMode,transition:data.transition};
     completion.modeTransition=data.transition ? 'in_progress' : data.sessionMode===null ? 'pending_auto' : 'none';
   } catch(error) {
-    ctx.modeStatus={state:'unavailable',error:{code:error.code || 'P10_STATUS_UNAVAILABLE',message:error.message}};
+    ctx.modeStatus={state:'unavailable',error:{code:error.code || 'SESSION_MODE_STATUS_UNAVAILABLE',message:error.message}};
   }
   let mode,transition;
   try {
@@ -928,6 +875,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.packageRoot = state.packageRoot;
   ctx.transactionDir=state.transactionDir;
   ctx.transactionId=state.transactionId;
+  ctx.protectedNpmCli=state.protectedNpmCli;
   ctx.backupDir = ctx.transactionDir ? path.join(ctx.transactionDir,'code') : null;
   ctx.from = state.from || null;
   ctx.to = state.to || null;
@@ -993,10 +941,15 @@ async function finalizeInstalledUpgrade(ctx, deps) {
       const result=await fn(ctx,options);
       ctx.steps.push(result);
       if(result.status==='failed') throw Object.assign(Error(result.error), {step:result.step});
+      if(result.step===5) {
+        try { (deps.commitBaselines || commitSkillBaselines)(ctx); }
+        catch(error) {
+          error.step=result.step;
+          error.finalizeStepName=result.name || 'sync_core_skills';
+          throw error;
+        }
+      }
     }
-    // Resume runs in a fresh process and must retain the authoritative merge
-    // bases even if the download directory disappears after the cutoff.
-    stageSkillBaselines(ctx);
     const runtimeClis=await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx);
     ctx.runtimeWarnings=runtimeClis?.warnings || [];
     maintenanceFor(ctx).update(ctx.transactionDir,ctx.journal,{runtimeWarnings:ctx.runtimeWarnings});

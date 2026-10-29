@@ -98,13 +98,13 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     const snapshot = createCoreDbSnapshot({ zylosDir: root, transactionId: 'tx', formatVersion: 2 });
     const closure = prepareRecoveryDependencies(dir, root, { dashboardRoot: path.join(home, 'uninstalled-dashboard') });
     for (const [source, target] of [['upgrade-maintenance.cjs', 'maintenance.cjs'],
-      ['upgrade-recovery.cjs', 'runner.cjs'], ['upgrade-finalizer.cjs', 'finalizer.cjs']]) {
+      ['upgrade-recovery.cjs', 'runner.cjs'], ['upgrade-installer.cjs', 'installer.cjs']]) {
       fs.copyFileSync(path.join(packageRoot, 'cli/lib', source), path.join(dir, target));
       fs.chmodSync(path.join(dir, target), 0o600);
     }
     m.durable(path.join(dir, 'descriptor.json'), { formatVersion: 1, transactionId: 'tx', ...closure,
       runnerPath: path.join(dir, 'runner.cjs'), hashes: Object.fromEntries(
-        ['maintenance.cjs', 'runner.cjs', 'finalizer.cjs'].map(name => [name, m.hash(path.join(dir, name))])) });
+        ['maintenance.cjs', 'runner.cjs', 'installer.cjs'].map(name => [name, m.hash(path.join(dir, name))])) });
     const packageJson = path.join(home, 'old-package.json'), cliRoot = path.join(home, 'old-cli');
     fs.writeFileSync(packageJson, '{}'); fs.mkdirSync(cliRoot);
     journal = { formatVersion: 1, transactionId: 'tx', zylosDir: root, skillsDir,
@@ -201,10 +201,10 @@ test('upgrade preparation rejects malformed settings before cutoff and preserves
   assert.equal(f.calls.includes('restart'), false);
 });
 
-test('default finalizer reports unknown when P10 status cannot be read', async t => {
+test('default finalizer reports unknown when session-mode status cannot be read', async t => {
   const f = fixture(t);
   const result = await f.run({ readModeStatus: () => {
-    throw Object.assign(Error('injected P10 status failure'), { code: 'P10_STATUS_UNAVAILABLE' });
+    throw Object.assign(Error('injected session-mode status failure'), { code: 'SESSION_MODE_STATUS_UNAVAILABLE' });
   } });
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(result.completion.modeTransition, 'unknown');
@@ -398,46 +398,6 @@ test('resume entry preserves step 4 lock timeout without adding persistent field
   assert.equal(f.load().phase,'recovery_required');
 });
 
-test('resume repairs a failed skill baseline commit before starting services',async t=>{
-  const f=fixture(t);
-  await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});
-  f.calls.length=0;
-  let attempts=0;
-  const resume=()=>resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},
-    finalize:ctx=>resumeUpgradeFinalization(ctx,{...f.deps,
-      commitBaselines(){
-        attempts++;
-        if(attempts===1)throw Object.assign(Error('baseline commit denied'),{code:'EACCES'});
-        return {status:'done'};
-      }})});
-  const failed=await resume();
-  assert.equal(failed.ok,false);
-  assert.deepEqual(failed.data.core.failedItems,[{id:'step13',code:'UPGRADE_FAILED',reason:'baseline commit denied'}]);
-  assert.deepEqual(failed.data.dashboard,{state:'degraded',errors:[]});
-  assert.equal(f.calls.filter(call=>call==='start').length,0);
-  assert.equal(f.calls.includes('dashboard-verify'),false);
-  assert.equal(f.load().phase,'recovery_required');
-  assert.equal(f.load().lastError,'baseline commit denied');
-  assert.equal(Object.hasOwn(f.load(),'error'),false);
-  const commandModule=new URL('../../commands/component.js',import.meta.url).href;
-  const resumeModule=new URL('../upgrade-resume.js',import.meta.url).href;
-  const command=spawnSync(process.execPath,['--experimental-test-module-mocks','--input-type=module','-e',`
-    import {mock} from 'node:test';
-    mock.module(${JSON.stringify(resumeModule)},{namedExports:{resumeFinalize:async()=>(${JSON.stringify(failed)})}});
-    const {upgradeComponent}=await import(${JSON.stringify(commandModule)});
-    await upgradeComponent(['--resume-finalize','--json']);
-  `],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:f.root}});
-  assert.equal(command.status,1,command.stderr);
-  assert.notEqual(command.stdout,'',command.stderr);
-  assert.deepEqual(JSON.parse(command.stdout),failed);
-  const repaired=await resume();
-  assert.equal(repaired.ok,true,JSON.stringify(repaired));
-  assert.equal(attempts,2);
-  assert.equal(f.calls.filter(call=>call==='start').length,1);
-  assert.equal(f.load().phase,'upgrade_complete');
-  assertDataPreserved(f);
-});
-
 for(const boundary of ['publication','manifest'])test(`resume reports an unnumbered ${boundary} failure as finalize`,async t=>{
   const f=fixture(t);
   await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});
@@ -453,7 +413,7 @@ for(const boundary of ['publication','manifest'])test(`resume reports an unnumbe
     }});
   assert.equal(result.ok,false);
   assert.equal(result.data.core.failedItems[0].id,'finalize');
-  assert.equal(result.data.core.failedItems[0].code,'UPGRADE_FAILED');
+  assert.equal(result.data.core.failedItems[0].code,boundary==='publication'?'EACCES':'UPGRADE_FAILED');
   assert.deepEqual(result.data.dashboard,{state:'degraded',errors:[]});
   assert.equal(f.calls.includes('start'),false);
 });
@@ -510,7 +470,7 @@ for (const [fault, step, code] of [
   readingFault=false;
   assert.equal(result.success,false,JSON.stringify(result));
   assert.equal(result.failedStep,step);
-  assert.equal(result.code,['LOCK_TIMEOUT'].includes(code)?code:'UPGRADE_FAILED');
+  assert.equal(result.code,code);
   assert.match(result.next,/resume-finalize/);
   assert.equal(f.calls.includes('start'),false);
   assert.equal(f.load().phase,'recovery_required');
@@ -732,7 +692,7 @@ test('finalizer returns the original failure when its journal becomes unreadable
   assert.equal(result.action, 'self_upgrade');
   assert.equal(result.success, false);
   assert.equal(result.error, 'original sync failure');
-  assert.equal(result.code, 'UPGRADE_FAILED');
+  assert.equal(result.code, 'SYNC_FAILED');
   assert.equal(typeof result.recoveryError, 'string');
   assert.ok(result.recoveryError.length > 0);
   assert.equal(result.recovery_required, true);

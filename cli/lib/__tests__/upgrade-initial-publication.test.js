@@ -70,7 +70,7 @@ test('transaction recovery is durably saved before the first journal is publishe
   fs.renameSync = (source, destination) => {
     if (path.basename(destination) === 'journal.json' && !checked) {
       checked = true;
-      for (const name of ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs']) {
+      for (const name of ['runner.cjs', 'maintenance.cjs', 'installer.cjs']) {
         const file = path.join(path.dirname(destination), name);
         assert.equal(fs.existsSync(file), true);
         if (process.platform === 'linux') assert.equal(synced.has(file), true, name + ' was not fsynced first');

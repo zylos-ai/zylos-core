@@ -56,7 +56,7 @@ test('thin entry refuses recovery failure before checking or downloading updates
   assert.equal(checked, false);
 });
 
-test('thin entry normalizes and redacts recovery exceptions before checking or downloading', async t => {
+test('thin entry preserves and redacts recovery exception codes before checking or downloading', async t => {
   const {upgradeSelfCore} = await import('../../commands/component.js');
   const root=fixture(t), output=[];
   let checked=false, downloaded=false;
@@ -69,7 +69,7 @@ test('thin entry normalizes and redacts recovery exceptions before checking or d
   }), false);
   assert.equal(checked,false);
   assert.equal(downloaded,false);
-  assert.equal(output[0].code,'UPGRADE_FAILED');
+  assert.equal(output[0].code,'EACCES');
   assert.deepEqual(output[0].persisted,[]);
   assert.equal(output[0].recovery_required,false);
   assert.doesNotMatch(output[0].error,new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
@@ -157,7 +157,14 @@ for (const phase of ['check-throw','check-result','download-throw','download-res
   assert.equal(await upgradeSelfCore({skipConfirm:true,jsonOutput:true},deps),false);
   assert.equal(output.length,1);
   assert.equal(output[0].success,false);
-  assert.equal(output[0].code,'UPGRADE_FAILED');
+  const expectedCode={
+    'check-throw':'MODULE_NOT_FOUND',
+    'check-result':'ERR_INVALID_ARG_TYPE',
+    'download-throw':'MODULE_NOT_FOUND',
+    'download-result':'SQLITE_ERROR',
+    'package-check':'UPGRADE_FAILED',
+  }[phase];
+  assert.equal(output[0].code,expectedCode);
   assert.deepEqual(output[0].persisted,[]);
   assert.doesNotMatch(output[0].error,/\/private\/|ENOENT|Require stack/);
   if(phase==='package-check')assert.equal(output[0].error,'Incomplete target package: package.json');

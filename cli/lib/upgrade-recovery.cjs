@@ -3,6 +3,7 @@
 const fs = require('node:fs'),
   path = require('node:path');
 const m = require('./maintenance.cjs');
+const failureCode = value => typeof value?.code === 'string' && value.code.length > 0 ? value.code : 'UPGRADE_FAILED';
 function fail(dir, j, error) {
   try {
     m.marker(j.zylosDir, dir, j);
@@ -43,7 +44,7 @@ function originalVerified(dir, j) {
   }
   for (const e of j.coreManifest) {
     const p = m.target(j, e.name);
-    if (e.existedBefore ? !fs.existsSync(p) || m.treeHash(p) !== e.originalHash : fs.existsSync(p)) throw Error('original core deployment changed: ' + e.name);
+    if (e.existedBefore ? !fs.existsSync(p) || m.treeHash(p,{excludeNodeModules:false}) !== e.originalHash : fs.existsSync(p)) throw Error('original core deployment changed: ' + e.name);
   }
   const ecosystem = path.join(j.zylosDir, 'pm2', 'ecosystem.config.cjs');
   if (j.initialIdentity.ecosystemHash ? !fs.existsSync(ecosystem) || m.hash(ecosystem) !== j.initialIdentity.ecosystemHash : fs.existsSync(ecosystem)) throw Error('original ecosystem changed');
@@ -73,7 +74,7 @@ function originalVerified(dir, j) {
     if (r.error || r.status !== 0) {
       let failure;
       try {failure=JSON.parse(r.stdout).error;} catch {}
-      throw Object.assign(Error(failure?.message || r.error?.message || 'original readonly verification failed'),{code:failure?.code || 'UPGRADE_FAILED'});
+      throw Object.assign(Error(failure?.message || r.error?.message || 'original readonly verification failed'),{code:failureCode(failure)});
     }
     result = JSON.parse(r.stdout);
   }
@@ -174,40 +175,18 @@ function rescue(dir, j) {
 }
 function restoreCore(dir, j) {
   j.codeRestore ||= {};
-  const dependencyState=(entry,skill) => {
-    const saved=entry.dependencies,modules=path.join(skill,'node_modules');
-    if(!saved || !['missing','directory'].includes(saved.kind))throw Error('missing original skill dependency evidence: '+entry.name);
-    const backup=path.join(dir,'code','dependencies',entry.name);
-    if(saved.kind==='directory') {
-      if(typeof saved.sha256!=='string' || !/^[a-f0-9]{64}$/.test(saved.sha256))throw Error('invalid original skill dependency hash');
-      m.privatePath(backup,{directory:true});
-      if(fs.realpathSync(backup)!==path.resolve(backup))throw Error('redirected skill dependency backup: '+entry.name);
-      if(m.treeHash(backup,{excludeNodeModules:false,includeModes:true})!==saved.sha256)throw Error('skill dependency backup changed: '+entry.name);
-    }
-    let stat;
-    try {stat=fs.lstatSync(modules);} catch(error) {if(error.code!=='ENOENT')throw error;}
-    const matches=saved.kind==='missing' ? !stat : !!stat?.isDirectory()&&!stat.isSymbolicLink()&&m.treeHash(modules,{excludeNodeModules:false,includeModes:true})===saved.sha256;
-    return {saved,modules,backup,matches};
-  };
   for (const e of j.coreManifest) {
     const p = m.target(j, e.name),
       backup = path.join(dir, 'code', 'skills', e.name),
       state = j.codeRestore[e.name];
     if (e.existedBefore) {
-      if (!e.backedUp || !fs.existsSync(backup) || m.treeHash(backup) !== e.originalHash) throw Error('invalid core backup: ' + e.name);
-      const dependencies=dependencyState(e,p);
+      if (!e.backedUp || !fs.existsSync(backup) || m.treeHash(backup,{excludeNodeModules:false}) !== e.originalHash) throw Error('invalid core backup: ' + e.name);
       if (state?.complete) {
-        if (!fs.existsSync(p) || m.treeHash(p) !== e.originalHash || !dependencies.matches) throw Error('completed core restore changed: ' + e.name);
+        if (!fs.existsSync(p) || m.treeHash(p,{excludeNodeModules:false}) !== e.originalHash) throw Error('completed core restore changed: ' + e.name);
         continue;
       }
       m.sync(backup, p);
-      if(!dependencies.matches) {
-        fs.rmSync(dependencies.modules,{recursive:true,force:true});
-        if(dependencies.saved.kind==='directory')fs.cpSync(dependencies.backup,dependencies.modules,{recursive:true,verbatimSymlinks:true});
-        m.fsyncTree(p);
-        if(!dependencyState(e,p).matches)throw Error('skill dependency restore verification failed: '+e.name);
-      }
-      if (m.treeHash(p) !== e.originalHash) throw Error('core restore verification failed');
+      if (m.treeHash(p,{excludeNodeModules:false}) !== e.originalHash) throw Error('core restore verification failed');
     } else if (fs.existsSync(p)) {
       const ownership = path.join(p, '.zylos', 'upgrade-owner.json');
       if (!fs.existsSync(ownership) || m.read(ownership).transactionId !== j.transactionId) throw Error('new core directory provenance unknown: ' + e.name);
@@ -425,7 +404,7 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
       m.update(dir, j);
     }
     if (j.installationIntent === false) {
-      if (!['preparing', 'code_saved', 'stopping', 'offline', 'snapshot_saved', 'runner_saved', 'prepared', 'aborted_before_install'].includes(j.phase)) throw Error('unrecognized preinstall recovery phase: ' + j.phase);
+      if (!['preparing', 'code_saved', 'stopping', 'offline', 'snapshot_saved', 'runner_saved', 'prepared', 'installing', 'aborted_before_install'].includes(j.phase)) throw Error('unrecognized preinstall recovery phase: ' + j.phase);
       return abort(dir, j);
     }
     if (j.installationIntent !== true || !m.READY.has(j.phase) && !['installing', 'restoring'].includes(j.phase)) throw Error('unrecognized installed recovery phase: ' + j.phase);

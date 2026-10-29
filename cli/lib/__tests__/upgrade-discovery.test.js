@@ -8,7 +8,7 @@ import {recoverBeforeUpgrade} from '../upgrade-discovery.js';
 function fixture() {
   let complete = false;
   const dir = '/isolated/.backup/self-upgrade/upgrade-1-fixture';
-  const hashes = Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name, 'a'.repeat(64)]));
+  const hashes = Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name, 'a'.repeat(64)]));
   const m = {discover:() => ({candidates:complete ? [] : [{dir,journal:{recoveryHashes:hashes}}], diagnostics:[], marker:null}),
     canRecognizeProcesses:() => true, privatePath() {}, hash:() => 'a'.repeat(64)};
   m.validateRecoveryFiles=(_dir,j)=>{if(Object.values(j.recoveryHashes).some(value=>value!==m.hash()))throw Error('transaction recovery material changed');};

@@ -53,12 +53,11 @@ function deps(calls, extras={}) {
     startServices:()=>{calls.push('start');return {status:'done'};},
     verifyServices:()=>{calls.push('verify');return {status:'done'};},
     dashboardOwner:{verifyDashboard:()=>{calls.push('dashboard');return {state:'degraded',errors:[]};}},
-    readModeStatus:()=>{throw Object.assign(Error('P10 session-mode status is unavailable'),{code:'P10_STATUS_UNAVAILABLE'});},
+    readModeStatus:()=>{throw Object.assign(Error('session-mode status is unavailable'),{code:'SESSION_MODE_STATUS_UNAVAILABLE'});},
     readMode:()=>{calls.push('mode');return {mode:null,keyPresent:false};},
     readTransition:()=>{calls.push('transition');return null;},
     restart:async options=>{calls.push('restart');assert.equal((await options.readMode()).mode,'single');return {ok:true,data:{result:'exit_enqueued'}};},
     audit:()=>{calls.push('audit');return [];},
-    commitBaselines:()=>{calls.push('baselines');return {status:'done'};},
     verifyPublicationForServices(){},protectedSuccess(){},
     ...extras,
   };
@@ -72,7 +71,7 @@ for(const failing of [false,true]) test(`finalization retains optional runtime w
   assert.equal(result.success,!failing);
   assert.deepEqual(JSON.parse(JSON.stringify(result)).warnings,ctx.runtimeWarnings);
   if(failing){
-    assert.equal(result.code,'UPGRADE_FAILED');
+    assert.equal(result.code,'MEMORY_UNAVAILABLE');
     assert.equal(result.recovery_required,true);
     assert.equal(calls.includes('start'),false);
   }
@@ -89,12 +88,12 @@ test('tail preserves W1 and follows F1, W7, services, restart and audit order',a
   assert.equal(result.completion.dashboard,'degraded');
   assert.equal(result.completion.sessionRestart,'single_exit_enqueued');
   assert.equal(result.completion.modeTransition,'unknown');
-  assert.equal(result.modeStatus.error.code,'P10_STATUS_UNAVAILABLE');
+  assert.equal(result.modeStatus.error.code,'SESSION_MODE_STATUS_UNAVAILABLE');
   assert.equal(Object.hasOwn(result,'instructionFilesRebuilt'),false);
-  assert.deepEqual(calls,['thresholds','ensure','rotate','baselines','start','verify','dashboard','mode','transition','restart','audit']);
+  assert.deepEqual(calls,['thresholds','ensure','rotate','start','verify','dashboard','mode','transition','restart','audit']);
   assert.equal(fs.readFileSync(path.join(ctx.zylosDir,'memory/state.md'),'utf8'),state);
 });
-test('P10 status adapter invokes only the read-only command with its own timeout and root',()=>{
+test('session-mode status adapter invokes only the read-only command with its own timeout and root',()=>{
   const observation={ok:true,data:{sessionMode:'multi',transition:null}};
   assert.deepEqual(readUpgradeModeStatus('/isolated/root',{execute:(node,args,options)=>{
     assert.equal(node,process.execPath);
@@ -104,13 +103,13 @@ test('P10 status adapter invokes only the read-only command with its own timeout
     return JSON.stringify(observation);
   }}),observation);
 });
-for(const outcome of ['unavailable','invalid-json','rejected']) test(`P10 status adapter reports ${outcome} without guessing a mode`,()=>{
+for(const outcome of ['unavailable','invalid-json','rejected']) test(`session-mode status adapter reports ${outcome} without guessing a mode`,()=>{
   assert.throws(()=>readUpgradeModeStatus('/isolated/root',{execute:()=>{
     if(outcome==='unavailable')throw Error('Unknown command: session-mode');
     return outcome==='invalid-json'?'invalid':JSON.stringify({ok:false});
-  }}),{code:'P10_STATUS_UNAVAILABLE'});
+  }}),{code:'SESSION_MODE_STATUS_UNAVAILABLE'});
 });
-test('mode transition reporting uses P10 status independently of restart routing',async t=>{
+test('mode transition reporting uses session-mode status independently of restart routing',async t=>{
   const ctx=fixture(t),calls=[];
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
     readModeStatus:()=>({ok:true,data:{sessionMode:'multi',transition:null}}),
@@ -120,7 +119,7 @@ test('mode transition reporting uses P10 status independently of restart routing
   assert.deepEqual(result.modeStatus,{state:'observed',sessionMode:'multi',transition:null});
   assert.equal(result.completion.sessionRestart,'single_exit_enqueued');
 });
-test('unreadable P10 status remains unknown despite successful restart routing',async t=>{
+test('unreadable session-mode status remains unknown despite successful restart routing',async t=>{
   const ctx=fixture(t),calls=[];
   const result=await completeUpgradeFinalization(ctx,deps(calls,{readModeStatus:()=>{throw Error('DB_BUSY');}}));
   assert.equal(result.success,true);
@@ -165,17 +164,6 @@ test('restart path read errors are reported without submitting; audit failure is
   assert.equal(calls.includes('restart'),false);
   assert.equal(result.checkpointAudit.state,'incomplete');
 });
-test('baseline failure prevents service and restart submission and leaves install pending',async t=>{
-  const ctx=fixture(t),calls=[];
-  const result=await completeUpgradeFinalization(ctx,deps(calls,{commitBaselines:()=>({status:'failed',error:'baseline write denied'})}));
-  assert.equal(result.success,false);
-  assert.equal(result.completion.install,'pending');
-  assert.equal(result.failedStep,13);
-  assert.match(result.error,/baseline write denied/);
-  assert.equal(calls.includes('start'),false);
-  assert.equal(calls.includes('restart'),false);
-});
-
 for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dashboard ${failing || 'success'} preserves independent outcomes`,async t=>{
   const ctx=fixture(t),calls=[];
   ctx.firstDashboardTakeover=true;

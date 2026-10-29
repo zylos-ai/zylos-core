@@ -731,6 +731,18 @@ function fsyncTree(dir) {
   }
   fsyncDir(dir);
 }
+function copyTreePreservingModes(src, dest) {
+  fs.cpSync(src, dest, {recursive:true, verbatimSymlinks:true});
+  function apply(source, target) {
+    const sourceStat = fs.lstatSync(source);
+    if (sourceStat.isSymbolicLink()) return;
+    if (sourceStat.isDirectory()) {
+      for (const name of fs.readdirSync(source)) apply(path.join(source, name), path.join(target, name));
+    } else if (!sourceStat.isFile()) throw Error('unsupported deployment file');
+    fs.chmodSync(target, sourceStat.mode & 0o7777);
+  }
+  apply(src, dest);
+}
 function target(j, name) {
   if (!ID.test(name) || !j.coreManifest.some(e => e.name === name)) throw Error('invalid core member');
   const root = fs.realpathSync(j.skillsDir),
@@ -745,18 +757,8 @@ function target(j, name) {
   return p;
 }
 function sync(src, dest) {
-  fs.mkdirSync(dest, {
-    recursive: true
-  });
-  for (const e of fs.readdirSync(dest)) if (e !== 'node_modules') fs.rmSync(path.join(dest, e), {
-    recursive: true,
-    force: true
-  });
-  fs.cpSync(src, dest, {
-    recursive: true,
-    verbatimSymlinks: true,
-    filter: p => path.relative(src, p).split(path.sep)[0] !== 'node_modules'
-  });
+  fs.rmSync(dest, {recursive:true, force:true});
+  copyTreePreservingModes(src, dest);
   fsyncTree(dest);
   fsyncDir(path.dirname(dest));
 }
@@ -774,7 +776,9 @@ function worker(dir, j, payload) {
   try {response=JSON.parse(result.stdout);} catch {}
   if(result.error || result.status!==0) {
     throw Object.assign(Error(response?.error?.message || result.error?.message || 'SQLite worker failed'), {
-      code:response?.error?.code || 'UPGRADE_FAILED'
+      code:typeof response?.error?.code === 'string' && response.error.code.length > 0
+        ? response.error.code
+        : 'UPGRADE_FAILED'
     });
   }
   if(!response)throw Error('Invalid SQLite worker response');
@@ -797,7 +801,7 @@ function validateDescriptor(dir, j, d) {
     driverClosureRoot: closure
   };
   for (const [key, value] of Object.entries(fixed)) if (d[key] !== value) throw Error('recovery material outside fixed layout: ' + key);
-  const names = ['finalizer.cjs', 'maintenance.cjs', 'runner.cjs'];
+  const names = ['installer.cjs', 'maintenance.cjs', 'runner.cjs'];
   if (!d.hashes || Array.isArray(d.hashes) || Object.keys(d.hashes).length !== names.length || names.some(name => !Object.hasOwn(d.hashes, name))) throw Error('missing required recovery material hashes');
   for (const name of names) {
     privatePath(path.join(dir, name));
@@ -896,7 +900,7 @@ function finishTerminal(dir, j) {
   return {complete:true, warnings:[]};
 }
 
-function validateRecoveryFiles(dir, j, names = ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs']) {
+function validateRecoveryFiles(dir, j, names = ['runner.cjs', 'maintenance.cjs', 'installer.cjs']) {
   for (const name of names) {
     const file = path.join(dir, name);
     privatePath(file);
@@ -908,25 +912,125 @@ function runInstaller(dir, j, {stage, npmCli, args, cwd, timeout = 180000}) {
   privatePath(npmCli);
   if (path.basename(npmCli) !== 'npm-cli.js' || !path.isAbsolute(npmCli)) throw Error('untrusted npm CLI');
   update(dir, j, {installerStarted:true, installerStage:stage, installerPid:null, installerIdentity:null, installerExitConfirmed:false, installerExitUnconfirmed:false});
-  const result = cp.spawnSync(j.nodePath, [path.join(dir, 'finalizer.cjs'), 'installer', dir], {cwd,
-    input:JSON.stringify({npmCli,args,timeout}), env:{...process.env, ZYLOS_PROTECTED_INSTALL:'1', ZYLOS_SKIP_POSTINSTALL:'1', ZYLOS_UPGRADE_FROM_VERSION:j.from},
+  const env={...process.env, ZYLOS_PROTECTED_INSTALL:'1'};
+  delete env.ZYLOS_SKIP_POSTINSTALL;
+  delete env.ZYLOS_UPGRADE_FROM_VERSION;
+  const result = cp.spawnSync(j.nodePath, [path.join(dir, 'installer.cjs'), 'installer', dir], {cwd,
+    input:JSON.stringify({npmCli,args,timeout}), env,
     encoding:'utf8', stdio:['pipe','pipe','pipe'], detached:true, timeout:timeout+10000, killSignal:'SIGKILL', maxBuffer:4*1024*1024});
   Object.assign(j, read(path.join(dir, 'journal.json')));
-  const confirmed = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:true, kind:'installer'});
+  const confirmed = require(path.join(dir, 'installer.cjs')).quiesce(dir, j, {terminate:true, kind:'installer'});
   update(dir, j, {installerExitConfirmed:confirmed.confirmed, installerExitUnconfirmed:!confirmed.confirmed});
   if (!confirmed.confirmed) throw Error(confirmed.error || 'installer exit unconfirmed');
   if (result.error || result.status !== 0) throw Error(result.error?.message || result.stderr?.trim() || 'npm ' + stage + ' failed');
   return result.stdout;
 }
-function restoreOriginalPackage(dir, j) {
-  const original = j.originalPackage;
-  if (!original || original.sourceVersion !== j.from || typeof original.path !== 'string' || path.dirname(original.path) !== path.resolve(dir) || !original.path.endsWith('.tgz')) throw Error('original package preservation evidence missing');
-  privatePath(original.path);
-  if (hash(original.path) !== original.sha256) throw Error('original package archive changed');
-  if (!j.originalPackageRestored) {
-    runInstaller(dir, j, {stage:'restore-original-package', npmCli:original.npmCli, args:['install', '-g', original.path], cwd:dir});
-    update(dir, j, {originalPackageRestored:true});
+function packageBins(metadata) {
+  const result = new Map();
+  const declared = typeof metadata?.bin === 'string'
+    ? {[String(metadata.name || '').split('/').pop()]:metadata.bin}
+    : metadata?.bin;
+  if (declared === undefined) return result;
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) throw Error('invalid installed package bin mapping');
+  for (const [name, target] of Object.entries(declared)) {
+    if (!name || path.basename(name) !== name || typeof target !== 'string' || !target) throw Error('invalid installed package bin mapping');
+    result.set(name, target);
   }
+  return result;
+}
+function globalPackageLayout(sourceRoot) {
+  sourceRoot = path.resolve(sourceRoot);
+  const suffix = path.join('lib', 'node_modules', 'zylos');
+  const prefix = path.dirname(path.dirname(path.dirname(sourceRoot)));
+  if (path.join(prefix, suffix) !== sourceRoot) throw Error('installed package root is outside the supported global npm layout');
+  return {sourceRoot, prefix, binDir:path.join(prefix, 'bin')};
+}
+function validateSupportedGlobalLayout(sourceRoot, metadata, {recovery = false} = {}) {
+  const unsupported = message => Object.assign(Error(message), {code:'UNSUPPORTED_INSTALL_LAYOUT'});
+  let layout;
+  try { layout = globalPackageLayout(sourceRoot); }
+  catch { throw unsupported('Installed Core is outside the supported global npm layout.'); }
+  sourceRoot = layout.sourceRoot;
+  let rootStat;
+  try { rootStat = fs.lstatSync(sourceRoot); } catch (error) {
+    if (recovery && error.code === 'ENOENT') return layout;
+    throw unsupported('Installed Core must use the supported global npm layout.');
+  }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw unsupported('Installed Core must be a real global package directory.');
+  }
+  if (recovery) return layout;
+  const {binDir} = layout;
+  let binStat;
+  try { binStat = fs.lstatSync(binDir); } catch { throw unsupported('The global npm bin directory is unavailable.'); }
+  if (!binStat.isDirectory() || binStat.isSymbolicLink()) throw unsupported('The global npm bin path must be a real directory.');
+  for (const [name, target] of packageBins(metadata)) {
+    const expected = path.resolve(sourceRoot, target);
+    if (expected === sourceRoot || !expected.startsWith(sourceRoot + path.sep)) throw unsupported('Installed Core declares an unsafe bin target.');
+    let targetStat;
+    try { targetStat = fs.statSync(expected); } catch { throw unsupported('Installed Core bin targets are unavailable.'); }
+    if (!targetStat.isFile()) throw unsupported('Installed Core bin targets must be files.');
+    const link = path.join(binDir, name);
+    let stat;
+    try { stat = fs.lstatSync(link); } catch { throw unsupported('Installed Core bin links do not match package metadata.'); }
+    if (!stat.isSymbolicLink()) {
+      throw unsupported('Installed Core bin links do not match package metadata.');
+    }
+    const resolved = path.resolve(binDir, fs.readlinkSync(link));
+    if (resolved === sourceRoot || !resolved.startsWith(sourceRoot + path.sep)) throw unsupported('Installed Core bin links do not resolve into the package.');
+  }
+  return layout;
+}
+function reconcilePackageBins(sourceRoot, originalMetadata) {
+  const desired = packageBins(originalMetadata);
+  const {binDir} = globalPackageLayout(sourceRoot);
+  for (const [name, target] of desired) {
+    const link = path.join(binDir, name), expected = path.resolve(sourceRoot, target);
+    if (expected === sourceRoot || !expected.startsWith(sourceRoot + path.sep)) throw Error('installed package bin target escapes package root');
+    if (!fs.statSync(expected).isFile()) throw Error('installed package bin target is not a file: ' + name);
+    let stat;
+    try { stat = fs.lstatSync(link); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (stat?.isSymbolicLink()) {
+      const current = path.resolve(binDir, fs.readlinkSync(link));
+      if (current === expected) continue;
+      if (current === sourceRoot || current.startsWith(sourceRoot + path.sep)) fs.unlinkSync(link);
+      else throw Error('global package bin link is not owned by the package: ' + name);
+    }
+    else if (stat) throw Error('global package bin path is not a symlink: ' + name);
+    fs.symlinkSync(path.relative(binDir, expected), link);
+  }
+  fsyncDir(binDir);
+}
+function restoreOriginalPackage(dir, j) {
+  verifyFinalizerExit(dir, j);
+  if (j.installationIntent !== true) return false;
+  const original = j.originalPackage;
+  const sourceRoot = original?.sourceRoot;
+  const snapshot = path.join(path.resolve(dir), 'code', 'original-package');
+  if (!original || original.path !== snapshot || sourceRoot !== path.dirname(j.initialIdentity.packageJson) || original.sourceVersion !== j.from ||
+      typeof original.treeHash !== 'string' || !/^[a-f0-9]{64}$/.test(original.treeHash)) throw Error('original package preservation evidence missing');
+  privatePath(snapshot, {directory:true});
+  if (fs.realpathSync(snapshot) !== snapshot || treeHash(snapshot, {excludeNodeModules:false, includeModes:true}) !== original.treeHash) {
+    throw Error('original package snapshot changed');
+  }
+  const metadata = read(path.join(snapshot, 'package.json'));
+  if (metadata.version !== original.sourceVersion) throw Error('original package snapshot version changed');
+  let currentHash = null;
+  try {
+    validateSupportedGlobalLayout(sourceRoot, metadata, {recovery:true});
+    currentHash = treeHash(sourceRoot, {excludeNodeModules:false, includeModes:true});
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (currentHash !== original.treeHash) {
+    validateSupportedGlobalLayout(sourceRoot, metadata, {recovery:true});
+    if (!j.originalPackageRestoreStarted) update(dir, j, {originalPackageRestoreStarted:true});
+    fs.rmSync(sourceRoot, {recursive:true, force:true});
+    copyTreePreservingModes(snapshot, sourceRoot);
+    fsyncTree(sourceRoot);
+    fsyncDir(path.dirname(sourceRoot));
+    if (treeHash(sourceRoot, {excludeNodeModules:false, includeModes:true}) !== original.treeHash) throw Error('original package restore verification failed');
+  }
+  reconcilePackageBins(sourceRoot, metadata);
+  if (!j.originalPackageRestored) update(dir, j, {originalPackageRestored:true});
   if (hash(j.initialIdentity.packageJson) !== j.initialIdentity.packageHash || treeHash(j.initialIdentity.cliRoot) !== j.initialIdentity.cliHash) throw Error('restored installed package identity mismatch');
 }
 function verifyFinalizerExit(dir, j) {
@@ -937,7 +1041,7 @@ function verifyFinalizerExit(dir, j) {
     const descriptorFile = path.join(dir, 'descriptor.json');
     if (fs.existsSync(descriptorFile)) validateDescriptor(dir, j, read(descriptorFile));
     validateRecoveryFiles(dir, j);
-    const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:true, kind:'installer'});
+    const result = require(path.join(dir, 'installer.cjs')).quiesce(dir, j, {terminate:true, kind:'installer'});
     if (!result.confirmed) throw Error(result.error || 'installer exit requires verification before resume');
     update(dir, j, {installerExitUnconfirmed:false, installerExitConfirmed:true});
   }
@@ -946,6 +1050,8 @@ module.exports = {
   validateRecoveryFiles,
   runInstaller,
   restoreOriginalPackage,
+  validateSupportedGlobalLayout,
+  copyTreePreservingModes,
   verifyFinalizerExit,
   classifyCutoff,
   fsyncFd,

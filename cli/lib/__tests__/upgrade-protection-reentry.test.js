@@ -36,7 +36,7 @@ test('stable deployment reloads all frozen modules across same-process attempts'
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const require=createRequire(import.meta.url),entry=deployUpgradeBootstrap(root),stable=path.dirname(entry);
  const first=new Map();
- for(const name of ['maintenance.cjs','recovery.cjs','finalizer.cjs','bootstrap.cjs']) first.set(name,require(path.join(stable,name)));
+ for(const name of ['maintenance.cjs','recovery.cjs','installer.cjs','bootstrap.cjs']) first.set(name,require(path.join(stable,name)));
  deployUpgradeBootstrap(root);
  for(const [name,previous] of first) assert.notEqual(require(path.join(stable,name)),previous,name+' reused the prior generation');
 });

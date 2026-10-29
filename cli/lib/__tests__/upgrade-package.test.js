@@ -5,89 +5,158 @@ import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {saveOriginalPackage} from '../upgrade-package.js';
+
 const m = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-original-package-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-original-package-')));
   t.after(() => fs.rmSync(root, {recursive:true, force:true}));
-  const source = path.join(root, 'installed'), dir = path.join(root, 'transaction');
-  fs.mkdirSync(path.join(source, 'cli'), {recursive:true}); fs.mkdirSync(dir);
-  fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({name:'fixture-core', version:'0.9.3', bundledDependencies:['unsafe']}));
-  fs.writeFileSync(path.join(source, 'cli', 'entry.js'), 'original CLI');
-  fs.mkdirSync(path.join(source, 'node_modules', 'unsafe'), {recursive:true});
-  fs.writeFileSync(path.join(source, 'node_modules', 'unsafe', 'secret'), 'must not be packed');
-  const npmCli = path.join(root, 'npm-cli.js'); fs.writeFileSync(npmCli, '');
-  const journal = {nodePath:process.execPath, from:'0.9.3', installationIntent:false};
-  m.update(dir, journal);
-  return {root, source, dir, ctx:{maintenance:m, coreDir:source, from:'0.9.3', transactionDir:dir, journal, protectedNpmCli:npmCli}};
+  const prefix = path.join(root, 'prefix');
+  const sourceRoot = path.join(prefix, 'lib', 'node_modules', 'zylos');
+  const transactionDir = path.join(root, 'transaction');
+  fs.mkdirSync(path.join(sourceRoot, 'cli'), {recursive:true});
+  fs.mkdirSync(path.join(sourceRoot, 'node_modules', 'dependency'), {recursive:true});
+  fs.mkdirSync(path.join(prefix, 'bin'), {recursive:true});
+  fs.mkdirSync(transactionDir);
+  fs.writeFileSync(path.join(sourceRoot, 'package.json'), JSON.stringify({
+    name:'zylos', version:'0.9.3', bin:{zylos:'cli/original.js'},
+  }));
+  fs.writeFileSync(path.join(sourceRoot, 'cli', 'original.js'), '#!/usr/bin/env node\n');
+  fs.chmodSync(path.join(sourceRoot, 'cli', 'original.js'), 0o755);
+  fs.writeFileSync(path.join(sourceRoot, 'node_modules', 'dependency', 'index.js'), 'original dependency\n');
+  fs.symlinkSync(path.relative(path.join(prefix, 'bin'), path.join(sourceRoot, 'cli', 'original.js')), path.join(prefix, 'bin', 'zylos'));
+  const journal = {
+    formatVersion:1, transactionId:'tx', zylosDir:root, nodePath:process.execPath,
+    from:'0.9.3', installationIntent:true, installerStarted:true,
+    installerStage:'install', installerExitConfirmed:true,
+  };
+  m.update(transactionDir, journal);
+  const ctx = {maintenance:m, coreDir:sourceRoot, from:'0.9.3', transactionDir, journal};
+  const originalPackage = saveOriginalPackage(ctx);
+  journal.initialIdentity = {
+    packageJson:path.join(sourceRoot, 'package.json'),
+    packageHash:m.hash(path.join(sourceRoot, 'package.json')),
+    cliRoot:path.join(sourceRoot, 'cli'),
+    cliHash:m.treeHash(path.join(sourceRoot, 'cli')),
+  };
+  m.update(transactionDir, journal, {initialIdentity:journal.initialIdentity});
+  return {root, prefix, sourceRoot, transactionDir, journal, originalPackage,
+    load:() => m.read(path.join(transactionDir, 'journal.json'))};
 }
 
-test('package preservation records a durable archive from an installation copy without dependencies', t => {
+function replaceInstalledPackage(f, metadata = {name:'zylos', version:'1.0.0', bin:{zylos:'cli/replacement.js'}}) {
+  fs.rmSync(f.sourceRoot, {recursive:true, force:true});
+  fs.mkdirSync(path.join(f.sourceRoot, 'cli'), {recursive:true});
+  fs.mkdirSync(path.join(f.sourceRoot, 'node_modules', 'replacement'), {recursive:true});
+  fs.writeFileSync(path.join(f.sourceRoot, 'package.json'), JSON.stringify(metadata));
+  fs.writeFileSync(path.join(f.sourceRoot, 'cli', 'replacement.js'), 'replacement\n');
+  fs.writeFileSync(path.join(f.sourceRoot, 'node_modules', 'replacement', 'index.js'), 'replacement dependency\n');
+  const link = path.join(f.prefix, 'bin', 'zylos');
+  fs.rmSync(link, {force:true});
+  fs.symlinkSync(path.relative(path.dirname(link), path.join(f.sourceRoot, 'cli', 'replacement.js')), link);
+}
+
+test('preservation snapshots the exact installed directory including dependencies and modes', t => {
   const f = fixture(t);
-  const original = saveOriginalPackage(f.ctx, {runInstaller(context, options) {
-    assert.equal(context, f.ctx); assert.equal(options.stage, 'save-original-package');
-    assert.ok(options.args.includes('--ignore-scripts'));
-    assert.equal(fs.existsSync(path.join(options.cwd, 'node_modules')), false);
-    assert.equal(fs.readFileSync(path.join(options.cwd, 'cli/entry.js'), 'utf8'), 'original CLI');
-    fs.writeFileSync(path.join(f.dir, 'fixture-core-0.9.3.tgz'), 'archive');
-    return JSON.stringify([{filename:'fixture-core-0.9.3.tgz'}]);
-  }});
-  assert.equal(original.sourceVersion, '0.9.3'); assert.equal(original.sha256, m.hash(original.path));
-  assert.deepEqual(m.read(path.join(f.dir, 'journal.json')).originalPackage, original);
+  const expected = path.join(f.transactionDir, 'code', 'original-package');
+  assert.deepEqual(f.originalPackage, {
+    path:expected,
+    treeHash:m.treeHash(f.sourceRoot, {excludeNodeModules:false, includeModes:true}),
+    sourceVersion:'0.9.3',
+    sourceRoot:f.sourceRoot,
+  });
+  assert.equal(fs.readFileSync(path.join(expected, 'node_modules/dependency/index.js'), 'utf8'), 'original dependency\n');
+  assert.equal(fs.statSync(path.join(expected, 'cli/original.js')).mode & 0o777, 0o755);
+  assert.deepEqual(f.load().originalPackage, f.originalPackage);
 });
 
-test('preservation rejects changed installed version and unsafe archive names before publishing evidence', t => {
-  const f = fixture(t); f.ctx.from = '0.9.4';
-  assert.throws(() => saveOriginalPackage(f.ctx), /version changed/);
-  f.ctx.from = '0.9.3';
-  assert.throws(() => saveOriginalPackage(f.ctx, {runInstaller:() => JSON.stringify([{filename:'../escape.tgz'}])}), /archive name/);
-  assert.equal(m.read(path.join(f.dir, 'journal.json')).originalPackage, undefined);
+test('restoration replaces the same source root and rebuilds changed package bin mappings', t => {
+  const f = fixture(t);
+  replaceInstalledPackage(f);
+  m.restoreOriginalPackage(f.transactionDir, f.journal);
+  assert.equal(m.treeHash(f.sourceRoot, {excludeNodeModules:false, includeModes:true}), f.originalPackage.treeHash);
+  assert.equal(fs.readFileSync(path.join(f.sourceRoot, 'node_modules/dependency/index.js'), 'utf8'), 'original dependency\n');
+  assert.equal(fs.statSync(path.join(f.sourceRoot, 'cli/original.js')).mode & 0o777, 0o755);
+  assert.equal(path.resolve(path.join(f.prefix, 'bin'), fs.readlinkSync(path.join(f.prefix, 'bin', 'zylos'))), path.join(f.sourceRoot, 'cli', 'original.js'));
+  assert.equal(f.load().originalPackageRestored, true);
 });
 
-test('restoration runs a tracked installer before checking restored installed identity and rejects corrupt archives', t => {
-  const f = fixture(t), j = f.ctx.journal;
-  const packageJson = path.join(f.source, 'package.json'), cliRoot = path.join(f.source, 'cli');
-  j.initialIdentity = {packageJson, packageHash:m.hash(packageJson), cliRoot, cliHash:m.treeHash(cliRoot)};
-  const bytes = fs.readFileSync(packageJson, 'utf8');
-  fs.writeFileSync(f.ctx.protectedNpmCli, `const fs=require('node:fs');if(process.env.ZYLOS_SKIP_POSTINSTALL!=='1'||process.env.ZYLOS_UPGRADE_FROM_VERSION!=='0.9.3')process.exit(3);fs.writeFileSync(${JSON.stringify(packageJson)},${JSON.stringify(bytes)});`);
-  for (const [source, name] of [['upgrade-finalizer.cjs','finalizer.cjs'], ['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-recovery.cjs','runner.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source), path.join(f.dir,name));
-  j.recoveryHashes = Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name,m.hash(path.join(f.dir,name))]));
-  const archive = path.join(f.dir, 'original.tgz'); fs.writeFileSync(archive, 'original');
-  j.originalPackage = {path:archive, sha256:m.hash(archive), sourceVersion:'0.9.3', npmCli:f.ctx.protectedNpmCli};
-  fs.writeFileSync(packageJson, 'new installed package');
-  m.restoreOriginalPackage(f.dir, j);
-  assert.equal(j.originalPackageRestored, true); assert.equal(j.installerStage, 'restore-original-package');
-  assert.equal(j.installerExitConfirmed, true); assert.equal(m.hash(packageJson), j.initialIdentity.packageHash);
-  fs.writeFileSync(archive, 'corrupted');
-  assert.throws(() => m.restoreOriginalPackage(f.dir, j), /archive changed/);
+test('an exact installed tree is an idempotent restore skip', t => {
+  const f = fixture(t);
+  const copy = fs.cpSync, remove = fs.rmSync;
+  fs.cpSync = () => { throw Error('exact tree must not be copied'); };
+  fs.rmSync = (...args) => {
+    if (args[0] === f.sourceRoot) throw Error('exact tree must not be removed');
+    return remove(...args);
+  };
+  try { assert.doesNotThrow(() => m.restoreOriginalPackage(f.transactionDir, f.journal)); }
+  finally { fs.cpSync = copy; fs.rmSync = remove; }
+  assert.equal(f.load().originalPackageRestored, true);
 });
 
-function restorationFixture(t, installer) {
-  const f = fixture(t), j = f.ctx.journal;
-  const packageJson = path.join(f.source, 'package.json'), cliRoot = path.join(f.source, 'cli');
-  j.initialIdentity = {packageJson, packageHash:m.hash(packageJson), cliRoot, cliHash:m.treeHash(cliRoot)};
-  fs.writeFileSync(f.ctx.protectedNpmCli, installer);
-  for (const [source, name] of [['upgrade-finalizer.cjs','finalizer.cjs'], ['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-recovery.cjs','runner.cjs']]) {
-    fs.copyFileSync(path.resolve('cli/lib',source), path.join(f.dir,name));
-  }
-  j.recoveryHashes = Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name,m.hash(path.join(f.dir,name))]));
-  const archive = path.join(f.dir, 'original.tgz'); fs.writeFileSync(archive, 'original');
-  j.originalPackage = {path:archive, sha256:m.hash(archive), sourceVersion:'0.9.3', npmCli:f.ctx.protectedNpmCli};
-  m.update(f.dir, j);
-  return {...f, j, packageJson, cliRoot};
-}
+test('restoration rejects corrupt snapshots and alternate source roots', t => {
+  const corrupt = fixture(t);
+  fs.appendFileSync(path.join(corrupt.originalPackage.path, 'package.json'), '\n');
+  assert.throws(() => m.restoreOriginalPackage(corrupt.transactionDir, corrupt.journal), /snapshot changed/);
 
-for (const mismatch of ['package', 'cli']) test(`B07 successful installer cannot hide a restored ${mismatch} identity mismatch`, t => {
-  const f = restorationFixture(t, 'process.exit(0);');
-  fs.writeFileSync(mismatch === 'package' ? f.packageJson : path.join(f.cliRoot, 'entry.js'), 'wrong restored contents');
-  assert.throws(() => m.restoreOriginalPackage(f.dir, f.j), /restored installed package identity mismatch/);
-  assert.equal(f.j.installerExitConfirmed, true);
+  const alternate = fixture(t);
+  alternate.journal.originalPackage.sourceRoot = path.join(alternate.prefix, 'lib', 'node_modules', 'other');
+  assert.throws(() => m.restoreOriginalPackage(alternate.transactionDir, alternate.journal), /preservation evidence missing/);
+  assert.equal(alternate.load().originalPackageRestored, undefined);
 });
 
-test('failed original-package installation never publishes the restored flag', t => {
-  const f = restorationFixture(t, 'process.exit(12);');
-  assert.throws(() => m.restoreOriginalPackage(f.dir, f.j));
-  assert.equal(f.j.originalPackageRestored, undefined);
-  assert.equal(m.read(path.join(f.dir, 'journal.json')).originalPackageRestored, undefined);
-  assert.equal(f.j.installerStage, 'restore-original-package');
+test('restoration rejects a copied result whose full tree hash differs', t => {
+  const f = fixture(t);
+  replaceInstalledPackage(f);
+  const copy = fs.cpSync;
+  fs.cpSync = (source, destination, options) => {
+    copy(source, destination, options);
+    if (destination === f.sourceRoot) fs.appendFileSync(path.join(destination, 'package.json'), '\n');
+  };
+  try { assert.throws(() => m.restoreOriginalPackage(f.transactionDir, f.journal), /restore verification failed/); }
+  finally { fs.cpSync = copy; }
+  assert.equal(f.load().originalPackageRestored, undefined);
+});
+
+test('restoration refuses to overwrite a non-symlink global bin path', t => {
+  const f = fixture(t);
+  replaceInstalledPackage(f);
+  const link = path.join(f.prefix, 'bin', 'zylos');
+  fs.rmSync(link);
+  fs.writeFileSync(link, 'unowned executable\n');
+  assert.throws(() => m.restoreOriginalPackage(f.transactionDir, f.journal), /bin path is not a symlink/);
+  assert.equal(fs.readFileSync(link, 'utf8'), 'unowned executable\n');
+  assert.equal(f.load().originalPackageRestored, undefined);
+});
+
+test('restoration skips package evidence when installation intent is false', t => {
+  const f=fixture(t);
+  replaceInstalledPackage(f);
+  f.journal.installationIntent=false;
+  f.journal.originalPackage.treeHash='invalid';
+  m.update(f.transactionDir,f.journal);
+  assert.equal(m.restoreOriginalPackage(f.transactionDir,f.journal),false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.sourceRoot,'package.json'))).version,'1.0.0');
+  assert.equal(f.load().originalPackageRestored,undefined);
+});
+
+test('restore retains target-only bins and repairs original bins even when the tree already matches', t => {
+  const f=fixture(t),binDir=path.join(f.prefix,'bin');
+  const stale=path.join(binDir,'target-only');
+  fs.symlinkSync(path.relative(binDir,path.join(f.sourceRoot,'cli/target-only.js')),stale);
+  fs.unlinkSync(path.join(binDir,'zylos'));
+  m.restoreOriginalPackage(f.transactionDir,f.journal);
+  assert.equal(fs.lstatSync(stale).isSymbolicLink(),true);
+  assert.equal(path.resolve(binDir,fs.readlinkSync(path.join(binDir,'zylos'))),path.join(f.sourceRoot,'cli/original.js'));
+  assert.equal(f.load().originalPackageRestored,true);
+});
+
+test('interrupted-copy reentry does not require package metadata or bin links before recopy', t => {
+  const f=fixture(t);
+  m.update(f.transactionDir,f.journal,{originalPackageRestoreStarted:true});
+  fs.rmSync(f.sourceRoot,{recursive:true,force:true});
+  fs.rmSync(path.join(f.prefix,'bin','zylos'),{force:true});
+  assert.doesNotThrow(()=>m.restoreOriginalPackage(f.transactionDir,f.journal));
+  assert.equal(m.treeHash(f.sourceRoot,{excludeNodeModules:false,includeModes:true}),f.originalPackage.treeHash);
+  assert.equal(path.resolve(path.join(f.prefix,'bin'),fs.readlinkSync(path.join(f.prefix,'bin','zylos'))),path.join(f.sourceRoot,'cli/original.js'));
 });

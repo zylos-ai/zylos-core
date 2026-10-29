@@ -25,8 +25,8 @@ async function fixture(t) {
   protection.beginUpgrade(ctx,{zylosDir:root,skillsDir});
   // This closure must originate in beginUpgrade, not a fixture-installed binding.
   const dir=ctx.transactionDir,m=protection.maintenance;
-  const names=['maintenance.cjs','finalizer.cjs','runner.cjs'];
-  for(const [source,target] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]) {
+  const names=['maintenance.cjs','installer.cjs','runner.cjs'];
+  for(const [source,target] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]) {
     fs.copyFileSync(path.join(pkg,'cli/lib',source),path.join(dir,target));fs.chmodSync(path.join(dir,target),0o600);
   }
   fs.writeFileSync(path.join(dir,'runner.cjs'),'// synthetic descriptor; recovery not invoked',{mode:0o600});
@@ -54,7 +54,7 @@ test('macOS parent records npm failure and releases controller after installed m
   assert.equal(fs.existsSync(path.join(f.dir,'macos-recovery-helper')),false);
 });
 
-for(const name of ['maintenance.cjs','finalizer.cjs','runner.cjs']) for(const fault of ['missing','tampered']) test(`macOS frozen ${name} ${fault} prevents installer execution`,{skip:process.platform!=='darwin'},async t=>{
+for(const name of ['maintenance.cjs','installer.cjs','runner.cjs']) for(const fault of ['missing','tampered']) test(`macOS frozen ${name} ${fault} prevents installer execution`,{skip:process.platform!=='darwin'},async t=>{
   const f=await fixture(t),sentinel=path.join(f.root,'installer-ran');
   fs.writeFileSync(f.npmCli,`require('node:fs').writeFileSync(${JSON.stringify(sentinel)},'unexpected');`,{mode:0o600});
   const material=path.join(f.dir,name),original=fs.readFileSync(material);

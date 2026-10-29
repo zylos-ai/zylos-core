@@ -25,11 +25,31 @@ export function resolveUpgradeNpmCli() {
 
 export function inspectUpgradeSource(input, deps = {}) {
   validateUpgradeHandoff(input);
-  const tempDir = fs.realpathSync(input.tempDir);
-  const coreDir = fs.realpathSync(input.installedRoot);
+  const packageRoot = (directory, label) => {
+    try {
+      const root=fs.realpathSync(directory);
+      return {root, metadata:JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))};
+    } catch(cause) {
+      throw Object.assign(Error(`${label} package metadata is unavailable.`, {cause}), {code:'UPGRADE_FAILED'});
+    }
+  };
+  let installed;
+  try {
+    const root=path.resolve(input.installedRoot);
+    if (input.installedRoot !== root) throw Object.assign(Error('Installed Core must use its normalized absolute global package path.'), {code:'UNSUPPORTED_INSTALL_LAYOUT'});
+    const metadata=JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    (deps.maintenance ?? maintenance).validateSupportedGlobalLayout(root, metadata);
+    installed={root,metadata};
+  } catch(cause) {
+    if (cause?.code === 'UNSUPPORTED_INSTALL_LAYOUT') throw cause;
+    throw Object.assign(Error('Installed Core package metadata is unavailable.', {cause}), {code:'UPGRADE_FAILED'});
+  }
+  const downloaded=packageRoot(input.tempDir, 'Downloaded target');
+  const tempDir = downloaded.root;
+  const coreDir = installed.root;
   const zylosDir = fs.realpathSync(input.zylosDir);
-  const source = JSON.parse(fs.readFileSync(path.join(coreDir, 'package.json'), 'utf8'));
-  const target = JSON.parse(fs.readFileSync(path.join(tempDir, 'package.json'), 'utf8'));
+  const source = installed.metadata;
+  const target = downloaded.metadata;
   if (source.version !== input.fromVersion) throw Object.assign(new Error('Installed source version does not match upgrade handoff.'), {code:'INVALID_UPGRADE_HANDOFF'});
   if (source.name !== target.name || typeof target.version !== 'string') throw Object.assign(new Error('Downloaded target package identity does not match installed Core.'), {code:'INVALID_UPGRADE_HANDOFF'});
   const skillsDir = path.join(zylosDir, '.claude', 'skills');
@@ -80,7 +100,8 @@ async function finalizeTarget(ctx) {
   const module = await import(pathToFileURL(path.join(ctx.coreDir, 'cli/lib/self-upgrade.js')).href);
   return module.runSelfUpgradeFinalize({
     tempDir:ctx.tempDir, packageRoot:ctx.coreDir, zylosDir:ctx.zylosDir, from:ctx.from, to:ctx.to,
-    transactionDir:ctx.transactionDir, transactionId:ctx.transactionId}, {maintenance:maintenanceFor(ctx), zylosDir:ctx.zylosDir});
+    transactionDir:ctx.transactionDir, transactionId:ctx.transactionId, protectedNpmCli:ctx.protectedNpmCli},
+    {maintenance:maintenanceFor(ctx), zylosDir:ctx.zylosDir});
 }
 
 export async function runUpgradeEntry(input, deps = {}) {
@@ -124,7 +145,10 @@ if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process
   try {
     const input = JSON.parse(fs.readFileSync(0, 'utf8'));
     validateUpgradeHandoff(input);
-    if (fs.realpathSync(input.tempDir) !== fs.realpathSync(path.join(import.meta.dirname, '../..'))) throw Object.assign(new Error('Upgrade entry must run from the downloaded target package.'), {code:'INVALID_UPGRADE_HANDOFF'});
+    let targetRoot;
+    try { targetRoot=fs.realpathSync(input.tempDir); }
+    catch(cause) { throw Object.assign(Error('Downloaded target package is unavailable.',{cause}),{code:'UPGRADE_FAILED'}); }
+    if (targetRoot !== fs.realpathSync(path.join(import.meta.dirname, '../..'))) throw Object.assign(new Error('Upgrade entry must run from the downloaded target package.'), {code:'INVALID_UPGRADE_HANDOFF'});
     process.env.ZYLOS_DIR = input.zylosDir;
     result = await runUpgradeEntry(input);
   } catch (error) {

@@ -96,9 +96,9 @@ test('once resumes exactly the attributed transaction and does not launch a runt
   t.mock.method(m, 'canRecognizeProcesses', () => true);
   fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'throw Error("stable recovery must not execute");');
   fs.writeFileSync(path.join(dir, 'runner.cjs'), 'exports.resume = dir => ({resumed: dir});');
-  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-finalizer.cjs','finalizer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
   const journal = m.read(path.join(dir, 'journal.json'));
-  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   const out = f.api.bootstrap(f.root, {once: true});
   assert.equal(out.resumed, dir);
   assert.equal(out.launched, undefined);
@@ -108,10 +108,10 @@ test('once rejects changed transaction recovery code before executing it', {skip
   const f = fixture(t), dir = f.journal();
   const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
   t.mock.method(m, 'canRecognizeProcesses', () => true);
-  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-finalizer.cjs','finalizer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
   fs.writeFileSync(path.join(dir, 'runner.cjs'), 'exports.resume = () => ({resumed:true});');
   const journal = m.read(path.join(dir, 'journal.json'));
-  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   fs.appendFileSync(path.join(dir, 'runner.cjs'), '\nthrow Error("changed runner executed");');
   assert.throws(() => f.api.bootstrap(f.root, {once:true}), /transaction recovery material changed/);
 });
@@ -122,9 +122,9 @@ test('restricted process visibility refuses automatic bootstrap recovery on Linu
   t.mock.method(m, 'canRecognizeProcesses', () => false);
   const executed = path.join(dir, 'runner-executed');
   fs.writeFileSync(path.join(dir, 'runner.cjs'), `exports.resume = () => { require('node:fs').writeFileSync(${JSON.stringify(executed)}, 'executed'); return {resumed:true}; };`);
-  for (const name of ['maintenance.cjs', 'finalizer.cjs']) fs.writeFileSync(path.join(dir, name), 'module.exports = {};');
+  for (const name of ['maintenance.cjs', 'installer.cjs']) fs.writeFileSync(path.join(dir, name), 'module.exports = {};');
   const journal = m.read(path.join(dir, 'journal.json'));
-  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   const out = f.api.bootstrap(f.root, {once:true});
   assert.equal(fs.existsSync(executed), false);
   assert.equal(out.automaticResume, false);

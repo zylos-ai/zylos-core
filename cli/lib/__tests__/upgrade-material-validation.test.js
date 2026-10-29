@@ -9,7 +9,7 @@ function fixture(t) {
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-material-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'tx'),closure=path.join(dir,'sqlite-runtime');fs.mkdirSync(closure,{recursive:true,mode:0o700});
-  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','finalizer.cjs']){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
+  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','installer.cjs']){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
   const closureFiles=['package.json','core-db-backup-worker.js','node_modules/better-sqlite3/lib/index.js'];
   for(const file of closureFiles){const p=path.join(closure,file);fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});fs.writeFileSync(p,'fixture '+file,{mode:0o600});}
   const j={transactionId:'tx',nodePath:process.execPath,initialIdentity:{nodePath:process.execPath}};
@@ -50,7 +50,7 @@ test('matching journal and descriptor cannot nominate another executable as Node
   assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/untrusted recovery Node/);
 });
 test('required recovery controller hash tampering is rejected',t=>{
-  const f=fixture(t);fs.appendFileSync(path.join(f.dir,'finalizer.cjs'),'changed');assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/material hash mismatch/);
+  const f=fixture(t);fs.appendFileSync(path.join(f.dir,'installer.cjs'),'changed');assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/material hash mismatch/);
 });
 for(const key of ['workerPath','driverPath'])test(`missing or symlinked fixed closure ${key} is rejected`,t=>{
  const f=fixture(t),file=f.d[key];fs.unlinkSync(file);
@@ -222,7 +222,7 @@ for (const blocker of ['installer', 'finalizer', 'services']) test(`terminal mar
 
 test('macOS descriptor needs only frozen JavaScript controllers and existing SQLite closure',{skip:process.platform!=='darwin'},t=>{
  const f=fixture(t);
- assert.deepEqual(Object.keys(f.d.hashes).sort(),['finalizer.cjs','maintenance.cjs','runner.cjs']);
+ assert.deepEqual(Object.keys(f.d.hashes).sort(),['installer.cjs','maintenance.cjs','runner.cjs']);
  assert.equal(fs.existsSync(path.join(f.dir,'macos-recovery-helper')),false);
  assert.doesNotThrow(()=>m.validateDescriptor(f.dir,f.j,f.d));
 });

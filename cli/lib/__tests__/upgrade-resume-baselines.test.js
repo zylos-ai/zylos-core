@@ -66,37 +66,32 @@ function fixture(t, { added = false } = {}) {
       assert.equal(Object.hasOwn(ctx, 'pendingBaselines'), false);
       assert.equal(Object.hasOwn(ctx, 'tempDir'), false);
       const result = await resumeUpgradeFinalization(ctx, { ...deps, publish: () => ({ ok: true }) });
-      if (result.success) {
-        assert.equal(result.steps.find(item => item.step === 13)?.name, 'commit_skill_baselines');
-        assert.equal(result.steps.find(item => item.step === 13)?.status, 'done');
-      }
+      if (result.success) assert.equal(result.steps.some(item => item.step === 13), false);
       return result;
     } });
   return { initial, resume, load, dir, download, target, source, get starts() { return starts; } };
 }
 
-for (const added of [false, true]) test(`fresh resume commits actual ${added ? 'first' : 'updated'} baseline and subsequent upgrade has no false conflict`, async t => {
+for (const added of [false, true]) test(`pre-cutoff sync commits actual ${added ? 'first' : 'updated'} baseline and resume does not rewrite it`, async t => {
   const f = fixture(t, { added });
   const first = await f.initial();
   assert.equal(first.success, false);
   assert.match(first.error, /publication interrupted/);
   assert.equal(f.load().phase, 'recovery_required');
   assert.equal(f.starts, 0);
-  if (added) assert.equal(loadManifest(f.target), null);
-  else {
-    assert.equal(fs.readFileSync(path.join(f.target, '.zylos/originals/SKILL.md'), 'utf8'), 'upstream v1\n');
-    assert.notEqual(loadManifest(f.target).files['SKILL.md'], generateManifest(f.target).files['SKILL.md']);
-  }
-  // Drop all downloaded inputs: only the transaction's fsynced copy survives.
+  const original = path.join(f.target, '.zylos/originals/SKILL.md');
+  assert.equal(fs.readFileSync(original, 'utf8'), 'upstream v2\n');
+  const committed = loadManifest(f.target);
+  assert.equal(committed.files['SKILL.md'], generateManifest(path.dirname(original)).files['SKILL.md']);
+  assert.equal(Object.hasOwn(committed.files, 'local-only.txt'), false);
+  // Forward repair consumes only post-cutoff material and does not need the download.
   fs.rmSync(f.download, { recursive: true });
   const result = await f.resume();
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(f.load().phase, 'upgrade_complete');
   assert.equal(f.starts, 1);
-  const original = path.join(f.target, '.zylos/originals/SKILL.md');
   assert.equal(fs.readFileSync(original, 'utf8'), 'upstream v2\n');
-  assert.equal(loadManifest(f.target).files['SKILL.md'], generateManifest(path.dirname(original)).files['SKILL.md']);
-  assert.equal(Object.hasOwn(loadManifest(f.target).files, 'local-only.txt'), false);
+  assert.deepEqual(loadManifest(f.target), committed);
   fs.mkdirSync(f.source, { recursive: true });
   fs.writeFileSync(path.join(f.source, 'SKILL.md'), 'upstream v3\n');
   const next = smartSync(f.source, f.target);
@@ -105,19 +100,4 @@ for (const added of [false, true]) test(`fresh resume commits actual ${added ? '
   assert.deepEqual(next.overwritten, ['SKILL.md']);
   assert.equal(fs.readFileSync(path.join(f.target, 'SKILL.md'), 'utf8'), 'upstream v3\n');
   assert.equal(fs.readFileSync(path.join(f.target, 'local-only.txt'), 'utf8'), 'user owned\n');
-});
-
-for (const defect of ['missing', 'corrupt']) test(`resume rejects ${defect} durable baseline before service startup`, async t => {
-  const f = fixture(t);
-  await f.initial();
-  const before = loadManifest(f.target);
-  const staged = path.join(f.dir, 'skill-baselines/example/SKILL.md');
-  if (defect === 'missing') fs.unlinkSync(staged);
-  else fs.writeFileSync(staged, 'untrusted bytes');
-  const result = await f.resume();
-  assert.equal(result.ok, false);
-  assert.match(result.error.message, /baseline is corrupt/);
-  assert.equal(f.load().phase, 'recovery_required');
-  assert.equal(f.starts, 0);
-  assert.deepEqual(loadManifest(f.target), before);
 });

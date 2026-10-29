@@ -9,7 +9,7 @@ function members(group) {
   const result = cp.spawnSync('ps', ['-eo', 'pid=,pgid=,stat='], {
     encoding: 'utf8', timeout: 10000
   });
-  if (result.error || result.status !== 0) throw Error('cannot verify finalizer process exit');
+  if (result.error || result.status !== 0) throw Error('cannot verify installer process exit');
   return result.stdout.split('\n').map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/))
     .filter(Boolean).filter(row => Number(row[2]) === group && Number(row[1]) !== result.pid && !row[3].startsWith('Z'));
 }
@@ -48,7 +48,7 @@ if (require.main === module && process.argv[2] === 'installer') {
     const m = require('./maintenance.cjs');
     const dir = path.resolve(process.argv[3]);
     const j = m.read(path.join(dir, 'journal.json'));
-    m.validateRecoveryFiles(dir, j, ['finalizer.cjs', 'maintenance.cjs']);
+    m.validateRecoveryFiles(dir, j, ['installer.cjs', 'maintenance.cjs']);
     if (!j.installerStarted || j.installerPid !== null) throw Error('installer launch identity rejected');
     const options = JSON.parse(fs.readFileSync(0, 'utf8'));
     m.privatePath(options.npmCli);

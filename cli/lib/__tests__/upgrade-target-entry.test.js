@@ -10,13 +10,15 @@ import { inspectUpgradeSource, runUpgradeEntry, installUpgradeTarget } from '../
 import {assertDashboardUninstalled} from '../core-db-backup.js';
 
 function fixture(t, version = '0.9.3') {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-target-entry-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-target-entry-')));
   t.after(() => fs.rmSync(root, {recursive:true, force:true}));
-  const input = {schemaVersion:1, fromVersion:version, installedRoot:path.join(root, 'installed'), tempDir:path.join(root, 'target'), zylosDir:path.join(root, 'deployment')};
+  const prefix=path.join(root,'prefix');
+  const input = {schemaVersion:1, fromVersion:version, installedRoot:path.join(prefix, 'lib/node_modules/zylos'), tempDir:path.join(root, 'target'), zylosDir:path.join(root, 'deployment')};
   for (const [directory, packageVersion] of [[input.installedRoot, version], [input.tempDir, '1.0.0']]) {
     fs.mkdirSync(directory, {recursive:true});
     fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({type:'module', name:'zylos', version:packageVersion}));
   }
+  fs.mkdirSync(path.join(prefix,'bin'),{recursive:true});
   fs.mkdirSync(input.zylosDir);
   return input;
 }
@@ -31,6 +33,23 @@ test('target checks reject old sources and standalone Dashboard before touching 
   fs.writeFileSync(path.join(input.zylosDir, '.zylos/components.json'), JSON.stringify({components:{dashboard:{version:'1'}}}));
   assert.throws(() => inspectUpgradeSource(input, deps), error => error.code === 'DASHBOARD_STILL_INSTALLED' && /zylos uninstall dashboard --yes/.test(error.next));
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
+});
+
+for (const invalid of ['linked-root','ordinary-bin','outside-bin']) test(`unsupported global layout rejects ${invalid} before probes or transaction writes`, t => {
+  const input=fixture(t),prefix=path.dirname(path.dirname(path.dirname(input.installedRoot)));
+  const metadata={type:'module',name:'zylos',version:'0.9.3',bin:{zylos:'cli/zylos.js'}};
+  fs.mkdirSync(path.join(input.installedRoot,'cli'),{recursive:true});
+  fs.writeFileSync(path.join(input.installedRoot,'cli/zylos.js'),'#!/usr/bin/env node\n');
+  fs.writeFileSync(path.join(input.installedRoot,'package.json'),JSON.stringify(metadata));
+  const bin=path.join(prefix,'bin/zylos');
+  if(invalid==='linked-root') {
+    const checkout=path.join(path.dirname(prefix),'checkout');
+    fs.renameSync(input.installedRoot,checkout);
+    fs.symlinkSync(checkout,input.installedRoot,'dir');
+  } else if(invalid==='ordinary-bin') fs.writeFileSync(bin,'shim\n');
+  else fs.symlinkSync(path.join(input.zylosDir,'outside.js'),bin);
+  assert.throws(()=>inspectUpgradeSource(input,{probe(){assert.fail('probe must not run');}}),{code:'UNSUPPORTED_INSTALL_LAYOUT'});
+  assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
 });
 
 test('all upgrade entrypoints share flat and nested standalone Dashboard rejection',async t=>{
@@ -194,7 +213,7 @@ test('downloaded executable redacts paths from its main-block failure', t => {
 
 const registeredProtocolCodes = [
   'ZYLOS_NOT_INITIALIZED', 'INVALID_ARGS', 'UPGRADE_RECOVERY_REQUIRED',
-  'DASHBOARD_STILL_INSTALLED', 'INVALID_CORE_DEPENDENCIES', 'DASHBOARD_TAKEOVER_INVALID',
+  'DASHBOARD_STILL_INSTALLED', 'INVALID_CORE_DEPENDENCIES', 'UNSUPPORTED_INSTALL_LAYOUT', 'DASHBOARD_TAKEOVER_INVALID',
   'RUNTIME_PREPARATION_INCOMPLETE', 'UPGRADE_FAILED', 'SCHEMA_TOO_NEW', 'SCHEMA_MIGRATION_FAILED',
   'SETTINGS_UNREADABLE', 'UPGRADE_SOURCE_TOO_OLD', 'INVALID_UPGRADE_HANDOFF', 'MANUAL_RECOVERY_REQUIRED',
   'SNAPSHOT_FAILED', 'NOT_RESUMABLE', 'CUTOFF_UNTRUSTED', 'CUTOFF_WRITE_UNCERTAIN', 'FINALIZE_INCOMPLETE',
@@ -212,7 +231,7 @@ for(const code of registeredProtocolCodes) test(`entry preserves registered prot
   assert.deepEqual(f.calls,[]);
 });
 
-for(const code of [undefined,'','ENOENT','EACCES','EIO','MODULE_NOT_FOUND','ERR_MODULE_NOT_FOUND','SQLITE_ERROR','UNREGISTERED_FAILURE']) test(`entry normalizes unregistered failure code: ${code}`,async t=>{
+for(const code of [undefined,'',7]) test(`entry normalizes missing failure code: ${code}`,async t=>{
   const input=fixture(t),f=pipeline(input);
   f.deps.inspect=()=>{throw Object.assign(Error('precheck failed'),{code});};
   const result=await runUpgradeEntry(input,f.deps);
@@ -221,21 +240,30 @@ for(const code of [undefined,'','ENOENT','EACCES','EIO','MODULE_NOT_FOUND','ERR_
   assert.deepEqual(f.calls,[]);
 });
 
+for(const code of ['',7]) test(`returned finalizer failure normalizes non-string code: ${JSON.stringify(code)}`,async t=>{
+  const input=fixture(t),f=pipeline(input);
+  f.deps.finalize=()=>({success:false,code,error:'forward repair failed',failedStep:4,steps:[]});
+  const result=await runUpgradeEntry(input,f.deps);
+  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.equal(result.failedStep,4);
+  assert.equal(result.rollback.completed,true);
+});
+
 test('target entry catch redacts absolute failure paths',async t=>{
   const input=fixture(t),f=pipeline(input);
   f.deps.inspect=()=>{throw Object.assign(Error(`Cannot read '${path.join(input.tempDir,'private.json')}'\nRequire stack: ${path.join(input.installedRoot,'source.js')}`),{code:'EACCES'});};
   const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.equal(result.code,'EACCES');
   assert.deepEqual(result.persisted,[]);
   assert.doesNotMatch(result.error,new RegExp(path.dirname(input.tempDir).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
   assert.doesNotMatch(result.error,/Require stack/);
 });
 
-for (const code of ['EACCES','MODULE_NOT_FOUND','ERR_INVALID_ARG_TYPE','SQLITE_BUSY','SCHEMA_TOO_NEW']) test(`returned finalizer failure uses a registered protocol code: ${code}`, async t => {
+for (const code of ['EACCES','MODULE_NOT_FOUND','ERR_INVALID_ARG_TYPE','SQLITE_BUSY','SCHEMA_TOO_NEW']) test(`returned finalizer failure preserves non-empty code: ${code}`, async t => {
   const input=fixture(t), f=pipeline(input);
   f.deps.finalize=()=>({success:false,code,error:"Finalizer cannot read '/fixture/private/components.json'\nRequire stack: /fixture/source.js",failedStep:4,steps:[]});
   const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,code==='SCHEMA_TOO_NEW'?code:'UPGRADE_FAILED');
+  assert.equal(result.code,code);
   assert.equal(result.failedStep,4);
   assert.equal(result.rollback.completed,true);
   assert.equal(result.error,"Finalizer cannot read '<path>'");
@@ -246,7 +274,7 @@ for (const error of ['', undefined]) test(`returned finalizer failure uses a rea
   const input=fixture(t), f=pipeline(input);
   f.deps.finalize=()=>({success:false,code:'EACCES',error,failedStep:4,steps:[]});
   const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.equal(result.code,'EACCES');
   assert.equal(result.error,'Upgrade finalization failed.');
   assert.equal(result.rollback.completed,true);
   assert.equal(result.rollback.performed,true);

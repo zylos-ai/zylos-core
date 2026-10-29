@@ -32,7 +32,6 @@ function fixture(t, config = {}) {
   });
   const deps = {
     ensureMemoryMigration: () => { calls.push('ensure'); },
-    commitBaselines: () => { calls.push('baselines'); },
     verifyPublicationForServices: () => {},
     protectedSuccess: () => {},
     startServices: () => { calls.push('start'); },

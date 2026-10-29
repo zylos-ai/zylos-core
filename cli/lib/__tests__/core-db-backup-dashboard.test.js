@@ -89,7 +89,8 @@ test('Dashboard owner version rejects future schemas without writing the databas
 
 for(const bundled of [false,true])for(const version of [13,20,99]) test(`real T09 owner selection bundled=${bundled} schema=${version}`,t=>{
   const f=fixture(t);f.database(version).close();
-  const installedRoot=path.join(f.root,'installed');fs.mkdirSync(installedRoot);
+  const prefix=path.join(f.root,'npm-prefix'),installedRoot=path.join(prefix,'lib/node_modules/zylos');
+  fs.mkdirSync(installedRoot,{recursive:true});fs.mkdirSync(path.join(prefix,'bin'));
   if(bundled)fs.mkdirSync(path.join(installedRoot,'skills/dashboard'),{recursive:true});
   fs.writeFileSync(path.join(installedRoot,'package.json'),JSON.stringify({name:'zylos',version:'0.9.4'}));
   fs.writeFileSync(path.join(f.target,'package.json'),JSON.stringify({name:'zylos',version:'1.0.0'}));

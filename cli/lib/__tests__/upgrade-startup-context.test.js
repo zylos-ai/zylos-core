@@ -46,9 +46,9 @@ function publishedTransaction(t) {
  const dir = path.join(root,'.backup/self-upgrade/tx');
  fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const executed = path.join(root,'recovery-executed');
- for (const [source,name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
+ for (const [source,name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
  fs.writeFileSync(path.join(dir,'runner.cjs'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(executed)},JSON.stringify(process.argv.slice(2)));fs.rmSync(${JSON.stringify(dir)},{recursive:true});console.log(JSON.stringify({recovery_required:false,stage:'aborted_before_install'}));`);
- const journal={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:false,initialIdentity:{},recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name=>[name,maintenance.hash(path.join(dir,name))]))};
+ const journal={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:false,initialIdentity:{},recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(dir,name))]))};
  maintenance.update(dir,journal);
  return {root,dir,journal,executed};
 }
@@ -76,7 +76,7 @@ test('pre-marker recovery material remains isolated with corrupt or absent journ
   const f=publishedTransaction(t);
   if(damage==='corrupt')fs.writeFileSync(path.join(f.dir,'journal.json'),'{broken');
   else fs.unlinkSync(path.join(f.dir,'journal.json'));
-  if(damage==='partial-recovery')for(const name of ['runner.cjs','finalizer.cjs'])fs.unlinkSync(path.join(f.dir,name));
+  if(damage==='partial-recovery')for(const name of ['runner.cjs','installer.cjs'])fs.unlinkSync(path.join(f.dir,name));
   const context=discoverUpgradeContext(f.root);
   assert.equal(context.active,true);assert.equal(context.blocked,true);assert.equal(context.recovery_required,true);
   assert.equal(fs.existsSync(f.executed),false);

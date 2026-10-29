@@ -75,19 +75,20 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  if(dashboard){const file=path.join(root,'components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});const db=new Database(file);db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);CREATE TABLE events(value TEXT);INSERT INTO events VALUES (\'original\')');db.prepare('INSERT INTO schema_migrations VALUES (?)').run(dashboardVersion);db.close();}
  const snapshotResult=snapshot({zylosDir:root,transactionId:'tx',formatVersion}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
- for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
- const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner)),dependencies:{kind:'directory',sha256:m.treeHash(path.join(skillsDir,item.owner,'node_modules'),{excludeNodeModules:false,includeModes:true})}}));
- for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,filter:p=>!p.split(path.sep).includes('node_modules')});
- for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name,'node_modules'),path.join(dir,'code/dependencies',e.name),{recursive:true,verbatimSymlinks:true});
+ for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
+ const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner),{excludeNodeModules:false})}));
+ for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,verbatimSymlinks:true});
  // Match saveProtectedCode: the disposable code root is private.
  fs.chmodSync(path.join(dir,'code'),0o700);
- const packageJson=path.join(root,'package.json');fs.writeFileSync(packageJson,'{}');const originalCli=path.join(root,'baseline-cli');fs.mkdirSync(originalCli,{mode:0o700});
- const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',firstTakeover:!dashboard,dashboardOwnerManaged:false,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshotResult.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
+ const prefix=path.join(root,'npm-prefix'),installedRoot=path.join(prefix,'lib/node_modules/zylos'),packageJson=path.join(installedRoot,'package.json'),originalCli=path.join(installedRoot,'cli'),binDir=path.join(prefix,'bin');
+ fs.mkdirSync(originalCli,{recursive:true,mode:0o700});fs.mkdirSync(binDir,{recursive:true});fs.writeFileSync(packageJson,JSON.stringify({name:'zylos',version:dashboard?'0.9.4':'0.9.3',bin:{zylos:'cli/entry.js'}}));fs.writeFileSync(path.join(originalCli,'entry.js'),'original CLI\n');
+ fs.symlinkSync(path.relative(binDir,path.join(originalCli,'entry.js')),path.join(binDir,'zylos'));
+ const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',firstTakeover:!dashboard,dashboardOwnerManaged:false,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,installerStarted:true,installerStage:'install',installerExitConfirmed:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshotResult.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
  // Package restoration has already completed in this database recovery fixture;
- // dedicated package tests exercise the installer and preservation failures.
- const originalArchive=path.join(dir,'original.tgz');fs.writeFileSync(originalArchive,'retained fixture package',{mode:0o600});
- j.originalPackage={path:originalArchive,sha256:m.hash(originalArchive),sourceVersion:j.from};j.originalPackageRestored=true;
- const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};j.recoveryHashes=descriptor.hashes;m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
+ // dedicated package tests exercise replacement and verification failures.
+ const originalSnapshot=path.join(dir,'code/original-package');fs.cpSync(installedRoot,originalSnapshot,{recursive:true,verbatimSymlinks:true});
+ j.originalPackage={path:originalSnapshot,treeHash:m.treeHash(originalSnapshot,{excludeNodeModules:false,includeModes:true}),sourceVersion:j.from,sourceRoot:installedRoot};j.originalPackageRestored=true;
+ const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};j.recoveryHashes=descriptor.hashes;m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
  const calls=[];m.stop=()=>calls.push('stop');m.start=()=>calls.push('start');m.verifyServices=()=>calls.push('verify');
  // These state-machine tests exercise same-owner retries on Mac, not crash
  // takeover. Dedicated admission tests prove standalone resume is refused.
@@ -235,6 +236,16 @@ test('frozen worker preserves structured schema rejection across its subprocess 
   });
 });
 
+for(const code of ['',7])test(`frozen worker normalizes invalid failure code ${JSON.stringify(code)}`,async t=>{
+ const f=await fixture(t),descriptor=f.m.read(path.join(f.dir,'descriptor.json'));
+ fs.writeFileSync(descriptor.workerPath,`process.stdout.write(JSON.stringify({error:{code:${JSON.stringify(code)},message:'controlled worker failure'}}));process.exit(1);`);
+ assert.throws(()=>f.m.worker(f.dir,f.load(),{}),error=>{
+  assert.equal(error.code,'UPGRADE_FAILED');
+  assert.match(error.message,/controlled worker failure/);
+  return true;
+ });
+});
+
 test('original deployment verification preserves structured schema rejection without a descriptor',async t=>{
  const f=await fixture(t);
  f.m.update(f.dir,f.j,{installationIntent:false,phase:'prepared'});
@@ -247,7 +258,7 @@ test('original deployment verification preserves structured schema rejection wit
  });
 });
 
-for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before baseline staging rejects before cutoff and compensates code/data`, async t => {
+for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before baseline commit rejects as step 5 before dependencies and cutoff`, async t => {
  const f=await fixture(t);
  const download=path.join(f.root,'download'),source=path.join(download,'skills/comm-bridge');
  fs.mkdirSync(source,{recursive:true});
@@ -268,12 +279,12 @@ for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before
      syncSkills:ctx=>{
        change(f);
        ctx.pendingBaselines=[{destDir:path.join(f.j.skillsDir,'comm-bridge'),srcDir:source,manifest:expected}];
+       if(mutation==='source')fs.writeFileSync(sourceFile,'changed after manifest generation\n');
+       else expected.files['SKILL.md']='0'.repeat(64);
        return {step:5,status:'done'};
      },
      installDependencies:()=>{
-       if(mutation==='source')fs.writeFileSync(sourceFile,'changed after manifest generation\n');
-       else expected.files['SKILL.md']='0'.repeat(64);
-       return {step:6,status:'done'};
+       throw Error('dependencies must not install after baseline failure');
      },
      prepareRuntimeClis:()=>{prepareCalls++;throw Error('must reject before runtime preparation');},
      commitCutoff:()=>{cutoffCalls++;throw Error('must reject before cutoff');},
@@ -286,6 +297,7 @@ for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before
    },
  });
  assert.equal(result.success,false,JSON.stringify(result));
+ assert.equal(result.failedStep,5);
  assert.match(result.error,/skill baseline source changed/);
  assert.equal(prepareCalls,0);assert.equal(cutoffCalls,0);assert.equal(recoveryCalls,1);
  assert.equal(result.rollback.attempted,true);assert.equal(result.rollback.completed,true,JSON.stringify(result));
@@ -294,6 +306,32 @@ for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before
  assert.equal(f.m.hash(f.db('comm-bridge/c4.db')),originalSnapshot.sha256);
  assert.deepEqual(fs.readFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json')),beforeCode);
  assert.deepEqual(f.calls,['stop','start','verify']);
+});
+
+test('baseline write failure is reported as sync step 5 before dependency installation', async t => {
+ const f=await fixture(t);
+ let dependencyCalls=0,recoveryCalls=0;
+ const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.root,
+   installedRoot:f.root,zylosDir:f.root},{
+   maintenance:{...f.m,discover:()=>({candidates:[],diagnostics:[]})},
+   inspect:()=>({zylosDir:f.root,skillsDir:f.j.skillsDir,tempDir:f.root,from:'0.9.3',to:'0.9.4',
+     transactionId:'tx',transactionDir:f.dir,journal:f.load(),maintenance:f.m,steps:[]}),
+   resolveNpm:()=>'/unused/npm-cli.js',begin:()=>{},savePackage:()=>{},saveCode:()=>{},prepare:()=>{},install:()=>{},
+   finalize:()=>runSelfUpgradeFinalize({zylosDir:f.root,transactionId:'tx',transactionDir:f.dir,tempDir:f.root},{
+     maintenance:f.m,assertDashboardUninstalled:()=>{},
+     syncSkills:()=>{change(f);return {step:5,status:'done'};},
+     commitBaselines:()=>{throw Object.assign(Error('baseline write denied'),{code:'EACCES'});},
+     installDependencies:()=>{dependencyCalls++;return {step:6,status:'done'};},
+   }),
+   recover:()=>{recoveryCalls++;return f.r.resume(f.dir);},
+ });
+ assert.equal(result.success,false,JSON.stringify(result));
+ assert.equal(result.failedStep,5);
+ assert.equal(result.code,'EACCES');
+ assert.match(result.error,/baseline write denied/);
+ assert.equal(dependencyCalls,0);
+ assert.equal(recoveryCalls,1);
+ assert.equal(result.rollback.completed,true,JSON.stringify(result));
 });
 
 for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects ${corrupt?'untrusted':'closed'} cutoff before any step`, async t => {
@@ -628,6 +666,22 @@ test('restored verification failure isolates without a second database replaceme
 test('trusted preinstall abort verifies original data without snapshot restore',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));assert.equal(result.attempted,false);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));assert.equal(f.m.discover(f.root).blocked,false);
 });
+
+test('pack-only installer activity aborts before install without package restoration evidence',async t=>{
+ const f=await fixture(t);
+ Object.assign(f.j,{installationIntent:false,installerStarted:true,installerStage:'pack-target',phase:'installing'});
+ delete f.j.originalPackageRestored;
+ f.m.update(f.dir,f.j);
+ const restore=f.m.restoreOriginalPackage;
+ f.m.restoreOriginalPackage=()=>{assert.fail('package restore must not run');};
+ try {
+  const result=f.r.resume(f.dir);
+  assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));
+  assert.equal(result.attempted,false);
+  assert.equal(f.load().installationIntent,false);
+  assert.equal(f.load().originalPackageRestored,undefined);
+ } finally {f.m.restoreOriginalPackage=restore;}
+});
 test('group-writable original npm CLI root permits verified preinstall abort',async t=>{
  const f=await fixture(t);fs.chmodSync(f.j.initialIdentity.cliRoot,0o775);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});
  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);
@@ -716,7 +770,7 @@ test('orphan installer with durable identity is quiesced before compensation',as
  f.m.update(f.dir,f.j,{installerStarted:true,installerPid:child.pid,installerIdentity:f.m.identity(child.pid),installerExitUnconfirmed:true});
  const exited=new Promise(resolve=>child.once('exit',resolve)),result=f.r.resume(f.dir);await exited;
  assert.equal(result.completed,true,JSON.stringify(result));assert.equal(f.load().installerExitConfirmed,true);assert.equal(f.load().installerExitUnconfirmed,false);
- assert.equal(require(path.join(f.dir,'finalizer.cjs')).members(child.pid).length,0);assert.ok(f.calls.includes('start'));
+ assert.equal(require(path.join(f.dir,'installer.cjs')).members(child.pid).length,0);assert.ok(f.calls.includes('start'));
 });
 for(const dangling of [false,true])test(`original CLI ${dangling?'dangling':'live'} symlink prevents preinstall abort provenance`,async t=>{
  const f=await fixture(t),cli=path.join(f.root,'original-cli'),outside=path.join(f.root,'outside.js');fs.mkdirSync(cli,{mode:0o700});if(!dangling)fs.writeFileSync(outside,'fixture',{mode:0o600});fs.symlinkSync(outside,path.join(cli,'linked.js'));f.j.initialIdentity.cliRoot=cli;f.j.initialIdentity.cliHash=f.m.treeHash(cli);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/CLI symlink rejected/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
@@ -875,7 +929,7 @@ test('successful cleanup deletes only code copies and unlinks nested symlinks wi
  const outside=path.join(f.root,'external.txt');fs.writeFileSync(outside,'external data');
  fs.symlinkSync(outside,path.join(code,'external-link'));
  for(const name of ['install.log','recovery.log','rescue/evidence']){const file=path.join(f.dir,name);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,name);}
- const retained=['descriptor.json','runner.cjs','maintenance.cjs','finalizer.cjs','install.log','recovery.log','rescue/evidence'];
+ const retained=['descriptor.json','runner.cjs','maintenance.cjs','installer.cjs','install.log','recovery.log','rescue/evidence'];
  const hashes=Object.fromEntries(retained.map(name=>[name,f.m.hash(path.join(f.dir,name))]));
  const snapshotHash=f.m.treeHash(f.snapshot.dbBackupDir);
  f.m.update(f.dir,f.j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}});
@@ -895,7 +949,7 @@ for(const phase of ['restored_data_ready','preparing'])test(`${phase} terminal r
  assert.equal(f.m.treeHash(code),hash);assert.notEqual(f.load().cleanup.codeRemoved,true);
 });
 
-for(const gate of ['installerExitUnconfirmed','finalizerExitUnconfirmed','terminalServicesStopped','installerStarted','finalizerStarted'])test(`durable ${gate} prevents cleanup despite stale caller`,async t=>{
+for(const gate of ['installerExitUnconfirmed','finalizerExitUnconfirmed','terminalServicesStopped','finalizerStarted'])test(`durable ${gate} prevents cleanup despite stale caller`,async t=>{
  const f=await fixture(t),code=path.join(f.dir,'code');
  const terminal={phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}};
  f.m.update(f.dir,f.j,terminal);const stale=structuredClone(f.j);

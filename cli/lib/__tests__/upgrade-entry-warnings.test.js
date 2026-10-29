@@ -9,8 +9,8 @@ import {pathToFileURL} from 'node:url';
 for(const warnings of [false,true]) test(`downloaded upgrade entry emits runtime warning text only when returned (warnings=${warnings})`,t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-entry-warnings-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const target=path.join(root,'target'),installed=path.join(root,'installed'),deployment=path.join(root,'deployment');
-  for(const directory of [target,installed,deployment])fs.mkdirSync(directory);
+  const target=path.join(root,'target'),prefix=path.join(root,'npm-prefix'),installed=path.join(prefix,'lib/node_modules/zylos'),deployment=path.join(root,'deployment');
+  for(const directory of [target,installed,deployment,path.join(prefix,'bin')])fs.mkdirSync(directory,{recursive:true});
   for(const [directory,version] of [[target,'0.9.4'],[installed,'0.9.3']]) {
     fs.writeFileSync(path.join(directory,'package.json'),JSON.stringify({type:'module',name:'zylos',version}));
   }
@@ -30,7 +30,7 @@ for(const warnings of [false,true]) test(`downloaded upgrade entry emits runtime
     const protection=await import(${JSON.stringify(original('upgrade-protection.js'))});
     const databases=await import(${JSON.stringify(original('core-db-backup.js'))});
     const packages=await import(${JSON.stringify(original('upgrade-package.js'))});
-    const m={discover:()=>({candidates:[],diagnostics:[],marker:null}),runInstaller(_dir,_journal,options){
+    const m={discover:()=>({candidates:[],diagnostics:[],marker:null}),validateSupportedGlobalLayout:protection.maintenance.validateSupportedGlobalLayout,runInstaller(_dir,_journal,options){
       if(options.stage==='pack-target')return JSON.stringify([{filename:'target.tgz'}]);
       fs.writeFileSync(${JSON.stringify(path.join(installed,'package.json'))},JSON.stringify({name:'zylos',version:'0.9.4'}));
     }};

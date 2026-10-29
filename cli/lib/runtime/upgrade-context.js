@@ -21,7 +21,7 @@ function hasTransactionHistory(root) {
   return entries.some(entry => {
     if (!entry.isDirectory() || entry.isSymbolicLink()) return false;
     const dir = path.join(directory, entry.name);
-    const publishedRecovery = ['runner.cjs', 'maintenance.cjs', 'finalizer.cjs'].some(name => {
+    const publishedRecovery = ['runner.cjs', 'maintenance.cjs', 'installer.cjs'].some(name => {
       try { fs.lstatSync(path.join(dir, name)); return true; }
       catch (error) { if (error.code === 'ENOENT') return false; throw error; }
     });

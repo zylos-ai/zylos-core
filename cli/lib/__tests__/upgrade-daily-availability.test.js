@@ -88,7 +88,7 @@ test('historical terminal journal shapes with retained scripts permit upgrade an
     inspect:()=>{inspected=true;throw Object.assign(Error('inspection boundary'),{code:'INSPECTION_REACHED'});}
    });
    assert.equal(inspected,true);
-   assert.equal(result.code,'UPGRADE_FAILED');
+   assert.equal(result.code,'INSPECTION_REACHED');
    let checked=false,delegated=false;
    assert.equal(await upgradeSelfCore({skipConfirm:true},{zylosDir:f.root,
     checkForCoreUpdates(){checked=true;return {success:true,current:'0.9.3',latest:'0.9.4',hasUpdate:true};},
@@ -168,10 +168,10 @@ for(const damage of ['malformed','missing','oversized','unknown-entry','dangling
 
 test('active READY ignores unrelated corrupt history, allows real writes, and still suppresses PM2 save',t=>{
  const f=fixture(t);
- for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','runner.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]) {
+ for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','runner.cjs'],['upgrade-installer.cjs','installer.cjs']]) {
   fs.copyFileSync(path.resolve('cli/lib',src),path.join(f.dir,dest));fs.chmodSync(path.join(f.dir,dest),0o600);
  }
- f.j.recoveryHashes=Object.fromEntries(['maintenance.cjs','runner.cjs','finalizer.cjs'].map(name=>[name,m.hash(path.join(f.dir,name))]));
+ f.j.recoveryHashes=Object.fromEntries(['maintenance.cjs','runner.cjs','installer.cjs'].map(name=>[name,m.hash(path.join(f.dir,name))]));
  f.save();m.marker(f.root,f.dir,f.j);
  const old=path.join(f.root,'.backup/self-upgrade/old');fs.mkdirSync(old,{mode:0o700});fs.writeFileSync(path.join(old,'journal.json'),'{');
  assert.equal(m.discover(f.root).blocked,true);

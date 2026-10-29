@@ -2,6 +2,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { classifyCutoff } from './upgrade-cutoff.js';
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
+import { upgradeFailureCode } from './upgrade-admission.js';
 
 const require = createRequire(import.meta.url);
 const maintenance = require('./upgrade-maintenance.cjs');
@@ -108,7 +109,7 @@ export async function resumeFinalize(root,{status=false}={},deps={}) {
     }
     if(result.success) return {ok:true,data};
     data.core.state='failed';
-    if(!data.core.failedItems.length || data.core.failedItems[0].code==='FINALIZE_INCOMPLETE') data.core.failedItems=[{id:result.failedStep ? `step${result.failedStep}`:'finalize',code:result.code || 'FINALIZE_INCOMPLETE',reason:result.error}];
+    if(!data.core.failedItems.length || data.core.failedItems[0].code==='FINALIZE_INCOMPLETE') data.core.failedItems=[{id:result.failedStep ? `step${result.failedStep}`:'finalize',code:upgradeFailureCode(result),reason:result.error}];
     return {ok:false,error:{code:'FINALIZE_INCOMPLETE',message:result.error || 'Upgrade finalization did not complete.',persisted:[...persisted]},data};
   } catch(error) {
     if(error.code==='CUTOFF_UNTRUSTED' || error.code==='NOT_RESUMABLE' || !before) throw error;
@@ -116,7 +117,7 @@ export async function resumeFinalize(root,{status=false}={},deps={}) {
     if(isolated && saved.phase!=='upgrade_complete') m.update(expected.dir,saved,{phase:'recovery_required',resumePhase:'compensation_closed',lastError:error.message});
     const data=finalizeStatus(saved);
     data.core.state='failed';
-    if(!data.core.failedItems.length || data.core.failedItems[0].code==='FINALIZE_INCOMPLETE') data.core.failedItems=[{id:error.step ? `step${error.step}`:'finalize',code:error.code || 'FINALIZE_INCOMPLETE',reason:error.message}];
+    if(!data.core.failedItems.length || data.core.failedItems[0].code==='FINALIZE_INCOMPLETE') data.core.failedItems=[{id:error.step ? `step${error.step}`:'finalize',code:upgradeFailureCode(error),reason:error.message}];
     return {ok:false,error:{code:'FINALIZE_INCOMPLETE',message:error.message,persisted:[...persisted]},data};
   } finally {release();}
 }

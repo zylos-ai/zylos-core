@@ -157,12 +157,12 @@ for(const status of [false,true]) test(`installing transaction is NOT_RESUMABLE 
 });
 
 
-test('forward repair retains the failing step and original code without new journal fields',async t=>{
+for(const [code,expectedCode] of [['LOCK_TIMEOUT','LOCK_TIMEOUT'],['','UPGRADE_FAILED'],[7,'UPGRADE_FAILED']]) test(`forward repair normalizes failedItems code ${JSON.stringify(code)}`,async t=>{
   const f=fixture(t);
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:()=>{
-    throw Object.assign(Error('configuration lock timed out'),{step:4,code:'LOCK_TIMEOUT'});
+    throw Object.assign(Error('configuration lock timed out'),{step:4,code});
   }});
-  const expected={id:'step4',code:'LOCK_TIMEOUT',reason:'configuration lock timed out'};
+  const expected={id:'step4',code:expectedCode,reason:'configuration lock timed out'};
   assert.deepEqual(result.data.core.failedItems,[expected]);
   const status=await resumeFinalize(f.root,{status:true},{maintenance:f.m});
   assert.equal(status.data.core.failedItems[0].reason,expected.reason);
