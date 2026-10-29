@@ -78,19 +78,22 @@ test('restart status keeps old-run completion separate from current Origin readi
 });
 
 test('runtime action reads a result returned after ten seconds and restarts Dashboard only for a saved baseline', { timeout: 25000 }, async t => {
-  const bin = path.join(process.env.TMPDIR, `dashboard-actions-${process.pid}`);
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR, 'dashboard-actions-'));
+  const zylosDir = path.join(root, 'zylos');
+  const bin = path.join(root, 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   writeExecutable(path.join(bin, 'zylos'), `const args=process.argv.slice(2),result=process.env.FAKE_RUNTIME_RESULT||'saved';if(args[0]==='runtime'&&result==='saved')setTimeout(()=>console.log(JSON.stringify({ok:true,data:{result}})),10200);else console.log(JSON.stringify({ok:true,data:{result}}));`);
-  const pm2Log = path.join(process.env.TMPDIR, `dashboard-pm2-${process.pid}.log`);
+  const pm2Log = path.join(root, 'pm2.log');
   writeExecutable(path.join(bin, 'pm2'), `require('node:fs').appendFileSync(process.env.FAKE_PM2_LOG,JSON.stringify(process.argv.slice(2))+'\\n');`);
-  const previous = { PATH: process.env.PATH, FAKE_RUNTIME_RESULT: process.env.FAKE_RUNTIME_RESULT, FAKE_PM2_LOG: process.env.FAKE_PM2_LOG };
+  const previous = { PATH: process.env.PATH, ZYLOS_DIR: process.env.ZYLOS_DIR, FAKE_RUNTIME_RESULT: process.env.FAKE_RUNTIME_RESULT, FAKE_PM2_LOG: process.env.FAKE_PM2_LOG };
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+  process.env.ZYLOS_DIR = zylosDir;
   process.env.FAKE_PM2_LOG = pm2Log;
-  fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.zylos'), { recursive: true });
-  fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ session_mode: 'single' }));
-  t.after(() => { process.env.PATH = previous.PATH; for (const key of ['FAKE_RUNTIME_RESULT', 'FAKE_PM2_LOG']) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; } });
-  const config = { zylosDir: process.env.ZYLOS_DIR };
+  fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(zylosDir, '.zylos', 'config.json'), JSON.stringify({ session_mode: 'single' }));
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  const config = { zylosDir };
   const saved = await handleCoreAction('switch-runtime', { runtime: 'codex' }, config);
   assert.equal(saved.ok, true); assert.equal(saved.data.result, 'saved'); assert.equal(saved.detached, true);
   for (let attempt = 0; attempt < 30 && !fs.existsSync(pm2Log); attempt += 1) await new Promise(resolve => setTimeout(resolve, 100));
