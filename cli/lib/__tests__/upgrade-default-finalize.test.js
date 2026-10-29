@@ -217,7 +217,7 @@ test('Dashboard takeover uses the persisted entry fact independently of source v
   f.m.update(f.dir,journal,{from:'0.9.4'});
   f.state.from='0.9.4';
   f.state.firstTakeover=false;
-  // Keep real protected snapshot checks, while avoiding a missing P12 schema owner.
+  // Keep real protected snapshot checks, while avoiding a missing Dashboard schema owner.
   const result=await f.run({dataReady:()=>{}});
   assert.equal(result.success,true,JSON.stringify(result));
   assert.equal(f.load().dashboardInstall.items.registration.state,'done');

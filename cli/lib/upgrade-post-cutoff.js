@@ -67,7 +67,7 @@ export function removeLegacyDashboardHooks(config, zylosDir) {
   return next;
 }
 
-/** Stage already-rendered P06 instruction/settings bytes without writing shared files. */
+/** Stage already-rendered instruction/settings bytes without writing shared files. */
 export function preparePostCutoff({ transactionDir, zylosDir, replacements, runtime = 'claude', homeDir = os.homedir() }) {
   const codexGlobalDir = path.join(path.resolve(homeDir), '.codex');
   const targets = [];
@@ -168,7 +168,7 @@ export async function publishPostCutoff(ctx, options = {}) {
 
 async function publishPrepared(ctx, { installHook = installCoreCodexHook,
   syncConfig = reconcileCodexConfig, persist = (journal, changes) => (ctx.maintenance ?? maintenance).update(ctx.transactionDir, journal, changes),
-  // DM-56d crash-injection boundary; production keeps the default no-op.
+  // Crash-injection boundary; production keeps the default no-op.
   afterStep = () => {} } = {}) {
   const journal = ctx.journal;
   const hooks = journal.postCutoff?.items?.hooks;

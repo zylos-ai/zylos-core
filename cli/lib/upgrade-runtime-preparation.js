@@ -261,7 +261,7 @@ export function prepareUpgradeRuntime(ctx, {
     for (const name of agents) {
       add(`.claude/agents/${name}`, readRegular(path.join(agentsRoot, name)));
     }
-    // P02 already attaches memory MCP per launch. Preserve that gate and verify
+    // Memory MCP is already attached per launch. Preserve that gate and verify
     // the installed target actually ships its server, without launching a runtime.
     readRegular(path.join(sourceRoot, 'skills/zylos-memory/scripts/memory-mcp-server.js'));
     const manifest = '.zylos/runtime-env.manifest';
