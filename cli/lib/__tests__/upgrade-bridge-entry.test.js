@@ -76,6 +76,19 @@ test('thin entry preserves and redacts recovery exception codes before checking 
   assert.doesNotMatch(output[0].error,/Require stack/);
 });
 
+test('thin entry supplies the fallback code when recovery throws without one', async t => {
+  const {upgradeSelfCore} = await import('../../commands/component.js');
+  const output=[];
+  assert.equal(await upgradeSelfCore({skipConfirm:true,jsonOutput:true}, {
+    zylosDir:fixture(t),
+    recoverBeforeUpgrade() {throw Error('recovery failed without a code');},
+    checkForCoreUpdates() {assert.fail('update check must not run');},
+    console:{log(value){output.push(JSON.parse(value));}},
+  }), false);
+  assert.equal(output[0].code, 'UPGRADE_FAILED');
+  assert.deepEqual(output[0].persisted, []);
+});
+
 test('actual preinstall rejects legacy upgrades and allows fresh/new upgrades without target dependencies', t => {
   const root = fixture(t), script = path.resolve('scripts/preinstall.js');
   const env = { ...process.env, HOME: root, PM2_HOME: path.join(root, '.pm2') };

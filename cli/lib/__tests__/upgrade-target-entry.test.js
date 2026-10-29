@@ -200,14 +200,14 @@ test('downloaded executable keeps malformed JSON classified as invalid handoff',
 });
 
 test('downloaded executable redacts paths from its main-block failure', t => {
-  const input=fixture(t);
-  input.tempDir=path.join(path.dirname(input.tempDir),'missing-target');
-  const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:JSON.stringify(input),encoding:'utf8'});
+  const privatePath=path.join(fixture(t).zylosDir,'private-handoff.json');
+  const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:privatePath,encoding:'utf8'});
   assert.equal(child.status,1,child.stderr);
   const result=JSON.parse(child.stdout);
-  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.equal(result.code,'INVALID_UPGRADE_HANDOFF');
   assert.deepEqual(result.persisted,[]);
-  assert.doesNotMatch(result.error,new RegExp(input.tempDir.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  assert.doesNotMatch(result.error,new RegExp(privatePath.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  assert.match(result.error,/<path>/);
   assert.doesNotMatch(result.error,/\n| at /);
 });
 

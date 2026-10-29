@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 const repository = path.resolve(import.meta.dirname, '../../../..');
 const maintenance = createRequire(import.meta.url)('../../upgrade-maintenance.cjs');
 const nodeBin = path.dirname(process.execPath);
+const restoreCrashPreload = path.join(import.meta.dirname, 'original-package-restore-crash.js');
 
 // Real npm and SQLite; all package, deployment, cache and process state belongs
 // to this fixture. The historical source is v0.9.2 relabelled 0.9.3, not a
@@ -15,7 +16,6 @@ const nodeBin = path.dirname(process.execPath);
 export function createProtectedPackageCrashFixture(root, {
   managedDashboard = false,
   targetBinChanged = false,
-  restoreStress = false,
 } = {}) {
   const home = path.join(root, 'home'), zylos = path.join(home, 'zylos');
   const prefix = path.join(root, 'prefix'), bin = path.join(root, 'bin');
@@ -79,7 +79,7 @@ const result={};for(const rel of ${JSON.stringify(['comm-bridge/c4.db','schedule
     for (const name of ['memory/sessions', '.zylos', '.claude', 'pm2']) fs.mkdirSync(path.join(zylos, name), { recursive: true });
     write(path.join(zylos, '.zylos/config.json'), '{"runtime":"claude"}\n');
     write(path.join(zylos, '.claude/settings.json'), '{"hooks":{}}\n');
-    write(path.join(zylos, 'memory/state.md'), 'T10 private working state\n');
+    write(path.join(zylos, 'memory/state.md'), 'private working state\n');
     fakes();
     const source = path.join(root, 'historical-v0.9.2-as-0.9.3');
     fs.mkdirSync(source);
@@ -87,22 +87,6 @@ const result={};for(const rel of ${JSON.stringify(['comm-bridge/c4.db','schedule
     run('tar', ['-x', '-C', source], { input: archive });
     const file = path.join(source, 'package.json'), pkg = JSON.parse(fs.readFileSync(file));
     pkg.version = '0.9.3';
-    if (restoreStress) {
-      const bins = {};
-      for (let index = 0; index < 2000; index += 1) {
-        const name = `zylos-restore-${String(index).padStart(4, '0')}`;
-        const relative = `cli/restore-${String(index).padStart(4, '0')}.js`;
-        write(path.join(source, relative), '#!/usr/bin/env node\n', 0o755);
-        bins[name] = `./${relative}`;
-      }
-      bins.zylos = './cli/zylos.js';
-      pkg.bin = bins;
-      const payload = fs.openSync(path.join(source, 'restore-payload.bin'), 'w');
-      try {
-        const block = Buffer.alloc(1 << 20, 0x5a);
-        for (let index = 0; index < 64; index += 1) fs.writeSync(payload, block);
-      } finally { fs.closeSync(payload); }
-    }
     write(file, JSON.stringify(pkg, null, 2));
     // Model the required 0.9.3 bridge guard explicitly; v0.9.2 lacks it.
     const postinstall = path.join(source, 'scripts/postinstall.js');
@@ -124,14 +108,14 @@ for(const [rel,owner]of [['comm-bridge/c4.db','comm-bridge/scripts/c4-schema.js'
  const f=${JSON.stringify(zylos)}+'/'+rel;const fs=await import('node:fs');fs.mkdirSync((await import('node:path')).dirname(f),{recursive:true});
  const db=new D(f);s.migrateDatabase(db,await import(${JSON.stringify(pathToFileURL(skills + '/').href)}+owner),{allowNew:true,strict:false});db.close();
 }
-const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(17,'T10 durable business row');db.close();`;
+ const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(17,'durable business row');db.close();`;
     run(process.execPath, ['--input-type=module', '-e', init]);
     if (managedDashboard) {
       assert.equal(fs.existsSync(path.join(core, 'skills/dashboard')), false);
       assert.equal(fs.existsSync(path.join(skills, 'dashboard')), false);
       const database = path.join(zylos, 'components/dashboard/dashboard.db');
       fs.mkdirSync(path.dirname(database), { recursive: true });
-      run(process.execPath, ['-e', `const D=require(${JSON.stringify(path.join(skills, 'comm-bridge/node_modules/better-sqlite3'))});const db=new D(${JSON.stringify(database)});db.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);INSERT INTO schema_migrations VALUES (20);CREATE TABLE events(value TEXT);INSERT INTO events VALUES ('T10 preserved Dashboard row')");db.close();`]);
+      run(process.execPath, ['-e', `const D=require(${JSON.stringify(path.join(skills, 'comm-bridge/node_modules/better-sqlite3'))});const db=new D(${JSON.stringify(database)});db.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);INSERT INTO schema_migrations VALUES (20);CREATE TABLE events(value TEXT);INSERT INTO events VALUES ('preserved Dashboard row')");db.close();`]);
     }
     assert.equal(version(), '0.9.3');
     const target = path.join(root, 'target');
@@ -202,45 +186,32 @@ const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prep
     return observed;
   }
   async function killDuringRestore(input, boundary) {
-    const child = spawn(process.execPath, failedEntryArgs(input), { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const marker = path.join(root, `restore-crash-${boundary}.txt`);
+    const childEnv = {
+      ...env,
+      ZYLOS_TEST_RESTORE_CRASH_BOUNDARY: boundary,
+      ZYLOS_TEST_RESTORE_INSTALLED_ROOT: core,
+      ZYLOS_TEST_RESTORE_BIN_DIR: path.join(prefix, 'bin'),
+      ZYLOS_TEST_RESTORE_CRASH_MARKER: marker,
+    };
+    const child = spawn(process.execPath, ['--import', pathToFileURL(restoreCrashPreload).href, ...failedEntryArgs(input)], {
+      env: childEnv, stdio: ['pipe', 'pipe', 'pipe'],
+    });
     const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
     let stdout = '', stderr = '';
     child.stdout.on('data', bytes => { stdout += bytes; });
     child.stderr.on('data', bytes => { stderr += bytes; });
     child.stdin.end(JSON.stringify(input));
-    const deadline = Date.now() + 300000;
-    let observed;
-    try {
-      while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
-        const current = journal().find(({ journal: j }) => j.phase === 'restoring' && j.installationIntent === true);
-        if (current?.journal.originalPackage) {
-          const original = current.journal.originalPackage;
-          let currentHash = null;
-          try { currentHash = maintenance.treeHash(core, {excludeNodeModules:false, includeModes:true}); } catch {}
-          if (boundary === 'copying' && fs.existsSync(path.join(core, 'restore-payload.bin')) && currentHash !== original.treeHash) {
-            observed = current;
-            break;
-          }
-          if (boundary === 'before-bin-repair' && currentHash === original.treeHash && !current.journal.originalPackageRestored) {
-            const metadata = JSON.parse(fs.readFileSync(path.join(original.path, 'package.json')));
-            const target = typeof metadata.bin === 'string' ? metadata.bin : metadata.bin.zylos;
-            const link = path.join(prefix, 'bin', 'zylos');
-            let resolved = null;
-            try { resolved = path.resolve(path.dirname(link), fs.readlinkSync(link)); } catch {}
-            if (resolved !== path.resolve(core, target)) {
-              observed = current;
-              break;
-            }
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, 2));
-      }
-      assert.ok(observed, `Restore boundary ${boundary} never observed: ${stdout} ${stderr}`);
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-      const result = await exited;
-      if (observed) assert.equal(result.signal, 'SIGKILL');
-    }
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 300000);
+    const result = await exited;
+    clearTimeout(timer);
+    assert.equal(timedOut, false, `Restore boundary ${boundary} timed out: ${stdout} ${stderr}`);
+    assert.equal(result.signal, 'SIGKILL', `Restore boundary ${boundary} exited unexpectedly: ${stdout} ${stderr}`);
+    assert.equal(fs.readFileSync(marker, 'utf8'), `${boundary}\n`);
+    const observed = journal().find(({journal: current}) => current.installationIntent === true &&
+      !['restored_complete', 'upgrade_complete', 'aborted_before_install'].includes(current.phase));
+    assert.ok(observed?.journal.originalPackage, `Restore boundary ${boundary} left no active transaction`);
     return observed;
   }
   function recover(from) {
@@ -249,10 +220,12 @@ const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prep
     return JSON.parse(result.stdout.trim().split('\n').at(-1));
   }
   const installedTreeHash = () => maintenance.treeHash(core, {excludeNodeModules:false, includeModes:true});
+  const serviceState = () => JSON.parse(fs.readFileSync(pm2State, 'utf8'));
+  const commandCalls = () => fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean) : [];
   const binTarget = name => {
     const link = path.join(prefix, 'bin', name);
     return path.resolve(path.dirname(link), fs.readlinkSync(link));
   };
   return { build, handoff, entry, kill, killDuringRestore, recover, journal, logicalDatabases,
-    installedTreeHash, binTarget, version, core, zylos, root, calls, skills };
+    installedTreeHash, binTarget, serviceState, commandCalls, version, core, zylos, root, calls, skills };
 }

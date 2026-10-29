@@ -70,6 +70,25 @@ test('preservation snapshots the exact installed directory including dependencie
   assert.deepEqual(f.load().originalPackage, f.originalPackage);
 });
 
+test('preservation rejects a snapshot changed after copying and records no evidence', t => {
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-original-package-copy-')));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const sourceRoot=path.join(root,'prefix/lib/node_modules/zylos');
+  const transactionDir=path.join(root,'transaction');
+  fs.mkdirSync(sourceRoot,{recursive:true});
+  fs.mkdirSync(transactionDir);
+  fs.writeFileSync(path.join(sourceRoot,'package.json'),JSON.stringify({name:'zylos',version:'0.9.3'}));
+  fs.writeFileSync(path.join(sourceRoot,'content.txt'),'original\n');
+  const journal={formatVersion:1,transactionId:'tx'};
+  m.update(transactionDir,journal);
+  const injected={...m,copyTreePreservingModes(source,destination){
+    m.copyTreePreservingModes(source,destination);
+    fs.appendFileSync(path.join(destination,'content.txt'),'changed\n');
+  }};
+  assert.throws(()=>saveOriginalPackage({maintenance:injected,coreDir:sourceRoot,from:'0.9.3',transactionDir,journal}),/snapshot changed during copy/);
+  assert.equal(m.read(path.join(transactionDir,'journal.json')).originalPackage,undefined);
+});
+
 test('restoration replaces the same source root and rebuilds changed package bin mappings', t => {
   const f = fixture(t);
   replaceInstalledPackage(f);

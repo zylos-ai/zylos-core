@@ -47,7 +47,7 @@ for (const managedDashboard of [false, true]) for (const stage of ['before', 'af
   assert.equal(f.version(), '1.0.0');
   const next = f.logicalDatabases();
   assert.ok(Object.values(next).every(db => db.integrity === 'ok'));
-  assert.match(JSON.stringify(next['comm-bridge/c4.db']), /T10 durable business row/);
+  assert.match(JSON.stringify(next['comm-bridge/c4.db']), /durable business row/);
   if (managedDashboard) assertDashboardUpgraded(next);
   assert.equal(f.journal().filter(item => item.journal.phase === 'upgrade_complete').length, 1);
   assert.match(fs.readFileSync(f.calls, 'utf8'), /pm2 stop activity-monitor/);
@@ -59,7 +59,7 @@ function assertDashboardUpgraded(databases) {
   assert.equal(dashboard.integrity, 'ok');
   const migrations = dashboard.tables.find(table => table.schema.name === 'schema_migrations');
   assert.deepEqual(migrations.rows.map(row => JSON.parse(row).version).sort((a, b) => a - b), [20, 21]);
-  assert.match(JSON.stringify(dashboard), /T10 preserved Dashboard row/);
+  assert.match(JSON.stringify(dashboard), /preserved Dashboard row/);
 }
 
 for (const failureStage of [undefined, 'before', 'after']) test(`first Dashboard takeover with retained v20 ${failureStage ? `compensates ${failureStage} installation failure` : 'completes upgrade'}`, {
@@ -78,7 +78,7 @@ for (const failureStage of [undefined, 'before', 'after']) test(`first Dashboard
   if (failureStage) {
     assert.equal(result.status, 1, JSON.stringify(result));
     assert.equal(result.result.success, false);
-    assert.match(result.result.error, /injected (pre|post)-install failure/);
+    assert.match(result.result.error, failureStage === 'before' ? /injected pre-install failure/ : /injected post-install failure/);
     assert.equal(result.result.recovery_required, false, JSON.stringify(result));
     assert.equal(saved[0].journal.phase, failureStage === 'after' ? 'restored_complete' : 'aborted_before_install');
     assert.equal(saved[0].journal.installationIntent === true, failureStage === 'after');
