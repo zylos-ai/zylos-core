@@ -26,7 +26,7 @@ test('Console absence and read errors distinct', async () => {
 });
 test('unknown runtime state cannot appear idle and usage validity stays independent', () => {
   const value = projectOrigin('origin', { identity: { present: true, runId: 'R' }, status: { valid: false, reason: 'stale' }, usage: { valid: true, value: { value: 1 } } });
-  assert.equal(value.state, 'UNKNOWN'); assert.equal(value.usage.valid, true);
+  assert.equal(value.state, 'UNKNOWN'); assert.equal('usage' in value, false);
 });
 test('cost cache refreshes on identity changes and every unknown observation', () => {
   let reads = 0; const cached = createSessionCache(() => ++reads);

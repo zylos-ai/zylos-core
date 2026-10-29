@@ -228,13 +228,6 @@ test('Codex runtime info exposes running, installed, effective, and restart fiel
   assert.match(index, /pending_restart: !!needsRestart,/);
 });
 
-test('upgrade-zylos writes a restart marker and uses double-fork spawning', () => {
-  const actions = fs.readFileSync(new URL('../src/lib/actions.js', import.meta.url).pathname, 'utf8');
-  assert.match(actions, /upgrade-zylos-pending\.json/);
-  assert.match(actions, /spawn\(process\.execPath, \['-e', script\]/);
-  assert.match(actions, /spawn\('zylos', \['upgrade', '--self', '-y'\]/);
-});
-
 function fleetFixture() {
   const now = '2026-06-07T15:20:00.000Z';
   return {
@@ -903,7 +896,7 @@ test('remote Actions/Settings are gated by access and routed through the viewed 
   assert.match(app, /const resp = await fetch\(api\(agentPath\('\/api\/settings'\)\), \{/);
   assert.match(app, /const actionPath = agentPath\(`\/api\/actions\/\$\{action\}`\);/);
   assert.match(app, /const healthPath = agentPath\('\/api\/health'\);/);
-  assert.match(app, /startCountdownAndReload\(15, statusEl, healthPath\);/);
+  assert.match(app, /startCountdownAndReload\(15, statusEl, healthPath, summary\);/);
 
   // An already-open modal cannot survive entering/exiting a remote view
   // (browser-back with the Actions modal open).

@@ -53,7 +53,8 @@ import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
 import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
-import { consumeZylosUpgradeMarker, handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
+import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
+import { buildRestartStatus } from './lib/core-actions.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
 import { applyVersionUpdateFields, codexRuntimeFields } from './lib/runtime-info.js';
@@ -99,9 +100,8 @@ function readInstalledVersions() {
 
 function refreshInstalledVersions() {
   readInstalledVersions();
-  const st = coreState?.getState();
-  if (st) {
-    const current = coreState.getState();
+  const current = coreState?.getState();
+  if (current) {
     current.runtime_info = buildRuntimeInfo();
     sse.broadcast('state_change', current);
     scheduleFleetStateBroadcast();
@@ -111,8 +111,6 @@ function refreshInstalledVersions() {
 const config = loadConfig();
 ensureDataDirs(config);
 await migratePasswordIfNeeded(config);
-let zylosUpgradeResult = null; // A previous launch marker is not completion evidence.
-
 const activeRuntime = loadZylosConfig(config.zylosDir).runtime || process.env.ZYLOS_RUNTIME || 'claude';
 const isClaudeRuntime = activeRuntime === 'claude';
 config.runtime = activeRuntime;
@@ -127,7 +125,8 @@ try {
   process.exit(1);
 }
 
-const coreState = new CoreState({ onChange: () => { if (typeof scheduleFleetStateBroadcast === 'function') scheduleFleetStateBroadcast(); } });
+let publishCoreStateChange = () => {};
+const coreState = new CoreState({ zylosDir: config.zylosDir, onChange: state => publishCoreStateChange(state) });
 const auth = new AuthGate(config, store);
 const memoryBrowser = new MemoryBrowser({ zylosDir: config.zylosDir });
 const observerInstaller = new ObserverInstaller({ dataDir: config.dataDir });
@@ -211,6 +210,10 @@ function broadcastFleetState() {
 }
 
 const scheduleFleetStateBroadcast = createCoalescedBroadcast(broadcastFleetState);
+publishCoreStateChange = () => {
+  sse.broadcast('state_change', buildApiStatePayload());
+  scheduleFleetStateBroadcast();
+};
 
 // 6b. Version checker (polls GitHub + npm registry every 12h)
 const versionChecker = new VersionChecker({
@@ -241,7 +244,8 @@ setInterval(readInstalledVersions, INSTALLED_VERSIONS_REFRESH_MS).unref();
 
 function buildRuntimeInfo() {
   const live = coreState.getState();
-  const usage = live.usage?.valid ? live.usage.value : null;
+  const usageObservation = coreState.getUsageObservation();
+  const usage = usageObservation.valid ? usageObservation.value : null;
   const slInfo = live.runtime === 'claude' && usage ? { model: usage.model?.display_name, model_id: usage.model?.id, effort: usage.effort?.level, cc_version: usage.version } : null;
   const latest = versionChecker.getLatest();
   const ccRunning = slInfo?.cc_version || null;
@@ -275,7 +279,6 @@ function buildRuntimeInfo() {
     codex_running: codexRunning,
     codex_installed: codexInstalledVersion || null,
     pending_restart: !!needsRestart,
-    zylos_upgrade_result: zylosUpgradeResult,
   };
   // info bar: installed newer than running → show restart hint
   if (ccInstalledVersion && ccRunning && isNewerVersion(ccInstalledVersion, ccRunning)) {
@@ -395,7 +398,8 @@ function buildApiStatePayload() {
   stateData.runtime_info = buildRuntimeInfo();
   stateData.new_session_threshold = getNewSessionThreshold();
   stateData.system_metrics = getSystemMetrics();
-  const usage = stateData.usage?.valid ? stateData.usage.value : null;
+  const usageObservation = coreState.getUsageObservation();
+  const usage = usageObservation.valid ? usageObservation.value : null;
   stateData.context_pct = usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null);
   stateData.rate_limit_pct = coreState.accountUsage?.five_hour?.used_percentage ?? coreState.accountUsage?.fiveHour?.usedPercentage ?? null;
   stateData.rate_limit_7d_pct = coreState.accountUsage?.seven_day?.used_percentage ?? coreState.accountUsage?.sevenDay?.usedPercentage ?? null;
@@ -1022,7 +1026,7 @@ async function handleApi(req, res, pathname, url) {
     let completion = 'unknown';
     try { const { lookupRestartRequest } = await loadCoreModule('am-sock-client.js'); completion = await lookupRestartRequest(requestId, { deadlineAt: Date.now() + 10000 }); } catch {}
     const current = await coreState.refresh();
-    sendJson(res, 200, { requestId, completion, origin: { runId: current.runId, sessionId: current.sessionId, ready: current.identity?.ready === true, state: current.state } });
+    sendJson(res, 200, buildRestartStatus(requestId, completion, current));
     return true;
   }
   if (pathname === '/api/session-mode' || pathname === '/api/instance-status') {
@@ -1030,7 +1034,13 @@ async function handleApi(req, res, pathname, url) {
       const args = pathname === '/api/session-mode' ? ['session-mode', 'status', '--json'] : ['status', '--json'];
       const { stdout } = await promisify(execFile)('zylos', args, { timeout: 10000, maxBuffer: 1024 * 1024 });
       sendJson(res, 200, JSON.parse(stdout));
-    } catch (error) { sendJson(res, 503, { ok: false, error: { code: 'STATUS_UNAVAILABLE', message: error.message } }); }
+    } catch (error) {
+      try {
+        const envelope = JSON.parse(String(error.stdout || '').trim());
+        if (typeof envelope?.ok === 'boolean') { sendJson(res, 400, envelope); return true; }
+      } catch {}
+      sendJson(res, 503, { ok: false, error: { code: 'STATUS_UNAVAILABLE', message: error.message } });
+    }
     return true;
   }
   if (pathname === '/api/state') {
@@ -1161,8 +1171,9 @@ async function handleApi(req, res, pathname, url) {
     if (['context_pct', 'rate_limit', 'rate_limit_7d'].includes(metricName)) {
       await coreState.refresh();
       const current = buildApiStatePayload();
+      const usage = coreState.getUsageObservation();
       const value = current[{ context_pct: 'context_pct', rate_limit: 'rate_limit_pct', rate_limit_7d: 'rate_limit_7d_pct' }[metricName]];
-      result = { value, selected_source: 'core-session-reader', freshness: current.usage?.sampledAt ? (Date.now() - current.usage.sampledAt) / 1000 : null, confidence: value === null ? 'none' : 'actual', alternatives: [], fallback_reason: value === null ? current.usage?.reason || 'missing' : null };
+      result = { value, selected_source: 'core-session-reader', freshness: usage.sampledAt ? (Date.now() - usage.sampledAt) / 1000 : null, confidence: value === null ? 'none' : 'actual', alternatives: [], fallback_reason: value === null ? usage.reason || 'missing' : null };
     } else result = metricResolver.resolve(metricName);
     sendJson(res, 200, result);
     return true;

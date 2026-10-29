@@ -6,9 +6,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { setTimeout as delay } from 'node:timers/promises';
 import { getCodexModels, codexEffortsForModel } from './codex-models.js';
-import { compareVersions, isNewerVersion } from './version-utils.js';
+import { isNewerVersion } from './version-utils.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -26,51 +25,6 @@ function codexConfigPath() {
 
 function codexProjectConfigPath(zylosDir) {
   return path.join(zylosDir || path.join(os.homedir(), 'zylos'), '.codex', 'config.toml');
-}
-
-function c4ControlPath(zylosDir) {
-  return path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-}
-
-function dashboardDataDir(zylosDir) {
-  return path.join(zylosDir, 'components', 'dashboard');
-}
-
-function zylosUpgradeMarkerPath(zylosDir) {
-  return path.join(dashboardDataDir(zylosDir), 'upgrade-zylos-pending.json');
-}
-
-export function consumeZylosUpgradeMarker(zylosDir, currentVersion) {
-  const markerPath = zylosUpgradeMarkerPath(zylosDir);
-  let marker;
-  try {
-    marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
-  } catch {
-    return null;
-  }
-
-  try { fs.rmSync(markerPath, { force: true }); } catch { /* best effort */ }
-
-  const targetVersion = marker.targetVersion || null;
-  const fromVersion = marker.fromVersion || null;
-  const current = currentVersion || null;
-  let status = 'warning';
-
-  if (current && targetVersion) {
-    const cmp = compareVersions(current, targetVersion);
-    if (cmp !== null && cmp >= 0) status = 'success';
-  } else if (current && fromVersion) {
-    const cmp = compareVersions(current, fromVersion);
-    if (cmp !== null && cmp > 0) status = 'success';
-  }
-
-  return {
-    status,
-    fromVersion,
-    targetVersion,
-    currentVersion: current,
-    startedAt: marker.startedAt || null
-  };
 }
 
 const DEDUP_WINDOW_MS = 2000;
@@ -299,15 +253,6 @@ async function upgradeZylos(reqId, zylosDir) {
     : 'Upgrade started. All services will restart.';
   const upgradeMsgKey = latestVersion && currentVersion ? 'result.upgrading_zylos' : 'result.upgrading_zylos_simple';
   const upgradeMsgParams = latestVersion && currentVersion ? { from: currentVersion, to: latestVersion } : undefined;
-
-  const markerPath = zylosUpgradeMarkerPath(zylosDir);
-  fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-  fs.writeFileSync(markerPath, JSON.stringify({
-    action: 'upgrade-zylos',
-    fromVersion: currentVersion,
-    targetVersion: latestVersion,
-    startedAt: new Date().toISOString()
-  }, null, 2) + '\n');
 
   const script = `
     const { spawn } = require('node:child_process');

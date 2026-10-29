@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { consumeZylosUpgradeMarker, getActionsMeta, handleAction } from '../src/lib/actions.js';
+import { getActionsMeta, handleAction } from '../src/lib/actions.js';
 
 async function withCodexHome(fn) {
   const prev = process.env.CODEX_HOME;
@@ -102,7 +102,6 @@ test('getActionsMeta keeps Claude model and effort controls for Claude runtime',
   assert.equal(meta.current_effort, 'medium');
   assert.equal(meta.new_session_threshold, 36);
 });
-
 test('Claude model list includes defaults with display names and specific versions', () => {
   const meta = getActionsMeta(
     { runtime: 'claude', zylosDir: '/tmp/zylos-dashboard-missing' },
@@ -200,44 +199,5 @@ test('handleAction upgrades Codex CLI under Codex runtime', async () => {
   } finally {
     process.env.PATH = prevPath;
     fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('consumeZylosUpgradeMarker reports success when current version reaches target', () => {
-  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-upgrade-marker-'));
-  const dashboardDir = path.join(zylosDir, 'components', 'dashboard');
-  fs.mkdirSync(dashboardDir, { recursive: true });
-  fs.writeFileSync(path.join(dashboardDir, 'upgrade-zylos-pending.json'), JSON.stringify({
-    fromVersion: '0.5.1',
-    targetVersion: '0.5.2',
-    startedAt: '2026-06-03T00:00:00.000Z'
-  }));
-
-  try {
-    const result = consumeZylosUpgradeMarker(zylosDir, '0.5.2');
-    assert.equal(result.status, 'success');
-    assert.equal(result.targetVersion, '0.5.2');
-    assert.equal(result.currentVersion, '0.5.2');
-    assert.equal(fs.existsSync(path.join(dashboardDir, 'upgrade-zylos-pending.json')), false);
-  } finally {
-    fs.rmSync(zylosDir, { recursive: true, force: true });
-  }
-});
-
-test('consumeZylosUpgradeMarker reports warning when current version is still old', () => {
-  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-upgrade-marker-'));
-  const dashboardDir = path.join(zylosDir, 'components', 'dashboard');
-  fs.mkdirSync(dashboardDir, { recursive: true });
-  fs.writeFileSync(path.join(dashboardDir, 'upgrade-zylos-pending.json'), JSON.stringify({
-    fromVersion: '0.5.1',
-    targetVersion: '0.5.2'
-  }));
-
-  try {
-    const result = consumeZylosUpgradeMarker(zylosDir, '0.5.1');
-    assert.equal(result.status, 'warning');
-    assert.equal(result.currentVersion, '0.5.1');
-  } finally {
-    fs.rmSync(zylosDir, { recursive: true, force: true });
   }
 });

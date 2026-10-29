@@ -34,8 +34,10 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
     fixture.tmux('-f','/dev/null','new-session','-d','-s',`zylos-group-${group}`,'-e',`ZYLOS_RUN_ID=${run}`,'-e',`ZYLOS_SESSION_GROUP=${group}`,'-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}','sleep','120');
     sample(group,run,session);
   }
-  const core=new CoreState();
+  const changes=[];const core=new CoreState({onChange:state=>changes.push(state)});
   let current=await core.refresh();assert.equal(current.runId,'R1');assert.equal(current.state,'BUSY');assert.equal(current.running_tools[0].tool_name,'Read');
+  assert.equal('identity' in current,false);assert.equal('status' in current,false);assert.equal('usage' in current,false);
+  const firstCostKey=core.costKey;assert.ok(firstCostKey);await core.refresh();assert.equal(changes.length,1);
   const consoleStatus=createConsoleStatusReader({readSessionMode,readSessionState,getChannelNamespace:()=>({namespace:'clone-console'})});
   assert.equal((await consoleStatus()).runId,'RC');
   write(path.join(root,'activity-monitor/agent-status.json'),{state:'WRONG_GLOBAL'});
@@ -54,11 +56,11 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   assert.equal(db.prepare('SELECT count(*) n FROM control_queue').get().n,3);
   assert.equal((await handleCoreAction('interrupt',{}, {zylosDir:root})).error,'TARGET_REQUIRED');
   assert.equal((await handleCoreAction('interrupt',{...target,sessionGroup:'other'}, {zylosDir:root})).error,'TARGET_SCOPE_MISMATCH');
-  current=await core.refresh();assert.equal(current.runId,'R2');assert.equal(current.sessionId,'S2');
+  current=await core.refresh();assert.equal(current.runId,'R2');assert.equal(current.sessionId,'S2');assert.notEqual(core.costKey,firstCostKey);
   const file=path.join(runDir('origin'),'agent-status.json');fs.utimesSync(file,new Date(0),new Date(0));
   assert.equal((await core.refresh()).reason,'stale');
   write(file,'{broken');assert.equal((await core.refresh()).reason,'unparseable');
-  sample('origin','R2','S3');assert.equal((await core.refresh()).sessionId,'S3');
+  const secondCostKey=core.costKey;sample('origin','R2','S3');assert.equal((await core.refresh()).sessionId,'S3');assert.notEqual(core.costKey,secondCostKey);
   assert.equal((await consoleStatus()).runId,'RC');
   db.prepare('INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)').run('clone-console','web-console');
   const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(resolve=>listener.close(resolve));

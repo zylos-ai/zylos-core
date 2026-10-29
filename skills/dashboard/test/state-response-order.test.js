@@ -2,31 +2,42 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   beginStateRequest,
+  applyStateResponse,
   captureMetricTarget,
   isMetricTargetCurrent,
   isStateRequestCurrent,
 } from '../public/js/response-order.js';
 
-test('a response predating a newer SSE observation is stale', () => {
-  const state = { navigationGeneration: 0, stateRevision: 0 };
+test('an unrelated same-run SSE observation does not discard a newer full response', () => {
+  const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };
   const request = beginStateRequest(state);
-  state.stateRevision++;
-  assert.equal(isStateRequestCurrent(state, request), false);
+  state.dashboardState = { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:01Z' };
+  const response = { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:02Z', system_metrics: { cpu_pct: 1 } };
+  assert.equal(applyStateResponse(state, request, response), true);
+  assert.deepEqual(state.dashboardState.system_metrics, { cpu_pct: 1 });
+});
+
+test('a response for the previous running identity is stale after SSE replacement', () => {
+  const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };
+  const request = beginStateRequest(state);
+  state.dashboardState = { runId: 'R2', sessionId: 'S2', updated_at: '2026-01-01T00:00:02Z' };
+  assert.equal(applyStateResponse(state, request, { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:01Z' }), false);
+  assert.equal(state.dashboardState.runId, 'R2');
 });
 
 test('only the newest overlapping state request remains current', () => {
   const state = { navigationGeneration: 0 };
   const first = beginStateRequest(state);
   const second = beginStateRequest(state);
-  assert.equal(isStateRequestCurrent(state, first), false);
-  assert.equal(isStateRequestCurrent(state, second), true);
+  assert.equal(isStateRequestCurrent(state, first, {}), false);
+  assert.equal(isStateRequestCurrent(state, second, {}), true);
 });
 
 test('a state request from the previous fleet target is stale', () => {
   const state = { navigationGeneration: 0 };
   const request = beginStateRequest(state);
   state.navigationGeneration++;
-  assert.equal(isStateRequestCurrent(state, request), false);
+  assert.equal(isStateRequestCurrent(state, request, {}), false);
 });
 
 test('metric responses are bound to navigation and running identity', () => {

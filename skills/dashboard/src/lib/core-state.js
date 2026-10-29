@@ -1,11 +1,23 @@
 import { loadCoreModule } from './core-modules.js';
+import { Sanitizer } from './sanitizer.js';
+import { isDeepStrictEqual } from 'node:util';
 
-export function projectOrigin(sessionGroup, observation) {
+const publicIdentity = identity => Object.fromEntries(
+  ['present', 'tmuxName', 'runId', 'createdAt', 'runtime', 'ready', 'sessionId']
+    .map(key => [key, identity?.[key] ?? null])
+);
+export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitizer(process.env.ZYLOS_DIR || process.cwd())) {
   const { identity, status, usage } = observation;
   const state = !identity.present ? 'OFFLINE' : status.reason === 'starting' ? 'STARTING' : !status.valid ? 'UNKNOWN' : String(status.value.state || 'unknown').toUpperCase();
-  const tools = status.valid && Array.isArray(status.value.active_tool_details) ? status.value.active_tool_details.map(tool => ({ tool_use_id: tool.id, tool_name: tool.name, started_at: Number.isFinite(tool.startedAt) ? new Date(tool.startedAt).toISOString() : null })) : [];
-  return { running_tools: tools, active_subagents: [], subagent_tools: [], last_message: null, last_prompt: null, updated_at: new Date().toISOString(), source: {}, state, sessionGroup, runId: identity.runId, sessionId: identity.sessionId,
-    runtime: identity.runtime, identity, status, usage,
+  const tools = status.valid && Array.isArray(status.value.active_tool_details) ? status.value.active_tool_details.map(tool => ({
+    tool_use_id: tool.id,
+    tool_name: tool.name,
+    tool_detail: sanitizer.sanitizeToolDetail(tool.name, tool.input),
+    started_at: Number.isFinite(tool.startedAt) ? new Date(tool.startedAt).toISOString() : null,
+  })) : [];
+  const targetValid = identity.present && status.reason !== 'identity_changed';
+  return { running_tools: tools, active_subagents: [], subagent_tools: [], last_message: null, last_prompt: null, updated_at: new Date().toISOString(), source: {}, state, sessionGroup, runId: targetValid ? identity.runId : null, sessionId: targetValid ? identity.sessionId : null,
+    runtime: identity.runtime, ready: targetValid && identity.ready === true,
     sampledAt: status.sampledAt, reason: status.reason,
     confidence: status.valid ? 'HIGH' : 'LOW',
     evidence: status.valid ? ['core-session-reader'] : [],
@@ -14,9 +26,12 @@ export function projectOrigin(sessionGroup, observation) {
 }
 
 export class CoreState {
-  constructor({ onChange = () => {} } = {}) {
+  constructor({ onChange = () => {}, zylosDir = process.env.ZYLOS_DIR || process.cwd() } = {}) {
     this.onChange = onChange;
-    this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: 'not_sampled', identity: null, status: { valid: false }, usage: { valid: false }, runId: null, sessionId: null };
+    this.sanitizer = new Sanitizer(zylosDir);
+    this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: 'not_sampled', ready: false, runId: null, sessionId: null };
+    this.observation = null;
+    this.lastSource = null;
     this.costKey = null; this.pending = null;
   }
   refresh() {
@@ -30,31 +45,45 @@ export class CoreState {
       const { mode } = readSessionMode();
       const group = mode === 'multi' ? 'origin' : null;
       const observation = await reader.readSessionState(group, { freshnessMs: 5000 });
-      this.snapshot = projectOrigin(group, observation);
       try {
       const groups = mode === 'multi' ? await paths.listGroupTmuxSessions() : [{ sessionGroup: null }];
       const identities = await Promise.all(groups.map(async ({ sessionGroup }) => {
-        const live = await reader.readLiveIdentity(sessionGroup);
+        const live = sessionGroup === group ? observation.identity : await reader.readLiveIdentity(sessionGroup);
         if (!live.present || !live.runId || live.runtime === 'unknown') throw new Error('Unknown running identity');
         return [sessionGroup, live.runId, live.sessionId];
       }));
       this.costKey = observation.status.reason === 'identity_changed' || observation.identity.runtime === 'unknown' ? null : JSON.stringify(identities.sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
       } catch { this.costKey = null; }
-      this.accountUsage = await reader.readAccountUsage(observation.identity.runtime).catch(() => null);
+      const accountUsage = await reader.readAccountUsage(observation.identity.runtime).catch(() => null);
+      const source = { observation, accountUsage };
+      this.observation = observation;
+      this.accountUsage = accountUsage;
+      if (!isDeepStrictEqual(source, this.lastSource)) {
+        this.lastSource = source;
+        this.snapshot = projectOrigin(group, observation, this.sanitizer);
+        this.onChange(this.snapshot);
+      }
     } catch (error) {
       this.costKey = null;
       this.accountUsage = null;
-      this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: error.code || 'read_failed', message: error.message, identity: null, status: { valid: false }, usage: { valid: false }, runId: null, sessionId: null };
+      this.observation = null;
+      const source = { error: { code: error.code || 'read_failed', message: error.message } };
+      if (!isDeepStrictEqual(source, this.lastSource)) {
+        this.lastSource = source;
+        this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: source.error.code, message: source.error.message, ready: false, runId: null, sessionId: null };
+        this.onChange(this.snapshot);
+      }
     }
-    this.onChange(this.snapshot);
     return this.snapshot;
   }
-  getCurrentSessionId() { return this.snapshot.identity?.present && this.snapshot.status?.reason !== 'identity_changed' ? this.snapshot.sessionId : null; }
+  getCurrentSessionId() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' ? this.observation.identity.sessionId : null; }
   getState() { return structuredClone(this.snapshot); }
+  getUsageObservation() { return this.observation?.usage ? structuredClone(this.observation.usage) : { valid: false }; }
   async currentTarget() {
-    const snapshot = await this.refresh();
-    if (!snapshot.identity?.present || !snapshot.identity.ready || !snapshot.runId || snapshot.status.reason === 'identity_changed') throw Object.assign(new Error('Current Origin identity is unavailable'), { code: 'target_unavailable' });
-    return { ...snapshot.identity, sessionGroup: snapshot.sessionGroup };
+    await this.refresh();
+    const identity = this.observation?.identity;
+    if (!identity?.present || !identity.ready || !identity.runId || this.observation?.status?.reason === 'identity_changed') throw Object.assign(new Error('Current Origin identity is unavailable'), { code: 'target_unavailable' });
+    return { ...publicIdentity(identity), sessionGroup: this.snapshot.sessionGroup };
   }
   start() { this.timer = setInterval(() => this.refresh(), 1000); this.timer.unref?.(); return this.refresh(); }
   async stop() { clearInterval(this.timer); await this.pending; }
