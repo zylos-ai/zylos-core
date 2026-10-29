@@ -6,6 +6,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {spawn} from 'node:child_process';
 import {resolveUpgradeNpmCli,installUpgradeTarget} from '../upgrade-entry.js';
+import {step6_installSkillDeps} from '../self-upgrade.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 const runInstaller=(ctx,options)=>m.runInstaller(ctx.transactionDir,ctx.journal,options);
 function fixture(t,body){
@@ -31,6 +32,36 @@ for(const ci of [undefined,'','0','false','xyz'])test(`protected npm preserves i
   assert.equal(seen.stage,stage);assert.equal(seen.ci,process.env.CI);
   assert.equal(f.read().installerStage,stage);assert.equal(f.read().installerExitConfirmed,true);
  }
+});
+
+test('target, skill and original-package installation keep lifecycle scripts enabled',t=>{
+ const f=fixture(t,''),log=path.join(f.root,'npm-calls.jsonl');
+ const inheritedIgnoreScripts=Object.fromEntries(Object.entries(process.env).filter(([key])=>key.toLowerCase()==='npm_config_ignore_scripts'));
+ for(const key of Object.keys(inheritedIgnoreScripts))delete process.env[key];
+ t.after(()=>Object.assign(process.env,inheritedIgnoreScripts));
+ fs.writeFileSync(f.npmCli,`const fs=require('node:fs');const journal=JSON.parse(fs.readFileSync(${JSON.stringify(path.join(f.dir,'journal.json'))}));fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({stage:journal.installerStage,args:process.argv.slice(2),env:Object.fromEntries(Object.entries(process.env).filter(([key])=>key.toLowerCase().startsWith('npm_')))})+'\\n');if(process.argv[2]==='pack')process.stdout.write(JSON.stringify([{filename:'target.tgz'}]));`);
+ Object.assign(f.ctx,{tempDir:f.root,protectedNpmCli:f.npmCli,maintenance:m,coreManifest:[{name:'example',existedBefore:false}]});
+ installUpgradeTarget(f.ctx,{markInstallationIntent:()=>{}});
+ const skills=path.join(f.root,'skills'),skill=path.join(skills,'example');
+ fs.mkdirSync(skill,{recursive:true});
+ fs.writeFileSync(path.join(skill,'package.json'),JSON.stringify({dependencies:{example:'1.0.0'}}));
+ assert.equal(step6_installSkillDeps(f.ctx,{skillsDir:skills}).status,'done');
+ const packageJson=path.join(f.root,'package.json'),cliRoot=path.join(f.root,'cli'),archive=path.join(f.dir,'original.tgz');
+ fs.writeFileSync(packageJson,JSON.stringify({name:'fixture-core',version:'0.9.3'}));
+ fs.mkdirSync(cliRoot);fs.writeFileSync(path.join(cliRoot,'entry.js'),'original CLI');fs.writeFileSync(archive,'original archive');
+ f.j.initialIdentity={packageJson,packageHash:m.hash(packageJson),cliRoot,cliHash:m.treeHash(cliRoot)};
+ f.j.originalPackage={path:archive,sha256:m.hash(archive),sourceVersion:'0.9.3',npmCli:f.npmCli};
+ m.restoreOriginalPackage(f.dir,f.j);
+ const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(line=>JSON.parse(line));
+ assert.deepEqual(calls.map(call=>call.stage),['pack-target','install','skill-deps:example','restore-original-package']);
+ assert.ok(calls[0].args.includes('--ignore-scripts'),'packing deliberately disables lifecycle scripts');
+ const expectedArgs=[['install','-g',path.join(f.root,'target.tgz')],['install','--omit=dev'],['install','-g',archive]];
+ for(const [index,call] of calls.slice(1).entries()){
+  assert.deepEqual(call.args,expectedArgs[index],`${call.stage} arguments`);
+  assert.ok(!call.args.some(arg=>arg==='--ignore-scripts'||arg.startsWith('--ignore-scripts=')),`${call.stage} must run lifecycle scripts`);
+  for(const [key,value] of Object.entries(call.env))if(key.toLowerCase()==='npm_config_ignore_scripts')assert.ok(value===''||value==='false',`${call.stage} must not disable lifecycle scripts via ${key}`);
+ }
+ assert.equal(f.read().originalPackageRestored,true);
 });
 for(const exitCode of [0,2])test(`all npm exits quiesce descendants before returning (exit=${exitCode})`,t=>{
  const f=fixture(t,`const cp=require('node:child_process');const child=cp.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();process.stdout.write('fixture.tgz\\n');process.exit(${exitCode});`);

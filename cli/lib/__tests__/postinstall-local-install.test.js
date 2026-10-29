@@ -162,7 +162,7 @@ describe('postinstall local install guard', () => {
     assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), true);
   });
 
-  for (const value of ['', '0', 'true']) it(`does not suppress skill synchronization for legacy flag ${JSON.stringify(value)}`, () => {
+  for (const value of ['', '0', 'false', 'true']) it(`does not suppress skill synchronization for legacy flag ${JSON.stringify(value)}`, () => {
     const zylosDir = fixtureZylosDir();
     runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' },
       { ZYLOS_SKIP_POSTINSTALL: value, ZYLOS_PROTECTED_INSTALL: '' });

@@ -5,6 +5,8 @@ its upgrade entry. Supported sources start at 0.9.3; older installations use
 `zylos upgrade --self --branch release/0.9` first. An already current installation does not
 download or retry an upgrade.
 
+<a id="first-adoption"></a>
+
 ## Before installation
 
 The updater refuses unresolved earlier transactions and requires standalone
@@ -31,7 +33,7 @@ installation path.
 
 Before the durable compensation cutoff, installation or finalizer failure can
 restore the original package, code and verified databases. Recovery validates
-saved material, stops writers and confirms installer/finalizer exit before
+saved material, stops writers and confirms installer exit before
 replacement. Ambiguous identities, damaged snapshots or unconfirmed exits retain
 isolation and require operator handling. A failed upgrade remains a failure even
 when compensation completes.

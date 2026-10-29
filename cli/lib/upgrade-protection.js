@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from './core-db-backup.js';
+import { upgradeFailureCode } from './upgrade-admission.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -395,6 +396,7 @@ export function recovery(ctx) {
       attempted: false,
       completed: false,
       stage: saved?.phase,
+      code: upgradeFailureCode(error),
       error: error.message,
       recovery_required: true
     };

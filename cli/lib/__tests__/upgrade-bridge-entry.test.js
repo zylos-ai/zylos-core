@@ -97,7 +97,38 @@ test('thin entry forwards handoff, preserves environment and has no whole-comman
     return { status: 37 };
   } }), 37);
   fs.unlinkSync(path.join(root, 'cli/lib/upgrade-entry.js'));
-  assert.throws(() => runDownloadedUpgrade(handoff, { spawn() { assert.fail('incomplete package executed'); } }));
+  assert.throws(() => runDownloadedUpgrade(handoff, { spawn() { assert.fail('incomplete package executed'); } }), {message:'Incomplete target package: cli/lib/upgrade-entry.js'});
+});
+
+for (const phase of ['check-throw','check-result','download-throw','download-result','package-check']) test(`thin entry reports pretransaction ${phase} failure`,async t=>{
+  const {upgradeSelfCore,runDownloadedUpgrade}=await import('../../commands/component.js');
+  const root=fixture(t), output=[];
+  const failure=()=>Object.assign(Error("Cannot read '/private/source/package.json'\nRequire stack: /private/source.js"),{code:'MODULE_NOT_FOUND'});
+  const deps={
+    zylosDir:root,recoverBeforeUpgrade(){},
+    checkForCoreUpdates(){
+      if(phase==='check-throw')throw failure();
+      if(phase==='check-result')return {success:false,code:'ERR_INVALID_ARG_TYPE',message:failure().message};
+      return {success:true,current:'0.9.3',latest:'1.0.0',hasUpdate:true};
+    },
+    downloadCoreToTemp(){
+      if(phase==='download-throw')throw failure();
+      if(phase==='download-result')return {success:false,code:'SQLITE_ERROR',error:failure().message};
+      return {success:true,tempDir:root};
+    },
+    runDownloadedUpgrade(input){return runDownloadedUpgrade(input,{spawn(){assert.fail('incomplete target executed');}});},
+    cleanupCoreTemp(directory){assert.equal(directory,root);},
+    console:{log(value){output.push(JSON.parse(value));}}
+  };
+  assert.equal(await upgradeSelfCore({skipConfirm:true,jsonOutput:true},deps),false);
+  assert.equal(output.length,1);
+  assert.equal(output[0].success,false);
+  assert.equal(output[0].code,'UPGRADE_FAILED');
+  assert.deepEqual(output[0].persisted,[]);
+  assert.doesNotMatch(output[0].error,/\/private\/|ENOENT|Require stack/);
+  if(phase==='package-check')assert.equal(output[0].error,'Incomplete target package: package.json');
+  else assert.equal(output[0].error,"Cannot read '<path>'");
+  assert.equal(fs.existsSync(path.join(root,'.backup')),false);
 });
 
 test('up-to-date path never invokes removed same-version retry or downloader', async t => {

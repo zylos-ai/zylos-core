@@ -10,6 +10,7 @@ import {discoverUpgradeContext} from '../runtime/upgrade-context.js';
 import {runUpgradeEntry} from '../upgrade-entry.js';
 import {recoverBeforeUpgrade} from '../upgrade-discovery.js';
 import {upgradeSelfCore} from '../../commands/component.js';
+import {assertCoreDatabaseAvailable as assertOwnerDatabaseAvailable} from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 function fixture(t) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_DAILY_TEST_TMPDIR || os.tmpdir(),'upgrade-daily-')));
@@ -87,7 +88,7 @@ test('historical terminal journal shapes with retained scripts permit upgrade an
     inspect:()=>{inspected=true;throw Object.assign(Error('inspection boundary'),{code:'INSPECTION_REACHED'});}
    });
    assert.equal(inspected,true);
-   assert.equal(result.code,'INSPECTION_REACHED');
+   assert.equal(result.code,'UPGRADE_FAILED');
    let checked=false,delegated=false;
    assert.equal(await upgradeSelfCore({skipConfirm:true},{zylosDir:f.root,
     checkForCoreUpdates(){checked=true;return {success:true,current:'0.9.3',latest:'0.9.4',hasUpdate:true};},
@@ -197,6 +198,35 @@ for(const phase of ['compensation_closed','recovery_required'])for(const hooks o
  else assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});
  f.j.compensationCutoff.transactionId='other';f.save();
  assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),{code:'ZYLOS_MAINTENANCE'});
+});
+
+for(const value of [undefined,'','0','false','1','true'])test(`database availability ignores Zylos environment switches set to ${JSON.stringify(value)}`,t=>{
+ const f=fixture(t),environment=process.env;
+ // Installer flags and any proposed Zylos bypass flag cannot authorize an open.
+ process.env=new Proxy(environment,{get(target,key){
+  if(typeof key==='string'&&key.startsWith('ZYLOS_')&&key!=='ZYLOS_DIR')return value;
+  return Reflect.get(target,key);
+ }});
+ try{
+  const stable=require(path.join(f.stable,'maintenance.cjs'));
+  const readers=[()=>m.assertCoreDatabaseAvailable(f.root),()=>stable.assertCoreDatabaseAvailable(f.root),()=>assertOwnerDatabaseAvailable(f.root)];
+  for(const [phase,hooks,cutoff,allowed] of [
+   ['installing','done','missing',false],
+   ['compensation_closed','pending','valid',false],
+   ['compensation_closed','done','invalid',false],
+   ['compensation_closed','done','valid',true],
+   ['recovery_required','done','valid',true],
+  ]){
+   Object.assign(f.j,{phase,resumePhase:'compensation_closed',postCutoff:{items:{hooks:{state:hooks}}}});
+   delete f.j.compensationCutoff;
+   if(cutoff!=='missing')f.j.compensationCutoff={formatVersion:1,closed:true,transactionId:cutoff==='valid'?f.j.transactionId:'other',snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-28T00:00:00.000Z',writer:'finalizer'};
+   f.save();m.marker(f.root,f.dir,f.j);
+   const journal=fs.readFileSync(path.join(f.dir,'journal.json')),marker=fs.readFileSync(path.join(f.stable,'active.json'));
+   for(const read of readers)if(allowed)assert.doesNotThrow(read,`${phase}/${hooks}/${cutoff}`);else assert.throws(read,{code:'ZYLOS_MAINTENANCE'},`${phase}/${hooks}/${cutoff}`);
+   assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),journal);
+   assert.deepEqual(fs.readFileSync(path.join(f.stable,'active.json')),marker);
+  }
+ }finally{process.env=environment;}
 });
 
 test('malformed active journal stays blocked while abandoned unmarked preparation permits daily use but rejects upgrade',async t=>{

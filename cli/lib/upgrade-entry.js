@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { validateUpgradeHandoff, upgradeFailureCode } from './upgrade-admission.js';
+import { validateUpgradeHandoff, upgradeFailureCode, upgradeFailureMessage } from './upgrade-admission.js';
 import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged, assertDashboardUninstalled } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
@@ -27,12 +27,7 @@ export function inspectUpgradeSource(input, deps = {}) {
   validateUpgradeHandoff(input);
   const tempDir = fs.realpathSync(input.tempDir);
   const coreDir = fs.realpathSync(input.installedRoot);
-  let zylosDir;
-  try { zylosDir=fs.realpathSync(input.zylosDir); }
-  catch(error) {
-    if(error.code!=='ENOENT')throw error;
-    throw Object.assign(Error('Zylos deployment directory is missing. Initialize this deployment before upgrading.'), {code:'ZYLOS_NOT_INITIALIZED'});
-  }
+  const zylosDir = fs.realpathSync(input.zylosDir);
   const source = JSON.parse(fs.readFileSync(path.join(coreDir, 'package.json'), 'utf8'));
   const target = JSON.parse(fs.readFileSync(path.join(tempDir, 'package.json'), 'utf8'));
   if (source.version !== input.fromVersion) throw Object.assign(new Error('Installed source version does not match upgrade handoff.'), {code:'INVALID_UPGRADE_HANDOFF'});
@@ -109,14 +104,15 @@ export async function runUpgradeEntry(input, deps = {}) {
     const result = await (deps.finalize ?? finalizeTarget)(ctx);
     if (result.success === false) {
       const rollback = (deps.recover ?? recovery)(ctx);
-      return {...result, rollback:{...rollback, performed:rollback.attempted}, recovery_required:rollback.recovery_required};
+      return {...result, code:upgradeFailureCode(result), error:upgradeFailureMessage({message:result.error}),
+        rollback:{...rollback, performed:rollback.attempted}, recovery_required:rollback.recovery_required};
     }
     ctx.releaseControl?.();
     ctx.releaseControl = null;
     return result;
   } catch (error) {
     const rollback = ctx?.transactionDir ? (deps.recover ?? recovery)(ctx) : {attempted:false, completed:false, performed:false};
-    return {action:'self_upgrade', success:false, code:upgradeFailureCode(error), error:error.message,
+    return {action:'self_upgrade', success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error),
       next:error.next, persisted:error.persisted || [], upgradeProtected:!!ctx?.upgradeProtected,
       transactionDir:ctx?.transactionDir, rollback:{...rollback, performed:!!rollback.attempted},
       recovery_required:rollback.recovery_required || error.recovery_required || false};
@@ -132,7 +128,7 @@ if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process
     process.env.ZYLOS_DIR = input.zylosDir;
     result = await runUpgradeEntry(input);
   } catch (error) {
-    result = {success:false, code:error instanceof SyntaxError ? 'INVALID_UPGRADE_HANDOFF' : upgradeFailureCode(error), error:error.message, persisted:[]};
+    result = {success:false, code:error instanceof SyntaxError ? 'INVALID_UPGRADE_HANDOFF' : upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]};
   }
   for(const warning of result.warnings || []) process.stderr.write(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}\n`);
   process.stdout.write(JSON.stringify(result) + '\n');

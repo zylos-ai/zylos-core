@@ -11,7 +11,7 @@ import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
 import {runUpgradeEntry} from '../upgrade-entry.js';
 import {runSelfUpgradeFinalize} from '../self-upgrade.js';
 import {generateManifest} from '../manifest.js';
-import {beginUpgrade,maintenance as protectionMaintenance,prepareProtectedInstall,protectedDataReady} from '../upgrade-protection.js';
+import {beginUpgrade,maintenance as protectionMaintenance,prepareProtectedInstall,protectedDataReady,recovery} from '../upgrade-protection.js';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
 import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
@@ -311,6 +311,31 @@ for (const corrupt of [false,true]) test(`pre-publication orchestrator rejects $
  assert.equal(result.next,undefined);
  assert.match(result.error,corrupt?/untrusted cutoff/:/compensation is closed/);
  assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),before);
+});
+
+for(const entry of ['runner','controller'])test(`${entry} compensation refusal persists only lastError after the cutoff`,async t=>{
+ const f=await fixture(t);
+ f.m.update(f.dir,f.j,{phase:'compensation_closed',compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},postCutoff:{items:{hooks:{state:'pending'}}},dashboardInstall:null});
+ const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
+ const result=entry==='runner'?f.r.resume(f.dir):recovery({maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx'});
+ assert.equal(result.recovery_required,true);
+ assert.match(result.error,/compensation is closed/);
+ const saved=f.load();
+ assert.equal(saved.phase,'recovery_required');
+ assert.equal(saved.resumePhase,'compensation_closed');
+ assert.equal(saved.lastError,result.error);
+ assert.equal(Object.hasOwn(saved,'error'),false);
+ assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
+ assert.equal(f.calls.includes('start'),false);
+});
+
+for(const code of ['EACCES','MODULE_NOT_FOUND','ERR_UNKNOWN','SQLITE_BUSY','SCHEMA_TOO_NEW'])test(`recovery controller normalizes ${code} during transaction read`,async t=>{
+ const f=await fixture(t);
+ const result=recovery({maintenance:{...f.m,transaction(){throw Object.assign(Error('recovery journal read failed'),{code});}},journal:f.j,transactionDir:f.dir,transactionId:'tx'});
+ assert.equal(result.recovery_required,true);
+ assert.equal(result.code,code==='SCHEMA_TOO_NEW'?code:'UPGRADE_FAILED');
+ assert.equal(result.error,'recovery journal read failed');
+ assert.deepEqual(f.calls,[]);
 });
 
 for(const failure of [null,'thresholds','ensure','state'])test(`closed writer access follows hooks completion when prerequisites ${failure?'fail at '+failure:'succeed'}`,async t=>{
@@ -631,6 +656,8 @@ test('partial core restore skips verified completed members after interruption',
 for(const installationIntent of [true,false])test(`unknown phase with installationIntent=${installationIntent} never restores or aborts`,async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'unknown-future-stage',installationIntent});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
  const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/unrecognized .* recovery phase/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));assert.ok(!f.calls.includes('start'));assert.equal(f.m.discover(f.root).blocked,true);
+ assert.equal(f.load().lastError,result.error);
+ assert.equal(Object.hasOwn(f.load(),'error'),false);
 });
 test('ecosystem copy fsync failure cannot publish completed restore and retry is durable',async t=>{
  const f=await fixture(t),dest=path.join(f.root,'pm2/ecosystem.config.cjs'),backup=path.join(f.dir,'code/pm2/ecosystem.config.cjs');

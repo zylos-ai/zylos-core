@@ -27,6 +27,7 @@ import { pathToFileURL } from 'node:url';
 import { classifyCutoff, commitCutoff } from './upgrade-cutoff.js';
 import { preparePostCutoff, publishPostCutoff } from './upgrade-post-cutoff.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runtime-preparation.js';
+import { upgradeFailureCode } from './upgrade-admission.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -715,7 +716,7 @@ function step13_commitSkillBaselines(ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// Public: runSelfUpgrade
+// Protected upgrade results and finalization
 // ---------------------------------------------------------------------------
 
 function protectionResult(ctx) {
@@ -821,7 +822,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     const failed={step:error.step ?? null,name:error.finalizeStepName || 'finalize',status:'failed',error:error.message};
     steps.push(failed);
     recordClosedFinalizationFailure(ctx,error,{stopServices:deps.stopServices,requireClosed:true});
-    return {...buildSelfUpgradeResult(ctx,failed,null,false),code:error.code,completion,...(ctx.isolationError ? {isolationError:ctx.isolationError} : {}),
+    return {...buildSelfUpgradeResult(ctx,failed,null,false),code:upgradeFailureCode(error),completion,...(ctx.isolationError ? {isolationError:ctx.isolationError} : {}),
       recovery_required:true,next:finalizationNext(ctx)};
   };
   try {
@@ -950,7 +951,7 @@ function recordClosedFinalizationFailure(ctx, error, {stopServices, requireClose
   return closed;
 }
 
-function finalizationFailure(ctx, error, step = 5) {
+function finalizationFailure(ctx, error, step = null) {
   const failed = {step, name:error.finalizeStepName || 'finalize', status:'failed', error:error.message};
   ctx.steps.push(failed);
   let closed = false;
@@ -963,7 +964,7 @@ function finalizationFailure(ctx, error, step = 5) {
   const guidance = recoveryError ? {recovery_required:true, recoveryError,
       next:'Repair the upgrade transaction journal before attempting recovery or resuming finalization.'} :
       closed ? {recovery_required:true, next:finalizationNext(ctx)} : {};
-  return {...buildSelfUpgradeResult(ctx, failed, null, false), code:error.code, ...guidance,
+  return {...buildSelfUpgradeResult(ctx, failed, null, false), code:upgradeFailureCode(error), ...guidance,
     ...((error.next || guidance.next) ? {next:[error.next,guidance.next].filter(Boolean).join(' ')} : {})};
 }
 
@@ -1019,7 +1020,7 @@ async function finalizeInstalledUpgrade(ctx, deps) {
       }
     (deps.commitCutoff || commitCutoff)(ctx,{postCutoff:preparation,dashboardInstall});
     return await resumeUpgradeFinalization(ctx,deps);
-  } catch(error) {return finalizationFailure(ctx,error,error.step);}
+  } catch(error) {return finalizationFailure(ctx,error,error.step ?? null);}
 }
 
 function publishedSettingsChanged(preparation) {
@@ -1047,7 +1048,7 @@ export async function resumeUpgradeFinalization(ctx, deps = {}) {
     ctx.publication=publication;
     ctx.settingsChanged=publishedSettingsChanged(ctx.journal.postCutoff);
     return await completeUpgradeFinalization(ctx,deps);
-  } catch(error) {return finalizationFailure(ctx,error);}
+  } catch(error) {return finalizationFailure(ctx,error,null);}
 }
 
 

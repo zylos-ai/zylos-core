@@ -180,13 +180,24 @@ test('downloaded executable keeps malformed JSON classified as invalid handoff',
   assert.deepEqual(result.persisted,[]);
 });
 
-for(const code of [undefined,'','ENOENT','EACCES','EIO','SCHEMA_TOO_NEW','SCHEMA_MIGRATION_FAILED','SETTINGS_UNREADABLE']) test(`entry normalizes system errno and preserves domain code: ${code}`,async t=>{
+for(const code of [undefined,'','ENOENT','EACCES','EIO','MODULE_NOT_FOUND','ERR_MODULE_NOT_FOUND','SQLITE_ERROR','UNREGISTERED_FAILURE','SCHEMA_TOO_NEW','SCHEMA_MIGRATION_FAILED','SETTINGS_UNREADABLE']) test(`entry permits only registered protocol codes: ${code}`,async t=>{
   const input=fixture(t),f=pipeline(input);
   f.deps.inspect=()=>{throw Object.assign(Error('precheck failed'),{code});};
   const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,!code || ['ENOENT','EACCES','EIO'].includes(code)?'UPGRADE_FAILED':code);
+  assert.equal(result.code,['SCHEMA_TOO_NEW','SCHEMA_MIGRATION_FAILED','SETTINGS_UNREADABLE'].includes(code)?code:'UPGRADE_FAILED');
   assert.deepEqual(result.persisted,[]);
   assert.deepEqual(f.calls,[]);
+});
+
+for (const code of ['EACCES','MODULE_NOT_FOUND','ERR_INVALID_ARG_TYPE','SQLITE_BUSY','SCHEMA_TOO_NEW']) test(`returned finalizer failure uses a registered protocol code: ${code}`, async t => {
+  const input=fixture(t), f=pipeline(input);
+  f.deps.finalize=()=>({success:false,code,error:"Finalizer cannot read '/fixture/private/components.json'\nRequire stack: /fixture/source.js",failedStep:4,steps:[]});
+  const result=await runUpgradeEntry(input,f.deps);
+  assert.equal(result.code,code==='SCHEMA_TOO_NEW'?code:'UPGRADE_FAILED');
+  assert.equal(result.failedStep,4);
+  assert.equal(result.rollback.completed,true);
+  assert.equal(result.error,"Finalizer cannot read '<path>'");
+  assert.deepEqual(f.calls,['begin','savePackage','saveCode','prepare','install','recover']);
 });
 
 test('target packing precedes installation intent and rejects unsafe npm archive filenames', t => {

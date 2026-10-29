@@ -72,7 +72,7 @@ for(const failing of [false,true]) test(`finalization retains optional runtime w
   assert.equal(result.success,!failing);
   assert.deepEqual(JSON.parse(JSON.stringify(result)).warnings,ctx.runtimeWarnings);
   if(failing){
-    assert.equal(result.code,'MEMORY_UNAVAILABLE');
+    assert.equal(result.code,'UPGRADE_FAILED');
     assert.equal(result.recovery_required,true);
     assert.equal(calls.includes('start'),false);
   }

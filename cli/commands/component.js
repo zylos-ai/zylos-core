@@ -25,7 +25,7 @@ import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
 import { resumeFinalize } from '../lib/upgrade-resume.js';
 import { recoverBeforeUpgrade } from '../lib/upgrade-discovery.js';
-import { upgradeFailureCode } from '../lib/upgrade-admission.js';
+import { upgradeFailureCode, upgradeFailureMessage } from '../lib/upgrade-admission.js';
 
 /**
  * Print a single upgrade step result in real time.
@@ -1085,7 +1085,10 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
 export function runDownloadedUpgrade(handoff, { spawn = spawnSync } = {}) {
   const script = path.join(handoff.tempDir, 'cli/lib/upgrade-entry.js');
   for (const file of ['package.json', 'cli/lib/upgrade-entry.js']) {
-    if (!fs.statSync(path.join(handoff.tempDir, file)).isFile()) throw new Error('Incomplete target package: ' + file);
+    let stat;
+    try { stat = fs.statSync(path.join(handoff.tempDir, file)); }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
+    if (!stat?.isFile()) throw new Error('Incomplete target package: ' + file);
   }
   const child = spawn(process.execPath, [script], {
     input: JSON.stringify(handoff), stdio: ['pipe', 'inherit', 'inherit'], env: { ...process.env },
@@ -1108,15 +1111,22 @@ export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', js
     (deps.recoverBeforeUpgrade ?? recoverBeforeUpgrade)(root);
   } catch (error) {
     const output = deps.console ?? globalThis.console;
-    if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:error.message,
+    if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error),
       persisted:error.persisted || [], recovery_required:error.recovery_required === true, ...(error.next ? {next:error.next} : {})}));
     else output.error(error.message);
     return false;
   }
-  const check = (deps.checkForCoreUpdates ?? checkForCoreUpdates)({ branch, beta });
+  let check;
+  try { check = (deps.checkForCoreUpdates ?? checkForCoreUpdates)({ branch, beta }); }
+  catch (error) {
+    if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]}));
+    else output.error(upgradeFailureMessage(error));
+    return false;
+  }
   if (!check.success) {
-    if (jsonOutput) output.log(JSON.stringify(check));
-    else output.error(check.message || check.error);
+    const error = {code:check.code, message:check.message || check.error || 'Core version check failed.'};
+    if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]}));
+    else output.error(upgradeFailureMessage(error));
     return false;
   }
   if (!branch && !check.hasUpdate) {
@@ -1128,7 +1138,7 @@ export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', js
   let tempDir;
   try {
     const download = (deps.downloadCoreToTemp ?? downloadCoreToTemp)(check.latest, branch);
-    if (!download.success) throw new Error(download.error);
+    if (!download.success) throw Object.assign(new Error(download.error || download.message || 'Core download failed.'), {code:download.code});
     tempDir = download.tempDir;
     const exitCode = (deps.runDownloadedUpgrade ?? runDownloadedUpgrade)({
       schemaVersion: 1, fromVersion: check.current, tempDir,
@@ -1138,8 +1148,8 @@ export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', js
     process.exitCode = exitCode;
     return exitCode === 0;
   } catch (error) {
-    if (jsonOutput) output.log(JSON.stringify({ success: false, code: error.code, error: error.message }));
-    else output.error(error.message);
+    if (jsonOutput) output.log(JSON.stringify({ success: false, code: upgradeFailureCode(error), error: upgradeFailureMessage(error), persisted:[] }));
+    else output.error(upgradeFailureMessage(error));
     return false;
   } finally {
     if (tempDir) (deps.cleanupCoreTemp ?? cleanupCoreTemp)(tempDir);

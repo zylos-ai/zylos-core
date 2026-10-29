@@ -1,13 +1,25 @@
 import path from 'node:path';
-import { getSystemErrorMap } from 'node:util';
 import { assertSupportedUpgradeVersion } from '../../skills/comm-bridge/scripts/upgrade-admission.js';
 
 export { assertSupportedUpgradeVersion, assertSupportedUpgradeVersion as assertSupportedUpgradeSource, MINIMUM_UPGRADE_VERSION, UPGRADE_BRIDGE_COMMAND } from '../../skills/comm-bridge/scripts/upgrade-admission.js';
 
-const systemErrorCodes = new Set([...getSystemErrorMap().values()].map(([code]) => code));
+const upgradeErrorCodes = new Set([
+  'ZYLOS_NOT_INITIALIZED', 'INVALID_ARGS', 'UPGRADE_RECOVERY_REQUIRED',
+  'DASHBOARD_STILL_INSTALLED', 'INVALID_CORE_DEPENDENCIES', 'DASHBOARD_TAKEOVER_INVALID',
+  'RUNTIME_PREPARATION_INCOMPLETE', 'UPGRADE_FAILED', 'SCHEMA_TOO_NEW', 'SCHEMA_MIGRATION_FAILED',
+  'SETTINGS_UNREADABLE', 'UPGRADE_SOURCE_TOO_OLD', 'INVALID_UPGRADE_HANDOFF', 'MANUAL_RECOVERY_REQUIRED',
+  'SNAPSHOT_FAILED', 'NOT_RESUMABLE', 'CUTOFF_UNTRUSTED', 'CUTOFF_WRITE_UNCERTAIN', 'FINALIZE_INCOMPLETE',
+  'CONFIG_LOCK_TIMEOUT', 'CONFIG_UNREADABLE', 'CONFIG_WRITE_FAILED', 'CONFIG_KEY_RESERVED',
+  'LOCK_TIMEOUT', 'DB_BUSY',
+]);
 
 export function upgradeFailureCode(error) {
-  return typeof error.code === 'string' && error.code && !systemErrorCodes.has(error.code) ? error.code : 'UPGRADE_FAILED';
+  return upgradeErrorCodes.has(error?.code) ? error.code : 'UPGRADE_FAILED';
+}
+
+export function upgradeFailureMessage(error) {
+  return String(error?.message || error).split('\n')[0]
+    .replace(/(^|[\s('"`])(?:file:\/\/)?(?:[A-Za-z]:[\\/]|\/)[^\s'"`,;:)]+/g, '$1<path>');
 }
 
 export function validateUpgradeHandoff(input) {
