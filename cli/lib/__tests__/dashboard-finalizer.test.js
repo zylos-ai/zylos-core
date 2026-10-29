@@ -72,7 +72,7 @@ for (const failHook of [false, true]) test(`finalizer child preserves JSON stdou
     import {completeUpgradeFinalization} from ${JSON.stringify(path.join(repo, 'cli/lib/self-upgrade.js'))};
     import {applyDashboardRegistration} from ${JSON.stringify(path.join(repo, 'cli/lib/dashboard-install.js'))};
     const root=process.env.ZYLOS_DIR;
-    const ctx={zylosDir:root,from:'0.9.3',to:'new',servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[],journal:{firstTakeover:true}};
+    const ctx={zylosDir:root,firstDashboardTakeover:true,from:'0.9.3',to:'new',servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[],journal:{firstTakeover:true}};
     const deps=(${prerequisites.toString()})();
     deps.dashboardOwner={applyDashboardRegistration,applyDashboardRoute:()=>({state:'done'}),verifyDashboard:()=>({state:'ready',errors:[]})};
     process.stdout.write(JSON.stringify(await completeUpgradeFinalization(ctx,deps)));
@@ -109,7 +109,7 @@ test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard
     compensationCutoff: { formatVersion: 1, closed: true, transactionId: 'fixture', snapshotManifestHash: 'a'.repeat(64), closedAt: '2026-10-27T00:00:00.000Z', writer: 'finalizer' } };
   fs.writeFileSync(path.join(transactionDir, 'journal.json'), JSON.stringify(journal));
   let terminalCalls = 0, restartCalls = 0;
-  const ctx = { zylosDir: root, from: '0.9.3', to: 'new', servicesWereRunning: [], steps: [], mergeConflicts: [], mergedFiles: [],
+  const ctx = { zylosDir: root, firstDashboardTakeover: true, from: '0.9.3', to: 'new', servicesWereRunning: [], steps: [], mergeConflicts: [], mergedFiles: [],
     transactionDir, transactionId: 'fixture', journal,
     maintenance: { ...maintenance, finishTerminal: () => { terminalCalls++; } } };
   const priorPath = process.env.PATH, priorFail = process.env.FAIL_MIGRATION;

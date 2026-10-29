@@ -17,7 +17,7 @@ function controller() {
 
 test('history Markdown escapes HTML and permits only http(s) links, without remote images', () => {
   const context = vm.createContext({});
-  vm.runInContext(fs.readFileSync('public/js/markdown-it.min.js', 'utf8'), context);
+  vm.runInContext(fs.readFileSync(new URL('../public/js/markdown-it.min.js', import.meta.url), 'utf8'), context);
   const render = createHistoryMarkdown(context.markdownit);
   const result = render('<script>alert(1)</script> [bad](javascript:alert(1)) [file](file:///etc/passwd) [mail](mailto:x@y.com) [good](https://example.com) ![tracker](https://example.com/pixel)');
   assert.doesNotMatch(result, /<script|<img|href="(?:javascript|file|mailto):/);
@@ -78,7 +78,7 @@ test('older pagination preserves scroll position and merges pending-tool updates
 });
 
 test('Observer history controls do not call live terminal lifecycle', () => {
-  const app = fs.readFileSync('public/js/app.js','utf8');
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url),'utf8');
   const controls = app.slice(app.indexOf('function initObserverControls()'), app.indexOf('function initMemoryControls()'));
   assert.doesNotMatch(controls, /closeObserver|openObserver|releaseObserverLease|srcdoc/);
   assert.match(controls, /parentElement.hidden = historyMode/);
@@ -122,7 +122,7 @@ test('session labels omit absent or invalid time without empty separators or dup
 });
 
 test('history controls align the search row with the session select, not its label', () => {
-  const css = fs.readFileSync('public/css/style.css', 'utf8');
+  const css = fs.readFileSync(new URL('../public/css/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.history-controls \{[^}]*align-items: flex-end;/);
   assert.match(css, /\.history-controls select, \.history-controls input\[type="search"\] \{[^}]*height: 36px;/);
   assert.match(css, /\.history-controls label \{[^}]*min-height: 36px;/);

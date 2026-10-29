@@ -6,7 +6,7 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { Store } from '../src/lib/store.js';
 
-const CLI = path.resolve('scripts/api-key.js');
+const CLI = path.resolve(import.meta.dirname, '../scripts/api-key.js');
 
 function makeTmpDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'api-key-cli-test-'));

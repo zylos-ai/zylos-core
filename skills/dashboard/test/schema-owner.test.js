@@ -73,14 +73,24 @@ test('newer schema with user_version zero rejects writes; inspection remains rea
   assert.throws(()=>owner.migrate(handle),{code:'SCHEMA_TOO_NEW'});
   assert.deepEqual(fs.readFileSync(file),before);
 });
-test('unsupported layout is refused on the supplied handle without mutation', t => {
+test('first Store open initializes its schema alongside unrelated tables', t => {
   const file=fixture(t);
-  const db=new Database(file); t.after(()=>db.close());
-  db.exec('CREATE TABLE unrelated(x)');
-  const before=fs.readFileSync(file);
-  assert.throws(()=>owner.migrate(db),/Unsupported Dashboard layout/);
-  assert.deepEqual(fs.readFileSync(file),before);
-  assert.equal(db.open,true);
+  const db=new Database(file);
+  db.exec('CREATE TABLE unrelated(x); INSERT INTO unrelated VALUES(42)');
+  db.close();
+  const store=new Store(file); t.after(()=>store.close());
+  assert.equal(store.db.prepare('SELECT x FROM unrelated').get().x,42);
+  assert.deepEqual(owner.inspectSchema(store.db),{currentVersion:20,targetVersion:20,needsMigration:false});
+});
+test('first Store open attempts legacy migration without a layout admission check', t => {
+  const file=fixture(t);
+  const db=new Database(file);
+  db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES(13)');
+  db.close();
+  assert.throws(()=>new Store(file),/no such table: runtime_events/);
+  const result=new Database(file); t.after(()=>result.close());
+  assert.equal(result.prepare('SELECT MAX(version) v FROM schema_migrations').get().v,13);
+  assert.equal(result.prepare("SELECT name FROM sqlite_master WHERE name='core_log_cursors'").get(),undefined);
 });
 test('legacy auto_vacuum stays NONE across migration (no startup VACUUM)', t => {
   const file=fixture(t);legacy(file);
@@ -106,14 +116,13 @@ test('supported version missing Store required column is rejected', t => {
   assert.throws(()=>owner.inspectSchema(handle),/no such column/);
 });
 
-for (const version of [14, 15, 16, 17, 18, 19]) test(`unpublished schema ${version} is rejected before migration writes`, t => {
+for (const version of [14, 15, 16, 17, 18, 19]) test(`first Store open migrates older schema ${version} without a source-version admission gate`, t => {
   const file = fixture(t); legacy(file);
   const db = new Database(file); db.prepare('INSERT INTO schema_migrations(version) VALUES(?)').run(version); db.close();
-  const before = fs.readFileSync(file);
-  const handle = new Database(file, {readonly:true,fileMustExist:true}); t.after(() => handle.close());
-  assert.throws(() => owner.inspectSchema(handle), /Unsupported Dashboard migration source/);
-  assert.throws(() => owner.migrate(handle), /Unsupported Dashboard migration source/);
-  assert.deepEqual(fs.readFileSync(file), before);
+  const store = new Store(file); t.after(() => store.close());
+  assert.equal(owner.inspectSchema(store.db).currentVersion,20);
+  assert.equal(store.db.prepare('SELECT token_hash FROM auth_sessions').get().token_hash,'retained');
+  assert.equal(store.db.prepare('SELECT COUNT(*) n FROM runtime_events').get().n,1);
 });
 
 test('readonly inspection includes committed WAL state without changing database contents', t => {

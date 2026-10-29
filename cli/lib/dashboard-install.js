@@ -47,7 +47,6 @@ export function copyDashboardDb(zylosDir, txDir) {
   try {
     const { db } = locations(zylosDir);
     if (!fs.existsSync(db)) {
-      if (fs.existsSync(db+'-wal') || fs.existsSync(db+'-shm')) throw Error('Orphan Dashboard database sidecars');
       return { ok: true, error: null };
     }
     const target = path.join(txDir, 'dashboard/db-copy');
@@ -104,6 +103,7 @@ export function restoreDashboardService({ zylosDir }) {
   catch (error) { startError = error; }
   try {
     if (!matches(JSON.parse(run('pm2', ['jlist'], zylosDir)), loc)) throw Error('Dashboard is not online at its managed entry');
+    run('pm2', ['save'], zylosDir);
     return { state: 'done' };
   } catch (error) { return { state: 'failed', error: { code: 'registration_failed', message: (startError || error).message } }; }
 }
@@ -150,7 +150,9 @@ export async function verifyDashboard({ zylosDir }) {
       // Match the Core Caddyfile generator's explicit-port rule.
       const publicBase = new URL(`${port != null ? 'http' : protocol}://${domain}${port != null ? ':' + port : ''}`);
       if (publicBase.username || publicBase.password || publicBase.pathname !== '/' || publicBase.search || publicBase.hash) throw Error('Invalid public URL');
-      routeLocation = new URL(loc.prefix + '/api/health', publicBase).href;
+      // Resolve the existing route prefix exactly as route installation does.
+      const { prefix } = settings(zylosDir);
+      routeLocation = new URL(prefix + '/api/health', publicBase).href;
       await health(routeLocation);
       checks.route = true;
     }

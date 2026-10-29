@@ -88,58 +88,38 @@ export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
   const currentVersion = hasTable ? (db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get()?.v ?? 0) : 0;
   if (!Number.isInteger(currentVersion) || currentVersion < 0) throw new Error('Unsupported Dashboard schema version');
-  if (!hasTable && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get()) {
-    throw new Error('Unsupported Dashboard layout: missing schema_migrations');
-  }
-  if (currentVersion > 0 && currentVersion <= TARGET_SCHEMA_VERSION) {
-    if (currentVersion > 13 && currentVersion < 20) throw new Error('Unsupported Dashboard migration source');
-    for (const table of ['runtime_events', 'metric_points', 'activity_facts', 'source_health', 'state_snapshots']) {
-      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) throw new Error(`Unsupported Dashboard layout: missing ${table}`);
-    }
+  if (currentVersion === TARGET_SCHEMA_VERSION) {
     const required = {
-      runtime_events: 'id ingest_id event_seq timestamp runtime session_id event_type category summary duration_ms metadata source confidence',
+      runtime_events: 'id ingest_id event_seq timestamp runtime session_id event_type category summary duration_ms metadata source confidence session_group run_id',
       metric_points: 'id timestamp runtime session_id metric_name metric_value dimensions source confidence',
       activity_facts: 'id timestamp fact_type runtime session_id project data',
       source_health: 'name signal_type status extra updated_at',
-      state_snapshots: 'id runtime session_id running_tool open_turn pending_permission possibly_stuck_since last_progress_cursor snapshot_at',
+      state_snapshots: 'id runtime session_id running_tool open_turn pending_permission possibly_stuck_since last_progress_cursor snapshot_at last_message last_prompt last_progress_at',
+      auth_sessions: 'token_hash created_at last_activity_at remember',
+      codex_rollout_paths: 'runtime session_id transcript_path last_event_at updated_at',
+      codex_rollout_cursors: 'transcript_path byte_offset session_id updated_at',
+      api_keys: 'id name key_hash scope created_at last_used_at revoked_at',
+      api_sessions: 'token_hash api_key_id scope created_at expires_at',
+      pm2_latest_state: 'process_name status cpu memory_bytes restarts uptime_ms updated_at',
+      core_log_cursors: 'stream file_dev file_ino generation anchor_len anchor_sha256 file_name byte_offset status updated_at',
     };
-    if (currentVersion >= 2) required.auth_sessions = 'token_hash created_at last_activity_at';
-    if (currentVersion >= 3) required.state_snapshots += ' last_message';
-    if (currentVersion >= 4) required.state_snapshots += ' last_prompt';
-    if (currentVersion >= 6) required.state_snapshots += ' last_progress_at';
-    if (currentVersion >= 7) required.auth_sessions += ' remember';
-    if (currentVersion >= 8) {
-      required.codex_rollout_paths = 'runtime session_id transcript_path last_event_at updated_at';
-      required.codex_rollout_cursors = 'transcript_path byte_offset session_id updated_at';
-    }
-    if (currentVersion >= 9) {
-      required.api_keys = 'id name key_hash scope created_at last_used_at revoked_at';
-      required.api_sessions = 'token_hash api_key_id scope created_at expires_at';
-    }
-    if (currentVersion >= 10) required.pm2_latest_state = 'process_name status cpu memory_bytes restarts uptime_ms updated_at';
-    if (currentVersion >= 20) {
-      required.runtime_events += ' session_group run_id';
-      required.core_log_cursors = 'stream file_dev file_ino generation anchor_len anchor_sha256 file_name byte_offset status updated_at';
-    }
     for (const [table, columns] of Object.entries(required)) {
       db.prepare(`SELECT ${columns.split(' ').join(', ')} FROM ${table} LIMIT 0`).all();
     }
-    if (currentVersion >= 20) {
-      const indexes = db.pragma('index_list(core_log_cursors)');
-      const active = indexes.find(index => index.name === 'idx_core_log_cursors_active');
-      const activeColumns = db.pragma('index_info(idx_core_log_cursors_active)').map(column => column.name);
-      const activeSql = db.prepare("SELECT sql FROM sqlite_master WHERE name='idx_core_log_cursors_active'").get()?.sql || '';
-      if (!active?.unique || !active.partial || activeColumns.join(',') !== 'stream,file_dev,file_ino'
-          || !/WHERE\s+status\s*=\s*'active'\s*;?$/i.test(activeSql)) throw new Error('Unsupported Dashboard active cursor index');
-      const groupColumns = db.pragma('index_info(idx_events_group_seq)').map(column => column.name);
-      const group = db.pragma('index_list(runtime_events)').find(index => index.name === 'idx_events_group_seq');
-      if (!group || group.unique || group.partial || groupColumns.join(',') !== 'session_group,event_seq') throw new Error('Unsupported Dashboard event group index');
-      const cursorColumns = db.pragma('table_info(core_log_cursors)');
-      const primary = cursorColumns.filter(column => column.pk).sort((a,b) => a.pk-b.pk).map(column => column.name);
-      if (primary.join(',') !== 'stream,file_dev,file_ino,generation') throw new Error('Unsupported Dashboard cursor primary key');
-      const identity = db.pragma('table_info(runtime_events)').filter(column => ['session_group','run_id'].includes(column.name));
-      if (identity.some(column => column.notnull || column.dflt_value !== null || column.type.toUpperCase() !== 'TEXT')) throw new Error('Unsupported Dashboard nullable event identity');
-    }
+    const indexes = db.pragma('index_list(core_log_cursors)');
+    const active = indexes.find(index => index.name === 'idx_core_log_cursors_active');
+    const activeColumns = db.pragma('index_info(idx_core_log_cursors_active)').map(column => column.name);
+    const activeSql = db.prepare("SELECT sql FROM sqlite_master WHERE name='idx_core_log_cursors_active'").get()?.sql || '';
+    if (!active?.unique || !active.partial || activeColumns.join(',') !== 'stream,file_dev,file_ino'
+        || !/WHERE\s+status\s*=\s*'active'\s*;?$/i.test(activeSql)) throw new Error('Unsupported Dashboard active cursor index');
+    const groupColumns = db.pragma('index_info(idx_events_group_seq)').map(column => column.name);
+    const group = db.pragma('index_list(runtime_events)').find(index => index.name === 'idx_events_group_seq');
+    if (!group || group.unique || group.partial || groupColumns.join(',') !== 'session_group,event_seq') throw new Error('Unsupported Dashboard event group index');
+    const cursorColumns = db.pragma('table_info(core_log_cursors)');
+    const primary = cursorColumns.filter(column => column.pk).sort((a,b) => a.pk-b.pk).map(column => column.name);
+    if (primary.join(',') !== 'stream,file_dev,file_ino,generation') throw new Error('Unsupported Dashboard cursor primary key');
+    const identity = db.pragma('table_info(runtime_events)').filter(column => ['session_group','run_id'].includes(column.name));
+    if (identity.some(column => column.notnull || column.dflt_value !== null || column.type.toUpperCase() !== 'TEXT')) throw new Error('Unsupported Dashboard nullable event identity');
   }
   return { currentVersion, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: currentVersion < TARGET_SCHEMA_VERSION };
 }

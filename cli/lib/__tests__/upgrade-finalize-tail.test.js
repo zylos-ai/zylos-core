@@ -167,6 +167,7 @@ test('restart path read errors are reported without submitting; audit failure is
 for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dashboard ${failing || 'success'} preserves independent outcomes`,async t=>{
   const ctx=fixture(t),calls=[];
   ctx.journal.firstTakeover=true;
+  ctx.firstDashboardTakeover=true;
   if(failing==='dbCopy')ctx.journal.dashboardInstall={dbCopy:{ok:false,error:{code:'COPY_FAILED',message:'copy denied'}}};
   const action=item=>()=>{calls.push(item);if(failing===item)throw Object.assign(Error(`${item} denied`),{code:'DASHBOARD_FAILED'});return {state:item==='verify'?'ready':'done',errors:[]};};
   const result=await completeUpgradeFinalization(ctx,deps(calls,{dashboardOwner:{applyDashboardRegistration:action('registration'),applyDashboardRoute:action('route'),verifyDashboard:action('verify')}}));
@@ -182,6 +183,7 @@ for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dash
 test('Dashboard owns verification timeout and receives no overall deadline',async t=>{
   const ctx=fixture(t),calls=[];
   ctx.journal.firstTakeover=true;
+  ctx.firstDashboardTakeover=true;
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
     dashboardOwner:{applyDashboardRegistration:()=>{calls.push('registration');return {state:'done'};},applyDashboardRoute:()=>{calls.push('route');return {state:'done'};},verifyDashboard:options=>{assert.deepEqual(options,{zylosDir:ctx.zylosDir});calls.push('dashboardVerify');return {state:'ready'};}}
   }));
@@ -220,6 +222,7 @@ test('closed recovery preserves the default reader and recovery phase before ser
 test('Dashboard persists independent failure and retries it without repeating completed registration',async t=>{
   const {ctx,journal}=protectedReaderFixture(t),calls=[];
   ctx.journal.firstTakeover=true;
+  ctx.firstDashboardTakeover=true;
   journal.dashboardInstall={dbCopy:{ok:true,error:null},items:Object.fromEntries(['registration','route'].map(item=>[item,{state:'pending',attempts:0,lastError:null}]))};
   let registrationFails=true;
   const d=deps(calls,{protectedSuccess:()=>{},dashboardOwner:{
@@ -295,7 +298,7 @@ for(const kind of ['failed','throw']) test(`Dashboard restore ${kind} is degrade
   assert.equal(result.completion.dashboard,'degraded');
   assert.equal(result.dashboard.errors[0].code,'registration_failed');
   assert.equal(stops,0);
-  assert.ok(calls.includes('dashboard-verify'));
+  assert.equal(calls.includes('dashboard-verify'),false);
   assert.ok(calls.includes('restart'));
 });
 
@@ -326,11 +329,12 @@ test('Dashboard absent from original running set is verified without starting',a
   assert.equal(result.success,true);
 });
 
-test('installation reads the journal first-takeover decision independently of legacy context',async t=>{
-  for(const firstTakeover of [true,false]){
+test('installation consumes the prepared target-aware takeover decision',async t=>{
+  for(const targetHasDashboard of [true,false]){
     const ctx=fixture(t),calls=[];
-    ctx.journal.firstTakeover=firstTakeover;
-    ctx.firstDashboardTakeover=!firstTakeover;
+    ctx.journal.firstTakeover=true;
+    ctx.journal.dashboardInstall=targetHasDashboard?{items:{}}:null;
+    ctx.firstDashboardTakeover=targetHasDashboard;
     ctx.servicesWereRunning=['zylos-dashboard'];
     const result=await completeUpgradeFinalization(ctx,deps(calls,{
       dashboardOwner:{
@@ -341,7 +345,7 @@ test('installation reads the journal first-takeover decision independently of le
       }
     }));
     assert.equal(result.success,true);
-    assert.deepEqual(calls.filter(x=>['register','route','restore','health'].includes(x)),firstTakeover?['register','route','health']:['restore','health']);
+    assert.deepEqual(calls.filter(x=>['register','route','restore','health'].includes(x)),targetHasDashboard?['register','route','health']:['restore','health']);
   }
 });
 

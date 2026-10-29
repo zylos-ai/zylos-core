@@ -72,19 +72,15 @@ if (testFiles.length === 0) {
 console.log(`Running ${testFiles.length} Node test files`);
 const environment = createTestEnvironment();
 try {
-  const dashboardRoot = path.join(ROOT, 'skills', 'dashboard');
-  const dashboardFiles = testFiles.filter(file => file.startsWith('skills/dashboard/test/'));
-  const coreFiles = testFiles.filter(file => !file.startsWith('skills/dashboard/test/'));
-  for (const [cwd, files] of [[ROOT, coreFiles], [dashboardRoot, dashboardFiles]]) {
-    if (!files.length) continue;
-    const env = { ...process.env };
-    // Runtime identity belongs to each fixture, never the agent running tests.
-    for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP']) delete env[key];
-    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...files.map(file => path.relative(cwd, path.join(ROOT, file)))], {
-      stdio: 'inherit', cwd, env,
-    });
-    if (result.status !== 0) process.exitCode = result.status ?? 1;
-  }
+  const tmpdir = path.join(environment.root, 'tmp');
+  fs.mkdirSync(tmpdir);
+  const env = { ...process.env, TMPDIR: tmpdir };
+  // Runtime identity belongs to each fixture, never the agent running tests.
+  for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP']) delete env[key];
+  const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...testFiles], {
+    stdio: 'inherit', cwd: ROOT, env,
+  });
+  process.exitCode = result.status ?? 1;
 } finally {
   environment.cleanup();
 }

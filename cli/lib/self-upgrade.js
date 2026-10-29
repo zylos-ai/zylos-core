@@ -810,7 +810,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   }
   try {
     const owner=deps.dashboardOwner || await installedDashboardOwner(ctx);
-    if(ctx.journal?.firstTakeover){
+    if(ctx.firstDashboardTakeover){
       for(const [item,name] of [['registration','applyDashboardRegistration'],['route','applyDashboardRoute']]) {
         const saved=ctx.journal?.dashboardInstall?.items?.[item];
         if (item==='registration' && saved?.state==='done') continue;
@@ -832,13 +832,14 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
         }
       }
     }
-    if(!ctx.journal?.firstTakeover && (ctx.servicesWereRunning || []).includes('zylos-dashboard')) {
+    let restoreFailed=false;
+    if(!ctx.firstDashboardTakeover && (ctx.servicesWereRunning || []).includes('zylos-dashboard')) {
       try {
         const restored=await owner.restoreDashboardService({zylosDir:root});
         if(restored?.state!=='done') throw Object.assign(Error(restored?.error?.message || 'Dashboard restore failed'),{code:'registration_failed'});
-      } catch(error) {dashboardFailure('registration',{code:'registration_failed',message:error.message});}
+      } catch(error) {restoreFailed=true;dashboardFailure('registration',{code:'registration_failed',message:error.message});}
     }
-    dashboard=await owner.verifyDashboard({zylosDir:root});
+    if(!restoreFailed)dashboard=await owner.verifyDashboard({zylosDir:root});
   } catch(error) {dashboardFailure('dashboard',error);}
   dashboard={...dashboard,state:dashboardErrors.length?'degraded':dashboard?.state || 'degraded',errors:[...(dashboard?.errors || []),...dashboardErrors]};
   completion.dashboard=dashboard.state;

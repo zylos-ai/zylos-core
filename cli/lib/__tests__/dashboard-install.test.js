@@ -28,6 +28,10 @@ function fixture(t) {
 test('best-effort copy preserves old main/WAL/SHM and missing does not create tx',t=>{
  const {dir,data}=fixture(t),tx=path.join(dir,'tx');
  assert.deepEqual(copyDashboardDb(dir,tx),{ok:true,error:null});assert.equal(fs.existsSync(tx),false);
+ fs.writeFileSync(path.join(data,'dashboard.db-wal'),'orphan wal');
+ fs.writeFileSync(path.join(data,'dashboard.db-shm'),'orphan shm');
+ assert.deepEqual(copyDashboardDb(dir,tx),{ok:true,error:null});assert.equal(fs.existsSync(tx),false);
+ assert.equal(fs.readFileSync(path.join(data,'dashboard.db-wal'),'utf8'),'orphan wal');
  for(const suffix of ['','-wal','-shm'])fs.writeFileSync(path.join(data,'dashboard.db'+suffix),'unchanged'+suffix);
  assert.equal(copyDashboardDb(dir,tx).ok,true);
  for(const suffix of ['','-wal','-shm'])assert.equal(fs.readFileSync(path.join(tx,'dashboard/db-copy/dashboard.db'+suffix),'utf8'),'unchanged'+suffix);
@@ -90,7 +94,7 @@ test('restore checks actual registration after a failed start without registerin
  fs.writeFileSync(path.join(bin,'pm2'),`#!${process.execPath}\nimport fs from 'node:fs';import path from 'node:path';const root=process.env.ZYLOS_DIR;const args=process.argv.slice(2);fs.appendFileSync(path.join(root,'pm2-calls'),JSON.stringify(args)+'\\n');if(args[0]==='start')process.exit(1);if(args[0]==='jlist'){const code=path.join(root,'.claude/skills/dashboard');console.log(JSON.stringify([{name:'zylos-dashboard',pm2_env:{status:'online',pm_exec_path:path.join(code,'src/index.js'),pm_cwd:code}}]));}`,{mode:0o755});
  const result=restoreDashboardService({zylosDir:dir});
  assert.equal(result.state,'done');
- assert.deepEqual(fs.readFileSync(path.join(dir,'pm2-calls'),'utf8').trim().split('\n').map(JSON.parse).map(a=>a[0]),['start','jlist']);
+ assert.deepEqual(fs.readFileSync(path.join(dir,'pm2-calls'),'utf8').trim().split('\n').map(JSON.parse).map(a=>a[0]),['start','jlist','save']);
  assert.equal(fs.existsSync(path.join(dir,'pm2/ecosystem.config.cjs')),true);
 });
 
@@ -221,7 +225,7 @@ test('verification timeout without an observed response is distinct from health 
  assert.deepEqual(result.errors.map(error=>error.code),['verify_timeout']);
 });
 
-test('restore gives both PM2 children a fresh fixed timeout and checks jlist after start timeout',t=>{
+test('restore gives each PM2 child a fresh fixed timeout and checks jlist after start timeout',t=>{
  const f=fixture(t);
  const script=`
   import {mock} from 'node:test';
@@ -239,5 +243,29 @@ test('restore gives both PM2 children a fresh fixed timeout and checks jlist aft
  const child=spawnSync(process.execPath,['--experimental-test-module-mocks','--input-type=module','-e',script],{encoding:'utf8',timeout:5000});
  assert.equal(child.status,0,child.stderr);
  const {result,calls}=JSON.parse(child.stdout);assert.deepEqual(result,{state:'done'});
- assert.deepEqual(calls.map(call=>[call.command,call.args[0],call.timeout]),[['pm2','start',30000],['pm2','jlist',30000]]);
+ assert.deepEqual(calls.map(call=>[call.command,call.args[0],call.timeout]),[['pm2','start',30000],['pm2','jlist',30000],['pm2','save',30000]]);
+});
+
+test('restore reports save failure after confirming the service is online',t=>{
+ const f=fixture(t);
+ fs.writeFileSync(path.join(f.bin,'pm2'),`#!${process.execPath}\nimport fs from 'node:fs';const args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(path.join(f.dir,'pm2-calls'))},JSON.stringify(args)+'\\n');if(args[0]==='jlist')console.log(${JSON.stringify(JSON.stringify([managedEntry(f)]))});if(args[0]==='save')process.exit(18);`,{mode:0o755});
+ const result=restoreDashboardService({zylosDir:f.dir});
+ assert.equal(result.state,'failed');assert.equal(result.error.code,'registration_failed');
+ assert.deepEqual(fs.readFileSync(path.join(f.dir,'pm2-calls'),'utf8').trim().split('\n').map(JSON.parse).map(args=>args[0]),['start','jlist','save']);
+});
+
+test('route installation and public health share the retained Caddy prefix without a configured prefix',async t=>{
+ const f=await healthFixture(t,(_req,res)=>healthy(res));
+ fs.writeFileSync(path.join(f.data,'config.json'),JSON.stringify({port:f.server.address().port}));
+ fs.writeFileSync(path.join(f.dir,'http/Caddyfile'),'http://localhost {\n# BEGIN zylos-component:dashboard\nhandle /custom/* {\nuri strip_prefix /custom\nreverse_proxy 127.0.0.1:3470\n}\n# END zylos-component:dashboard\n}\n');
+ assert.equal(applyDashboardRoute({zylosDir:f.dir}).state,'done');
+ assert.match(fs.readFileSync(path.join(f.dir,'http/Caddyfile'),'utf8'),/strip_prefix \/custom/);
+ const requests=[];
+ const proxy=http.createServer((req,res)=>{requests.push(req.url);if(req.url==='/custom/api/health')healthy(res);else{res.writeHead(404);res.end('{}');}});
+ await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));
+ t.after(()=>new Promise(resolve=>{proxy.closeAllConnections();proxy.close(resolve);}));
+ fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
+ fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'127.0.0.1',port:proxy.address().port}));
+ assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true,route:true},errors:[]});
+ assert.deepEqual(requests,['/custom/api/health']);
 });

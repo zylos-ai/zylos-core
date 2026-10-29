@@ -14,7 +14,7 @@ function tmpDir() {
 }
 
 function fixture(name) {
-  return JSON.parse(fs.readFileSync(path.resolve('test/fixtures/codex', name), 'utf8'));
+  return JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, 'fixtures/codex', name), 'utf8'));
 }
 
 function usageEvents(store) {
@@ -121,7 +121,7 @@ test('CodexRolloutCollector reports unavailable without hook transcript path', (
 test('CodexRolloutCollector ingests rollout fixture metrics from hook-derived path only', () => {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  const fixtureText = fs.readFileSync(path.resolve('test/fixtures/codex/rollout.jsonl'), 'utf8');
+  const fixtureText = fs.readFileSync(path.resolve(import.meta.dirname, 'fixtures/codex/rollout.jsonl'), 'utf8');
   fs.writeFileSync(rolloutPath, fixtureText);
 
   const store = new Store(path.join(dir, 'dashboard.db'));
@@ -259,7 +259,7 @@ test('CodexRolloutCollector does not guess a slot for unknown window durations',
 test('CodexRolloutCollector bounds each collect pass by complete lines', () => {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  const fixtureText = fs.readFileSync(path.resolve('test/fixtures/codex/rollout.jsonl'), 'utf8');
+  const fixtureText = fs.readFileSync(path.resolve(import.meta.dirname, 'fixtures/codex/rollout.jsonl'), 'utf8');
   fs.writeFileSync(rolloutPath, fixtureText);
 
   const store = new Store(path.join(dir, 'dashboard.db'));
@@ -534,7 +534,7 @@ test('CodexRolloutCollector does not carry cli_version across active session cha
 test('CodexRolloutCollector deduplicates metrics when rollout cursor is replayed', () => {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  fs.copyFileSync(path.resolve('test/fixtures/codex/rollout.jsonl'), rolloutPath);
+  fs.copyFileSync(path.resolve(import.meta.dirname, 'fixtures/codex/rollout.jsonl'), rolloutPath);
 
   const store = new Store(path.join(dir, 'dashboard.db'));
   store.upsertCodexRolloutPath({
@@ -716,7 +716,7 @@ test('CodexRolloutCollector uses rollout position identity when response item ca
 test('CodexRolloutCollector does not backfill legacy rate-limit rows when cursor already passed initial rollout event', () => {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  fs.copyFileSync(path.resolve('test/fixtures/codex/rollout.jsonl'), rolloutPath);
+  fs.copyFileSync(path.resolve(import.meta.dirname, 'fixtures/codex/rollout.jsonl'), rolloutPath);
 
   const store = new Store(path.join(dir, 'dashboard.db'));
   store.upsertCodexRolloutPath({
@@ -860,7 +860,7 @@ test('MetricResolver exposes Codex rollout TTFT and turn duration', () => {
 test('CodexRolloutCollector skips cost when model price is missing', () => {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  fs.copyFileSync(path.resolve('test/fixtures/codex/rollout.jsonl'), rolloutPath);
+  fs.copyFileSync(path.resolve(import.meta.dirname, 'fixtures/codex/rollout.jsonl'), rolloutPath);
 
   const store = new Store(path.join(dir, 'dashboard.db'));
   store.upsertCodexRolloutPath({
@@ -887,7 +887,7 @@ test('CodexRolloutCollector skips cost when model price is missing', () => {
 test('CodexRolloutCollector computes cost from default Codex runtime prices', () => {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  const fixtureText = fs.readFileSync(path.resolve('test/fixtures/codex/rollout.jsonl'), 'utf8')
+  const fixtureText = fs.readFileSync(path.resolve(import.meta.dirname, 'fixtures/codex/rollout.jsonl'), 'utf8')
     .replaceAll('gpt-5.3-codex', 'gpt-5.5');
   fs.writeFileSync(rolloutPath, fixtureText);
 
@@ -1443,7 +1443,7 @@ test('CodexRolloutCollector handles wait_agent array status timeout and agent_id
 test('CodexRolloutCollector computes cost from Codex priority prices when fast tier is recorded', () => {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  const fixtureText = fs.readFileSync(path.resolve('test/fixtures/codex/rollout.jsonl'), 'utf8')
+  const fixtureText = fs.readFileSync(path.resolve(import.meta.dirname, 'fixtures/codex/rollout.jsonl'), 'utf8')
     .replace('"model":"gpt-5.3-codex"', '"model":"gpt-5.3-codex","service_tier":"priority"');
   fs.writeFileSync(rolloutPath, fixtureText);
 

@@ -6,7 +6,7 @@ import { finished } from 'node:stream/promises';
 import test from 'node:test';
 import { serveStatic } from '../src/lib/http.js';
 
-const root = path.resolve('public');
+const root = path.resolve(import.meta.dirname, '../public');
 
 function response() {
   const chunks = [];
