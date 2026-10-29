@@ -211,6 +211,19 @@ test('downloaded executable redacts paths from its main-block failure', t => {
   assert.doesNotMatch(result.error,/\n| at /);
 });
 
+test('downloaded executable reports a missing target package without its path', t => {
+  const input=fixture(t);
+  input.tempDir=path.join(path.dirname(input.tempDir),'missing-target');
+  const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:JSON.stringify(input),encoding:'utf8'});
+  assert.equal(child.status,1,child.stderr);
+  const result=JSON.parse(child.stdout);
+  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.deepEqual(result.persisted,[]);
+  assert.match(result.error,/Downloaded target package is unavailable/);
+  assert.doesNotMatch(result.error,new RegExp(input.tempDir.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  assert.doesNotMatch(result.error,/\n| at /);
+});
+
 const registeredProtocolCodes = [
   'ZYLOS_NOT_INITIALIZED', 'INVALID_ARGS', 'UPGRADE_RECOVERY_REQUIRED',
   'DASHBOARD_STILL_INSTALLED', 'INVALID_CORE_DEPENDENCIES', 'UNSUPPORTED_INSTALL_LAYOUT', 'DASHBOARD_TAKEOVER_INVALID',

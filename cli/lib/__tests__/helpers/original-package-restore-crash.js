@@ -11,7 +11,9 @@ function terminate() {
   process.kill(process.pid, 'SIGKILL');
 }
 
-if (boundary === 'copying') {
+if (/npm/.test(process.argv[1] || '')) {
+  // npm itself is never the restoring process.
+} else if (boundary === 'copying') {
   const copy = fs.cpSync;
   fs.cpSync = (source, destination, options = {}) => {
     if (path.resolve(destination) !== installedRoot) return copy(source, destination, options);
@@ -28,6 +30,12 @@ if (boundary === 'copying') {
     });
   };
 } else if (boundary === 'before-bin-repair') {
+  // Trip before the first bin mutation: repair unlinks a stale link before relinking it.
+  const unlink = fs.unlinkSync;
+  fs.unlinkSync = (link, ...args) => {
+    if (path.dirname(path.resolve(link)) === binDir) terminate();
+    return unlink(link, ...args);
+  };
   const symlink = fs.symlinkSync;
   fs.symlinkSync = (target, destination, ...args) => {
     if (path.dirname(path.resolve(destination)) === binDir) terminate();

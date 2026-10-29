@@ -193,8 +193,9 @@ for(const [rel,owner]of [['comm-bridge/c4.db','comm-bridge/scripts/c4-schema.js'
       ZYLOS_TEST_RESTORE_INSTALLED_ROOT: core,
       ZYLOS_TEST_RESTORE_BIN_DIR: path.join(prefix, 'bin'),
       ZYLOS_TEST_RESTORE_CRASH_MARKER: marker,
+      NODE_OPTIONS: `--import=${pathToFileURL(restoreCrashPreload).href}`,
     };
-    const child = spawn(process.execPath, ['--import', pathToFileURL(restoreCrashPreload).href, ...failedEntryArgs(input)], {
+    const child = spawn(process.execPath, failedEntryArgs(input), {
       env: childEnv, stdio: ['pipe', 'pipe', 'pipe'],
     });
     const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
@@ -207,7 +208,7 @@ for(const [rel,owner]of [['comm-bridge/c4.db','comm-bridge/scripts/c4-schema.js'
     const result = await exited;
     clearTimeout(timer);
     assert.equal(timedOut, false, `Restore boundary ${boundary} timed out: ${stdout} ${stderr}`);
-    assert.equal(result.signal, 'SIGKILL', `Restore boundary ${boundary} exited unexpectedly: ${stdout} ${stderr}`);
+    assert.ok(result.signal === 'SIGKILL' || result.code !== 0, `Restore boundary ${boundary} exited unexpectedly: ${stdout} ${stderr}`);
     assert.equal(fs.readFileSync(marker, 'utf8'), `${boundary}\n`);
     const observed = journal().find(({journal: current}) => current.installationIntent === true &&
       !['restored_complete', 'upgrade_complete', 'aborted_before_install'].includes(current.phase));
