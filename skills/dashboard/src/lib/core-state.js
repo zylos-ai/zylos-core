@@ -61,8 +61,7 @@ export class CoreState {
   async _read() {
     try {
       const [{ readSessionMode }, reader, paths] = await Promise.all([loadCoreModule('config.js'), loadCoreModule('session-state-reader.js'), loadCoreModule('session-group-paths.js')]);
-      const { mode } = readSessionMode();
-      if (!['single', 'multi'].includes(mode)) throw Object.assign(new Error('Session mode is unavailable'), { code: 'mode_unavailable' });
+      const mode = readSessionMode().mode ?? 'single';
       const group = mode === 'multi' ? 'origin' : null;
       this.lastSessionMode = mode;
       this.lastSessionGroup = group;
@@ -81,11 +80,10 @@ export class CoreState {
       const source = businessSource(projected, observation, accountUsage);
       this.observation = observation;
       this.accountUsage = accountUsage;
-      if (!isDeepStrictEqual(source, this.lastSource)) {
-        this.lastSource = source;
-        this.snapshot = projected;
-        this.onChange(this.snapshot);
-      }
+      const changed = !isDeepStrictEqual(source, this.lastSource);
+      this.lastSource = source;
+      this.snapshot = projected;
+      if (changed) this.onChange(this.snapshot);
     } catch (error) {
       this.costKey = null;
       this.accountUsage = null;

@@ -45,7 +45,8 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   let current=await core.refresh();assert.equal(current.runId,'R1');assert.equal(current.state,'BUSY');assert.equal(current.running_tools[0].tool_name,'Read');
   assert(sseChunks.some(chunk=>chunk.includes('event: state_change')&&chunk.includes('"runId":"R1"')));assert.equal(fleetBroadcasts,1);
   assert.equal('identity' in current,false);assert.equal('status' in current,false);assert.equal('usage' in current,false);
-  const firstCostKey=core.costKey;assert.ok(firstCostKey);await core.refresh();assert.equal(changes.length,1);
+  const firstCostKey=core.costKey;assert.ok(firstCostKey);const firstUpdatedAt=current.updated_at;
+  await new Promise(resolve=>setTimeout(resolve,5));current=await core.refresh();assert.equal(changes.length,1);assert.notEqual(current.updated_at,firstUpdatedAt);
   sample('origin','R1','S1','busy',{last_check:Date.now(),inactive_seconds:1});await core.refresh();assert.equal(changes.length,1);
   sample('origin','R1','S1','idle',{last_check:Date.now(),inactive_seconds:0});await core.refresh();assert.equal(changes.length,2);assert.equal(changes.at(-1).state,'IDLE');
   sample('origin','R1','S1','busy',{last_check:Date.now(),inactive_seconds:0});await core.refresh();assert.equal(changes.length,3);
@@ -76,6 +77,10 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   assert.equal((await core.refresh()).reason,'stale');
   write(file,'{broken');const unreadable=await core.refresh();assert.equal(unreadable.reason,'unparseable');assert.equal(unreadable.sessionGroup,'origin');
   const secondCostKey=core.costKey;sample('origin','R2','S3');assert.equal((await core.refresh()).sessionId,'S3');assert.notEqual(core.costKey,secondCostKey);
+  write(path.join(root,'.zylos/config.json'),'{broken');
+  const retainedScope=await core.refresh();assert.equal(retainedScope.state,'UNKNOWN');assert.equal(retainedScope.sessionGroup,'origin');
+  const coldFailure=await new CoreState().refresh();assert.equal(coldFailure.state,'UNKNOWN');assert.equal(coldFailure.sessionGroup,undefined);
+  write(path.join(root,'.zylos/config.json'),{session_mode:'multi'});
   assert.equal((await consoleStatus()).runId,'RC');
   db.prepare('INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)').run('clone-console','web-console');
   const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(resolve=>listener.close(resolve));
@@ -90,7 +95,9 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   assert.equal((await (await fetch(base+'/api/status')).json()).reason,'stale');
   write(consoleFile,'{broken');assert.equal((await (await fetch(base+'/api/status')).json()).reason,'unparseable');
   fixture.tmux('kill-session','-t','zylos-group-clone-console');assert.equal((await (await fetch(base+'/api/status')).json()).state,'not_running');
-  write(path.join(root,'.zylos/config.json'),{session_mode:'single'});assert.equal((await consoleStatus()).runId,'R2');
+  write(path.join(root,'.zylos/config.json'),{});assert.deepEqual(readSessionMode(),{mode:null,keyPresent:false});
+  const legacyState=await core.refresh();assert.equal(legacyState.runId,'R2');assert.equal(legacyState.sessionGroup,null);
+  assert.equal((await core.currentTarget()).sessionGroup,null);assert.equal((await consoleStatus()).runId,'R2');
   assert.equal((await (await fetch(base+'/api/status')).json()).runId,'R2');
 
   const socketPath=path.join(root,'activity-monitor/am.sock');let requests=0;let reply=false;
