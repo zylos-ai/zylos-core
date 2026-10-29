@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { activateFreshSplitInstructions } from '../runtime/instruction-builder.js';
+import { codexAppServerFixtureSource } from '../../../test/helpers/codex-trust.js';
 
 const cli = path.resolve(import.meta.dirname, '../../zylos.js');
 const coreRoot = path.resolve(import.meta.dirname, '../../..');
@@ -14,15 +15,25 @@ function makeProfile(host = 'mirror.example.test') {
   } } };
 }
 function fixture(t, { initialized = false } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upstream-cli-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upstream-cli-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), zylosDir = path.join(home, 'zylos'), bin = path.join(root, 'bin');
   const configDir = path.join(zylosDir, '.zylos');
   fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(bin);
+  const pm2Home = path.join(root, 'pm2'), tmpDir = path.join(root, 'tmp');
+  fs.mkdirSync(pm2Home);
+  fs.mkdirSync(tmpDir);
   fs.writeFileSync(path.join(configDir, 'components.json'), '{}');
   let candidateRoot = coreRoot;
   if (initialized) {
+    fs.writeFileSync(path.join(bin, 'codex'), `#!${process.execPath}
+const fs = require('node:fs');
+${codexAppServerFixtureSource()}
+if (process.argv[2] === '--version') console.log('codex-fixture');
+else if (process.argv[2] === 'login' && process.argv[3] === 'status') console.log('Logged in using ChatGPT');
+else process.exit(1);
+`, { mode: 0o755 });
     // Model the installed package: development-only per-skill dependencies
     // are not part of its source payload and must not be copied by init.
     candidateRoot = path.join(root, 'core');
@@ -85,6 +96,7 @@ function fixture(t, { initialized = false } = {}) {
   fs.writeFileSync(path.join(bin, 'pm2'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o755 });
   const env = {
     HOME: home, ZYLOS_DIR: zylosDir, PATH: `${bin}:${process.env.PATH}`,
+    PM2_HOME: pm2Home, TMPDIR: tmpDir,
     ZYLOS_PACKAGE_ROOT: candidateRoot,
     GITHUB_TOKEN: 'fixture-token-never-forward-to-custom-hosts', GH_TOKEN: '',
     ZYLOS_GH_RETRY_DELAY_MS: '', ROUTING_LOG: log, ROUTING_TARBALL: tarball,
