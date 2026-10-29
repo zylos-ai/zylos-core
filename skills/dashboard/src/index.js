@@ -21,6 +21,8 @@ import {
 } from './lib/config.js';
 import { readJsonBody, sendHtml, sendJson, sendText, serveStatic } from './lib/http.js';
 import { Store } from './lib/store.js';
+import { Sanitizer } from './lib/sanitizer.js';
+import { CoreLogImporter } from './lib/core-log-importer.js';
 import { PM2Collector } from './lib/collectors/pm2-collector.js';
 import { SystemCollector } from './lib/collectors/system-collector.js';
 import { StatuslineCollector } from './lib/collectors/statusline-collector.js';
@@ -160,6 +162,12 @@ observerService.ensureCoordinatorOwnership = async () => {
   if (observerService._initialized) await observerControl.start();
 };
 
+// 3. Sanitizer
+const sanitizer = new Sanitizer(config.zylosDir);
+const coreLogImporter = new CoreLogImporter({ store, zylosDir: config.zylosDir, sanitizer,
+  onImport: () => scheduleHistoryBroadcast(),
+});
+
 // Event-loop delay observability (#260)
 const eventLoopMonitor = new EventLoopMonitor({
   blockWarnMs: config.observability?.event_loop_warn_ms
@@ -183,6 +191,7 @@ if (!isClaudeRuntime) process.stderr.write(`[startup] Runtime "${activeRuntime}"
 
 // SSE hub
 const sse = new SseHub(15_000);
+const scheduleHistoryBroadcast = createCoalescedBroadcast(() => sse.broadcast('history_changed', {}));
 let fleetPollerReady = false; // fleetPoller is declared later (TDZ guard)
 
 function broadcastFleetState() {
@@ -980,7 +989,7 @@ function latestMetricRow(metricName, source) {
   return rows.length > 0 ? rows[rows.length - 1] : null;
 }
 
-function handleApi(req, res, pathname, url) {
+async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/health') {
     const sourceHealth = stateEngine.getSourceHealth();
     sendJson(res, 200, {
@@ -990,6 +999,7 @@ function handleApi(req, res, pathname, url) {
       uptimeSeconds: Math.round(process.uptime()),
       phase: 'phase2a',
       event_loop: eventLoopMonitor.snapshot(),
+      core_importer: coreLogImporter.snapshot(),
       source: sourceHealth
     });
     return true;
@@ -1017,8 +1027,18 @@ function handleApi(req, res, pathname, url) {
     const limit = parseInt(url.searchParams.get('limit') || '100', 10);
     const offset = parseInt(url.searchParams.get('offset') || '0', 10);
     const order = url.searchParams.get('order') === 'desc' ? 'desc' : 'asc';
-    const events = store.queryEvents({ since, until, types, sessionId, limit, offset, order });
-    sendJson(res, 200, { events, count: events.length });
+    const sessionGroup = url.searchParams.has('session_group') ? (url.searchParams.get('session_group') || null) : undefined;
+    const runId = url.searchParams.get('run_id') || undefined;
+    const runtime = url.searchParams.get('runtime') || undefined;
+    const afterSeq = Number(url.searchParams.get('after_seq'));
+    const events = await coreLogImporter.sanitizeEvents(store.queryEvents({ since, until, types, sessionId,
+      sessionGroup, runId, runtime, afterSeq, limit: Math.min(1000, limit), offset, order }));
+    const stream = url.searchParams.get('stream') || undefined;
+    const gapLimit = parseInt(url.searchParams.get('gap_limit') || '100', 10);
+    const gapOffset = parseInt(url.searchParams.get('gap_offset') || '0', 10);
+    const gaps = await coreLogImporter.sanitizeEvents(store.getHistoryDiagnostics({
+      sessionGroup, stream, limit: gapLimit, offset: gapOffset }));
+    sendJson(res, 200, { events, count: events.length, gaps });
     return true;
   }
 
@@ -1481,7 +1501,7 @@ export function createServer() {
     }
 
     if (pathname === '/api/stream') {
-      handleApi(req, res, pathname, url);
+      await handleApi(req, res, pathname, url);
       return;
     }
 
@@ -1563,7 +1583,7 @@ export function createServer() {
     }
 
     if (pathname.startsWith('/api/')) {
-      const handled = handleApi(req, res, pathname, url);
+      const handled = await handleApi(req, res, pathname, url);
       if (!handled && !res.headersSent) sendJson(res, 404, { error: 'not_found' });
       return;
     }
@@ -1635,6 +1655,7 @@ if (isMain && process.argv.includes('--smoke')) {
   const retentionAbort = new AbortController();
 
   server.listen(config.port, config.host, () => {
+    coreLogImporter.start();
     console.log(`zylos-dashboard listening on http://${config.host}:${config.port}`);
     setTimeout(() => {
       (async () => {
@@ -1707,6 +1728,7 @@ if (isMain && process.argv.includes('--smoke')) {
           (shutdown.observer.timedOut ? 'observer_shutdown_timeout' : 'observer_shutdown_failed');
         process.stderr.write(`[observer] shutdown failed: ${code}\n`);
       }
+      await coreLogImporter.stop();
       c4Reader.close();
       store.close();
       process.exit(exitCode);

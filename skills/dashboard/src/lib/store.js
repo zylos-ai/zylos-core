@@ -32,9 +32,9 @@ export class Store {
   _prepareStatements() {
     this._insertEvent = this.db.prepare(`
       INSERT OR IGNORE INTO runtime_events
-        (id, ingest_id, event_seq, timestamp, runtime, session_id, event_type, category, summary, duration_ms, metadata, source, confidence)
+        (id, ingest_id, event_seq, timestamp, runtime, session_id, session_group, run_id, event_type, category, summary, duration_ms, metadata, source, confidence)
       VALUES
-        (@id, @ingest_id, @event_seq, @timestamp, @runtime, @session_id, @event_type, @category, @summary, @duration_ms, @metadata, @source, @confidence)
+        (@id, @ingest_id, @event_seq, @timestamp, @runtime, @session_id, @session_group, @run_id, @event_type, @category, @summary, @duration_ms, @metadata, @source, @confidence)
     `);
 
     this._nextSeq = this.db.prepare('SELECT COALESCE(MAX(event_seq), 0) + 1 AS seq FROM runtime_events');
@@ -368,8 +368,10 @@ export class Store {
       ingest_id: event.ingest_id,
       event_seq: seq,
       timestamp: event.timestamp,
-      runtime: event.runtime || 'claude',
+      runtime: event.runtime || (event.source === 'core-log' ? 'unknown' : 'claude'),
       session_id: event.session_id || null,
+      session_group: event.session_group ?? null,
+      run_id: event.run_id ?? null,
       event_type: event.event_type,
       category: event.category,
       summary: event.summary || null,
@@ -381,26 +383,28 @@ export class Store {
     return { inserted: info.changes > 0, event_seq: seq };
   }
 
-  queryEvents({ since, until, types, sessionId, limit = 100, offset = 0, order = 'asc' }) {
-    const s = since || '1970-01-01T00:00:00Z';
-    const u = until || '2099-12-31T23:59:59Z';
-    const desc = order === 'desc';
-
-    if (types && types.length === 1) {
-      const stmt = desc ? this._queryEventsByTypeDesc : this._queryEventsByType;
-      return stmt.all({ since: s, until: u, event_type: types[0], limit, offset })
-        .map(this._parseEventRow);
+  queryEvents({ since, until, types, sessionId, sessionGroup, runId, runtime, afterSeq,
+    limit = 100, offset = 0, order = 'asc' } = {}) {
+    const clauses = ['timestamp >= @since', 'timestamp <= @until'];
+    const params = { since: since || '1970-01-01T00:00:00.000Z', until: until || '2099-12-31T23:59:59Z',
+      limit: Number.isFinite(limit) ? Math.min(10000, Math.max(1, Math.floor(limit))) : 100,
+      offset: Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0 };
+    for (const [column, value] of Object.entries({ session_id: sessionId, session_group: sessionGroup,
+      run_id: runId, runtime })) {
+      if (value === undefined) continue;
+      if (value === null) clauses.push(`${column} IS NULL`);
+      else { clauses.push(`${column} = @${column}`); params[column] = value; }
     }
-
-    let rows = (desc ? this._queryEventsDesc : this._queryEvents).all({ since: s, until: u, limit, offset });
-    if (types && types.length > 0) {
-      const typeSet = new Set(types);
-      rows = rows.filter(r => typeSet.has(r.event_type));
+    if (Number.isSafeInteger(afterSeq) && afterSeq >= 0) {
+      clauses.push('event_seq > @afterSeq'); params.afterSeq = afterSeq;
     }
-    if (sessionId) {
-      rows = rows.filter(r => r.session_id === sessionId);
+    if (Array.isArray(types) && types.length) {
+      const names = types.slice(0, 100).map((type, i) => { params[`type${i}`] = type; return `@type${i}`; });
+      clauses.push(`event_type IN (${names.join(',')})`);
     }
-    return rows.map(this._parseEventRow);
+    return this.db.prepare(`SELECT * FROM runtime_events WHERE ${clauses.join(' AND ')}
+      ORDER BY event_seq ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT @limit OFFSET @offset`)
+      .all(params).map(this._parseEventRow);
   }
 
   latestEventByType(eventType) {
@@ -475,7 +479,7 @@ export class Store {
 
   latestMetric({ name, source, since, until, runtime = null }) {
     const row = this._latestMetric.get({ name, source, runtime,
-      since: since || '1970-01-01T00:00:00Z', until: until || '2099-12-31T23:59:59Z' });
+      since: since || '1970-01-01T00:00:00.000Z', until: until || '2099-12-31T23:59:59Z' });
     return row ? { ...row, dimensions: row.dimensions ? JSON.parse(row.dimensions) : null } : null;
   }
 
@@ -648,6 +652,21 @@ export class Store {
       ...row,
       extra: row.extra ? JSON.parse(row.extra) : null
     }));
+  }
+
+  getHistoryDiagnostics({ sessionGroup, stream, limit = 100, offset = 0 } = {}) {
+    const conditions = ["signal_type='history'", "status!='healthy'"];
+    const params = [];
+    if (stream !== undefined) { conditions.push("json_extract(extra,'$.stream')=?"); params.push(stream); }
+    if (sessionGroup !== undefined) {
+      if (sessionGroup === null) conditions.push("COALESCE(json_extract(extra,'$.stream'),'') NOT LIKE 'events:%'");
+      else { conditions.push("json_extract(extra,'$.stream')=?"); params.push(`events:${sessionGroup}`); }
+    }
+    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 100;
+    const boundedOffset = Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0;
+    return this.db.prepare(`SELECT * FROM source_health WHERE ${conditions.join(' AND ')}
+      ORDER BY updated_at DESC,name LIMIT ? OFFSET ?`).all(...params, boundedLimit, boundedOffset)
+      .map(row => ({ ...row, extra: row.extra ? JSON.parse(row.extra) : null }));
   }
 
   getCollectorLiveness() {
