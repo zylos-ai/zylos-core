@@ -57,6 +57,10 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   assert.equal((await handleCoreAction('interrupt',{}, {zylosDir:root})).error,'TARGET_REQUIRED');
   assert.equal((await handleCoreAction('interrupt',{...target,sessionGroup:'other'}, {zylosDir:root})).error,'TARGET_SCOPE_MISMATCH');
   current=await core.refresh();assert.equal(current.runId,'R2');assert.equal(current.sessionId,'S2');assert.notEqual(core.costKey,firstCostKey);
+  fixture.tmux('set-environment','-u','-t','zylos-group-clone-console','ZYLOS_RUN_ID');
+  await core.refresh();assert.equal(core.costKey,null);
+  fixture.tmux('set-environment','-t','zylos-group-clone-console','ZYLOS_RUN_ID','RC');
+  await core.refresh();assert.ok(core.costKey);
   const file=path.join(runDir('origin'),'agent-status.json');fs.utimesSync(file,new Date(0),new Date(0));
   assert.equal((await core.refresh()).reason,'stale');
   write(file,'{broken');assert.equal((await core.refresh()).reason,'unparseable');

@@ -25,6 +25,15 @@ test('Origin projection distinguishes startup and absence without exposing raw t
   const offline = projectOrigin('origin', { identity: { present: false, runtime: 'unknown' }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } }, sanitizer);
   assert.equal(offline.state, 'OFFLINE');
 
+  const replaced = projectOrigin('origin', {
+    identity: { present: true, ready: true, runId: 'R-old', sessionId: 'S-old', runtime: 'claude' },
+    status: { valid: false, reason: 'identity_changed', sampledAt: 1 }, usage: { valid: false },
+  }, sanitizer);
+  assert.equal(replaced.state, 'UNKNOWN');
+  assert.equal(replaced.runId, null);
+  assert.equal(replaced.sessionId, null);
+  assert.equal(replaced.ready, false);
+
   const busy = projectOrigin('origin', {
     identity: { present: true, ready: true, runId: 'R2', sessionId: 'S2', runtime: 'claude' },
     status: { valid: true, reason: null, sampledAt: 1, value: { state: 'busy', active_tool_details: [{ id: 'T1', name: 'Bash', startedAt: 1, input: { command: 'curl -H "Authorization: Bearer abc.def.secret" https://example.test' } }] } },
