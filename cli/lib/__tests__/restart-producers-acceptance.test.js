@@ -57,6 +57,6 @@ async function invoke(t, producer, response) {
   if (['uncertain', 'timeout'].includes(response)) assert.match(all, /restart_result_unknown/);
   if (response === 'accepted') assert.match(all, /accepted/);
 }
-test('IB-17 restart/upgrade producers: Unix Sock success, refusal and uncertain result', async t => {
+test('restart and upgrade producers cover Unix socket success, refusal and uncertain result', async t => {
   for (const producer of ['restart', 'upgrade']) for (const response of ['accepted', 'rejected', 'uncertain', 'timeout']) await invoke(t, producer, response);
 });

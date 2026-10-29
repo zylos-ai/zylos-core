@@ -87,7 +87,7 @@ test('Dashboard owner version rejects future schemas without writing the databas
   assert.deepEqual(fs.readFileSync(source),before);
 });
 
-for(const bundled of [false,true])for(const version of [13,20,99]) test(`real T09 owner selection bundled=${bundled} schema=${version}`,t=>{
+for(const bundled of [false,true])for(const version of [13,20,99]) test(`real Dashboard owner selection bundled=${bundled} schema=${version}`,t=>{
   const f=fixture(t);f.database(version).close();
   const prefix=path.join(f.root,'npm-prefix'),installedRoot=path.join(prefix,'lib/node_modules/zylos');
   fs.mkdirSync(installedRoot,{recursive:true});fs.mkdirSync(path.join(prefix,'bin'));

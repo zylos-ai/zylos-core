@@ -120,7 +120,7 @@ test('invalid installed Dashboard directory rejects independently of old marker'
   assert.throws(()=>inspectUpgradeSource(input),{code:'DASHBOARD_TAKEOVER_INVALID'});
 });
 
-for(const kind of ['file','symlink','dangling'])test(`T09 rejects ${kind} skill dependencies before probes or transaction writes`,t=>{
+for(const kind of ['file','symlink','dangling'])test(`target entry rejects ${kind} skill dependencies before probes or transaction writes`,t=>{
   const input=fixture(t),declared=path.join(input.tempDir,'skills/comm-bridge'),modules=path.join(input.zylosDir,'.claude/skills/comm-bridge/node_modules');
   fs.mkdirSync(declared,{recursive:true});fs.mkdirSync(path.dirname(modules),{recursive:true});
   if(kind==='file')fs.writeFileSync(modules,'invalid');

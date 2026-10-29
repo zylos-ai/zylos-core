@@ -76,7 +76,7 @@ for(const unknown of [false,true]) test(`resume retains ${unknown?'unknown':'acc
   const f=fixture(t);
   const observations={completion:{install:'done',dashboard:'ready',sessionRestart:unknown?'manual_required':'accepted',modeTransition:'unknown'},
     sessionRestart:unknown?{ok:false,requestId:'repair-request',error:{code:'restart_result_unknown',message:'reply lost'}}:{ok:true,data:{result:'accepted',requestId:'repair-request'}},
-    checkpointAudit:{state:'incomplete',error:'DB_BUSY'},modeStatus:{state:'unavailable',error:{message:'P10 unavailable'}}};
+    checkpointAudit:{state:'incomplete',error:'DB_BUSY'},modeStatus:{state:'unavailable',error:{message:'session-mode status unavailable'}}};
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
     f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete'});
     return {success:true,dashboard:{state:'ready',errors:[]},...observations};
@@ -87,7 +87,7 @@ for(const unknown of [false,true]) test(`resume retains ${unknown?'unknown':'acc
   const text=formatFinalizeResult(json);
   assert.match(text,/Restart request: repair-request/);
   assert.match(text,/Checkpoint audit: incomplete: DB_BUSY/);
-  assert.match(text,/Mode status: unavailable: P10 unavailable/);
+  assert.match(text,/Mode status: unavailable: session-mode status unavailable/);
   assert.match(text,unknown?/Do not resubmit automatically/:/Session restart: accepted/);
   const status=await resumeFinalize(f.root,{status:true},{maintenance:f.m});
   assert.equal(Object.hasOwn(status.data,'sessionRestart'),false);

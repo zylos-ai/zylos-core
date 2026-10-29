@@ -22,7 +22,7 @@ function publishRuntimePreparation({workDir, zylosDir, preparation}, options = {
   });
 }
 
-test('upgrade reuses P06 CLI preparation without login or touching the running runtime', async t => {
+test('upgrade reuses CLI preparation without login or touching the running runtime', async t => {
   const f = fixture(t);
   const installed = new Set(['claude']), calls = [];
   const result = await prepareUpgradeRuntimeClis(f.ctx, {

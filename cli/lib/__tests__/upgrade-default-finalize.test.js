@@ -253,7 +253,7 @@ test('finalization does not recompute the persisted takeover fact from changed d
   assert.ok(f.calls.includes('registration'));
 });
 
-test('default finalizer loads IB-66 from the CLI module without loading the Dashboard service package', async t => {
+test('default finalizer loads the Dashboard owner from the CLI module without loading the service package', async t => {
   const f=fixture(t), target=path.join(f.home,'target-package');
   fs.mkdirSync(path.join(target,'cli/lib'),{recursive:true});
   fs.mkdirSync(path.join(target,'components/dashboard'),{recursive:true});

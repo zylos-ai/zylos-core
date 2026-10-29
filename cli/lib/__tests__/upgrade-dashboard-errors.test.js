@@ -6,7 +6,7 @@ import path from 'node:path';
 import {completeUpgradeFinalization} from '../self-upgrade.js';
 
 for(const item of ['dbCopy','registration','route','dashboard']) {
-  for(const response of ['throw','return']) test(`IB-66 ${item} ${response} preserves original code and message`,async t=>{
+  for(const response of ['throw','return']) test(`Dashboard ${item} ${response} preserves original code and message`,async t=>{
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-errors-'));
     t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     const error={code:`${item}_original_code`,message:`${item} original diagnostic`};

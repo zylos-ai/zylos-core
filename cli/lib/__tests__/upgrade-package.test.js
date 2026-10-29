@@ -153,10 +153,26 @@ test('restore retains target-only bins and repairs original bins even when the t
 
 test('interrupted-copy reentry does not require package metadata or bin links before recopy', t => {
   const f=fixture(t);
-  m.update(f.transactionDir,f.journal,{originalPackageRestoreStarted:true});
   fs.rmSync(f.sourceRoot,{recursive:true,force:true});
   fs.rmSync(path.join(f.prefix,'bin','zylos'),{force:true});
   assert.doesNotThrow(()=>m.restoreOriginalPackage(f.transactionDir,f.journal));
   assert.equal(m.treeHash(f.sourceRoot,{excludeNodeModules:false,includeModes:true}),f.originalPackage.treeHash);
   assert.equal(path.resolve(path.join(f.prefix,'bin'),fs.readlinkSync(path.join(f.prefix,'bin','zylos'))),path.join(f.sourceRoot,'cli/original.js'));
+});
+
+test('completed restoration rejects a changed installed tree without replacing it', t => {
+  const f=fixture(t);
+  replaceInstalledPackage(f);
+  m.restoreOriginalPackage(f.transactionDir,f.journal);
+  const changed=path.join(f.sourceRoot,'operator-change');
+  fs.writeFileSync(changed,'preserve for manual recovery\n');
+  const copy=fs.cpSync,remove=fs.rmSync;
+  fs.cpSync=()=>{throw Error('completed restore must not copy');};
+  fs.rmSync=(...args)=>{
+    if(args[0]===f.sourceRoot)throw Error('completed restore must not remove');
+    return remove(...args);
+  };
+  try {assert.throws(()=>m.restoreOriginalPackage(f.transactionDir,f.load()),/completed original package restore changed; manual recovery required/);}
+  finally {fs.cpSync=copy;fs.rmSync=remove;}
+  assert.equal(fs.readFileSync(changed,'utf8'),'preserve for manual recovery\n');
 });

@@ -14,14 +14,14 @@ test('completion formatter reports independent outcomes without promising restar
     completion: { install: 'done', dashboard: 'degraded', sessionRestart: 'manual_required', modeTransition: 'unknown' },
     dashboard: { errors: [{ item: 'route', code: 'ROUTE_FAILED', message: 'reload failed' }] },
     sessionRestart: { ok: false, error: { code: 'TIMEOUT', message: 'submission timed out' } },
-    modeStatus: { state: 'unavailable', error: { message: 'P10 unavailable' } },
+    modeStatus: { state: 'unavailable', error: { message: 'session-mode status unavailable' } },
     warnings: [{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI unavailable'}],
     next: 'Resolve the failure before restarting.' };
   const text = formatSelfUpgradeCompletion(result);
   const json = JSON.parse(JSON.stringify(result));
   for (const expected of ['Installation: done', 'Dashboard: degraded', 'Session restart: manual_required',
     'Mode transition: unknown', 'ROUTE_FAILED: reload failed', 'TIMEOUT: submission timed out',
-    'Mode status: unavailable: P10 unavailable', 'Runtime warning (codex): RUNTIME_CLI_UNAVAILABLE: CLI unavailable', 'Manual runtime restart required', result.next]) {
+    'Mode status: unavailable: session-mode status unavailable', 'Runtime warning (codex): RUNTIME_CLI_UNAVAILABLE: CLI unavailable', 'Manual runtime restart required', result.next]) {
     assert.ok(text.includes(expected), expected);
   }
   assert.deepEqual(json.completion, result.completion);

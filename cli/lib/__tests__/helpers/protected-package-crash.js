@@ -12,7 +12,11 @@ const nodeBin = path.dirname(process.execPath);
 // Real npm and SQLite; all package, deployment, cache and process state belongs
 // to this fixture. The historical source is v0.9.2 relabelled 0.9.3, not a
 // claim that the unreleased historical 0.9.3 package has been exercised.
-export function createProtectedPackageCrashFixture(root, { managedDashboard = false } = {}) {
+export function createProtectedPackageCrashFixture(root, {
+  managedDashboard = false,
+  targetBinChanged = false,
+  restoreStress = false,
+} = {}) {
   const home = path.join(root, 'home'), zylos = path.join(home, 'zylos');
   const prefix = path.join(root, 'prefix'), bin = path.join(root, 'bin');
   const core = path.join(prefix, 'lib/node_modules/zylos');
@@ -82,7 +86,24 @@ const result={};for(const rel of ${JSON.stringify(['comm-bridge/c4.db','schedule
     const archive = run('git', ['archive', 'v0.9.2'], { cwd: repository, encoding: null }).stdout;
     run('tar', ['-x', '-C', source], { input: archive });
     const file = path.join(source, 'package.json'), pkg = JSON.parse(fs.readFileSync(file));
-    pkg.version = '0.9.3'; write(file, JSON.stringify(pkg, null, 2));
+    pkg.version = '0.9.3';
+    if (restoreStress) {
+      const bins = {};
+      for (let index = 0; index < 2000; index += 1) {
+        const name = `zylos-restore-${String(index).padStart(4, '0')}`;
+        const relative = `cli/restore-${String(index).padStart(4, '0')}.js`;
+        write(path.join(source, relative), '#!/usr/bin/env node\n', 0o755);
+        bins[name] = `./${relative}`;
+      }
+      bins.zylos = './cli/zylos.js';
+      pkg.bin = bins;
+      const payload = fs.openSync(path.join(source, 'restore-payload.bin'), 'w');
+      try {
+        const block = Buffer.alloc(1 << 20, 0x5a);
+        for (let index = 0; index < 64; index += 1) fs.writeSync(payload, block);
+      } finally { fs.closeSync(payload); }
+    }
+    write(file, JSON.stringify(pkg, null, 2));
     // Model the required 0.9.3 bridge guard explicitly; v0.9.2 lacks it.
     const postinstall = path.join(source, 'scripts/postinstall.js');
     const postinstallSource = fs.readFileSync(postinstall, 'utf8');
@@ -119,7 +140,12 @@ const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prep
       return !parts.some(part => ['.git', 'node_modules', '__tests__', 'test'].includes(part));
     } });
     const targetPkg = JSON.parse(fs.readFileSync(path.join(target, 'package.json')));
-    targetPkg.version = '1.0.0'; write(path.join(target, 'package.json'), JSON.stringify(targetPkg, null, 2));
+    targetPkg.version = '1.0.0';
+    if (targetBinChanged) {
+      fs.copyFileSync(path.join(target, 'cli/zylos.js'), path.join(target, 'cli/target-zylos.js'));
+      targetPkg.bin = {zylos:'./cli/target-zylos.js', 'target-only':'./cli/target-zylos.js'};
+    }
+    write(path.join(target, 'package.json'), JSON.stringify(targetPkg, null, 2));
     if (managedDashboard) {
       write(path.join(target, 'skills/dashboard/package.json'), '{"name":"fixture-dashboard","type":"module"}\n');
       // The target supplies the new owner; the original package and deployed
@@ -136,9 +162,15 @@ const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prep
     fs.cpSync(target, tempDir, { recursive: true, verbatimSymlinks: true });
     return { schemaVersion: 1, fromVersion: '0.9.3', tempDir, installedRoot: core, zylosDir: zylos };
   }
+  function failedEntryArgs(input) {
+    const module = pathToFileURL(path.join(input.tempDir, 'cli/lib/upgrade-entry.js')).href;
+    return ['--input-type=module', '-e', `import fs from 'node:fs';const {runUpgradeEntry,installUpgradeTarget}=await import(${JSON.stringify(module)});const input=JSON.parse(fs.readFileSync(0,'utf8'));const result=await runUpgradeEntry(input,{install(ctx){installUpgradeTarget(ctx);throw Error('injected post-install failure');}});console.log(JSON.stringify(result));process.exitCode=result.success?0:1;`];
+  }
   function entry(input, { failureStage } = {}) {
     const module = pathToFileURL(path.join(input.tempDir, 'cli/lib/upgrade-entry.js')).href;
-    const args = failureStage ? ['--input-type=module', '-e', `import fs from 'node:fs';const {runUpgradeEntry,installUpgradeTarget}=await import(${JSON.stringify(module)});const input=JSON.parse(fs.readFileSync(0,'utf8'));const result=await runUpgradeEntry(input,{install(ctx){${failureStage === 'after' ? 'installUpgradeTarget(ctx);' : ''}throw Error(${JSON.stringify('T10 injected ' + failureStage + ' installation failure')});}});console.log(JSON.stringify(result));process.exitCode=result.success?0:1;`] : [path.join(input.tempDir, 'cli/lib/upgrade-entry.js')];
+    const args = failureStage === 'after' ? failedEntryArgs(input) : failureStage
+      ? ['--input-type=module', '-e', `import fs from 'node:fs';const {runUpgradeEntry}=await import(${JSON.stringify(module)});const input=JSON.parse(fs.readFileSync(0,'utf8'));const result=await runUpgradeEntry(input,{install(){throw Error('injected pre-install failure');}});console.log(JSON.stringify(result));process.exitCode=result.success?0:1;`]
+      : [path.join(input.tempDir, 'cli/lib/upgrade-entry.js')];
     const result = run(process.execPath, args, { input: JSON.stringify(input), allowFailure: true, timeout: 900000 });
     assert.ok(result.stdout.trim(), result.stderr);
     return { status: result.status, result: JSON.parse(result.stdout.trim().split('\n').at(-1)) };
@@ -169,10 +201,58 @@ const db=new D(${JSON.stringify(path.join(zylos, 'comm-bridge/c4.db'))});db.prep
     }
     return observed;
   }
+  async function killDuringRestore(input, boundary) {
+    const child = spawn(process.execPath, failedEntryArgs(input), { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
+    let stdout = '', stderr = '';
+    child.stdout.on('data', bytes => { stdout += bytes; });
+    child.stderr.on('data', bytes => { stderr += bytes; });
+    child.stdin.end(JSON.stringify(input));
+    const deadline = Date.now() + 300000;
+    let observed;
+    try {
+      while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
+        const current = journal().find(({ journal: j }) => j.phase === 'restoring' && j.installationIntent === true);
+        if (current?.journal.originalPackage) {
+          const original = current.journal.originalPackage;
+          let currentHash = null;
+          try { currentHash = maintenance.treeHash(core, {excludeNodeModules:false, includeModes:true}); } catch {}
+          if (boundary === 'copying' && fs.existsSync(path.join(core, 'restore-payload.bin')) && currentHash !== original.treeHash) {
+            observed = current;
+            break;
+          }
+          if (boundary === 'before-bin-repair' && currentHash === original.treeHash && !current.journal.originalPackageRestored) {
+            const metadata = JSON.parse(fs.readFileSync(path.join(original.path, 'package.json')));
+            const target = typeof metadata.bin === 'string' ? metadata.bin : metadata.bin.zylos;
+            const link = path.join(prefix, 'bin', 'zylos');
+            let resolved = null;
+            try { resolved = path.resolve(path.dirname(link), fs.readlinkSync(link)); } catch {}
+            if (resolved !== path.resolve(core, target)) {
+              observed = current;
+              break;
+            }
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 2));
+      }
+      assert.ok(observed, `Restore boundary ${boundary} never observed: ${stdout} ${stderr}`);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      const result = await exited;
+      if (observed) assert.equal(result.signal, 'SIGKILL');
+    }
+    return observed;
+  }
   function recover(from) {
     const script = `const {recoverBeforeUpgrade}=await import(${JSON.stringify(pathToFileURL(path.join(from, 'cli/lib/upgrade-discovery.js')).href)});console.log(JSON.stringify(recoverBeforeUpgrade(${JSON.stringify(zylos)})));`;
     const result = run(process.execPath, ['--input-type=module', '-e', script]);
     return JSON.parse(result.stdout.trim().split('\n').at(-1));
   }
-  return { build, handoff, entry, kill, recover, journal, logicalDatabases, version, core, zylos, root, calls, skills };
+  const installedTreeHash = () => maintenance.treeHash(core, {excludeNodeModules:false, includeModes:true});
+  const binTarget = name => {
+    const link = path.join(prefix, 'bin', name);
+    return path.resolve(path.dirname(link), fs.readlinkSync(link));
+  };
+  return { build, handoff, entry, kill, killDuringRestore, recover, journal, logicalDatabases,
+    installedTreeHash, binTarget, version, core, zylos, root, calls, skills };
 }

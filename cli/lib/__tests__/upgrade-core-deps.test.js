@@ -21,6 +21,7 @@ function fixture(t,{dependency='directory',body='process.stdout.write("installed
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-dependency-'))),dir=path.join(root,'.backup/self-upgrade/tx'),skillsDir=path.join(root,'.claude/skills'),skill=path.join(skillsDir,'core');
  fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.mkdirSync(skill,{recursive:true});
  fs.writeFileSync(path.join(skill,'package.json'),JSON.stringify({dependencies:{dep:'v1'}}));fs.writeFileSync(path.join(skill,'code.js'),'original code');fs.chmodSync(path.join(skill,'code.js'),0o755);
+ fs.mkdirSync(path.join(skill,'.zylos'));fs.writeFileSync(path.join(skill,'.zylos','state.json'),'{"source":"original"}\n');
  const outside=path.join(root,'outside');fs.mkdirSync(outside);fs.writeFileSync(path.join(outside,'untouched'),'outside original');
  if(dependency==='directory') {fs.mkdirSync(path.join(skill,'node_modules/dep'),{recursive:true});fs.writeFileSync(path.join(skill,'node_modules/dep/index.js'),'module.exports="v1";');fs.mkdirSync(path.join(skill,'node_modules/.bin'));fs.symlinkSync('../dep/index.js',path.join(skill,'node_modules/.bin/dep'));}
  for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs'],['upgrade-recovery.cjs','runner.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dest));
@@ -58,9 +59,11 @@ test('whole-skill backup includes dependencies and preserves modes and relative 
  assert.equal(fs.readlinkSync(path.join(backup,'node_modules/.bin/dep')),'../dep/index.js');
  assert.equal(fs.statSync(path.join(backup,'code.js')).mode&0o777,0o755);
  fs.writeFileSync(path.join(f.skill,'node_modules/dep/index.js'),'target dependency');
+ fs.writeFileSync(path.join(f.skill,'.zylos/state.json'),'{"source":"target"}\n');
  fs.chmodSync(path.join(f.skill,'code.js'),0o644);
  f.recovery.restoreCore(f.dir,f.j);
  assert.equal(fs.readFileSync(path.join(f.skill,'node_modules/dep/index.js'),'utf8'),'module.exports="v1";');
+ assert.equal(fs.readFileSync(path.join(f.skill,'.zylos/state.json'),'utf8'),'{"source":"original"}\n');
  assert.equal(fs.readlinkSync(path.join(f.skill,'node_modules/.bin/dep')),'../dep/index.js');
  assert.equal(fs.statSync(path.join(f.skill,'code.js')).mode&0o777,0o755);
 });

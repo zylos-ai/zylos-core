@@ -1020,9 +1020,11 @@ function restoreOriginalPackage(dir, j) {
     validateSupportedGlobalLayout(sourceRoot, metadata, {recovery:true});
     currentHash = treeHash(sourceRoot, {excludeNodeModules:false, includeModes:true});
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (j.originalPackageRestored && currentHash !== original.treeHash) {
+    throw Error('completed original package restore changed; manual recovery required');
+  }
   if (currentHash !== original.treeHash) {
     validateSupportedGlobalLayout(sourceRoot, metadata, {recovery:true});
-    if (!j.originalPackageRestoreStarted) update(dir, j, {originalPackageRestoreStarted:true});
     fs.rmSync(sourceRoot, {recursive:true, force:true});
     copyTreePreservingModes(snapshot, sourceRoot);
     fsyncTree(sourceRoot);

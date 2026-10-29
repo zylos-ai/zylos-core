@@ -7,7 +7,7 @@ import { createProtectedPackageCrashFixture } from './helpers/protected-package-
 
 // Explicit opt-in: these tests install real npm packages into private prefixes
 // and require registry access, native SQLite support, Linux /proc and flock.
-for (const managedDashboard of [false, true]) for (const stage of ['before', 'after']) test(`T10 real npm SIGKILL ${stage} install recovers v0.9.2-as-0.9.3 and permits retry${managedDashboard ? ' with retained Dashboard v20' : ''}`, {
+for (const managedDashboard of [false, true]) for (const stage of ['before', 'after']) test(`real npm SIGKILL ${stage} install recovers v0.9.2-as-0.9.3 and permits retry${managedDashboard ? ' with retained Dashboard v20' : ''}`, {
   skip: process.env.ZYLOS_RUN_PACKAGE_CRASH_E2E !== '1', timeout: 1200000,
 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `package-crash-${stage}-`));
@@ -62,7 +62,7 @@ function assertDashboardUpgraded(databases) {
   assert.match(JSON.stringify(dashboard), /T10 preserved Dashboard row/);
 }
 
-for (const failureStage of [undefined, 'before', 'after']) test(`T10 first Dashboard takeover with retained v20 ${failureStage ? `compensates ${failureStage} installation failure` : 'completes upgrade'}`, {
+for (const failureStage of [undefined, 'before', 'after']) test(`first Dashboard takeover with retained v20 ${failureStage ? `compensates ${failureStage} installation failure` : 'completes upgrade'}`, {
   skip: process.env.ZYLOS_RUN_PACKAGE_CRASH_E2E !== '1', timeout: 1200000,
 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `package-dashboard-${failureStage || 'success'}-`));
@@ -78,7 +78,7 @@ for (const failureStage of [undefined, 'before', 'after']) test(`T10 first Dashb
   if (failureStage) {
     assert.equal(result.status, 1, JSON.stringify(result));
     assert.equal(result.result.success, false);
-    assert.match(result.result.error, new RegExp(`T10 injected ${failureStage} installation failure`));
+    assert.match(result.result.error, /injected (pre|post)-install failure/);
     assert.equal(result.result.recovery_required, false, JSON.stringify(result));
     assert.equal(saved[0].journal.phase, failureStage === 'after' ? 'restored_complete' : 'aborted_before_install');
     assert.equal(saved[0].journal.installationIntent === true, failureStage === 'after');

@@ -30,7 +30,7 @@ test('IB-40 producer does not downgrade transition races or invalid config to si
   let reads=0;const expired=await requestRuntimeRestart({...base,now:()=>1000,readMode:()=>{reads++;}});assert.equal(expired.error.code,'deadline_exceeded');assert.equal(reads,0);
 });
 
-test('M4 upgrade submission retries only connects with a 30s total budget and 1s spacing',async()=>{
+test('upgrade restart submission retries only connects with a 30s total budget and 1s spacing',async()=>{
   for (const afterServiceRestart of [false,true]) {
     let options;
     const result=await requestRuntimeRestart({...base,deadlineAt:undefined,afterServiceRestart,
@@ -41,7 +41,7 @@ test('M4 upgrade submission retries only connects with a 30s total budget and 1s
   }
 });
 
-test('M4 upgrade submission uses its own 30 second window regardless of an obsolete parent deadline',async()=>{
+test('upgrade restart submission uses its own 30 second window regardless of an obsolete parent deadline',async()=>{
   for(const [deadlineAt,expected] of [[500,30100],[100000,30100]]) {
     let deadline;
     await requestRuntimeRestart({...base,afterServiceRestart:true,deadlineAt,
