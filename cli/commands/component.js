@@ -1196,6 +1196,14 @@ export async function uninstallComponent(args) {
     process.exit(1);
   }
 
+  if (target === 'dashboard') {
+    const result = { action: checkOnly ? 'uninstall_check' : 'uninstall', success: false, component: target,
+      error: 'core_managed', message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
+    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
+    process.exitCode = 1;
+    return;
+  }
+
   if (checkOnly) {
     return handleUninstallCheck(target, { jsonOutput });
   }
@@ -1489,6 +1497,14 @@ export async function infoComponent(args) {
   if (!target) {
     console.error('Usage: zylos info <name> [--json]');
     process.exit(1);
+  }
+
+  if (target === 'dashboard') {
+    const result = { action: 'info', success: false, component: target, error: 'core_managed',
+      message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
+    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
+    process.exitCode = 1;
+    return;
   }
 
   const components = loadComponents();

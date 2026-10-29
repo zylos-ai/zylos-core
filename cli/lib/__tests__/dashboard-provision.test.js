@@ -109,6 +109,42 @@ test('component upgrade refuses the Core-managed Dashboard at the CLI entry', t 
   assert.equal(JSON.parse(result.stdout).error, 'core_managed');
 });
 
+test('component uninstall refuses the Core-managed Dashboard before reading or changing registration', t => {
+  const root = fixture(t); const metadata = path.join(root, '.zylos/components.json');
+  fs.mkdirSync(path.dirname(metadata), { recursive: true });
+  fs.writeFileSync(metadata, JSON.stringify({ dashboard: { version: '0.6.9' } }));
+  const before = fs.readFileSync(metadata, 'utf8');
+  for (const args of [
+    ['uninstall', 'dashboard', '--yes'],
+    ['uninstall', 'dashboard', '--check'],
+    ['uninstall', 'dashboard', '--json'],
+    ['uninstall', 'dashboard', '--check', '--json'],
+  ]) {
+    const result = spawnSync(process.execPath, [path.join(packageRoot, 'cli/zylos.js'), ...args], {
+      encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, '.pm2') },
+    });
+    assert.equal(result.status, 1, result.stderr);
+    if (args.includes('--json')) assert.equal(JSON.parse(result.stdout).error, 'core_managed');
+    else assert.match(result.stderr, /bundled with Core/);
+    assert.equal(fs.readFileSync(metadata, 'utf8'), before);
+  }
+});
+
+test('component info refuses the Core-managed Dashboard before inspecting its files or service', t => {
+  const root = fixture(t); const metadata = path.join(root, '.zylos/components.json');
+  fs.mkdirSync(path.dirname(metadata), { recursive: true });
+  fs.writeFileSync(metadata, JSON.stringify({ dashboard: { version: '0.6.9' } }));
+  const before = fs.readFileSync(metadata, 'utf8');
+  const result = spawnSync(process.execPath, [path.join(packageRoot, 'cli/zylos.js'), 'info', 'dashboard', '--json'], {
+    encoding: 'utf8', timeout: 10_000,
+    env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, '.pm2') },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(JSON.parse(result.stdout).error, 'core_managed');
+  assert.equal(fs.readFileSync(metadata, 'utf8'), before);
+});
+
 test('upgrade all excludes a registered Core-managed Dashboard before checking components', t => {
   const root = fixture(t);
   fs.mkdirSync(path.join(root, '.zylos'));

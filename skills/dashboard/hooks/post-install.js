@@ -16,7 +16,6 @@ if (!fs.existsSync(configPath)) {
   const config = {
     port: 3470,
     host: '127.0.0.1',
-    ingestToken: null,
     auth: {
       enabled: true,
       password: hashPassword(plaintext)

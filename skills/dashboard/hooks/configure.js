@@ -15,8 +15,6 @@ const DEFAULT_CONFIG = {
 const KEY_MAP = {
   port: 'port',
   host: 'host',
-  ingest_token: 'ingestToken',
-  spool_max_bytes: 'spoolMaxBytes',
   auth_password: ['auth', 'password']
 };
 
@@ -71,9 +69,7 @@ try {
       const stripped = configKeyFromName(name);
       const mapped = KEY_MAP[stripped];
       if (mapped) {
-        const coerced = stripped === 'port' || stripped === 'spool_max_bytes'
-          ? Number(value)
-          : value;
+        const coerced = stripped === 'port' ? Number(value) : value;
         setNested(config, mapped, coerced);
       } else {
         config[stripped] = value;

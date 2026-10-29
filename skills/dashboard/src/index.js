@@ -1609,7 +1609,6 @@ if (isMain && process.argv.includes('--smoke')) {
     host: config.host,
     phase: 'phase2a',
     db: dbPath,
-    spoolDrained: 0,
     state: stateEngine.getState().state
   }, null, 2));
   store.close();

@@ -33,15 +33,9 @@ config:
     - name: DASHBOARD_HOST
       description: Dashboard bind address
       default: "127.0.0.1"
-    - name: DASHBOARD_INGEST_TOKEN
-      description: Optional bearer token for /api/ingest endpoint (defense-in-depth, not required — localhost restriction is the primary guard)
-      sensitive: true
     - name: DASHBOARD_AUTH_PASSWORD
       description: Dashboard login password (independent from Web Console; generated on first install and never printed)
       sensitive: true
-    - name: DASHBOARD_SPOOL_MAX_BYTES
-      description: Maximum spool file size before dropping events
-      default: "10485760"
 
 
 ---
