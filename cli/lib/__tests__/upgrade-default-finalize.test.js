@@ -458,14 +458,14 @@ for(const boundary of ['publication','manifest'])test(`resume reports an unnumbe
   assert.equal(f.calls.includes('start'),false);
 });
 
-for(const code of ['EACCES','SCHEMA_TOO_NEW'])test(`resume catch normalizes ${code} while preserving the failed transaction`,async t=>{
+for(const code of ['EACCES','SCHEMA_TOO_NEW'])test(`resume catch preserves ${code} while retaining the failed transaction`,async t=>{
   const f=fixture(t);
   await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});
   f.calls.length=0;
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},
     finalize(){throw Object.assign(Error('forward repair failed'),{code});}});
   assert.equal(result.ok,false);
-  assert.deepEqual(result.data.core.failedItems,[{id:'finalize',code:code==='SCHEMA_TOO_NEW'?code:'UPGRADE_FAILED',reason:'forward repair failed'}]);
+  assert.deepEqual(result.data.core.failedItems,[{id:'finalize',code,reason:'forward repair failed'}]);
   assert.deepEqual(result.data.dashboard,{state:'degraded',errors:[]});
   assert.equal(f.load().lastError,'forward repair failed');
   assert.equal(Object.hasOwn(f.load(),'error'),false);
@@ -583,14 +583,14 @@ test('default resume rejects declared corrupt material with no regeneration fall
     return staged;
   } });
   assert.equal(result.success, false);
-  assert.equal(result.code, 'UPGRADE_FAILED');
+  assert.equal(result.code, 'material_corrupt');
   assert.equal(f.load().phase, 'recovery_required');
   assert.equal(f.read('CLAUDE.md'), 'old Claude output');
   const before = fs.readFileSync(path.join(f.root, '.claude/settings.json'));
   const repaired = await f.resume({ prepareRuntime() { throw Error('must never regenerate'); },
     migrateDatabases() { throw Error('must never migrate'); } });
   assert.equal(repaired.success, false);
-  assert.equal(repaired.code, 'UPGRADE_FAILED');
+  assert.equal(repaired.code, 'material_corrupt');
   assert.deepEqual(fs.readFileSync(path.join(f.root, '.claude/settings.json')), before);
   assert.equal(f.calls.includes('start'), false);
   assertDataPreserved(f);

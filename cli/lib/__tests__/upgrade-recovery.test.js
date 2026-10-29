@@ -329,12 +329,14 @@ for(const entry of ['runner','controller'])test(`${entry} compensation refusal p
  assert.equal(f.calls.includes('start'),false);
 });
 
-for(const code of ['EACCES','MODULE_NOT_FOUND','ERR_UNKNOWN','SQLITE_BUSY','SCHEMA_TOO_NEW'])test(`recovery controller normalizes ${code} during transaction read`,async t=>{
+for(const code of ['EACCES','MODULE_NOT_FOUND','ERR_UNKNOWN','SQLITE_BUSY','SCHEMA_TOO_NEW'])test(`recovery controller preserves the recovery result shape during ${code} transaction read`,async t=>{
  const f=await fixture(t);
  const result=recovery({maintenance:{...f.m,transaction(){throw Object.assign(Error('recovery journal read failed'),{code});}},journal:f.j,transactionDir:f.dir,transactionId:'tx'});
  assert.equal(result.recovery_required,true);
- assert.equal(result.code,code==='SCHEMA_TOO_NEW'?code:'UPGRADE_FAILED');
+ assert.equal(Object.hasOwn(result,'code'),false);
  assert.equal(result.error,'recovery journal read failed');
+ assert.equal(result.attempted,false);
+ assert.equal(result.completed,false);
  assert.deepEqual(f.calls,[]);
 });
 

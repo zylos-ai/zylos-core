@@ -104,7 +104,7 @@ export async function runUpgradeEntry(input, deps = {}) {
     const result = await (deps.finalize ?? finalizeTarget)(ctx);
     if (result.success === false) {
       const rollback = (deps.recover ?? recovery)(ctx);
-      return {...result, code:upgradeFailureCode(result), error:upgradeFailureMessage({message:result.error}),
+      return {...result, code:upgradeFailureCode(result), error:upgradeFailureMessage({message:result.error || 'Upgrade finalization failed.'}),
         rollback:{...rollback, performed:rollback.attempted}, recovery_required:rollback.recovery_required};
     }
     ctx.releaseControl?.();

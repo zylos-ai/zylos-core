@@ -11,6 +11,7 @@ const upgradeErrorCodes = new Set([
   'SNAPSHOT_FAILED', 'NOT_RESUMABLE', 'CUTOFF_UNTRUSTED', 'CUTOFF_WRITE_UNCERTAIN', 'FINALIZE_INCOMPLETE',
   'CONFIG_LOCK_TIMEOUT', 'CONFIG_UNREADABLE', 'CONFIG_WRITE_FAILED', 'CONFIG_KEY_RESERVED',
   'LOCK_TIMEOUT', 'DB_BUSY',
+  'material_corrupt', 'runtime_config_conflict', 'codex_config_unparseable', 'codex_config_reconcile_failed',
 ]);
 
 export function upgradeFailureCode(error) {

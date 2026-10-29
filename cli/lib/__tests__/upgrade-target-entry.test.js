@@ -180,13 +180,55 @@ test('downloaded executable keeps malformed JSON classified as invalid handoff',
   assert.deepEqual(result.persisted,[]);
 });
 
-for(const code of [undefined,'','ENOENT','EACCES','EIO','MODULE_NOT_FOUND','ERR_MODULE_NOT_FOUND','SQLITE_ERROR','UNREGISTERED_FAILURE','SCHEMA_TOO_NEW','SCHEMA_MIGRATION_FAILED','SETTINGS_UNREADABLE']) test(`entry permits only registered protocol codes: ${code}`,async t=>{
+test('downloaded executable redacts paths from its main-block failure', t => {
+  const input=fixture(t);
+  input.tempDir=path.join(path.dirname(input.tempDir),'missing-target');
+  const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:JSON.stringify(input),encoding:'utf8'});
+  assert.equal(child.status,1,child.stderr);
+  const result=JSON.parse(child.stdout);
+  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.deepEqual(result.persisted,[]);
+  assert.doesNotMatch(result.error,new RegExp(input.tempDir.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  assert.doesNotMatch(result.error,/\n| at /);
+});
+
+const registeredProtocolCodes = [
+  'ZYLOS_NOT_INITIALIZED', 'INVALID_ARGS', 'UPGRADE_RECOVERY_REQUIRED',
+  'DASHBOARD_STILL_INSTALLED', 'INVALID_CORE_DEPENDENCIES', 'DASHBOARD_TAKEOVER_INVALID',
+  'RUNTIME_PREPARATION_INCOMPLETE', 'UPGRADE_FAILED', 'SCHEMA_TOO_NEW', 'SCHEMA_MIGRATION_FAILED',
+  'SETTINGS_UNREADABLE', 'UPGRADE_SOURCE_TOO_OLD', 'INVALID_UPGRADE_HANDOFF', 'MANUAL_RECOVERY_REQUIRED',
+  'SNAPSHOT_FAILED', 'NOT_RESUMABLE', 'CUTOFF_UNTRUSTED', 'CUTOFF_WRITE_UNCERTAIN', 'FINALIZE_INCOMPLETE',
+  'CONFIG_LOCK_TIMEOUT', 'CONFIG_UNREADABLE', 'CONFIG_WRITE_FAILED', 'CONFIG_KEY_RESERVED',
+  'LOCK_TIMEOUT', 'DB_BUSY',
+  'material_corrupt', 'runtime_config_conflict', 'codex_config_unparseable', 'codex_config_reconcile_failed',
+];
+
+for(const code of registeredProtocolCodes) test(`entry preserves registered protocol code: ${code}`,async t=>{
   const input=fixture(t),f=pipeline(input);
   f.deps.inspect=()=>{throw Object.assign(Error('precheck failed'),{code});};
   const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,['SCHEMA_TOO_NEW','SCHEMA_MIGRATION_FAILED','SETTINGS_UNREADABLE'].includes(code)?code:'UPGRADE_FAILED');
+  assert.equal(result.code,code);
   assert.deepEqual(result.persisted,[]);
   assert.deepEqual(f.calls,[]);
+});
+
+for(const code of [undefined,'','ENOENT','EACCES','EIO','MODULE_NOT_FOUND','ERR_MODULE_NOT_FOUND','SQLITE_ERROR','UNREGISTERED_FAILURE']) test(`entry normalizes unregistered failure code: ${code}`,async t=>{
+  const input=fixture(t),f=pipeline(input);
+  f.deps.inspect=()=>{throw Object.assign(Error('precheck failed'),{code});};
+  const result=await runUpgradeEntry(input,f.deps);
+  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.deepEqual(result.persisted,[]);
+  assert.deepEqual(f.calls,[]);
+});
+
+test('target entry catch redacts absolute failure paths',async t=>{
+  const input=fixture(t),f=pipeline(input);
+  f.deps.inspect=()=>{throw Object.assign(Error(`Cannot read '${path.join(input.tempDir,'private.json')}'\nRequire stack: ${path.join(input.installedRoot,'source.js')}`),{code:'EACCES'});};
+  const result=await runUpgradeEntry(input,f.deps);
+  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.deepEqual(result.persisted,[]);
+  assert.doesNotMatch(result.error,new RegExp(path.dirname(input.tempDir).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  assert.doesNotMatch(result.error,/Require stack/);
 });
 
 for (const code of ['EACCES','MODULE_NOT_FOUND','ERR_INVALID_ARG_TYPE','SQLITE_BUSY','SCHEMA_TOO_NEW']) test(`returned finalizer failure uses a registered protocol code: ${code}`, async t => {
@@ -197,6 +239,17 @@ for (const code of ['EACCES','MODULE_NOT_FOUND','ERR_INVALID_ARG_TYPE','SQLITE_B
   assert.equal(result.failedStep,4);
   assert.equal(result.rollback.completed,true);
   assert.equal(result.error,"Finalizer cannot read '<path>'");
+  assert.deepEqual(f.calls,['begin','savePackage','saveCode','prepare','install','recover']);
+});
+
+for (const error of ['', undefined]) test(`returned finalizer failure uses a readable default for ${error === '' ? 'empty' : 'missing'} error text`, async t => {
+  const input=fixture(t), f=pipeline(input);
+  f.deps.finalize=()=>({success:false,code:'EACCES',error,failedStep:4,steps:[]});
+  const result=await runUpgradeEntry(input,f.deps);
+  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.equal(result.error,'Upgrade finalization failed.');
+  assert.equal(result.rollback.completed,true);
+  assert.equal(result.rollback.performed,true);
   assert.deepEqual(f.calls,['begin','savePackage','saveCode','prepare','install','recover']);
 });
 

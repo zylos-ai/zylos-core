@@ -56,6 +56,26 @@ test('thin entry refuses recovery failure before checking or downloading updates
   assert.equal(checked, false);
 });
 
+test('thin entry normalizes and redacts recovery exceptions before checking or downloading', async t => {
+  const {upgradeSelfCore} = await import('../../commands/component.js');
+  const root=fixture(t), output=[];
+  let checked=false, downloaded=false;
+  assert.equal(await upgradeSelfCore({skipConfirm:true,jsonOutput:true}, {
+    zylosDir:root,
+    recoverBeforeUpgrade() {throw Object.assign(Error(`Cannot load '${path.join(root,'private/recovery.js')}'\nRequire stack: ${path.join(root,'private/source.js')}`), {code:'EACCES'});},
+    checkForCoreUpdates() {checked=true; return {success:true,hasUpdate:true};},
+    downloadCoreToTemp() {downloaded=true; return {success:true,tempDir:root};},
+    console:{log(value){output.push(JSON.parse(value));}},
+  }), false);
+  assert.equal(checked,false);
+  assert.equal(downloaded,false);
+  assert.equal(output[0].code,'UPGRADE_FAILED');
+  assert.deepEqual(output[0].persisted,[]);
+  assert.equal(output[0].recovery_required,false);
+  assert.doesNotMatch(output[0].error,new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  assert.doesNotMatch(output[0].error,/Require stack/);
+});
+
 test('actual preinstall rejects legacy upgrades and allows fresh/new upgrades without target dependencies', t => {
   const root = fixture(t), script = path.resolve('scripts/preinstall.js');
   const env = { ...process.env, HOME: root, PM2_HOME: path.join(root, '.pm2') };
@@ -98,6 +118,20 @@ test('thin entry forwards handoff, preserves environment and has no whole-comman
   } }), 37);
   fs.unlinkSync(path.join(root, 'cli/lib/upgrade-entry.js'));
   assert.throws(() => runDownloadedUpgrade(handoff, { spawn() { assert.fail('incomplete package executed'); } }), {message:'Incomplete target package: cli/lib/upgrade-entry.js'});
+});
+
+test('thin entry rejects a package member beneath a non-directory parent', async t => {
+  const {runDownloadedUpgrade}=await import('../../commands/component.js');
+  const root=fixture(t);
+  fs.writeFileSync(path.join(root,'package.json'),'{}');
+  fs.writeFileSync(path.join(root,'cli'),'not a directory');
+  const handoff={schemaVersion:1,fromVersion:'0.9.3',tempDir:root,installedRoot:'/installed',zylosDir:'/private'};
+  assert.throws(()=>runDownloadedUpgrade(handoff,{spawn(){assert.fail('incomplete package executed');}}),error=>{
+    assert.equal(error.message,'Incomplete target package: cli/lib/upgrade-entry.js');
+    assert.doesNotMatch(error.message,new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+    assert.doesNotMatch(error.message,/ENOENT|ENOTDIR/);
+    return true;
+  });
 });
 
 for (const phase of ['check-throw','check-result','download-throw','download-result','package-check']) test(`thin entry reports pretransaction ${phase} failure`,async t=>{
