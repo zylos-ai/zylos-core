@@ -77,6 +77,38 @@ test('restart status keeps old-run completion separate from current Origin readi
   });
 });
 
+test('Core state enforces readiness, freshness and runtime-specific account usage', async t => {
+  const calls = [];
+  let observation = {
+    identity: { present: true, ready: true, runId: 'R-codex', sessionId: 'S-codex', runtime: 'codex' },
+    status: { valid: true, reason: null, sampledAt: Date.now(), value: { state: 'idle' } },
+    usage: { valid: false, reason: 'missing' },
+  };
+  t.mock.module(new URL('../../../cli/lib/config.js', import.meta.url).href, { exports: {
+    readSessionMode: () => ({ mode: 'multi', keyPresent: true }),
+  } });
+  t.mock.module(new URL('../../../cli/lib/session-state-reader.js', import.meta.url).href, { exports: {
+    readSessionState: async (group, options) => { calls.push({ type: 'state', group, options }); return structuredClone(observation); },
+    readLiveIdentity: async () => structuredClone(observation.identity),
+    readAccountUsage: async runtime => {
+      calls.push({ type: 'account', runtime });
+      return runtime === 'codex' ? { five_hour: { used_percentage: 23 } } : { five_hour: { used_percentage: 91 } };
+    },
+  } });
+  t.mock.module(new URL('../../../cli/lib/session-group-paths.js', import.meta.url).href, { exports: {
+    listGroupTmuxSessions: async () => [{ sessionGroup: 'origin' }],
+  } });
+  const { CoreState } = await import(`../src/lib/core-state.js?contracts=${Date.now()}`);
+  const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR });
+  const state = await core.refresh();
+  assert.deepEqual(calls.find(call => call.type === 'state'), { type: 'state', group: 'origin', options: { freshnessMs: 5000 } });
+  assert.deepEqual(calls.find(call => call.type === 'account'), { type: 'account', runtime: 'codex' });
+  assert.equal(core.accountUsage.five_hour.used_percentage, 23);
+  assert.equal(state.state, 'IDLE');
+  observation = { ...observation, identity: { ...observation.identity, ready: false } };
+  await assert.rejects(core.currentTarget(), error => error.code === 'target_unavailable');
+});
+
 test('runtime action reads a result returned after ten seconds and restarts Dashboard only for a saved baseline', { timeout: 25000 }, async t => {
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR, 'dashboard-actions-'));
   const zylosDir = path.join(root, 'zylos');
