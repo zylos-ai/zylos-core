@@ -98,3 +98,47 @@ test('Dashboard provisioning failure warns but continues real init Core service 
     if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
   }
 });
+
+test('component upgrade refuses the Core-managed Dashboard at the CLI entry', t => {
+  const root = fixture(t);
+  const result = spawnSync(process.execPath, [path.join(packageRoot, 'cli/zylos.js'), 'upgrade', 'dashboard', '--check', '--json', '--upstream-config', 'direct'], {
+    encoding: 'utf8', timeout: 10_000,
+    env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, '.pm2') },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(JSON.parse(result.stdout).error, 'core_managed');
+});
+
+test('upgrade all excludes a registered Core-managed Dashboard before checking components', t => {
+  const root = fixture(t);
+  fs.mkdirSync(path.join(root, '.zylos'));
+  fs.writeFileSync(path.join(root, '.zylos/components.json'), JSON.stringify({ dashboard: { version: '0.6.9' } }));
+  const result = spawnSync(process.execPath, [path.join(packageRoot, 'cli/zylos.js'), 'upgrade', '--all', '--check', '--json', '--upstream-config', 'direct'], {
+    encoding: 'utf8', timeout: 10_000,
+    env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, '.pm2') },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.action, 'check_all');
+  assert.deepEqual(output.components, []);
+});
+
+test('PM2 template reserves the Dashboard service name against registered components', t => {
+  const root = fixture(t);
+  const skillDir = path.join(root, '.claude/skills/fixture');
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.mkdirSync(path.join(root, '.zylos'));
+  fs.writeFileSync(path.join(root, '.zylos/components.json'), JSON.stringify({ fixture: { skillDir } }));
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nservice:\n  name: zylos-dashboard\n  entry: collision.js\n---\n');
+  const template = path.join(packageRoot, 'templates/pm2/ecosystem.config.cjs');
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e',
+    'const {default: config} = await import(process.argv[1]); process.stdout.write(JSON.stringify(config.apps));', template], {
+    encoding: 'utf8', timeout: 10_000,
+    env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, '.pm2'), PATH: '' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const dashboards = JSON.parse(result.stdout).filter(app => app.name === 'zylos-dashboard');
+  assert.equal(dashboards.length, 1);
+  assert.equal(dashboards[0].script, path.join(root, '.claude/skills/dashboard/src/index.js'));
+  assert.match(result.stderr, /conflicts with existing service/);
+});

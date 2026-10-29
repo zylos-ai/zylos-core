@@ -217,3 +217,26 @@ test('polling reads every two seconds and clears account usage when the next rea
   t.mock.timers.tick(2000);
   assert.equal(calls, 2, 'stop removes the polling timer');
 });
+
+test('unchanged sample values remain distinct across runtime, run and session identities', async () => {
+  const rows = [];
+  const identity = { runtime: 'claude', runId: 'run-one', sessionId: 'session-one' };
+  const usage = { valid: true, sampledAt: 1000, value: { context_window: { used_percentage: 35 } } };
+  const collector = new StatuslineCollector({ insertMetric: row => rows.push(row), upsertSourceHealth() {} }, {}, {
+    read: async () => ({ identity: { ...identity }, usage }),
+  });
+  assert.equal((await collector.collect()).written, 1);
+  assert.equal((await collector.collect()).written, 0);
+  identity.runId = 'run-two';
+  assert.equal((await collector.collect()).written, 1);
+  identity.sessionId = 'session-two';
+  assert.equal((await collector.collect()).written, 1);
+  identity.runtime = 'codex';
+  assert.equal((await collector.collect()).written, 1);
+  assert.deepEqual(rows.map(row => [row.runtime, row.dimensions.run_id, row.session_id]), [
+    ['claude', 'run-one', 'session-one'], ['claude', 'run-two', 'session-one'],
+    ['claude', 'run-two', 'session-two'], ['codex', 'run-two', 'session-two'],
+  ]);
+  assert.equal((await collector.collect()).written, 0);
+  await collector.stop();
+});

@@ -71,8 +71,9 @@ if (testFiles.length === 0) {
 
 console.log(`Running ${testFiles.length} Node test files`);
 const environment = createTestEnvironment();
+const tmpdir = path.join(environment.root, 'tmp');
+let failed = true;
 try {
-  const tmpdir = path.join(environment.root, 'tmp');
   fs.mkdirSync(tmpdir);
   const env = { ...process.env, TMPDIR: tmpdir };
   // Runtime identity belongs to each fixture, never the agent running tests.
@@ -81,6 +82,8 @@ try {
     stdio: 'inherit', cwd: ROOT, env,
   });
   process.exitCode = result.status ?? 1;
+  failed = process.exitCode !== 0;
 } finally {
-  environment.cleanup();
+  environment.cleanup({ preserveTmp: failed });
+  if (failed) console.error(`Test temporary files retained at ${tmpdir}`);
 }

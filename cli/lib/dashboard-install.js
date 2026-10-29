@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { inspectCaddyRouteMarkers } from './caddy.js';
 import { readConfigStrict } from './config-store.js';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -13,25 +12,12 @@ function locations(root) {
   const data = path.join(root, 'components/dashboard');
   return { code, data, db: path.join(data, 'dashboard.db'), config: path.join(data, 'config.json'), ecosystem: path.join(root, 'pm2/ecosystem.config.cjs') };
 }
-function settings(root, { readRoute = true } = {}) {
+function settings(root) {
   const loc = locations(root);
   const config = fs.existsSync(loc.config) ? JSON.parse(fs.readFileSync(loc.config, 'utf8')) : {};
   const port = config.port ?? 3470;
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid Dashboard port');
-  let prefix = config.pathPrefix ?? config.basePath ?? '/dashboard';
-  const caddyfile = path.join(root, 'http/Caddyfile');
-  if (readRoute && fs.existsSync(caddyfile)) {
-    const markers = inspectCaddyRouteMarkers(fs.readFileSync(caddyfile, 'utf8'), 'dashboard');
-    if (!markers.success) throw Error(markers.error);
-    const prefixes = markers.blocks.flatMap(block => block.lines.flatMap(line => {
-      const match = line.match(/^\s*uri strip_prefix (\S+)\s*$/);
-      return match ? [match[1]] : [];
-    }));
-    if (new Set(prefixes).size > 1) throw Error('Conflicting Dashboard route prefixes');
-    if (prefixes.length) prefix = prefixes[0];
-  }
-  if (!/^\/[A-Za-z0-9_/-]+$/.test(prefix) || prefix.includes('//') || prefix.includes('/..')) throw Error('Invalid Dashboard route prefix');
-  return { ...loc, configValue: config, port, prefix: prefix.replace(/\/$/, '') };
+  return { ...loc, configValue: config, port };
 }
 function run(command, args, root, timeout = 30000) {
   return execFileSync(command, args, { encoding: 'utf8', timeout, stdio: ['ignore','pipe','pipe'], env: { ...process.env, ZYLOS_DIR: root } });
@@ -85,11 +71,11 @@ export function applyDashboardRegistration({ zylosDir }) {
 
 export function applyDashboardRoute({ zylosDir }) {
   try {
-    const { prefix, port } = settings(zylosDir);
+    const { port } = settings(zylosDir);
     // A fresh process binds the existing Caddy helper to the requested instance.
     const moduleUrl = pathToFileURL(path.join(packageRoot, 'cli/lib/caddy.js')).href;
     const script = `const {applyCaddyRoutes}=await import(process.argv[1]); process.stdout.write(JSON.stringify(applyCaddyRoutes('dashboard',JSON.parse(process.argv[2]))));`;
-    const routes = [{ path: `${prefix}/*`, type: 'reverse_proxy', target: `127.0.0.1:${port}`, strip_prefix: prefix }];
+    const routes = [{ path: '/dashboard/*', type: 'reverse_proxy', target: `127.0.0.1:${port}`, strip_prefix: '/dashboard' }];
     const result = JSON.parse(run(process.execPath, ['--input-type=module','-e',script,moduleUrl,JSON.stringify(routes)], zylosDir));
     return result.success ? { state: 'done' } : { state: 'failed', error: { code: 'route_failed', message: result.error || result.action } };
   } catch (error) { return { state: 'failed', error: { code: 'route_failed', message: error.message } }; }
@@ -125,7 +111,7 @@ export async function verifyDashboard({ zylosDir }) {
     errors.push({ item, code, location });
   };
   let loc;
-  try { loc = settings(zylosDir, { readRoute: false }); }
+  try { loc = settings(zylosDir); }
   catch { return { state: 'degraded', checks: { health: false }, errors: [{ item: 'health', code: 'health_failed', location: locations(zylosDir).config }] }; }
   const localUrl = `http://127.0.0.1:${loc.port}/api/health`;
   let observedFailure = false;
@@ -150,9 +136,7 @@ export async function verifyDashboard({ zylosDir }) {
       // Match the Core Caddyfile generator's explicit-port rule.
       const publicBase = new URL(`${port != null ? 'http' : protocol}://${domain}${port != null ? ':' + port : ''}`);
       if (publicBase.username || publicBase.password || publicBase.pathname !== '/' || publicBase.search || publicBase.hash) throw Error('Invalid public URL');
-      // Resolve the existing route prefix exactly as route installation does.
-      const { prefix } = settings(zylosDir);
-      routeLocation = new URL(prefix + '/api/health', publicBase).href;
+      routeLocation = new URL('/dashboard/api/health', publicBase).href;
       await health(routeLocation);
       checks.route = true;
     }

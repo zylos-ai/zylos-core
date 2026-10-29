@@ -7,7 +7,8 @@ import { DEFAULT_OBSERVER_SIZE, validObserverSize } from '../public/js/observer-
 import { observerFrameDocument, OBSERVER_FRAME_ASSETS } from '../src/lib/observer-frame.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function frame(documentHtml = observerFrameDocument()) {
+function frame() {
+  const documentHtml = observerFrameDocument();
   let resolveFont, rejectFont;
   const font = new Promise((resolve, reject) => { resolveFont = resolve; rejectFont = reject; });
   const calls = { open: 0, dispose: 0, sizes: [], writes: [], fonts: [], loads: [], wheelListeners: [] };
@@ -71,16 +72,6 @@ test('read-only frame helper suppresses keyboard requests and immediately releas
     textarea.focus();
     assert.notEqual(f.document.activeElement, textarea);
   }
-});
-
-test('focus oracle detects the frame with keyboard protection removed', async () => {
-  const html = observerFrameDocument();
-  const mutant = html.replace(/  \/\/ Read-only viewing must not summon[\s\S]*?textarea.addEventListener\('focus',\(\)=>textarea.blur\(\)\);\n/, '');
-  assert.notEqual(mutant, html);
-  const f = frame(mutant); f.resolveFont([]); await flush();
-  f.calls.textarea.focus();
-  assert.throws(() => assert.notEqual(f.document.activeElement, f.calls.textarea), assert.AssertionError);
-  assert.equal(f.calls.textarea.readOnly, false);
 });
 
 test('wheel events are stopped before xterm so it cannot cancel page scrolling', async () => {

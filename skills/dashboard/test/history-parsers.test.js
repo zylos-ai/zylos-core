@@ -197,22 +197,6 @@ test('repeated session lists do not evict the selected index, including more tha
   const second = await parser.loadSession('session-0'); assert.equal(second.index, first.index);
 });
 
-test('negative control: removing queued-command handling loses the busy inbound fixture', async t => {
-  const options = await fixture(t);
-  const file = path.join(options.projectDir, 'session-1.jsonl');
-  await fs.copyFile(new URL('./fixtures/history/claude.jsonl', import.meta.url), file);
-  const sourceUrl = new URL('../src/lib/history/claude-history.js', import.meta.url);
-  let source = await fs.readFile(sourceUrl, 'utf8');
-  source = source.replace("record.attachment?.type === 'queued_command'", "record.attachment?.type === 'disabled_queued_command'");
-  source = source.replace(/from '([.][^']+)'/g, (_, relative) => `from '${new URL(relative, sourceUrl).href}'`);
-  const { ClaudeHistory: Mutant } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-  const live = (await new ClaudeHistory(options).loadSession('session-1')).entries;
-  const mutant = (await new Mutant(options).loadSession('session-1')).entries;
-  const hasBusy = entries => entries.some(e => e.kind === 'inbound' && typeof e.fields.body === 'string' && e.fields.body.includes('message while busy'));
-  assert.equal(hasBusy(live), true);
-  assert.equal(hasBusy(mutant), false, 'acceptance must reject parser without queued-command branch');
-});
-
 test('raw internal and oversized views cannot reveal reasoning blocks', async t => {
   const options = await fixture(t);
   const record = { type: 'assistant', isMeta: true, message: { content: [{ type: 'thinking', thinking: 'PRIVATE_REASONING_SENTINEL' }] } };

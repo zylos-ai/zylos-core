@@ -364,7 +364,7 @@ test('long preceding steps do not suppress Dashboard restore or verification',as
   assert.deepEqual(calls.filter(x=>['restore','health'].includes(x)),['restore','health']);
 });
 
-test('empty Core running set still publishes the protected ecosystem before Dashboard registration',t=>{
+test('Dashboard completion preserves the ecosystem creation intent with no Core services running',async t=>{
  const ctx=fixture(t),root=ctx.zylosDir;
  const packageRoot=path.join(root,'package'),template=path.join(packageRoot,'templates/pm2/ecosystem.config.cjs');
  fs.mkdirSync(path.dirname(template),{recursive:true});fs.writeFileSync(path.join(packageRoot,'package.json'),JSON.stringify({version:'new'}));
@@ -373,13 +373,23 @@ test('empty Core running set still publishes the protected ecosystem before Dash
  ctx.packageRoot=packageRoot;
  ctx.maintenance=maintenance;
  ctx.journal.initialIdentity={ecosystemHash:null};
+ ctx.firstDashboardTakeover=true;
+ ctx.journal.dashboardInstall={items:Object.fromEntries(['registration','route'].map(item=>[item,{state:'pending',attempts:0,lastError:null}]))};
  fs.mkdirSync(ctx.transactionDir);fs.writeFileSync(path.join(ctx.transactionDir,'journal.json'),JSON.stringify(ctx.journal));
  const options={zylosDir:root,ecosystemPath:target,execSync:()=>assert.fail('no Core processes should start')};
- {const result=step11_startCoreServices(ctx,options);assert.equal(result.status,'skipped',JSON.stringify(result));}
+ const result=await completeUpgradeFinalization(ctx,deps([], {
+   startServices:coreCtx=>step11_startCoreServices(coreCtx,options),
+   dashboardOwner:{applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:'done'}),verifyDashboard:()=>({state:'ready',errors:[]})}
+ }));
+ assert.equal(result.success,true);
+ assert.equal(result.completion.dashboard,'ready');
  assert.equal(fs.readFileSync(target,'utf8'),bytes);
  const journal=JSON.parse(fs.readFileSync(path.join(ctx.transactionDir,'journal.json')));
  assert.equal(journal.ecosystemCreationIntent.originalMissing,true);
  assert.equal(journal.ecosystemCreationIntent.target,target);
+ assert.equal(journal.ecosystemCreationIntent.intendedHash,maintenance.hash(template));
+ assert.equal(journal.dashboardInstall.items.registration.state,'done');
+ assert.equal(journal.dashboardInstall.items.route.state,'done');
  {const result=step11_startCoreServices(ctx,options);assert.equal(result.status,'skipped',JSON.stringify(result));}
  assert.equal(fs.readFileSync(target,'utf8'),bytes);
 });

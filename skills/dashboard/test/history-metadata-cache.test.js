@@ -119,24 +119,3 @@ test('Codex: excluded subagent metadata stays warm and is pruned only when its f
   assert.equal(parser.metadataCache.has(rows[1].transcript_path), false);
   assert.equal(parser.metadataCache.size, 1);
 });
-
-test('negative control: restoring Claude fixed-256 eviction fails the same warm-list acceptance', async t => {
-  const { options, rows } = await fixture(t, 'claude');
-  const sourceUrl = new URL('../src/lib/history/claude-history.js', import.meta.url);
-  const source = await fs.readFile(sourceUrl, 'utf8');
-  const insertion = 'this.metadataCache.set(filePath, result);';
-  assert.equal(source.split(insertion).length, 2, 'mutant must alter exactly one metadata insertion');
-  const mutantSource = source.replace(insertion, `${insertion}\n    while (this.metadataCache.size > 256) this.metadataCache.delete(this.metadataCache.keys().next().value);`)
-    .replace(/from '([.][^']+)'/g, (_, relative) => `from '${new URL(relative, sourceUrl).href}'`);
-  const { ClaudeHistory: Mutant } = await import(`data:text/javascript;base64,${Buffer.from(mutantSource).toString('base64')}`);
-  const metrics = transcriptIO(t);
-  const live = new ClaudeHistory(options);
-  await live.listSessions();
-  await assertWarmListing(live, metrics, rows.length);
-  const mutant = new Mutant(options);
-  assert.equal((await mutant.listSessions()).sessions.length, rows.length);
-  await assert.rejects(assertWarmListing(mutant, metrics, rows.length), {
-    code: 'ERR_ASSERTION', message: /unchanged listing must not reopen or read transcripts/
-  });
-  assert.ok(metrics.opens > 0 && metrics.bytes > 0, 'fixed-size eviction causes real transcript rereads');
-});

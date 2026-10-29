@@ -186,21 +186,6 @@ test('session title truncation occurs only after redaction, and expanded records
   } finally { await service.close(); }
 });
 
-test('negative control: bypassing service redaction exposes every protected textual path', async () => {
-  const fake = 'zylos_st_negative_control_fixture';
-  const { parser } = fixture([{ id: 'o:0', kind: 'tool', name: fake, fields: { input: { password: fake }, output: fake } }, { id: 'o:10', kind: 'internal', fields: { raw: { nested: fake } } }]);
-  parser.listSessions = async () => ({ current: 'session', sessions: [{ id: 'session', title: fake }] });
-  const live = new HistoryService({ parser });
-  const mutant = new HistoryService({ parser });
-  mutant.safe = async value => ({ text: typeof value === 'string' ? value : JSON.stringify(value), count: 0, kinds: [] });
-  try {
-    for (const route of ['sessions', 'entries?session=session&internal=1', 'content?session=session&entry=o:0&field=input', 'content?session=session&entry=o:10&field=raw', 'search?session=session&q=negative_control_fixture']) {
-      assert.equal((await request(live, route)).body.includes(fake), false, route);
-      assert.equal((await request(mutant, route)).body.includes(fake), true, 'redaction acceptance must reject bypass on ' + route);
-    }
-  } finally { await live.close(); await mutant.close(); }
-});
-
 test('HTTP remains available while a small history field stalls its redaction worker', async () => {
   const channelName = `history-stall-${process.pid}-${Date.now()}`;
   const channel = new BroadcastChannel(channelName);

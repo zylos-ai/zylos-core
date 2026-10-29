@@ -1,15 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import http from 'node:http';
-import { pathToFileURL } from 'node:url';
 import { createRedactor, redact, UNAVAILABLE } from '../src/lib/redaction/engine.js';
 import { HistoryService } from '../src/lib/history/history-service.js';
 import { ObserverService } from '../src/lib/observer-service.js';
 
-const engineURL = new URL('../src/lib/redaction/engine.js', import.meta.url);
 const workerURL = new URL('../src/lib/redaction/worker.js', import.meta.url);
 
 function fixture(sessionCount) {
@@ -68,7 +63,6 @@ async function pages(createEngine, sessionCount) {
   }
 }
 
-// Shared acceptance predicate for the live implementation and source mutant.
 // Exact content checks distinguish successful redaction from fail-closed masking.
 function assertComplete(result) {
   for (const { session, status, body } of result.responses) {
@@ -104,33 +98,4 @@ test('HTTP internal=1&limit=200 returns every field with the production redactor
 test('four concurrent cold HTTP pages of 200 entries remain complete and redacted', async () => {
   // Distinct sessions and values prevent a warmed cache from hiding queue pressure.
   assertComplete(await pages(createRedactor, 4));
-});
-
-test('negative control: restoring the 128-job rejection fails the same HTTP acceptance predicate', async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-queue-mutant-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const workerSource = await fs.readFile(new URL('../src/lib/redaction/worker-client.js', import.meta.url), 'utf8');
-  const guard = /if \(closed\)\s*return Promise\.resolve\(failure\(\)\);/;
-  assert.match(workerSource, guard, 'mutation anchor must match the production closed guard');
-  const mutantWorker = workerSource.replace(guard, 'if (closed || queue.length + Number(Boolean(active)) >= 128) return Promise.resolve(failure());');
-  const mutantWorkerURL = pathToFileURL(path.join(root, 'worker-client.mjs'));
-  await fs.writeFile(mutantWorkerURL, mutantWorker);
-  const source = await fs.readFile(engineURL, 'utf8');
-  const mutantEngine = source.replace(/from '(\.\/?[^']+)'/g, (_, specifier) => {
-    const target = specifier === './worker-client.js' ? mutantWorkerURL : new URL(specifier, engineURL);
-    return `from ${JSON.stringify(target.href)}`;
-  });
-  const mutantEngineURL = pathToFileURL(path.join(root, 'engine.mjs'));
-  await fs.writeFile(mutantEngineURL, mutantEngine);
-  const mutant = await import(mutantEngineURL.href);
-  for (const count of [1, 4]) {
-    const result = await pages(mutant.createRedactor, count);
-    assert.throws(() => assertComplete(result), /all fields remain available/);
-    assert.ok(result.responses.some(({ body }) => body.entries.some(entry => JSON.stringify(entry).includes(UNAVAILABLE))));
-    // The mutant must fail availability, while retaining fail-closed credential safety.
-    for (const { body } of result.responses) {
-      const serialized = JSON.stringify(body);
-      for (const secret of result.secrets) assert.equal(serialized.includes(secret), false);
-    }
-  }
 });

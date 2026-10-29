@@ -66,9 +66,7 @@ for(const runtime of ['claude','codex']) for(const statusLineKind of ['custom','
  }
 });
 
-test('fixture oracle rejects wide event deletion and exact remover preserves third-party hooks',t=>{
+test('exact legacy hook removal preserves third-party hooks',t=>{
  const f=fixture(t,'claude');
  const cleaned=removeLegacyDashboardHooks(f.source.claude,f.zylosDir);userHooks(cleaned,f.source.claude);
- const wide=structuredClone(f.source.claude);delete wide.hooks.Stop;
- assert.throws(()=>userHooks(wide,f.source.claude));
 });

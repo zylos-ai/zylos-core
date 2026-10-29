@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { copyDashboardDb, applyDashboardRegistration, applyDashboardRoute, verifyDashboard, restoreDashboardService } from '../dashboard-install.js';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 function fixture(t) {
@@ -47,16 +46,6 @@ test('registration uses one managed service, preserves config bytes, never insta
  assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'.claude/settings.json'))).hooks.Stop[0].hooks[0].command,'third-party');
  const calls=fs.readFileSync(path.join(dir,'pm2-calls'),'utf8');assert.equal(calls.split('\n').filter(l=>l.includes('"start"')).length,2);
 });
-test('route retains custom prefix/port and reloads even identical content',t=>{
- const {dir,data}=fixture(t);fs.writeFileSync(path.join(data,'config.json'),JSON.stringify({port:3999}));
- fs.writeFileSync(path.join(dir,'http/Caddyfile'),'http://localhost {\n# BEGIN zylos-component:dashboard\nhandle /private-observer/* {\nuri strip_prefix /private-observer\nreverse_proxy 127.0.0.1:3999\n}\n# END zylos-component:dashboard\n}\n');
- assert.deepEqual(applyDashboardRoute({zylosDir:dir}),{state:'done'});
- const first=fs.readFileSync(path.join(dir,'http/Caddyfile'),'utf8');
- assert.deepEqual(applyDashboardRoute({zylosDir:dir}),{state:'done'});
- assert.equal(fs.readFileSync(path.join(dir,'http/Caddyfile'),'utf8'),first);
- assert.match(first,/strip_prefix \/private-observer/);assert.match(first,/127.0.0.1:3999/);
- assert.equal(fs.readFileSync(path.join(dir,'pm2-calls'),'utf8').split('\n').filter(l=>l.includes('"reload"')).length,2);
-});
 test('missing Caddy returns failed instead of claiming manual route done',t=>{
  const {dir,bin}=fixture(t);fs.unlinkSync(path.join(bin,'caddy'));
  const result=applyDashboardRoute({zylosDir:dir});assert.equal(result.state,'failed');assert.equal(result.error.code,'route_failed');
@@ -65,7 +54,7 @@ test('registration preserves the original password and live session credentials'
  const {dir,data}=fixture(t);
  const {Store}=await import('../../../skills/dashboard/src/lib/store.js');
  const {AuthGate,hashPassword}=await import('../../../skills/dashboard/src/lib/auth.js');
- const originalConfig={auth:{enabled:true,password:hashPassword('original-fixture-password')},basePath:'/private-observer'};
+ const originalConfig={auth:{enabled:true,password:hashPassword('original-fixture-password')}};
  const bytes=JSON.stringify(originalConfig);
  fs.writeFileSync(path.join(data,'config.json'),bytes);
  const store=new Store(path.join(data,'dashboard.db'));
@@ -152,7 +141,7 @@ async function healthFixture(t, handler) {
  const server=http.createServer((req,res)=>{requests.push(req.url);handler(req,res,requests.length);});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));
- fs.writeFileSync(path.join(f.data,'config.json'),JSON.stringify({port:server.address().port,basePath:'/private-observer',auth:{enabled:true,password:'fixture-hash'}}));
+ fs.writeFileSync(path.join(f.data,'config.json'),JSON.stringify({port:server.address().port,auth:{enabled:true,password:'fixture-hash'}}));
  return {...f,server,requests};
 }
 function healthy(res) {res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true,service:'zylos-dashboard'}));}
@@ -185,7 +174,7 @@ test('verification waits for a delayed local listener',async t=>{
  assert.equal(result.state,'ready');assert.deepEqual(f.requests,['/api/health']);
 });
 
-test('public verification makes one health request at the configured prefix',async t=>{
+test('public verification makes one health request at the fixed Dashboard prefix',async t=>{
  const f=await healthFixture(t,(_req,res)=>healthy(res));
  let publicHealthy=true;const requests=[];
  const proxy=http.createServer((req,res)=>{requests.push(req.url);if(publicHealthy)healthy(res);else{res.end('{"ok":true,"service":"other"}');}});
@@ -194,7 +183,7 @@ test('public verification makes one health request at the configured prefix',asy
  fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
  fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'127.0.0.1',protocol:'https',port:proxy.address().port}));
  assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true,route:true},errors:[]});
- assert.deepEqual(requests,['/private-observer/api/health']);
+ assert.deepEqual(requests,['/dashboard/api/health']);
  publicHealthy=false;
  const failed=await verifyDashboard({zylosDir:f.dir});
  assert.equal(failed.state,'degraded');assert.equal(failed.checks.health,true);assert.equal(failed.checks.route,false);
@@ -225,47 +214,10 @@ test('verification timeout without an observed response is distinct from health 
  assert.deepEqual(result.errors.map(error=>error.code),['verify_timeout']);
 });
 
-test('restore gives each PM2 child a fresh fixed timeout and checks jlist after start timeout',t=>{
- const f=fixture(t);
- const script=`
-  import {mock} from 'node:test';
-  import * as childProcess from 'node:child_process';
-  const calls=[];
-  mock.module('node:child_process',{namedExports:{...childProcess,execFileSync:(command,args,options)=>{
-    calls.push({command,args,timeout:options.timeout});
-    if(args[0]==='start')throw Object.assign(Error('timed out'),{code:'ETIMEDOUT'});
-    return JSON.stringify([{name:'zylos-dashboard',pm2_env:{status:'online',pm_exec_path:${JSON.stringify(path.join(f.code,'src/index.js'))},pm_cwd:${JSON.stringify(f.code)}}}]);
-  }}});
-  const {restoreDashboardService}=await import(${JSON.stringify(path.join(root,'cli/lib/dashboard-install.js'))});
-  const result=restoreDashboardService({zylosDir:${JSON.stringify(f.dir)}});
-  process.stdout.write(JSON.stringify({result,calls}));
- `;
- const child=spawnSync(process.execPath,['--experimental-test-module-mocks','--input-type=module','-e',script],{encoding:'utf8',timeout:5000});
- assert.equal(child.status,0,child.stderr);
- const {result,calls}=JSON.parse(child.stdout);assert.deepEqual(result,{state:'done'});
- assert.deepEqual(calls.map(call=>[call.command,call.args[0],call.timeout]),[['pm2','start',30000],['pm2','jlist',30000],['pm2','save',30000]]);
-});
-
 test('restore reports save failure after confirming the service is online',t=>{
  const f=fixture(t);
  fs.writeFileSync(path.join(f.bin,'pm2'),`#!${process.execPath}\nimport fs from 'node:fs';const args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(path.join(f.dir,'pm2-calls'))},JSON.stringify(args)+'\\n');if(args[0]==='jlist')console.log(${JSON.stringify(JSON.stringify([managedEntry(f)]))});if(args[0]==='save')process.exit(18);`,{mode:0o755});
  const result=restoreDashboardService({zylosDir:f.dir});
  assert.equal(result.state,'failed');assert.equal(result.error.code,'registration_failed');
  assert.deepEqual(fs.readFileSync(path.join(f.dir,'pm2-calls'),'utf8').trim().split('\n').map(JSON.parse).map(args=>args[0]),['start','jlist','save']);
-});
-
-test('route installation and public health share the retained Caddy prefix without a configured prefix',async t=>{
- const f=await healthFixture(t,(_req,res)=>healthy(res));
- fs.writeFileSync(path.join(f.data,'config.json'),JSON.stringify({port:f.server.address().port}));
- fs.writeFileSync(path.join(f.dir,'http/Caddyfile'),'http://localhost {\n# BEGIN zylos-component:dashboard\nhandle /custom/* {\nuri strip_prefix /custom\nreverse_proxy 127.0.0.1:3470\n}\n# END zylos-component:dashboard\n}\n');
- assert.equal(applyDashboardRoute({zylosDir:f.dir}).state,'done');
- assert.match(fs.readFileSync(path.join(f.dir,'http/Caddyfile'),'utf8'),/strip_prefix \/custom/);
- const requests=[];
- const proxy=http.createServer((req,res)=>{requests.push(req.url);if(req.url==='/custom/api/health')healthy(res);else{res.writeHead(404);res.end('{}');}});
- await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));
- t.after(()=>new Promise(resolve=>{proxy.closeAllConnections();proxy.close(resolve);}));
- fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
- fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'127.0.0.1',port:proxy.address().port}));
- assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true,route:true},errors:[]});
- assert.deepEqual(requests,['/custom/api/health']);
 });

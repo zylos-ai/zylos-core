@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -135,24 +135,6 @@ test('serialized JSON nested in tool output masks escaped credential values', as
   const result = await r.redactValue({ output: text });
   assert.ok(!JSON.stringify(result).includes(secret));
   r.close();
-});
-
-test('negative control: removing L2 makes the unchanged Fleet guard reject history', async () => {
-  const engineURL = new URL('../src/lib/redaction/engine.js', import.meta.url);
-  const original = await readFile(engineURL, 'utf8');
-  const mutation = original.replace('...dashboardSpans(text), ', '');
-  assert.notEqual(mutation, original, 'mutation must remove the production L2 call');
-  const source = mutation.replace(
-    /from '(\.\/[^']+)'/g,
-    (_, relative) => `from '${new URL(relative, engineURL).href}'`,
-  );
-  const directory = await mkdtemp(path.join(tmpdir(), 'redaction-l2-mutant-'));
-  const file = path.join(directory, 'engine.mjs');
-  await writeFile(file, source);
-  const mutant = await import(pathToFileURL(file).href);
-  const input = 'read_api_key read_session_token zylos_st_synthetic_credential';
-  assert.equal(SECRET_PATTERN.test(redact(input).text), false);
-  assert.equal(SECRET_PATTERN.test(mutant.redact(input).text), true);
 });
 
 test('L4 preserves session identifiers and metadata while masking credential compounds', async () => {

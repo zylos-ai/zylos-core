@@ -19,7 +19,7 @@ export function createTestEnvironment() {
   let cleaned = false;
   let restoreChildGuard;
 
-  function cleanup() {
+  function cleanup({ preserveTmp = false } = {}) {
     if (cleaned) return;
     cleaned = true;
     process.removeListener('exit', onExit);
@@ -31,7 +31,13 @@ export function createTestEnvironment() {
     } finally {
       try {
         cleanupTestPm2(root);
-        fs.rmSync(root, { recursive: true, force: true });
+        if (preserveTmp) {
+          for (const name of fs.readdirSync(root)) {
+            if (name !== 'tmp') fs.rmSync(path.join(root, name), { recursive: true, force: true });
+          }
+        } else {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
       } finally {
         restoreChildGuard?.();
         for (const [key, value] of Object.entries(previous)) {
