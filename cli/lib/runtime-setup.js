@@ -434,6 +434,7 @@ export function writeCodexProjectConfig(projectDir, opts = {}) {
   }
   if (content !== existing) {
     writeCodexProjectConfigAtomically(configPath, content);
+    opts.onWrite?.(configPath);
   }
 }
 
@@ -538,8 +539,9 @@ export function writeCodexConfig(projectDir, opts = {}) {
       renderCodexGlobalConfig(projectDir, existing, opts),
       'utf8'
     );
+    opts.onWrite?.(globalConfigPath);
 
-    installCoreCodexHook({ zylosDir: projectDir });
+    installCoreCodexHook({ zylosDir: projectDir, onWrite: opts.onWrite });
 
     return true;
   } catch {

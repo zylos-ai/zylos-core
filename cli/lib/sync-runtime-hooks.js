@@ -397,6 +397,7 @@ export function syncCodexConfig({
   homeDir = os.homedir(),
   readFileSync = fs.readFileSync,
   writeConfig = writeCodexConfig,
+  onWrite,
   log = console.log,
 } = {}) {
   const globalConfigPath = path.join(homeDir, '.codex', 'config.toml');
@@ -428,7 +429,7 @@ export function syncCodexConfig({
     return { attempted: true, changed: true, fatal: false };
   }
 
-  if (!writeConfig(projectDir)) {
+  if (!writeConfig(projectDir, { onWrite })) {
     return {
       attempted: true,
       changed: false,

@@ -61,17 +61,14 @@ afterEach(() => {
 });
 
 describe('self-upgrade durable conflict backups (#717)', () => {
-  test('old launcher prints every nested conflict path and success cleanup preserves durable backups', () => {
+  test('protected merge prints every nested conflict path and success cleanup preserves durable backups', () => {
     prepareThreeWayConflictFixture();
 
-    const { result, launcherOutput, npmCommands, stoppedServices, transactionBackupDir } = runScenario('success');
+    const { result, launcherOutput, operations, transactionBackupDir } = runScenario('success');
 
     expect(result.success).toBe(true);
     expect(result.mergeConflicts).toHaveLength(2);
-    expect(stoppedServices).toEqual(['fixture-service']);
-    expect(npmCommands).toHaveLength(2);
-    expect(npmCommands[0]).toMatch(/^npm pack/);
-    expect(npmCommands[1]).toMatch(/^npm install -g/);
+    expect(operations).toEqual(['save-package', 'save-code', 'snapshot-and-stop', 'install', 'release']);
     expect(fs.existsSync(transactionBackupDir)).toBe(false);
 
     for (const conflict of result.mergeConflicts) {
@@ -98,19 +95,22 @@ describe('self-upgrade durable conflict backups (#717)', () => {
     }
   });
 
-  test('later finalizer failure performs no rollback and retains both backup lifecycles', () => {
+  test('failure before cutoff compensates installed files and preserves durable conflicts', () => {
     prepareThreeWayConflictFixture();
 
-    const { result, transactionBackupDir } = runScenario('later-failure');
+    const { result, operations, transactionBackupDir } = runScenario('later-failure');
 
     expect(result.success).toBe(false);
     expect(result.failedStep).toBe(6);
-    expect(result.rollback).toEqual({ performed: false, steps: [] });
+    expect(result.rollback).toEqual({attempted:true, completed:true, recovery_required:false, performed:true});
+    expect(operations.at(-1)).toBe('compensate');
     expect(fs.existsSync(transactionBackupDir)).toBe(true);
+    expect(readFile(path.join(skillsDir, 'demo-skill/SKILL.md'))).toContain('value=local');
+    expect(readFile(path.join(skillsDir, 'demo-skill/nested/settings.txt'))).toBe('mode=local\n');
 
     const durableRoot = path.join(zylosDir, '.backup');
     const durableFiles = fs.readdirSync(durableRoot, { recursive: true })
-      .filter((entry) => !fs.statSync(path.join(durableRoot, entry)).isDirectory());
+      .filter((entry) => entry.includes(`${path.sep}conflicts${path.sep}`) && !fs.statSync(path.join(durableRoot, entry)).isDirectory());
     expect(durableFiles).toHaveLength(2);
     expect(readFile(path.join(durableRoot, durableFiles.find((entry) => entry.endsWith('SKILL.md'))))).toContain('value=local');
   });
@@ -122,6 +122,8 @@ describe('self-upgrade durable conflict backups (#717)', () => {
 
     expect(result.success).toBe(true);
     expect(result.mergeConflicts).toBeNull();
-    expect(fs.existsSync(path.join(zylosDir, '.backup'))).toBe(false);
+    const conflictFiles = fs.readdirSync(path.join(zylosDir, '.backup'), {recursive:true})
+      .filter(entry => entry.includes('conflicts'));
+    expect(conflictFiles).toEqual([]);
   });
 });

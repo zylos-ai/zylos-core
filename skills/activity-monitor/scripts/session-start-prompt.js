@@ -110,9 +110,13 @@ export function isOnboardingPending({
 
 export function isMigrationPending({
   migrationPromptPath = MIGRATION_PROMPT_PATH,
-  existsSync = fs.existsSync,
+  readFileSync = fs.readFileSync,
 } = {}) {
-  return existsSync(migrationPromptPath);
+  try {
+    return readFileSync(migrationPromptPath, 'utf8').trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function enqueueStartupPrompt(source, {

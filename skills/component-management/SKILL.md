@@ -100,7 +100,8 @@ The request is from C4 when the message arrives via a communication channel
 
 ### C4 Reply Formatting
 
-All `--json` outputs include structured data and a `reply` field (pre-formatted fallback).
+Component commands include structured data and a `reply` field (pre-formatted fallback).
+Core self-upgrade forwards the target script’s structured JSON directly and does not include `reply`.
 
 **Preferred**: Use the JSON data fields to craft a clear, user-friendly plain text reply.
 **Fallback**: If you're unsure how to format the reply, use the `reply` field directly.

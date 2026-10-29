@@ -351,7 +351,7 @@ describe('step11_startCoreServices', () => {
       opts: {
         ecosystemPath: '/tmp/core-ecosystem.config.cjs',
         stdio: 'pipe',
-        fallbackToPlainRestartOnError: true,
+        fallbackToPlainRestartOnError: false,
       },
     }, {
       type: 'exec',

@@ -44,6 +44,7 @@ function installedPostinstallPath() {
 function runPostinstall(zylosDir, npmEnv = {}, extraEnv = {}, scriptPath = POSTINSTALL_PATH) {
   assert.notEqual(path.dirname(zylosDir), os.tmpdir(), 'Postinstall HOME must not be the shared temporary directory');
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_')));
+  delete env.ZYLOS_PROTECTED_INSTALL;
   execFileSync(process.execPath, [scriptPath], {
     stdio: 'pipe',
     env: {
@@ -130,16 +131,69 @@ describe('postinstall local install guard', () => {
     assert.equal(settingsSynced(zylosDir), true);
   });
 
-  it('still syncs settings only during self-upgrade (npm install -g <tgz>)', () => {
+  it('preserves shared files during protected installation (npm install -g <tgz>)', () => {
     const zylosDir = fixtureZylosDir();
     runPostinstall(
       zylosDir,
       { npm_lifecycle_event: 'postinstall', npm_command: 'install' },
-      { ZYLOS_SKIP_POSTINSTALL: '1' },
+      { ZYLOS_SKIP_POSTINSTALL: '1', ZYLOS_PROTECTED_INSTALL: '1' },
       installedPostinstallPath(),
     );
     assert.equal(skillsSynced(zylosDir), false);
+    assert.equal(settingsSynced(zylosDir), false);
+    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), false);
+    assert.equal(fs.existsSync(path.join(zylosDir, '.codex')), false);
+  });
+
+  it('retains settings synchronization for the legacy skip-skills flag', () => {
+    const zylosDir = fixtureZylosDir();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_command: 'install' },
+      { ZYLOS_SKIP_POSTINSTALL: '1', ZYLOS_PROTECTED_INSTALL: '' }, installedPostinstallPath());
+    assert.equal(skillsSynced(zylosDir), false);
     assert.equal(settingsSynced(zylosDir), true);
+  });
+
+  for (const value of [undefined, '', '0', 'false', 'true', '01', ' 1']) it(`does not suppress shared writes for protected flag ${JSON.stringify(value)}`, () => {
+    const zylosDir = fixtureZylosDir();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' },
+      { ZYLOS_SKIP_POSTINSTALL: '', ...(value === undefined ? {} : { ZYLOS_PROTECTED_INSTALL: value }) });
+    assert.equal(skillsSynced(zylosDir), true);
+    assert.equal(settingsSynced(zylosDir), true);
+    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), true);
+  });
+
+  for (const value of ['', '0', 'false', 'true']) it(`does not suppress skill synchronization for legacy flag ${JSON.stringify(value)}`, () => {
+    const zylosDir = fixtureZylosDir();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' },
+      { ZYLOS_SKIP_POSTINSTALL: value, ZYLOS_PROTECTED_INSTALL: '' });
+    assert.equal(skillsSynced(zylosDir), true);
+    assert.equal(settingsSynced(zylosDir), true);
+    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), true);
+  });
+
+  it('preserves shared files when the installer supplies the legacy CI suppression', () => {
+    const zylosDir = fixtureZylosDir();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' }, { CI: '1' });
+    assert.equal(skillsSynced(zylosDir), false);
+    assert.equal(settingsSynced(zylosDir), false);
+    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), false);
+  });
+
+  for (const value of ['0', 'false']) it(`preserves legacy truthy CI suppression for ${JSON.stringify(value)}`, () => {
+    const zylosDir = fixtureZylosDir();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_config_global: 'true' }, { CI: value });
+    assert.equal(skillsSynced(zylosDir), false);
+    assert.equal(settingsSynced(zylosDir), false);
+    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'upgrade')), false);
+  });
+
+  it('negative control: removing suppression violates the pre-cutoff settings invariant', () => {
+    const zylosDir = fixtureZylosDir();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_command: 'install' },
+      { CI: '', ZYLOS_SKIP_POSTINSTALL: '1', ZYLOS_PROTECTED_INSTALL: '' }, installedPostinstallPath());
+    const settings = fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8');
+    assert.notEqual(settings, SETTINGS_BEFORE);
+    assert.throws(() => assert.equal(settings, SETTINGS_BEFORE), { code: 'ERR_ASSERTION' });
   });
 
   it('keeps syncing when run directly outside npm', () => {

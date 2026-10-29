@@ -16,7 +16,7 @@ function enqueueSingleExit() {
 export async function requestRuntimeRestart({ now = Date.now, deadlineAt, afterServiceRestart = false, readMode = readSessionMode,
   readTransition = async () => (await import('../../skills/comm-bridge/scripts/c4-db.js')).getModeTransition(), send = submit, lookup = lookupRestartRequest,
   enqueueExit = enqueueSingleExit, requestId = `restart-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
-  const deadline = afterServiceRestart ? Math.min(deadlineAt ?? Infinity, now() + 30000) : deadlineAt ?? now() + 10000;
+  let deadline = afterServiceRestart ? Infinity : deadlineAt ?? now() + 10000;
   const fail = (code, message, persisted = []) => ({ok:false,error:{code,message: afterServiceRestart && persisted !== null
     ? `${message}. All currently running managed sessions, including Origin, need manual restart.` : message,persisted},requestId});
   if (now() >= deadline) return fail('deadline_exceeded','Restart budget was exhausted before submission');
@@ -28,6 +28,7 @@ export async function requestRuntimeRestart({ now = Date.now, deadlineAt, afterS
     const output = await enqueueExit();
     return {ok:true,data:{result:'exit_enqueued',mode:'single',output}};
   }
+  if (afterServiceRestart) deadline = now() + 30000;
   const result = await send({version:1,type:'restart_all',requestId,reason:'upgrade'},{deadlineAt:deadline, ...(afterServiceRestart ? {connectRetryEveryMs:1000} : {})});
   if (result.kind === 'accepted') return {ok:true,data:{result:result.reply.result,requestId,runCount:result.reply.runCount}};
   if (result.kind === 'rejected' || !result.sent) return fail(result.reply?.code ?? result.kind,'Restart was not accepted');

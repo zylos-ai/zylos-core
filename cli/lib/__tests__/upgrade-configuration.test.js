@@ -37,5 +37,5 @@ test('CLI status uses file status and resume enters the same trusted bootstrap o
   await recoveryCommand(['status'], {root});
   await recoveryCommand(['resume'], {root});
   const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(calls, [{}, {status: true, once: false}, {}, {status: false, once: true}]);
+  assert.deepEqual(calls, [{status:true}, {status:false}, {once:true}]);
 });

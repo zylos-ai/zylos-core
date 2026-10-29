@@ -9,7 +9,7 @@ function fixture(t) {
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-material-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'tx'),closure=path.join(dir,'sqlite-runtime');fs.mkdirSync(closure,{recursive:true,mode:0o700});
-  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','finalizer.cjs']){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
+  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','installer.cjs']){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
   const closureFiles=['package.json','core-db-backup-worker.js','node_modules/better-sqlite3/lib/index.js'];
   for(const file of closureFiles){const p=path.join(closure,file);fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});fs.writeFileSync(p,'fixture '+file,{mode:0o600});}
   const j={transactionId:'tx',nodePath:process.execPath,initialIdentity:{nodePath:process.execPath}};
@@ -50,7 +50,7 @@ test('matching journal and descriptor cannot nominate another executable as Node
   assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/untrusted recovery Node/);
 });
 test('required recovery controller hash tampering is rejected',t=>{
-  const f=fixture(t);fs.appendFileSync(path.join(f.dir,'finalizer.cjs'),'changed');assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/material hash mismatch/);
+  const f=fixture(t);fs.appendFileSync(path.join(f.dir,'installer.cjs'),'changed');assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/material hash mismatch/);
 });
 for(const key of ['workerPath','driverPath'])test(`missing or symlinked fixed closure ${key} is rejected`,t=>{
  const f=fixture(t),file=f.d[key];fs.unlinkSync(file);
@@ -92,7 +92,7 @@ test('absent recovery directories permit ordinary database access',t=>{
 function readyFixture(t){
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-ready-identity-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
-  const j={formatVersion:1,transactionId:'tx',zylosDir:root,phase:'new_data_ready',installationIntent:true,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:'a'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}],originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:m.DB_PATHS.map(source=>({source,exists:true}))}};
+  const j={formatVersion:1,transactionId:'tx',zylosDir:root,phase:'restored_data_ready',installationIntent:true,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:'a'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}],originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:[...m.DB_PATHS,'components/dashboard/dashboard.db'].map(source=>({source,exists:true}))}};
   return {root,dir,j,save:()=>m.durable(path.join(dir,'journal.json'),j)};
 }
 const badReadyRecords={
@@ -105,7 +105,7 @@ const badReadyRecords={
   'missing snapshot hash':j=>delete j.snapshotManifestHash,
   'incomplete core backup':j=>j.coreManifest[0].backedUp=false,
   'duplicate core member':j=>j.coreManifest.push({...j.coreManifest[0]}),
-  'missing database identity':j=>j.initialIdentity.databases.pop(),
+  'missing Dashboard database identity':j=>j.initialIdentity.databases.pop(),
   'missing original service set':j=>delete j.originalServices,
 };
 for(const [label,alter] of Object.entries(badReadyRecords))test(`data-ready ${label} stays isolated without touching business files`,t=>{
@@ -113,7 +113,7 @@ for(const [label,alter] of Object.entries(badReadyRecords))test(`data-ready ${la
   const result=m.discover(f.root);assert.equal(result.blocked,true);assert.match(result.diagnostics.join(' '),/data-ready/);assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);assert.equal(fs.readFileSync(business,'utf8'),'normal writes');
 });
 test('complete data-ready records allow subsequent legitimate writes without frozen hash revalidation',t=>{
-  const f=readyFixture(t);for(const phase of ['new_data_ready','new_verifying','restored_data_ready','restored_verifying']){f.j.phase=phase;f.save();m.marker(f.root,f.dir,f.j);assert.equal(m.discover(f.root).blocked,false);assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));}
+  const f=readyFixture(t);for(const phase of ['restored_data_ready','restored_verifying']){f.j.phase=phase;f.save();m.marker(f.root,f.dir,f.j);assert.equal(m.discover(f.root).blocked,false);assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));}
 });
 for(const phase of ['upgrade_complete','restored_complete','aborted_before_install'])test(`${phase} cannot hide incomplete original identity or directory manifest`,t=>{
   const f=readyFixture(t);Object.assign(f.j,{phase,installationIntent:phase!=='aborted_before_install',cleanup:{complete:true,markerRemoved:true,servicesRestored:true},terminalEvidence:{verified:true,kind:phase==='aborted_before_install'?'original_deployment_and_readonly_data':'code_data_services'}});
@@ -222,7 +222,7 @@ for (const blocker of ['installer', 'finalizer', 'services']) test(`terminal mar
 
 test('macOS descriptor needs only frozen JavaScript controllers and existing SQLite closure',{skip:process.platform!=='darwin'},t=>{
  const f=fixture(t);
- assert.deepEqual(Object.keys(f.d.hashes).sort(),['finalizer.cjs','maintenance.cjs','runner.cjs']);
+ assert.deepEqual(Object.keys(f.d.hashes).sort(),['installer.cjs','maintenance.cjs','runner.cjs']);
  assert.equal(fs.existsSync(path.join(f.dir,'macos-recovery-helper')),false);
  assert.doesNotThrow(()=>m.validateDescriptor(f.dir,f.j,f.d));
 });
