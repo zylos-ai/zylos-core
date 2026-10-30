@@ -52,14 +52,32 @@ test('importing the actual target schema rejects a legacy version-probe caller',
 
 test('thin entry refuses recovery failure before checking or downloading updates', async () => {
   const {upgradeSelfCore} = await import('../../commands/component.js');
+  const stdout=[], stderr=[];
   let checked = false;
   const result = await upgradeSelfCore({skipConfirm:true}, {
-    recoverBeforeUpgrade() {throw Object.assign(Error('recovery blocked'), {code:'UPGRADE_RECOVERY_REQUIRED'});},
+    recoverBeforeUpgrade() {throw Object.assign(Error('recovery blocked'), {
+      code:'UPGRADE_RECOVERY_REQUIRED', recovery_required:true, next:'Run zylos recovery status.',
+    });},
     checkForCoreUpdates() {checked=true; return {success:true,hasUpdate:false};},
-    console:{log(){},error(){}},
+    console:{log(value){stdout.push(value);},error(value){stderr.push(value);}},
   });
   assert.equal(result, false);
   assert.equal(checked, false);
+  assert.deepEqual(stdout, []);
+  assert.deepEqual(stderr, ['Error: recovery blocked', 'Next: Run zylos recovery status.']);
+});
+
+test('self-upgrade CLI prints recovery guidance only to stderr and exits one', t => {
+  const root=fixture(t), recovery=path.join(root,'.backup/self-upgrade');
+  fs.mkdirSync(recovery,{recursive:true});
+  fs.writeFileSync(path.join(recovery,'unsafe-entry'),'');
+  const child=spawnSync(process.execPath,[path.resolve('cli/zylos.js'),'upgrade','--self','--yes'],{
+    encoding:'utf8', env:{...process.env,ZYLOS_DIR:root,HOME:root,PM2_HOME:path.join(root,'.pm2')},
+  });
+  assert.equal(child.status,1,child.stderr);
+  assert.equal(child.stdout,'');
+  assert.match(child.stderr,/^Error: Upgrade recovery materials are ambiguous; preserve them for inspection\.\n/);
+  assert.match(child.stderr,/Next: Run zylos recovery status, then zylos recovery resume; preserve ambiguous materials for inspection\.\n$/);
 });
 
 test('thin entry preserves and redacts recovery exception codes before checking or downloading', async t => {

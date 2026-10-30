@@ -1107,12 +1107,17 @@ export function runDownloadedUpgrade(handoff, { spawn = spawnSync } = {}) {
   return child.status ?? 1;
 }
 
+function outputSelfUpgradeFailure(output, message, next) {
+  output.error(`Error: ${message}`);
+  if (next) output.error(`Next: ${next}`);
+}
+
 export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutput = false, skipConfirm = false } = {}, deps = {}) {
   const output = deps.console ?? globalThis.console;
   if(mode!=='merge') {
     const failure={success:false,code:'INVALID_ARGS',error:'Core self-upgrade supports only --mode merge.',persisted:[]};
     if(jsonOutput)output.log(JSON.stringify(failure));
-    else output.error(failure.error);
+    else outputSelfUpgradeFailure(output, failure.error);
     return false;
   }
   try {
@@ -1123,20 +1128,20 @@ export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', js
     const output = deps.console ?? globalThis.console;
     if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error),
       persisted:error.persisted || [], recovery_required:error.recovery_required === true, ...(error.next ? {next:error.next} : {})}));
-    else output.error(error.message);
+    else outputSelfUpgradeFailure(output, error.message, error.next);
     return false;
   }
   let check;
   try { check = (deps.checkForCoreUpdates ?? checkForCoreUpdates)({ branch, beta }); }
   catch (error) {
     if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]}));
-    else output.error(upgradeFailureMessage(error));
+    else outputSelfUpgradeFailure(output, upgradeFailureMessage(error), error.next);
     return false;
   }
   if (!check.success) {
     const error = {code:check.code, message:check.message || check.error || 'Core version check failed.'};
     if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]}));
-    else output.error(upgradeFailureMessage(error));
+    else outputSelfUpgradeFailure(output, upgradeFailureMessage(error), check.next);
     return false;
   }
   if (!branch && !check.hasUpdate) {
@@ -1181,7 +1186,7 @@ export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', js
     return exitCode === 0;
   } catch (error) {
     if (jsonOutput) output.log(JSON.stringify({ success: false, code: upgradeFailureCode(error), error: upgradeFailureMessage(error), persisted:[] }));
-    else output.error(upgradeFailureMessage(error));
+    else outputSelfUpgradeFailure(output, upgradeFailureMessage(error), error.next);
     return false;
   } finally {
     if (tempDir) (deps.cleanupCoreTemp ?? cleanupCoreTemp)(tempDir);
