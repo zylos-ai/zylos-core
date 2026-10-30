@@ -151,7 +151,7 @@ test('standalone restored Dashboard is hash checked during first takeover',t=>{
   assert.throws(()=>runCoreDbWorker(request),/hash mismatch/);
 });
 
-test('missing Dashboard stays absent through version inspection, rehearsal and data-ready checks',t=>{
+test('missing Dashboard stays absent before recovery and preserves a later generation',t=>{
   const {root,target,source,driverRoot,payload}=fixture(t);
   assert.equal(probeCoreDbVersions(root,target,{driverRoot}).databases[3].status,'missing');
   assert.equal(rehearseCoreDbUpgrade(root,target,{driverRoot}).databases[3].status,'missing');
@@ -159,8 +159,10 @@ test('missing Dashboard stays absent through version inspection, rehearsal and d
   assert.equal(fs.existsSync(source),false);
   const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'missing-preserved'});
   assert.equal(runCoreDbWorker({...payload,action:'offline-preflight',manifest:snapshot.manifest}).databases[3].status,'missing');
-  fs.mkdirSync(path.dirname(source),{recursive:true});fs.writeFileSync(source,'unexpected database');
-  assert.throws(()=>runCoreDbWorker({...payload,action:'offline-preflight',manifest:snapshot.manifest}),/Expected missing database exists/);
+  fs.mkdirSync(path.dirname(source),{recursive:true});fs.writeFileSync(source,'later Dashboard generation');
+  const later=fs.readFileSync(source);
+  assert.equal(runCoreDbWorker({...payload,action:'offline-preflight',manifest:snapshot.manifest}).databases[3].status,'present');
+  assert.deepEqual(fs.readFileSync(source),later);
 });
 
 function controlledMigration(t, dashboardOwnerManaged, options) {

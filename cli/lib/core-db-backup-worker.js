@@ -274,7 +274,9 @@ export async function execute(input) {
       const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(row=>row.source===item.source);
       if(input.action==='offline-preflight') {
         if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
-        if(expected?.status==='missing' && !absent) throw Error(`Expected missing database exists: ${source}`);
+        const preserveMissingDashboard=standaloneSnapshot && input.manifest?.formatVersion===2 && item.owner==='dashboard' && expected?.status==='missing' && !absent;
+        if(expected?.status==='missing' && !absent && !preserveMissingDashboard) throw Error(`Expected missing database exists: ${source}`);
+        if(preserveMissingDashboard) {rows.push({source:item.source,status:'present',ownerSkipped:true});continue;}
         if(!absent) {
           const Database=driver(input);
           if(standaloneSnapshot) {
@@ -333,8 +335,10 @@ export async function execute(input) {
     if(input.action==='offline-preflight' && item.owner==='dashboard') {
       const absent=missing(source);
       if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
-      if(expected?.status==='missing' && !absent) throw Error(`Expected missing database exists: ${source}`);
+      const preserveMissingDashboard=standaloneSnapshot && input.manifest?.formatVersion===2 && expected?.status==='missing' && !absent;
+      if(expected?.status==='missing' && !absent && !preserveMissingDashboard) throw Error(`Expected missing database exists: ${source}`);
       if(absent) {rows.push({source:item.source,status:'missing'});continue;}
+      if(preserveMissingDashboard) {rows.push({source:item.source,status:'present'});continue;}
       const mod=await ownerSchema(input,item);
       if(standaloneSnapshot) {
         if(expected?.status!=='backed_up') throw Error('Missing standalone restored snapshot evidence');
@@ -346,7 +350,8 @@ export async function execute(input) {
       rows.push({source:item.source,status:'present',...state});
       continue;
     }
-    if(missing(source)) {
+    const absent=missing(source);
+    if(absent) {
       if(expected&&expected.status!=='missing') throw new Error(`Expected database absent: ${source}`);
       if(input.action==='offline-preflight') {
         const mod=await ownerSchema(input,item);
@@ -358,7 +363,9 @@ export async function execute(input) {
       }
       rows.push({source:item.source,status:'missing',userVersion:null,file:null,bytes:0,sha256:null,integrityCheck:null});continue;
     }
-    if(expected?.status==='missing') throw new Error(`Expected missing database exists: ${source}`);
+    const preserveMissingDashboard=standaloneSnapshot && input.manifest?.formatVersion===2 && item.owner==='dashboard' && expected?.status==='missing';
+    if(expected?.status==='missing' && !preserveMissingDashboard) throw new Error(`Expected missing database exists: ${source}`);
+    if(preserveMissingDashboard) {rows.push({source:item.source,status:'present'});continue;}
     const Database=driver(input,item);
     if(input.action==='offline-preflight') {
       const mod=await ownerSchema(input,item);
