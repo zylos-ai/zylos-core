@@ -199,6 +199,16 @@ test('protected finalizer reports persisted unchanged database mode and verified
   assertDataPreserved(f);
 });
 
+test('forward repair does not report a verified snapshot when the manifest no longer matches',async t=>{
+  const f=fixture(t);
+  await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});
+  fs.appendFileSync(path.join(f.load().dbBackupDir,'manifest.json'),' ');
+  const result=await f.resume();
+  assert.equal(result.success,false,JSON.stringify(result));
+  assert.match(result.error,/Snapshot manifest hash does not match/);
+  assert.equal(result.dbSnapshotVerified,false);
+});
+
 test('upgrade preparation rejects malformed settings before cutoff and preserves live settings', async t => {
   const f = fixture(t);
   const malformed = '{invalid settings';

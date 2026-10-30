@@ -668,11 +668,10 @@ function commitSkillBaselines(ctx) {
 // ---------------------------------------------------------------------------
 
 function protectionResult(ctx) {
-  const journal=ctx.journal;
+  // The finalizer sets dbManifest only after the persisted manifest matches the cutoff hash.
   return {compensationSupported:true, automaticResume:maintenanceFor(ctx).canRecognizeProcesses(),
-    databaseMode:journal?.databaseMode==='unchanged' ? 'unchanged' : 'migrate',
-    dbSnapshotVerified:journal?.installationIntent===true && typeof journal.dbBackupDir==='string' &&
-      typeof journal.snapshotManifestHash==='string' && /^[a-f0-9]{64}$/.test(journal.snapshotManifestHash),
+    databaseMode:ctx.journal?.databaseMode==='unchanged' ? 'unchanged' : 'migrate',
+    dbSnapshotVerified:Boolean(ctx.dbManifest),
     databases:ctx.databases || ctx.databasePreflight?.databases || null};
 }
 function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbackPerformed = Boolean(rollbackResults)) {
