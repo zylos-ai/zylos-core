@@ -470,3 +470,48 @@ test('tickets are bounded per lease and dropped with their lease', async () => {
   assert.equal(f.manager.tickets.size, 0);
   assert.equal(f.manager.consumeTicket(second.ticket, second.id, admin), false);
 });
+
+test('Core Origin lease pins the current run and retires on replacement or unknown identity', async () => {
+  let runId = 'origin-A';
+  const f = fixture({ resolveOrigin: async () => { if (!runId) throw new Error('unknown identity'); return { runId, tmuxName: 'zylos-group-origin' }; } });
+  f.coordinator.firstLease = async () => { f.containment.active={generation:5,originRunId:runId}; return f.containment.active; };
+  try {
+    const lease=await f.manager.createLease(context('admin'));
+    assert.equal(lease.runId,'origin-A'); assert(f.manager.consumeTicket(lease.ticket,lease.id,context('admin')));
+    runId='origin-B'; await f.manager.revalidate();
+    assert.equal(f.manager.leases.size,0); assert.equal(f.containment.active,null);
+    const next=await f.manager.createLease(context('admin'));
+    assert.equal(next.runId,'origin-B');
+    runId=null; await f.manager.revalidate();
+    assert.equal(f.manager.leases.size,0); assert.equal(f.containment.active,null);
+    await assert.rejects(f.manager.createLease(context('admin')),{code:'target_mismatch'});
+  } finally { await f.manager.shutdown(); }
+});
+
+test('Core Origin lease creation rejects an unavailable current run', async () => {
+  for (const resolveOrigin of [async () => ({ tmuxName: 'zylos-group-origin' }), async () => { throw new Error('not ready'); }]) {
+    const f = fixture({ resolveOrigin });
+    try {
+      await assert.rejects(f.manager.createLease(context('admin')), { code: 'target_mismatch' });
+      assert.equal(f.counts().starts, 0);
+    } finally { await f.manager.shutdown(); }
+  }
+});
+
+test('Origin replacement during attachment rejects the pending Observer lease', async () => {
+  let runId = 'origin-A';
+  let finishStart;
+  const f = fixture({ resolveOrigin: async () => ({ runId, tmuxName: 'zylos-group-origin' }) });
+  f.coordinator.firstLease = () => new Promise(resolve => {
+    f.containment.active = { generation: 5, originRunId: 'origin-A' };
+    finishStart = () => resolve(f.containment.active);
+  });
+  try {
+    const pending = f.manager.createLease(context('admin'));
+    await new Promise(resolve => setImmediate(resolve));
+    runId = 'origin-B';
+    finishStart();
+    await assert.rejects(pending, { code: 'target_mismatch' });
+    assert.equal(f.manager.leases.size, 0);
+  } finally { await f.manager.shutdown(); }
+});

@@ -113,6 +113,10 @@ export class Sanitizer {
     return this.safeSummary(text, limit);
   }
 
+  sanitizeToolDetail(toolName, toolInput) {
+    return this.safeSummary(this._extractToolDetail(toolName, toolInput), 120);
+  }
+
   buildSummary(hookEventName, toolName, durationMs, toolDetail, promptSource, assistantSummary) {
     const detail = toolDetail ? `: ${toolDetail}` : '';
     switch (hookEventName) {

@@ -5,6 +5,20 @@ import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=2'
 import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import { priceWithEditedBaseRates } from './pricing-form.js';
+import {
+  captureMetricTarget,
+  isMetricTargetCurrent,
+} from './response-order.js';
+import { refreshDashboardState } from './state-refresh.js';
+import { formatActionResult } from './action-result.js';
+import { pendingDepthValue, sessionBlockTitleKey, stateTitleKey } from './state-presentation.js';
+import {
+  effortOptionState,
+  mergeRuntimeInfo,
+  modelOptionState,
+  runtimeLabels,
+  submitSelectAction,
+} from './runtime-ui.js';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
 const ASSET_ROOT = `${BASE_PATH}/_assets`;
@@ -290,16 +304,7 @@ function latestTool(tools = []) {
 }
 
 function stateTitle(p, mood) {
-  if (mood === 'thinking') return t('agent_fleet.thinking');
-  const s = normState(p?.state);
-  const reason = p?.reason || t('value.unknown');
-  if (s === 'BUSY') return t('state.busy_simple');
-  if (s === 'IDLE') return t('state.idle');
-  if (s === 'OFFLINE') return t('state.offline');
-  if (s === 'WAITING_HUMAN') return t('state.waiting');
-  if (s === 'POSSIBLY_STUCK') return t('state.possibly_stuck_simple');
-  if (s === 'STUCK') return t('state.stuck_simple');
-  return t('state.unknown_simple');
+  return t(stateTitleKey(p?.state, mood));
 }
 
 
@@ -311,9 +316,10 @@ function confLabel(v) {
 }
 
 function srcLabel(m) {
-  if (!m) return t('confidence.unavailable');
+  if (!m || metVal(m) === null) return t('confidence.unavailable');
   const src = m.selected_source || m.source || '';
   const friendly = {
+    'core-session-reader': t('metric.current_session'),
     statusline: t('metric.current_session'),
     statusline_current_usage: t('metric.current_session'),
     jsonl_usage: t('source.jsonl_usage'),
@@ -390,15 +396,7 @@ function renderInfoBar() {
     if (ri.zylos_update) zv += ` <span class="info-bar-hint" id="zylos-update-hint" role="button" tabindex="0" title="${esc(t('info.zylos_update_hint', { version: ri.zylos_update }))}">↑${esc(ri.zylos_update)}</span>`;
     parts.push(zv);
   }
-  if (ri.runtime && ri.runtime !== 'codex') parts.push(esc(ri.runtime.charAt(0).toUpperCase() + ri.runtime.slice(1)));
-  if (ri.runtime === 'codex') {
-    parts.push(esc(t('info.runtime_model', { value: ri.model || ri.model_id || t('info.unknown') })));
-    parts.push(esc(t('info.runtime_effort', { value: ri.effort ? effortLabel(ri.effort) : t('info.unknown') })));
-  } else if (ri.model) {
-    const short = ri.model.replace(' context', '');
-    parts.push(esc(short));
-  }
-  if (ri.runtime !== 'codex' && ri.effort) parts.push(esc(effortLabel(ri.effort)));
+  parts.push(...runtimeLabels(ri, t, effortLabel).map(esc));
   if (ri.runtime === 'codex') {
     const codexVersion = ri.codex_running || ri.codex_version || ri.codex_installed;
     if (codexVersion) {
@@ -437,6 +435,11 @@ function mascotClass(agentState) {
 }
 
 function renderState() {
+  const title = $('#runtime-title');
+  if (title) {
+    title.removeAttribute('data-i18n');
+    title.textContent = t(sessionBlockTitleKey(state.dashboardState?.sessionGroup));
+  }
   const p = state.dashboardState;
   // Same octopus mascot set + mood logic as Agent Fleet (busy with no visible
   // tool = thinking), so the agent looks identical in its tile and its detail.
@@ -1032,8 +1035,9 @@ function timelineItemClass(event) {
 
 function renderTimeline() {
   const events = state.timeline || [];
+  const gaps = state.timelineGaps || [];
   const container = $('#timeline-list');
-  if (!events.length) {
+  if (!events.length && !gaps.length) {
     container.innerHTML = `<p class="empty-state">${t('timeline.empty')}</p>`;
     return;
   }
@@ -1050,6 +1054,12 @@ function renderTimeline() {
       `<span class="timeline-duration">${esc(durStr)}</span>`;
     return el;
   }));
+  for (const gap of gaps) {
+    const notice = document.createElement('p');
+    notice.className = 'empty-state';
+    notice.textContent = t('timeline.source_gap', { source: gap.name || gap.stream || 'Core', reason: gap.extra?.reason || gap.reason || 'unknown' });
+    container.prepend(notice);
+  }
   $('#timeline-updated').textContent = fmtAge(state.timelineUpdatedAt);
 }
 
@@ -1098,10 +1108,11 @@ function renderComm() {
 
   const pendingEl = $('#comm-pending');
   const avgStr = c.avg_response_s != null ? `${t('comm.avg_response')}: ${dur(c.avg_response_s)}` : '';
-  const pendingStr = c.pending_depth > 0
+  const pendingDepth = pendingDepthValue(c.pending_depth);
+  const pendingStr = pendingDepth !== null && Number(pendingDepth) > 0
     ? `<span class="${c.pending_oldest_age_s > 300 ? 'warn' : ''}">${t('comm.pending')}: ${c.pending_depth}</span>` +
       (c.pending_oldest_age_s != null ? ` · ${t('comm.oldest')}: ${dur(c.pending_oldest_age_s)}` : '')
-    : `${t('comm.pending')}: 0`;
+    : pendingDepth === '0' ? `${t('comm.pending')}: 0` : `${t('comm.pending')}: ${t('value.unknown')}`;
   pendingEl.innerHTML = [avgStr, pendingStr].filter(Boolean).join(' · ');
 
   $('#comm-updated').textContent = fmtAge(state.commUpdatedAt);
@@ -1864,9 +1875,8 @@ async function resolveMemoryConflict(action) {
 }
 
 async function refreshState() {
-  const data = await fetchJson('/api/state');
-  if (!data || typeof data !== 'object') return;
-  state.dashboardState = data;
+  const data = await refreshDashboardState(state, fetchJson);
+  if (!data) return;
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
   if (data.new_session_threshold) {
     state.newSessionThreshold = data.new_session_threshold;
@@ -1878,7 +1888,10 @@ async function refreshState() {
 }
 
 async function refreshMetrics() {
+  const target = captureMetricTarget(state);
+  const stillCurrent = () => isMetricTargetCurrent(state, target);
   const results = await Promise.allSettled(METRICS.map(async (n) => [n, await fetchJson(`/api/metrics/${n}`)]));
+  if (!stillCurrent()) return;
   let changed = false;
   for (const r of results) {
     if (r.status === 'fulfilled') { state.metrics.set(r.value[0], r.value[1]); changed = true; }
@@ -1889,6 +1902,7 @@ async function refreshMetrics() {
       ['tokens', 'session'], ['tokens', 'today'], ['tokens', '7d']
     ];
     const aggResults = await Promise.allSettled(aggKeys.map(([m, p]) => fetchJson(`/api/metrics/aggregate?metric=${m}&period=${p}`)));
+    if (!stillCurrent()) return;
     state.aggregated = {};
     aggKeys.forEach(([m, p], i) => {
       const r = aggResults[i];
@@ -1914,6 +1928,7 @@ async function refreshTimeline() {
   const since = new Date(Date.now() - 30 * 60_000).toISOString();
   const data = await fetchJson(`/api/timeline?since=${since}&limit=200&order=desc`);
   if (!data || typeof data !== 'object') return;
+  state.timelineGaps = data.gaps || [];
   state.timeline = (data.events || []).filter((e) => (
     e.event_type !== 'pre_tool_use' &&
     e.event_type !== 'tool_result'
@@ -2397,24 +2412,20 @@ async function refreshAll() {
 
 // ─── SSE ───
 function applySse(name, data) {
+  if (name === 'history_changed') { refreshTimeline().catch(() => {}); return; }
   if (!data || typeof data !== 'object') return;
   // A remote agent's stream describes its own fleet; never let it clobber ours.
   if (name === 'fleet' && state.remoteAgent) return;
   if (name === 'state_change') {
-    const prevRi = state.dashboardState?.runtime_info;
-    const prevSessionId = state.dashboardState?.session?.session_id;
+    const previousState = state.dashboardState;
+    const nextRuntimeInfo = mergeRuntimeInfo(previousState, data);
     // The SSE state payload carries only raw state — the agent identity color
     // (hue) is added by /api/state, not by the broadcast. Preserve it across SSE
     // updates so the single-agent mascot stays tinted to match its Agent Fleet
     // tile instead of falling back to the untinted base art on every update.
     const prevAgent = state.dashboardState?.agent;
     state.dashboardState = data;
-    if (!data.runtime_info && prevRi) {
-      const sessionChanged = data.session?.session_id !== prevSessionId;
-      state.dashboardState.runtime_info = prevRi.runtime === 'codex' && sessionChanged
-        ? { ...prevRi, model: null, model_id: null, effort: null, service_tier: null }
-        : prevRi;
-    }
+    if (nextRuntimeInfo) state.dashboardState.runtime_info = nextRuntimeInfo;
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     if (data.new_session_threshold) state.newSessionThreshold = data.new_session_threshold;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
@@ -2449,22 +2460,28 @@ function connectSse() {
   }
   clearTimeout(state.sseReconnectTimer);
 
-  state.eventSource = new EventSource(api(agentPath('/api/stream')));
+  const source = new EventSource(api(agentPath('/api/stream')));
+  state.eventSource = source;
 
-  state.eventSource.onopen = () => {
+  source.onopen = () => {
+    if (state.eventSource !== source) return;
     state.sseRetries = 0;
     renderConnection('live');
+    refreshState().catch(() => {});
+    refreshTimeline().catch(() => {});
   };
 
-  state.eventSource.onerror = () => {
-    state.eventSource.close();
+  source.onerror = () => {
+    if (state.eventSource !== source) return;
+    source.close();
     state.eventSource = null;
     renderConnection('reconnecting');
     scheduleSseReconnect();
   };
 
-  for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet']) {
+  for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet', 'history_changed']) {
     state.eventSource.addEventListener(ev, (e) => {
+      if (state.eventSource !== source) return;
       try { applySse(ev, JSON.parse(e.data)); renderConnection('live'); }
       catch { renderConnection('degraded'); }
     });
@@ -4019,6 +4036,8 @@ async function saveSettings() {
 
 // ─── Actions Modal ───
 let actionsModal = null;
+let modeStatusTimer = null;
+let pendingManualRestart = null;
 
 function createActionsModal() {
   if (actionsModal) return actionsModal;
@@ -4042,6 +4061,10 @@ function createActionsModal() {
     </div>
     <div class="action-group">
       <span class="action-group-label">${esc(t('actions.configuration'))}</span>
+      <div class="action-field"><label class="action-field-label">${esc(t('actions.session_mode'))}</label><select id="action-mode" class="action-select"><option value="single">single</option><option value="multi">multi</option></select></div>
+      <p id="action-mode-status" class="modal-status" style="overflow-wrap:anywhere"></p>
+      <p id="action-instance-status" class="modal-status" style="overflow-wrap:anywhere"></p>
+      <p id="action-restart-status" class="modal-status" style="overflow-wrap:anywhere"></p>
       <div class="action-field">
         <label class="action-field-label">${esc(t('actions.runtime'))}</label>
         <select id="action-runtime" class="action-select">
@@ -4104,22 +4127,11 @@ function createActionsModal() {
     btn.addEventListener('click', () => execAction(btn.dataset.action));
   });
 
+  overlay.querySelector('#action-mode').addEventListener('change', async event => { await execAction('switch-mode', { mode: event.target.value }); await refreshModeStatus(); });
   async function selectAction(sel, action, key) {
-    if (sel._inFlight) return;
-    const prev = sel._prevValue ?? sel.value;
-    const val = sel.value;
-    if (!val || val === prev) return;
-    sel._inFlight = true;
-    try {
-      const ok = await execAction(action, { [key]: val });
-      if (ok === false) sel.value = prev;
-      else {
-        sel._prevValue = val;
-        if (action === 'switch-effort') sel._currentEffort = val;
-      }
-    } finally {
-      sel._inFlight = false;
-    }
+    const accepted = await submitSelectAction(sel, action, key, execAction);
+    if (accepted !== false && action === 'switch-effort') sel._currentEffort = sel.value;
+    return accepted;
   }
 
   const modelSel = overlay.querySelector('#action-model');
@@ -4211,24 +4223,46 @@ function createActionsModal() {
   return overlay;
 }
 
+async function refreshModeStatus() {
+  if (pendingManualRestart) {
+    try {
+      const result = await fetchJson(`/api/restart-status?requestId=${encodeURIComponent(pendingManualRestart.requestId)}`);
+      const text = actionsModal?.querySelector('#action-restart-status');
+      const ready = result.origin?.ready && result.origin.runId !== pendingManualRestart.runId;
+      if (text) text.textContent = t('actions.restart_progress', { submission: pendingManualRestart.submission, completion: result.completion === 'deadline_exceeded' ? 'unknown' : result.completion, ready: ready ? t('actions.ready') : t('value.unknown') });
+      if (result.completion === 'done' || ready) pendingManualRestart = null;
+    } catch {}
+  }
+  const text = actionsModal?.querySelector('#action-mode-status');
+  try {
+    const result = await fetchJson('/api/session-mode');
+    if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
+    const data = result.data;
+    const mode = ['single', 'multi'].includes(data.sessionMode) ? data.sessionMode : null;
+    if (mode) actionsModal.querySelector('#action-mode').value = mode;
+    text.textContent = [mode || t('value.unknown'), data.transition?.phase, data.transition?.reason, data.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', data.blocked?.since ? t('actions.blocked_since', { time: data.blocked.since }) : ''].filter(Boolean).join(' · ');
+  } catch (error) { if (text) text.textContent = error.message; }
+  const instanceText = actionsModal?.querySelector('#action-instance-status');
+  try {
+    const result = await fetchJson('/api/instance-status');
+    if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
+    const data = result.data || {};
+    const originState = data.origin?.status?.state || data.origin?.presence || t('value.unknown');
+    if (instanceText) instanceText.textContent = t('actions.instance_status', { view: data.view || t('value.unknown'), mode: data.sessionMode || t('value.unknown'), origin: originState });
+  } catch (error) { if (instanceText) instanceText.textContent = error.message; }
+}
+
 async function openActionsModal() {
   if (remoteIsReadOnly()) return;
   const modal = createActionsModal();
   modal.hidden = false;
+  refreshModeStatus();
+  clearInterval(modeStatusTimer);
+  modeStatusTimer = setInterval(refreshModeStatus, 2000);
 
   const statusEl = modal.querySelector('#action-status');
   statusEl.hidden = true;
   updateRestartDot();
-  const upgradeResult = state.dashboardState?.runtime_info?.zylos_upgrade_result;
-  if (upgradeResult && statusEl) {
-    statusEl.hidden = false;
-    statusEl.className = upgradeResult.status === 'success' ? 'modal-status success' : 'modal-status error';
-    const key = upgradeResult.status === 'success' ? 'result.zylos_upgrade_succeeded' : 'result.zylos_upgrade_unverified';
-    statusEl.textContent = t(key, {
-      version: upgradeResult.currentVersion || upgradeResult.targetVersion || ''
-    });
-  }
-
   try {
     const meta = await fetchJson('/api/actions/meta');
     const runtimeSel = modal.querySelector('#action-runtime');
@@ -4242,32 +4276,21 @@ async function openActionsModal() {
     if (modelField) modelField.hidden = false;
     if (effortField) effortField.hidden = false;
 
+    const modelState = modelOptionState(meta);
     modelSel.innerHTML = '';
-    if (meta.runtime === 'codex' && !meta.current_model) {
-      const unset = document.createElement('option');
-      unset.value = '';
-      unset.textContent = t('actions.unset');
-      unset.disabled = true;
-      unset.selected = true;
-      modelSel.appendChild(unset);
-    }
-    let currentIsSystem = false;
-    for (const m of meta.models || []) {
+    for (const option of modelState.options) {
       const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.display_name || m.id;
-      if (m.id === meta.current_model) { opt.selected = true; currentIsSystem = true; }
+      opt.value = option.value;
+      opt.textContent = option.labelKey ? t(option.labelKey) : option.label;
+      opt.disabled = Boolean(option.disabled);
+      opt.selected = Boolean(option.selected);
       modelSel.appendChild(opt);
     }
-    const customOpt = document.createElement('option');
-    customOpt.value = '__custom__';
-    customOpt.textContent = t('actions.custom');
-    modelSel.appendChild(customOpt);
     const modelCustomEl = modal.querySelector('#action-model-custom');
     const modelApplyEl = modal.querySelector('#action-model-apply');
-    if (!currentIsSystem && meta.current_model) {
+    if (modelState.custom) {
       modelSel.value = '__custom__';
-      modelCustomEl.value = meta.current_model;
+      modelCustomEl.value = modelState.customValue;
       modelCustomEl.hidden = false;
       modelApplyEl.hidden = false;
       modelSel.classList.add('action-select-narrow');
@@ -4277,32 +4300,20 @@ async function openActionsModal() {
       modelSel.classList.remove('action-select-narrow');
     }
 
-    const effortsByModel = meta.efforts_by_model || {};
     effortSel._currentEffort = meta.current_effort;
     modal._renderEffortOptions = (modelId) => {
-      const list = effortsByModel[modelId] || effortsByModel['*'] || [];
+      const effortState = effortOptionState(meta, modelId, effortSel._currentEffort, effortLabel);
       effortSel.innerHTML = '';
-      effortSel.disabled = !list.length;
-      if (!list.length && meta.runtime !== 'codex') {
-        effortField.hidden = true;
-        return;
-      }
-      effortField.hidden = false;
-      if (meta.runtime === 'codex' && !list.includes(effortSel._currentEffort)) {
-        const unset = document.createElement('option');
-        unset.value = '';
-        unset.textContent = effortSel._currentEffort
-          ? t('actions.effort_unavailable', { value: effortLabel(effortSel._currentEffort) })
-          : t('actions.unset');
-        unset.disabled = true;
-        unset.selected = true;
-        effortSel.appendChild(unset);
-      }
-      for (const e of list) {
+      effortSel.disabled = effortState.disabled;
+      effortField.hidden = effortState.hidden;
+      for (const option of effortState.options) {
         const opt = document.createElement('option');
-        opt.value = e;
-        opt.textContent = effortLabel(e);
-        if (e === effortSel._currentEffort) opt.selected = true;
+        opt.value = option.value;
+        opt.textContent = option.labelKey
+          ? t(option.labelKey, option.labelParams)
+          : effortLabel(option.value);
+        opt.disabled = Boolean(option.disabled);
+        opt.selected = Boolean(option.selected);
         effortSel.appendChild(opt);
       }
       effortSel._prevValue = effortSel.value;
@@ -4328,6 +4339,8 @@ async function openActionsModal() {
 }
 
 function closeActionsModal() {
+  clearInterval(modeStatusTimer);
+  modeStatusTimer = null;
   if (!actionsModal) return;
   if (pendingConfirmCancel) { pendingConfirmCancel(); pendingConfirmCancel = null; }
   actionsModal.hidden = true;
@@ -4346,12 +4359,12 @@ function updateRestartDot() {
   btn.title = pending ? t('info.pending_restart') : '';
 }
 
-const CONFIRM_ACTIONS = new Set(['interrupt', 'chop-chop', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
+const CONFIRM_ACTIONS = new Set(['switch-mode', 'interrupt', 'chop-chop', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
 
 let countdownTimer = null;
 let pendingConfirmCancel = null;
 
-function startCountdownAndReload(seconds, statusEl, healthPath = '/api/health') {
+function startCountdownAndReload(seconds, statusEl, healthPath = '/api/health', prefix = '') {
   if (countdownTimer) clearInterval(countdownTimer);
   let remaining = seconds;
 
@@ -4362,7 +4375,7 @@ function startCountdownAndReload(seconds, statusEl, healthPath = '/api/health') 
     if (!statusEl) return;
     statusEl.hidden = false;
     statusEl.className = 'modal-status running';
-    statusEl.textContent = t('status.countdown', { seconds: remaining });
+    statusEl.textContent = [prefix, t('status.countdown', { seconds: remaining })].filter(Boolean).join('\n');
   };
   tick();
 
@@ -4426,10 +4439,15 @@ function showConfirm(text) {
 
 async function execAction(action, body) {
   if (remoteIsReadOnly()) return false;
+  if (['interrupt', 'chop-chop', 'restart-session'].includes(action)) {
+    const shown = state.dashboardState;
+    body = { ...body, sessionGroup: shown?.sessionGroup, runId: shown?.runId, sessionId: shown?.sessionId };
+  }
   const actionPath = agentPath(`/api/actions/${action}`);
   const healthPath = agentPath('/api/health');
   if (CONFIRM_ACTIONS.has(action)) {
     const labels = {
+      'switch-mode': t('confirm.switch_mode', { mode: body?.mode }),
       'interrupt': t('confirm.interrupt'),
       'chop-chop': t('confirm.chop_chop'),
       'restart-session': t('confirm.restart'),
@@ -4464,21 +4482,28 @@ async function execAction(action, body) {
       body: JSON.stringify(body || {})
     });
     const result = await r.json();
+    if (action === 'restart-session' && result.requestId) {
+      pendingManualRestart = result.submission === 'unknown' ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
+      if (pendingManualRestart) refreshModeStatus();
+    }
     if (result.ok && result.detached) {
-      startCountdownAndReload(15, statusEl, healthPath);
+      const summary = formatActionResult(result, t) || t('status.done');
+      if (statusEl) {
+        statusEl.className = 'modal-status success';
+        statusEl.style.whiteSpace = 'pre-line';
+        statusEl.textContent = summary;
+      }
+      startCountdownAndReload(15, statusEl, healthPath, summary);
       return true;
     }
     if (statusEl) {
       const isInfo = !result.ok && (result.error === 'already_up_to_date' || result.error === 'already_set');
       statusEl.className = result.ok ? 'modal-status success' : isInfo ? 'modal-status success' : 'modal-status error';
-      let localMsg = null;
-      if (result.messageKey) {
-        const translated = t(result.messageKey, result.messageParams);
-        if (translated !== result.messageKey) localMsg = translated;
-      }
-      statusEl.textContent = localMsg || result.message || (result.ok ? t('status.done') : result.error);
+      statusEl.style.whiteSpace = 'pre-line';
+      statusEl.textContent = formatActionResult(result, t) || (result.ok ? t('status.done') : result.error);
       if (result.ok || isInfo) setTimeout(() => { statusEl.hidden = true; }, 5000);
     }
+    if (result.refreshState) await refreshState();
     if (result.ok && result.requires_restart) {
       await new Promise(r => setTimeout(r, 1500));
       if (statusEl) statusEl.hidden = true;

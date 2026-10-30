@@ -320,6 +320,7 @@ test('session cookie survives server restart (SQLite persistence)', async () => 
 
 test('/api/state exposes stable agent identity without fleet secrets', async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  const legacyMarker = path.join(zylosDir, 'components', 'dashboard', 'upgrade-zylos-pending.json');
   writeConfig(zylosDir, 'secret', {
     auth: { enabled: false },
     agent: { name: 'Jinglever', id: 'jinglever-main' },
@@ -333,6 +334,7 @@ test('/api/state exposes stable agent identity without fleet secrets', async () 
       ]
     }
   });
+  fs.writeFileSync(legacyMarker, JSON.stringify({ from: '0.5.1', to: '0.5.2', startedAt: '2026-01-01T00:00:00.000Z' }));
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
@@ -354,6 +356,11 @@ test('/api/state exposes stable agent identity without fleet secrets', async () 
     assert.ok(Object.hasOwn(body, 'daily_cost'));
     assert.ok(Object.hasOwn(body, 'weekly_cost'));
     assert.ok(Object.hasOwn(body, 'context_pct'));
+    for (const rawField of ['identity', 'status', 'usage', 'launchConfig', 'input']) {
+      assert.equal(JSON.stringify(body).includes(`"${rawField}"`), false);
+    }
+    assert.equal(Object.hasOwn(body.runtime_info, 'zylos_upgrade_result'), false);
+    assert.equal(fs.existsSync(legacyMarker), true, 'Dashboard must not consume the legacy upgrade marker');
     assert.equal(JSON.stringify(body).includes('zylos_ak_secret'), false);
     assert.equal(JSON.stringify(body).includes('read_api_key'), false);
   } finally {

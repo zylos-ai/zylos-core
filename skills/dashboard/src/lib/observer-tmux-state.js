@@ -125,7 +125,7 @@ export async function validateState(root) {
       state.outerSocket !== path.join(state.socketRoot, 'tmux') ||
       state.sessionName !== `observer-${state.nonce.slice(0, 16)}` ||
       !Number.isInteger(state.port) || state.port < 1 || state.port > 65535 ||
-      !['claude-main', 'codex-main'].includes(state.target) ||
+      !['claude-main', 'codex-main', 'zylos-group-origin'].includes(state.target) ||
       typeof state.binaryPath !== 'string' || !path.isAbsolute(state.binaryPath) ||
       typeof state.tmuxPath !== 'string' || !state.tmuxPath ||
       (state.tmuxSocket !== null && (typeof state.tmuxSocket !== 'string' || !path.isAbsolute(state.tmuxSocket))) ||

@@ -27,6 +27,7 @@ export class ObserverManager {
     containment,
     authGate,
     runtime,
+    resolveOrigin,
     target = 'local',
     maxViewers = DEFAULT_MAX_VIEWERS,
     leaseTtlMs = DEFAULT_LEASE_TTL_MS,
@@ -39,6 +40,7 @@ export class ObserverManager {
     this.containment = containment;
     this.authGate = authGate;
     this.runtime = runtime;
+    this.resolveOrigin = resolveOrigin;
     this.target = target;
     this.maxViewers = maxViewers;
     this.leaseTtlMs = leaseTtlMs;
@@ -128,6 +130,11 @@ export class ObserverManager {
 
   async createLease(context, { target = this.target } = {}) {
     this._requireAdmin(context);
+    let origin = null;
+    if (this.resolveOrigin) {
+      try { origin = await this.resolveOrigin(); } catch {}
+      if (!origin?.runId) throw new ObserverManagerError('target_mismatch', 'Current Origin run is unavailable');
+    }
     if (target !== this.target) throw new ObserverManagerError('target_mismatch', 'Observer target is not this producer');
     if (this._shuttingDown || this._lifecycleTransitions > 0) {
       throw new ObserverManagerError('operation_obsolete', 'Observer lifecycle is changing');
@@ -151,11 +158,14 @@ export class ObserverManager {
       if (epoch !== this._epoch || active !== this.containment.active || active.generation !== this.generation) {
         throw new ObserverManagerError('operation_obsolete', 'Observer lease start was superseded');
       }
+      const currentOrigin = this.resolveOrigin ? await this.resolveOrigin() : null;
+      if (this.resolveOrigin && (!currentOrigin?.runId || currentOrigin.runId !== origin.runId || active.originRunId !== origin.runId)) throw new ObserverManagerError('target_mismatch', 'Origin changed during Observer attachment');
       const id = crypto.randomBytes(24).toString('base64url');
       const createdAt = this.now();
       const lease = {
         id,
         principal: context,
+        runId: origin?.runId ?? null,
         target,
         generation: active.generation,
         createdAt,
@@ -175,6 +185,7 @@ export class ObserverManager {
       expiresAt: lease.expiresAt,
       generation: lease.generation,
       resource: 'frame',
+      ...(lease.runId ? { runId: lease.runId } : {}),
     };
   }
 
@@ -243,6 +254,14 @@ export class ObserverManager {
   }
 
   async revalidate() {
+    if (this.resolveOrigin && this.containment.active) {
+      let origin;
+      try { origin = await this.resolveOrigin(); } catch {}
+      if (!origin || origin.runId !== this.containment.active.originRunId) {
+        await this.handleContainmentFailure(new ObserverManagerError('target_mismatch', 'Origin identity changed'));
+        return 0;
+      }
+    }
     const now = this.now();
     for (const [id, lease] of this.leases) {
       const refreshed = this.authGate.revalidateAuthContext(lease.principal);

@@ -52,7 +52,7 @@ export class C4Reader {
 
   getPendingQueue() {
     const db = this._open();
-    if (!db) return { depth: 0, oldest_age_s: null };
+    if (!db) return { depth: null, oldest_age_s: null, error: 'READ_FAILED' };
     try {
       const row = db.prepare(`
         SELECT COUNT(*) as depth,
@@ -66,7 +66,7 @@ export class C4Reader {
         oldest_age_s: row.oldest_age_s ?? null
       };
     } catch {
-      return { depth: 0, oldest_age_s: null };
+      return { depth: null, oldest_age_s: null, error: 'READ_FAILED' };
     }
   }
 

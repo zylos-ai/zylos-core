@@ -167,9 +167,23 @@ test('C4Reader — missing db returns safe defaults', () => {
   const reader = new C4Reader(tmpDir);
   try {
     assert.equal(reader.getTodayStats(), null);
-    assert.deepEqual(reader.getPendingQueue(), { depth: 0, oldest_age_s: null });
+    assert.deepEqual(reader.getPendingQueue(), { depth: null, oldest_age_s: null, error: 'READ_FAILED' });
     assert.deepEqual(reader.getLastOutbound(), {});
     assert.equal(reader.getAvgResponseTime(), null);
+  } finally {
+    reader.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('C4Reader — a readable database with an invalid queue schema reports a read failure', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-reader-schema-'));
+  const commDir = path.join(tmpDir, 'comm-bridge');
+  fs.mkdirSync(commDir, { recursive: true });
+  new Database(path.join(commDir, 'c4.db')).close();
+  const reader = new C4Reader(tmpDir);
+  try {
+    assert.deepEqual(reader.getPendingQueue(), { depth: null, oldest_age_s: null, error: 'READ_FAILED' });
   } finally {
     reader.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
