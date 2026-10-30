@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 
 const cli = path.resolve(import.meta.dirname, '../../zylos.js');
+const installedVersion = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../../../package.json'), 'utf8')).version;
 function makeProfile(host = 'mirror.example.test') {
   return { schemaVersion: 1, revision: host, providers: { github: {
     apiBase: `https://${host}/api/`, rawBase: `https://${host}/raw/`, downloadBase: `https://${host}/download/`,
@@ -123,7 +124,7 @@ test('CLI self upgrade delegates to the downloaded entry and preserves its strea
   assert.equal(result.stderr, 'target stderr\n');
   const handoff = JSON.parse(fs.readFileSync(handoffFile, 'utf8'));
   assert.equal(handoff.schemaVersion, 1);
-  assert.equal(handoff.fromVersion, '0.9.3');
+  assert.equal(handoff.fromVersion, installedVersion);
   assert.equal(path.isAbsolute(handoff.tempDir), true);
   assert.equal(path.isAbsolute(handoff.installedRoot), true);
   assert.equal(path.isAbsolute(handoff.zylosDir), true);
@@ -138,7 +139,7 @@ test('CLI self upgrade cancellation preserves baseline display and does not run 
   });
   assert.equal(result.status, 0, result.stderr);
   const output = result.stdout.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '');
-  assert.match(output, /zylos-core.*0\.9\.3.*2\.0\.0/s);
+  assert.match(output, new RegExp(`zylos-core.*${installedVersion.replaceAll('.', '\\.')}.*2\\.0\\.0`, 's'));
   assert.match(output, /Target package: 2\.0\.0 \(tag:v2\.0\.0\)/);
   assert.match(output, /CHANGELOG.*Fixture core change\./s);
   assert.match(output, /Proceed with zylos-core upgrade\? \[y\/N\]: n\nUpgrade cancelled\./);

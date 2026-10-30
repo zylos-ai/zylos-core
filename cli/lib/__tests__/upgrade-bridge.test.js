@@ -146,6 +146,5 @@ test('automatic recovery refusal preserves the manual recovery result code', t =
 
 test('release package has no minimum-source install gate', () => {
   const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-  assert.equal(pkg.version, '0.9.3');
   assert.equal(Object.hasOwn(pkg.scripts, 'preinstall'), false);
 });
