@@ -142,6 +142,20 @@ describe('postinstall local install guard', () => {
     assert.equal(settingsSynced(zylosDir), true);
   });
 
+  it('activates the legacy postinstall skip only for the exact value 1', () => {
+    for (const value of ['', '0', 'false']) {
+      const zylosDir = fixtureZylosDir();
+      runPostinstall(
+        zylosDir,
+        { npm_lifecycle_event: 'postinstall', npm_command: 'install' },
+        { ZYLOS_SKIP_POSTINSTALL: value },
+        installedPostinstallPath(),
+      );
+      assert.equal(skillsSynced(zylosDir), true, value);
+      assert.equal(settingsSynced(zylosDir), true, value);
+    }
+  });
+
   it('keeps syncing when run directly outside npm', () => {
     const zylosDir = fixtureZylosDir();
     runPostinstall(zylosDir);

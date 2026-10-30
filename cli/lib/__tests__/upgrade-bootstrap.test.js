@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {test} from 'node:test';
@@ -48,6 +49,23 @@ function readyJournal(f, phase = 'new_data_ready', extra = {}) {
   });
 }
 
+function installFrozenRunner(dir, source) {
+  const files = {
+    'runner.cjs': source,
+    'maintenance.cjs': "'use strict';\n",
+    'installer.cjs': "'use strict';\n",
+  };
+  const hashes = {};
+  for (const [name, content] of Object.entries(files)) {
+    fs.writeFileSync(path.join(dir, name), content, {mode:0o600});
+    hashes[name] = crypto.createHash('sha256').update(content).digest('hex');
+  }
+  const journalFile = path.join(dir, 'journal.json');
+  const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'));
+  fs.writeFileSync(journalFile, JSON.stringify({...journal, nodePath:process.execPath, recoveryHashes:hashes}), {mode:0o600});
+  return hashes;
+}
+
 
 test('malformed journals expose a fixed diagnostic cue and never resume', t => {
   const f = fixture(t), dir = f.journal();
@@ -81,19 +99,84 @@ test('status and discovery do not depend on runtime capability or recovery modul
 
 test('live controller is observed without entering resume', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
+  const executed = path.join(f.root, 'executed');
+  installFrozenRunner(dir, `require('node:fs').writeFileSync(${JSON.stringify(executed)}, 'yes');`);
   const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
   m.durable(path.join(dir, 'controller.json'), m.identity());
   const out = f.api.bootstrap(f.root, {once: true});
   assert.equal(out.controllerAlive, true);
   assert.equal(out.observing, true);
+  assert.equal(fs.existsSync(executed), false);
 });
 
 test('once resumes exactly the attributed transaction and does not launch a runtime', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
-  fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'exports.resume = dir => ({resumed: dir});');
+  const record = path.join(f.root, 'runner-args.json');
+  installFrozenRunner(dir, `
+    const fs=require('node:fs'),path=require('node:path');
+    fs.writeFileSync(${JSON.stringify(record)},JSON.stringify(process.argv.slice(2)));
+    const dir=process.argv[process.argv.length-1],root=path.resolve(dir,'../../..');
+    fs.rmSync(path.join(root,'.zylos/upgrade/active.json'));
+    fs.rmSync(dir,{recursive:true});
+    process.stdout.write(JSON.stringify({success:true})+'\\n');
+  `);
   const out = f.api.bootstrap(f.root, {once: true});
-  assert.equal(out.resumed, dir);
-  assert.equal(out.launched, undefined);
+  assert.equal(out.active, false);
+  assert.equal(out.resumed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(record, 'utf8')), ['resume','--transaction-dir',dir]);
+});
+
+test('a failing frozen runner keeps recovery required and reports its exit status', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal();
+  installFrozenRunner(dir, 'process.exit(9);');
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.active, true);
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.error, /exited 9/);
+});
+
+test('a successful frozen runner must leave no transaction or active marker', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal();
+  installFrozenRunner(dir, `
+    const fs=require('node:fs'),path=require('node:path');
+    const dir=process.argv[process.argv.length-1],root=path.resolve(dir,'../../..');
+    fs.rmSync(path.join(root,'.zylos/upgrade/active.json'));
+  `);
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.active, true);
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.error, /clean terminal state/);
+  assert.equal(fs.existsSync(dir), true);
+});
+
+test('changed frozen recovery material is rejected before runner execution', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal();
+  const executed = path.join(f.root, 'executed');
+  installFrozenRunner(dir, `require('node:fs').writeFileSync(${JSON.stringify(executed)}, 'yes');`);
+  fs.appendFileSync(path.join(dir, 'runner.cjs'), '\n// changed\n');
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.error, /hash mismatch/);
+  assert.equal(fs.existsSync(executed), false);
+});
+
+test('an existing descriptor must name the fixed layout and the same recovery hashes', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal();
+  const hashes = installFrozenRunner(dir, '');
+  fs.writeFileSync(path.join(dir, 'descriptor.json'), JSON.stringify({
+    formatVersion:1, transactionId:'tx', nodePath:process.execPath,
+    runnerPath:path.join(dir, 'elsewhere.cjs'),
+    driverClosureRoot:path.join(dir, 'sqlite-runtime'),
+    workerPath:path.join(dir, 'sqlite-runtime/core-db-backup-worker.js'),
+    driverPath:path.join(dir, 'sqlite-runtime/node_modules/better-sqlite3/lib/index.js'),
+    hashes,
+  }), {mode:0o600});
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.recovery_required, true);
+  assert.match(out.error, /fixed layout/);
 });
 
 test('stale or invalid controller material leaves an isolated recovery cue', t => {
