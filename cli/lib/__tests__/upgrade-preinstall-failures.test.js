@@ -62,7 +62,7 @@ else if(args[0]==='stop') {if(${JSON.stringify(fault)}==='stop'){console.error('
 else if(args[0]==='restart'||args[0]==='startOrRestart') fs.writeFileSync(state,'online');
 else if(args[0]!=='save') {console.error('unexpected fake PM2 command');process.exit(2);}
 `,{mode:0o700});
-  const prior=process.env.PATH;process.env.PATH=bin+path.delimiter+prior;
+  const prior=process.env.PATH;process.env.PATH=fault==='missing-ps'?bin:bin+path.delimiter+prior;
   t.after(()=>{process.env.PATH=prior;});
   return {root,skillsDir,tempDir,original,calls,state,packageRoot};
 }
@@ -90,4 +90,21 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
   const calls=fs.readFileSync(f.calls,'utf8').trim().split('\n').map(JSON.parse);
   if (restrictedView) assert.equal(calls.some(args=>args[0]==='stop'),false,'incomplete process view must reject before stopping services');
   else assert.ok(calls.some(args=>args[0]==='stop'),'real stop boundary must be exercised');
+});
+
+test('missing ps reports writer-exit guidance before installation or migration',async t=>{
+  const f=fixture(t,'missing-ps');let installerCalls=0,migrationCalls=0;
+  const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.tempDir,installedRoot:f.packageRoot,zylosDir:f.root},{
+    inspect:()=>({zylosDir:f.root,skillsDir:f.skillsDir,tempDir:f.tempDir,coreDir:f.packageRoot,from:'0.9.3',to:'0.9.4',firstTakeover:true,dashboardOwnerManaged:false,snapshotFormatVersion:2,steps:[]}),
+    resolveNpm:()=>'/fixture/npm-cli.js',savePackage:()=>{},
+    prepare:ctx=>prepareProtectedInstall(ctx),
+    install:()=>{installerCalls++;throw Error('installer must not run');},
+    finalize:()=>{migrationCalls++;throw Error('migration must not run');},
+  });
+  assert.equal(result.success,false);
+  assert.equal(result.code,'UPGRADE_FAILED');
+  assert.match(result.error,/cannot confirm that write processes exited because the ps command is unavailable/i);
+  assert.match(result.next,/install procps/i);
+  assert.equal(installerCalls,0);assert.equal(migrationCalls,0);
+  assert.equal(fs.readFileSync(f.state,'utf8'),'online');
 });
