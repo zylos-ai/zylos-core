@@ -668,8 +668,11 @@ function commitSkillBaselines(ctx) {
 // ---------------------------------------------------------------------------
 
 function protectionResult(ctx) {
+  const journal=ctx.journal;
   return {compensationSupported:true, automaticResume:maintenanceFor(ctx).canRecognizeProcesses(),
-    databaseMode:ctx.databaseMode || 'migrate', dbSnapshotVerified:ctx.dbSnapshotVerified===true,
+    databaseMode:journal?.databaseMode==='unchanged' ? 'unchanged' : 'migrate',
+    dbSnapshotVerified:journal?.installationIntent===true && typeof journal.dbBackupDir==='string' &&
+      typeof journal.snapshotManifestHash==='string' && /^[a-f0-9]{64}$/.test(journal.snapshotManifestHash),
     databases:ctx.databases || ctx.databasePreflight?.databases || null};
 }
 function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbackPerformed = Boolean(rollbackResults)) {

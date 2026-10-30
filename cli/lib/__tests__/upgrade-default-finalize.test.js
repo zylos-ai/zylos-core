@@ -20,7 +20,7 @@ const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
 const Database = require(path.join(packageRoot, 'skills/comm-bridge/node_modules/better-sqlite3'));
 
-function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firstTakeover = true } = {}) {
+function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firstTakeover = true, databaseMode = 'migrate' } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(temporaryBase, 'default-finalizer-')));
   const previousHome = process.env.HOME, previousPm2Home = process.env.PM2_HOME, previousPath = process.env.PATH;
   process.env.HOME = home;
@@ -109,7 +109,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     fs.writeFileSync(packageJson, '{}'); fs.mkdirSync(cliRoot);
     journal = { formatVersion: 1, transactionId: 'tx', zylosDir: root, skillsDir,
       nodePath: process.execPath, phase: 'installing', installationIntent: true,
-      databaseMode: 'migrate', firstTakeover, dashboardOwnerManaged:false, dbBackupDir: snapshot.dbBackupDir,
+      databaseMode, firstTakeover, dashboardOwnerManaged:false, dbBackupDir: snapshot.dbBackupDir,
       snapshotManifestHash: m.hash(path.join(snapshot.dbBackupDir, 'manifest.json')),
       from: '0.9.3', to: '0.9.4', originalServices: [],
       coreManifest: LEGACY_CORE_DATABASES.map(item => ({ name: item.owner, existedBefore: true,
@@ -172,6 +172,8 @@ test('default protected initial finalizer publishes real preparation, closes jou
   const f = fixture(t);
   const result = await f.run();
   assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.dbSnapshotVerified, true);
+  assert.equal(result.databaseMode, 'migrate');
   assert.equal(f.load().phase, 'upgrade_complete');
   assert.equal(f.load().postCutoff.items.hooks.state, 'done');
   assert.equal(f.load().dashboardInstall.items.registration.state, 'done');
@@ -185,6 +187,15 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assert.equal(result.completion.modeTransition, 'pending_auto');
   assert.ok(f.calls.indexOf('start') > f.calls.indexOf('ensure-memory'));
   assert.ok(f.calls.indexOf('restart') > f.calls.indexOf('verify'));
+  assertDataPreserved(f);
+});
+
+test('protected finalizer reports persisted unchanged database mode and verified snapshot',async t=>{
+  const f=fixture(t,{databaseMode:'unchanged'});
+  const result=await f.run();
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(result.dbSnapshotVerified,true);
+  assert.equal(result.databaseMode,'unchanged');
   assertDataPreserved(f);
 });
 
