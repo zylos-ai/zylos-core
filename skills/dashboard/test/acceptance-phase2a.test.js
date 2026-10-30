@@ -5,6 +5,9 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test, { after, before } from 'node:test';
+import { CoreLogImporter } from '../src/lib/core-log-importer.js';
+import { StatuslineCollector } from '../src/lib/collectors/statusline-collector.js';
+import { Store } from '../src/lib/store.js';
 
 if (!process.env.ACCEPTANCE) {
   console.log('# Skipping acceptance tests (set ACCEPTANCE=1 to run)');
@@ -177,25 +180,28 @@ test('AC-2: source health freshness fields', () => {
   }
 });
 
-// --- AC-4: Hook data flow ---
-
-test('AC-4: hook_events source healthy after data flow', () => {
-  const health = api('/api/health');
-  const hookEvents = health.source.runtime_progress.hook_events;
-  assert.equal(hookEvents.status, 'healthy');
-  assert.equal(hookEvents.fresh, true);
-});
-
-test('AC-4: hook_handler collector healthy', () => {
-  const health = api('/api/health');
-  const handler = health.source.collector_liveness.hook_handler;
-  assert.equal(handler.status, 'healthy');
-  assert.equal(handler.fresh, true);
-});
-
 // --- Data integrity ---
 
-test('Data integrity: events have required fields', () => {
+test('Data integrity: Core log events have required fields', async () => {
+  const fixturePath = path.join(SANDBOX_ZYLOS_DIR, 'acceptance-core-events.jsonl');
+  fs.writeFileSync(fixturePath, `${JSON.stringify({
+    v: 1,
+    ts: Date.now(),
+    event: 'prompt',
+    runtime: 'claude',
+    session_group: 'origin',
+    run_id: 'acceptance-run',
+    session_id: 'acceptance-session'
+  })}\n`);
+  const store = new Store(DB_PATH);
+  const importer = new CoreLogImporter({ store, zylosDir: SANDBOX_ZYLOS_DIR });
+  try {
+    await importer.importFile('events:origin', fixturePath);
+  } finally {
+    await importer.stop();
+    store.close();
+  }
+
   const row = sql("SELECT id, ingest_id, event_seq, timestamp, runtime, event_type, category, source FROM runtime_events ORDER BY event_seq DESC LIMIT 1");
   assert.ok(row.length > 0, 'no events found');
   const parts = row.split('|');
@@ -208,7 +214,7 @@ test('Data integrity: events have required fields', () => {
   assert.equal(runtime, 'claude');
   assert.ok(event_type, 'missing event_type');
   assert.ok(category, 'missing category');
-  assert.equal(source, 'hook');
+  assert.equal(source, 'core-log');
 });
 
 test('Data integrity: schema migrations applied', () => {
@@ -221,23 +227,42 @@ test('Data integrity: WAL mode enabled', () => {
   assert.equal(mode, 'wal');
 });
 
-// --- StatusLine ingest ---
+// --- StatusLine collection ---
 
-test('StatusLine: /api/ingest/statusline accepts metrics', async () => {
-  const body = JSON.stringify({
-    metrics: [
-      { metric_name: 'context_pct', metric_value: 42.5, source: 'statusline', confidence: 'actual' },
-      { metric_name: 'session_cost', metric_value: 0.1234, source: 'statusline', confidence: 'actual' }
-    ]
+test('StatusLine: Core collector accepts identity-valid usage', async () => {
+  const store = new Store(DB_PATH);
+  const collector = new StatuslineCollector(store, { zylosDir: SANDBOX_ZYLOS_DIR }, {
+    read: async () => ({
+      identity: { runtime: 'claude', runId: 'acceptance-run', sessionId: 'acceptance-session' },
+      usage: {
+        valid: true,
+        sampledAt: Date.now(),
+        value: {
+          context_window: { used_percentage: 42.5 },
+          cost: { total_cost_usd: 0.1234 }
+        }
+      }
+    })
   });
-  const resp = JSON.parse(execSync(`curl -s -X POST -H "Content-Type: application/json" -d '${body}' ${BASE}/api/ingest/statusline`, { encoding: 'utf8' }));
-  assert.equal(resp.ok, true);
-  assert.equal(resp.written, 2);
+  try {
+    assert.equal((await collector.collect()).written, 1);
+  } finally {
+    await collector.stop();
+    store.close();
+  }
 });
 
-test('StatusLine: metrics stored in DB after ingest', () => {
-  const count = parseInt(sql("SELECT COUNT(*) FROM metric_points WHERE metric_name = 'context_pct' AND source = 'statusline'"), 10);
-  assert.ok(count >= 1, 'context_pct metric not stored');
+test('StatusLine: Core usage metrics stored in DB', () => {
+  const row = sql("SELECT runtime, session_id, dimensions FROM metric_points WHERE metric_name = 'statusline_summary' AND source = 'statusline' ORDER BY id DESC LIMIT 1");
+  assert.ok(row.length > 0, 'statusline_summary metric not stored');
+  const [runtime, sessionId, dimensions] = row.split('|');
+  assert.equal(runtime, 'claude');
+  assert.equal(sessionId, 'acceptance-session');
+  assert.deepEqual(JSON.parse(dimensions), {
+    run_id: 'acceptance-run',
+    context_pct: 42.5,
+    session_cost: 0.1234
+  });
 });
 
 test('Metrics history: metric_points table queryable', () => {
