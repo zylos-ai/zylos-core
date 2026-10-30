@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { applyUpgradePrompt, discoverUpgradeContext } from './upgrade-context.js';
+import { applyUpgradePrompt, resumeUpgradeForStartup } from './upgrade-context.js';
 import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url);
 
@@ -39,7 +39,7 @@ try {
 }
 
 // File-only recovery must precede normal runtime SessionStart/C4 imports.
-const recovery = discoverUpgradeContext(spec.cwd || process.cwd(), { resume: true, scanHistory: true });
+const recovery = resumeUpgradeForStartup(spec.cwd || process.cwd());
 if (recovery.blocked || (recovery.active && !recovery.controllerAlive)) {
   spec.args = applyUpgradePrompt(spec.args || [], recovery.prompt, spec.promptIndex, {
     append: !recovery.blocked,
