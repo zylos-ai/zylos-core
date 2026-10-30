@@ -1,13 +1,10 @@
 import assert from 'node:assert/strict';
-import { execSync, spawn } from 'node:child_process';
+import { execFileSync, execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test, { after, before } from 'node:test';
-import { CoreLogImporter } from '../src/lib/core-log-importer.js';
-import { StatuslineCollector } from '../src/lib/collectors/statusline-collector.js';
-import { Store } from '../src/lib/store.js';
 
 if (!process.env.ACCEPTANCE) {
   console.log('# Skipping acceptance tests (set ACCEPTANCE=1 to run)');
@@ -21,13 +18,53 @@ if (!process.env.ACCEPTANCE) {
 const SANDBOX_ZYLOS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-acceptance-'));
 const DATA_DIR = path.join(SANDBOX_ZYLOS_DIR, 'components', 'dashboard');
 const DB_PATH = path.join(DATA_DIR, 'dashboard.db');
+const CORE_RUN_DIR = path.join(SANDBOX_ZYLOS_DIR, 'activity-monitor', 'session-groups', 'origin');
+const SANDBOX_HOME = path.join(SANDBOX_ZYLOS_DIR, 'home');
+const SANDBOX_PM2_HOME = path.join(SANDBOX_ZYLOS_DIR, 'pm2');
+const SANDBOX_TMPDIR = path.join(SANDBOX_ZYLOS_DIR, 'tmp');
+const TMUX_SOCKET = path.join(SANDBOX_TMPDIR, 'tmux.sock');
+const TMUX_BIN = process.env.TEST_TMUX_BIN || 'tmux';
+const RUN_ID = 'acceptance-run';
+const SESSION_ID = 'acceptance-session';
 const HOOK_SCRIPT = path.resolve(new URL('../src/lib/hook-ingest.cjs', import.meta.url).pathname);
 const SERVER_ENTRY = path.resolve(new URL('../src/index.js', import.meta.url).pathname);
+const PACKAGE_ROOT = path.resolve(new URL('../../..', import.meta.url).pathname);
 
 let PORT = null;
 let BASE = null;
 let server = null;
 let serverLog = '';
+let statuslineTimer = null;
+
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function waitFor(description, read, accept, timeoutMs = 25000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const value = await read();
+      if (accept(value)) return value;
+    } catch (error) { lastError = error; }
+    await pause(100);
+  }
+  throw new Error(`${description} did not arrive within ${timeoutMs}ms${lastError ? `: ${lastError.message}` : ''}\n${serverLog.slice(-2000)}`);
+}
+
+function tmux(...args) {
+  return execFileSync(TMUX_BIN, ['-u', '-S', TMUX_SOCKET, ...args], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000
+  }).trim();
+}
+
+function writeCoreStatusline() {
+  fs.writeFileSync(path.join(CORE_RUN_DIR, 'statusline.json'), JSON.stringify({
+    session_id: SESSION_ID,
+    zylos: { v: 1, runId: RUN_ID, capturedAt: Date.now() },
+    context_window: { used_percentage: 42.5 },
+    cost: { total_cost_usd: 0.1234 }
+  }));
+}
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -43,14 +80,54 @@ function freePort() {
 before(async () => {
   PORT = await freePort();
   BASE = `http://127.0.0.1:${PORT}`;
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  for (const dir of [DATA_DIR, CORE_RUN_DIR, SANDBOX_HOME, SANDBOX_PM2_HOME, SANDBOX_TMPDIR, path.join(SANDBOX_ZYLOS_DIR, '.zylos')]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
   fs.writeFileSync(path.join(DATA_DIR, 'config.json'), JSON.stringify({
     port: PORT,
     auth: { enabled: false }
   }, null, 2));
+  fs.writeFileSync(path.join(SANDBOX_ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({
+    runtime: 'claude',
+    session_mode: 'single'
+  }));
+  fs.writeFileSync(path.join(CORE_RUN_DIR, 'current-session.json'), JSON.stringify({
+    runId: RUN_ID,
+    sessionId: SESSION_ID,
+    ts: Date.now(),
+    startupControlIds: []
+  }));
+  fs.writeFileSync(path.join(CORE_RUN_DIR, 'agent-status.json'), JSON.stringify({
+    runId: RUN_ID,
+    sessionId: SESSION_ID,
+    state: 'idle'
+  }));
+  fs.writeFileSync(path.join(CORE_RUN_DIR, 'events.jsonl'), `${JSON.stringify({
+    v: 1,
+    ts: Date.now(),
+    event: 'prompt',
+    runtime: 'claude',
+    session_group: 'origin',
+    run_id: RUN_ID,
+    session_id: SESSION_ID
+  })}\n`);
+
+  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'zylos-group-origin',
+    '-e', `ZYLOS_RUN_ID=${RUN_ID}`,
+    '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',
+    'sleep', '120');
 
   server = spawn('node', [SERVER_ENTRY], {
-    env: { ...process.env, ZYLOS_DIR: SANDBOX_ZYLOS_DIR },
+    env: {
+      ...process.env,
+      HOME: SANDBOX_HOME,
+      PM2_HOME: SANDBOX_PM2_HOME,
+      TMPDIR: SANDBOX_TMPDIR,
+      TMUX: `${TMUX_SOCKET},0,0`,
+      TMUX_TMPDIR: SANDBOX_TMPDIR,
+      ZYLOS_DIR: SANDBOX_ZYLOS_DIR,
+      ZYLOS_PACKAGE_ROOT: PACKAGE_ROOT
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   server.stdout.on('data', (d) => { serverLog += d; });
@@ -60,15 +137,24 @@ before(async () => {
   while (Date.now() < deadline) {
     try {
       const resp = await fetch(`${BASE}/api/health`);
-      if (resp.ok) return;
+      if (resp.ok) {
+        await waitFor('initial statusline health check',
+          () => sql("SELECT status FROM source_health WHERE name = 'statusline' AND signal_type = 'collector_liveness'"),
+          value => value === 'stale');
+        writeCoreStatusline();
+        statuslineTimer = setInterval(writeCoreStatusline, 1000);
+        return;
+      }
     } catch { /* not up yet */ }
-    await new Promise(r => setTimeout(r, 250));
+    await pause(250);
   }
   throw new Error(`sandbox dashboard did not become healthy on :${PORT}\n${serverLog.slice(-2000)}`);
 });
 
 after(() => {
+  clearInterval(statuslineTimer);
   server?.kill();
+  try { tmux('kill-server'); } catch {}
   fs.rmSync(SANDBOX_ZYLOS_DIR, { recursive: true, force: true });
 });
 
@@ -182,27 +268,10 @@ test('AC-2: source health freshness fields', () => {
 
 // --- Data integrity ---
 
-test('Data integrity: Core log events have required fields', async () => {
-  const fixturePath = path.join(SANDBOX_ZYLOS_DIR, 'acceptance-core-events.jsonl');
-  fs.writeFileSync(fixturePath, `${JSON.stringify({
-    v: 1,
-    ts: Date.now(),
-    event: 'prompt',
-    runtime: 'claude',
-    session_group: 'origin',
-    run_id: 'acceptance-run',
-    session_id: 'acceptance-session'
-  })}\n`);
-  const store = new Store(DB_PATH);
-  const importer = new CoreLogImporter({ store, zylosDir: SANDBOX_ZYLOS_DIR });
-  try {
-    await importer.importFile('events:origin', fixturePath);
-  } finally {
-    await importer.stop();
-    store.close();
-  }
-
-  const row = sql("SELECT id, ingest_id, event_seq, timestamp, runtime, event_type, category, source FROM runtime_events ORDER BY event_seq DESC LIMIT 1");
+test('Data integrity: running service imports Core log events with required fields', async () => {
+  const row = await waitFor('Core log import',
+    () => sql("SELECT id, ingest_id, event_seq, timestamp, runtime, event_type, category, source FROM runtime_events WHERE source = 'core-log' ORDER BY event_seq DESC LIMIT 1"),
+    value => value.length > 0);
   assert.ok(row.length > 0, 'no events found');
   const parts = row.split('|');
   assert.equal(parts.length, 8, 'expected 8 columns');
@@ -229,40 +298,30 @@ test('Data integrity: WAL mode enabled', () => {
 
 // --- StatusLine collection ---
 
-test('StatusLine: Core collector accepts identity-valid usage', async () => {
-  const store = new Store(DB_PATH);
-  const collector = new StatuslineCollector(store, { zylosDir: SANDBOX_ZYLOS_DIR }, {
-    read: async () => ({
-      identity: { runtime: 'claude', runId: 'acceptance-run', sessionId: 'acceptance-session' },
-      usage: {
-        valid: true,
-        sampledAt: Date.now(),
-        value: {
-          context_window: { used_percentage: 42.5 },
-          cost: { total_cost_usd: 0.1234 }
-        }
-      }
-    })
-  });
+test('StatusLine: running service stores Core usage and reports fresh health', async () => {
+  let row;
   try {
-    assert.equal((await collector.collect()).written, 1);
-  } finally {
-    await collector.stop();
-    store.close();
+    row = await waitFor('statusline collection',
+      () => sql("SELECT runtime, session_id, dimensions FROM metric_points WHERE metric_name = 'statusline_summary' AND source = 'statusline' ORDER BY id DESC LIMIT 1"),
+      value => value.length > 0);
+  } catch (error) {
+    error.message += `\nsource_health:\n${sql("SELECT name, signal_type, status, extra FROM source_health ORDER BY name, signal_type")}`;
+    throw error;
   }
-});
-
-test('StatusLine: Core usage metrics stored in DB', () => {
-  const row = sql("SELECT runtime, session_id, dimensions FROM metric_points WHERE metric_name = 'statusline_summary' AND source = 'statusline' ORDER BY id DESC LIMIT 1");
   assert.ok(row.length > 0, 'statusline_summary metric not stored');
   const [runtime, sessionId, dimensions] = row.split('|');
   assert.equal(runtime, 'claude');
-  assert.equal(sessionId, 'acceptance-session');
+  assert.equal(sessionId, SESSION_ID);
   assert.deepEqual(JSON.parse(dimensions), {
-    run_id: 'acceptance-run',
+    run_id: RUN_ID,
     context_pct: 42.5,
     session_cost: 0.1234
   });
+  const health = api('/api/health');
+  for (const entry of [health.source.platform.statusline, health.source.runtime_progress.statusline]) {
+    assert.equal(entry.status, 'healthy');
+    assert.equal(entry.fresh, true);
+  }
 });
 
 test('Metrics history: metric_points table queryable', () => {
