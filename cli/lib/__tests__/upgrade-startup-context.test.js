@@ -6,6 +6,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt,discoverUpgradeContext} from '../runtime/upgrade-context.js';
+import {recoveryCommand} from '../../commands/recovery.js';
 const maintenance = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 test('Codex recovery replaces the sole positional startup prompt and shell quoting preserves hostile text',()=>{
  const prompt="recovery $(false) `false` 'quotes'\nnext line";
@@ -69,6 +70,23 @@ test('read-only discovery preserves published recovery material without executin
  assert.equal(context.candidates.length,1);
  assert.equal(fs.existsSync(f.executed),false);
  assert.equal(fs.readFileSync(path.join(f.dir,'journal.json'),'utf8'),before);
+});
+
+test('recovery resume output directs a closed transaction to forward finalization', {skip:process.platform!=='linux'}, async t => {
+ const f=publishedTransaction(t),hash='a'.repeat(64);
+ fs.copyFileSync(path.resolve('cli/lib/upgrade-recovery.cjs'),path.join(f.dir,'runner.cjs'));
+ Object.assign(f.journal,{phase:'compensation_closed',snapshotManifestHash:hash,originalServices:[],lastError:'EACCES: retained diagnostic',
+  compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:hash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
+  postCutoff:{formatVersion:1,items:{hooks:{state:'done',attempts:1,lastError:null}}},dashboardInstall:null});
+ f.journal.recoveryHashes=Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(f.dir,name))]));
+ maintenance.durable(path.join(f.dir,'journal.json'),f.journal);
+ const output=[],log=console.log,exitCode=process.exitCode;
+ console.log=value=>output.push(String(value));
+ try {await recoveryCommand(['resume'],{root:f.root});}
+ finally {console.log=log;process.exitCode=exitCode;}
+ assert.equal(output.length,1);
+ assert.match(output[0],/zylos upgrade --resume-finalize/);
+ assert.match(output[0],/Do not use zylos recovery resume/);
 });
 
 test('pre-marker recovery material remains isolated with corrupt or absent journal publication', t => {

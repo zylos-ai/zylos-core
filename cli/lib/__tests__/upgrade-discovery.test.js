@@ -58,3 +58,16 @@ for (const kind of ['ambiguous','unrecognizable','changed','failed','remaining']
   });
   assert.equal(calls,['failed','remaining'].includes(kind)?1:0);
 });
+
+test('closed recovery failure directs the caller to forward finalization', () => {
+  const f=fixture();
+  f.m.classifyCutoff=()=> 'closed';
+  assert.throws(()=>recoverBeforeUpgrade('/isolated',{maintenance:f.m,spawn(){
+    return {status:1,stdout:JSON.stringify({recovery_required:true,error:'compensation is closed'})};
+  }}),error=>{
+    assert.equal(error.code,'UPGRADE_RECOVERY_REQUIRED');
+    assert.match(error.next,/zylos upgrade --resume-finalize/);
+    assert.doesNotMatch(error.next,/zylos recovery resume/);
+    return true;
+  });
+});

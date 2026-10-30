@@ -318,7 +318,10 @@ export function recovery(ctx) {
     if (cutoff === 'untrusted') throw Object.assign(Error('untrusted cutoff requires manual recovery'), {code:'CUTOFF_UNTRUSTED'});
     if (cutoff === 'closed' && saved.phase !== 'upgrade_complete') {
       maintenance.marker(root,dir,saved);
-      let error = 'compensation is closed; use zylos upgrade --resume-finalize';
+      const guidance = 'compensation is closed; use zylos upgrade --resume-finalize';
+      let error = typeof saved.lastError === 'string' && saved.lastError.trim()
+        ? saved.lastError.includes(guidance) ? saved.lastError : `${saved.lastError}; ${guidance}`
+        : guidance;
       try { maintenance.stop(saved); } catch (cause) { error += '; isolation: ' + cause.message; }
       maintenance.update(dir,saved,{phase:'recovery_required',resumePhase:'compensation_closed',lastError:error});
       if (maintenance.canRecognizeProcesses()) release();

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { recoverBeforeUpgrade } from '../upgrade-discovery.js';
+import { isClosedRecovery, recoverBeforeUpgrade } from '../upgrade-discovery.js';
 const require = createRequire(import.meta.url);
 const maintenance = require('../upgrade-maintenance.cjs');
 
@@ -57,12 +57,14 @@ function hasRecoveryMaterials(root) {
   } catch { return true; }
 }
 
-export function upgradeDiscoveryFailure() {
+export function upgradeDiscoveryFailure({closed = false} = {}) {
   return {
     active: true,
     blocked: true,
     recovery_required: true,
-    prompt: 'SYSTEM RECOVERY TASK: Upgrade discovery failed. Keep normal C4/database access isolated. Use only the fixed file-only upgrade status entry after verifying its ownership and permissions. Preserve transaction materials; report recovery_required if trusted discovery remains unavailable. Do not query C4 or execute journal command strings.',
+    prompt: closed
+      ? 'SYSTEM RECOVERY TASK: Compensation is closed. Keep normal C4/database access isolated. Use zylos upgrade --resume-finalize to finish the transaction; use zylos upgrade --resume-finalize --status first to inspect it. Do not use zylos recovery resume for this transaction.'
+      : 'SYSTEM RECOVERY TASK: Upgrade discovery failed. Keep normal C4/database access isolated. Use only the fixed file-only upgrade status entry after verifying its ownership and permissions. Preserve transaction materials; report recovery_required if trusted discovery remains unavailable. Do not query C4 or execute journal command strings.',
   };
 }
 
@@ -74,7 +76,7 @@ export function discoverUpgradeContext(root, {recover = true} = {}) {
     root = fs.realpathSync(root);
     if (hasTransactionHistory(root)) {
       const found = maintenance.discover(root);
-      const failed = () => ({...upgradeDiscoveryFailure(),
+      const failed = () => ({...upgradeDiscoveryFailure({closed:isClosedRecovery(found, maintenance)}),
         blocked:maintenance.hasRecoveryMaterials(root) ? maintenance.discoverActive(root).blocked : true});
       if (found.diagnostics.length || found.candidates.length !== 1) return failed();
       if (!recover) return {active:true, ...found};
