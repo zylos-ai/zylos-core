@@ -3,8 +3,49 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt} from '../runtime/upgrade-context.js';
+
+const require=createRequire(import.meta.url);
+
+function startupResumeFixture(t,{resumeFails=true,liveController=false}={}) {
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-startup-resume-')));
+ t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const stable=path.join(root,'.zylos/upgrade'),dir=path.join(root,'.backup/self-upgrade/tx');
+ const executed=path.join(root,'runner-executed');
+ fs.mkdirSync(stable,{recursive:true,mode:0o700});fs.mkdirSync(dir,{recursive:true,mode:0o700});
+ for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs']]) {
+  fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);
+ }
+ const files={
+  'runner.cjs':`'use strict'; const fs=require('node:fs'),path=require('node:path'); const dir=process.argv.at(-1),j=JSON.parse(fs.readFileSync(path.join(dir,'journal.json'))); fs.writeFileSync(${JSON.stringify(executed)},'yes'); if(j.phase==='installing'&&j.installerStarted===true&&j.installerPid===null) process.exit(9); fs.rmSync(dir,{recursive:true});\n`,
+  'maintenance.cjs':fs.readFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs')),
+  'installer.cjs':"'use strict';\n",
+ };
+ const recoveryHashes={};
+ for(const [name,content] of Object.entries(files)) {
+  fs.writeFileSync(path.join(dir,name),content,{mode:0o600});
+  recoveryHashes[name]=crypto.createHash('sha256').update(content).digest('hex');
+ }
+ const digest='a'.repeat(64);
+ fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify({
+  formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir:path.join(root,'.claude/skills'),
+  nodePath:process.execPath,phase:liveController?'new_data_ready':'installing',installationIntent:true,
+  installerStarted:resumeFails,installerPid:null,installerExitConfirmed:false,recoveryHashes,
+  dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:digest,
+  coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
+  initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:digest,
+   cliRoot:path.join(root,'original-cli'),cliHash:digest,workerPath:path.join(root,'worker.js'),workerHash:digest,
+   ecosystemHash:null,databases:['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db'].map(source=>({source,exists:true}))},
+ }),{mode:0o600});
+ if(liveController) {
+  const maintenance=require(path.join(stable,'maintenance.cjs'));
+  maintenance.durable(path.join(dir,'controller.json'),maintenance.identity());
+ }
+ return {root,dir,executed};
+}
 test('Codex recovery replaces the sole positional startup prompt and shell quoting preserves hostile text',()=>{
  const prompt="recovery $(false) `false` 'quotes'\nnext line";
  const args=applyUpgradePrompt(['--no-daemon','old startup prompt'],prompt,1);
@@ -61,6 +102,69 @@ test('unmarked historical transactions reach startup discovery and the tmux laun
   const result = spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), specPath], {encoding:'utf8'});
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'historical recovery prompt');
+});
+
+test('failed automatic resume leaves the real recovery prompt for Claude and tmux argv', t => {
+ const f=startupResumeFixture(t);
+ const prompt=upgradeStartupPrompt(f.root);
+ assert.match(prompt,/SYSTEM RECOVERY TASK/);
+ assert.match(prompt,/tx/);
+
+ const specPath=path.join(f.root,'spec.json');
+ fs.writeFileSync(specPath,JSON.stringify({
+  command:process.execPath,args:['-e','console.log(process.argv[1])','ordinary prompt'],promptIndex:2,
+  cwd:f.root,env:{PATH:process.env.PATH,HOME:f.root,PM2_HOME:path.join(f.root,'pm2')},
+ }),{mode:0o600});
+ const launched=spawnSync(process.execPath,[path.resolve('cli/lib/runtime/tmux-launcher.js'),specPath],{
+  encoding:'utf8',env:{...process.env,HOME:f.root,PM2_HOME:path.join(f.root,'pm2'),TMPDIR:f.root},
+ });
+ assert.equal(launched.status,0,launched.stderr);
+ assert.match(launched.stdout,/SYSTEM RECOVERY TASK/);
+ assert.doesNotMatch(launched.stdout,/ordinary prompt/);
+});
+
+test('successful automatic resume clears recovery before Claude and tmux launch',{skip:process.platform==='darwin'},t=>{
+ const claude=startupResumeFixture(t,{resumeFails:false});
+ assert.equal(upgradeStartupPrompt(claude.root),null);
+ assert.equal(fs.existsSync(claude.dir),false);
+ assert.equal(fs.existsSync(claude.executed),true);
+
+ const tmux=startupResumeFixture(t,{resumeFails:false});
+ const specPath=path.join(tmux.root,'spec.json');
+ fs.writeFileSync(specPath,JSON.stringify({
+  command:process.execPath,args:['-e','console.log(process.argv[1])','ordinary prompt'],promptIndex:2,
+  cwd:tmux.root,env:{PATH:process.env.PATH,HOME:tmux.root,PM2_HOME:path.join(tmux.root,'pm2')},
+ }),{mode:0o600});
+ const launched=spawnSync(process.execPath,[path.resolve('cli/lib/runtime/tmux-launcher.js'),specPath],{
+  encoding:'utf8',env:{...process.env,HOME:tmux.root,PM2_HOME:path.join(tmux.root,'pm2'),TMPDIR:tmux.root},
+ });
+ assert.equal(launched.status,0,launched.stderr);
+ assert.equal(launched.stdout.trim(),'ordinary prompt');
+ assert.equal(fs.existsSync(tmux.dir),false);
+ assert.equal(fs.existsSync(tmux.executed),true);
+});
+
+test('live upgrade controller remains observed without a recovery prompt or runner execution',{skip:process.platform==='darwin'},t=>{
+ const f=startupResumeFixture(t,{resumeFails:false,liveController:true});
+ assert.equal(upgradeStartupPrompt(f.root),null);
+ assert.equal(fs.existsSync(f.executed),false);
+ assert.equal(fs.existsSync(f.dir),true);
+});
+
+test('no transaction adds no Claude prompt and leaves tmux argv unchanged', t => {
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-startup-empty-')));
+ t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ assert.equal(upgradeStartupPrompt(root),null);
+ const specPath=path.join(root,'spec.json');
+ fs.writeFileSync(specPath,JSON.stringify({
+  command:process.execPath,args:['-e','console.log(process.argv[1])','ordinary prompt'],promptIndex:2,
+  cwd:root,env:{PATH:process.env.PATH,HOME:root,PM2_HOME:path.join(root,'pm2')},
+ }),{mode:0o600});
+ const launched=spawnSync(process.execPath,[path.resolve('cli/lib/runtime/tmux-launcher.js'),specPath],{
+  encoding:'utf8',env:{...process.env,HOME:root,PM2_HOME:path.join(root,'pm2'),TMPDIR:root},
+ });
+ assert.equal(launched.status,0,launched.stderr);
+ assert.equal(launched.stdout.trim(),'ordinary prompt');
 });
 
  test('nonblocking recovery cue remains available alongside normal context', t => {
@@ -244,5 +348,5 @@ test('Mac runtime startup recovery prompt permits status and manual recovery onl
  for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
  fs.writeFileSync(path.join(stable,'active.json'),'{broken',{mode:0o600});
  const prompt=upgradeStartupPrompt(root);
- assert.match(prompt,/manual recovery/);assert.match(prompt,/--status/);assert.match(prompt,/do not run automatic resume/);assert.doesNotMatch(prompt,/--once/);
+ assert.match(prompt,/"automaticResume": false/);assert.match(prompt,/--status/);assert.match(prompt,/do not run automatic resume/);assert.doesNotMatch(prompt,/--once/);
 });

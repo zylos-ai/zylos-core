@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { spawnSync as realSpawnSync } from 'node:child_process';
 import { parse } from 'smol-toml';
 import { deployManifestTemplate } from '../runtime/tmux-env.js';
 
@@ -89,6 +91,8 @@ mock.module('node:child_process', {
       return '';
     }),
     spawnSync: mock.fn((file, args, opts) => {
+      // The deployed upgrade bootstrap launches its transaction runner; run it for real.
+      if (path.basename(String(args?.[0] ?? '')) === 'runner.cjs') return realSpawnSync(file, args, opts);
       const zylosDir = opts?.env?.ZYLOS_CODEX_TRUST_CWD || fakeZylosDir;
       const key = `${path.join(zylosDir, '.codex', 'hooks.json')}:session_start:0:0`;
       const configPath = path.join(fakeHome, '.codex', 'config.toml');
@@ -151,6 +155,43 @@ function makeAdapter(Cls) {
   const adapter = new Cls({});
   adapter.buildInstructionFile = async () => '/fake/instruction.md';
   return adapter;
+}
+
+function installStartupResume(root, {resumeFails=true} = {}) {
+  const canonicalRoot = fs.realpathSync(root);
+  const stable = path.join(root, '.zylos', 'upgrade');
+  const transaction = path.join(root, '.backup', 'self-upgrade', 'tx');
+  fs.mkdirSync(stable, {recursive:true, mode:0o700});
+  fs.mkdirSync(transaction, {recursive:true, mode:0o700});
+  for (const [source, target] of [['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['upgrade-maintenance.cjs', 'maintenance.cjs']]) {
+    fs.copyFileSync(path.resolve(import.meta.dirname, '..', source), path.join(stable, target));
+    fs.chmodSync(path.join(stable, target), 0o600);
+  }
+  const files = {
+    'runner.cjs': "'use strict'; const fs=require('node:fs'),path=require('node:path'); const dir=process.argv.at(-1),j=JSON.parse(fs.readFileSync(path.join(dir,'journal.json'))); if(j.phase==='installing'&&j.installerStarted===true&&j.installerPid===null) process.exit(9); fs.rmSync(dir,{recursive:true});\n",
+    'maintenance.cjs': fs.readFileSync(path.resolve(import.meta.dirname, '..', 'upgrade-maintenance.cjs')),
+    'installer.cjs': "'use strict';\n",
+  };
+  const recoveryHashes = {};
+  for (const [name, content] of Object.entries(files)) {
+    fs.writeFileSync(path.join(transaction, name), content, {mode:0o600});
+    recoveryHashes[name] = crypto.createHash('sha256').update(content).digest('hex');
+  }
+  const digest = 'a'.repeat(64);
+  fs.writeFileSync(path.join(transaction, 'journal.json'), JSON.stringify({
+    formatVersion:1, transactionId:'tx', zylosDir:canonicalRoot, skillsDir:path.join(canonicalRoot, '.claude/skills'),
+    nodePath:process.execPath, phase:'installing', installationIntent:true,
+    installerStarted:resumeFails, installerPid:null, installerExitConfirmed:false, recoveryHashes,
+    dbBackupDir:path.join(canonicalRoot, '.backup/db/tx'), snapshotManifestHash:digest,
+    coreManifest:[{name:'core', existedBefore:true, backedUp:true, originalHash:digest}], originalServices:[],
+    initialIdentity:{nodePath:process.execPath, packageJson:path.join(canonicalRoot, 'package.json'), packageHash:digest,
+      cliRoot:path.join(canonicalRoot, 'original-cli'), cliHash:digest, workerPath:path.join(canonicalRoot, 'worker.js'), workerHash:digest,
+      ecosystemHash:null, databases:['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db'].map(source=>({source,exists:true}))},
+  }), {mode:0o600});
+  return {transaction, cleanup:() => {
+    fs.rmSync(path.join(root, '.backup'), {recursive:true, force:true});
+    fs.rmSync(stable, {recursive:true, force:true});
+  }};
 }
 
 function readSpecEnv() {
@@ -365,6 +406,35 @@ describe('Claude launch — compat mode PATH dedupe', () => {
 // ── Codex launch tests ───────────────────────────────────────────────────────
 
 describe('Codex launch — new session', () => {
+  it('keeps the recovery prompt after automatic resume fails without concatenating undefined', async t => {
+    const {cleanup} = installStartupResume(fakeZylosDir);
+    t.after(cleanup);
+    tmuxSessionExists = false;
+    await makeAdapter(CodexAdapter).launch({bypassPermissions:false});
+    const prompt = readLaunchSpec().args.at(-1);
+    assert.match(prompt, /SYSTEM RECOVERY TASK/);
+    assert.match(prompt, /tx/);
+    assert.doesNotMatch(prompt, /undefined/);
+  });
+
+  it('keeps only the kick prompt after automatic resume succeeds',{skip:process.platform==='darwin'},async t=>{
+    const {cleanup,transaction}=installStartupResume(fakeZylosDir,{resumeFails:false});
+    t.after(cleanup);
+    tmuxSessionExists=false;
+    await makeAdapter(CodexAdapter).launch({bypassPermissions:false});
+    assert.equal(readLaunchSpec().args.at(-1),
+      'System startup trigger, not a user message. Continue with startup context.');
+    assert.equal(fs.existsSync(transaction),false);
+  });
+
+  it('adds no recovery text or undefined when no transaction exists', async () => {
+    tmuxSessionExists = false;
+    await makeAdapter(CodexAdapter).launch({bypassPermissions:false});
+    assert.equal(readLaunchSpec().args.at(-1),
+      'System startup trigger, not a user message. Continue with startup context.');
+    assert.doesNotMatch(readLaunchSpec().args.at(-1), /undefined/);
+  });
+
   it('includes unmarked historical recovery in the launch prompt', async t => {
     const stable = path.join(fakeZylosDir, '.zylos', 'upgrade');
     const transaction = path.join(fakeZylosDir, '.backup', 'self-upgrade', 'tx');

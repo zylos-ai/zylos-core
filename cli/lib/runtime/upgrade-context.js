@@ -46,7 +46,7 @@ export function upgradeDiscoveryFailure() {
 // Validate every module imported during discovery before executing any code.
 // The deployment owner controls these files; links and writable files cannot
 // authorize startup code, even when discovery itself would throw safely.
-export function discoverUpgradeContext(root, { resume = false, scanHistory = false } = {}) {
+export function discoverUpgradeContext(root, { resume = false, status = false, scanHistory = false } = {}) {
   try {
     root = fs.realpathSync(root);
     if (!(scanHistory ? hasRecoveryHistory(root) : hasRecoveryMaterials(root))) return { active: false, blocked: false };
@@ -72,14 +72,24 @@ export function discoverUpgradeContext(root, { resume = false, scanHistory = fal
     delete require.cache[entry];
     delete require.cache[path.join(directory, 'maintenance.cjs')];
     const bootstrap = require(entry).bootstrap;
-    return resume ? bootstrap(root, { once: true }) : bootstrap(root);
+    return resume ? bootstrap(root, { once: true }) : status ? bootstrap(root, { status: true }) : bootstrap(root);
   } catch {
     return upgradeDiscoveryFailure();
   }
 }
 
+export function resumeUpgradeForStartup(root) {
+  const resumed = discoverUpgradeContext(root, { resume: true, scanHistory: true });
+  const context = discoverUpgradeContext(root, { status: true, scanHistory: true });
+  return {
+    ...context,
+    ...(resumed.controllerAlive ? { controllerAlive: true } : {}),
+    ...(resumed.observing ? { observing: true } : {}),
+  };
+}
+
 export function upgradeStartupPrompt(root) {
-  const context = discoverUpgradeContext(root, { resume: true, scanHistory: true });
+  const context = resumeUpgradeForStartup(root);
   return context.blocked || (context.active && !context.controllerAlive) ? context.prompt : null;
 }
 
