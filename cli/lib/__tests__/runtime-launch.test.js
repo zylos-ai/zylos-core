@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync as realSpawnSync } from 'node:child_process';
 import { parse } from 'smol-toml';
 import { deployManifestTemplate } from '../runtime/tmux-env.js';
 
@@ -90,6 +91,8 @@ mock.module('node:child_process', {
       return '';
     }),
     spawnSync: mock.fn((file, args, opts) => {
+      // The deployed upgrade bootstrap launches its transaction runner; run it for real.
+      if (path.basename(String(args?.[0] ?? '')) === 'runner.cjs') return realSpawnSync(file, args, opts);
       const zylosDir = opts?.env?.ZYLOS_CODEX_TRUST_CWD || fakeZylosDir;
       const key = `${path.join(zylosDir, '.codex', 'hooks.json')}:session_start:0:0`;
       const configPath = path.join(fakeHome, '.codex', 'config.toml');
