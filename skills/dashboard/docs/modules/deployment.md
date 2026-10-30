@@ -4,7 +4,7 @@
 
 Dashboard 是 Zylos Core 的内置能力，不是可独立安装或升级的组件。
 
-- 代码随 Core 发布，位于 `~/.claude/skills/dashboard/`。
+- 代码随 Core 发布，位于 `~/zylos/.claude/skills/dashboard/`。
 - 运行数据位于 `~/zylos/components/dashboard/`，Core 升级时保留 `config.json`、`dashboard.db`、`spool/` 和 `backups/`。
 - 初始化由 `zylos init` 完成；升级使用 `zylos upgrade --self`。
 - 组件命令会拒绝对 Dashboard 执行独立 upgrade/uninstall，并返回 `core_managed`。
@@ -16,10 +16,9 @@ Core finalizer 负责组件注册、Caddy 路由、PM2 服务、数据库迁移/
 关键路径：
 
 ```text
-~/.claude/skills/dashboard/
+~/zylos/.claude/skills/dashboard/
 ├── SKILL.md
 ├── package.json
-├── ecosystem.config.cjs
 ├── hooks/post-install.js
 ├── src/
 │   ├── index.js
@@ -39,7 +38,7 @@ Core finalizer 负责组件注册、Caddy 路由、PM2 服务、数据库迁移/
 
 ## 服务与路由
 
-- PM2 服务名：`zylos-dashboard`。
+- PM2 服务名：`zylos-dashboard`；条目来自 Core 的 `~/zylos/pm2/ecosystem.config.cjs`。
 - 默认监听：`127.0.0.1:3470`。
 - Caddy 对外路径：`/dashboard/*`，转发前剥离 `/dashboard`，并设置 `X-Forwarded-Prefix: /dashboard`。
 - 无前缀直接访问时，页面 URL 退化为根相对路径。
@@ -74,7 +73,7 @@ Dashboard 的备份、迁移和升级结论应以 Core 当前实现为准，不�
 - 服务仅监听 loopback，外部访问经 Caddy。
 - 浏览器登录使用独立的 scrypt password hash 和 HttpOnly、Secure、SameSite=Strict cookie。
 - REST API 与 SSE 使用同源 session；CLI/内部调用可使用 Bearer token。
-- URL token 默认关闭，避免浏览器历史、日志和 Referer 泄露。
+- 不支持 URL token 登录。
 - 登录失败具有 per-IP lockout 和全局限速。
 - logout、Observer unsafe requests 与 WebSocket handshake 执行 Origin/Fetch Metadata 校验；Observer ticket 仅作为受限的一次性代理兼容机制。
 

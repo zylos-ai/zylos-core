@@ -16,7 +16,7 @@ Dashboard 不再通过自己的 runtime hook 推断当前会话状态。Core 负
 |---|---|---|---|
 | `PM2Collector` | PM2 进程列表 | 服务状态、CPU、内存、重启次数 | 通用 |
 | `SystemCollector` | 本机系统采样 | CPU、内存、磁盘 | 通用 |
-| `StatuslineCollector` | Core 会话状态与 Claude statusline 数据 | context、成本、cache、rate limit | Claude |
+| `StatuslineCollector` | Core 会话状态（session-state-reader）与账号用量 | context、成本、cache、rate limit | 通用 |
 | `ConversationCollector` | Claude conversation JSONL | token、成本、工具与会话历史 | Claude |
 | `CodexRolloutCollector` | Codex rollout JSONL | token、context、turn 与工具历史 | Codex |
 
