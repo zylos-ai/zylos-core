@@ -11,8 +11,8 @@ import { createSessionReader } from '../../../../cli/lib/session-state-reader-as
 import { readReadyIdentity } from '../../../../cli/lib/runtime/session-target.js';
 import { listGroupTmuxSessions } from '../../../../cli/lib/session-group-paths.js';
 
-// IF10-7c: only the external runtime is replaced. Its READY file is a test
-// producer, not evidence of the M3 hook or an authenticated runtime startup.
+// only the external runtime is replaced. Its READY file is a test
+// producer, not evidence of the hook or an authenticated runtime startup.
 async function setup(t, { mode = 'multi', group = 'chat', runtime = 'claude' } = {}) {
   let router;
   let clock = Date.now();
@@ -126,7 +126,7 @@ function assertLaunch(record, live, expected, group) {
 }
 
 for (const runtime of ['claude', 'codex']) for (const override of [false, true]) {
-  test(`IF10-7c real P01/P02 ${runtime} ${override ? 'override' : 'default'} matches argv/F2`, async t => {
+  test(`real ${runtime} ${override ? 'override' : 'default'} matches argv`, async t => {
     const f = await setup(t, { runtime });
     const expected = override ? { runtime, mode: 'override', model: 'model name', effort: 'high' } : { runtime, mode: 'default' };
     if (override) f.db.setSessionModelConfig({ sessionGroup: f.group, ...expected });
@@ -137,7 +137,7 @@ for (const runtime of ['claude', 'codex']) for (const override of [false, true])
   });
 }
 
-test('IF10-7c single ignores origin overrides and omits group from runtime environment', async t => {
+test('single ignores origin overrides and omits group from runtime environment', async t => {
   const f = await setup(t, { mode: 'single', group: null });
   f.db.setSessionRuntimeConfig({ sessionGroup: 'origin', runtime: 'codex' });
   f.db.setSessionModelConfig({ sessionGroup: 'origin', runtime: 'codex', model: 'ignored', effort: 'high' });
@@ -146,7 +146,7 @@ test('IF10-7c single ignores origin overrides and omits group from runtime envir
   assert.equal(f.configReads, 1); assert.equal(f.launches.length, 1);
 });
 
-test('IF10-7c multi origin consumes its runtime and model override', async t => {
+test('multi origin consumes its runtime and model override', async t => {
   const f = await setup(t, { group: 'origin' });
   const expected = { runtime: 'codex', mode: 'override', model: 'origin-model', effort: 'xhigh' };
   f.db.setSessionRuntimeConfig({ sessionGroup: 'origin', runtime: 'codex' });
@@ -156,7 +156,7 @@ test('IF10-7c multi origin consumes its runtime and model override', async t => 
   assert.equal(f.configReads, 1); assert.equal(f.launches.length, 1);
 });
 
-test('IF10-7c one resolved config survives F1/D10/D11 changes before adapter launch', async t => {
+test('one resolved config survives // changes before adapter launch', async t => {
   const f = await setup(t);
   const expected = { runtime: 'claude', mode: 'override', model: 'original', effort: 'high' };
   f.db.setSessionModelConfig({ sessionGroup: f.group, ...expected });
@@ -170,7 +170,7 @@ test('IF10-7c one resolved config survives F1/D10/D11 changes before adapter lau
   assert.equal(f.configReads, 1); assert.equal(f.launches.length, 1);
 });
 
-test('IF10-7c unreadable F1 leaves fresh conversation pending without adapter launch', async t => {
+test('unreadable leaves fresh conversation pending without adapter launch', async t => {
   const f = await setup(t);
   fs.writeFileSync(path.join(f.tm.dir, 'config.json'), '{');
   await f.run();
@@ -180,7 +180,7 @@ test('IF10-7c unreadable F1 leaves fresh conversation pending without adapter la
   assert.equal(fs.existsSync(path.join(f.tm.dir, 'record.json')), false);
 });
 
-test('IF10-7c same argv/F2 oracle rejects re-resolving configuration at adapter boundary', async t => {
+test('same argv/ oracle rejects re-resolving configuration at adapter boundary', async t => {
   const f = await setup(t);
   const expected = { runtime: 'claude', mode: 'override', model: 'original', effort: 'high' };
   f.db.setSessionModelConfig({ sessionGroup: f.group, ...expected });

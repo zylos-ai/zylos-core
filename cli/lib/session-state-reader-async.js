@@ -56,7 +56,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
     const live = await readLiveIdentity(sessionGroup);
     if (live.present) return live.runtime;
     const resolve = resolveConfig || (await import('../../skills/comm-bridge/scripts/c4-db.js')).resolveSessionLaunchConfig;
-    if (typeof resolve !== 'function') throw Object.assign(new Error('P01 configuration resolver is unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
+    if (typeof resolve !== 'function') throw Object.assign(new Error('Session launch configuration resolver is unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
     return (await resolve({ sessionGroup, sessionMode: sessionGroup === null ? 'single' : 'multi' })).runtime;
   }
   async function readAccountUsage(runtime) {

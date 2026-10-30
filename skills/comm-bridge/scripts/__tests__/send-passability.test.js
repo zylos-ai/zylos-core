@@ -19,7 +19,7 @@ function setup(t) {
 }
 const request = { channel: 'demo', endpoint: 'private-route-value' };
 
-test('IF-68 actual SQLite writer contention commits no audit, namespace or group and starts no process', async t => {
+test('actual SQLite writer contention commits no audit, namespace or group and starts no process', async t => {
   const { db, filename, api, dir, marker } = setup(t);
   db.pragma('busy_timeout=1');
   const writer = new Database(filename);
@@ -38,7 +38,7 @@ test('IF-68 actual SQLite writer contention commits no audit, namespace or group
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 1);
 });
 
-test('IF-68 real PATH ENOENT and EACCES retain committed audit without disclosing endpoint', async t => {
+test('real PATH ENOENT and EACCES retain committed audit without disclosing endpoint', async t => {
   const { api, db, dir } = setup(t);
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
@@ -58,9 +58,9 @@ test('IF-68 real PATH ENOENT and EACCES retain committed audit without disclosin
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
 });
 
-test('IF-68 actual aggregate argv/environment E2BIG keeps audit even when each argument is passable', async t => {
+test('actual aggregate argv/environment E2BIG keeps audit even when each argument is passable', async t => {
   const { api, db, dir } = setup(t);
-  const keys = Array.from({ length: 40 }, (_, i) => `P09_SEND_PAYLOAD_${i}`);
+  const keys = Array.from({ length: 40 }, (_, i) => `SEND_PAYLOAD_${i}`);
   const previous = keys.map(key => process.env[key]);
   try {
     for (const key of keys) process.env[key] = 'x'.repeat(65536);
@@ -72,7 +72,7 @@ test('IF-68 actual aggregate argv/environment E2BIG keeps audit even when each a
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 1);
 });
 
-test('IF-68 started syntax failure and signal termination are uncertain send failures with retained audits', async t => {
+test('started syntax failure and signal termination are uncertain send failures with retained audits', async t => {
   const { api, db, dir, script } = setup(t);
   for (const source of ['this is not valid JavaScript !!!', "process.kill(process.pid, 'SIGTERM')"]) {
     fs.writeFileSync(script, source);

@@ -25,7 +25,7 @@ async function before(t,variant=''){
  assert.equal(result.kind,'rejected');assert.equal(result.reply.reason,'identity_unavailable');
  const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));await f.stop();
 }
-test('IF-36 actual entry rejects already observed session change before manual acceptance; ignoring session fails',{timeout:20000},async t=>{await before(t);await assert.rejects(before(t,'ignore-admission-session'),{code:'ERR_ASSERTION'});});
+test('actual entry rejects already observed session change before manual acceptance; ignoring session fails',{timeout:20000},async t=>{await before(t);await assert.rejects(before(t,'ignore-admission-session'),{code:'ERR_ASSERTION'});});
 async function after(t,mode,variant=''){
  const f=await fixture(t,mode,variant);assert.equal((await f.submit()).kind,'accepted');f.change('new-session');
  const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);
@@ -34,8 +34,8 @@ async function after(t,mode,variant=''){
  assert.deepEqual(state.alerts,[]);
  await f.stop();
 }
-for(const mode of ['single','multi'])test(`IF-36 ${mode} actual entry stops accepted run after session changes without rechecking sessionId`,{timeout:20000},async t=>{await after(t,mode);});
-test('IF-36 missing post-acceptance hook marker retains run-level stop boundary without invented atomic session proof',{timeout:20000},async t=>{
+for(const mode of ['single','multi'])test(`${mode} actual entry stops accepted run after session changes without rechecking sessionId`,{timeout:20000},async t=>{await after(t,mode);});
+test('missing post-acceptance hook marker retains run-level stop boundary without invented atomic session proof',{timeout:20000},async t=>{
  const f=await fixture(t);assert.equal((await f.submit()).kind,'accepted');fs.unlinkSync(f.readyPath);
  const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);assert.throws(()=>f.tmux('has-session','-t','=zylos-group-origin'));assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await f.stop();
 });
@@ -48,14 +48,14 @@ for(const [name,fields] of [
  ['missing control IDs',{sessionId:'new-session',startupControlIds:undefined}],
  ['nonarray control IDs',{sessionId:'new-session',startupControlIds:{}}],
  ['noninteger control ID',{sessionId:'new-session',startupControlIds:[1,'2']}],
-])test(`IF-36 invalid READY ${name} does not invent a context-change veto`,{timeout:20000},async t=>{
+])test(`invalid READY ${name} does not invent a context-change veto`,{timeout:20000},async t=>{
  const f=await fixture(t);assert.equal((await f.submit()).kind,'accepted');
  fs.writeFileSync(f.readyPath,JSON.stringify({...f.ready,...fields}));
  const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);
  assert.throws(()=>f.tmux('has-session','-t','=zylos-group-origin'));assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await f.stop();
 });
 
-test('IF-36 replacement READY identity preserves replacement and renamed original',{timeout:20000},async t=>{
+test('replacement READY identity preserves replacement and renamed original',{timeout:20000},async t=>{
  const f=await fixture(t);assert.equal((await f.submit()).kind,'accepted');
  f.tmux('rename-session','-t','=zylos-group-origin','fixture-original');
  f.tmux('new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=replacement','-e','ZYLOS_SESSION_GROUP=origin','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',path.join(f.root,'claude'),'120');

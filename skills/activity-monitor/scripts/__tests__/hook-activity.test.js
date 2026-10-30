@@ -51,7 +51,7 @@ describe('hook-activity', () => {
     assert.deepEqual(event.tool_input, { url: 'https://example.com/path' });
   });
 
-  it('T08: preserves absent native tool_use_id without fabricating one', async () => {
+  it('preserves absent native tool_use_id without fabricating one', async () => {
     await runHook({
       hook_event_name: 'PreToolUse',
       session_id: 'payload-session',
@@ -137,7 +137,7 @@ describe('hook-activity', () => {
     assert.equal(event.event, 'idle');
   });
 
-  it('T08: retains subagent hook facts with agent_id', async () => {
+  it('retains subagent hook facts with agent_id', async () => {
     process.env.ZYLOS_DIR = tmpDir;
     process.env.HOOK_ACTIVITY_DISABLE_MAIN = '1';
     const modulePath = new URL('../hook-activity.js', import.meta.url);
@@ -196,7 +196,7 @@ describe('hook-activity', () => {
     process.env.CLAUDE_SESSION_ID = 'env-session';
   });
 
-  it('T08: leaves watchdog classification to the consumer', async () => {
+  it('leaves watchdog classification to the consumer', async () => {
     await runHook({
       hook_event_name: 'PreToolUse',
       session_id: 'session-6',

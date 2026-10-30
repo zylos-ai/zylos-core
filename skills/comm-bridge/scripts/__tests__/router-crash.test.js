@@ -37,7 +37,7 @@ async function waitBarrier(filename, processState) {
 }
 
 for (const boundary of boundaries) {
-  test(`T01 process SIGKILL and restart after ${boundary}`, { timeout: 15000 }, async t => {
+  test(`process SIGKILL and restart after ${boundary}`, { timeout: 15000 }, async t => {
     const now = 1800000000000;
     const f = fixture(t, { now: () => now }, true);
     const directory = path.dirname(f.filename);

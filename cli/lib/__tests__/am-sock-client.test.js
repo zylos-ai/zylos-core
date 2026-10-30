@@ -17,8 +17,8 @@ async function withServer(handler, fn) {
   try { await fn(socketPath); }
   finally { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); }
 }
-// IF-37: first complete reply and branch validation, including unknown extensions.
-test('IF-37 validates all five reply branches and mandatory relationships', () => {
+// first complete reply and branch validation, including unknown extensions.
+test('validates all five reply branches and mandatory relationships', () => {
   const cases = [
     ['restart_all', { ok: true, result: 'done_empty', runCount: 0 }, true],
     ['restart_all', { ok: true, result: 'done_empty', runCount: 2 }, false],
@@ -46,19 +46,19 @@ test('IF-37 validates all five reply branches and mandatory relationships', () =
   assert.equal(validateReply(request, { ...reply, requestId: 'wrong' }), false);
   assert.equal(validateReply(request, { ...reply, version: 2 }), false);
 });
-test('IF-37 first line wins; EOF after accepted is not uncertain', async () => {
+test('first line wins; EOF after accepted is not uncertain', async () => {
   await withServer(socket => socket.once('data', () => socket.end(`${JSON.stringify(reply)}\ninvalid\n`)), async socketPath => {
     assert.deepEqual(await submit(request, { socketPath }), { kind: 'accepted', reply, sent: true });
   });
 });
-test('IF-37 malformed complete reply is invalid_reply, including positive-control bad relationship', async () => {
+test('malformed complete reply is invalid_reply, including positive-control bad relationship', async () => {
   for (const body of ['not-json\n', JSON.stringify({ ...reply, result: 'done_empty', runCount: 2 }) + '\n']) {
     await withServer(socket => socket.once('data', () => socket.end(body)), async socketPath => {
       assert.deepEqual(await submit(request, { socketPath }), { kind: 'invalid_reply', sent: true });
     });
   }
 });
-test('IF-37 half line and connected write failure remain uncertain', async () => {
+test('half line and connected write failure remain uncertain', async () => {
   await withServer(socket => socket.once('data', () => socket.end('{"ok":')), async socketPath => {
     assert.deepEqual(await submit(request, { socketPath }), { kind: 'no_reply', sent: true });
   });
@@ -66,17 +66,17 @@ test('IF-37 half line and connected write failure remain uncertain', async () =>
   const result = submit(request, { connect: () => { queueMicrotask(() => fake.emit('connect')); return fake; } });
   assert.deepEqual(await result, { kind: 'no_reply', sent: true });
 });
-test('IF-37 unknown socket is unsent; expired budget never connects', async () => {
+test('unknown socket is unsent; expired budget never connects', async () => {
   assert.deepEqual(await submit(request, { socketPath: path.join(os.tmpdir(), `missing-${process.pid}.sock`) }), { kind: 'connect_failed', sent: false });
   assert.deepEqual(await submit(request, { deadlineAt: Date.now() - 1, connect: () => { throw new Error('must not connect'); } }), { kind: 'deadline_exceeded', sent: false });
 });
-test('IF-37 total and reply deadlines have distinct classifications', async () => {
+test('total and reply deadlines have distinct classifications', async () => {
   await withServer(() => {}, async socketPath => {
     assert.deepEqual(await submit(request, { socketPath, deadlineAt: Date.now() + 1000, replyMaxMs: 20 }), { kind: 'timeout', sent: true });
     assert.deepEqual(await submit(request, { socketPath, deadlineAt: Date.now() + 20, replyMaxMs: 1000 }), { kind: 'deadline_exceeded', sent: true });
   });
 });
-test('IF-37 connection retry uses total budget and does not retry entry_not_open', async () => {
+test('connection retry uses total budget and does not retry entry_not_open', async () => {
   let calls = 0;
   const connect = () => {
     calls++;
@@ -88,7 +88,7 @@ test('IF-37 connection retry uses total budget and does not retry entry_not_open
   assert.equal((await submit(request, { deadlineAt: Date.now() + 1000, replyMaxMs: 10, connectRetryEveryMs: 20, connect })).kind, 'rejected');
   assert.equal(calls, 3);
 });
-test('IF-31/IF-65 lookup never resubmits; queries use ordinary locks after budget precheck', async () => {
+test('lookup never resubmits; queries use ordinary locks after budget precheck', async () => {
   let now = 100; let queries = 0;
   const getModeTransition = (...args) => { assert.deepEqual(args, []); queries++; now = 300; return { target_mode: 'multi' }; };
   assert.equal(await lookupModeSwitch('multi', { deadlineAt: 200, now: () => now, getModeTransition }), 'accepted');
@@ -99,9 +99,9 @@ test('IF-31/IF-65 lookup never resubmits; queries use ordinary locks after budge
   assert.equal(await lookupRestartRequest('a', { deadlineAt: 200, now: () => 100, readRequests: () => [], readCompleted: () => true }), 'done');
 });
 
-// IF-37 five request families share the exact transport state machine. These
+// five request families share the exact transport state machine. These
 // fixtures intentionally retain invalid branch values as negative controls.
-test('IF-37 five-family matrix: complete, partial, reset, malformed, late and deadline replies', async t => {
+test('five-family matrix: complete, partial, reset, malformed, late and deadline replies', async t => {
   t.mock.timers.enable({apis:['setTimeout']});
   let clock = 1792000000000;
   const replies = {
@@ -156,7 +156,7 @@ test('IF-37 five-family matrix: complete, partial, reset, malformed, late and de
   assert.throws(()=>submit({type:'route'}),TypeError);
 });
 
-test('IF-37 virtual 30s connection budget permits 12s listener and gives independent 10s reply deadline', async t => {
+test('rtual 30s connection budget permits 12s listener and gives independent 10s reply deadline', async t => {
   t.mock.timers.enable({apis:['setTimeout']});
   for(const responds of [true,false]) {
     let clock=1792000000000;const start=clock;const attempts=[];let closedAt=null,writtenAt=null,socket;
@@ -174,7 +174,7 @@ test('IF-37 virtual 30s connection budget permits 12s listener and gives indepen
   }
 });
 
-test('IF-31 default completion lookup reads retained events only after authoritative F9 absence', async () => {
+test('default completion lookup reads retained events only after authoritative absence', async () => {
   const { supervisorDiagnosticPath } = await import('../session-group-paths.js');
   const file=supervisorDiagnosticPath();fs.mkdirSync(path.dirname(file),{recursive:true});
   const rotated=file.replace('.jsonl','.1792000000000.jsonl');

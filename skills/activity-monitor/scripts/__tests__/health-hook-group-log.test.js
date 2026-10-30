@@ -7,7 +7,7 @@ import { collectHealthHook } from '../hook-health.js';
 import { EventLogReader } from '../../../../cli/lib/event-log.js';
 import { groupRunDir, RUN_FILES } from '../../../../cli/lib/session-group-paths.js';
 
-test('T02/T08 F6 health hook writes group/run identity with unchanged receipt time and no singleton stream',t=>{
+test('health hook writes group/run identity with unchanged receipt time and no singleton stream',t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'hook-group-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const env={ZYLOS_DIR:root,ZYLOS_SESSION_GROUP:'telegram:a',ZYLOS_RUN_ID:'11111111-1111-4111-8111-111111111111'};
   const event=collectHealthHook({hook_event_name:'StopFailure',session_id:'session',error:'rate_limit'}, {zylosDir:root,nowMs:123456,pid:42,env});

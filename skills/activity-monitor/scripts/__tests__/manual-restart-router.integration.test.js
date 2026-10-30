@@ -6,9 +6,9 @@ import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fixture, launch, manual, assertReply } from './fixtures/i2-manual-harness.js';
+import { fixture, launch, manual, assertReply } from './fixtures/manual-restart-harness.js';
 import { tmuxNameForGroup, groupRunDir } from '../../../../cli/lib/session-group-paths.js';
-const worker = fileURLToPath(new URL('./fixtures/i2-manual-router-worker.js', import.meta.url));
+const worker = fileURLToPath(new URL('./fixtures/manual-restart-router-worker.js', import.meta.url));
 async function m1(t, f, scenario) {
   const child = fork(worker, [f.root, f.socketPath, f.binary, f.mode, scenario], { env: { ...process.env, ...f.env }, silent: true });
   let sequence = 0, stderr = '', readyResolve, readyReject, barrierResolve;
@@ -21,17 +21,17 @@ async function m1(t, f, scenario) {
     const item = pending.get(message.id); if (!item) return; pending.delete(message.id); clearTimeout(item.timer);
     message.error ? item.reject(new Error(message.error)) : item.resolve(message.result);
   });
-  child.on('exit', (code, signal) => { const error = new Error(`M1 exited ${code ?? signal}: ${stderr}`); readyReject(error); for (const item of pending.values()) { clearTimeout(item.timer); item.reject(error); } pending.clear(); });
+  child.on('exit', (code, signal) => { const error = new Error(`dispatcher exited ${code ?? signal}: ${stderr}`); readyReject(error); for (const item of pending.values()) { clearTimeout(item.timer); item.reject(error); } pending.clear(); });
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) { const done = once(child, 'exit'); child.kill('SIGKILL'); await done; } });
   await ready;
-  const call = op => new Promise((resolve, reject) => { const id = ++sequence, timer = setTimeout(() => { pending.delete(id); reject(new Error(`M1 ${op} timeout: ${stderr}`)); }, 10000); pending.set(id, { resolve, reject, timer }); child.send({ id, op }); });
+  const call = op => new Promise((resolve, reject) => { const id = ++sequence, timer = setTimeout(() => { pending.delete(id); reject(new Error(`dispatcher ${op} timeout: ${stderr}`)); }, 10000); pending.set(id, { resolve, reject, timer }); child.send({ id, op }); });
   return { call, barrier: () => barriers.length ? Promise.resolve(barriers.shift()) : new Promise(resolve => { barrierResolve = resolve; }),
     async stop() { const done = once(child, 'exit'); await call('stop'); assert.equal((await done)[0], 0); } };
 }
 function trace(f) { const file = path.join(f.root, 'manual-router.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []; }
 function requests(f) { const file = path.join(f.root, 'activity-monitor/restart-requests.json'); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : []; }
 async function until(check, describe) { for (let i = 0; i < 200; i++) { if (await check()) return; await delay(10); } assert.fail(describe()); }
-for (const mode of ['single', 'multi']) test(`IF-36 ${mode} real M1 paste in flight, real M4 manual kill retains gate until late bound Enter settles`, { timeout: 30000 }, async t => realInflight(t, mode));
+for (const mode of ['single', 'multi']) test(`${mode} real dispatcher paste in flight, real supervisor manual kill retains gate until late bound Enter settles`, { timeout: 30000 }, async t => realInflight(t, mode));
 async function realInflight(t, mode, variant = '') {
   const f = fixture(t, mode), m4 = launch(t, f, variant); assert.equal((await m4.next()).ready, true);
   const router = await m1(t, f, 'inflight');
@@ -42,7 +42,7 @@ async function realInflight(t, mode, variant = '') {
   assert.equal(trace(f).filter(row => row.kind === 'paste').length, 1);
   const req = manual('real-inflight', { expectedRunId: 'run-1' }); assertReply(await f.submit(req), req, 'accepted');
   const accepted = requests(f), stopped = await m4.command('tick');
-  assert.equal(stopped.scene.present, false); assert.equal(stopped.fences.length, 1, 'real in-flight M1 must retain manual D8'); assert.deepEqual(stopped.requests, accepted);
+  assert.equal(stopped.scene.present, false); assert.equal(stopped.fences.length, 1, 'real in-flight dispatcher must retain manual D8'); assert.deepEqual(stopped.requests, accepted);
   assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').pluck().get(id), 'running');
   // A new object at the same name cannot receive delayed Enter from the old claim.
   f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=replacement', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), path.join(f.root, 'claude'), '120');
@@ -59,11 +59,11 @@ async function realInflight(t, mode, variant = '') {
   t.diagnostic(JSON.stringify({ mode, boundary, accounted: f.db.prepare('SELECT status,retry_count FROM conversations WHERE id=?').get(id), delayedKeys: trace(f).filter(row => row.kind.startsWith('keys-')), finalRun: done.scene.runId }));
   await router.stop(); await m4.stop();
 }
-test('IF-36 real M1 in-flight negative control detects early M4 D8 removal', { timeout: 30000 }, async t => {
-  await assert.rejects(realInflight(t, 'multi', 'early-clear'), { code: 'ERR_ASSERTION', message: /real in-flight M1 must retain manual D8/ });
+test('detects early supervisor removal of the manual fence', { timeout: 30000 }, async t => {
+  await assert.rejects(realInflight(t, 'multi', 'early-clear'), { code: 'ERR_ASSERTION', message: /real in-flight dispatcher must retain manual D8/ });
 });
 
-for (const mode of ['single', 'multi']) test(`IF-36 ${mode} real M1 replacement startup failure cannot restore completed manual intent or gate`, { timeout: 30000 }, async t => {
+for (const mode of ['single', 'multi']) test(`${mode} real dispatcher replacement startup failure cannot restore completed manual intent or gate`, { timeout: 30000 }, async t => {
   const f = fixture(t, mode); let ordinary;
   if (mode === 'multi') {
     const group = 'fixture:ordinary', name = tmuxNameForGroup(group), dir = groupRunDir(group, f.env); fs.mkdirSync(dir, { recursive: true });

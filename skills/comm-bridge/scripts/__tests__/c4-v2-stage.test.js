@@ -10,7 +10,7 @@ import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
 import { seedV1, NEW_TABLES } from './helpers/c4-v2-fixtures.js';
 const moduleURL = new URL('../c4-db.js', import.meta.url).href;
-// P01 §2.1 T02–T09 frozen public function list, independent of implementation.
+// – frozen public function list, independent of implementation.
 const exportsRequired = `getChannelNamespace getComponentByNamespace ensureChannelNamespace registerChannelNamespace composeSessionGroup parseSessionGroup resolveSessionGroup insertConversation insertInternalMessage
 markStatusNoticeSuppressed getNextPending expirePending claimConversation recoverOrphanRunning markDelivered requeueConversation failDelivery hasOutboundAfter listPendingSessionGroups countRunningConversations countGlobalRunningConversations
 legacyBaselineEnd getCoverageEnd getGlobalCoverageEnd getDeliveredFrontier getGlobalDeliveredFrontier getLatestContentCheckpoint getDeliveredSince getGlobalDeliveredSince createCheckpoint

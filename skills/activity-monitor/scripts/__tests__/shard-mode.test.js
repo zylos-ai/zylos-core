@@ -87,7 +87,7 @@ function fakeResolver(chain) {
 }
 
 describe('shard-registry chain', () => {
-  it('builds the four P06 core shards in the agreed order', () => {
+  it('builds the four core shards in the agreed order', () => {
     const { chain } = buildChain({ zylosDir: makeTmpdir() });
     assert.deepEqual(
       chain.map(s => [s.name, s.chainIndex]),

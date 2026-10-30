@@ -8,7 +8,7 @@ const NOW = 1800000000;
 const add = (s, group = 'a', options = {}) => s.insertConversation('in', group, 'e', 'message', options);
 const row = (db, id) => db.prepare('SELECT * FROM conversations WHERE id=?').get(id);
 
-test('IF11 selection uses priority then id, isolates filters, and includes legacy empty scope globally', t => {
+test('selection uses priority then id, isolates filters, and includes legacy empty scope globally', t => {
   const { store: s, db } = fixture(t);
   const a = add(s, 'a', { priority: 3 }), b = add(s, 'b', { priority: 1 }), c = add(s, 'a', { priority: 1 });
   db.prepare("UPDATE conversations SET timestamp='1999-01-01 00:00:00' WHERE id=?").run(c.id);
@@ -20,7 +20,7 @@ test('IF11 selection uses priority then id, isolates filters, and includes legac
   assert.equal(s.getNextPending().id, a.id);
   assert.equal(s.getNextPending({ sessionGroups: ['a'] }).id, c.id);
 });
-test('DM16/17 two connections: stale selection cannot cross committed group fence or claim twice', t => {
+test('two connections: stale selection cannot cross committed group fence or claim twice', t => {
   const { store: a, filename, dependencies, db } = fixture(t, {}, true);
   const other = new Database(filename); t.after(() => other.close()); const b = createStore(other, dependencies);
   const x = add(a), y = add(a, 'b');
@@ -32,7 +32,7 @@ test('DM16/17 two connections: stale selection cannot cross committed group fenc
   assert.equal(a.claimConversation(y.id), true); assert.equal(b.claimConversation(y.id), false);
   b.clearDrainFence('a'); assert.equal(a.claimConversation(x.id), true);
 });
-test('DM18 global fence covers existing, legacy and newly created groups after store reopening', t => {
+test('global fence covers existing, legacy and newly created groups after store reopening', t => {
   const { store: s, filename, dependencies, db } = fixture(t, {}, true);
   const legacy = add(s); db.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(legacy.id);
   s.setDrainFence('*'); const fresh = add(s, 'fresh');
@@ -50,7 +50,7 @@ test('group head scheduling keeps priority and head id paired and excludes nonpe
   s.setDrainFence('a', { reason: 'evict', runId: 'r' }); assert.equal(s.listPendingSessionGroups()[0].sessionGroup, 'b');
   s.clearDrainFence('a'); assert.equal(s.listPendingSessionGroups().length, 2);
 });
-test('DM73 pending age uses strict boundary, never retries, never overwrites other states or outbound rows', t => {
+test('pending age uses strict boundary, never retries, never overwrites other states or outbound rows', t => {
   const { store: s, db } = fixture(t, { now: () => NOW * 1000 });
   for (const age of [1799, 1800, 1801]) {
     const item = add(s); db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch'),retry_count=2 WHERE id=?").run(NOW - age, item.id);
@@ -79,7 +79,7 @@ test('orphan recovery classifies strict age boundaries, prioritizes age and is r
   assert.deepEqual(row(db, pending.id), beforePending);
   assert.deepEqual(s.recoverOrphanRunning({ maxAgeSeconds: 1800 }), { requeued: { ids: [], count: 0 }, ageExpired: { ids: [], count: 0 }, retryExhausted: { ids: [], count: 0 } });
 });
-test('IF11 failDelivery is one conditional increment and state change; old split mutation trips oracle', t => {
+test('failDelivery is one conditional increment and state change; old split mutation trips oracle', t => {
   const { store: s, db } = fixture(t);
   const item = add(s); s.claimConversation(item.id);
   db.exec("CREATE TRIGGER detect_half_failure AFTER UPDATE ON conversations WHEN NEW.retry_count > OLD.retry_count AND NEW.status='running' BEGIN SELECT RAISE(ABORT,'half-updated delivery'); END");

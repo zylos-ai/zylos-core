@@ -7,9 +7,9 @@ import { randomUUID } from 'node:crypto';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { HealthStore } from '../health-store.js';
 
-// IF-62 unreadable is distinct from missing/corrupt health. Inject an actual
+// unreadable is distinct from missing/corrupt health. Inject an actual
 // read error at the store boundary; root-run tests cannot rely on chmod denial.
-test('IF-62 A unreadable F10 yields not_restricted with no write, association or F11 access', async t => {
+test('A unreadable yields not_restricted with no write, association or access', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'health-read-error-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const disk = new HealthStore({ zylosDir: root }), value = disk.read(); value.health = 'auth_failed'; disk.write(value);
   const before = fs.readFileSync(disk.file, 'utf8'); let reads = 0, writes = 0, caches = 0, scenes = 0;

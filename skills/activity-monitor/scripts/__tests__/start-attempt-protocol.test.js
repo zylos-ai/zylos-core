@@ -13,10 +13,10 @@ import { SupervisorAdmission } from '../supervisor-admission.js';
 import { createSupervisorConnectionHandler } from '../router-socket.js';
 import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/router-fixture.js';
 
-// IF-62 is a contract-fixture test: real socket parser/admission and real M1
+// is a contract-fixture test: real socket parser/admission and real dispatcher
 // scheduler, injected runtime scene/transport boundaries; no runtime is launched.
 async function socketFixture(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'i2-proto-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'start-attempt-protocol-')));
   const health = new RuntimeHealthCoordinator({ zylosDir: root, readMode: () => 'multi',
     resolveTargetRuntime: () => 'claude', listScenes: () => [] });
   const store = health.store('claude'); const state = store.read();
@@ -42,7 +42,7 @@ async function socketFixture(t) {
   return { send, unchanged: () => assert.equal(fs.readFileSync(store.file, 'utf8'), before) };
 }
 
-test('IF-62 A absent group/run keys are rejected over am.sock without a health write', async t => {
+test('A absent group/run keys are rejected over am.sock without a health write', async t => {
   const f = await socketFixture(t);
   for (const missing of ['sessionGroup', 'runId']) {
     const request = { version: 1, type: 'start_attempt', requestId: 'sa-1800000000000-0123456789ab', runtime: 'claude', sessionGroup: 'telegram:a', runId: randomUUID() };
@@ -54,19 +54,19 @@ test('IF-62 A absent group/run keys are rejected over am.sock without a health w
   assert.equal(valid.result, 'registered', 'same fixture accepts all required valid keys');
 });
 
-test('IF-62 A unparseable input returns a public rejection trusted by both clients', async t => {
+test('A unparseable input returns a public rejection trusted by both clients', async t => {
   const f = await socketFixture(t);
   const request = { version: 1, type: 'start_attempt', requestId: 'sa-1800000000000-0123456789ab' };
   for (const line of ['{"type":"start_attempt","requestId":\n', '[]\n', 'null\n']) {
     const reply = await f.send(line);
     assert.deepEqual(reply, { ok: false, code: 'invalid_request' });
     assert.equal(validateReply(request, reply), true, 'CLI trusts the public rejection');
-    assert.equal(validStartAttemptReply(reply, request), true, 'M1 trusts the public rejection');
+    assert.equal(validStartAttemptReply(reply, request), true, 'dispatcher trusts the public rejection');
     f.unchanged();
   }
 });
 
-test('IF-62 A parsed start_attempt with missing or nonstring requestId returns a null-ID envelope', async t => {
+test('A parsed start_attempt with missing or nonstring requestId returns a null-ID envelope', async t => {
   const f = await socketFixture(t);
   for (const id of [{}, { requestId: null }, { requestId: 123 }]) {
     const request = { version: 1, type: 'start_attempt', runtime: 'claude', sessionGroup: 'telegram:a', runId: randomUUID(), ...id };
@@ -84,7 +84,7 @@ const invalidReplies = [
   ['probe_inflight with notBefore', () => ({ ok: false, code: 'probe_inflight', notBefore: 1800000060000 })],
   ['registered with forbidden notBefore', () => ({ ok: true, result: 'registered', reason: 'recovery_due', notBefore: 1800000060000 })],
 ];
-for (const [name, value] of invalidReplies) test(`IF-62 B ${name}: no launch, diagnostic, fresh next-round IDs`, async t => {
+for (const [name, value] of invalidReplies) test(`B ${name}: no launch, diagnostic, fresh next-round IDs`, async t => {
   const f = routerFixture(t); f.put('origin', { runtime: 'codex' }); const row = f.add('a');
   f.health.set('claude', { health: 'unavailable' }); const submitted = [];
   f.deps.submit = async request => {
@@ -104,7 +104,7 @@ for (const [name, value] of invalidReplies) test(`IF-62 B ${name}: no launch, di
   assert.notEqual(submitted[0].runId, submitted[1].runId);
 });
 
-test('IF-62 B valid backoff does not delay next round and an extra-field grant launches its requested run', async t => {
+test('B valid backoff does not delay next round and an extra-field grant launches its requested run', async t => {
   const f = routerFixture(t); f.put('origin', { runtime: 'codex' }); f.add('a');
   f.health.set('claude', { health: 'unavailable' }); const submitted = [];
   f.deps.submit = async request => {

@@ -10,7 +10,7 @@ import { acquire, release, guard, memoryScope, readSyncMarker, MARKER_TTL_MS } f
 const fixture = group => ({ ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'sync-marker-')), ZYLOS_RUN_ID: 'run-1', ...(group ? { ZYLOS_SESSION_GROUP: group } : {}) });
 const currentRunId = async scope => scope.runId;
 
-// IB-51: acquisition uses the real P02 reader rather than trusting caller env.
+// acquisition uses the real reader rather than trusting caller env.
 test('CLI acquire checks the current isolated tmux identity', t => {
   const f = readyTmuxTarget(t, { prefix: 'sync-lock-live-', ledger: false });
   const env = { ...f.env, ZYLOS_RUN_ID: 'run-1' };
@@ -26,7 +26,7 @@ test('CLI acquire checks the current isolated tmux identity', t => {
   assert.equal(freed.status, 0, freed.stderr);
 });
 
-// IB-39 / IF-42: exact read shape, stale takeover and obsolete-token refusal.
+// exact read shape, stale takeover and obsolete-token refusal.
 test('F7 lifecycle, independent origin marker, stale takeover and old release', async () => {
   const env = fixture('origin');
   const scope = await memoryScope(env);
@@ -68,7 +68,7 @@ test('expired markers, invalid marker warning, scope and current-run checks', as
   assert.ok(token);
 });
 
-// DM-40: marker expiry permits a later takeover, never revokes a held F8.
+// marker expiry permits a later takeover, never revokes a held .
 test('expiry during a guarded operation cannot admit a contender', async () => {
   const env = fixture('lark:oc_b'); const scope = await memoryScope(env);
   const token = await acquire({ kind: 'group', env }, { currentRunId });
@@ -85,7 +85,7 @@ test('expiry during a guarded operation cannot admit a contender', async () => {
   assert.notEqual(next, token);
 });
 
-// IB-51/53: each ownership predicate rejects independently; no live tmux read.
+// each ownership predicate rejects independently; no live tmux read.
 test('shared guard checks token, kind and environment runId independently', async () => {
   const env = fixture('origin');
   const scope = await memoryScope(env);

@@ -19,7 +19,7 @@ fs.mkdirSync(process.env.ZYLOS_DIR, { recursive: true });
 fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.env'), '', 'utf8');
 
 describe('runtime base URL support', () => {
-  test('P06 C-1: Codex readiness returns objects for missing instructions and valid or invalid real trust', async t => {
+  test('Codex readiness returns objects for missing instructions and valid or invalid real trust', async t => {
     const { runtimeHooksReady } = await import('../../commands/runtime.js');
     const { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, hookKeyFor,
       isCodexTrustValid } = await import('../codex-hooks.js');
@@ -50,7 +50,7 @@ describe('runtime base URL support', () => {
     assert.deepEqual(await runtimeHooksReady('codex'), { ready: false, pendingMigration: true });
     fs.rmSync(instruction);
   });
-  test('review P1: readiness checks installed project hooks, and rejects missing/stale hooks (M9)', async t => {
+  test('readiness checks installed project hooks, and rejects missing/stale hooks', async t => {
     const { runtimeHooksReady, executeRuntimeSwitch } = await import('../../commands/runtime.js');
     const { syncRuntimeHooks } = await import('../sync-runtime-hooks.js');
     const instruction = path.join(process.env.ZYLOS_DIR, 'CLAUDE.md');

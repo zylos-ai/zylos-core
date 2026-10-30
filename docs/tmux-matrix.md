@@ -28,8 +28,8 @@ Choose `TMPDIR` before invocation if the host needs a specific temporary mount.
 The matrix sets `ZYLOS_TMUX_CHURN_STRESS=1` for both the normal adapter churn
 fixture and its known-bad control. Without that explicit opt-in, both tests in
 `session-adapter-churn.test.js` skip during ordinary full-suite runs. It also
-sets the existing `P05_TMUX_STRESS=1` opt-in, fixes `P05_LAUNCH_ROUNDS=300` and
-`P05_DELIVERY_ROUNDS=150`, and records `P05_STRESS_RESULT` separately for each
+sets the existing `TMUX_STRESS_ENABLED=1` opt-in, fixes `TMUX_STRESS_LAUNCH_ROUNDS=300` and
+`TMUX_STRESS_DELIVERY_ROUNDS=150`, and records `TMUX_STRESS_RESULT` separately for each
 version. The supervisor fixture performs two launches per launch round and
 four delivery lanes, exercising the shared session reader as well as the adapter.
 

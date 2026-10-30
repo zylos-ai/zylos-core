@@ -94,7 +94,7 @@ test('factual first failure notices are independent of persistent health transit
   }
 });
 
-test('IB-02 matched notice evidence remains durable while rate-limited inbound stays pending', async t => {
+test('matched notice evidence remains durable while rate-limited inbound stays pending', async t => {
   const store=fixture(t);
   const result=store.consume({...base,quota:snapshot({five_hour:{used_percentage:100,resets_at:reset1}}),error_details:'PRIVATE'}, {identity});
   const intent=store.read().pending_notice;

@@ -9,9 +9,9 @@ import { openTmuxConnection } from '../../../../cli/lib/runtime/tmux-connection.
 import { resolveSessionTarget } from '../../../../cli/lib/runtime/session-target.js';
 import { getSessionAdapter } from '../../../../cli/lib/runtime/index.js';
 
-// T04 / IB-12 caller integration: real isolated tmux, real adapter, real P01
-// ledger. The terminal is a recorder and F4 is injected, not authenticated M3/M4.
-for (const mode of ['single', 'multi']) test(`real P02 bound paste/Enter/cursor and ledger (${mode})`, async t => {
+// caller integration: real isolated tmux, real adapter
+// ledger. The terminal is a recorder and is injected, not authenticated supervisor.
+for (const mode of ['single', 'multi']) test(`real bound paste/Enter/cursor and ledger (${mode})`, async t => {
   const terminal = readyTmuxTarget(t, { mode, runtime: 'codex', ledger: false });
   const f = fixture(t); const log = path.join(terminal.root, 'lines');
   const script = path.join(terminal.root, 'terminal.mjs');

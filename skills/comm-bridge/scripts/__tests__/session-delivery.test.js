@@ -10,9 +10,9 @@ process.env.C4_DISPATCHER_DISABLE_MAIN = '1';
 const { main } = await import('../c4-dispatcher.js');
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
-// T01/T04: this replaces extraction of the retired single-lane loop. Delivery
+// this replaces extraction of the retired single-lane loop. Delivery
 // semantics are exercised directly in router-delivery{,-tmux,-pure}.test.js.
-test('T01 production entry starts one factory and drains before closing DB on repeated signals', async () => {
+test('production entry starts one factory and drains before closing DB on repeated signals', async () => {
   const signals = new EventEmitter(), drain = deferred(), events = [];
   const controller = await main({ signals, log() {}, closeDatabase: () => events.push('close'),
     create: () => { events.push('create'); return {
@@ -28,7 +28,7 @@ test('T01 production entry starts one factory and drains before closing DB on re
   assert.equal(signals.listenerCount('SIGINT'), 0);
 });
 
-test('T01 production startup failure stops owned work before closing DB', async () => {
+test('production startup failure stops owned work before closing DB', async () => {
   const signals = new EventEmitter(), events = [];
   await assert.rejects(main({ signals, log() {}, closeDatabase: () => events.push('close'),
     create: () => ({ start: async () => { throw Error('recovery failed'); }, stop: async () => events.push('stop') }),
@@ -37,7 +37,7 @@ test('T01 production startup failure stops owned work before closing DB', async 
   assert.equal(signals.listenerCount('SIGTERM'), 0);
 });
 
-test('T01 PM2-style entry auto-starts and malformed F1 stays alive/inert until signal', { timeout: 10000 }, async t => {
+test('PM2-style entry auto-starts and malformed stays alive/inert until signal', { timeout: 10000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'router-entry-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.zylos'));
@@ -64,7 +64,7 @@ test('T01 PM2-style entry auto-starts and malformed F1 stays alive/inert until s
   assert.equal(code, 0, errors); assert.equal(signal, null);
 });
 
-test('T01 signal during failed startup still drains once before closing DB', async () => {
+test('signal during failed startup still drains once before closing DB', async () => {
   const signals = new EventEmitter(), gate = deferred(), events = [];
   const starting = main({ signals, log() {}, closeDatabase: () => events.push('close'),
     create: () => ({ start: async () => { await gate.promise; throw Error('late startup failure'); }, stop: async () => events.push('stop') }),

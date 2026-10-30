@@ -6,7 +6,7 @@ import path from 'node:path';
 const p=await import('../session-memory-paths.js');
 const run='12345678-1234-1234-1234-123456789abc';
 test('W4-W6 paths isolate run and scope without creating directories',()=>{
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'p02-memory-')); const env={ZYLOS_DIR:root};
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'session-runtime-memory-')); const env={ZYLOS_DIR:root};
  try {
   assert.equal(p.handoffPath(null,env),`${root}/memory/handoff.md`);
   assert.equal(p.handoffPath('lark:x',env),`${root}/memory/session-groups/lark:x/handoff.md`);

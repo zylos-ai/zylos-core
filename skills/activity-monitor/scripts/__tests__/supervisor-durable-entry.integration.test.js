@@ -6,9 +6,9 @@ import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
 import { startSupervisor } from '../supervisor-main.js';
-// DM54/IF31: actual entry + SQLite + immutable real tmux target; no memory-only fence fixture.
+// /actual entry + SQLite + immutable real tmux target; no memory-only fence fixture.
 for(const corruption of ['malformed','unwritable'])test(`entry advances existing durable D8 with corrupt F9 and ${corruption} diagnostic streams`,{timeout:15000},async t=>{
- const f=readyTmuxTarget(t,{prefix:'p05-durable-entry-',mode:'multi'});
+ const f=readyTmuxTarget(t,{prefix:'supervisor-durable-entry-',mode:'multi'});
  f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
  const db=createStore(f.db,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'multi'}})});
  db.setDrainFence('origin',{reason:'upgrade',runId:'run-1'});

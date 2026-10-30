@@ -25,7 +25,7 @@ function marker(child, expected) {
     child.on('exit', code => { clearTimeout(timer); if (!output.includes(expected)) reject(new Error(`worker exited ${code}: ${output} ${errors}`)); });
   });
 }
-test('IF-09 DM-13: concurrent first namespace allocation never replaces a binding', async t => {
+test('concurrent first namespace allocation never replaces a binding', async t => {
   const { db, filename } = fixture(t, {}, true);
   const children = ['Foo','Foo','foo'].map(name => worker(filename, `writeSync(1,'READY\\n'); process.stdin.once('data',()=>{writeSync(1, JSON.stringify(s.ensureChannelNamespace(${JSON.stringify(name)}))+'\\n'); db.close();});`));
   t.after(() => children.forEach(child => child.kill('SIGKILL')));
@@ -38,7 +38,7 @@ test('IF-09 DM-13: concurrent first namespace allocation never replaces a bindin
   assert.deepEqual(rows.map(r => r.component_name), ['Foo','foo']);
   assert.deepEqual(rows.map(r => r.namespace).sort(), ['foo','foo-2']);
 });
-for (const phase of ['before', 'after']) test(`DM-11 crash ${phase} COMMIT preserves whole message transaction`, async t => {
+for (const phase of ['before', 'after']) test(`crash ${phase} COMMIT preserves whole message transaction`, async t => {
   const { db, filename } = fixture(t, {}, true);
   const child = worker(filename, `
     const exec = db.exec.bind(db);
@@ -59,7 +59,7 @@ for (const phase of ['before', 'after']) test(`DM-11 crash ${phase} COMMIT prese
   for (const table of ['conversations','channel_namespaces','group_heads']) assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n, expected);
   if (expected) assert.equal(db.prepare('SELECT head_id FROM group_heads').get().head_id, db.prepare('SELECT id FROM conversations').get().id);
 });
-test('DM-14: group case is preserved independently in messages, heads, checkpoints and cursors', t => {
+test('group case is preserved independently in messages, heads, checkpoints and cursors', t => {
   const { db, store: s } = fixture(t);
   const groups = ['AbC','abc',undefined,'x'];
   for (const local of groups) {
@@ -72,7 +72,7 @@ test('DM-14: group case is preserved independently in messages, heads, checkpoin
   for (const table of ['group_heads','origin_sync_cursors']) assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n,4);
   assert.deepEqual(db.prepare('SELECT session_group FROM group_heads ORDER BY session_group').all().map(r=>r.session_group), ['ns','ns:AbC','ns:abc','ns:x']);
 });
-test('DM-15: maintained heads equal independent message aggregation across 20 groups', t => {
+test('maintained heads equal independent message aggregation across 20 groups', t => {
   const { db, store: s } = fixture(t);
   for (let i=0;i<1000;i++) s.insertConversation('in','ns',null,`${i}`,{groupName:`g${i%20}`});
   const expected = db.prepare("SELECT session_group,MAX(id) head_id FROM conversations WHERE session_group<>'' GROUP BY session_group ORDER BY session_group").all();

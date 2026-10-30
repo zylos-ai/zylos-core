@@ -47,7 +47,7 @@ async function timeoutWithoutWaiter(operation) {
 }
 
 function fixture(t, overrides = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-migration-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-migration-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const memory = path.join(root, 'memory'); fs.mkdirSync(memory);
   const references = path.join(memory, 'references.md'); fs.writeFileSync(references, 'original marker\n');
@@ -63,7 +63,7 @@ const init = f => f.service.ensure({ createdBy: 'upgrade' });
 const patch = { path: 'references.md', expected: 'original marker', replacement: 'new marker' };
 
 function cliFixture(t) {
-  const target = readyTmuxTarget(t, { prefix: 'p06-migrate-detail-', mode: 'multi' });
+  const target = readyTmuxTarget(t, { prefix: 'runtime-control-migrate-detail-', mode: 'multi' });
   const references = path.join(target.root, 'memory/references.md');
   fs.mkdirSync(path.dirname(references), { recursive: true });
   fs.writeFileSync(references, 'original marker\n');
@@ -451,7 +451,7 @@ test('installed skill uses Core discovery and rejects malformed CLI input withou
 });
 
 test('real isolated tmux F2 and F3 authorize current main and reject stale or ordinary group callers', async t => {
-  const target = readyTmuxTarget(t, { prefix: 'p06-migrate-', mode: 'multi' });
+  const target = readyTmuxTarget(t, { prefix: 'runtime-control-migrate-', mode: 'multi' });
   const memory = path.join(target.root, 'memory'); fs.mkdirSync(memory);
   const references = path.join(memory, 'references.md'); fs.writeFileSync(references, 'original marker\n');
   const env = { ...target.env, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: target.ready.runId,
@@ -507,7 +507,7 @@ test('real isolated tmux F2 and F3 authorize current main and reject stale or or
   const completed = await run(['complete', '--id', 'references-layout-v1', '--summary', '-'], 'verified');
   assert.equal(completed.code, 0, `${completed.stdout} ${completed.stderr}`);
   assert.match(completed.stdout, /^OK: /); assert.equal(completed.stderr, '');
-  const jsonTarget = readyTmuxTarget(t, { prefix: 'p06-migrate-json-', mode: 'multi' });
+  const jsonTarget = readyTmuxTarget(t, { prefix: 'runtime-control-migrate-json-', mode: 'multi' });
   fs.mkdirSync(path.join(jsonTarget.root, 'memory'));
   fs.writeFileSync(path.join(jsonTarget.root, 'memory/references.md'), 'original marker\n');
   const jsonEnv = { ...jsonTarget.env, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: jsonTarget.ready.runId,

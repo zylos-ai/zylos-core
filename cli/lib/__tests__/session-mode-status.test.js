@@ -11,7 +11,7 @@ const defaults = overrides => ({
   readPm2: () => { throw new Error('reachable socket must not query PM2'); }, ...overrides,
 });
 
-test('IB44 status maps only authoritative transition/gate fields and does not submit requests', async () => {
+test('status maps only authoritative transition/gate fields and does not submit requests', async () => {
   const status = await readSessionModeStatus(defaults());
   assert.deepEqual(status, {
     sessionMode: 'single', transition: { runId: 'switch-a', sourceMode: 'single', targetMode: 'multi', phase: 'gating', cutoff: null,
@@ -22,7 +22,7 @@ test('IB44 status maps only authoritative transition/gate fields and does not su
 });
 
 for (const method of ['getModeTransition', 'getDrainFence', 'getLastCompletedModeTransition']) {
-  test(`IB44 ${method} failures propagate instead of becoming absent`, async () => {
+  test(`${method} failures propagate instead of becoming absent`, async () => {
     const input = defaults(); const failure = Object.assign(new Error('held database'), { code: 'DB_BUSY', persisted: [] });
     input.db[method] = () => { throw failure; };
     input.probeSupervisor = () => { throw new Error('must stop before observations'); };
@@ -30,14 +30,14 @@ for (const method of ['getModeTransition', 'getDrainFence', 'getLastCompletedMod
   });
 }
 
-test('IB44 missing config and unreadable config differ without changing D9', async () => {
+test('missing config and unreadable config differ without changing', async () => {
   const missing = await readSessionModeStatus(defaults({ readMode: () => ({ mode: null, keyPresent: false }) }));
   const unreadable = await readSessionModeStatus(defaults({ readMode: () => { throw new Error('invalid config'); } }));
   assert.equal(missing.sessionMode, null); assert.equal(unreadable.sessionMode, 'unreadable');
   assert.deepEqual(missing.transition, unreadable.transition);
 });
 
-test('IF66 diagnostics use only the current run, first matching reason and latest ten allowed events', async () => {
+test('diagnostics use only the current run, first matching reason and latest ten allowed events', async () => {
   const events = [
     { run_id: 'other', event: 'transition_blocked', reason: row.reason, ts: 1 },
     { run_id: row.run_id, event: 'unrelated', reason: row.reason, ts: 2 },
@@ -50,14 +50,14 @@ test('IF66 diagnostics use only the current run, first matching reason and lates
   assert.equal(status.lastEvents.length, 10);
 });
 
-test('IF31 E diagnostic loss cannot change authoritative state or socket observation', async () => {
+test('E diagnostic loss cannot change authoritative state or socket observation', async () => {
   const input = defaults({ readEvents: () => [{ run_id: row.run_id, reason: row.reason, event: 'transition_blocked', ts: 3 }] });
   const before = await readSessionModeStatus(input);
   const after = await readSessionModeStatus({ ...input, readEvents: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } });
   assert.deepEqual(after, { ...before, blocked: { reason: row.reason, since: null }, lastEvents: [] });
 });
 
-test('IF66 stopped supervisor preserves state with explicit PM2 status or observation failure', async () => {
+test('stopped supervisor preserves state with explicit PM2 status or observation failure', async () => {
   const stopped = await readSessionModeStatus(defaults({ probeSupervisor: () => false, readPm2: () => 'stopped' }));
   assert.equal(stopped.supervisor, 'unreachable'); assert.deepEqual(stopped.supervisorPm2, { status: 'stopped', error: null });
   const unknown = await readSessionModeStatus(defaults({ probeSupervisor: () => false,
@@ -67,7 +67,7 @@ test('IF66 stopped supervisor preserves state with explicit PM2 status or observ
   assert.match(formatSessionModeStatus(unknown), /PM2 activity-monitor: unobservable/);
 });
 
-test('IF66 no open transition reads latest completed row and never infers blocked from logs', async () => {
+test('no open transition reads latest completed row and never infers blocked from logs', async () => {
   const input = defaults(); input.db.getModeTransition = () => null; input.db.getDrainFence = () => null;
   input.db.getLastCompletedModeTransition = () => ({ ...row, phase: 'complete', updated_at: 110 });
   input.readEvents = () => [{ run_id: row.run_id, event: 'transition_blocked', reason: 'stale', ts: 100 }];
@@ -78,7 +78,7 @@ test('IF66 no open transition reads latest completed row and never infers blocke
   assert.match(formatSessionModeStatus(status), /Last completed: switch-a/);
 });
 
-for (const outcome of ['connect', 'error', 'timeout']) test(`IB44 one socket connection with no bytes, ${outcome}`, async () => {
+for (const outcome of ['connect', 'error', 'timeout']) test(`one socket connection with no bytes, ${outcome}`, async () => {
   let calls = 0; let destroyed = 0;
   const socket = new EventEmitter(); socket.destroy = () => destroyed++;
   socket.write = () => assert.fail('status may not send a request');
@@ -90,7 +90,7 @@ for (const outcome of ['connect', 'error', 'timeout']) test(`IB44 one socket con
   assert.equal(result, outcome === 'connect'); assert.equal(calls, 1); assert.equal(destroyed, 1);
 });
 
-test('IB44 an unfinished gating transition with NULL reason is not blocked, including after unblocking', async () => {
+test('an unfinished gating transition with NULL reason is not blocked, including after unblocking', async () => {
   const input = defaults(); let reason = null;
   input.db.getModeTransition = () => ({ ...row, reason });
   input.readEvents = () => [{ run_id: row.run_id, event: 'transition_blocked', reason: row.reason, ts: 10 }];
@@ -102,7 +102,7 @@ test('IB44 an unfinished gating transition with NULL reason is not blocked, incl
   assert.equal(unblocked.transition.runId, row.run_id); assert.equal(unblocked.transition.phase, 'gating'); assert.equal(unblocked.blocked, null);
 });
 
-test('IB44 a global manual_restart fence is present independently of any mode transition', async () => {
+test('a global manual_restart fence is present independently of any mode transition', async () => {
   const input = defaults(); input.db.getModeTransition = () => null;
   input.db.getDrainFence = group => { assert.equal(group, '*'); return { reason: 'manual_restart', runId: 'restart-run' }; };
   const status = await readSessionModeStatus(input);

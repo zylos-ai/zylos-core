@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Set isolated roots before importing the real C4 database/config modules.
-const root=await fs.mkdtemp(path.join(os.tmpdir(),'p02-guard-'));
+const root=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-guard-'));
 process.env.ZYLOS_DIR=root;process.env.HOME=root;
 process.env.ZYLOS_PACKAGE_ROOT=fileURLToPath(new URL('../../../../',import.meta.url));
 await fs.mkdir(path.join(root,'.zylos'));
@@ -50,7 +50,7 @@ async function fixture(t){
   return {dir,tmux,input,flag,calls,options};
 }
 
-for(const position of ['initial','guarded-environment'])test(`IF-16 hanging ${position} command keeps D3 empty and preserves timeout cause`,async t=>{
+for(const position of ['initial','guarded-environment'])test(`hanging ${position} command keeps empty and preserves timeout cause`,async t=>{
   const f=await fixture(t);
   if(position==='initial')await fs.writeFile(f.flag,'1');
   else {
@@ -66,7 +66,7 @@ for(const position of ['initial','guarded-environment'])test(`IF-16 hanging ${po
   if(position==='guarded-environment')assert.ok(calls.some(a=>a.includes('if-shell')));
 });
 
-test('IF-18 hanging command and unusable executable remain unknown; no server is absent',async t=>{
+test('hanging command and unusable executable remain unknown; no server is absent',async t=>{
   const f=await fixture(t);await fs.writeFile(f.flag,'1');
   const adapter=new SessionAdapter({tmux:f.options});
   await assert.rejects(adapter.isRunning({tmuxName:'zylos-group-origin'}),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
@@ -86,11 +86,11 @@ test('IF-18 hanging command and unusable executable remain unknown; no server is
   assert.deepEqual(await adapter.isRunning({tmuxName:'zylos-group-origin'}),{tmux:false,process:false});
 });
 
-// P02-side caller harness: it consumes real resolver errors and real P01 ledger
+// side caller harness: it consumes real resolver errors and real ledger
 // primitives. The harness itself chooses requeue/stale outcomes below; these
 // assertions verify the provider errors and ledger primitives, NOT dispatcher
-// routing. P04 must verify those choices through its real dispatcher integration.
-for(const scenario of ['absent','missing-run','timeout'])test(`IF-13 first-resolution ${scenario}: provider zero sending and caller-selected real ledger outcomes`,async t=>{
+// routing. must verify those choices through its real dispatcher integration.
+for(const scenario of ['absent','missing-run','timeout'])test(`first-resolution ${scenario}: provider zero sending and caller-selected real ledger outcomes`,async t=>{
   const f=await fixture(t);
   const initial=await openTmuxConnection(f.options);
   const bound=await resolveSessionTarget({sessionGroup:'origin',connection:initial});initial.close();
@@ -133,7 +133,7 @@ for(const scenario of ['absent','missing-run','timeout'])test(`IF-13 first-resol
   }
 });
 
-test('IF-16 replacement between atomic identity and first guarded read rejects with D3 zero rows',async t=>{
+test('replacement between atomic identity and first guarded read rejects with zero rows',async t=>{
   const f=await fixture(t),replaced=path.join(f.dir,'replaced');
   const beforeGeneration=f.tmux('display-message','-p','#{pid}:#{start_time}');
   const source=`#!${process.execPath}
@@ -158,7 +158,7 @@ const r=cp.spawnSync(${JSON.stringify(actualBinary)},a,{stdio:'inherit'});proces
   assert.equal(f.tmux('list-sessions','-F','#{session_name}').split('\n').sort().join(','),'keeper,zylos-group-origin');
 });
 
-test('IF-13 marker-looking pane content and message syntax are data, not guard output or commands',async t=>{
+test('marker-looking pane content and message syntax are data, not guard output or commands',async t=>{
   const f=await fixture(t),connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
   const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=new SessionAdapter();
   const marker=path.join(f.dir,'must-not-exist');
@@ -173,7 +173,7 @@ test('IF-13 marker-looking pane content and message syntax are data, not guard o
   assert.equal(calls.some(a=>a.some(arg=>arg.includes(payload))),false,'Message body must never enter a tmux command string');
 });
 
-for(const method of ['sendText','sendKeys'])test(`IF-13 ${method} guarded command timeout uses its step error`,async t=>{
+for(const method of ['sendText','sendKeys'])test(`${method} guarded command timeout uses its step error`,async t=>{
   const f=await fixture(t);
   // Setup starts a Node wrapper for every ordinary tmux read. Under parallel
   // suite load its startup can exceed the deliberately short fault deadline.
@@ -191,7 +191,7 @@ for(const method of ['sendText','sendKeys'])test(`IF-13 ${method} guarded comman
   await adapter[method]({connection,target,text:'retry on original target',keys:['Enter']});
 });
 
-test('IF-13 replacing the bound server blocks old text and keys from the new pane',async t=>{
+test('replacing the bound server blocks old text and keys from the new pane',async t=>{
   const f=await fixture(t),connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
   const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=new SessionAdapter();
   f.tmux('kill-server');await delay(50);

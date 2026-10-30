@@ -6,11 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { extractAbsorbedBlock } from '../sync-files.js';
 import { renderStateSkeleton } from '../state-format.js';
 import { createFixture, createToolExecutor, runDriver, assertPreserved, assertSuccessfulSync,
-  assertFailureFlow, assertRotationFlow, prepareAcquireFault, provenIds } from './fixtures/p07-model-harness.js';
+  assertFailureFlow, assertRotationFlow, prepareAcquireFault, provenIds } from './fixtures/model-harness.js';
 
 // These default tests calibrate fixtures, transport and observers. They are not
 // real-model acceptance and do not emulate the Sync algorithm.
-test('P07 integration observer detects exact-line, title and outbound-evidence regressions', t => {
+test('integration observer detects exact-line, title and outbound-evidence regressions', t => {
   const f = createFixture(t); f.prepareRound(1);
   const block = extractAbsorbedBlock(f.before.state);
   assert.equal(block.entries.length, 1000);
@@ -38,7 +38,7 @@ test('P07 integration observer detects exact-line, title and outbound-evidence r
   assertPreserved(good, shell, remaining.map(entry => entry.id));
 });
 
-test('P07 integration fixture binds real CLI and restricted stdio MCP to an isolated scope', async t => {
+test('integration fixture binds real CLI and restricted stdio MCP to an isolated scope', async t => {
   const f = createFixture(t); f.prepareRound(1);
   const executor = await createToolExecutor(f); t.after(executor.close);
   const acquire = await executor.execute({ name: 'run_script', arguments: { script: 'sync-lock', args: ['acquire', '--kind', 'group'] } });
@@ -56,24 +56,24 @@ test('P07 integration fixture binds real CLI and restricted stdio MCP to an isol
   assert.equal(f.snapshot().rowsHash, f.before.rowsHash);
 });
 
-test('P07 JSONL transport records real results without executing a stub Sync procedure', async t => {
+test('JSONL transport records real results without executing a stub Sync procedure', async t => {
   const f = createFixture(t); f.prepareRound(1);
-  const result = await runDriver(f, 'transport-only', { executable: process.execPath, args: [fileURLToPath(new URL('./fixtures/p07-transport-driver.js', import.meta.url))], timeoutMs: 15000 });
+  const result = await runDriver(f, 'transport-only', { executable: process.execPath, args: [fileURLToPath(new URL('./fixtures/transport-driver.js', import.meta.url))], timeoutMs: 15000 });
   assert.equal(result.trace.length, 1); assert.equal(result.final.modelCalls, 0);
   assert.equal(result.trace[0].request.name, 'read_file');
   assert.equal(result.snapshot.stateHash, f.before.stateHash);
   assert.ok(fs.existsSync(path.join(result.evidenceDir, 'trace.jsonl')));
 });
 
-const driver = process.env.P07_MODEL_DRIVER;
-const selected = new Set((process.env.P07_MODEL_CASES || '').split(',').filter(Boolean));
-const live = (id, action) => test(`P07 real model: ${id}`, {
-  skip: !driver ? 'P07_MODEL_DRIVER is absent: real-model acceptance NOT RUN' : selected.size && !selected.has(id) ? 'Not selected' : false,
+const driver = process.env.MODEL_WORKFLOW_DRIVER;
+const selected = new Set((process.env.MODEL_WORKFLOW_CASES || '').split(',').filter(Boolean));
+const live = (id, action) => test(`real model: ${id}`, {
+  skip: !driver ? 'MODEL_WORKFLOW_DRIVER is absent: real-model acceptance NOT RUN' : selected.size && !selected.has(id) ? 'Not selected' : false,
   timeout: 1900000,
 }, action);
 
-// P07 §4: same fixture and real committed state through all three rounds.
-for (const [id, scope] of [['group-followup', 'p07'], ['origin-group-followup', 'origin'], ['global-followup', '*']]) {
+// §4: same fixture and real committed state through all three rounds.
+for (const [id, scope] of [['group-followup', 'model-workflow'], ['origin-group-followup', 'origin'], ['global-followup', '*']]) {
   live(id, async t => {
     const f = createFixture(t, { scope });
     for (let round = 1; round <= 3; round++) {
@@ -87,7 +87,7 @@ for (const [id, scope] of [['group-followup', 'p07'], ['origin-group-followup', 
   });
 }
 
-// P07 §2.5 / §4: model continues or stops after the actual tool result. Injections
+// §4: model continues or stops after the actual tool result. Injections
 // are boundary faults, while guarded commit and marker operations remain real.
 for (const fault of ['copy-block', 'formal-bad-header', 'temporary-bad-header', 'temporary-missing-section', 'unknown-id', 'read-failure', 'token-mismatch', 'busy', 'acquire-failure', 'release-failure']) {
   live(`group-${fault}`, async t => {
@@ -104,7 +104,7 @@ for (const fault of ['copy-block', 'formal-bad-header', 'temporary-bad-header', 
   });
 }
 
-// P07 §2.6/2.7 / §4: true identity edit followed by rejected rotation, with
+// / §4: true identity edit followed by rejected rotation, with
 // continued progress and a truthful final report. Origin's group Pending stays.
 for (const kind of ['origin', 'global']) {
   for (const fault of ['rotation-transition', 'rotation-enqueue']) {

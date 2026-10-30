@@ -57,7 +57,7 @@ async function runOpenStdin(t, fixture, args) {
   });
 }
 
-test('IB-55 invalid internal arguments reject before waiting on stdin with exact error format', async t => {
+test('invalid internal arguments reject before waiting on stdin with exact error format', async t => {
   const fixture = setup(t);
   for (const args of [['internal'], ['internal', '--group'], ['internal', 'target', 'extra']]) {
     const result = await runOpenStdin(t, fixture, args);
@@ -67,7 +67,7 @@ test('IB-55 invalid internal arguments reject before waiting on stdin with exact
   }
 });
 
-test('IB-55 valid internal dispatch uses the real P08 module and preserves empty-body errors', t => {
+test('valid internal dispatch uses the real module and preserves empty-body errors', t => {
   const fixture = setup(t);
   fs.mkdirSync(path.join(fixture.dir, '.claude/skills/demo/scripts'), { recursive: true });
   runDatabase(fixture, "db.insertConversation('in','demo','room','seed',{groupName:'room'});");
@@ -103,7 +103,7 @@ test('installed external and void commands dispatch through installed component 
   assert.equal(invoke(['void', 'handoff', '--stdin']).status, 0);
 });
 
-test('#6b installed CLI reads original absorbed route and queues internal targets through the real P08 module', t => {
+test('#6b installed CLI reads original absorbed route and queues internal targets through the real module', t => {
   const fixture = setup(t);
   const component = path.join(fixture.dir, '.claude/skills/demo/scripts');
   fs.mkdirSync(component, { recursive: true });

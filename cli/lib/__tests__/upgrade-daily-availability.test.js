@@ -138,7 +138,7 @@ for(const [shape,phase,hooks,validCutoff,allowed] of cutoffShapes)for(const [own
   const databaseBytes=()=>Object.fromEntries(m.DB_PATHS.flatMap(db=>['','-wal','-shm'].map(suffix=>db+suffix))
    .filter(db=>fs.existsSync(path.join(f.root,db))).map(db=>[db,fs.readFileSync(path.join(f.root,db))]));
   const before=databaseBytes();
-  const code=`import {${entry} as open} from ${JSON.stringify(module)};try{const db=open();db.prepare('INSERT INTO daily_probe VALUES (?)').run('IF-50');console.log(db.prepare('SELECT COUNT(*) AS n FROM daily_probe').get().n);db.close();}catch(error){console.error(error.code+': '+error.message);process.exitCode=1;}`;
+  const code=`import {${entry} as open} from ${JSON.stringify(module)};try{const db=open();db.prepare('INSERT INTO daily_probe VALUES (?)').run('');console.log(db.prepare('SELECT COUNT(*) AS n FROM daily_probe').get().n);db.close();}catch(error){console.error(error.code+': '+error.message);process.exitCode=1;}`;
   const result=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:f.root}});
   if(allowed) {assert.equal(result.status,0,result.stderr);assert.equal(result.stdout.trim(),'2');}
   else {assert.equal(result.status,1,result.stderr);assert.match(result.stderr,/ZYLOS_MAINTENANCE/);assert.deepEqual(databaseBytes(),before);}

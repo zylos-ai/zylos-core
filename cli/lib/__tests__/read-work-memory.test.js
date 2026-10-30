@@ -9,13 +9,13 @@ import { test } from 'node:test';
 import { readWorkMemory, parseReadWorkMemoryArgs } from '../read-work-memory.js';
 import { appendInbox } from '../../../skills/zylos-memory/scripts/memory-append.js';
 
-// Most cases inject a parser to isolate the snapshot contract; one uses P07 below.
+// Most cases inject a parser to isolate the snapshot contract; one uses below.
 const lockModule = new URL('../../../skills/zylos-memory/scripts/sync-lock.js', import.meta.url).href;
 const { withMemoryLock } = await import(lockModule);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const id1 = '20261019T081500123Z', id2 = '20261019T091200456Z';
 function fixture(t, grouped = true) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-work-memory-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-work-memory-'));
   t.after(() => fs.rmSync(root, { force: true, recursive: true }));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'read-1', TMPDIR: root };
   delete env.ZYLOS_SESSION_GROUP;
@@ -31,7 +31,7 @@ function fixture(t, grouped = true) {
   return { root, env, memory, run, options: { env, withMemoryLock, parseStateHeader } };
 }
 
-test('IF-22: same-lock snapshot excludes committed segments, hashes exact bytes and never changes source files', async t => {
+test('same-lock snapshot excludes committed segments, hashes exact bytes and never changes source files', async t => {
   const f = fixture(t);
   const before = Object.fromEntries(fs.readdirSync(f.memory).map(name => [name, fs.readFileSync(path.join(f.memory, name))]));
   let held = false, parseHeld = false;
@@ -53,7 +53,7 @@ test('IF-22: same-lock snapshot excludes committed segments, hashes exact bytes 
   for (const [name, bytes] of Object.entries(before)) assert.deepEqual(fs.readFileSync(path.join(f.memory, name)), bytes);
 });
 
-test('IF-22: malformed header retains body and includes all segments in ID order', async t => {
+test('malformed header retains body and includes all segments in ID order', async t => {
   const f = fixture(t);
   const result = await readWorkMemory({ ...f.options,
     parseStateHeader: () => ({ valid: false, scope: null, coverage: null, inboxCommitted: [] }) });
@@ -64,7 +64,7 @@ test('IF-22: malformed header retains body and includes all segments in ID order
   assert.equal(result.data.warnings.length, 1);
 });
 
-test('IF-22/P07: installed real parser validates scope and excludes only committed segments', async t => {
+test('installed real parser validates scope and excludes only committed segments', async t => {
   const f = fixture(t);
   const scripts = path.join(f.root, '.claude', 'skills', 'zylos-memory', 'scripts');
   fs.mkdirSync(path.dirname(scripts), { recursive: true });
@@ -86,7 +86,7 @@ test('IF-22/P07: installed real parser validates scope and excludes only committ
   assert.equal(wrongScope.data.warnings.length, 1);
 });
 
-test('IF-22: rotate/commit waits until capture releases F8; output uses its original snapshot', async t => {
+test('rotate/commit waits until capture releases ; output uses its original snapshot', async t => {
   const f = fixture(t);
   let change;
   const result = await readWorkMemory({ ...f.options, readFile: file => {
@@ -105,7 +105,7 @@ test('IF-22: rotate/commit waits until capture releases F8; output uses its orig
   assert.doesNotMatch(result.data.text, /new committed state/);
 });
 
-test('IF-22: legacy reads and legacy inbox appends contend on the same F8', async t => {
+test('legacy reads and legacy inbox appends contend on the same', async t => {
   const f = fixture(t, false);
   delete f.env.ZYLOS_RUN_ID;
   let signalHeld, release;
@@ -131,7 +131,7 @@ test('IF-22: legacy reads and legacy inbox appends contend on the same F8', asyn
   assert.doesNotMatch(snapshot.data.text, /after release/);
 });
 
-test('IF-22: large UTF-8 output spills the same captured bytes after unlocking', async t => {
+test('large UTF-8 output spills the same captured bytes after unlocking', async t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.memory, 'state.md'), 'abc '.repeat(12000));
   let held = false;
@@ -163,7 +163,7 @@ test('IF-22: large UTF-8 output spills the same captured bytes after unlocking',
   assert.equal(fs.statSync(result.data.spill.path).mode & 0o777, 0o600);
 });
 
-test('IB-23: exactly 32 KiB stays inline and the next UTF-8 byte spills', async t => {
+test('exactly 32 KiB stays inline and the next UTF-8 byte spills', async t => {
   const f = fixture(t);
   const statePath = path.join(f.memory, 'state.md');
   fs.writeFileSync(statePath, 'x'.repeat(10000));
@@ -185,7 +185,7 @@ test('IB-23: exactly 32 KiB stays inline and the next UTF-8 byte spills', async 
   assert.equal(JSON.parse(spill).data.text.includes(state + 'x'), true);
 });
 
-test('IB-23: expired total budget, non-UTF-8 and spill failure never return partial success', async t => {
+test('expired total budget, non-UTF-8 and spill failure never return partial success', async t => {
   const f = fixture(t);
   let clock = 0, reads = 0;
   await assert.rejects(readWorkMemory({ ...f.options, timeoutMs: 2100, now: () => clock,
@@ -207,7 +207,7 @@ test('IB-23: expired total budget, non-UTF-8 and spill failure never return part
   assert.equal(fs.readdirSync(f.root).some(name => name.startsWith('zylos-work-memory-')), false);
 });
 
-test('IF-22: unreadable part rejects the whole snapshot and identifies the part', async t => {
+test('unreadable part rejects the whole snapshot and identifies the part', async t => {
   const f = fixture(t);
   for (const part of ['state', 'inbox', `segment:${id2}`]) {
     await assert.rejects(readWorkMemory({ ...f.options, readFile: file => {
@@ -219,7 +219,7 @@ test('IF-22: unreadable part rejects the whole snapshot and identifies the part'
   }
 });
 
-test('IB-23: a Sync-rotated inbox is empty while existing segments remain readable', async t => {
+test('a Sync-rotated inbox is empty while existing segments remain readable', async t => {
   const f = fixture(t);
   fs.unlinkSync(path.join(f.memory, 'inbox.md'));
   const result = await readWorkMemory(f.options);
@@ -229,7 +229,7 @@ test('IB-23: a Sync-rotated inbox is empty while existing segments remain readab
   assert.match(result.data.text, /second segment/);
 });
 
-test('IB-23: new group and fresh global memory return empty snapshots with an invalid-header warning', async t => {
+test('new group and fresh global memory return empty snapshots with an invalid-header warning', async t => {
   for (const grouped of [true, false]) {
     const f = fixture(t, grouped);
     fs.rmSync(f.memory, { recursive: true });
@@ -242,7 +242,7 @@ test('IB-23: new group and fresh global memory return empty snapshots with an in
   }
 });
 
-test('IB-23: environment scope only, global and grouped reads cannot fall back across scopes', async t => {
+test('environment scope only, global and grouped reads cannot fall back across scopes', async t => {
   const global = fixture(t, false);
   assert.equal((await readWorkMemory(global.options)).data.scope, '*');
   delete global.env.ZYLOS_RUN_ID;
@@ -259,7 +259,7 @@ test('IB-23: environment scope only, global and grouped reads cannot fall back a
   assert.doesNotMatch(result.data.text, /wrong-scope/);
 });
 
-test('IF-22: timeout cancels lock wait before returning and does not read without lock', async t => {
+test('timeout cancels lock wait before returning and does not read without lock', async t => {
   const f = fixture(t);
   let release, signalHeld;
   const held = new Promise(resolve => { signalHeld = resolve; });
@@ -278,7 +278,7 @@ test('IF-22: timeout cancels lock wait before returning and does not read withou
   assert.equal(readAttempts, 0);
 });
 
-test('IF-22: a SIGSTOP holder times out without a surviving waiter or source reads', async t => {
+test('a SIGSTOP holder times out without a surviving waiter or source reads', async t => {
   const f = fixture(t);
   const child = spawn(process.execPath, ['--input-type=module', '-e', `
     import { withMemoryLock } from ${JSON.stringify(lockModule)};
@@ -314,7 +314,7 @@ test('IF-22: a SIGSTOP holder times out without a surviving waiter or source rea
   assert.equal(reads, 0);
 });
 
-test('IB-23: malformed flags reject and missing P07 parser is explicit READ_FAILED', async t => {
+test('malformed flags reject and missing parser is explicit READ_FAILED', async t => {
   for (const args of [['--group', 'origin'], ['--unknown'], ['--json', '--json'], ['--timeout-ms'],
     ['--timeout-ms', '0'], ['--timeout-ms', '2000'], ['--timeout-ms', '2.5'], ['--timeout-ms', '10000', '--timeout-ms', '10000']]) {
     assert.throws(() => parseReadWorkMemoryArgs(args), { code: 'INVALID_ARGS' });

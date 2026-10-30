@@ -28,7 +28,7 @@ function launch(dir, fault = '') {
   let stderr = ''; child.stderr.on('data', chunk => stderr += chunk);
   const messages = [], waits = [];
   child.on('message', data => waits.length ? waits.shift().resolve(data) : messages.push(data));
-  child.on('exit', (code, signal) => { for (const wait of waits.splice(0)) wait.reject(new Error(`M4 exit ${code ?? signal}: ${stderr}`)); });
+  child.on('exit', (code, signal) => { for (const wait of waits.splice(0)) wait.reject(new Error(`supervisor exit ${code ?? signal}: ${stderr}`)); });
   const next = () => messages.length ? Promise.resolve(messages.shift()) : new Promise((resolve, reject) => waits.push({ resolve, reject }));
   const worker = { child, next, stderr: () => stderr, command: async value => { child.send(value); const answer = await next(); assert.equal(answer.error, undefined, answer.stack); return answer; } }; workers.add(worker); return worker;
 }
@@ -43,7 +43,7 @@ async function finish(worker) {
   for (let index = 0; index < 8; index++) { value = await worker.command('tick'); if (value.last?.phase === 'complete' && !value.row) return value; }
   throw new Error(`Transition failed to finish: ${JSON.stringify(value)}`);
 }
-for (const source of ['single', 'multi']) for (const phase of ['gating', 'converting', 'cutover']) test(`IF-39 ${source} real M4 crash during ${phase} resumes same D9/cutoff and completes atomically`, async () => {
+for (const source of ['single', 'multi']) for (const phase of ['gating', 'converting', 'cutover']) test(`${source} real supervisor crash during ${phase} resumes same /cutoff and completes atomically`, async () => {
   const target = source === 'single' ? 'multi' : 'single';
   const dir = root(source); let worker = launch(dir); expect((await worker.next()).ready).toBe(true);
   await worker.command({ seed: [{ content: 'pending source message' }] });
@@ -57,7 +57,7 @@ for (const source of ['single', 'multi']) for (const phase of ['gating', 'conver
   if (source === 'single') expect(fs.readFileSync(path.join(dir, 'memory/state.md'), 'utf8')).toBe('prior source state\n');
 }, 20000);
 
-for (const source of ['single','multi']) for (const point of ['before-config', 'after-config', 'before-confirm', 'before-complete', 'after-complete']) test(`IF-39 ${source} real M4 SIGKILL ${point} preserves artifacts and recovers forward`, async () => {
+for (const source of ['single','multi']) for (const point of ['before-config', 'after-config', 'before-confirm', 'before-complete', 'after-complete']) test(`${source} real supervisor SIGKILL ${point} preserves artifacts and recovers forward`, async () => {
   const target=source==='single'?'multi':'single';
   const dir = root(source); let worker = launch(dir, point); await worker.next();
   await worker.command({ seed: [{ content: 'pending source message' }] });
@@ -74,7 +74,7 @@ for (const source of ['single','multi']) for (const point of ['before-config', '
   expect(fs.readFileSync(state, 'utf8')).toBe(written);
 }, 20000);
 
-for (const source of ['single','multi']) test(`IF-39 ${source} real P05 reclaim waits starting runtime then ends exact source run`, async () => {
+for (const source of ['single','multi']) test(`${source} real reclaim waits starting runtime then ends exact source run`, async () => {
   const dir=root(source), worker=launch(dir); await worker.next();
   const target=source==='single'?'multi':'single';
   await worker.command({scenes:[{sessionGroup:'origin',runId:'old-source',present:true,ready:false,processRunning:false}]});
@@ -86,7 +86,7 @@ for (const source of ['single','multi']) test(`IF-39 ${source} real P05 reclaim 
   const done=await finish(worker); expect(done.mode.mode).toBe(target); expect(done.fences).toEqual([]);
 },20000);
 
-for (const source of ['single','multi']) test(`IF-39 ${source} converting recovery keeps frozen cutoff and leaves later input pending`,async()=>{
+for (const source of ['single','multi']) test(`${source} converting recovery keeps frozen cutoff and leaves later input pending`,async()=>{
  const dir=root(source); let worker=launch(dir); await worker.next();
  await worker.command({seed:[{content:'before cutoff'}]}); const accepted=await request(dir,source==='single'?'multi':'single');
  const absorbed=await worker.command('tick'); expect(absorbed.row.phase).toBe('converting'); expect(absorbed.row.cutoff).toBe(1);
@@ -96,7 +96,7 @@ for (const source of ['single','multi']) test(`IF-39 ${source} converting recove
 },20000);
 
 const diagnostics = dir => fs.readFileSync(path.join(dir,'activity-monitor/supervisor-events.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
-test('IF-66 real M4 conversion/config/PM2 failures persist reasons, dedup A-B-A, unblock and keep gate until complete',async()=>{
+test('real supervisor conversion/config/PM2 failures persist reasons, dedup A-B-A, unblock and keep gate until complete',async()=>{
  const dir=root(), worker=launch(dir); await worker.next(); await worker.command({seed:[{content:'pending'}]});
  const accepted=await request(dir); await worker.command('tick');
  for(const step of ['export','export','check','export']){
@@ -106,13 +106,13 @@ test('IF-66 real M4 conversion/config/PM2 failures persist reasons, dedup A-B-A,
  expect(diagnostics(dir).filter(e=>e.event==='transition_convert_failed').map(e=>e.reason)).toEqual(['conversion_failed:export:EIO','conversion_failed:check:EIO','conversion_failed:export:EIO']);
  await worker.command({failure:''}); expect((await worker.command('tick')).row.phase).toBe('cutover');
  await worker.command({failure:'config'}); let state=await worker.command('tick'); expect(state.row.reason).toBe('config_write_failed:CONFIG_LOCK_TIMEOUT'); expect(state.mode.mode).toBe('single');
- await worker.command({failure:'pm2'}); state=await worker.command('tick'); expect(state.row.reason).toBe('m1_restart_unconfirmed'); expect(state.mode.mode).toBe('multi'); expect(state.fences.map(f=>f.sessionGroup)).toEqual(['*']);
+ await worker.command({failure:'pm2'}); state=await worker.command('tick'); expect(state.row.reason).toBe('dispatcher_restart_unconfirmed'); expect(state.mode.mode).toBe('multi'); expect(state.fences.map(f=>f.sessionGroup)).toEqual(['*']);
  await worker.command({failure:''}); const done=await finish(worker); expect(done.last.run_id).toBe(accepted.runId); expect(done.last.reason).toBeNull(); expect(done.fences).toEqual([]);
  expect(diagnostics(dir).filter(e=>e.event==='transition_unblocked').length).toBeGreaterThanOrEqual(2);
  expect(done.logs.some(e=>String(e.error).includes('external notification'))).toBe(false);
 },20000);
 
-for(const intent of ['manual','corrupt'])test(`IF-36/38 real M4 automatic migration defers to ${intent} F9`,async()=>{
+for(const intent of ['manual','corrupt'])test(`real supervisor automatic migration defers to ${intent}`,async()=>{
  const dir=root(); fs.writeFileSync(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'claude'}));
  fs.mkdirSync(path.join(dir,'activity-monitor'),{recursive:true});
  const file=path.join(dir,'activity-monitor/restart-requests.json');
@@ -123,7 +123,7 @@ for(const intent of ['manual','corrupt'])test(`IF-36/38 real M4 automatic migrat
  else {const tick=await worker.command('tick'); expect(tick.row?.phase).toBe('gating');}
 },20000);
 
-test('IF-66 real M4 missing deadlines and mode conflict remain blocked across restart then recover',async()=>{
+test('real supervisor missing deadlines and mode conflict remain blocked across restart then recover',async()=>{
  const dir=root(); let worker=launch(dir); await worker.next(); await worker.command({controlGroup:null}); await request(dir);
  let state=await worker.command('tick'); expect(state.row.reason).toBe('running_control_without_deadline:machine:1');
  await worker.command('tick'); expect(diagnostics(dir).filter(e=>e.event==='transition_blocked').length).toBe(1);
@@ -137,7 +137,7 @@ test('IF-66 real M4 missing deadlines and mode conflict remain blocked across re
 },20000);
 
 
-for (const source of ['single', 'multi']) test(`DM-41 ${source} real M4 archive collision retains gate and completes after operator moves conflict`, async () => {
+for (const source of ['single', 'multi']) test(`${source} real supervisor archive collision retains gate and completes after operator moves conflict`, async () => {
   const dir = root(source), worker = launch(dir);
   await worker.next();
   await worker.command({ seed: [{ content: 'pending source message' }] });

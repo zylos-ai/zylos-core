@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { routerFixture } from './helpers/router-fixture.js';
 import { createActivationManager } from '../router/activation.js';
 
-test('T03 U prevents a later candidate of the same runtime submitting in the same round', async t => {
+test('U prevents a later candidate of the same runtime submitting in the same round', async t => {
   const f = routerFixture(t); const a = f.add('a'), b = f.add('b');
   f.health.set('claude', { health: 'unavailable' }); const submitted = [];
   f.deps.submit = async request => { submitted.push(request); return { kind: 'timeout', sent: true }; };
@@ -24,7 +24,7 @@ test('T03 U prevents a later candidate of the same runtime submitting in the sam
   assert.equal(f.calls.some(x => x[0] === 'launch'), false);
 });
 
-test('T03 resident polling rounds without elapsed time cannot consume seconds of backoff', async t => {
+test('resident polling rounds without elapsed time cannot consume seconds of backoff', async t => {
   const f = routerFixture(t); const router = f.create(); await router.initialize();
   await f.rounds(20);
   assert.equal(f.calls.some(x => x[0] === 'launch'), false);

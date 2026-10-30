@@ -32,7 +32,7 @@ function assertMigrated(db, before) {
   for (const table of NEW_TABLES) assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0);
 }
 
-test('DM-01: v1 rows remain identical, defaults are applied, new tables are empty', t => {
+test('v1 rows remain identical, defaults are applied, new tables are empty', t => {
   const db = database(t), before = oldRows(db);
   migrateDatabase(db, owner);
   assertMigrated(db, before);
@@ -43,7 +43,7 @@ test('DM-01: v1 rows remain identical, defaults are applied, new tables are empt
   assert.throws(() => assertMigrated(db, before), assert.AssertionError);
 });
 
-test('DM-02: empty database executes 0→1→2 with initial checkpoint', t => {
+test('empty database executes 0→1→2 with initial checkpoint', t => {
   const db = new Database(':memory:'); t.after(() => db.close());
   const calls = [];
   const counted = { ...owner, MIGRATIONS: Object.fromEntries(Object.entries(owner.MIGRATIONS).map(([from, step]) =>
@@ -77,7 +77,7 @@ function assertIndexes(db) {
 function transition(db, run, source = 'single', target = 'multi', phase = 'gating') {
   return db.prepare('INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES(?,?,?,?,1,1)').run(run, source, target, phase);
 }
-test('DM-03: six exact indexes, binary keys, namespace and transition/config constraints', t => {
+test('six exact indexes, binary keys, namespace and transition/config constraints', t => {
   const db = database(t); guardDatabase(db, owner); assertIndexes(db);
   const ns = db.prepare('INSERT INTO channel_namespaces VALUES(?,?)');
   for (const name of ['a', 'a'.repeat(32), 'foo-2_x']) ns.run(name, `component:${name}`);
@@ -105,7 +105,7 @@ test('DM-03: six exact indexes, binary keys, namespace and transition/config con
   assert.throws(() => assert.throws(() => ns.run('Origin', 'weak-check'), /CHECK/), assert.AssertionError);
 });
 
-test('DM-04: repeated guards do not invoke migrations or change live fences/transitions', t => {
+test('repeated guards do not invoke migrations or change live fences/transitions', t => {
   const db = database(t); guardDatabase(db, owner);
   db.exec("INSERT INTO drain_fences VALUES('telegram','upgrade','run',123)"); transition(db, 'run');
   const before = snapshot(db); let calls = 0;
@@ -115,7 +115,7 @@ test('DM-04: repeated guards do not invoke migrations or change live fences/tran
   check(); db.exec('DELETE FROM drain_fences'); assert.throws(check, assert.AssertionError);
 });
 
-test('DM-05: user tables, columns and values survive v1→2', t => {
+test('user tables, columns and values survive v1→2', t => {
   const db = database(t, { extensions: true });
   const before = oldRows(db), tags = db.prepare('SELECT id,user_tag FROM conversations ORDER BY id').all();
   guardDatabase(db, owner); assertMigrated(db, before);
@@ -126,7 +126,7 @@ test('DM-05: user tables, columns and values survive v1→2', t => {
   check(); db.exec('ALTER TABLE conversations DROP COLUMN user_tag'); assert.throws(check, /user_tag/);
 });
 
-for (const name of NEW_TABLES) test(`DM-06: ${name} collision rejected before callback with zero changes`, t => {
+for (const name of NEW_TABLES) test(`${name} collision rejected before callback with zero changes`, t => {
   const db = database(t); db.exec(`CREATE TABLE ${name}(x); INSERT INTO ${name} VALUES('user data')`);
   const before = snapshot(db); let calls = 0;
   const candidate = changedOwner(connection => { calls++; migrateToV2(connection); });
@@ -139,7 +139,7 @@ for (const name of NEW_TABLES) test(`DM-06: ${name} collision rejected before ca
   assert.throws(() => assert.throws(() => { try { guardDatabase(db, candidate); } catch {} }), assert.AssertionError);
 });
 for (const [table, column] of [['conversations','session_group'],['conversations','session_id'],['checkpoints','session_group'],['checkpoints','no_content'],['control_queue','session_group'],['control_queue','target_binding']])
-  test(`DM-06: existing ${table}.${column} is not silently adopted`, t => {
+  test(`existing ${table}.${column} is not silently adopted`, t => {
     const db = database(t); db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
     const before = snapshot(db); let calls = 0;
     assert.throws(() => guardDatabase(db, changedOwner(() => { calls++; })), /already exists|collid/);
@@ -156,7 +156,7 @@ function interrupted(db, { commit = false } = {}) {
     throw Error('injected after fifth table');
   } });
 }
-test('DM-07: fifth-table exception rolls back and permits clean reentry; premature commit is detected', t => {
+test('fifth-table exception rolls back and permits clean reentry; premature commit is detected', t => {
   const db = database(t), before = snapshot(db);
   assert.throws(() => guardDatabase(db, changedOwner(interrupted)), /injected after fifth/);
   assert.deepEqual(snapshot(db), before); assert.equal(db.inTransaction, false);
@@ -168,7 +168,7 @@ test('DM-07: fifth-table exception rolls back and permits clean reentry; prematu
 function oldRowsFromSnapshot(state) {
   return Object.fromEntries(Object.keys(v1.TABLES).map(table => [table, state.rows[table]]));
 }
-test('DM-07: SIGKILL after fifth table recovers on reopen and migration reentry', t => {
+test('SIGKILL after fifth table recovers on reopen and migration reentry', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-v2-crash-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'test.db'); let db = new Database(file); seedV1(db); const before = snapshot(db); db.close();
   const code = `import Database from ${JSON.stringify(import.meta.resolve('better-sqlite3'))};
@@ -185,7 +185,7 @@ test('DM-07: SIGKILL after fifth table recovers on reopen and migration reentry'
   guardDatabase(db, owner); assertMigrated(db, oldRowsFromSnapshot(before));
 });
 
-for (const tag of ['v0.1.0', 'v0.4.11', 'v0.5.2']) test(`DM-08: ${tag} retains 0→1 retag before 1→2`, t => {
+for (const tag of ['v0.1.0', 'v0.4.11', 'v0.5.2']) test(`${tag} retains 0→1 retag before 1→2`, t => {
   const db = new Database(':memory:'); t.after(() => db.close());
   db.exec(fs.readFileSync(new URL(`./fixtures/migration-history/c4-${tag}.sql`, import.meta.url), 'utf8'));
   db.exec("INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES('in','web-console','session-handoff','history')");
@@ -198,7 +198,7 @@ for (const tag of ['v0.1.0', 'v0.4.11', 'v0.5.2']) test(`DM-08: ${tag} retains 0
   check(); db.exec("UPDATE conversations SET channel='web-console'"); assert.throws(check, assert.AssertionError);
 });
 
-test('DM-09: frozen v1 owner refuses v2 without writes', t => {
+test('frozen v1 owner refuses v2 without writes', t => {
   const db = database(t); guardDatabase(db, owner); const before = snapshot(db);
   assert.throws(() => v1.inspectSchema(db), /schema version 2 exceeds supported 1/);
   assert.throws(() => guardDatabase(db, v1), /schema version 2 exceeds supported 1/);
@@ -210,7 +210,7 @@ test('historical out-of-range checkpoint is preserved for subsequent read-only a
   const before = oldRows(db); guardDatabase(db, owner); assertMigrated(db, before);
 });
 
-test('DM-06 negative control: maybeTables plus IF NOT EXISTS wrongly accepts a matching user table', t => {
+test('oracle: maybeTables plus IF NOT EXISTS wrongly accepts a matching user table', t => {
   const db = database(t);
   db.exec('CREATE TABLE drain_fences(session_group TEXT PRIMARY KEY, reason TEXT, run_id TEXT, created_at INTEGER NOT NULL)');
   db.exec("INSERT INTO drain_fences VALUES('user','retained','user-run',1)");
@@ -225,7 +225,7 @@ test('DM-06 negative control: maybeTables plus IF NOT EXISTS wrongly accepts a m
 });
 
 for (const name of [...Object.keys(indexSql), 'IDX_MODE_TRANSITIONS_OPEN']) {
-  test(`DM-03/06: existing index ${name} rejects migration and preserves the entire v1 database`, t => {
+  test(`existing index ${name} rejects migration and preserves the entire v1 database`, t => {
     const db = database(t);
     db.exec(`CREATE TABLE user_extra(x); INSERT INTO user_extra VALUES('preserved'); CREATE INDEX ${name} ON user_extra(x)`);
     const before = snapshot(db);
@@ -234,7 +234,7 @@ for (const name of [...Object.keys(indexSql), 'IDX_MODE_TRANSITIONS_OPEN']) {
     assert.equal(db.inTransaction, false);
   });
 }
-test('DM-03/06 negative control: IF NOT EXISTS hides user index collision and loses open-transition uniqueness', t => {
+test('oracle: IF NOT EXISTS hides user index collision and loses open-transition uniqueness', t => {
   const db = database(t);
   db.exec('CREATE TABLE user_extra(x); CREATE INDEX idx_mode_transitions_open ON user_extra(x)');
   const unsafe = changedOwner(connection => migrateToV2({ exec(sql) {

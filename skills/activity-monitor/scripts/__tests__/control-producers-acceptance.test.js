@@ -55,10 +55,10 @@ async function produce(t, mode, mutation) {
   } finally { db.close(); }
   for (const args of f.calls) assert.equal(args.includes('--no-ack-suffix'), true);
 }
-test('IF-17 actual machine notice producers commit Origin/NULL D3 with preserved options', async t => {
+test('actual machine notice producers commit Origin/NULL with preserved options', async t => {
   for (const mode of ['multi', 'single']) await produce(t, mode);
 });
-test('IF-17 bad Origin removal and ack-without-deadline producers are rejected by the same assertions', async t => {
+test('bad Origin removal and ack-without-deadline producers are rejected by the same assertions', async t => {
   await assert.rejects(produce(t, 'multi', 'drop-origin'), { code: 'ERR_ASSERTION' });
   await assert.rejects(produce(t, 'multi', 'ack-without-deadline'), { code: 'ERR_ASSERTION' });
 });

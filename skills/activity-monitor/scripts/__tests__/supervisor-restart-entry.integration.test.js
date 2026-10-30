@@ -38,8 +38,8 @@ async function scenario(t,mutant=''){
  assert.equal(events.filter(e=>e.event==='restart_done'&&e.requestId===restart.requestId).length,1);
  await reopened.command('stop');
 }
-test('IF-34/DM-42 actual M4 commit-before-reply SIGKILL preserves snapshot, rejects changed content and finishes SQLite/tmux cleanup',{timeout:20000},async t=>{await scenario(t);});
-test('DM-42 actual entry crash harness rejects memory-only acceptance',{timeout:15000},async t=>{await assert.rejects(scenario(t,'memory-only'),{code:'ERR_ASSERTION'});});
+test('actual supervisor commit-before-reply SIGKILL preserves snapshot, rejects changed content and finishes SQLite/tmux cleanup',{timeout:20000},async t=>{await scenario(t);});
+test('actual entry crash harness rejects memory-only acceptance',{timeout:15000},async t=>{await assert.rejects(scenario(t,'memory-only'),{code:'ERR_ASSERTION'});});
 
 async function configScenario(t,mutant=''){
  const f=readyTmuxTarget(t,{prefix:'config-entry-',mode:'multi'});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
@@ -56,10 +56,10 @@ async function configScenario(t,mutant=''){
  observed=await reopened.command('tick');assert.equal(observed.present,false);assert.deepEqual(observed.fences,[]);
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await reopened.command('stop');
 }
-test('IF-35 actual M4 SQLite commit-before-reply crash preserves one config gate across retry and input changes',{timeout:20000},async t=>{await configScenario(t);});
-test('IF-35 config gate deletion on restart is detected by actual retry harness',{timeout:15000},async t=>{await assert.rejects(configScenario(t,'drop-config-gate'),{code:'ERR_ASSERTION'});});
+test('actual supervisor SQLite commit-before-reply crash preserves one config gate across retry and input changes',{timeout:20000},async t=>{await configScenario(t);});
+test('config gate deletion on restart is detected by actual retry harness',{timeout:15000},async t=>{await assert.rejects(configScenario(t,'drop-config-gate'),{code:'ERR_ASSERTION'});});
 
-test('IF-28 real M4 SIGKILL after auth fence retains health, drains old target and rechecks credentials before clearing',{timeout:20000},async t=>{
+test('real supervisor SIGKILL after auth fence retains health, drains old target and rechecks credentials before clearing',{timeout:20000},async t=>{
  const f=readyTmuxTarget(t,{prefix:'auth-entry-',mode:'multi',runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
  const store=new HealthStore({zylosDir:f.root,runtime:'claude'}),state=store.read();state.health='auth_failed';state.reason='authentication_failed';store.write(state);
  const w=await launch(t,f,'auth-fence',true);await w.command('release');await w.command('pending');

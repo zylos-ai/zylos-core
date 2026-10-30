@@ -13,7 +13,7 @@ const record = (runtime, health) => ({ v: 1, runtime, health, reason: health ===
   lastUserMessageRecoveryAt: 0, restartFailureCount: 0, lastRecoveryAt: 0, lastDownCheckAt: 0, rateLimitResetTime: '' });
 
 function diskFixture(t, runtime, health) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p09-f10-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-routing-f10-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const healthDir = path.join(root, 'activity-monitor', 'runtime-health');
   fs.mkdirSync(healthDir, { recursive: true });
@@ -62,7 +62,7 @@ function receiveCLI(f, env, args = []) {
   return { reply, row: rows.at(-1), rows, cooldowns, stderr: result.stderr };
 }
 
-test('IF-04 actual CLI missing socket reads only selected on-disk F10 across external/Core/noReply cases', { timeout: 60000 }, t => {
+test('actual CLI missing socket reads only selected on-disk across external/Core/noReply cases', { timeout: 60000 }, t => {
   const env = tmuxClientEnv(isolatedTmux(t));
   for (const runtime of ['codex']) {
     for (const health of ['missing', 'unreadable', 'ok', 'rate_limited', 'auth_failed', 'unavailable']) {

@@ -17,7 +17,7 @@ function prepare(t,config={session_mode:'multi',runtime:'claude'}) {
   fs.mkdirSync(path.join(root,'.zylos'));fs.writeFileSync(path.join(root,'.zylos','config.json'),JSON.stringify(config));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root;
 }
-// Explicit missing-dependency package: preserve Core sources except the P04 reader.
+// Explicit missing-dependency package: preserve Core sources except the reader.
 function withoutPoolReader(root) {
   const pkg=path.join(root,'core-without-pool-reader');
   fs.mkdirSync(pkg);
@@ -52,18 +52,18 @@ async function stop(worker) {
   const exited=once(worker.child,'exit');worker.child.send('stop');assert.deepEqual(await worker.next(),{stopped:true});
   const [code]=await exited;assert.equal(code,0,worker.stderr());
 }
-test('T01 actual entry restores before Sock admission and shuts down with a partial-line peer', {timeout:15000}, async t=>{
+test('actual entry restores before Sock admission and shuts down with a partial-line peer', {timeout:15000}, async t=>{
   const root=prepare(t),w=launch(t,root,{packageRoot:withoutPoolReader(root)});const ready=await w.next();assert.equal(ready.admissionOpen,true);
-  assert.ok(ready.logs.some(row=>row?.error==='DEPENDENCY_UNAVAILABLE'&&row.dependency==='P04 pool configuration reader'));
+  assert.ok(ready.logs.some(row=>row?.error==='DEPENDENCY_UNAVAILABLE'&&row.dependency==='Session pool configuration reader'));
   w.child.send('rounds');const repeated=await w.next();
-  assert.equal(repeated.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,1);
+  assert.equal(repeated.logs.filter(row=>row?.dependency==='Session pool configuration reader').length,1);
   assert.equal(fs.statSync(path.join(root,'activity-monitor/am.sock')).mode&0o777,0o600);
   assert.equal((await request(root,{version:1,type:'restart_all',requestId:'empty',reason:'upgrade'})).result,'done_empty');
   const partial=net.createConnection(path.join(root,'activity-monitor/am.sock'));await once(partial,'connect');partial.write('{');
   partial.on('error',error=>assert.equal(error.code,'ECONNRESET'));
   const closed=new Promise(resolve=>partial.once('close',resolve));await stop(w);await closed;assert.equal(fs.existsSync(path.join(root,'activity-monitor/am.sock')),false);
 });
-test('T01 duplicate entry preserves the original listener; non-socket paths remain intact', {timeout:15000}, async t=>{
+test('duplicate entry preserves the original listener; non-socket paths remain intact', {timeout:15000}, async t=>{
   const root=prepare(t),w=launch(t,root);await w.next();w.child.send('second');
   assert.deepEqual(await w.next(),{duplicateError:'EADDRINUSE',originalListening:true});
   assert.equal((await request(root,{version:1,type:'restart_all',requestId:'still-alive',reason:'upgrade'})).result,'done_empty');await stop(w);
@@ -71,7 +71,7 @@ test('T01 duplicate entry preserves the original listener; non-socket paths rema
   const invalid=launch(t,root);assert.deepEqual(await invalid.next(),{startupError:'EADDRINUSE'});
   assert.equal(fs.readFileSync(path.join(root,'activity-monitor/am.sock'),'utf8'),'preserve');
 });
-test('T01 bad startup F1 keeps Sock closed to mutations; restore failure cleans up listener', {timeout:15000}, async t=>{
+test('bad startup keeps Sock closed to mutations; restore failure cleans up listener', {timeout:15000}, async t=>{
   const root=prepare(t,{session_mode:'invalid'}),w=launch(t,root);const ready=await w.next();
   assert.equal(ready.admissionOpen,false);assert.equal(ready.configurationError,'CONFIG_UNREADABLE');
   assert.equal((await request(root,{version:1,type:'restart_all',requestId:'blocked',reason:'upgrade'})).code,'entry_not_open');await stop(w);
@@ -79,7 +79,7 @@ test('T01 bad startup F1 keeps Sock closed to mutations; restore failure cleans 
   const broken=launch(t,root,{scenario:'restore-failure'});assert.deepEqual(await broken.next(),{startupError:'RESTORE_FAILED'});
   assert.equal(fs.existsSync(path.join(root,'activity-monitor/am.sock')),false);
 });
-test('T01 copied installed skills resolve the separate Core package and serve actual Sock requests', {timeout:15000}, async t=>{
+test('copied installed skills resolve the separate Core package and serve actual Sock requests', {timeout:15000}, async t=>{
   const root=prepare(t);const pkg=path.join(root,'installed-core'),skills=path.join(root,'.claude','skills');
   fs.mkdirSync(pkg);fs.copyFileSync(path.join(repository,'package.json'),path.join(pkg,'package.json'));
   const filter=file=>!['node_modules','__tests__'].includes(path.basename(file));
@@ -96,7 +96,7 @@ test('T01 copied installed skills resolve the separate Core package and serve ac
   assert.equal((await request(root,{version:1,type:'restart_all',requestId:'installed',reason:'upgrade'})).result,'done_empty');await stop(w);
 });
 
-test('T02 entry freezes first-failure notice synchronously with correct single/multi SQL scope', {timeout:15000}, async t=>{
+test('entry freezes first-failure notice synchronously with correct single/multi SQL scope', {timeout:15000}, async t=>{
   for(const mode of ['single','multi']) {
     const root=prepare(t,{session_mode:mode,runtime:'claude'}),w=launch(t,root);await w.next();w.child.send('freeze');
     const result=await w.next();assert.equal(result.notice.endpoint,'frozen');assert.equal(result.notice.reason,'authentication_failed');
@@ -121,20 +121,20 @@ test('C4 canonical PM2 wrapper invokes the monitor entry even when imported indi
  assert.equal(starts,1);
 });
 
-// C3 / P3-1: use the actual entry's missing P04 module, without capacity injection.
-test('C3 missing P04 reader logs once across six rounds and defers eviction without config-error spam',{timeout:15000},async t=>{
+// : use the actual entry's missing module, without capacity injection.
+test('missing reader logs once across six rounds and defers eviction without config-error spam',{timeout:15000},async t=>{
  const root=prepare(t),w=launch(t,root,{packageRoot:withoutPoolReader(root)});await w.next();
  w.child.send('rounds');const result=await w.next();
  assert.equal(result.configuration.capacityUnavailable,true);
  assert.equal(Object.hasOwn(result.configuration,'capacity'),false);
- assert.equal(result.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,1);
+ assert.equal(result.logs.filter(row=>row?.dependency==='Session pool configuration reader').length,1);
  assert.equal(result.logs.filter(row=>row?.phase==='eviction').length,0);
- assert.equal((await request(root,{version:1,type:'restart_all',requestId:'after-missing-p04',reason:'upgrade'})).result,'done_empty');
+ assert.equal((await request(root,{version:1,type:'restart_all',requestId:'after-missing-session-pool',reason:'upgrade'})).result,'done_empty');
  await stop(w);
 });
 
-// P04/P05 integration regression: actual entry loads the available Core reader.
-test('C3 present P04 reader supplies real capacity without a missing-dependency notice',{timeout:15000},async t=>{
+// integration regression: actual entry loads the available Core reader.
+test('present reader supplies real capacity without a missing-dependency notice',{timeout:15000},async t=>{
  const config={session_mode:'multi',runtime:'claude',session_pool_size:7};
  const root=prepare(t,config);
  assert.equal(fs.existsSync(path.join(repository,'cli/lib/session-pool-config.js')),true);
@@ -144,11 +144,11 @@ test('C3 present P04 reader supplies real capacity without a missing-dependency 
  const env={...process.env,HOME:root,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:repository};
  assert.equal(result.configuration.capacityUnavailable,false);
  assert.equal(result.configuration.capacity,resolveSessionPoolSize({env,config}));
- assert.equal(result.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,0);
+ assert.equal(result.logs.filter(row=>row?.dependency==='Session pool configuration reader').length,0);
  await stop(w);
 });
 
-test('P05 actual Sock rejects requests throughout paused restoration, then admits after restoration completes', { timeout: 15000 }, async t => {
+test('actual Sock rejects requests throughout paused restoration, then admits after restoration completes', { timeout: 15000 }, async t => {
   const { startSupervisor } = await import('../supervisor-main.js');
   const root = prepare(t); let release, entered, service, observations = 0;
   const held = new Promise(resolve => { release = resolve; });
@@ -180,7 +180,7 @@ test('P05 actual Sock rejects requests throughout paused restoration, then admit
 });
 
 
-test('T01 explicit single opens the actual entry with legacy false', {timeout:15000}, async t => {
+test('explicit single opens the actual entry with legacy false', {timeout:15000}, async t => {
   const root = prepare(t, {session_mode:'single',runtime:'claude'}), worker = launch(t, root);
   const ready = await worker.next();
   assert.equal(ready.admissionOpen, true); assert.equal(ready.mode, 'single'); assert.equal(ready.legacy, false);

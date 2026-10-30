@@ -7,14 +7,14 @@ import { resolveAllowedMemoryPath, applyFragmentLocked } from '../self-write.js'
 import { memoryScope, withMemoryLock } from '../sync-lock.js';
 
 async function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p07-self-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-workflow-self-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: 'self-test' };
   const scope = await memoryScope(env);
   fs.mkdirSync(scope.runDir, { recursive: true }); fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
   return { root, ...scope };
 }
-test('IB51 shared fragments retain other content and reject stale/ambiguous fragments', async t => {
+test('shared fragments retain other content and reject stale/ambiguous fragments', async t => {
   const f = await fixture(t), target = path.join(f.root, 'memory', 'identity.md');
   fs.writeFileSync(target, 'first: old\nsecond: old\n');
   const update = (expected, replacement) => withMemoryLock(f.runDir, () => applyFragmentLocked({ target, expected, replacement }));
@@ -24,7 +24,7 @@ test('IB51 shared fragments retain other content and reject stale/ambiguous frag
   for (const expected of ['first: old', 'new', '']) await assert.rejects(update(expected, 'bad'), { code: 'FRAGMENT_CONFLICT' });
   assert.equal(fs.readFileSync(target, 'utf8'), 'first: new\nsecond: new\n');
 });
-test('IB51 create and empty-file edits distinguish null from empty expected', async t => {
+test('create and empty-file edits distinguish null from empty expected', async t => {
   const f = await fixture(t), target = path.join(f.root, 'memory', 'reference', 'new.md');
   const create = () => withMemoryLock(f.runDir, () => applyFragmentLocked({ target, expected: null, replacement: '' }));
   await create(); await assert.rejects(create(), { code: 'EXISTS' });
@@ -32,7 +32,7 @@ test('IB51 create and empty-file edits distinguish null from empty expected', as
   assert.equal(fs.readFileSync(target, 'utf8'), 'created');
   assert.throws(() => applyFragmentLocked({ target, expected: null, replacement: 'overwrite' }), { code: 'EXISTS' });
 });
-test('IB53 path validation checks normalized and actual symlink destinations', async t => {
+test('path validation checks normalized and actual symlink destinations', async t => {
   const f = await fixture(t), outside = path.join(f.root, 'outside');
   fs.mkdirSync(outside); fs.mkdirSync(path.join(f.root, 'memory', 'reference'));
   fs.symlinkSync(outside, path.join(f.root, 'memory', 'reference', 'escape'));
@@ -43,7 +43,7 @@ test('IB53 path validation checks normalized and actual symlink destinations', a
   assert.equal(resolveAllowedMemoryPath({ root: f.root, path: 'reference/../identity.md' }).path, 'identity.md');
   assert.equal(resolveAllowedMemoryPath({ root: f.root, path: 'users/u/profile.md' }).path, 'users/u/profile.md');
 });
-test('IB53 fragment publication failure leaves existing file intact', async t => {
+test('fragment publication failure leaves existing file intact', async t => {
   const f = await fixture(t), target = path.join(f.root, 'memory', 'identity.md');
   fs.writeFileSync(target, 'old');
   const rename = fs.renameSync;

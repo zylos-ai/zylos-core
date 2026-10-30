@@ -6,8 +6,8 @@ import path from 'node:path';
 import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 
-// IF-28 / DM-63: exercise the composed owner and durable F10, with frozen
-// scene/DB contracts. Actual M1 delivery and P07 marker execution are separate.
+// exercise the composed owner and durable , with frozen
+// scene/DB contracts. Actual dispatcher delivery and marker execution are separate.
 function fixture(t, { mode = 'multi', create = createSupervisor } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-auth-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -61,7 +61,7 @@ function fixture(t, { mode = 'multi', create = createSupervisor } = {}) {
   return { root, state, group, add, reopen, tick, seed, get supervisor() { return supervisor; } };
 }
 
-test('IF-28 composed multi auth captures only affected runtime, retains F10 until old target and D8 are gone, rechecks after restart', async t => {
+test('composed multi auth captures only affected runtime, retains until old target and are gone, rechecks after restart', async t => {
   const f = fixture(t); await f.reopen(); f.seed(); f.add(); f.add('claude', 'lark:other', 'claude-run');
   await f.tick();
   assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed');
@@ -85,7 +85,7 @@ test('IF-28 composed multi auth captures only affected runtime, retains F10 unti
   assert.equal(f.supervisor.health.store('codex').read().health, 'ok'); assert.equal(f.state.fences.size, 0);
 });
 
-test('IF-28 composed single auth preserves blocking through in-flight work and restart; deadline-less control does not prevent cleanup', async t => {
+test('composed single auth preserves blocking through in-flight work and restart; deadline-less control does not prevent cleanup', async t => {
   const f = fixture(t, { mode: 'single' }); await f.reopen(); f.seed(); f.add();
   f.state.running = 1; await f.tick();
   assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed'); assert.deepEqual(f.state.stops, []);
@@ -99,7 +99,7 @@ test('IF-28 composed single auth preserves blocking through in-flight work and r
 
 for (const [label, active, cooldown, expected] of [
   ['unexpired', true, 1500, 1500], ['expired', true, 900, 0], ['zero', true, 0, 0], ['no-limit', false, 0, 0],
-]) test(`DM-63 composed auth recovery after F10 reopen retains ${label} rate-limit facts`, async t => {
+]) test(`composed auth recovery after reopen retains ${label} rate-limit facts`, async t => {
   const f = fixture(t); await f.reopen(); f.seed(active, cooldown); await f.reopen();
   const before = f.supervisor.health.store('codex').read();
   assert.equal(before.health, 'auth_failed'); assert.equal(before.rateLimitActive, active);
@@ -110,7 +110,7 @@ for (const [label, active, cooldown, expected] of [
   assert.equal(after.scheduling.cooldownUntil, expected);
 });
 
-for (const kind of ['early', 'deadline', 'limit']) test(`IF-28 / DM-63 composed ${kind} recovery boundary`, async t => {
+for (const kind of ['early', 'deadline', 'limit']) test(`composed ${kind} recovery boundary`, async t => {
   const verify = async create => {
     const f = fixture(t, { create, mode: kind === 'deadline' ? 'single' : 'multi' });
     await f.reopen(); f.seed(kind === 'limit', kind === 'limit' ? 1500 : 0);
@@ -125,7 +125,7 @@ for (const kind of ['early', 'deadline', 'limit']) test(`IF-28 / DM-63 composed 
   await verify(createSupervisor);
 });
 
-test('DM-47 composed owners keep current and legacy caches inside their own root', async t => {
+test('composed owners keep current and legacy caches inside their own root', async t => {
   const a = fixture(t), b = fixture(t); await a.reopen(); await b.reopen();
   a.supervisor.router.writeNegativeCache('codex', 'unavailable', 'runtime_unavailable');
   b.supervisor.router.writeNegativeCache('codex', 'rate_limited', 'rate_limit');
@@ -142,7 +142,7 @@ test('DM-47 composed owners keep current and legacy caches inside their own root
 // Review P2-1: composed auth recovery must use the same dependency preflight.
 async function unavailableAuthAssertion(t, create) {
   const f = fixture(t, { create }); await f.reopen(); f.seed(); f.add();
-  f.supervisor.lifecycle.d.readSyncMarker = () => { throw Object.assign(new Error('P07 unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
+  f.supervisor.lifecycle.d.readSyncMarker = () => { throw Object.assign(new Error(' unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
   await assert.rejects(f.tick(), { code: 'DEPENDENCY_UNAVAILABLE' });
   assert.equal(f.state.d8Writes, 0, 'unavailable Sync dependency must not fence auth recovery');
   assert.equal(f.state.fences.size, 0); assert.deepEqual(f.state.stops, []);

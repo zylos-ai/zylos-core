@@ -49,7 +49,7 @@ async function gateScenario(t, Class) {
   await f.lifecycle.checkSync([f.scene], f.context);
   assert.equal(sql.db.prepare("SELECT count(*) FROM control_queue WHERE status='pending'").pluck().get(), 2);
 }
-test('IF-30 Sync respects real D9 and resumes group/Origin production after completion', async t => {
+test('Sync respects real and resumes group/Origin production after completion', async t => {
   await gateScenario(t, SupervisorLifecycle);
 });
 
@@ -65,14 +65,14 @@ async function duplicateScenario(t, storeFactory = createStore) {
   assert.equal(rows.filter(r => r.status === 'superseded').length, 1);
   assert.equal(rows[1].raw_content, rows[0].raw_content);
 }
-test('IF-30 repeated Sync content leaves one pending D3 row and supersedes the previous one', async t => {
+test('repeated Sync content leaves one pending row and supersedes the previous one', async t => {
   await duplicateScenario(t);
 });
 
 
-// Frozen IB-39 outputs are the P07 boundary. Raw marker contents are only used
+// Frozen outputs are the boundary. Raw marker contents are only used
 // by the deliberately wrong existence-only consumer; no second production
-// marker parser is introduced and no real P07-provider claim is made.
+// marker parser is introduced and no real provider claim is made.
 async function markerScenario(t, Class, existenceOnly = false) {
   const cases = [
     ['valid', { held: true, stale: false, runId: 'old-run', expiresAt: 1792000060000, reason: 'held' }, false],
@@ -91,16 +91,16 @@ async function markerScenario(t, Class, existenceOnly = false) {
     assert.equal(f.controls.length, idle ? 1 : 0);
   }
 }
-test('IF-33 consumer accepts expired/wrong-run/corrupt marker results and blocks only valid ownership', async t => {
+test('consumer accepts expired/wrong-run/corrupt marker results and blocks only valid ownership', async t => {
   await markerScenario(t, SupervisorLifecycle);
 });
-test('IF-33 negative control detects checking marker existence instead of its reader result', async t => {
+test('oracle: detects checking marker existence instead of its reader result', async t => {
   await assert.rejects(markerScenario(t, SupervisorLifecycle, true),
     error => error.code === 'ERR_ASSERTION' && error.message.includes('marker expired blocked idle incorrectly'));
 });
 
 async function configScenario(t, Class) {
-  const target = readyTmuxTarget(t, { prefix: 'p05-config-f2-', mode: 'multi' });
+  const target = readyTmuxTarget(t, { prefix: 'supervisor-config-f2-', mode: 'multi' });
   const store = createStore(target.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), validateModel: () => true });
   const scenes = new SupervisorScenes({ env: target.env, connectionOptions: { socketPath: target.socketPath, binary: target.binary },
     readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state: 'idle', idleSince: 1 }), readUsage: () => null });
@@ -123,7 +123,7 @@ async function configScenario(t, Class) {
   assert.deepEqual((await scenes.observeGroup('origin')).launchConfig, old.launchConfig);
   assert.equal(store.getDrainFence('origin'), null);
 }
-test('IF10-7d real F2 running snapshot stays old after D10/D11 changes and produces reclaim control', { timeout: 15000 }, async t => {
+test('real running snapshot stays old after / changes and produces reclaim control', { timeout: 15000 }, async t => {
   await configScenario(t, SupervisorLifecycle);
 });
 
@@ -144,7 +144,7 @@ async function syncScopeScenario(t, Class) {
     await f.lifecycle.checkSync([f.scene], f.context); assert.equal(f.controls.length, count);
   }
 }
-test('T06 Sync reads all three marker scopes and failed writes do not mark a scope sent', async t => {
+test('Sync reads all three marker scopes and failed writes do not mark a scope sent', async t => {
   await syncScopeScenario(t, SupervisorLifecycle);
 });
 
@@ -167,6 +167,6 @@ async function rotationScenario(t, Class) {
     await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 5);
   }
 }
-test('T06 rotation scope, exact cooldown boundary, run/session identity and failed write retry', async t => {
+test('rotation scope, exact cooldown boundary, run/session identity and failed write retry', async t => {
   await rotationScenario(t, SupervisorLifecycle);
 });

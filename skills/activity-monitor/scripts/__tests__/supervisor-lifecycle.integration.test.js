@@ -15,11 +15,11 @@ function start(f, pause) {
   const message = Promise.race([once(child, 'message').then(([value]) => value), exited.then(([code]) => { throw new Error(`worker exited ${code}: ${stderr}`); })]);
   return { child, exited, message };
 }
-// P05 T05 / IF-32: real process termination at the three durable recovery boundaries.
+// real process termination at the three durable recovery boundaries.
 // Uses actual SQLite + isolated tmux + adapter.stop, with an exited-runtime fixture.
 for (const pause of ['after-fence', 'before-stop', 'after-stop']) {
   test(`reclaim resumes after SIGKILL ${pause} using durable fence and actual target`, { timeout: 15000 }, async t => {
-    const f = readyTmuxTarget(t, { prefix: 'p05-reclaim-', mode: 'multi' });
+    const f = readyTmuxTarget(t, { prefix: 'supervisor-reclaim-', mode: 'multi' });
     f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
     const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
     db.setDrainFence('origin', { reason: 'upgrade', runId: 'run-1' });
@@ -35,10 +35,10 @@ for (const pause of ['after-fence', 'before-stop', 'after-stop']) {
   });
 }
 
-// IF-32 acceptance negative control: dropping persisted D8 cannot pass the same
+// acceptance oracle: dropping persisted cannot pass the same
 // completion assertion, and leaves the real original target stranded.
 test('reclaim recovery harness detects restart that clears durable fence', { timeout: 15000 }, async t => {
-  const f = readyTmuxTarget(t, { prefix: 'p05-reclaim-bad-', mode: 'multi' });
+  const f = readyTmuxTarget(t, { prefix: 'supervisor-reclaim-bad-', mode: 'multi' });
   const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
   db.setDrainFence('origin', { reason: 'upgrade', runId: 'run-1' });
   const first = start(f, 'after-fence');

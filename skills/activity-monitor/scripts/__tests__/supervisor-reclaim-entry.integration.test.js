@@ -23,5 +23,5 @@ async function scenario(t,pause,mutant=''){
  assert.equal(db.getDrainFence('origin'),null);assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));
  const exited=once(second.child,'exit');second.child.send('stop');assert.deepEqual(await second.next(),{stopped:true});assert.equal((await exited)[0],0);
 }
-for(const pause of ['after-fence','before-stop','after-stop'])test(`IF-32 actual M4 entry SIGKILL ${pause} resumes retained SQLite gate and exact target cleanup`,{timeout:20000},async t=>{await scenario(t,pause);});
-test('IF-32 actual entry restart-clear-D8 mutant cannot pass original-target cleanup assertion',{timeout:20000},async t=>{await assert.rejects(scenario(t,'after-fence','clear-fence'),{code:'ERR_ASSERTION'});});
+for(const pause of ['after-fence','before-stop','after-stop'])test(`actual supervisor entry SIGKILL ${pause} resumes retained SQLite gate and exact target cleanup`,{timeout:20000},async t=>{await scenario(t,pause);});
+test('actual entry restart-clear- mutant cannot pass original-target cleanup assertion',{timeout:20000},async t=>{await assert.rejects(scenario(t,'after-fence','clear-fence'),{code:'ERR_ASSERTION'});});

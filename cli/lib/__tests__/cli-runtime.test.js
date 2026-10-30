@@ -24,7 +24,7 @@ function fixture(overrides = {}) {
   return { calls, run: flags => executeRuntimeSwitch('codex', flags || [], deps) };
 }
 
-test('IF-47 runtime prechecks are ordered and stop before persistence', async () => {
+test('runtime prechecks are ordered and stop before persistence', async () => {
   const success = fixture();
   assert.equal((await success.run()).data.result, 'saved');
   assert.deepEqual(success.calls, ['adapter', 'read', 'exists', 'hooks', 'auth', 'write', 'observe']);
@@ -60,7 +60,7 @@ test('review JSON: full-path credentials and failed precheck emit exactly the fi
   } finally { console.log = original; process.exitCode = previousExit; }
 });
 
-test('IF-47 auth failure is rejected by the runtime command with exit code 1', async () => {
+test('auth failure is rejected by the runtime command with exit code 1', async () => {
   const f = fixture({ adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) });
   const original = console.log, previousExit = process.exitCode;
   console.log = () => {};
@@ -72,7 +72,7 @@ test('IF-47 auth failure is rejected by the runtime command with exit code 1', a
   } finally { console.log = original; process.exitCode = previousExit; }
 });
 
-test('IF-47 unchanged skips install/hooks/auth/write; no-validate only skips auth', async () => {
+test('unchanged skips install/hooks/auth/write; no-validate only skips auth', async () => {
   const same = fixture({ read: () => ({ state: 'ok', config: { runtime: 'codex' } }) });
   assert.equal((await same.run()).data.result, 'unchanged');
   assert.deepEqual(same.calls, ['adapter', 'observe']);
@@ -81,7 +81,7 @@ test('IF-47 unchanged skips install/hooks/auth/write; no-validate only skips aut
   assert.deepEqual(f.calls, ['adapter', 'read', 'exists', 'hooks', 'write', 'observe']);
 });
 
-test('IF-47 persistence errors preserve credentials and after-rename uncertainty', async () => {
+test('persistence errors preserve credentials and after-rename uncertainty', async () => {
   for (const phase of ['before_rename', 'after_rename']) {
     const f = fixture({ write: () => { throw Object.assign(new Error('injected'), { code: 'CONFIG_WRITE_FAILED', phase }); } });
     const result = await f.run(['--save-apikey', 'fixture-key']);
@@ -92,7 +92,7 @@ test('IF-47 persistence errors preserve credentials and after-rename uncertainty
   }
 });
 
-test('IF-47 later credential/hook failures retain only confirmed saved credential items', async () => {
+test('later credential/hook failures retain only confirmed saved credential items', async () => {
   const partial = fixture({ baseUrl: () => false });
   const result = await partial.run(['--save-apikey', 'fixture-key', '--save-base-url', 'https://example.test/v1']);
   assert.equal(result.error.code, 'CREDENTIAL_SAVE_FAILED'); assert.deepEqual(result.error.persisted, ['apiKey']);
@@ -102,7 +102,7 @@ test('IF-47 later credential/hook failures retain only confirmed saved credentia
   assert.equal(failed.error.code, 'HOOKS_NOT_READY'); assert.deepEqual(failed.error.persisted, ['apiKey']);
 });
 
-test('IF-47 lock-return snapshot determines previous/config/changed, including concurrent writer', async () => {
+test('lock-return snapshot determines previous/config/changed, including concurrent writer', async () => {
   for (const changed of [false, true]) {
     const f = fixture({ write: () => ({ previous: { runtime: changed ? 'claude' : 'codex' }, config: { runtime: 'codex', session_mode: 'single' }, changed }) });
     const result = await f.run(['--save-apikey', 'fixture-key']);
@@ -112,7 +112,7 @@ test('IF-47 lock-return snapshot determines previous/config/changed, including c
   }
 });
 
-test('IF-47 saved result survives single identity read errors', async () => {
+test('saved result survives single identity read errors', async () => {
   const f = fixture({ observe: async () => { throw new Error('unavailable'); },
     write: () => ({ previous: {}, config: { runtime: 'codex' }, changed: true }),
     identity: async () => { throw new Error('unavailable'); } });
@@ -122,7 +122,7 @@ test('IF-47 saved result survives single identity read errors', async () => {
   assert.deepEqual(result.data.warnings, []);
 });
 
-test('IF-47 group union uses explicit override priority and preserves unknown identities', async () => {
+test('group union uses explicit override priority and preserves unknown identities', async () => {
   const result = await observeRuntimeGroups('codex', 'multi', {
     list: async () => ['a', 'b', 'c', 'd', 'e'].map(sessionGroup => ({ sessionGroup })),
     overrides: async () => [{ sessionGroup: 'b', runtime: 'claude' }],
@@ -141,8 +141,8 @@ test('IF-47 group union uses explicit override priority and preserves unknown id
   assert.deepEqual(failed.observationErrors.map(error => error.source), ['tmux', 'overrides', 'session']);
 });
 
-test('IF-47 real IB-46 writer preserves concurrent keys and returns the lock-time baseline', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-runtime-config-'));
+test('real writer preserves concurrent keys and returns the lock-time baseline', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-runtime-config-'));
   const file = path.join(dir, 'config.json');
   const save = update => updateConfigWithLock({ configFile: file, lockFile: `${file}.lock`, update });
   try {

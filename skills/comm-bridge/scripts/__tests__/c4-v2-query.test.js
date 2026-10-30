@@ -277,7 +277,7 @@ test('reply-via survives real POSIX shell parsing byte-for-byte', t => {
   for (const endpoint of ['\0', '\n', '\x7f', 'x'.repeat(131072)]) assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: endpoint }, path), /不可用/);
   assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: 'e' }, path + '\n'), /Core 路径含控制字符/);
 });
-test('IB50 global/group reads preserve scopes, checkpoint metadata and truncation upper bound', t => {
+test('global/group reads preserve scopes, checkpoint metadata and truncation upper bound', t => {
   const { store, query } = fixture(t);
   const a = store.insertConversation('out', 'foo', 'e', 'a');
   store.createCheckpoint('foo', a.id, 'summary');
@@ -292,7 +292,7 @@ test('IB50 global/group reads preserve scopes, checkpoint metadata and truncatio
   assert.throws(() => query.unsummarized({ group: 'foo', upToConversationId: 999 }), { code: 'UPTO_BEYOND_FRONTIER' });
   assert.equal(query.checkpoints({ group: 'foo', after: 0 })[0].summary, 'summary');
 });
-test('IB56 ordering uses latest head while matching/preview use latest external input', t => {
+test('ordering uses latest head while matching/preview use latest external input', t => {
   const { store, query } = fixture(t);
   store.insertConversation('in', 'Foo', 'e1', '研发群', { groupName: 'a' });
   store.insertConversation('in', 'bar', 'e2', 'other');

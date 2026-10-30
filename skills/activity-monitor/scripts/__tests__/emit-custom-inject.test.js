@@ -84,7 +84,7 @@ describe('emitCustomInject', () => {
     assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), 'A\n\nC');
   });
 
-  it('M3 2.8: multi injects only own rules and guidance; single has neither', () => {
+  it('multi injects only own rules and guidance; single has neither', () => {
     const root = makeZylosDir();
     const configFile = path.join(root, '.zylos/config.json');
     fs.mkdirSync(path.dirname(configFile), { recursive: true });

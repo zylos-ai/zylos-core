@@ -24,7 +24,7 @@ function fakeChild(exitCode = 0, signal = null) {
 function sender(options = {}) { return createStatusNoticeSender({ db, render: () => 'receipt', diagnostic: () => {}, log: () => {}, spawn: () => fakeChild(), ...options }); }
 function reservation(record, routing = route) { return db.getStatusNoticeCooldowns().find(item => item.cooldown_key === statusNoticeKey(record, routing)); }
 
-test('IB04 D4 six-tuple independent cooldown and exact 600 second boundary', async () => {
+test('six-tuple independent cooldown and exact 600 second boundary', async () => {
   let now = 1800000000, calls = 0;
   const send = sender({ now: () => now, spawn: () => { calls++; return fakeChild(); } });
   const record = row({ endpoint_id: 'tuple|msg:1|type:group|req:2|parent:3' });
@@ -43,7 +43,7 @@ test('IB04 D4 six-tuple independent cooldown and exact 600 second boundary', asy
   assert.equal((await send(record, { ...route, noticeKind: 'failure' })).outcome, 'suppressed');
 });
 
-test('IB04 pre-spawn failures release their reservation; nonzero and signals retain it', async () => {
+test('pre-spawn failures release their reservation; nonzero and signals retain it', async () => {
   for (const spawnFailure of [() => { throw Error('cannot spawn'); }, () => spawn('/missing-c4-test-executable', [])]) {
     const record = row(); const result = await sender({ spawn: spawnFailure })(record, route);
     assert.equal(result.outcome, 'failed'); assert.equal(result.code, 'UNHEALTHY_NOTIFY_FAILED');
@@ -57,7 +57,7 @@ test('IB04 pre-spawn failures release their reservation; nonzero and signals ret
   }
 });
 
-test('IB04 a failed old sender cannot clear a later reservation', async () => {
+test('a failed old sender cannot clear a later reservation', async () => {
   const record = row(); let clock = 1800010000;
   const send = sender({ now: () => clock, spawn: () => {
     clock += 600;
@@ -69,7 +69,7 @@ test('IB04 a failed old sender cannot clear a later reservation', async () => {
   assert.equal(reservation(record).last_notified_at, clock);
 });
 
-test('IB04 noReply and pending skip before render/reserve; DB and diagnostics do not invent success', async () => {
+test('noReply and pending skip before render/reserve; DB and diagnostics do not invent success', async () => {
   const unexpected = () => { throw Error('must not call'); };
   const send = sender({ render: unexpected, db: { reserveStatusNoticeCooldown: unexpected } });
   assert.equal((await send(row({ endpoint_id: null }), route)).outcome, 'skipped');
@@ -85,7 +85,7 @@ test('IB04 noReply and pending skip before render/reserve; DB and diagnostics do
   assert.ok(reservation(record));
 });
 
-test('IB04 stdin exception after child started drains close before returning', async () => {
+test('stdin exception after child started drains close before returning', async () => {
   const child = fakeChild(); let close;
   child.stdin.end = () => { throw Error('stdin unavailable'); };
   child.kill = () => { close = () => child.emit('close', null, 'SIGKILL'); return true; };
@@ -95,7 +95,7 @@ test('IB04 stdin exception after child started drains close before returning', a
   close(); assert.equal((await pending).outcome, 'uncertain'); assert.ok(reservation(record));
 });
 
-test('IB04 real child gets original argv and shared template stdin; whole and subgroup scopes', async t => {
+test('real child gets original argv and shared template stdin; whole and subgroup scopes', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "c4 receipt's ")); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const output = path.join(dir, 'capture.json'), script = path.join(dir, 'recorder.cjs');
   fs.writeFileSync(script, `let body='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>body+=x);process.stdin.on('end',()=>require('fs').writeFileSync(${JSON.stringify(output)},JSON.stringify({argv:process.argv.slice(2),body})));`);
@@ -110,7 +110,7 @@ test('IB04 real child gets original argv and shared template stdin; whole and su
   }
 });
 
-test('IB04 real timed-out sender is killed and classified uncertain, not retried', async t => {
+test('real timed-out sender is killed and classified uncertain, not retried', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-timeout-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const script = path.join(dir, 'hang.cjs'); fs.writeFileSync(script, "process.stdin.resume();setInterval(()=>{},1000);");
   const record = row(), diagnostics = [];
@@ -119,7 +119,7 @@ test('IB04 real timed-out sender is killed and classified uncertain, not retried
   assert.equal(diagnostics.length, 1); assert.equal((await sender()(record, route)).outcome, 'suppressed');
 });
 
-test('IB04 receipt assertions reject dropped group/runtime keys and nonzero-as-failed mutants', async () => {
+test('receipt assertions reject dropped group/runtime keys and nonzero-as-failed mutants', async () => {
   const moduleURL = new URL('../c4-status-notice.js', import.meta.url);
   const original = fs.readFileSync(moduleURL, 'utf8');
   async function mutant(before, after) {

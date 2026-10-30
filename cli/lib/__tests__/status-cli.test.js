@@ -32,7 +32,7 @@ test('review P1: real text status uses the default PM2 collector without crashin
   assert.doesNotMatch(result.stderr, /ReferenceError/);
 });
 
-test('IF-56b single/null uses only null reader and preserves absent/running states', async () => {
+test('single/null uses only null reader and preserves absent/running states', async () => {
   for (const mode of ['single', null]) {
     for (const row of [absent, live()]) {
       const calls = [];
@@ -55,13 +55,13 @@ test('review P2: text status retains PM2 and disk while JSON never queries host 
     assert.match(lines.join('\n'), /scheduler: online/);
     assert.match(lines.join('\n'), /Disk: 10 GiB available \/ 20 GiB total/);
     lines.length = 0;
-    await showStatus(['--json'], { collect: () => collectStatus(fixture()), host: () => assert.fail('JSON must retain IB-73 only') });
+    await showStatus(['--json'], { collect: () => collectStatus(fixture()), host: () => assert.fail('JSON must retain  only') });
     assert.equal(lines.length, 1);
     assert.equal(JSON.parse(lines[0]).ok, true);
   } finally { console.log = original; process.exitCode = previousExit; }
 });
 
-test('IF-56b multi sort/starting/stale/generation reasons are reader projections', async () => {
+test('multi sort/starting/stale/generation reasons are reader projections', async () => {
   for (const reason of ['starting', 'stale', 'identity_changed']) {
     const view = await collectStatus(fixture({ session: async group => group === 'b' ? live(reason !== 'starting', reason) : live() }));
     assert.deepEqual(view.groups.map(group => group.sessionGroup), ['a', 'b']);
@@ -71,7 +71,7 @@ test('IF-56b multi sort/starting/stale/generation reasons are reader projections
   }
 });
 
-test('IF-56b local failures remain in the successful projection including F10 missing/invalid', async () => {
+test('local failures remain in the successful projection including F10 missing/invalid', async () => {
   const view = await collectStatus(fixture({ mode: () => { throw new Error('bad F1'); },
     session: async group => { if (group === 'b') throw new Error('bad item'); return live(); },
     health: runtime => runtime === 'claude' ? { health: 'rate_limited', publicHealth: 'rate_limited', cooldownUntil: 4, updatedAt: 5 } : { unreadable: true },
@@ -84,7 +84,7 @@ test('IF-56b local failures remain in the successful projection including F10 mi
   assert.deepEqual(noList.runtimeHealth.codex, { source: 'missing', health: 'ok', publicHealth: 'ok', cooldownUntil: null, updatedAt: null });
 });
 
-test('IF-56b CLI emits one JSON line for invalid args, reader load failure, and success', async () => {
+test('CLI emits one JSON line for invalid args, reader load failure, and success', async () => {
   const log = console.log, previousExit = process.exitCode;
   const lines = []; console.log = line => lines.push(line);
   try {

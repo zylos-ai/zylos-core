@@ -28,7 +28,7 @@ function fixture(t, checkAuth, create = createSupervisor) {
     route: () => supervisor.router.route({ version: 1, type: 'route', requestId: 'incoming', noReply: false, receivedAt: state.now }) };
 }
 
-test('IB-33 pending auth demand retries no more than once per minute per runtime, including adapter errors', async t => {
+test('pending auth demand retries no more than once per minute per runtime, including adapter errors', async t => {
   const calls = [];
   let throws = false;
   const f = fixture(t, async runtime => { calls.push(runtime); if (throws) throw new Error('adapter failed'); return { status: 'failure' }; });
@@ -44,7 +44,7 @@ test('IB-33 pending auth demand retries no more than once per minute per runtime
   assert.equal(f.supervisor.health.store('claude').read().health, 'auth_failed');
 });
 
-test('IB-33 incoming routing joins pending auth flight; distinct runtimes stay independent; later incoming may retry immediately', async t => {
+test('incoming routing joins pending auth flight; distinct runtimes stay independent; later incoming may retry immediately', async t => {
   let release, entered;
   const barrier = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });

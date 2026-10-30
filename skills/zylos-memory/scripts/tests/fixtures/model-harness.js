@@ -48,9 +48,9 @@ function stateWithCoverage(scope, rows, runId) {
   return renderStateSkeleton({ scope, syncedAt: oldDate, absorbed: { runId, rows } }).replace('coverage= |', 'coverage=1000 |');
 }
 
-export function createFixture(t, { scope = 'p07', kind = scope === '*' ? 'global' : 'group', fault = null } = {}) {
-  const runId = `p07-${randomUUID()}`;
-  const f = readyTmuxTarget(t, { prefix: 'p07-model-', mode: scope === '*' ? 'single' : 'multi', runtime: 'codex', runId, packageRoot: repository });
+export function createFixture(t, { scope = 'model-workflow', kind = scope === '*' ? 'global' : 'group', fault = null } = {}) {
+  const runId = `model-workflow-${randomUUID()}`;
+  const f = readyTmuxTarget(t, { prefix: 'model-workflow-model-', mode: scope === '*' ? 'single' : 'multi', runtime: 'codex', runId, packageRoot: repository });
   // Keep the shared helper's owned server alive across slow model calls.
   f.tmux('respawn-pane', '-k', '-t', '=zylos-group-origin:', '/bin/sleep', '3600');
   const env = { ...f.env, ZYLOS_RUN_ID: runId, PM2_HOME: path.join(f.root, '.pm2'), TZ: 'UTC' };
@@ -59,11 +59,11 @@ export function createFixture(t, { scope = 'p07', kind = scope === '*' ? 'global
     f.tmux('rename-session', '-t', '=zylos-group-origin', tmuxNameForGroup(scope));
     f.tmux('set-environment', '-t', `=${tmuxNameForGroup(scope)}`, 'ZYLOS_SESSION_GROUP', scope);
   }
-  for (const [key, value] of Object.entries(process.env)) if (key.startsWith('P07_')) env[key] = value;
+  for (const [key, value] of Object.entries(process.env)) if (key.startsWith('MODEL_WORKFLOW_')) env[key] = value;
   const memoryDir = scope === '*' ? path.join(f.root, 'memory') : groupMemoryDir(scope, env);
   const runDir = groupRunDir(scope === '*' ? 'origin' : scope, env);
   fs.mkdirSync(runDir, { recursive: true });
-  const sourceGroup = kind === 'origin' ? 'p07-source' : scope === '*' ? 'p07-source' : scope;
+  const sourceGroup = kind === 'origin' ? 'model-workflow-source' : scope === '*' ? 'model-workflow-source' : scope;
   const store = createStore(f.db);
   const rows = makeOriginalRows(sourceGroup);
   const insert = f.db.prepare('INSERT INTO conversations(id,timestamp,direction,channel,endpoint_id,content,status,session_group) VALUES(?,?,?,?,?,?,?,?)');
@@ -156,7 +156,7 @@ function memoryClient(f) {
 // procedure emulator, and the model must decide how to react.
 export async function createToolExecutor(f) {
   const mcp = memoryClient(f);
-  await mcp.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'p07-integration', version: '1' } });
+  await mcp.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'model-workflow', version: '1' } });
   let injected = false;
   return {
     close: mcp.close,
@@ -219,10 +219,10 @@ export function promptFor(f) {
   return `Perform one ${f.kind} Memory Sync, using the production instructions below and only the provided tools. This is an isolated fixture with real scripts and a real restricted MCP tool. Do not access the filesystem outside the tools, and do not delegate again. The requesting supervisor has already launched you as its background worker. Resolve facts from the available inputs; do not infer progress from the scenario name. Report the outcome and any failure honestly in your final text.\n\nInherited environment: ZYLOS_DIR=${f.root}; ZYLOS_RUN_ID=${f.env.ZYLOS_RUN_ID}; ${f.scope === '*' ? 'ZYLOS_SESSION_GROUP is absent' : 'ZYLOS_SESSION_GROUP=' + f.scope}; TZ=UTC. Script names map directly to run_script. read_file/list_files paths are relative to ZYLOS_DIR; edit_memory paths are relative to memory as in the production tool. No native write tool is permitted.\n\n${skill}\n\n${procedures}\n\n${format}`;
 }
 
-export async function runDriver(f, scenarioId, { executable = process.env.P07_MODEL_DRIVER, args = JSON.parse(process.env.P07_MODEL_DRIVER_ARGS || '[]'), timeoutMs = 600000 } = {}) {
-  assert.ok(executable && path.isAbsolute(executable), 'P07_MODEL_DRIVER must be an absolute executable path');
-  assert.ok(Array.isArray(args) && args.every(value => typeof value === 'string'), 'P07_MODEL_DRIVER_ARGS must be a JSON array of strings');
-  const evidenceRoot = process.env.P07_MODEL_EVIDENCE_DIR || path.join(f.root, 'evidence');
+export async function runDriver(f, scenarioId, { executable = process.env.MODEL_WORKFLOW_DRIVER, args = JSON.parse(process.env.MODEL_WORKFLOW_DRIVER_ARGS || '[]'), timeoutMs = 600000 } = {}) {
+  assert.ok(executable && path.isAbsolute(executable), 'MODEL_WORKFLOW_DRIVER must be an absolute executable path');
+  assert.ok(Array.isArray(args) && args.every(value => typeof value === 'string'), 'MODEL_WORKFLOW_DRIVER_ARGS must be a JSON array of strings');
+  const evidenceRoot = process.env.MODEL_WORKFLOW_EVIDENCE_DIR || path.join(f.root, 'evidence');
   const evidenceDir = path.join(evidenceRoot, scenarioId + '-' + randomUUID()); fs.mkdirSync(evidenceDir, { recursive: true });
   const executor = await createToolExecutor(f);
   const child = spawn(executable, args, { env: f.env, cwd: f.root, stdio: ['pipe', 'pipe', 'pipe'] });

@@ -10,7 +10,7 @@ function enqueueSingleExit() {
     '--block-queue-until-idle', '--no-ack-suffix'], {encoding:'utf8',timeout:10000}, (error, stdout) => error ? reject(error) : resolve(stdout.trim())));
 }
 
-/** T07: select once; never fall back or resubmit after a connected attempt.
+/** Select once; never fall back or resubmit after a connected attempt.
  * Only the self-upgrade call after services restart may retry failed connects.
  */
 export async function requestRuntimeRestart({ now = Date.now, deadlineAt, afterServiceRestart = false, readMode = readSessionMode,

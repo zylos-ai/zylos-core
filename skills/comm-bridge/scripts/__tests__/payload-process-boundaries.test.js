@@ -18,8 +18,8 @@ const databaseModule = createRequire(import.meta.url).resolve('better-sqlite3');
 const pending = { decision: 'pending', recovered: true, runtime: 'codex', health: 'rate_limited', reason: 'quota', transitionHold: false };
 const auth = { decision: 'auth_rejected', recovered: false, runtime: 'codex', health: 'auth_failed', reason: 'auth_failed', transitionHold: false, auth: { result: 'failed', detail: 'original rejection' } };
 
-test('IF-01 receive CLI maps database open failure to INTERNAL_ERROR with no persisted writes', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p09-open-failure-'));
+test('receive CLI maps database open failure to INTERNAL_ERROR with no persisted writes', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-routing-open-failure-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, '.claude', 'skills', 'chat'), { recursive: true });
   const databasePath = path.join(dir, 'comm-bridge', 'c4.db');
@@ -80,7 +80,7 @@ function receiveChild(filename, mode, eventFile) {
     db.close(); process.exit(0);`;
 }
 
-test('IF-05 SIGKILL before commit rolls back D1/D5/D6; after commit retains terminal rejection before F14', { timeout: 15000 }, async t => {
+test('SIGKILL before commit rolls back /; after commit retains terminal rejection before', { timeout: 15000 }, async t => {
   fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'chat'), { recursive: true });
   for (const mode of ['before', 'after']) {
     const f = fixture(t, {}, true), eventFile = path.join(path.dirname(f.filename), 'events.jsonl');
@@ -104,7 +104,7 @@ test('IF-05 SIGKILL before commit rolls back D1/D5/D6; after commit retains term
   }
 });
 
-test('IF-02 simultaneous first receives commit one namespace and consistent final group without rerouting', { timeout: 15000 }, async t => {
+test('simultaneous first receives commit one namespace and consistent final group without rerouting', { timeout: 15000 }, async t => {
   fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'chat'), { recursive: true });
   const f = fixture(t, {}, true);
   const source = `import Database from ${JSON.stringify(databaseModule)};
@@ -132,7 +132,7 @@ test('IF-02 simultaneous first receives commit one namespace and consistent fina
 });
 
 async function socketServer(t, response) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p09-socket-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-routing-socket-'));
   const socketPath = path.join(dir, 'am.sock'), requests = [], sockets = new Set();
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket));
@@ -146,7 +146,7 @@ async function socketServer(t, response) {
   return { socketPath, requests };
 }
 
-test('IB-02 real socket accepts fragmented v2 replies and rejects malformed/correlation/timeout with one fallback', { timeout: 10000 }, async t => {
+test('real socket accepts fragmented v2 replies and rejects malformed/correlation/timeout with one fallback', { timeout: 10000 }, async t => {
   const request = { version: 2, type: 'route', requestId: 'socket-case', noReply: true };
   const cases = [
     (socket, req) => { const bytes = JSON.stringify({ version: 2, type: 'route', requestId: req.requestId, ...pending }) + '\n'; socket.write(bytes.slice(0, 10)); socket.end(bytes.slice(10)); },
@@ -165,7 +165,7 @@ test('IB-02 real socket accepts fragmented v2 replies and rejects malformed/corr
   }
 });
 
-test('IF-06 rejection lookup rescans real rename race and never invents a missing historical reason', t => {
+test('rejection lookup rescans real rename race and never invents a missing historical reason', t => {
   const f = fixture(t, {}, true), filename = path.join(path.dirname(f.filename), 'receive-events.jsonl');
   const row = f.store.insertConversation('in', 'chat', null, 'rejected', { status: 'failed', deliveryAction: 'auth_rejected' });
   fs.writeFileSync(filename, JSON.stringify({ v: 1, event: 'auth_rejected', conversation_id: row.id, reason_code: 'auth_check_failed', detail: 'then', runtime: 'codex', ts: 10 }) + '\n');
@@ -181,8 +181,8 @@ test('IF-06 rejection lookup rescans real rename race and never invents a missin
     { status: 'failed', category: 'auth_rejected', reason: 'expired_or_missing' });
 });
 
-test('IF-06 actual rejection CLI preserves database/log bytes across success and rejection errors', { timeout: 10000 }, t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p09-rejection-cli-'));
+test('actual rejection CLI preserves database/log bytes across success and rejection errors', { timeout: 10000 }, t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-routing-rejection-cli-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const dataDir = path.join(dir, 'comm-bridge'); fs.mkdirSync(dataDir);
   const f = fixture(t, {}, path.join(dataDir, 'c4.db'));

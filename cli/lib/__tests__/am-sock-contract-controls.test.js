@@ -23,12 +23,12 @@ async function partial(client) {
   const result = await client(request, { connect: connection('partial') });
   assert.deepEqual(result, { kind: 'no_reply', sent: true });
 }
-test('IF-37 field relation and connected partial-reply classification', async () => {
+test('field relation and connected partial-reply classification', async () => {
   await fields(submit); await partial(submit);
 
 });
 
-test('IF-37 reply timeout remains independent of total deadline', async t => {
+test('reply timeout remains independent of total deadline', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   async function scenario(client) {
     let now = 1792000000000, settled = false;

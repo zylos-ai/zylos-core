@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { HealthStore } from '../health-store.js';
 
-// T02 legacy singleton takeover: crash at the real atomic publish boundary,
+// legacy singleton takeover: crash at the real atomic publish boundary,
 // preserving original notice destination and never replaying an uncertain send.
 for (const status of ['pending', 'sending']) for (const phase of ['before', 'after']) {
   test(`health singleton migration ${status}, SIGKILL ${phase} rename is idempotent`, { timeout: 10000 }, async t => {

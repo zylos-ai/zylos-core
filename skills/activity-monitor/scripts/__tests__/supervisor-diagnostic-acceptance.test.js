@@ -8,7 +8,7 @@ import { SupervisorScenes } from '../supervisor-scenes.js';
 import { startSupervisor } from '../supervisor-main.js';
 
 async function scenario(t, operation, start = startSupervisor, corrupt = false) {
-  const f = readyTmuxTarget(t, { prefix: 'p05-diag-matrix-', mode: 'multi' });
+  const f = readyTmuxTarget(t, { prefix: 'supervisor-diag-matrix-', mode: 'multi' });
   f.tmux('new-session', '-d', '-s', 'keeper', 'sleep', '120');
   const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
   db.setDrainFence('origin', { reason: 'upgrade', runId: 'run-1' });
@@ -42,10 +42,10 @@ async function scenario(t, operation, start = startSupervisor, corrupt = false) 
   await service.stop(); return { before, after };
 }
 
-test('IF-31 local M4 paired authority invariance under inject/delete/truncate/rotate of all diagnostic streams', { timeout: 30000 }, async t => {
+test('local supervisor paired authority invariance under inject/delete/truncate/rotate of all diagnostic streams', { timeout: 30000 }, async t => {
   const baseline = await scenario(t, 'unchanged');
   for (const operation of ['inject', 'delete', 'truncate', 'rotate']) assert.deepEqual(await scenario(t, operation), baseline);
 });
-test('IF-31 fake completion and DM54 corrupt F9 preserve authoritative cleanup', { timeout: 30000 }, async t => {
+test('fake completion and corrupt preserve authoritative cleanup', { timeout: 30000 }, async t => {
   await scenario(t, 'inject'); await scenario(t, 'inject', startSupervisor, true);
 });

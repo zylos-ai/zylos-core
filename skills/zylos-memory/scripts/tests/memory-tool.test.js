@@ -20,7 +20,7 @@ async function fixture(kind, group, sharedRoot) {
 }
 const create = (token, file, replacement = 'content') => ({ op: 'create', path: file, replacement, token });
 
-test('IB53 local: group, origin and global use marker-derived target scopes', async () => {
+test('local: group, origin and global use marker-derived target scopes', async () => {
   const group = await fixture('group', 'telegram:g-1');
   const temporary = `session-groups/telegram:g-1/state.md.${group.token}.tmp`;
   assert.equal((await group.editor(create(group.token, temporary))).ok, true);
@@ -38,7 +38,7 @@ test('IB53 local: group, origin and global use marker-derived target scopes', as
   assert.equal((await global.editor(create(global.token, 'session-groups/origin/state.md'))).code, 'PATH_NOT_ALLOWED');
 });
 
-test('IB53 local: model role claims are rejected and the server environment stays bound', async () => {
+test('local: model role claims are rejected and the server environment stays bound', async () => {
   const f = await fixture('global');
   assert.equal((await f.editor({ ...create(f.token, 'identity.md'), kind: 'global' })).code, 'INVALID_INPUT');
   assert.equal((await f.editor(create('0'.repeat(32), 'identity.md'))).code, 'TOKEN_MISMATCH');
@@ -52,7 +52,7 @@ test('IB53 local: model role claims are rejected and the server environment stay
   assert.equal(fs.existsSync(path.join(f.dir, 'memory', 'state.md')), false);
 });
 
-test('IB53 local: create and fragment conflicts preserve existing files', async () => {
+test('local: create and fragment conflicts preserve existing files', async () => {
   const f = await fixture('global');
   assert.equal((await f.editor(create(f.token, 'identity.md', 'left middle right'))).ok, true);
   assert.equal((await f.editor(create(f.token, 'identity.md', 'overwrite'))).code, 'EXISTS');
@@ -65,7 +65,7 @@ test('IB53 local: create and fragment conflicts preserve existing files', async 
   assert.equal((await f.editor({ op: 'edit', path: 'references.md', expected: '', replacement: 'index', token: f.token })).ok, true);
 });
 
-test('IB53 local: traversal, target symlinks and parent symlinks cannot escape allowed paths', async () => {
+test('local: traversal, target symlinks and parent symlinks cannot escape allowed paths', async () => {
   const f = await fixture('global');
   const memory = path.join(f.dir, 'memory');
   fs.mkdirSync(memory, { recursive: true });
@@ -80,7 +80,7 @@ test('IB53 local: traversal, target symlinks and parent symlinks cannot escape a
   assert.equal(fs.existsSync(path.join(outside, 'new.md')), false);
 });
 
-test('IB53 local: write failures return WRITE_FAILED and preserve the target', async t => {
+test('local: write failures return WRITE_FAILED and preserve the target', async t => {
   const f = await fixture('global');
   await f.editor(create(f.token, 'identity.md', 'original'));
   for (const [method, code, op] of [['writeFileSync', 'EACCES', 'edit'], ['renameSync', 'EIO', 'edit'], ['linkSync', 'EIO', 'create']]) {
@@ -94,7 +94,7 @@ test('IB53 local: write failures return WRITE_FAILED and preserve the target', a
   }
 });
 
-test('IB53 local: nonregular lock returns LOCK_UNAVAILABLE without writing', async () => {
+test('local: nonregular lock returns LOCK_UNAVAILABLE without writing', async () => {
   for (const kind of ['directory', 'symlink']) {
     const f = await fixture('global'), lock = path.join(f.scope.runDir, 'memory.lock');
     fs.unlinkSync(lock);
@@ -107,7 +107,7 @@ test('IB53 local: nonregular lock returns LOCK_UNAVAILABLE without writing', asy
   }
 });
 
-test('IB53 local: published create succeeds even when temporary cleanup fails', async t => {
+test('local: published create succeeds even when temporary cleanup fails', async t => {
   const f = await fixture('global');
   const mock = t.mock.method(fs, 'unlinkSync', () => { throw Object.assign(new Error('cleanup failed'), { code: 'EACCES' }); });
   const result = await f.editor(create(f.token, 'identity.md', 'published'));
@@ -117,7 +117,7 @@ test('IB53 local: published create succeeds even when temporary cleanup fails', 
   assert.equal((await f.editor(create(f.token, 'identity.md', 'retry'))).code, 'EXISTS');
 });
 
-test('IB53 local: stdio emits only protocol frames and advertises the restricted tool', async () => {
+test('local: stdio emits only protocol frames and advertises the restricted tool', async () => {
   const input = new PassThrough(), output = new PassThrough();
   let received = ''; output.on('data', chunk => { received += chunk; });
   const done = serveMemoryTools({ input, output, editor: async () => ({ ok: false, code: 'SCOPE_UNBOUND', message: 'unbound' }) });
@@ -136,7 +136,7 @@ test('IB53 local: stdio emits only protocol frames and advertises the restricted
   assert.equal(JSON.parse(frames[2].result.content[0].text).code, 'SCOPE_UNBOUND');
 });
 
-test('IB53 local: concurrent group editors cannot cross scope and origin tokens choose separate permissions', async () => {
+test('local: concurrent group editors cannot cross scope and origin tokens choose separate permissions', async () => {
   const a = await fixture('group', 'telegram:a'), b = await fixture('group', 'telegram:b', a.dir);
   const fileA = `session-groups/telegram:a/state.md.${a.token}.tmp`;
   const fileB = `session-groups/telegram:b/state.md.${b.token}.tmp`;
@@ -150,7 +150,7 @@ test('IB53 local: concurrent group editors cannot cross scope and origin tokens 
   assert.equal((await origin.editor(create(origin.token, 'identity.md'))).ok, true);
 });
 
-test('IB53 local: actual stdio process exposes no authority when forwarded run env is absent', async () => {
+test('local: actual stdio process exposes no authority when forwarded run env is absent', async () => {
   const { execFileSync } = await import('node:child_process');
   const env = { ...process.env };
   delete env.ZYLOS_RUN_ID; delete env.ZYLOS_SESSION_GROUP;

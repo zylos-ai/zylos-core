@@ -58,6 +58,6 @@ async function scenario(t, Observation) {
   assert.deepEqual(faults, []);
   await assert.rejects(scenes.readRun(scene.sessionGroup), { code: 'TMUX_UNAVAILABLE' });
 }
-test('IF-29 composed unknown server preserves occupancy, F10 and F4 without exit or recovery actions', async t => {
+test('composed unknown server preserves occupancy, and without exit or recovery actions', async t => {
   await scenario(t, SupervisorServerObservation);
 });

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { CONFIG_FILE } from '../config.js';
 import { prepareInitRuntimeClis, prepareInitRuntimeAssets, reportInitPreparation, ensureInitMemoryMigration, parseInitFlags, initCommand, runInitNativeLogin } from '../../commands/init.js';
 
-test('IF-47 init prepares both CLIs idempotently and continues after one failure', async () => {
+test('init prepares both CLIs idempotently and continues after one failure', async () => {
   const installed = new Set(['claude']); const calls = [];
   const deps = { exists: runtime => installed.has(runtime), install: {
     claude: () => { throw new Error('already installed'); },
@@ -18,7 +18,7 @@ test('IF-47 init prepares both CLIs idempotently and continues after one failure
   assert.deepEqual(partial.completed, ['codex.cli']); assert.equal(partial.failed[0].item, 'claude.cli');
 });
 
-test('IF-47 init prepares both hook/instruction sets and reports partial completion', async () => {
+test('init prepares both hook/instruction sets and reports partial completion', async () => {
   const calls = [];
   const result = await prepareInitRuntimeAssets({ instruction: runtime => { calls.push(`${runtime}.instruction`); return runtime; },
     exists: () => true, hooks: { claude: () => calls.push('claude.hooks'), codex: () => { throw new Error('trust'); } } });
@@ -29,12 +29,12 @@ test('IF-47 init prepares both hook/instruction sets and reports partial complet
   assert.match(lines[0], /部分完成/); assert.match(lines.join('\n'), /Failed: codex.hooks/);
 });
 
-test('IF-47 init --json text compatibility and unknown argument rejection', () => {
+test('init --json text compatibility and unknown argument rejection', () => {
   assert.deepEqual(parseInitFlags(['--json']), parseInitFlags([]));
   assert.throws(() => parseInitFlags(['--bad']), /Unknown init option/);
 });
 
-test('IF-47 init refuses corrupt F1 before running any installation/auth stage', async t => {
+test('init refuses corrupt before running any installation/auth stage', async t => {
   const previous = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE) : null;
   t.after(() => {
     if (previous === null) fs.rmSync(CONFIG_FILE, { force: true });
@@ -47,7 +47,7 @@ test('IF-47 init refuses corrupt F1 before running any installation/auth stage',
   assert.equal(fs.readFileSync(CONFIG_FILE, 'utf8'), before);
 });
 
-test('IF-47 init migration uses reusable ensure with fresh flag only on fresh install', async () => {
+test('init migration uses reusable ensure with fresh flag only on fresh install', async () => {
   for (const freshInstall of [true, false]) {
     const calls = [];
     await ensureInitMemoryMigration({ freshInstall, load: async () => ({ createMigration: () => ({ ensure: options => { calls.push(options); return { state: 'done' }; } }) }) });
@@ -55,7 +55,7 @@ test('IF-47 init migration uses reusable ensure with fresh flag only on fresh in
   }
 });
 
-test('DM-48 init warns on the migration unreadable status without replacing the record', async () => {
+test('init warns on the migration unreadable status without replacing the record', async () => {
   const warnings = [];
   const status = { state: 'unreadable', warning: 'RECORD_UNREADABLE' };
   const result = await ensureInitMemoryMigration({
@@ -67,7 +67,7 @@ test('DM-48 init warns on the migration unreadable status without replacing the 
   assert.match(warnings[0], /RECORD_UNREADABLE/);
 });
 
-test('IF-47 init native cancellation selects 130 independently of prior partial failures', () => {
+test('init native cancellation selects 130 independently of prior partial failures', () => {
   for (const native of [{ signal: 'SIGINT' }, { status: 130 }]) {
     const exits = [];
     runInitNativeLogin('codex', ['login'], { spawn: () => native, exit: code => exits.push(code) });
