@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Package contents**: tests and fixtures are excluded from the npm package and the GitHub source archive, so they no longer reach user machines. (#886)
 
 ### Upgrade notice
-- **0.9.3 is the bridge to later releases.** Releases after 0.9.3 carry their own upgrade and recovery code and accept upgrades only from 0.9.3 or later, so upgrade to 0.9.3 first. No database schema migration is required for this release.
+- **0.9.3 is the bridge to later releases.** Releases after 0.9.3 carry their own upgrade and recovery code and accept upgrades only from 0.9.3 or later, so upgrade to 0.9.3 first. Once a later release is the latest one, hosts on 0.9.1/0.9.2 reach 0.9.3 with `zylos upgrade --self --branch release/0.9.3` (a fixed branch on the v0.9.3 commit; `--branch v0.9.3` does not work without a GitHub token because it is a tag). No database schema migration is required for this release.
 
 ## [0.9.2] - 2026-10-22
 
