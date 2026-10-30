@@ -175,6 +175,29 @@ test('CLI self upgrade reports an uninitialized Zylos directory as JSON without 
   assert.deepEqual(f.readLog(), []);
 });
 
+test('CLI self upgrade rejects overwrite mode as text before any download request', t => {
+  const f = fixture(t);
+  const result = f.run(['upgrade', '--self', '--mode', 'overwrite', '--yes']);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'Error: Core self-upgrade supports only --mode merge.\n');
+  assert.deepEqual(f.readLog(), []);
+});
+
+test('CLI self upgrade rejects overwrite mode as JSON before any download request', t => {
+  const f = fixture(t);
+  const result = f.run(['upgrade', '--self', '--mode', 'overwrite', '--yes', '--json']);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(result.stdout), {
+    success:false,
+    code:'INVALID_ARGS',
+    error:'Core self-upgrade supports only --mode merge.',
+    persisted:[],
+  });
+  assert.deepEqual(f.readLog(), []);
+});
+
 function installUnfinishedRecovery(f) {
   f.save({type:'local', path:f.profilePath});
   const stable = path.join(f.zylosDir, '.zylos/upgrade');
