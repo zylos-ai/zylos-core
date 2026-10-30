@@ -67,6 +67,7 @@ function getLatestTag(repo) {
     .map(line => line.replace(/.*refs\/tags\//, '').replace(/\^{}$/, ''))
     .filter(name => /^v?\d+\.\d+\.\d+/.test(name))
     .map(name => name.replace(/^v/, ''))
+    .filter(version => !version.includes('-'))
     .filter((v, i, arr) => arr.indexOf(v) === i)  // deduplicate (annotated tags have ^{})
     .sort(compareSemver);
   if (versions.length === 0) return { version: null, error: 'no semver tags' };

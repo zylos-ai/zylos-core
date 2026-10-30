@@ -22,12 +22,12 @@ test('status and resume on an ordinary deployment do not require stable deployme
 });
 
 
-test('CLI status uses file status and resume enters the same trusted bootstrap once', async t => {
+test('CLI status scans unmarked history and resume enters the same trusted bootstrap once', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-cli-active-'));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const stable = path.join(root, '.zylos/upgrade');
   fs.mkdirSync(stable, {recursive: true, mode: 0o700});
-  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode: 0o600});
+  fs.mkdirSync(path.join(root, '.backup/self-upgrade/tx'), {recursive:true, mode:0o700});
   fs.writeFileSync(path.join(stable, 'maintenance.cjs'), '// fixture', {mode: 0o600});
   const log = path.join(root, 'calls.jsonl');
   fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `exports.bootstrap = (root, options = {}) => {

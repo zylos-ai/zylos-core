@@ -38,6 +38,31 @@ test('unmarked historical transactions do not require stable startup helpers', t
  }
 });
 
+test('unmarked historical transactions reach startup discovery and the tmux launcher', t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-history-startup-')));
+  t.after(() => fs.rmSync(root, {recursive:true, force:true}));
+  const stable = path.join(root, '.zylos/upgrade');
+  fs.mkdirSync(stable, {recursive:true, mode:0o700});
+  fs.mkdirSync(path.join(root, '.backup/self-upgrade/tx'), {recursive:true, mode:0o700});
+  fs.writeFileSync(path.join(stable, 'maintenance.cjs'), "'use strict';\n", {mode:0o600});
+  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `
+    exports.bootstrap = () => ({active:true, blocked:true, prompt:'historical recovery prompt'});
+  `, {mode:0o600});
+  assert.equal(upgradeStartupPrompt(root), 'historical recovery prompt');
+
+  const specPath = path.join(root, 'spec.json');
+  fs.writeFileSync(specPath, JSON.stringify({
+    command: process.execPath,
+    args: ['-e', 'console.log(process.argv[1])', 'ordinary prompt'],
+    promptIndex: 2,
+    cwd: root,
+    env: {PATH:process.env.PATH},
+  }), {mode:0o600});
+  const result = spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), specPath], {encoding:'utf8'});
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'historical recovery prompt');
+});
+
  test('nonblocking recovery cue remains available alongside normal context', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-available-startup-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

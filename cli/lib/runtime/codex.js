@@ -284,7 +284,7 @@ export class CodexAdapter extends RuntimeAdapter {
     // Internal lifecycle sentinel — stateless, covers both first start and
     // resume; sentinel form so the kick is never mistaken for a human turn
     // (#743/#745). See kick-prompt.js.
-    const recovery = discoverUpgradeContext(ZYLOS_DIR);
+    const recovery = discoverUpgradeContext(ZYLOS_DIR, { resume: true, scanHistory: true });
     const kick = buildKickPrompt();
     const kickPrompt = recovery.blocked ? recovery.prompt
       : recovery.active && !recovery.controllerAlive ? kick + "\n\n" + recovery.prompt : kick;

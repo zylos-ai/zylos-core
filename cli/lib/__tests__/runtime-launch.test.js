@@ -365,6 +365,25 @@ describe('Claude launch — compat mode PATH dedupe', () => {
 // ── Codex launch tests ───────────────────────────────────────────────────────
 
 describe('Codex launch — new session', () => {
+  it('includes unmarked historical recovery in the launch prompt', async t => {
+    const stable = path.join(fakeZylosDir, '.zylos', 'upgrade');
+    const transaction = path.join(fakeZylosDir, '.backup', 'self-upgrade', 'tx');
+    fs.mkdirSync(stable, {recursive:true, mode:0o700});
+    fs.mkdirSync(transaction, {recursive:true, mode:0o700});
+    fs.writeFileSync(path.join(stable, 'maintenance.cjs'), "'use strict';\n", {mode:0o600});
+    fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `
+      exports.bootstrap = () => ({active:true, blocked:true, prompt:'historical recovery prompt'});
+    `, {mode:0o600});
+    t.after(() => {
+      fs.rmSync(path.join(fakeZylosDir, '.backup'), {recursive:true, force:true});
+      fs.rmSync(stable, {recursive:true, force:true});
+    });
+
+    tmuxSessionExists = false;
+    await makeAdapter(CodexAdapter).launch({bypassPermissions:false});
+    assert.match(readLaunchSpec().args.at(-1), /historical recovery prompt/);
+  });
+
   it('refuses to launch without instructions while split migration is pending', async () => {
     const agentsPath = path.join(fakeZylosDir, 'AGENTS.md');
     fs.unlinkSync(agentsPath);
