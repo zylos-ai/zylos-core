@@ -148,23 +148,34 @@ test('CLI self upgrade cancellation preserves baseline display and does not run 
   assert.equal(fs.existsSync(handoffFile), false);
 });
 
-test('CLI self upgrade rejects an uninitialized Zylos directory before recovery discovery', t => {
+test('CLI self upgrade reports an uninitialized Zylos directory as text without --json', t => {
   const f = fixture(t);
   fs.rmSync(f.zylosDir, {recursive:true});
   const result = f.run(['upgrade', '--self', '--yes']);
   assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, `Error: Zylos is not initialized at ${f.zylosDir}. Run "zylos init" first.\n`);
+  assert.deepEqual(f.readLog(), []);
+});
+
+test('CLI self upgrade reports an uninitialized Zylos directory as JSON without recovery state', t => {
+  const f = fixture(t);
+  fs.rmSync(f.zylosDir, {recursive:true});
+  const result = f.run(['upgrade', '--self', '--yes', '--json']);
+  assert.equal(result.status, 1);
   assert.equal(result.stderr, '');
-  assert.deepEqual(JSON.parse(result.stdout), {
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(output, {
     success:false,
     code:'ZYLOS_NOT_INITIALIZED',
     error:`Zylos is not initialized at ${f.zylosDir}. Run "zylos init" first.`,
     persisted:[],
   });
+  assert.equal(Object.hasOwn(output, 'recovery_required'), false);
   assert.deepEqual(f.readLog(), []);
 });
 
-test('CLI self upgrade refuses unfinished recovery before any download request', t => {
-  const f = fixture(t);
+function installUnfinishedRecovery(f) {
   f.save({type:'local', path:f.profilePath});
   const stable = path.join(f.zylosDir, '.zylos/upgrade');
   const transaction = path.join(f.zylosDir, '.backup/self-upgrade/tx');
@@ -179,12 +190,30 @@ test('CLI self upgrade refuses unfinished recovery before any download request',
       error:'unfinished transaction',
     });
   `, {mode:0o600});
+}
+
+test('CLI self upgrade reports unfinished recovery as text before any download request', t => {
+  const f = fixture(t);
+  installUnfinishedRecovery(f);
+  const result = f.run(['upgrade', '--self', '--yes']);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'Error: unfinished transaction\nNext: zylos recovery status\n');
+  assert.deepEqual(f.readLog(), []);
+});
+
+test('CLI self upgrade reports unfinished recovery as JSON before any download request', t => {
+  const f = fixture(t);
+  installUnfinishedRecovery(f);
   const result = f.run(['upgrade', '--self', '--yes', '--json']);
   assert.equal(result.status, 1);
   assert.equal(result.stderr, '');
+  assert.equal(result.stdout.trim().split('\n').length, 1);
   const output = JSON.parse(result.stdout);
   assert.equal(output.code, 'UPGRADE_RECOVERY_REQUIRED');
   assert.deepEqual(output.persisted, []);
+  assert.equal(output.next, 'zylos recovery status');
+  assert.equal(output.recovery_required, true);
   assert.deepEqual(f.readLog(), []);
 });
 

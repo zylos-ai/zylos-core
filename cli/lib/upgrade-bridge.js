@@ -3,13 +3,14 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { discoverUpgradeContext } from './runtime/upgrade-context.js';
 
-export function upgradeBridgeFailure(error, { code = 'UPGRADE_FAILED', next } = {}) {
+export function upgradeBridgeFailure(error, { code = 'UPGRADE_FAILED', next, recoveryRequired = false } = {}) {
   return {
     success: false,
     code,
     error: String(error || 'Upgrade failed'),
     persisted: [],
     ...(next ? { next } : {}),
+    ...(recoveryRequired ? { recovery_required: true } : {}),
   };
 }
 
@@ -34,7 +35,7 @@ function recoveryRefusal(context) {
     success: false,
     failure: upgradeBridgeFailure(
       context.error || 'An unfinished upgrade transaction must be recovered before starting a new upgrade.',
-      { code: manual ? 'MANUAL_RECOVERY_REQUIRED' : 'UPGRADE_RECOVERY_REQUIRED', next },
+      { code: manual ? 'MANUAL_RECOVERY_REQUIRED' : 'UPGRADE_RECOVERY_REQUIRED', next, recoveryRequired: true },
     ),
   };
 }

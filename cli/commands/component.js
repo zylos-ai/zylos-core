@@ -296,6 +296,15 @@ export function printSelfUpgradeProtection(data) {
   const text=formatSelfUpgradeProtection(data);if(text)console.log(text);
 }
 
+function printSelfUpgradeFailure(failure, jsonOutput) {
+  if (jsonOutput) {
+    console.log(JSON.stringify(failure));
+    return;
+  }
+  console.error(`Error: ${failure.error}`);
+  if (failure.next) console.error(`Next: ${failure.next}`);
+}
+
 export async function upgradeComponent(args) {
   // Parse flags
   const checkOnly = args.includes('--check');
@@ -359,7 +368,7 @@ export async function upgradeComponent(args) {
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
     if (mode !== 'merge') {
-      console.log(JSON.stringify(upgradeBridgeFailure('Core self-upgrade supports only --mode merge.', { code: 'INVALID_ARGS' })));
+      printSelfUpgradeFailure(upgradeBridgeFailure('Core self-upgrade supports only --mode merge.', { code: 'INVALID_ARGS' }), jsonOutput);
       process.exitCode = 1;
       return;
     }
@@ -1080,22 +1089,22 @@ async function upgradeSelfCore({ branch, beta = false } = {}) {
 
   try {
     if (!fs.existsSync(ZYLOS_DIR)) {
-      console.log(JSON.stringify(upgradeBridgeFailure(
+      printSelfUpgradeFailure(upgradeBridgeFailure(
         `Zylos is not initialized at ${ZYLOS_DIR}. Run "zylos init" first.`,
         { code: 'ZYLOS_NOT_INITIALIZED' },
-      )));
+      ), jsonOutput);
       return 1;
     }
 
     const recovery = resumeUnfinishedUpgrade(ZYLOS_DIR);
     if (!recovery.success) {
-      console.log(JSON.stringify(recovery.failure));
+      printSelfUpgradeFailure(recovery.failure, jsonOutput);
       return 1;
     }
 
     const check = checkForCoreUpdates({ branch, beta });
     if (!check.success) {
-      console.log(JSON.stringify(upgradeBridgeFailure(check.message || check.error)));
+      printSelfUpgradeFailure(upgradeBridgeFailure(check.message || check.error), jsonOutput);
       return 1;
     }
 
@@ -1117,14 +1126,14 @@ async function upgradeSelfCore({ branch, beta = false } = {}) {
       dlResult = { success: false, error: err.message };
     }
     if (!dlResult.success) {
-      console.log(JSON.stringify(upgradeBridgeFailure(dlResult.error)));
+      printSelfUpgradeFailure(upgradeBridgeFailure(dlResult.error), jsonOutput);
       return 1;
     }
     tempDir = dlResult.tempDir;
 
     const validation = validateDownloadedCore(tempDir);
     if (!validation.success) {
-      console.log(JSON.stringify(validation));
+      printSelfUpgradeFailure(validation, jsonOutput);
       return 1;
     }
 

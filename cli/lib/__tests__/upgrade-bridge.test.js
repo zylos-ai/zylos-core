@@ -37,6 +37,12 @@ test('pre-transaction failures use the fixed result shape', () => {
   assert.deepEqual(upgradeBridgeFailure('recover first', {code:'UPGRADE_RECOVERY_REQUIRED',next:'zylos recovery status'}), {
     success:false, code:'UPGRADE_RECOVERY_REQUIRED', error:'recover first', persisted:[], next:'zylos recovery status',
   });
+  assert.deepEqual(upgradeBridgeFailure('recover first', {
+    code:'UPGRADE_RECOVERY_REQUIRED', next:'zylos recovery status', recoveryRequired:true,
+  }), {
+    success:false, code:'UPGRADE_RECOVERY_REQUIRED', error:'recover first', persisted:[],
+    next:'zylos recovery status', recovery_required:true,
+  });
 });
 
 test('downloaded package validation requires package.json and upgrade-entry.js files', t => {
@@ -120,6 +126,7 @@ test('unfinished recovery is rejected when a deployed bootstrap leaves the trans
   const f = recoveryFixture(t, "return {active:true, completed:true};");
   const blocked = resumeUnfinishedUpgrade(f.root);
   assert.equal(blocked.failure.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.equal(blocked.failure.recovery_required, true);
   assert.deepEqual(blocked.failure.persisted, []);
   assert.match(blocked.failure.error, /transaction remains/);
 });
@@ -132,6 +139,7 @@ test('unfinished recovery is rejected when rediscovery reports an active blocked
   );
   const blocked = resumeUnfinishedUpgrade(f.root);
   assert.equal(blocked.failure.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.equal(blocked.failure.recovery_required, true);
   assert.deepEqual(blocked.failure.persisted, []);
   assert.equal(fs.existsSync(f.transaction), true);
 });
@@ -140,6 +148,7 @@ test('automatic recovery refusal preserves the manual recovery result code', t =
   const f = recoveryFixture(t, "return {active:true, automaticResume:false, error:'manual recovery required'};");
   const blocked = resumeUnfinishedUpgrade(f.root);
   assert.equal(blocked.failure.code, 'MANUAL_RECOVERY_REQUIRED');
+  assert.equal(blocked.failure.recovery_required, true);
   assert.deepEqual(blocked.failure.persisted, []);
   assert.match(blocked.failure.error, /manual recovery required/);
 });
