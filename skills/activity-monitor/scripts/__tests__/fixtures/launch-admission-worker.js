@@ -1,4 +1,4 @@
-// Process fixture: production launcher scheduler / supervisor entry, real SQLite, socket and tmux.
+// Process fixture: production dispatcher scheduler / supervisor entry, real SQLite, socket and tmux.
 // External runtime, clock, transport faults and D3 terminal outcomes are injected.
 import fs from 'node:fs';
 import path from 'node:path';

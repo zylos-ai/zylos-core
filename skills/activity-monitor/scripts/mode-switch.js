@@ -1,4 +1,4 @@
-import { LauncherRestartConfirmation } from './launcher-restart-confirmation.js';
+import { DispatcherRestartConfirmation } from './dispatcher-restart-confirmation.js';
 import { binaryCompare as groupSort } from '../../comm-bridge/scripts/c4-query-format.js';
 
 const failure = (code, message) => Object.assign(new Error(message), { code, persisted: [] });
@@ -12,7 +12,7 @@ const modes = new Set(['single', 'multi']);
 export class ModeSwitchCoordinator {
   constructor({ db, readMode, readConfiguration, readRequests, legacyPresent, observe,
     lifecycle, serialize = operation => operation(), convert, writeMode,
-    restart = new LauncherRestartConfirmation(), diagnostic = () => {}, now = Date.now } = {}) {
+    restart = new DispatcherRestartConfirmation(), diagnostic = () => {}, now = Date.now } = {}) {
     Object.assign(this, { db, readMode, readConfiguration, readRequests, legacyPresent,
       observe, lifecycle, serialize, convert, writeMode, restart, diagnostic, now });
     this.lastReasons = new Map();
@@ -88,7 +88,7 @@ export class ModeSwitchCoordinator {
       if (!result.confirmed) {
         await this.serialize(async () => {
           const row = await this.db.getModeTransition();
-          if (row?.run_id === attempt.runId && row.phase === 'cutover') await this.block(row, 'launcher_restart_unconfirmed', 'transition_launcher_restart_failed');
+          if (row?.run_id === attempt.runId && row.phase === 'cutover') await this.block(row, 'dispatcher_restart_unconfirmed', 'transition_dispatcher_restart_failed');
         });
         if (this.attempt === attempt) this.attempt = null;
         return;

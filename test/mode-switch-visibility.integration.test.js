@@ -106,7 +106,7 @@ test('real supervisor conversion/config/PM2 failures persist reasons, dedup A-B-
  expect(diagnostics(dir).filter(e=>e.event==='transition_convert_failed').map(e=>e.reason)).toEqual(['conversion_failed:export:EIO','conversion_failed:check:EIO','conversion_failed:export:EIO']);
  await worker.command({failure:''}); expect((await worker.command('tick')).row.phase).toBe('cutover');
  await worker.command({failure:'config'}); let state=await worker.command('tick'); expect(state.row.reason).toBe('config_write_failed:CONFIG_LOCK_TIMEOUT'); expect(state.mode.mode).toBe('single');
- await worker.command({failure:'pm2'}); state=await worker.command('tick'); expect(state.row.reason).toBe('launcher_restart_unconfirmed'); expect(state.mode.mode).toBe('multi'); expect(state.fences.map(f=>f.sessionGroup)).toEqual(['*']);
+ await worker.command({failure:'pm2'}); state=await worker.command('tick'); expect(state.row.reason).toBe('dispatcher_restart_unconfirmed'); expect(state.mode.mode).toBe('multi'); expect(state.fences.map(f=>f.sessionGroup)).toEqual(['*']);
  await worker.command({failure:''}); const done=await finish(worker); expect(done.last.run_id).toBe(accepted.runId); expect(done.last.reason).toBeNull(); expect(done.fences).toEqual([]);
  expect(diagnostics(dir).filter(e=>e.event==='transition_unblocked').length).toBeGreaterThanOrEqual(2);
  expect(done.logs.some(e=>String(e.error).includes('external notification'))).toBe(false);

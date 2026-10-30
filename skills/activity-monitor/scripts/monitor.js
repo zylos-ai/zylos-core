@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** The supervisor observes and reconciles sessions; the launcher owns process launch. */
+/** The supervisor observes and reconciles sessions; the dispatcher owns process launch. */
 import { isMainModule } from './is-main-module.js';
 import { startSupervisor } from './supervisor-main.js';
 

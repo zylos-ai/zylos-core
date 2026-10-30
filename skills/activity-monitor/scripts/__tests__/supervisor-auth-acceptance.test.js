@@ -7,7 +7,7 @@ import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 
 // exercise the composed owner and durable , with frozen
-// scene/DB contracts. Actual launcher delivery and marker execution are separate.
+// scene/DB contracts. Actual dispatcher delivery and marker execution are separate.
 function fixture(t, { mode = 'multi', create = createSupervisor } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-auth-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

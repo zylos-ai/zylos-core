@@ -127,7 +127,7 @@ test('diagnostics maintenance runs every minute independently and remains single
   assert.equal(f.calls.filter(x => x[0] === 'cleanup').length, 1);
 });
 
-// launcher: missing identity does not wait for the READY deadline.
+// dispatcher: missing identity does not wait for the READY deadline.
 test('missing runId stops immediately with null binding and alerts; known run waits', async t => {
   const f = routerFixture(t); f.put('origin');
   const missing = f.put('missing', { runId: null, ready: false });
@@ -139,7 +139,7 @@ test('missing runId stops immediately with null binding and alerts; known run wa
   assert.equal(f.scene.has('missing'), false); assert.equal(f.scene.has('starting'), true);
 });
 
-// launcher: count the incompatible pending scope, without consuming it.
+// dispatcher: count the incompatible pending scope, without consuming it.
 test('mode mismatch counts and alerts once per interval in both modes', async t => {
   for (const mode of ['single', 'multi']) await t.test(mode, async t => {
     const f = routerFixture(t, { mode }); f.put(mode === 'single' ? null : 'origin');

@@ -8,7 +8,7 @@ import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 
 // actual observer/coordinator; injected runtime screen and control
-// acknowledgements. No model API, real quota, launcher process or tmux is involved.
+// acknowledgements. No model API, real quota, dispatcher process or tmux is involved.
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rate-probe-')));
   let now = 1800000000000, matches = {}, coordinator, observer;

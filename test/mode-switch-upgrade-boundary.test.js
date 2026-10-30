@@ -24,7 +24,7 @@ test('real supervisor service recreation preserves legacy delay, same and blocke
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
       loopOptions: { schedule: () => 1, cancel() {} }, readSyncMarker: () => ({ held: false, stale: false }),
       convertModeTransition: () => { throw Object.assign(new Error('export offline'), { step: 'export', code: 'EIO' }); },
-      restartLauncherConfirmation: { advance: () => { throw new Error('restart must not run while conversion blocked'); } },
+      restartDispatcherConfirmation: { advance: () => { throw new Error('restart must not run while conversion blocked'); } },
       sendAlert: () => { throw new Error('external send forbidden'); }, log() {},
     });
     const started = service;

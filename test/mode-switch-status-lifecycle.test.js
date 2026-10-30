@@ -22,7 +22,7 @@ test('real supervisor reason/events and readonly status agree through block, rec
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} }, loopOptions: { schedule: () => 1, cancel() {} },
       readSyncMarker: () => ({ held: false, stale: false }),
       convertModeTransition: row => { if (failExport) throw Object.assign(new Error('export fixture failure'), { step: 'export', code: 'EIO' }); return converter(row); },
-      writeMode: target => { mode = target; }, restartLauncherConfirmation: { advance: () => ({ confirmed: true }) },
+      writeMode: target => { mode = target; }, restartDispatcherConfirmation: { advance: () => ({ confirmed: true }) },
       sendAlert: () => { throw new Error('external notification forbidden'); }, log() {},
     });
     const reply = await service.supervisor.admission.handle({ version: 1, type: 'mode_switch', requestId: 'visible', target: 'multi' });

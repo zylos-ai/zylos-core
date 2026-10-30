@@ -5,8 +5,8 @@ function pm2(args, timeoutMs) {
     (error, stdout) => error ? reject(error) : resolve(stdout)));
 }
 
-/** Confirm a launcher restart without taking ownership of transition or fence writes. */
-export class LauncherRestartConfirmation {
+/** Confirm a dispatcher restart without taking ownership of transition or fence writes. */
+export class DispatcherRestartConfirmation {
   constructor({ processName = 'c4-dispatcher', now = Date.now, timeoutMs = 30000,
     restart = ({ name, timeoutMs }) => pm2(['restart', name], timeoutMs),
     list = async ({ timeoutMs }) => JSON.parse(await pm2(['jlist'], timeoutMs)),
@@ -16,13 +16,13 @@ export class LauncherRestartConfirmation {
   }
   fail(attempt) {
     if (this.attempt === attempt) this.attempt = null;
-    try { this.diagnostic({ event: 'transition_launcher_restart_failed', run_id: attempt.runId, reason: 'launcher_restart_unconfirmed' }); } catch {}
-    return { confirmed: false, pending: false, reason: 'launcher_restart_unconfirmed' };
+    try { this.diagnostic({ event: 'transition_dispatcher_restart_failed', run_id: attempt.runId, reason: 'dispatcher_restart_unconfirmed' }); } catch {}
+    return { confirmed: false, pending: false, reason: 'dispatcher_restart_unconfirmed' };
   }
   async advance({ runId, writtenAt }) {
     if (typeof runId !== 'string' || !runId || !Number.isSafeInteger(writtenAt)) throw new TypeError('A transition and its config write time are required');
     let attempt = this.attempt;
-    if (attempt && (attempt.runId !== runId || attempt.writtenAt !== writtenAt)) throw new Error('Another launcher restart confirmation is still active');
+    if (attempt && (attempt.runId !== runId || attempt.writtenAt !== writtenAt)) throw new Error('Another dispatcher restart confirmation is still active');
     if (!attempt) {
       attempt = { runId, writtenAt, deadline: this.now() + this.timeoutMs, state: 'restarting', querying: false };
       this.attempt = attempt;

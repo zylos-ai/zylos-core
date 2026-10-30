@@ -98,7 +98,7 @@ test('successful authentication waits for lifecycle release; uncertain is explic
   assert.equal((await f.router.route(request())).auth.result, 'unconfirmed');
 });
 
-// real input acceleration must remain usable by the next launcher scheduling round.
+// real input acceleration must remain usable by the next dispatcher scheduling round.
 test('absent recovery target leaves accelerated admission uncached; completed failure still caches', async t => {
   for (const accelerated of [false, true]) {
     const f = fixture(t); f.states.claude.health = 'unavailable';

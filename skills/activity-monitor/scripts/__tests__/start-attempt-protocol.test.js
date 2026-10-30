@@ -13,7 +13,7 @@ import { SupervisorAdmission } from '../supervisor-admission.js';
 import { createSupervisorConnectionHandler } from '../router-socket.js';
 import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/router-fixture.js';
 
-// is a contract-fixture test: real socket parser/admission and real launcher
+// is a contract-fixture test: real socket parser/admission and real dispatcher
 // scheduler, injected runtime scene/transport boundaries; no runtime is launched.
 async function socketFixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'start-attempt-protocol-')));
@@ -61,7 +61,7 @@ test('A unparseable input returns a public rejection trusted by both clients', a
     const reply = await f.send(line);
     assert.deepEqual(reply, { ok: false, code: 'invalid_request' });
     assert.equal(validateReply(request, reply), true, 'CLI trusts the public rejection');
-    assert.equal(validStartAttemptReply(reply, request), true, 'launcher trusts the public rejection');
+    assert.equal(validStartAttemptReply(reply, request), true, 'dispatcher trusts the public rejection');
     f.unchanged();
   }
 });

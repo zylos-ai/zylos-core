@@ -18,7 +18,7 @@ async function until(predicate) {
   assert.fail('isolated target did not reach the expected state');
 }
 
-// launcher §6 and DM: resetting origin must not erase legacy
+// dispatcher §6 and DM: resetting origin must not erase legacy
 // upgrade progress, another group's state, or current-session/event history.
 test('single preparation cleans origin samples/caches, preserves history and legacy files, and builds real instructions', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-lifecycle-'));

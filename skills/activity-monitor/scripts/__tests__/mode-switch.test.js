@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ModeSwitchCoordinator } from '../mode-switch.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
-import { LauncherRestartConfirmation } from '../launcher-restart-confirmation.js';
+import { DispatcherRestartConfirmation } from '../dispatcher-restart-confirmation.js';
 
 const error = code => Object.assign(new Error(code), { code });
 function fixture(overrides = {}) {
@@ -125,7 +125,7 @@ test('extra fence prevents expiration/cutover and complete transaction is never 
 
 test('PM2 adjacent ticks keep baseline/timer and confirmed attempt survives DB failure', async () => {
   let time = 1800000000000, restarts = 0, lists = 0, locked = false;
-  const restart = new LauncherRestartConfirmation({ now: () => time, restart: async () => { assert.equal(locked, false); restarts++; }, list: async () => { assert.equal(locked, false); lists++; return [{ name: 'c4-dispatcher', pm2_env: { status: 'online', pm_uptime: 1800000000001 } }]; } });
+  const restart = new DispatcherRestartConfirmation({ now: () => time, restart: async () => { assert.equal(locked, false); restarts++; }, list: async () => { assert.equal(locked, false); lists++; return [{ name: 'c4-dispatcher', pm2_env: { status: 'online', pm_uptime: 1800000000001 } }]; } });
   const f = fixture({ restart, now: () => time, serialize: async action => { assert.equal(locked, false); locked = true; try { return await action(); } finally { locked = false; } } }), owner = f.create();
   await owner.handle(request); await owner.advance(); await owner.advance(); await owner.advance();
   assert.equal(owner.attempt.writtenAt, time); time += 1000; await new Promise(resolve => setImmediate(resolve));
@@ -152,10 +152,10 @@ test('second config read fails closed before begin', async () => {
 test('restart rejection retains cutover and gate then starts fresh attempt', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); await owner.advance(); await owner.advance();
   owner.restart.advance = async () => { throw error('PM2_FAILED'); };
-  await owner.advance(); assert.equal(f.row.reason, 'launcher_restart_unconfirmed'); assert.equal(owner.attempt, null);
+  await owner.advance(); assert.equal(f.row.reason, 'dispatcher_restart_unconfirmed'); assert.equal(owner.attempt, null);
   assert.equal(f.row.phase, 'cutover'); assert.equal(f.fences.length, 1);
   owner.restart.advance = async () => ({ confirmed: true }); await owner.advance();
-  assert.equal(f.row.phase, 'complete'); assert.equal(f.events.filter(x => x.event === 'transition_launcher_restart_failed').length, 1);
+  assert.equal(f.row.phase, 'complete'); assert.equal(f.events.filter(x => x.event === 'transition_dispatcher_restart_failed').length, 1);
 });
 
 for (const code of ['DB_BUSY', 'DB_READ_FAILED']) test(`missing-deadline detail ${code} propagates without blocking or absorbing`, async () => {

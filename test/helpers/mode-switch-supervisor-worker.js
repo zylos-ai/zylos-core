@@ -33,7 +33,7 @@ service = await startSupervisor({ db: database, scenes, legacyPresent: async () 
     if (fault === 'after-config') return pause('after-config');
     return result;
   },
-  restartLauncherConfirmation: { advance: async () => {
+  restartDispatcherConfirmation: { advance: async () => {
     if (injectedFailure==='pm2') return {confirmed:false,pending:false};
     if (!restartCalls) { restartCalls++; return { confirmed: false, pending: true }; }
     confirmationCalls++;
