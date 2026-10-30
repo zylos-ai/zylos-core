@@ -41,7 +41,7 @@ import {
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ensureCodexHooksTrusted } from '../codex-hooks.js';
-import { discoverUpgradeContext, shellArgument } from './upgrade-context.js';
+import { resumeUpgradeForStartup, shellArgument } from './upgrade-context.js';
 import { buildKickPrompt } from './kick-prompt.js';
 import { resolveCodexBypassPermissions, writeCodexProjectConfig } from '../runtime-setup.js';
 
@@ -284,10 +284,10 @@ export class CodexAdapter extends RuntimeAdapter {
     // Internal lifecycle sentinel — stateless, covers both first start and
     // resume; sentinel form so the kick is never mistaken for a human turn
     // (#743/#745). See kick-prompt.js.
-    const recovery = discoverUpgradeContext(ZYLOS_DIR, { resume: true, scanHistory: true });
+    const recovery = resumeUpgradeForStartup(ZYLOS_DIR);
     const kick = buildKickPrompt();
     const kickPrompt = recovery.blocked ? recovery.prompt
-      : recovery.active && !recovery.controllerAlive ? kick + "\n\n" + recovery.prompt : kick;
+      : recovery.active && !recovery.controllerAlive && recovery.prompt ? kick + "\n\n" + recovery.prompt : kick;
 
     if (tmuxHasSession(SESSION)) {
       // Existing tmux session — start a fresh Codex process with kick prompt
