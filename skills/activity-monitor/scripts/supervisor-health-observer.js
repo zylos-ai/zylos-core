@@ -26,7 +26,7 @@ export class SupervisorHealthObserver {
   sceneState(scene) {
     let state = this.scenes.get(scene.sessionGroup);
     if (!state || !sameRun(state, scene)) {
-      state = { runtime: scene.runtime, runId: scene.runId, delivery: null, rateHits:0, sticky: null, frozen: null, watchdog: null };
+      state = { runtime: scene.runtime, runId: scene.runId, delivery: null, rateHits:0, sticky: null, watchdog: null };
       this.scenes.set(scene.sessionGroup, state);
     }
     return state;
@@ -178,13 +178,7 @@ export class SupervisorHealthObserver {
       }
       if (!delivery.screenChecked && now - delivery.pastedAt >= USER_MESSAGE_CHECK_DELAY_MS && await this.checkDeliveredScreen(scene, tracked, delivery, state, now)) return;
     }
-    if (!tools.length) {tracked.frozen=null;tracked.watchdog=null;return;}
-    if (Number.isFinite(state.contextSwitches)) {
-      if (!tracked.frozen || tracked.frozen.value !== state.contextSwitches) tracked.frozen={value:state.contextSwitches,since:now};
-      else if (now-tracked.frozen.since >= 60000) {
-        if (await this.stopScene(scene,'process_frozen')) return;
-      }
-    } else tracked.frozen=null;
+    if (!tools.length) {tracked.watchdog=null;return;}
     if (this.coordinator.store(scene.runtime).read().health !== 'ok') {tracked.watchdog=null;return;}
     const candidates = [];
     for (const tool of tools) {
