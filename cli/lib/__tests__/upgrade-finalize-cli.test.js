@@ -61,6 +61,9 @@ test('unknown restart result retains request identity and forbids automatic resu
 test('thin CLI forwards downloaded executable output and exit status without another restart', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-cli-output-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'cli/lib'), {recursive:true});
+  fs.writeFileSync(path.join(root, 'package.json'), '{}');
+  fs.writeFileSync(path.join(root, 'cli/lib/upgrade-entry.js'), '');
   const result = { success: true, from: '0.9.0', to: '0.9.2', settingsChanged: true,
     completion: { install: 'done', dashboard: 'degraded', sessionRestart: 'manual_required', modeTransition: 'unknown' },
     sessionRestart: { ok: false, error: { code: 'SUBMISSION_FAILED', message: 'entry unavailable' } },
@@ -96,7 +99,11 @@ test('thin CLI forwards downloaded executable output and exit status without ano
     assert.equal(child.status, 37, child.stderr);
     assert.match(child.stderr, /restartCalls=0/);
     assert.match(child.stderr, /downloaded diagnostic/);
-    assert.equal(child.stdout, JSON.stringify(result) + '\n');
+    if (json) assert.equal(child.stdout, JSON.stringify(result) + '\n');
+    else {
+      assert.match(child.stdout, /^zylos-core: 0\.9\.3 .* 0\.9\.4\n/);
+      assert.ok(child.stdout.endsWith(JSON.stringify(result) + '\n'));
+    }
   }
 });
 
