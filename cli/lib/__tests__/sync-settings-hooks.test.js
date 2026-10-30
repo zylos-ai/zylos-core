@@ -23,6 +23,7 @@ const {
   renderCodexProjectConfig,
 } = await import('../runtime-setup.js');
 const { activateFreshSplitInstructions, instructionPaths } = await import('../runtime/instruction-builder.js');
+const { codexHooksPath, installCoreCodexHook } = await import('../codex-hooks.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
@@ -491,12 +492,15 @@ describe('shouldSyncCodexConfig', () => {
 });
 
 describe('syncCodexConfig', () => {
+  // TOML-focused cases: keep the real .codex/hooks.json check out of them.
+  const noHookDrift = () => ({ changed: false });
+
   it('does not overwrite malformed permission configuration', () => {
     let writes = 0;
     const result = syncCodexConfig({
       cfg: { runtime: 'codex' }, homeDir: '/tmp/home', projectDir: '/tmp/zylos',
       existsSync: () => true, readFileSync: () => '[broken',
-      writeConfig: () => { writes++; return true; }, log: () => {},
+      writeConfig: () => { writes++; return true; }, checkHooks: noHookDrift, log: () => {},
     });
     assert.equal(result.fatal, true);
     assert.equal(writes, 0);
@@ -518,6 +522,7 @@ describe('syncCodexConfig', () => {
         writes.push(projectDir);
         return true;
       },
+      checkHooks: noHookDrift,
       log: (line) => logs.push(line),
     });
 
@@ -535,6 +540,7 @@ describe('syncCodexConfig', () => {
       // Return stale content so drift is detected
       readFileSync: () => 'stale_setting = true\n',
       writeConfig: () => false,
+      checkHooks: noHookDrift,
       log: () => {},
     });
 
@@ -575,6 +581,7 @@ describe('syncCodexConfig', () => {
         files.set(globalConfigPath, renderCodexGlobalConfig(projectDir, files.get(globalConfigPath)));
         return true;
       },
+      checkHooks: noHookDrift,
       log: () => {},
     });
 
@@ -611,12 +618,113 @@ describe('syncCodexConfig', () => {
       existsSync: (filePath) => files.has(filePath),
       readFileSync: (filePath) => files.get(filePath),
       writeConfig: () => true,
+      checkHooks: noHookDrift,
       log: (line) => logs.push(line),
       dryRun: true,
     });
 
     assert.equal(result.changed, true);
     assert.ok(logs.some((line) => line.includes('codex project config')));
+  });
+
+  function makeCodexHooksEnv() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hooks-sync-test-'));
+    const homeDir = path.join(root, 'home');
+    const projectDir = path.join(root, 'zylos');
+    const globalConfigPath = path.join(homeDir, '.codex', 'config.toml');
+    const projectConfigPath = path.join(projectDir, '.codex', 'config.toml');
+    // Both TOML configs are already in their desired state, so only
+    // .codex/hooks.json can drift.
+    const files = new Map([
+      [globalConfigPath, renderCodexGlobalConfig(projectDir, '')],
+      [projectConfigPath, renderCodexProjectConfig('')],
+    ]);
+    const writes = [];
+    const logs = [];
+    const sync = (opts = {}) => syncCodexConfig({
+      cfg: { runtime: 'codex' },
+      homeDir,
+      projectDir,
+      existsSync: (filePath) => files.has(filePath),
+      readFileSync: (filePath) => files.get(filePath),
+      writeConfig: (dir) => {
+        writes.push(dir);
+        installCoreCodexHook({ zylosDir: dir });
+        return true;
+      },
+      log: (line) => logs.push(line),
+      ...opts,
+    });
+    return { root, projectDir, hooksPath: codexHooksPath(projectDir), writes, logs, sync };
+  }
+
+  function declareComponentShard(projectDir, name) {
+    const shardsDir = path.join(projectDir, '.zylos', 'shards.d');
+    fs.mkdirSync(shardsDir, { recursive: true });
+    fs.writeFileSync(path.join(shardsDir, `${name}.json`), JSON.stringify({
+      name,
+      order: 10,
+      emitter: `skills/${name}/emit.js`,
+    }));
+  }
+
+  function hookShardNames(hooksPath) {
+    const config = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+    return config.hooks.SessionStart
+      .flatMap(group => group.hooks.map(h => h.command.match(/--shard (\S+)$/)?.[1]))
+      .filter(Boolean);
+  }
+
+  it('rewrites .codex/hooks.json when only a new component shard changes the hook set', (t) => {
+    const env = makeCodexHooksEnv();
+    t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+    installCoreCodexHook({ zylosDir: env.projectDir });
+    assert.equal(env.sync().changed, false);
+
+    declareComponentShard(env.projectDir, 'expert-slot');
+    const result = env.sync();
+
+    assert.equal(result.changed, true);
+    assert.equal(result.hooksChanged, true);
+    assert.deepEqual(env.writes, [env.projectDir]);
+    assert.ok(env.logs.includes(`  ~ codex hooks: ${env.hooksPath}`));
+    assert.equal(env.logs.some(line => line.includes('codex project config') || line.includes('codex global config')), false);
+    assert.ok(hookShardNames(env.hooksPath).includes('expert-slot'));
+
+    const again = env.sync();
+    assert.equal(again.changed, false);
+    assert.deepEqual(env.writes, [env.projectDir]);
+  });
+
+  it('restores missing core hook entries in .codex/hooks.json', (t) => {
+    const env = makeCodexHooksEnv();
+    t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+    installCoreCodexHook({ zylosDir: env.projectDir });
+    const config = JSON.parse(fs.readFileSync(env.hooksPath, 'utf8'));
+    config.hooks.SessionStart[0].hooks.pop();
+    fs.writeFileSync(env.hooksPath, JSON.stringify(config, null, 2) + '\n');
+
+    const result = env.sync();
+
+    assert.equal(result.changed, true);
+    assert.equal(result.hooksChanged, true);
+    assert.equal(hookShardNames(env.hooksPath).at(-1), 'start-prompt');
+  });
+
+  it('reports hooks.json drift in dry-run mode without writing', (t) => {
+    const env = makeCodexHooksEnv();
+    t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+    installCoreCodexHook({ zylosDir: env.projectDir });
+    const before = fs.readFileSync(env.hooksPath, 'utf8');
+    declareComponentShard(env.projectDir, 'expert-slot');
+
+    const result = env.sync({ dryRun: true });
+
+    assert.equal(result.changed, true);
+    assert.equal(result.hooksChanged, true);
+    assert.deepEqual(env.writes, []);
+    assert.ok(env.logs.includes(`  ~ codex hooks: ${env.hooksPath}`));
+    assert.equal(fs.readFileSync(env.hooksPath, 'utf8'), before);
   });
 });
 
