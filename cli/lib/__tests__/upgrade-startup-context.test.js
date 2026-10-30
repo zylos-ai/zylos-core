@@ -129,11 +129,19 @@ test('startup rejects modified transaction recovery and unrecognizable ownership
  for(const attack of ['modified-runner','unknown-process']) {
   const f=publishedTransaction(t),recognize=maintenance.canRecognizeProcesses;
   if(attack==='modified-runner')fs.appendFileSync(path.join(f.dir,'runner.cjs'),'\n// changed');
-  else maintenance.canRecognizeProcesses=()=>false;
+  else {
+   const hash='a'.repeat(64);
+   Object.assign(f.journal,{phase:'compensation_closed',snapshotManifestHash:hash,
+    compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:hash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
+    postCutoff:{formatVersion:1,items:{hooks:{state:'pending',attempts:0,lastError:null}}},dashboardInstall:null});
+   maintenance.update(f.dir,f.journal);
+   maintenance.canRecognizeProcesses=()=>false;
+  }
   let context;
   try{context=discoverUpgradeContext(f.root);}finally{maintenance.canRecognizeProcesses=recognize;}
   assert.equal(context.recovery_required,true);
   assert.equal(context.blocked,true);
+  if(attack==='unknown-process')assert.doesNotMatch(context.prompt,/zylos upgrade --resume-finalize/);
   assert.equal(fs.existsSync(f.executed),false);
  }
 });

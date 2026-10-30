@@ -40,10 +40,18 @@ test('upgrade discovery delegates only to the verified transaction runner before
   assert.equal(result.result.completed,true);
 });
 
-for (const kind of ['ambiguous','unrecognizable','changed','failed','remaining']) test(`upgrade discovery rejects ${kind} recovery without starting a new upgrade`, () => {
+for (const kind of ['ambiguous','diagnostics','unrecognizable','changed','failed','remaining']) test(`upgrade discovery rejects ${kind} recovery without starting a new upgrade`, () => {
   const f = fixture();
-  if (kind==='ambiguous') f.m.discover=()=>({candidates:[],diagnostics:['unsafe'],marker:null});
-  if (kind==='unrecognizable') f.m.canRecognizeProcesses=()=>false;
+  if (kind==='ambiguous') {
+    const candidate=f.m.discover().candidates[0];
+    f.m.discover=()=>({candidates:[candidate,candidate],diagnostics:[],marker:null});
+    f.m.classifyCutoff=()=> 'closed';
+  }
+  if (kind==='diagnostics') f.m.discover=()=>({candidates:[],diagnostics:['unsafe'],marker:null});
+  if (kind==='unrecognizable') {
+    f.m.canRecognizeProcesses=()=>false;
+    f.m.classifyCutoff=()=> 'closed';
+  }
   if (kind==='changed') f.m.hash=()=> 'b'.repeat(64);
   let calls=0;
   assert.throws(()=>recoverBeforeUpgrade('/isolated',{maintenance:f.m,spawn() {

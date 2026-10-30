@@ -193,6 +193,19 @@ test('entry directs a closed transaction to forward finalization without changin
   assert.deepEqual(f.calls,[]);
 });
 
+test('entry keeps manual recovery guidance when process identity cannot be verified', async t => {
+  const input=fixture(t),f=pipeline(input);
+  f.deps.maintenance.discover=()=>({candidates:[{journal:{phase:'recovery_required'}}],diagnostics:[],marker:null});
+  f.deps.maintenance.classifyCutoff=()=> 'closed';
+  f.deps.maintenance.canRecognizeProcesses=()=> false;
+  f.deps.inspect=()=>assert.fail('closed transaction must block prechecks');
+  const result=await runUpgradeEntry(input,f.deps);
+  assert.equal(result.code,'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(result.next,/zylos recovery status.*zylos recovery resume/);
+  assert.doesNotMatch(result.next,/zylos upgrade --resume-finalize/);
+  assert.deepEqual(f.calls,[]);
+});
+
 test('target rejects missing deployment before recovery discovery', async t => {
   const input=fixture(t);
   input.zylosDir=path.join(input.zylosDir,'missing');

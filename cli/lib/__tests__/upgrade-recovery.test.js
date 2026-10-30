@@ -357,7 +357,9 @@ for(const entry of ['runner','controller'])test(`${entry} compensation refusal p
  const original='CONFIG_LOCK_TIMEOUT: configuration lock remained busy';
  f.m.update(f.dir,f.j,{phase:'compensation_closed',compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:f.j.snapshotManifestHash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},postCutoff:{items:{hooks:{state:'pending'}}},dashboardInstall:null,lastError:original});
  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
- const result=entry==='runner'?f.r.resume(f.dir):recovery({maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx'});
+ const invoke=()=>entry==='runner'?f.r.resume(f.dir):recovery({maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx'});
+ const first=invoke(),result=invoke();
+ assert.equal(first.recovery_required,true);
  assert.equal(result.recovery_required,true);
  assert.match(result.error,/compensation is closed/);
  const saved=f.load();
@@ -365,7 +367,8 @@ for(const entry of ['runner','controller'])test(`${entry} compensation refusal p
  assert.equal(saved.resumePhase,'compensation_closed');
  assert.equal(saved.lastError,result.error);
  assert.match(saved.lastError,new RegExp(original));
- assert.match(saved.lastError,/compensation is closed; use zylos upgrade --resume-finalize/);
+ const guidance='compensation is closed; use zylos upgrade --resume-finalize';
+ assert.equal(saved.lastError.split(guidance).length-1,1);
  assert.match(finalizeStatus(saved).core.failedItems[0].reason,new RegExp(original));
  assert.equal(Object.hasOwn(saved,'error'),false);
  assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);

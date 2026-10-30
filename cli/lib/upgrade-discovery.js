@@ -9,7 +9,11 @@ const CLOSED_RECOVERY_NEXT = 'Run zylos upgrade --resume-finalize to finish the 
 
 export function isClosedRecovery(found, m = maintenance) {
   if (found?.diagnostics?.length || found?.candidates?.length !== 1) return false;
-  try { return m.classifyCutoff(found.candidates[0].journal) === 'closed'; }
+  const journal = found.candidates[0].journal;
+  try {
+    if (journal?.phase !== 'upgrade_complete' && m.canRecognizeProcesses?.() === false) return false;
+    return m.classifyCutoff(journal) === 'closed';
+  }
   catch { return false; }
 }
 
