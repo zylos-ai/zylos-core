@@ -5,16 +5,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, getZylosConfig } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
 import { checkForUpdates, getLocalSourceUpgradeError, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
-  checkForCoreUpdates, runSelfUpgrade,
+  checkForCoreUpdates,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
-  cleanupTemp as cleanupCoreTemp, cleanupBackup,
+  cleanupTemp as cleanupCoreTemp,
 } from '../lib/self-upgrade.js';
+import {
+  resumeUnfinishedUpgrade,
+  runDownloadedUpgrade,
+  upgradeBridgeFailure,
+  validateDownloadedCore,
+} from '../lib/upgrade-bridge.js';
 import { detectChanges } from '../lib/manifest.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { linkBins, unlinkBins } from '../lib/bin.js';
@@ -352,11 +358,16 @@ export async function upgradeComponent(args) {
 
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
+    if (mode !== 'merge') {
+      console.log(JSON.stringify(upgradeBridgeFailure('Core self-upgrade supports only --mode merge.', { code: 'INVALID_ARGS' })));
+      process.exitCode = 1;
+      return;
+    }
     if (checkOnly) {
       return handleSelfCheckOnly({ jsonOutput, branch, beta });
     }
-    const ok = await upgradeSelfCore({ branch, beta, mode });
-    if (!ok) process.exit(1);
+    const exitCode = await upgradeSelfCore({ branch, beta });
+    if (exitCode !== 0) process.exitCode = exitCode;
     return;
   }
 
@@ -1059,42 +1070,24 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
 
 /**
  * Upgrade zylos-core itself.
- * Lock-first pattern, same as component upgrades.
- *
- * Returns true on success, false on failure.
- * Does NOT call process.exit() — caller decides exit behavior.
+ * The installed package only resolves and downloads the target. The target
+ * package owns every stateful upgrade step through its upgrade-entry.js.
  */
-async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
+async function upgradeSelfCore({ branch, beta = false } = {}) {
   const jsonOutput = process.argv.includes('--json');
-  const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = null;
 
-  // 1. Acquire lock (reuse component lock mechanism with special name)
-  const lockResult = acquireLock('_zylos-core');
-  if (!lockResult.success) {
-    if (jsonOutput) {
-      const errOutput = { action: 'self_upgrade', success: false, error: lockResult.error };
-      errOutput.reply = formatC4Reply('error', { message: lockResult.error });
-      console.log(JSON.stringify(errOutput, null, 2));
-    } else {
-      console.error(`Error: ${lockResult.error}`);
-    }
-    return false;
-  }
-
   try {
-    // 2. Check for updates (compare against branch when --branch is specified)
-    const check = checkForCoreUpdates({ branch, beta });
+    const recovery = resumeUnfinishedUpgrade(ZYLOS_DIR);
+    if (!recovery.success) {
+      console.log(JSON.stringify(recovery.failure));
+      return 1;
+    }
 
-    if (!check.success && !branch) {
-      if (jsonOutput) {
-        const errOutput = { action: 'check', target: 'zylos-core', ...check };
-        errOutput.reply = formatC4Reply('error', check);
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${check.message}`);
-      }
-      return false;
+    const check = checkForCoreUpdates({ branch, beta });
+    if (!check.success) {
+      console.log(JSON.stringify(upgradeBridgeFailure(check.message || check.error)));
+      return 1;
     }
 
     if (!branch && check.success && !check.hasUpdate) {
@@ -1105,14 +1098,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
       } else {
         console.log(success(`${bold('zylos-core')} is up to date (v${check.current})`));
       }
-      return true;
-    }
-
-    // 3. Download new version to temp (always fresh in confirm/--yes flow)
-    const downloadLabel = branch ? `zylos-core (branch: ${branch})` : `zylos-core@${check.latest}`;
-    if (!jsonOutput) {
-      console.log(`\n${dim('Confirm flow uses a fresh download (check artifacts are not reused).')}`);
-      console.log(`Downloading ${bold(downloadLabel)}...`);
+      return 0;
     }
 
     let dlResult;
@@ -1122,146 +1108,25 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
       dlResult = { success: false, error: err.message };
     }
     if (!dlResult.success) {
-      if (jsonOutput) {
-        const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };
-        errOutput.reply = formatC4Reply('error', { message: dlResult.error });
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${dlResult.error}`);
-      }
-      return false;
+      console.log(JSON.stringify(upgradeBridgeFailure(dlResult.error)));
+      return 1;
     }
     tempDir = dlResult.tempDir;
 
-    // 4. Show info: version diff, changelog, local modifications to core skills
-    const fullCoreChangelog = readCoreChangelog(tempDir);
-    const coreChangelog = filterChangelog(fullCoreChangelog, check.current);
-
-    // Detect local modifications across all core skills
-    const allLocalChanges = detectCoreSkillChanges();
-
-    if (!jsonOutput) {
-      console.log(`\n${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
-      const targetVersion = check.latest || (branch ? `branch:${branch}` : 'unknown');
-      const targetRef = branch ? `branch:${branch}` : `tag:v${check.latest}`;
-      console.log(dim(`Target package: ${targetVersion} (${targetRef})`));
-
-      if (allLocalChanges.length > 0) {
-        console.log(`\n${warn('LOCAL MODIFICATIONS DETECTED:')}`);
-        for (const { skill, changes } of allLocalChanges) {
-          for (const f of changes.modified) console.log(`  ${yellow('M')} ${skill}/${f}`);
-          for (const f of changes.added) console.log(`  ${green('A')} ${skill}/${f}`);
-        }
-      }
-
-      if (coreChangelog) {
-        console.log(`\n${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}`);
-        console.log(heading('CHANGELOG'));
-        console.log(`${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}`);
-        console.log(coreChangelog);
-        console.log(`${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}\n`);
-      }
+    const validation = validateDownloadedCore(tempDir);
+    if (!validation.success) {
+      console.log(JSON.stringify(validation));
+      return 1;
     }
 
-    // 5. Confirmation
-    if (!skipConfirm) {
-      const confirmed = await promptYesNo('Proceed with zylos-core upgrade? [y/N]: ');
-      if (!confirmed) {
-        console.log('Upgrade cancelled.');
-        return true; // Not an error — user chose to cancel
-      }
-    } else if (!jsonOutput) {
-      console.log(`Upgrading ${bold('zylos-core')}...`);
-    }
-
-    // 6. Execute self-upgrade — show progress in real time
-    const result = runSelfUpgrade({
-      tempDir,
-      newVersion: check.latest,
-      mode,
-      onStep: !jsonOutput ? printStep : undefined,
+    return runDownloadedUpgrade({
+      tempDir: path.resolve(tempDir),
+      fromVersion: check.current,
+      installedRoot: path.resolve(import.meta.dirname, '..', '..'),
+      zylosDir: path.resolve(ZYLOS_DIR),
     });
-
-    // Protected transactions own their checked cleanup and retained materials.
-    // Legacy success cleanup is common to JSON and human output.
-    if(result.success && !result.preInstallProtection && !result.backupOnly && result.backupDir)cleanupBackup(result.backupDir);
-
-    // Output result
-    if (jsonOutput) {
-      const output = { ...result };
-      if (coreChangelog) output.changelog = coreChangelog;
-      if (allLocalChanges.length > 0) {
-        output.localChanges = allLocalChanges.map(({ skill, changes }) => ({
-          skill,
-          modified: changes.modified,
-          added: changes.added,
-        }));
-      }
-      output.reply = formatC4Reply('self-upgrade', { ...result, changelog: coreChangelog });
-      console.log(JSON.stringify(output, null, 2));
-      // Auto-restart for instruction file changes (CLAUDE.md / AGENTS.md).
-      // Settings hook changes are handled by sync-settings-hooks.js directly,
-      // which enqueues /exit from the newly installed package — avoiding the
-      // bootstrap problem where the old component.js lacks restart logic.
-      if (result.success && result.instructionFilesRebuilt) {
-        try {
-          const activeRuntime = getZylosConfig().runtime ?? 'claude';
-          if (activeRuntime === 'claude') {
-            const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-            const { spawnSync } = await import('child_process');
-            spawnSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle', '--no-ack-suffix'], { stdio: 'pipe' });
-          }
-        } catch { /* non-fatal */ }
-      }
-    } else if (result.success) {
-      console.log(`\n${success(`${bold('zylos-core')} upgraded: ${dim(result.from)} → ${bold(result.to)}`)}`);
-      if (coreChangelog) {
-        console.log(`\n${heading('Changelog:')}\n${coreChangelog}`);
-      }
-
-      // Show migration hints if any
-      if (result.migrationHints?.length > 0) {
-        console.log(`\n${warn('ACTION REQUIRED')} — Hook changes for ${bold('.claude/settings.json')}:`);
-        for (const hint of result.migrationHints) {
-          if (hint.type === 'missing_hook') {
-            console.log(`  ${yellow(`[${hint.event}]`)} ${green('ADD')}    ${hint.command} ${dim(`(timeout: ${hint.timeout}ms)`)}`);
-          } else if (hint.type === 'modified_hook') {
-            console.log(`  ${yellow(`[${hint.event}]`)} ${yellow('UPDATE')} ${hint.command} ${dim(`(timeout: ${hint.timeout}ms)`)}`);
-          } else if (hint.type === 'removed_hook') {
-            console.log(`  ${yellow(`[${hint.event}]`)} ${dim('REMOVE')} ${hint.command}`);
-          }
-        }
-        console.log(`\nUpdate hooks in ${bold('~/zylos/.claude/settings.json')} and restart Claude to apply.`);
-      }
-
-      if (result.mergeConflicts?.length > 0) {
-        console.log(`\n${warn(`${result.mergeConflicts.length} conflict backup(s) retained:`)}`);
-        for (const conflict of result.mergeConflicts) {
-          console.log(`  ${yellow(`${conflict.skill}/${conflict.file}`)} -> ${conflict.backupPath}`);
-        }
-      }
-
-    } else {
-      console.log(`\n${error(`Self-upgrade failed${result.failedStep==null?'':` (step ${result.failedStep})`}: ${result.error}`)}`);
-
-      if (result.rollback?.performed) {
-        console.log(`\n${bold('Auto-rollback performed:')}`);
-        for (const r of result.rollback.steps || []) {
-          if (r.success) {
-            console.log(`  ${success(r.action)}`);
-          } else {
-            console.log(`  ${error(r.action)}`);
-          }
-        }
-      }
-    }
-
-    if(!jsonOutput)printSelfUpgradeProtection(result);
-
-    return result.success;
   } finally {
     cleanupCoreTemp(tempDir);
-    releaseLock('_zylos-core');
   }
 }
 

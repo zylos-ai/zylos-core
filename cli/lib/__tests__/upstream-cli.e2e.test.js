@@ -26,6 +26,16 @@ function fixture(t) {
   fs.mkdirSync(packageRoot);
   fs.writeFileSync(path.join(packageRoot, 'SKILL.md'), '---\nname: mirror-fixture\nversion: 2.0.0\ndescription: Isolated routing fixture\n---\n');
   fs.writeFileSync(path.join(packageRoot, 'payload.txt'), 'fixture payload\n');
+  fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({name:'zylos',version:'2.0.0',type:'module'}));
+  fs.mkdirSync(path.join(packageRoot, 'cli/lib'), {recursive:true});
+  fs.writeFileSync(path.join(packageRoot, 'cli/lib/upgrade-entry.js'), `
+    import fs from 'node:fs';
+    const input = fs.readFileSync(0, 'utf8');
+    if (process.env.ROUTING_HANDOFF) fs.writeFileSync(process.env.ROUTING_HANDOFF, input);
+    process.stdout.write('target stdout\\n');
+    process.stderr.write('target stderr\\n');
+    process.exitCode = Number(process.env.ROUTING_TARGET_EXIT || 0);
+  `);
   const tarball = path.join(root, 'fixture.tar.gz');
   execFileSync('tar', ['czf', tarball, '-C', root, 'package']);
   fs.writeFileSync(path.join(bin, 'curl.cjs'), `
@@ -98,6 +108,24 @@ test('CLI saved routing covers remote registry, real add pipeline, component/sel
     assert.equal(new URL(req.url).hostname, 'mirror.example.test');
     assert.equal(req.input.includes('fixture-token'), false);
   }
+});
+
+test('CLI self upgrade delegates to the downloaded entry and preserves its streams and exit status', t => {
+  const f = fixture(t), handoffFile = path.join(f.root, 'handoff.json');
+  f.save({ type:'local', path:f.profilePath });
+  const result = f.run(['upgrade', '--self', '--yes'], {
+    ROUTING_HANDOFF: handoffFile,
+    ROUTING_TARGET_EXIT: '7',
+  });
+  assert.equal(result.status, 7);
+  assert.equal(result.stdout, 'target stdout\n');
+  assert.equal(result.stderr, 'target stderr\n');
+  const handoff = JSON.parse(fs.readFileSync(handoffFile, 'utf8'));
+  assert.equal(handoff.schemaVersion, 1);
+  assert.equal(handoff.fromVersion, '0.9.3');
+  assert.equal(path.isAbsolute(handoff.tempDir), true);
+  assert.equal(path.isAbsolute(handoff.installedRoot), true);
+  assert.equal(path.isAbsolute(handoff.zylosDir), true);
 });
 
 test('CLI operation freezes profile while later processes read the new local generation', t => {

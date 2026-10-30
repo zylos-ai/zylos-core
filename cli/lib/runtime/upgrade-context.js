@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 
 // Ordinary entrypoints only consult the explicit active marker. Historical
 // transactions are inspected by upgrade admission and explicit recovery tools.
-function hasRecoveryMaterials(root) {
+function hasRecoveryMaterials(root, { scanHistory = false } = {}) {
   const present = file => {
     try { return fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -18,7 +18,9 @@ function hasRecoveryMaterials(root) {
         if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
       } else if (!stat.isDirectory()) return true;
     }
-    return !!present(path.join(root, '.zylos/upgrade/active.json'));
+    if (present(path.join(root, '.zylos/upgrade/active.json'))) return true;
+    if (!scanHistory || !present(path.join(root, '.backup/self-upgrade'))) return false;
+    return ['bootstrap.cjs', 'maintenance.cjs'].every(name => present(path.join(root, '.zylos/upgrade', name)));
   } catch { return true; }
 }
 
@@ -34,10 +36,10 @@ export function upgradeDiscoveryFailure() {
 // Validate every module imported during discovery before executing any code.
 // The deployment owner controls these files; links and writable files cannot
 // authorize startup code, even when discovery itself would throw safely.
-export function discoverUpgradeContext(root) {
+export function discoverUpgradeContext(root, { resume = false, scanHistory = false } = {}) {
   try {
     root = fs.realpathSync(root);
-    if (!hasRecoveryMaterials(root)) return { active: false, blocked: false };
+    if (!hasRecoveryMaterials(root, { scanHistory })) return { active: false, blocked: false };
     const directory = path.join(root, '.zylos', 'upgrade');
     const entry = path.join(directory, 'bootstrap.cjs');
     for (const parent of [path.join(root, '.zylos'), directory]) {
@@ -59,14 +61,14 @@ export function discoverUpgradeContext(root) {
     // These paths can be replaced between upgrades in the same process.
     delete require.cache[entry];
     delete require.cache[path.join(directory, 'maintenance.cjs')];
-    return require(entry).bootstrap(root);
+    return require(entry).bootstrap(root, { once: resume });
   } catch {
     return upgradeDiscoveryFailure();
   }
 }
 
 export function upgradeStartupPrompt(root) {
-  const context = discoverUpgradeContext(root);
+  const context = discoverUpgradeContext(root, { resume: true, scanHistory: true });
   return context.blocked || (context.active && !context.controllerAlive) ? context.prompt : null;
 }
 

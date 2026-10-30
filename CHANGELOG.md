@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-30
+
+### Changed
+- **Target-owned self-upgrades**: `zylos upgrade --self` now resolves and downloads the requested Core release, verifies the target package has its own upgrade entry, and synchronously hands the upgrade to that package. The target process owns backup, service, database, installation, finalization, and recovery work; its output and exit status pass through unchanged.
+- **Frozen recovery handoff**: a new upgrade and runtime startup discover unfinished transactions before ordinary work and run only the transaction's validated `runner.cjs`. Live, ambiguous, changed, unsupported-platform, and incomplete recovery states refuse a new upgrade.
+- **Stable daily checks**: the unattended daily availability check ignores prerelease tags. Explicit `--beta` checks remain available.
+
+### Fixed
+- **Legacy install compatibility**: `ZYLOS_SKIP_POSTINSTALL=1` continues to skip Core skill/bootstrap synchronization while still applying settings synchronization. Other values no longer activate that legacy skip path, and the 0.9.3 package adds no minimum-source installation gate.
+
 ## [0.9.2] - 2026-10-22
 
 ### Added

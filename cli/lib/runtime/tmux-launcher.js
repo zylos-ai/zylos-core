@@ -39,7 +39,7 @@ try {
 }
 
 // File-only recovery must precede normal runtime SessionStart/C4 imports.
-const recovery = discoverUpgradeContext(spec.cwd || process.cwd());
+const recovery = discoverUpgradeContext(spec.cwd || process.cwd(), { resume: true, scanHistory: true });
 if (recovery.blocked || (recovery.active && !recovery.controllerAlive)) {
   spec.args = applyUpgradePrompt(spec.args || [], recovery.prompt, spec.promptIndex, {
     append: !recovery.blocked,

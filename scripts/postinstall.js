@@ -145,7 +145,7 @@ function main() {
     return;
   }
 
-  const isSelfUpgrade = !!process.env.ZYLOS_SKIP_POSTINSTALL;
+  const isSelfUpgrade = process.env.ZYLOS_SKIP_POSTINSTALL === '1';
 
   if (!isSelfUpgrade) {
     // Fresh install or manual `npm install -g` — sync skills
