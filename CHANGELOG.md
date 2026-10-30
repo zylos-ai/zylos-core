@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-30
+
+### Changed
+- **Target-owned self-upgrades**: `zylos upgrade --self` now only resolves the requested Core release, downloads it, and checks that the package is complete and includes its own upgrade entry (`cli/lib/upgrade-entry.js`). It then shows the version change, local Core skill modifications and the filtered changelog, asks for confirmation (`--yes` skips the prompt), and hands the upgrade to the downloaded package. The target package owns backup, service, database, installation, finalization and recovery work; its output and exit status pass through unchanged. Declining the prompt prints `Upgrade cancelled.` and exits successfully without changing the deployment. Core self-upgrade accepts only `--mode merge`. (#910)
+- **Recovery before upgrade and at startup**: before checking for updates, and when a runtime starts, Zylos looks for unfinished upgrade transactions, including history without an active marker. It runs only the transaction's frozen `runner.cjs`, after verifying the recorded hashes of the frozen recovery files, in a separate process, and confirms a clean terminal state afterwards. Live, ambiguous, changed or incomplete recovery states refuse a new upgrade. Automatic resume is available only on supported Linux hosts; elsewhere the status entry reports that manual recovery is required. (#910)
+- **Failure output**: self-upgrade failures print `Error: <reason>` to stderr, plus `Next: <command>` when a recovery step is needed. With `--json`, a single JSON result is printed; only recovery refusals set `recovery_required: true`. (#910)
+- **Stable daily checks**: the unattended daily availability check ignores prerelease tags. Explicit `--beta` checks remain available. (#910)
+
+### Fixed
+- **Source-checkout installs**: `npm install` / `npm ci` inside a zylos-core checkout no longer runs the postinstall sync into the live `~/zylos` deployment; real global installs still sync. (#847)
+- **Legacy postinstall skip**: only `ZYLOS_SKIP_POSTINSTALL=1` activates the legacy skip path (skills and bootstrap skipped, settings still synchronized); other values no longer do. The 0.9.3 package adds no minimum-source installation gate, so 0.9.2 can upgrade to it with its existing upgrader. (#910)
+- **Package contents**: tests and fixtures are excluded from the npm package and the GitHub source archive, so they no longer reach user machines. (#886)
+
+### Upgrade notice
+- **0.9.3 is the bridge to later releases.** Releases after 0.9.3 carry their own upgrade and recovery code and accept upgrades only from 0.9.3 or later, so upgrade to 0.9.3 first. No database schema migration is required for this release.
+
 ## [0.9.2] - 2026-10-22
 
 ### Added
