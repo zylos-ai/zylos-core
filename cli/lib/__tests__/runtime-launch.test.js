@@ -154,7 +154,7 @@ function makeAdapter(Cls) {
   return adapter;
 }
 
-function installFailedStartupResume(root) {
+function installStartupResume(root, {resumeFails=true} = {}) {
   const canonicalRoot = fs.realpathSync(root);
   const stable = path.join(root, '.zylos', 'upgrade');
   const transaction = path.join(root, '.backup', 'self-upgrade', 'tx');
@@ -178,17 +178,17 @@ function installFailedStartupResume(root) {
   fs.writeFileSync(path.join(transaction, 'journal.json'), JSON.stringify({
     formatVersion:1, transactionId:'tx', zylosDir:canonicalRoot, skillsDir:path.join(canonicalRoot, '.claude/skills'),
     nodePath:process.execPath, phase:'installing', installationIntent:true,
-    installerStarted:true, installerPid:null, installerExitConfirmed:false, recoveryHashes,
+    installerStarted:resumeFails, installerPid:null, installerExitConfirmed:false, recoveryHashes,
     dbBackupDir:path.join(canonicalRoot, '.backup/db/tx'), snapshotManifestHash:digest,
     coreManifest:[{name:'core', existedBefore:true, backedUp:true, originalHash:digest}], originalServices:[],
     initialIdentity:{nodePath:process.execPath, packageJson:path.join(canonicalRoot, 'package.json'), packageHash:digest,
       cliRoot:path.join(canonicalRoot, 'original-cli'), cliHash:digest, workerPath:path.join(canonicalRoot, 'worker.js'), workerHash:digest,
       ecosystemHash:null, databases:['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db'].map(source=>({source,exists:true}))},
   }), {mode:0o600});
-  return () => {
+  return {transaction, cleanup:() => {
     fs.rmSync(path.join(root, '.backup'), {recursive:true, force:true});
     fs.rmSync(stable, {recursive:true, force:true});
-  };
+  }};
 }
 
 function readSpecEnv() {
@@ -404,7 +404,7 @@ describe('Claude launch — compat mode PATH dedupe', () => {
 
 describe('Codex launch — new session', () => {
   it('keeps the recovery prompt after automatic resume fails without concatenating undefined', async t => {
-    const cleanup = installFailedStartupResume(fakeZylosDir);
+    const {cleanup} = installStartupResume(fakeZylosDir);
     t.after(cleanup);
     tmuxSessionExists = false;
     await makeAdapter(CodexAdapter).launch({bypassPermissions:false});
@@ -412,6 +412,16 @@ describe('Codex launch — new session', () => {
     assert.match(prompt, /SYSTEM RECOVERY TASK/);
     assert.match(prompt, /tx/);
     assert.doesNotMatch(prompt, /undefined/);
+  });
+
+  it('keeps only the kick prompt after automatic resume succeeds',{skip:process.platform==='darwin'},async t=>{
+    const {cleanup,transaction}=installStartupResume(fakeZylosDir,{resumeFails:false});
+    t.after(cleanup);
+    tmuxSessionExists=false;
+    await makeAdapter(CodexAdapter).launch({bypassPermissions:false});
+    assert.equal(readLaunchSpec().args.at(-1),
+      'System startup trigger, not a user message. Continue with startup context.');
+    assert.equal(fs.existsSync(transaction),false);
   });
 
   it('adds no recovery text or undefined when no transaction exists', async () => {
