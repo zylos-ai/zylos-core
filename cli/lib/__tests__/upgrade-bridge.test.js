@@ -89,7 +89,7 @@ test('target signal termination maps to exit 1 without synthetic output', t => {
   assert.equal(result.stderr, '');
 });
 
-function recoveryFixture(t, resumeSource) {
+function recoveryFixture(t, resumeSource, statusSource) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-admission-')));
   t.after(() => fs.rmSync(root, {recursive:true, force:true}));
   const stable = path.join(root, '.zylos/upgrade');
@@ -102,9 +102,9 @@ function recoveryFixture(t, resumeSource) {
     exports.bootstrap = (root, options) => {
       const transaction = ${JSON.stringify(transaction)};
       if (options?.once) { ${resumeSource} }
-      return fs.existsSync(transaction)
+      ${statusSource || `return fs.existsSync(transaction)
         ? {active:true, recovery_required:true, error:'transaction remains'}
-        : {active:false};
+        : {active:false};`}
     };
   `, {mode:0o600});
   return {root, transaction};
@@ -122,6 +122,26 @@ test('unfinished recovery is rejected when a deployed bootstrap leaves the trans
   assert.equal(blocked.failure.code, 'UPGRADE_RECOVERY_REQUIRED');
   assert.deepEqual(blocked.failure.persisted, []);
   assert.match(blocked.failure.error, /transaction remains/);
+});
+
+test('unfinished recovery is rejected when rediscovery reports an active blocked transaction', t => {
+  const f = recoveryFixture(
+    t,
+    "return {active:true, completed:true};",
+    "return fs.existsSync(transaction) ? {active:true, blocked:true} : {active:false};",
+  );
+  const blocked = resumeUnfinishedUpgrade(f.root);
+  assert.equal(blocked.failure.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.deepEqual(blocked.failure.persisted, []);
+  assert.equal(fs.existsSync(f.transaction), true);
+});
+
+test('automatic recovery refusal preserves the manual recovery result code', t => {
+  const f = recoveryFixture(t, "return {active:true, automaticResume:false, error:'manual recovery required'};");
+  const blocked = resumeUnfinishedUpgrade(f.root);
+  assert.equal(blocked.failure.code, 'MANUAL_RECOVERY_REQUIRED');
+  assert.deepEqual(blocked.failure.persisted, []);
+  assert.match(blocked.failure.error, /manual recovery required/);
 });
 
 test('release package has no minimum-source install gate', () => {

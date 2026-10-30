@@ -126,6 +126,31 @@ test('once resumes exactly the attributed transaction and does not launch a runt
   assert.deepEqual(JSON.parse(fs.readFileSync(record, 'utf8')), ['resume','--transaction-dir',dir]);
 });
 
+test('a failing frozen runner keeps recovery required and reports its exit status', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal();
+  installFrozenRunner(dir, 'process.exit(9);');
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.active, true);
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.error, /exited 9/);
+});
+
+test('a successful frozen runner must leave no transaction or active marker', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal();
+  installFrozenRunner(dir, `
+    const fs=require('node:fs'),path=require('node:path');
+    const dir=process.argv[process.argv.length-1],root=path.resolve(dir,'../../..');
+    fs.rmSync(path.join(root,'.zylos/upgrade/active.json'));
+  `);
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.active, true);
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.error, /clean terminal state/);
+  assert.equal(fs.existsSync(dir), true);
+});
+
 test('changed frozen recovery material is rejected before runner execution', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
   const executed = path.join(f.root, 'executed');

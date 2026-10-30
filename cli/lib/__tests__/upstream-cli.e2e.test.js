@@ -162,6 +162,31 @@ test('CLI self upgrade rejects an uninitialized Zylos directory before recovery 
   assert.deepEqual(f.readLog(), []);
 });
 
+test('CLI self upgrade refuses unfinished recovery before any download request', t => {
+  const f = fixture(t);
+  f.save({type:'local', path:f.profilePath});
+  const stable = path.join(f.zylosDir, '.zylos/upgrade');
+  const transaction = path.join(f.zylosDir, '.backup/self-upgrade/tx');
+  fs.mkdirSync(stable, {recursive:true, mode:0o700});
+  fs.mkdirSync(transaction, {recursive:true, mode:0o700});
+  fs.writeFileSync(path.join(stable, 'maintenance.cjs'), "'use strict';\n", {mode:0o600});
+  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `
+    exports.bootstrap = () => ({
+      active:true,
+      blocked:true,
+      recovery_required:true,
+      error:'unfinished transaction',
+    });
+  `, {mode:0o600});
+  const result = f.run(['upgrade', '--self', '--yes', '--json']);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, '');
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.deepEqual(output.persisted, []);
+  assert.deepEqual(f.readLog(), []);
+});
+
 test('CLI operation freezes profile while later processes read the new local generation', t => {
   const f = fixture(t);
   f.save({ type: 'local', path: f.profilePath });
