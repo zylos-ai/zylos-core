@@ -12,6 +12,12 @@ function fixture(t) {
   return root;
 }
 
+function completeDownloadedPackage(root) {
+  fs.mkdirSync(path.join(root, 'cli/lib'), {recursive:true});
+  fs.writeFileSync(path.join(root, 'package.json'), '{}');
+  fs.writeFileSync(path.join(root, 'cli/lib/upgrade-entry.js'), '');
+}
+
 test('source admission rejects old, malformed and pre-bridge prerelease versions', () => {
   for (const version of ['0.5.0', '0.8.3', '0.9.0', '0.9.1', '0.9.2', '0.9.3-beta.1', undefined, 'latest', '01.9.3']) {
     assert.throws(() => assertSupportedUpgradeVersion(version), error =>
@@ -183,6 +189,85 @@ for (const phase of ['check-throw','check-result','download-throw','download-res
   if(phase==='package-check')assert.equal(output[0].error,'Incomplete target package: package.json');
   else assert.equal(output[0].error,"Cannot read '<path>'");
   assert.equal(fs.existsSync(path.join(root,'.backup')),false);
+});
+
+test('thin entry previews the target before confirmation and cleans a declined download', async t => {
+  const {upgradeSelfCore}=await import('../../commands/component.js');
+  const deployment=fixture(t), download=path.join(deployment,'download'), events=[];
+  fs.mkdirSync(download);
+  completeDownloadedPackage(download);
+  const strip=value=>String(value).replace(/\u001b\[[0-9;]*m/g,'');
+  assert.equal(await upgradeSelfCore({}, {
+    zylosDir:deployment,recoverBeforeUpgrade(){},
+    checkForCoreUpdates(){return {success:true,current:'1.0.0',latest:'1.1.0',hasUpdate:true};},
+    downloadCoreToTemp(){events.push('download');return {success:true,tempDir:download};},
+    readCoreChangelog(){return '## [1.1.0]\n- Preview before confirmation';},
+    filterChangelog(value){return value;},
+    detectCoreSkillChanges(){return [{skill:'comm-bridge',changes:{modified:['SKILL.md'],added:['new.js']}}];},
+    promptYesNo(prompt){events.push('prompt:' + prompt);return false;},
+    runDownloadedUpgrade(){assert.fail('declined upgrade was handed off');},
+    console:{log(value){events.push('log:' + strip(value));},error(){assert.fail('decline emitted an error');}},
+  }),true);
+  assert.ok(events.indexOf('download') < events.findIndex(value=>value.startsWith('log:zylos-core: 1.0.0')));
+  assert.ok(events.findIndex(value=>value.includes('Changelog:')) < events.findIndex(value=>value.startsWith('prompt:')));
+  assert.ok(events.findIndex(value=>value.includes('M comm-bridge/SKILL.md')) < events.findIndex(value=>value.startsWith('prompt:')));
+  assert.match(events.find(value=>value.startsWith('log:zylos-core:')),/1\.0\.0 .* 1\.1\.0/);
+  assert.match(events.find(value=>value.includes('Changelog:')),/Preview before confirmation/);
+  assert.match(events.at(-1),/Upgrade cancelled/);
+  assert.equal(fs.existsSync(download),false);
+});
+
+test('thin entry --yes skips only confirmation while retaining the preview', async t => {
+  const {upgradeSelfCore}=await import('../../commands/component.js');
+  const deployment=fixture(t), download=path.join(deployment,'download'), output=[];
+  fs.mkdirSync(download);
+  completeDownloadedPackage(download);
+  assert.equal(await upgradeSelfCore({skipConfirm:true}, {
+    zylosDir:deployment,recoverBeforeUpgrade(){},
+    checkForCoreUpdates(){return {success:true,current:'1.0.0',latest:'1.1.0',hasUpdate:true};},
+    downloadCoreToTemp(){return {success:true,tempDir:download};},
+    readCoreChangelog(){return 'release notes';},filterChangelog(value){return value;},detectCoreSkillChanges(){return [];},
+    promptYesNo(){assert.fail('--yes prompted');},
+    runDownloadedUpgrade(){return 0;},
+    console:{log(value){output.push(String(value));},error(){assert.fail('successful handoff emitted an error');}},
+  }),true);
+  assert.ok(output.some(value=>value.includes('zylos-core')));
+  assert.ok(output.some(value=>value.includes('release notes')));
+});
+
+test('thin entry JSON output suppresses preview work for a valid handoff', async t => {
+  const {upgradeSelfCore}=await import('../../commands/component.js');
+  const deployment=fixture(t), download=path.join(deployment,'download'), output=[];
+  fs.mkdirSync(download);
+  completeDownloadedPackage(download);
+  assert.equal(await upgradeSelfCore({jsonOutput:true,skipConfirm:true}, {
+    zylosDir:deployment,recoverBeforeUpgrade(){},
+    checkForCoreUpdates(){return {success:true,current:'1.0.0',latest:'1.1.0',hasUpdate:true};},
+    downloadCoreToTemp(){return {success:true,tempDir:download};},
+    readCoreChangelog(){assert.fail('JSON mode read preview content');},
+    detectCoreSkillChanges(){assert.fail('JSON mode inspected preview content');},
+    promptYesNo(){assert.fail('--yes prompted');},
+    runDownloadedUpgrade(){return 0;},
+    console:{log(value){output.push(value);},error(){assert.fail('JSON handoff emitted an error');}},
+  }),true);
+  assert.deepEqual(output,[]);
+  assert.equal(fs.existsSync(download),false);
+});
+
+test('thin entry rejects an incomplete package before confirmation', async t => {
+  const {upgradeSelfCore}=await import('../../commands/component.js');
+  const deployment=fixture(t), download=path.join(deployment,'download'), output=[];
+  fs.mkdirSync(download);
+  assert.equal(await upgradeSelfCore({jsonOutput:true}, {
+    zylosDir:deployment,recoverBeforeUpgrade(){},
+    checkForCoreUpdates(){return {success:true,current:'1.0.0',latest:'1.1.0',hasUpdate:true};},
+    downloadCoreToTemp(){return {success:true,tempDir:download};},
+    promptYesNo(){assert.fail('incomplete package prompted');},
+    runDownloadedUpgrade(){assert.fail('incomplete package was handed off');},
+    console:{log(value){output.push(JSON.parse(value));},error(){assert.fail('JSON failure used stderr');}},
+  }),false);
+  assert.deepEqual(output,[{success:false,code:'UPGRADE_FAILED',error:'Incomplete target package: package.json',persisted:[]}]);
+  assert.equal(fs.existsSync(download),false);
 });
 
 test('up-to-date path never invokes removed same-version retry or downloader', async t => {

@@ -1088,14 +1088,18 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-export function runDownloadedUpgrade(handoff, { spawn = spawnSync } = {}) {
-  const script = path.join(handoff.tempDir, 'cli/lib/upgrade-entry.js');
+function assertDownloadedUpgradePackage(tempDir) {
   for (const file of ['package.json', 'cli/lib/upgrade-entry.js']) {
     let stat;
-    try { stat = fs.statSync(path.join(handoff.tempDir, file)); }
+    try { stat = fs.statSync(path.join(tempDir, file)); }
     catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
     if (!stat?.isFile()) throw new Error('Incomplete target package: ' + file);
   }
+}
+
+export function runDownloadedUpgrade(handoff, { spawn = spawnSync } = {}) {
+  assertDownloadedUpgradePackage(handoff.tempDir);
+  const script = path.join(handoff.tempDir, 'cli/lib/upgrade-entry.js');
   const child = spawn(process.execPath, [script], {
     input: JSON.stringify(handoff), stdio: ['pipe', 'inherit', 'inherit'], env: { ...process.env },
   });
@@ -1140,12 +1144,34 @@ export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', js
     else output.log('zylos-core is up to date (v' + check.current + ')');
     return true;
   }
-  if (!skipConfirm && !await (deps.promptYesNo ?? promptYesNo)('Proceed with zylos-core upgrade? [y/N]: ')) return true;
   let tempDir;
   try {
     const download = (deps.downloadCoreToTemp ?? downloadCoreToTemp)(check.latest, branch);
     if (!download.success) throw Object.assign(new Error(download.error || download.message || 'Core download failed.'), {code:download.code});
     tempDir = download.tempDir;
+    assertDownloadedUpgradePackage(tempDir);
+
+    if (!jsonOutput) {
+      const fullChangelog = (deps.readCoreChangelog ?? readCoreChangelog)(tempDir);
+      const changelog = (deps.filterChangelog ?? filterChangelog)(fullChangelog, check.current);
+      const localChanges = (deps.detectCoreSkillChanges ?? detectCoreSkillChanges)();
+
+      output.log(`${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
+      if (localChanges.length > 0) {
+        output.log(`\n${warn('Local modifications:')}`);
+        for (const { skill, changes } of localChanges) {
+          for (const file of changes.modified) output.log(`  ${yellow('M')} ${skill}/${file}`);
+          for (const file of changes.added) output.log(`  ${green('A')} ${skill}/${file}`);
+        }
+      }
+      if (changelog) output.log(`\n${heading('Changelog:')}\n${changelog}`);
+    }
+
+    if (!skipConfirm && !await (deps.promptYesNo ?? promptYesNo)('Proceed with zylos-core upgrade? [y/N]: ')) {
+      if (!jsonOutput) output.log('Upgrade cancelled.');
+      return true;
+    }
+
     const exitCode = (deps.runDownloadedUpgrade ?? runDownloadedUpgrade)({
       schemaVersion: 1, fromVersion: check.current, tempDir,
       installedRoot: deps.installedRoot ?? path.resolve(import.meta.dirname, '../..'),
