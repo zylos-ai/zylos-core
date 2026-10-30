@@ -84,7 +84,7 @@ function fixture(t) {
   const readLog = () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   const save = source => fs.writeFileSync(path.join(configDir, 'upstreams.json'), JSON.stringify({ schemaVersion: 1, source }));
   const success = result => { assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`); return result; };
-  return { root, bin, configDir, profilePath, log, run, readLog, save, success };
+  return { root, bin, zylosDir, configDir, profilePath, log, run, readLog, save, success };
 }
 
 test('CLI saved routing covers remote registry, real add pipeline, component/self checks and upgrade', t => {
@@ -126,6 +126,21 @@ test('CLI self upgrade delegates to the downloaded entry and preserves its strea
   assert.equal(path.isAbsolute(handoff.tempDir), true);
   assert.equal(path.isAbsolute(handoff.installedRoot), true);
   assert.equal(path.isAbsolute(handoff.zylosDir), true);
+});
+
+test('CLI self upgrade rejects an uninitialized Zylos directory before recovery discovery', t => {
+  const f = fixture(t);
+  fs.rmSync(f.zylosDir, {recursive:true});
+  const result = f.run(['upgrade', '--self', '--yes']);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(result.stdout), {
+    success:false,
+    code:'ZYLOS_NOT_INITIALIZED',
+    error:`Zylos is not initialized at ${f.zylosDir}. Run "zylos init" first.`,
+    persisted:[],
+  });
+  assert.deepEqual(f.readLog(), []);
 });
 
 test('CLI operation freezes profile while later processes read the new local generation', t => {

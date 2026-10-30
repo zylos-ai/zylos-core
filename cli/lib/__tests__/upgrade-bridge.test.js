@@ -89,23 +89,39 @@ test('target signal termination maps to exit 1 without synthetic output', t => {
   assert.equal(result.stderr, '');
 });
 
-test('unfinished transaction discovery runs before upgrade and rejects incomplete recovery', () => {
-  let options;
-  assert.deepEqual(resumeUnfinishedUpgrade('/fixture', {discover:(root, opts) => {
-    assert.equal(root, '/fixture'); options = opts; return {active:false, blocked:false};
-  }}), {success:true});
-  assert.deepEqual(options, {resume:true, scanHistory:true});
+function recoveryFixture(t, resumeSource) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-admission-')));
+  t.after(() => fs.rmSync(root, {recursive:true, force:true}));
+  const stable = path.join(root, '.zylos/upgrade');
+  const transaction = path.join(root, '.backup/self-upgrade/tx');
+  fs.mkdirSync(stable, {recursive:true, mode:0o700});
+  fs.mkdirSync(transaction, {recursive:true, mode:0o700});
+  fs.writeFileSync(path.join(stable, 'maintenance.cjs'), "'use strict';\n", {mode:0o600});
+  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `
+    const fs = require('node:fs');
+    exports.bootstrap = (root, options) => {
+      const transaction = ${JSON.stringify(transaction)};
+      if (options?.once) { ${resumeSource} }
+      return fs.existsSync(transaction)
+        ? {active:true, recovery_required:true, error:'transaction remains'}
+        : {active:false};
+    };
+  `, {mode:0o600});
+  return {root, transaction};
+}
 
-  const blocked = resumeUnfinishedUpgrade('/fixture', {discover:() => ({
-    active:true, recovery_required:true, error:'runner failed', automaticResume:true,
-  })});
+test('unfinished recovery is re-discovered after a deployed bootstrap reports completion', t => {
+  const f = recoveryFixture(t, "fs.rmSync(transaction, {recursive:true}); return {active:true, completed:true};");
+  assert.deepEqual(resumeUnfinishedUpgrade(f.root), {success:true});
+  assert.equal(fs.existsSync(f.transaction), false);
+});
+
+test('unfinished recovery is rejected when a deployed bootstrap leaves the transaction behind', t => {
+  const f = recoveryFixture(t, "return {active:true, completed:true};");
+  const blocked = resumeUnfinishedUpgrade(f.root);
   assert.equal(blocked.failure.code, 'UPGRADE_RECOVERY_REQUIRED');
   assert.deepEqual(blocked.failure.persisted, []);
-
-  const manual = resumeUnfinishedUpgrade('/fixture', {discover:() => ({
-    active:true, recovery_required:true, error:'ownership unknown', automaticResume:false,
-  })});
-  assert.equal(manual.failure.code, 'MANUAL_RECOVERY_REQUIRED');
+  assert.match(blocked.failure.error, /transaction remains/);
 });
 
 test('release package has no minimum-source install gate', () => {

@@ -16,9 +16,18 @@ export function upgradeBridgeFailure(error, { code = 'UPGRADE_FAILED', next } = 
 export function resumeUnfinishedUpgrade(zylosDir, {
   discover = discoverUpgradeContext,
 } = {}) {
-  const context = discover(zylosDir, { resume: true, scanHistory: true });
-  if (!context.active && !context.recovery_required) return { success: true };
+  const resumed = discover(zylosDir, { resume: true, scanHistory: true });
+  if (resumed.controllerAlive || resumed.observing || resumed.blocked || resumed.recovery_required ||
+      resumed.automaticResume === false || ['MANUAL_RECOVERY_REQUIRED', 'UPGRADE_RECOVERY_REQUIRED'].includes(resumed.code)) {
+    return recoveryRefusal(resumed);
+  }
 
+  const context = discover(zylosDir, { scanHistory: true });
+  if (!context.active && !context.recovery_required) return { success: true };
+  return recoveryRefusal(context);
+}
+
+function recoveryRefusal(context) {
   const manual = context.automaticResume === false || context.code === 'MANUAL_RECOVERY_REQUIRED';
   const next = context.next || 'zylos recovery status';
   return {

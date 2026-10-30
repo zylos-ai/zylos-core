@@ -1078,6 +1078,14 @@ async function upgradeSelfCore({ branch, beta = false } = {}) {
   let tempDir = null;
 
   try {
+    if (!fs.existsSync(ZYLOS_DIR)) {
+      console.log(JSON.stringify(upgradeBridgeFailure(
+        `Zylos is not initialized at ${ZYLOS_DIR}. Run "zylos init" first.`,
+        { code: 'ZYLOS_NOT_INITIALIZED' },
+      )));
+      return 1;
+    }
+
     const recovery = resumeUnfinishedUpgrade(ZYLOS_DIR);
     if (!recovery.success) {
       console.log(JSON.stringify(recovery.failure));
