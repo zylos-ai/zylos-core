@@ -754,6 +754,12 @@ function finalizationNext(ctx) {
     : 'Repair the reported failure, then run zylos upgrade --resume-finalize.';
 }
 
+function dashboardNext(dashboard) {
+  return dashboard.state==='degraded'
+    ? 'Dashboard is not ready. Diagnose and repair it using dashboard.errors, report what you fixed, then run zylos init after fixing the cause to reapply Dashboard configuration and routing and start ecosystem services.'
+    : null;
+}
+
 /** Shared by initial finalization and forward repair after publication is done. */
 export async function completeUpgradeFinalization(ctx, deps = {}) {
   const root=ctx.zylosDir || ZYLOS_DIR;
@@ -875,7 +881,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   ctx.completion=completion;
   (deps.protectedSuccess || protectedSuccess)(ctx);
   return {...buildSelfUpgradeResult(ctx,null),completion,dashboard,sessionRestart:ctx.restart,checkpointAudit:ctx.checkpointAudit,
-    modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || []};
+    modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || [],next:dashboardNext(dashboard)};
 }
 
 export function runSelfUpgradeFinalize(state = {}, deps = {}) {

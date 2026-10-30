@@ -98,10 +98,11 @@ test('successful resume uses the shared finalizer Dashboard result directly',asy
   f.journal={...f.journal,dashboardInstall:{dbCopy:{ok:false,error:{code:'COPY_FAILED'}},items:{}}};
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
     f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete'});
-    return {success:true,dashboard:{state:'ready',errors:[]}};
+    return {success:true,dashboard:{state:'ready',errors:[]},next:null};
   }});
   assert.equal(result.data.dashboard.state,'ready');
   assert.deepEqual(result.data.dashboard.errors,[]);
+  assert.equal(result.data.next,null);
 });
 
 for(const success of [false,true]) test(`resume retains structured runtime warnings after ${success?'successful':'failed'} finalization`,async t=>{
@@ -323,12 +324,15 @@ test('fresh Dashboard observation preserves errors supplied by the shared finali
     f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete'});
     return {success:true,dashboard:{state:'degraded',errors:[
       {item:'dbCopy',code:'COPY_FAILED',location:'copy denied'},
-      {item:'verify',code:'UNAVAILABLE',location:'route missing'}]}};
+      {item:'verify',code:'UNAVAILABLE',location:'route missing'}]},
+      next:'Use dashboard.errors to repair Dashboard, then run zylos init.'};
   }});
   assert.equal(result.ok,true);
   assert.equal(result.data.dashboard.errors.length,2);
   assert.equal(result.data.dashboard.errors[0].item,'dbCopy');
   assert.equal(result.data.dashboard.errors[1].item,'verify');
+  assert.match(result.data.next,/dashboard\.errors/);
+  assert.match(result.data.next,/zylos init/);
 });
 
 test('real partial publication reports retained replace bytes when a later target conflicts',async t=>{

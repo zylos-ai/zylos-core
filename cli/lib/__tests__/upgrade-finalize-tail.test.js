@@ -178,6 +178,8 @@ for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dash
   assert.equal(result.completion.dashboard,result.dashboard.state);
   assert.equal(result.dashboard.errors.length,failing?1:0);
   if(failing)assert.equal(result.dashboard.errors[0].item,failing==='verify'?'dashboard':failing);
+  if(failing){assert.match(result.next,/dashboard\.errors/);assert.match(result.next,/zylos init/);}
+  else assert.equal(result.next,null);
 });
 
 test('Dashboard owns verification timeout and receives no overall deadline',async t=>{
