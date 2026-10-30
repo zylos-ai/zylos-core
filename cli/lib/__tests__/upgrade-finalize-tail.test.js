@@ -246,6 +246,17 @@ test('Dashboard persists independent failure and retries it without repeating co
   assert.equal(calls.filter(item=>item==='route').length,3);
 });
 
+test('first Dashboard takeover records unavailable Caddy as skipped without degradation',async t=>{
+  const {ctx,journal}=protectedReaderFixture(t),calls=[];
+  ctx.journal.firstTakeover=true;ctx.firstDashboardTakeover=true;
+  journal.dashboardInstall={dbCopy:{ok:true,error:null},items:Object.fromEntries(['registration','route'].map(item=>[item,{state:'pending',attempts:0,lastError:null}]))};
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{protectedSuccess:()=>{},dashboardOwner:{
+    applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:'skipped'}),verifyDashboard:()=>({state:'ready',checks:{health:true},errors:[]})
+  }}));
+  assert.equal(result.dashboard.state,'ready');assert.equal(result.next,null);
+  assert.deepEqual(journal.dashboardInstall.items.route,{state:'skipped',attempts:1,lastError:null});
+});
+
 test('unfinished publication blocks actual maintenance reader refresh and service start',async t=>{
   const {ctx,stable}=protectedReaderFixture(t,{hooks:'failed'}),calls=[];calls.protectedReader=true;
   const result=await completeUpgradeFinalization(ctx,deps(calls,{verifyPublicationForServices:undefined}));

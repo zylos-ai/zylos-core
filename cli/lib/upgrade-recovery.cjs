@@ -127,6 +127,18 @@ function validateSnapshot(dir, j) {
     dbBackupDir: j.dbBackupDir,
     manifest
   });
+  for (const database of manifest.databases) {
+    if (database.status !== 'missing' || database.source === 'components/dashboard/dashboard.db') continue;
+    const target = path.join(j.zylosDir, database.source);
+    for (const suffix of ['', '-wal', '-shm']) {
+      try {
+        fs.lstatSync(target + suffix);
+        throw Error('Expected missing database exists: ' + target);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+  }
   return manifest;
 }
 function rescue(dir, j) {

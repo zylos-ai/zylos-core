@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { readConfigStrict } from './config-store.js';
+import { isCaddyAvailable } from './caddy.js';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const name = 'zylos-dashboard';
@@ -77,6 +78,7 @@ export function applyDashboardRoute({ zylosDir }) {
     const script = `const {applyCaddyRoutes}=await import(process.argv[1]); process.stdout.write(JSON.stringify(applyCaddyRoutes('dashboard',JSON.parse(process.argv[2]))));`;
     const routes = [{ path: '/dashboard/*', type: 'reverse_proxy', target: `127.0.0.1:${port}`, strip_prefix: '/dashboard' }];
     const result = JSON.parse(run(process.execPath, ['--input-type=module','-e',script,moduleUrl,JSON.stringify(routes)], zylosDir));
+    if (!result.success && result.error === 'caddy_not_available') return { state: 'skipped' };
     return result.success ? { state: 'done' } : { state: 'failed', error: { code: 'route_failed', message: result.error || result.action } };
   } catch (error) { return { state: 'failed', error: { code: 'route_failed', message: error.message } }; }
 }
@@ -126,7 +128,7 @@ export async function verifyDashboard({ zylosDir }) {
   if (!checks.health) failed('health', observedFailure ? 'health_failed' : 'verify_timeout', localUrl);
 
   let routeLocation = path.join(zylosDir, '.zylos/config.json');
-  try {
+  if (isCaddyAvailable(zylosDir)) try {
     const configured = readConfigStrict(routeLocation);
     if (configured.state !== 'ok' && configured.state !== 'missing') throw Error('Core URL configuration is unreadable');
     const { domain, protocol = 'https', port } = configured.config || {};

@@ -274,7 +274,7 @@ export async function execute(input) {
       const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(row=>row.source===item.source);
       if(input.action==='offline-preflight') {
         if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
-        const preserveMissingDashboard=standaloneSnapshot && input.manifest?.formatVersion===2 && item.owner==='dashboard' && expected?.status==='missing' && !absent;
+        const preserveMissingDashboard=standaloneSnapshot && item.owner==='dashboard' && expected?.status==='missing' && !absent;
         if(expected?.status==='missing' && !absent && !preserveMissingDashboard) throw Error(`Expected missing database exists: ${source}`);
         if(preserveMissingDashboard) {rows.push({source:item.source,status:'present',ownerSkipped:true});continue;}
         if(!absent) {
@@ -335,7 +335,7 @@ export async function execute(input) {
     if(input.action==='offline-preflight' && item.owner==='dashboard') {
       const absent=missing(source);
       if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
-      const preserveMissingDashboard=standaloneSnapshot && input.manifest?.formatVersion===2 && expected?.status==='missing' && !absent;
+      const preserveMissingDashboard=standaloneSnapshot && expected?.status==='missing' && !absent;
       if(expected?.status==='missing' && !absent && !preserveMissingDashboard) throw Error(`Expected missing database exists: ${source}`);
       if(absent) {rows.push({source:item.source,status:'missing'});continue;}
       if(preserveMissingDashboard) {rows.push({source:item.source,status:'present'});continue;}
@@ -363,9 +363,7 @@ export async function execute(input) {
       }
       rows.push({source:item.source,status:'missing',userVersion:null,file:null,bytes:0,sha256:null,integrityCheck:null});continue;
     }
-    const preserveMissingDashboard=standaloneSnapshot && input.manifest?.formatVersion===2 && item.owner==='dashboard' && expected?.status==='missing';
-    if(expected?.status==='missing' && !preserveMissingDashboard) throw new Error(`Expected missing database exists: ${source}`);
-    if(preserveMissingDashboard) {rows.push({source:item.source,status:'present'});continue;}
+    if(expected?.status==='missing') throw new Error(`Expected missing database exists: ${source}`);
     const Database=driver(input,item);
     if(input.action==='offline-preflight') {
       const mod=await ownerSchema(input,item);

@@ -756,7 +756,7 @@ function finalizationNext(ctx) {
 
 function dashboardNext(dashboard) {
   return dashboard.state==='degraded'
-    ? 'Dashboard is not ready. Diagnose and repair it using dashboard.errors, report what you fixed, then run zylos init after fixing the cause to reapply Dashboard configuration and routing and start ecosystem services.'
+    ? 'Dashboard is not ready. Fix the cause reported in dashboard.errors, run zylos init to reapply Dashboard configuration and routing and start ecosystem services, then report what you fixed.'
     : null;
 }
 
@@ -831,9 +831,10 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
         try {
           persistItem({state:'pending',attempts:(saved?.attempts || 0)+1,lastError:null});
           const result=await owner[name]({zylosDir:root});
-          if(result.state!=='done')throw Object.assign(Error(result.error?.message || result.message || `${name}: ${result.state}`),
+          const accepted = result.state==='done' || item==='route' && result.state==='skipped';
+          if(!accepted)throw Object.assign(Error(result.error?.message || result.message || `${name}: ${result.state}`),
             {code:result.error?.code || result.code,location:result.error?.location || result.location});
-          persistItem({state:'done',lastError:null});
+          persistItem({state:result.state,lastError:null});
         } catch(error) {
           persistItem({state:'failed',lastError:{code:error.code || 'DASHBOARD_INSTALL_FAILED',message:error.message}});
           dashboardFailure(item,error);
