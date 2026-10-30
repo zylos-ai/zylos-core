@@ -6,12 +6,23 @@ const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 function members(group) {
-  const result = cp.spawnSync('ps', ['-eo', 'pid=,pgid=,stat='], {
+  const result = cp.spawnSync('ps', ['-eo', 'pid=,ppid=,pgid=,stat='], {
     encoding: 'utf8', timeout: 10000
   });
   if (result.error || result.status !== 0) throw Error('cannot verify installer process exit');
-  return result.stdout.split('\n').map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/))
-    .filter(Boolean).filter(row => Number(row[2]) === group && Number(row[1]) !== result.pid && !row[3].startsWith('Z'));
+  const rows = result.stdout.split('\n').map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)$/)).filter(Boolean);
+  const parents = new Map(rows.map(row => [Number(row[1]), Number(row[2])]));
+  const observerProcess = pid => {
+    const seen = new Set();
+    while (Number.isSafeInteger(pid) && pid > 0 && !seen.has(pid)) {
+      if (pid === result.pid) return true;
+      seen.add(pid);
+      pid = parents.get(pid);
+    }
+    return false;
+  };
+  return rows.filter(row => Number(row[3]) === group && !observerProcess(Number(row[1])) && !row[4].startsWith('Z'))
+    .map(row => [row[0], row[1], row[3], row[4]]);
 }
 function quiesce(_dir, j, {terminate = false, kind = 'installer'} = {}) {
   if (kind !== 'installer') throw Error('unsupported contained process kind');

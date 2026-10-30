@@ -602,6 +602,11 @@ function command(bin, args, options = {}) {
     timeout: 30000,
     ...options
   });
+  if (bin === 'ps' && r.error?.code === 'ENOENT') {
+    const error = Error('Cannot confirm that write processes exited because the ps command is unavailable. Install procps, then retry the upgrade.');
+    error.next = 'Install procps so the ps command is available, then retry the upgrade.';
+    throw error;
+  }
   if (r.error || r.status !== 0) throw Error(r.error?.message || String(r.stderr) || `${bin} exited ${r.status}`);
   return r.stdout;
 }
