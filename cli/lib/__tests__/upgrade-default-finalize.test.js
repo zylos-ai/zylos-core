@@ -199,6 +199,15 @@ test('protected finalizer reports persisted unchanged database mode and verified
   assertDataPreserved(f);
 });
 
+test('forward repair reports the persisted unchanged database mode',async t=>{
+  const f=fixture(t,{databaseMode:'unchanged'});
+  await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});
+  const result=await f.resume();
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(result.databaseMode,'unchanged');
+  assert.equal(result.dbSnapshotVerified,true);
+});
+
 test('forward repair does not report a verified snapshot when the manifest no longer matches',async t=>{
   const f=fixture(t);
   await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});

@@ -108,3 +108,10 @@ test('missing ps reports writer-exit guidance before installation or migration',
   assert.equal(installerCalls,0);assert.equal(migrationCalls,0);
   assert.equal(fs.readFileSync(f.state,'utf8'),'online');
 });
+
+test('a missing PM2 command keeps its own error instead of the ps guidance',t=>{
+  const empty=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-no-pm2-'));
+  const prior=process.env.PATH;process.env.PATH=empty;
+  t.after(()=>{process.env.PATH=prior;fs.rmSync(empty,{recursive:true,force:true});});
+  assert.throws(()=>m.services({skillsDir:empty}),error=>/ENOENT/.test(error.message) && !/procps|ps command/i.test(error.message) && error.next===undefined);
+});
