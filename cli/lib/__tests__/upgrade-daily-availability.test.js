@@ -90,6 +90,9 @@ test('historical terminal journal shapes with retained scripts permit upgrade an
    assert.equal(inspected,true);
    assert.equal(result.code,'INSPECTION_REACHED');
    let checked=false,delegated=false;
+   fs.mkdirSync(path.join(f.root,'cli/lib'),{recursive:true});
+   fs.writeFileSync(path.join(f.root,'package.json'),'{}');
+   fs.writeFileSync(path.join(f.root,'cli/lib/upgrade-entry.js'),'');
    assert.equal(await upgradeSelfCore({skipConfirm:true},{zylosDir:f.root,
     checkForCoreUpdates(){checked=true;return {success:true,current:'0.9.3',latest:'0.9.4',hasUpdate:true};},
     downloadCoreToTemp(){return {success:true,tempDir:f.root};},
