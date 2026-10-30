@@ -15,7 +15,7 @@ async function fixture(t) {
 }
 const lines = async filename => (await fs.readFile(filename, 'utf8')).trimEnd().split('\n').filter(Boolean).map(JSON.parse);
 
-// T07: readers ignore an incomplete tail and malformed newline-delimited segments.
+// readers ignore an incomplete tail and malformed newline-delimited segments.
 function completeRows(text) {
   return text.split('\n').slice(0, -1).flatMap(line => {
     try { return [JSON.parse(line)]; } catch { return []; }

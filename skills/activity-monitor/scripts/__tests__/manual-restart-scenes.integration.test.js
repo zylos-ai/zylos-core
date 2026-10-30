@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { fixture, launch, manual, assertReply } from './fixtures/i2-manual-harness.js';
+import { fixture, launch, manual, assertReply } from './fixtures/manual-restart-harness.js';
 import { tmuxNameForGroup, groupRunDir } from '../../../../cli/lib/session-group-paths.js';
 
 const requestFile = f => path.join(f.root, 'activity-monitor/restart-requests.json');
@@ -14,7 +14,7 @@ async function assertUntouched(m4, f) {
   return state;
 }
 for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex']) {
-  test(`IF-36 ${mode}/${runtime} real M4 exact target rejection fields and accepted F9 identity`, { timeout: 25000 }, async t => {
+  test(`${mode}/${runtime} real supervisor exact target rejection fields and accepted identity`, { timeout: 25000 }, async t => {
     const f = fixture(t, mode, runtime), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
     let req = manual('no-target'); assertReply(await f.submit(req), req, 'rejected', { reason: 'target_required' }, false);
     req = manual('stale', { expectedRunId: 'old-run' }); assertReply(await f.submit(req), req, 'stale_target', { currentRunId: 'run-1' }, false);
@@ -45,7 +45,7 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
     assert.equal(JSON.parse(fs.readFileSync(f.readyPath, 'utf8')).runId, 'run-1');
     await m4.stop();
   });
-  test(`IF-36 ${mode}/${runtime} actual empty Origin already_stopped has no intent, gate, stop or launch; later appearance survives`, { timeout: 25000 }, async t => {
+  test(`${mode}/${runtime} actual empty Origin already_stopped has no intent, gate, stop or launch; later appearance survives`, { timeout: 25000 }, async t => {
     const f = fixture(t, mode, runtime); f.tmux('kill-session', '-t', '=zylos-group-origin');
     const m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
     for (const req of [manual('empty'), manual('old-absent', { expectedRunId: 'run-1' })]) {
@@ -58,7 +58,7 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
   });
 }
 
-test('IF-36 actual M4 empty Origin conflict and corrupt F9 fail closed before already_stopped', { timeout: 25000 }, async t => {
+test('actual supervisor empty Origin conflict and corrupt fail closed before already_stopped', { timeout: 25000 }, async t => {
   const f = fixture(t); f.tmux('kill-session', '-t', '=zylos-group-origin');
   const m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
   const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
@@ -77,7 +77,7 @@ test('IF-36 actual M4 empty Origin conflict and corrupt F9 fail closed before al
   fs.writeFileSync(requestFile(f), '[]'); await assertUntouched(m4, f); await m4.stop();
 });
 
-for (const mode of ['single', 'multi']) test(`IF-36 ${mode} manual restart stops busy Sync-held run despite running control, retains D8 until inflight accounted`, { timeout: 25000 }, async t => {
+for (const mode of ['single', 'multi']) test(`${mode} manual restart stops busy Sync-held run despite running control, retains until inflight accounted`, { timeout: 25000 }, async t => {
   await inflight(t, mode);
 });
 async function inflight(t, mode, variant = '') {
@@ -101,12 +101,12 @@ async function inflight(t, mode, variant = '') {
   assert.deepEqual(f.db.prepare('SELECT * FROM control_queue').all(), control);
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await m4.stop();
 }
-test('IF-36 negative control early gate withdrawal is detected by the same real M4 inflight assertion', { timeout: 25000 }, async t => {
+test('oracle: early gate withdrawal is detected by the same real supervisor inflight assertion', { timeout: 25000 }, async t => {
   await assert.rejects(inflight(t, 'single', 'early-clear'), { code: 'ERR_ASSERTION', message: /manual inflight intent must persist/ });
 });
 
 for (const mode of ['single', 'multi']) for (const pause of ['before-intent', 'after-intent', 'after-fence', 'after-stop', 'after-clear', 'before-remove', 'after-remove']) {
-  test(`IF-36 ${mode} full M4 SIGKILL ${pause} recovers durable intent without resubmission or retargeting`, { timeout: 25000 }, async t => {
+  test(`${mode} full supervisor SIGKILL ${pause} recovers durable intent without resubmission or retargeting`, { timeout: 25000 }, async t => {
     await crashWindow(t, mode, pause);
   });
 }
@@ -132,11 +132,11 @@ async function crashWindow(t, mode, pause, variant = '') {
   const done = await second.command('tick'); assert.deepEqual(done.stopped, []); assert.deepEqual(done.requests, []);
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await second.stop();
 }
-test('IF-36 negative control retargeting recovered intent kills replacement and fails the same survival assertion', { timeout: 25000 }, async t => {
+test('oracle: retargeting recovered intent kills replacement and fails the same survival assertion', { timeout: 25000 }, async t => {
   await assert.rejects(crashWindow(t, 'multi', 'after-intent', 'retarget'), { code: 'ERR_ASSERTION', message: /replacement must remain present/ });
 });
 
-for (const mode of ['single', 'multi']) test(`IF-36 ${mode} actual M4 transition/fence conflict holds accepted manual identity and does not reuse global gate`, { timeout: 25000 }, async t => {
+for (const mode of ['single', 'multi']) test(`${mode} actual supervisor transition/fence conflict holds accepted manual identity and does not reuse global gate`, { timeout: 25000 }, async t => {
   const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
   const req = manual('transition-conflict', { expectedRunId: 'run-1' });
   const transition = () => f.db.prepare("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES('transition',?,?,'gating',1,1)").run(mode, mode === 'single' ? 'multi' : 'single');
@@ -161,7 +161,7 @@ for (const mode of ['single', 'multi']) test(`IF-36 ${mode} actual M4 transition
   await m4.stop();
 });
 
-for (const mode of ['single', 'multi']) test(`IF-36 ${mode} real Origin appearing during target observation requires refresh, never auto-selects`, { timeout: 25000 }, async t => {
+for (const mode of ['single', 'multi']) test(`${mode} real Origin appearing during target observation requires refresh, never auto-selects`, { timeout: 25000 }, async t => {
   const f = fixture(t, mode); f.tmux('kill-session', '-t', '=zylos-group-origin');
   const m4 = launch(t, f); assert.equal((await m4.next()).ready, true); await m4.command('arm-read');
   const req = manual('appearing-target'), pending = f.submit(req);
@@ -171,7 +171,7 @@ for (const mode of ['single', 'multi']) test(`IF-36 ${mode} real Origin appearin
   const state = await assertUntouched(m4, f); assert.equal(state.scene.runId, 'appeared'); await m4.stop();
 });
 
-for (const mode of ['single', 'multi']) test(`IF-36 ${mode} actual tmux server restart and reused Origin name cannot redirect accepted intent`, { timeout: 25000 }, async t => {
+for (const mode of ['single', 'multi']) test(`${mode} actual tmux server restart and reused Origin name cannot redirect accepted intent`, { timeout: 25000 }, async t => {
   const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
   const req = manual('server-replaced', { expectedRunId: 'run-1' }); assertReply(await f.submit(req), req, 'accepted');
   f.tmux('kill-server'); await f.waitForServerExit();
@@ -183,7 +183,7 @@ for (const mode of ['single', 'multi']) test(`IF-36 ${mode} actual tmux server r
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await m4.stop();
 });
 
-for (const runtime of ['claude', 'codex']) test(`IF-36 ${runtime} stopping Origin leaves real ready ordinary runtime and its ledger untouched`, { timeout: 25000 }, async t => {
+for (const runtime of ['claude', 'codex']) test(`${runtime} stopping Origin leaves real ready ordinary runtime and its ledger untouched`, { timeout: 25000 }, async t => {
   const f = fixture(t, 'multi', runtime), group = 'fixture:ordinary', name = tmuxNameForGroup(group);
   const directory = groupRunDir(group, f.env); fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, 'current-session.json'), JSON.stringify({ runId: 'ordinary-run', sessionId: 'ordinary-session', ts: 1, startupControlIds: [] }));

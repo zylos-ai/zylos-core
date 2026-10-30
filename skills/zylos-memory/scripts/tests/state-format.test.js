@@ -39,7 +39,7 @@ test('W1: malformed first lines degrade without scanning later lines or throwing
   assert.equal(parseStateHeader(good.replaceAll('\n', '\r\n'), { scope }).valid, true);
 });
 
-test('IB48 A/B: 64KiB body truncates locally; all 1000 sorted IDs survive deterministically', () => {
+test('A/B: 64KiB body truncates locally; all 1000 sorted IDs survive deterministically', () => {
   const rows = Array.from({ length: 1000 }, (_, i) => row(1000 - i, i === 0 ? 'x'.repeat(65536) : `body ${i}`));
   const text = render(rows), lines = text.split('\n').filter(line => line.startsWith('- #'));
   assert.equal(lines.length, 1000);
@@ -51,7 +51,7 @@ test('IB48 A/B: 64KiB body truncates locally; all 1000 sorted IDs survive determ
   assert.equal(validateStateDocument(text, { scope }), true);
 });
 
-test('IB48 C: empty rows omit block; empty source group uses caller scope origin without route prefix', () => {
+test('C: empty rows omit block; empty source group uses caller scope origin without route prefix', () => {
   assert.doesNotMatch(render([]), /切换来信/);
   assert.doesNotMatch(renderStateSkeleton(base), /切换来信/);
   const rows = [row(1, '', { sessionGroup: '' })];
@@ -62,7 +62,7 @@ test('IB48 C: empty rows omit block; empty source group uses caller scope origin
   assert.match(entry(render(rows, { scope: '*' })), /\[telegram -123/);
 });
 
-test('IB48 D/E: UTF-8 route/body byte bounds preserve whole characters', () => {
+test('D/E: UTF-8 route/body byte bounds preserve whole characters', () => {
   const line = entry(render([row(1, '汉'.repeat(400), { endpointId: '路'.repeat(234) })]));
   const route = /\[([^\]]+)\]/.exec(line)[1];
   assert.ok(Buffer.byteLength(route) <= 128);
@@ -71,7 +71,7 @@ test('IB48 D/E: UTF-8 route/body byte bounds preserve whole characters', () => {
   assert.doesNotMatch(line, /�/);
 });
 
-test('IB48 F: controls and backslashes render as reversible single-line tokens', () => {
+test('F: controls and backslashes render as reversible single-line tokens', () => {
   const content = '\\\n\r\t\x00\x1f\x7f\u0085\u2028\u2029';
   const line = entry(render([row(1, content, { endpointId: content })]));
   const expected = '\\\\\\n\\r\\t\\x00\\x1f\\x7f\\u0085\\u2028\\u2029';
@@ -80,7 +80,7 @@ test('IB48 F: controls and backslashes render as reversible single-line tokens',
   assert.doesNotMatch(line, /[\x00-\x1f\x7f\u0085\u2028\u2029]/);
 });
 
-test('IB48 G: escaped 512/513 bytes and truncation beside escape boundaries', () => {
+test('G: escaped 512/513 bytes and truncation beside escape boundaries', () => {
   assert.ok(entry(render([row(1, 'a'.repeat(510) + '\n')])).endsWith('a'.repeat(510) + '\\n'));
   assert.ok(entry(render([row(1, 'a'.repeat(511) + '\n')])).endsWith('a'.repeat(509) + '…（截断，全文见 #1）'));
   for (const character of ['\n', '\\', '\x00', '\u2028', '🙂']) {
@@ -89,15 +89,15 @@ test('IB48 G: escaped 512/513 bytes and truncation beside escape boundaries', ()
   }
 });
 
-test('IB48 timestamp conversion is UTC, second precision, supplied syncedAt retained', () => {
+test('timestamp conversion is UTC, second precision, supplied syncedAt retained', () => {
   const line = entry(render([row(1, 'hello', { timestamp: '2026-10-19T13:30:02.123+08:00' })]));
   assert.match(line, /2026-10-19T05:30:02Z/);
   const text = renderStateSkeleton({ scope: '*', syncedAt: '2026-10-19T13:30:02+08:00' });
   assert.match(text, /synced_at=2026-10-19T13:30:02\+08:00/);
 });
 
-// A P2-1 / IB-48: freeze the entire rendered document, including Pending placement.
-test('IB-48 absorbed title and rows appear at the start of Pending in the full document', () => {
+// A / freeze the entire rendered document, including Pending placement.
+test('absorbed title and rows appear at the start of Pending in the full document', () => {
   assert.equal(render([row(2), row(1)]), `<!-- zylos-state v1 | scope=telegram:g-123 | synced_at=2026-10-19T05:30:02Z | coverage= | inbox_committed= -->
 
 # Working State

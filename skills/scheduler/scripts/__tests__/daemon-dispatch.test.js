@@ -54,7 +54,7 @@ for(const type of ['one-time','recurring','interval']) test(`R fails exact execu
  if(type!=='one-time')assert.ok(row.task.next_run_at>task.next_run_at);else assert.equal(row.task.next_run_at,task.next_run_at);
 });
 
-// P2-1: Scheduler claim/dispatch through the actual P09 CLI and D1 owner.
+// : Scheduler claim/dispatch through the actual CLI and owner.
 for(const [label, route, expected] of [
  ['saved group with reply',{session_component:'telegram',session_group_name:'team',reply_channel:'telegram',reply_endpoint:'chat|msg:9'},['telegram','chat|msg:9','telegram:team']],
  ['saved group without reply',{session_component:'telegram',session_group_name:'team'},['telegram',null,'telegram:team']],
@@ -203,7 +203,7 @@ for(const category of ['C','U'])for(const type of ['one-time','interval']) test(
 });
 
 
-test('real P01 recent/range reads find full execution after a non-maximum-id lower bound',t=>{
+test('real recent/range reads find full execution after a non-maximum-id lower bound',t=>{
  const {db,task,read}=fixture(t);
  const messages=c4.getDb();
  // U readback needs a persisted row with a deliberately lost receipt; inject only that uncertainty.

@@ -30,7 +30,7 @@ async function fixture(responder) {
   return {root,db,store,requests,send:(request,options)=>submit(request,{...options,socketPath,replyMaxMs:40})};
 }
 for (const behavior of ['accept','lost-after-commit','malformed','closed-before-commit']) {
-  test(`IB44 real socket ${behavior} and real D9 observation`,async()=>{
+  test(`real socket ${behavior} and real observation`,async()=>{
     const f=await fixture((socket,request,store)=>{
       if(behavior==='accept'||behavior==='lost-after-commit') {
         const {runId}=store.beginModeTransition('single','multi');
@@ -48,7 +48,7 @@ for (const behavior of ['accept','lost-after-commit','malformed','closed-before-
     if(!result.ok)expect(result.error.persisted).toBeNull();
   });
 }
-test('IB44 expired reply budget does not start a D9 read or resend',async()=>{
+test('expired reply budget does not start a read or resend',async()=>{
   const f=await fixture(()=>{});let reads=0;
   const deadlineAt=Date.now()+25;
   const result=await executeSessionMode(['switch','multi'],{deadlineAt,send:async(request,options)=>{
@@ -61,7 +61,7 @@ test('IB44 expired reply budget does not start a D9 read or resend',async()=>{
   },lookup:(target,options)=>lookupModeSwitch(target,{...options,getModeTransition:()=>{reads++;return f.store.getModeTransition();}})});
   expect(result.ok).toBe(false);expect(result.error.persisted).toBeNull();expect(reads).toBe(0);expect(f.requests).toHaveLength(1);
 });
-test('IB44 public CLI dispatch rejects bad target with one JSON line and no instance writes',()=>{
+test('public CLI dispatch rejects bad target with one JSON line and no instance writes',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-args-'));cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
   const child=spawnSync(process.execPath,['cli/zylos.js','session-mode','switch','bad','--json'],{encoding:'utf8',env:{...process.env,HOME:root,ZYLOS_DIR:root}});
   expect(child.status).toBe(1);expect(JSON.parse(child.stdout).error.code).toBe('INVALID_ARGUMENT');

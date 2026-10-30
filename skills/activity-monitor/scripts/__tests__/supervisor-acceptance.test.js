@@ -111,7 +111,7 @@ async function deliveryScenario(t, create) {
   assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.elapsed, 2000);
 }
 
-test('IF-14 composed socket rejects stale-run delivery without resetting observer counters', async t => {
+test('composed socket rejects stale-run delivery without resetting observer counters', async t => {
   await deliveryScenario(t, createSupervisor);
 });
 
@@ -156,7 +156,7 @@ async function runtimeScenario(t, create) {
   assert.equal(fs.readFileSync(f.supervisor.health.store('codex').file, 'utf8'), codexBefore);
   assert.equal(f.current[0], codex); assert.equal(f.stops.length, 0);
 }
-test('IF-27 composed mixed-runtime demand waits for its own runtime and only recovers its F10', async t => {
+test('composed mixed-runtime demand waits for its own runtime and only recovers its', async t => {
   await runtimeScenario(t, createSupervisor);
 });
 

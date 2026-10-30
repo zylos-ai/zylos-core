@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
 const pump = async f => { for (let i = 0; i < 4; i++) { f.router.tick(); await flush(); } };
 
-test('IF12 one blocked delivery does not prevent another ready lane or new activation', async t => {
+test('one blocked delivery does not prevent another ready lane or new activation', async t => {
   for (const existing of [true, false]) await t.test(`B existing=${existing}`, async t => {
     const f = routerFixture(t); f.put('origin'); f.put('a'); if (existing) f.put('b');
     const a = f.add('a'), b = f.add('b'); const hold = deferred(); const delivered = [];
@@ -16,7 +16,7 @@ test('IF12 one blocked delivery does not prevent another ready lane or new activ
   });
 });
 
-test('IF12 control timeout is global even with no lane, and pool waiting preserves priority', async t => {
+test('control timeout is global even with no lane, and pool waiting preserves priority', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); f.put('occupied');
   const low = f.add('low', { priority: 5 }), high = f.add('high', { priority: 1 });
   const expired = f.db.insertControl('expire', { sessionGroup: 'silent', ackDeadlineAt: f.now()/1000 - 1 });
@@ -29,7 +29,7 @@ test('IF12 control timeout is global even with no lane, and pool waiting preserv
   assert.equal(f.row(high.id).status, 'delivered'); assert.equal(f.row(low.id).status, 'pending');
 });
 
-test('T02 control claim=false ends lane round without claiming business', async t => {
+test('control claim=false ends lane round without claiming business', async t => {
   const f = routerFixture(t); f.put('origin'); f.put('a'); const row = f.add('a');
   f.db.insertControl('priority control', { sessionGroup: 'a', appendAckSuffix: false });
   f.db.claimControl = () => false;
@@ -37,7 +37,7 @@ test('T02 control claim=false ends lane round without claiming business', async 
   assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.calls.some(x => x[0] === 'conversation'), false);
 });
 
-test('T01/T03 recovery control before startup prompt before triggering conversation; clear reloads identity', async t => {
+test('recovery control before startup prompt before triggering conversation; clear reloads identity', async t => {
   const f = routerFixture(t); f.put('origin'); const row = f.add('a');
   const launch = f.deps.getSessionAdapter;
   f.deps.getSessionAdapter = runtime => ({ ...launch(runtime), launch: async input => {
@@ -58,7 +58,7 @@ test('T01/T03 recovery control before startup prompt before triggering conversat
   assert.equal(f.calls.findIndex(x => x[0] === 'control' && x[1] === prompt2.id) < f.calls.findIndex(x => x[0] === 'conversation' && x[1] === later.id), true);
 });
 
-test('T03 startup prompt fence or health block requeues trigger without retry', async t => {
+test('startup prompt fence or health block requeues trigger without retry', async t => {
   for (const blockedBy of ['fence', 'health']) await t.test(blockedBy, async t => {
     const f = routerFixture(t); f.put('origin'); const row = f.add('a');
     const adapter = f.deps.getSessionAdapter;
@@ -74,7 +74,7 @@ test('T03 startup prompt fence or health block requeues trigger without retry', 
   });
 });
 
-test('IF70 expiry commits before receipt and skips launch/registration; fresh next item proceeds', async t => {
+test('expiry commits before receipt and skips launch/registration; fresh next item proceeds', async t => {
   const f = routerFixture(t); f.put('origin', { runtime: 'codex' });
   const old = f.add('a'), fresh = f.add('a'); f.sqlite.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(f.now()/1000 - 1801, old.id);
   f.health.set('claude', { health: 'rate_limited' });
@@ -86,7 +86,7 @@ test('IF70 expiry commits before receipt and skips launch/registration; fresh ne
   assert.equal(f.calls.filter(x => x[0] === 'submit').length, 1);
 });
 
-test('IF70 expiry DB error stops lane before launch, while another lane continues', async t => {
+test('expiry DB error stops lane before launch, while another lane continues', async t => {
   const f = routerFixture(t); f.put('origin'); f.put('b'); const a = f.add('a'), b = f.add('b');
   const expire = f.db.expirePending; f.db.expirePending = (id, max) => { if (id === a.id) throw Error('conditional write failed'); return expire(id, max); };
   const router = f.create(); await router.initialize(); await f.rounds(4);
@@ -94,7 +94,7 @@ test('IF70 expiry DB error stops lane before launch, while another lane continue
   assert.equal(f.calls.some(x => x[0] === 'launch'), false);
 });
 
-test('T02 capacity opportunity preserves head order across slow high-priority preflight', async t => {
+test('capacity opportunity preserves head order across slow high-priority preflight', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
   const high = f.add('high', {priority: 0}), low = f.add('low', {priority: 1});
   const hold = deferred(); const read = f.deps.readLiveIdentity; let highReads = 0;
@@ -110,7 +110,7 @@ test('T02 capacity opportunity preserves head order across slow high-priority pr
   assert.equal(f.row(high.id).status, 'delivered'); assert.equal(f.row(low.id).status, 'pending');
 });
 
-test('T02 expired priority head is reranked against other groups before capacity allocation', async t => {
+test('expired priority head is reranked against other groups before capacity allocation', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
   const old = f.add('a', {priority:0}); f.add('a', {priority:3}); const b = f.add('b', {priority:1});
   f.sqlite.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(f.now()/1000 - 1801, old.id);
@@ -119,7 +119,7 @@ test('T02 expired priority head is reranked against other groups before capacity
   assert.equal(f.calls.find(x => x[0] === 'launch')[1].sessionGroup, 'b');
 });
 
-test('T02 rejected preflight passes opportunity to another runtime without reserving capacity', async t => {
+test('rejected preflight passes opportunity to another runtime without reserving capacity', async t => {
   const f = routerFixture(t, {poolSize:1}); const a=f.add('a',{priority:0}), b=f.add('b',{priority:1});
   f.health.set('claude',{health:'unavailable'}); f.db.resolveSessionLaunchConfig=({sessionGroup})=>({runtime:sessionGroup==='b'?'codex':'claude',mode:'default'});
   const hold=deferred(); f.deps.submit=async request=>{await hold.promise;return {kind:'rejected',sent:true,reply:{...request,ok:false,code:'probe_inflight'}};};

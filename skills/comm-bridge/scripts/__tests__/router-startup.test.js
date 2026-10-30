@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
 import { resolveSessionPoolSize } from '../../../../cli/lib/session-pool-config.js';
 
-test('T02 pool size: environment then file then fixed hardware, minimum one', () => {
+test('pool size: environment then file then fixed hardware, minimum one', () => {
   const hardware = { cpuCount: 4, totalMemoryBytes: 8 * 1024 ** 3 };
   assert.equal(resolveSessionPoolSize({ ...hardware, env: {}, config: {} }), 6);
   assert.equal(resolveSessionPoolSize({ ...hardware, env: { ZYLOS_SESSION_POOL_SIZE: '25' }, config: { session_pool_size: 3 } }), 25);
@@ -14,7 +14,7 @@ test('T02 pool size: environment then file then fixed hardware, minimum one', ()
   assert.equal(resolveSessionPoolSize({ cpuCount: 1, totalMemoryBytes: 1024 ** 3, env: {}, config: {} }), 1);
 });
 
-test('T01 strict mode is read once, CONFIG_UNREADABLE stays inert even after repair', async t => {
+test('strict mode is read once, CONFIG_UNREADABLE stays inert even after repair', async t => {
   const f = routerFixture(t); let broken = true;
   f.deps.readSessionMode = () => { f.calls.push(['mode']); if (broken) throw Object.assign(new Error('broken'), { code: 'CONFIG_UNREADABLE' }); return { mode: 'multi' }; };
   const router = f.create(); await router.initialize(); broken = false;
@@ -25,7 +25,7 @@ test('T01 strict mode is read once, CONFIG_UNREADABLE stays inert even after rep
   assert.equal(f.calls.filter(x => x[0] === 'alert').length, 1);
 });
 
-test('T01 orphan recovery once before selection; strict age/retry classifications', async t => {
+test('orphan recovery once before selection; strict age/retry classifications', async t => {
   const f = routerFixture(t); f.put('origin');
   const ages = [1799, 1800, 1801, 20];
   const rows = ages.map((age,i) => { const row = f.add(); f.db.claimConversation(row.id);
@@ -40,7 +40,7 @@ test('T01 orphan recovery once before selection; strict age/retry classification
   assert.ok(f.events.some(x => x.event === 'orphan_recovery_summary' && x.oldestId === rows[0].id));
 });
 
-test('T01 failed recovery never selects or launches and never re-runs recovery', async t => {
+test('failed recovery never selects or launches and never re-runs recovery', async t => {
   const f = routerFixture(t); let recoveries = 0;
   f.db.recoverOrphanRunning = () => { recoveries++; throw Error('DB unavailable'); };
   const router = f.create(); await assert.rejects(router.initialize(), /DB unavailable/);
@@ -49,7 +49,7 @@ test('T01 failed recovery never selects or launches and never re-runs recovery',
   assert.equal(f.calls.some(x => x[0] === 'launch'), false);
 });
 
-test('T01 initial unobservable scene cannot become empty capacity', async t => {
+test('initial unobservable scene cannot become empty capacity', async t => {
   const f = routerFixture(t); f.add(); f.put('origin');
   f.deps.listGroupTmuxSessions = async () => { throw Error('tmux timeout'); };
   const router = f.create(); await router.initialize(); await f.rounds(3);
@@ -57,7 +57,7 @@ test('T01 initial unobservable scene cannot become empty capacity', async t => {
   assert.equal(f.calls.some(x => x[0] === 'launch'), false);
 });
 
-test('T01 unowned startup waits from tmux creation; boundary READY avoids stop', async t => {
+test('unowned startup waits from tmux creation; boundary READY avoids stop', async t => {
   const f = routerFixture(t); f.put('origin'); f.put('a', { ready: false });
   const router = f.create(); await router.initialize(); await f.rounds(2);
   assert.equal(f.calls.some(x => x[0] === 'stop'), false);
@@ -67,7 +67,7 @@ test('T01 unowned startup waits from tmux creation; boundary READY avoids stop',
   assert.ok(f.calls.some(x => x[0] === 'stop' && x[1].tmuxName.endsWith('-b')));
 });
 
-test('T03 resident retry is seconds not rounds, excludes K, never start_attempt', async t => {
+test('resident retry is seconds not rounds, excludes K, never start_attempt', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('a'); f.health.set('claude', { health: 'auth_failed' });
   const router = f.create(); await router.initialize(); await f.rounds(2);
   f.advance(3000); await f.rounds(1); assert.equal(f.calls.some(x => x[0] === 'launch'), false);
@@ -79,7 +79,7 @@ test('T03 resident retry is seconds not rounds, excludes K, never start_attempt'
   f.advance(60000); await f.rounds(2); assert.equal(router.state.resident.failures, 0);
 });
 
-test('T03 single uses null semantic scope and origin target; global fence prevents launch', async t => {
+test('single uses null semantic scope and origin target; global fence prevents launch', async t => {
   const f = routerFixture(t, { mode: 'single' }); f.deps.readSessionMode = () => ({ mode: null, keyPresent: false });
   f.db.setDrainFence('*'); const router = f.create(); await router.initialize(); await f.rounds(2);
   f.advance(9000); await f.rounds(2); assert.equal(f.calls.some(x => x[0] === 'launch'), false);
@@ -91,7 +91,7 @@ test('T03 single uses null semantic scope and origin target; global fence preven
   assert.ok(f.calls.some(x => x[0] === 'prepare'));
 });
 
-test('T01 unowned timeout observation failure alerts without stopping or freeing capacity', async t => {
+test('unowned timeout observation failure alerts without stopping or freeing capacity', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); f.put('a', { ready: false });
   const b = f.add('b'); const router = f.create(); await router.initialize(); await f.rounds(2);
   const read = f.deps.readLiveIdentity;
@@ -110,8 +110,8 @@ test('T01 unowned timeout observation failure alerts without stopping or freeing
   assert.equal(f.scene.has('a'), false);
 });
 
-// P04 T07 / DM F12/F14: rotation is independent of daily control cleanup.
-test('T07 diagnostics maintenance runs every minute independently and remains single-flight', async t => {
+// DM: rotation is independent of daily control cleanup.
+test('diagnostics maintenance runs every minute independently and remains single-flight', async t => {
   const f = routerFixture(t); f.put('origin');
   const hold = deferred(); let starts = 0;
   f.deps.maintainDiagnostics = async () => { starts++; if (starts === 2) await hold.promise; };
@@ -127,8 +127,8 @@ test('T07 diagnostics maintenance runs every minute independently and remains si
   assert.equal(f.calls.filter(x => x[0] === 'cleanup').length, 1);
 });
 
-// P04 T01 / M1 8.3: missing identity does not wait for the READY deadline.
-test('T01 missing runId stops immediately with null binding and alerts; known run waits', async t => {
+// launcher: missing identity does not wait for the READY deadline.
+test('missing runId stops immediately with null binding and alerts; known run waits', async t => {
   const f = routerFixture(t); f.put('origin');
   const missing = f.put('missing', { runId: null, ready: false });
   f.put('starting', { ready: false });
@@ -139,8 +139,8 @@ test('T01 missing runId stops immediately with null binding and alerts; known ru
   assert.equal(f.scene.has('missing'), false); assert.equal(f.scene.has('starting'), true);
 });
 
-// P04 T02 / M1 2.8: count the incompatible pending scope, without consuming it.
-test('T02 mode mismatch counts and alerts once per interval in both modes', async t => {
+// launcher: count the incompatible pending scope, without consuming it.
+test('mode mismatch counts and alerts once per interval in both modes', async t => {
   for (const mode of ['single', 'multi']) await t.test(mode, async t => {
     const f = routerFixture(t, { mode }); f.put(mode === 'single' ? null : 'origin');
     const controls = ['one','two','running'].map(text => f.db.insertControl(text, { sessionGroup: 'other', appendAckSuffix: false }));
@@ -159,8 +159,8 @@ test('T02 mode mismatch counts and alerts once per interval in both modes', asyn
   });
 });
 
-// P04 T01: a READY identity without startup controls is adopted once and reported.
-test('T01 startup prompt missing is reported once per adopted identity, not with a prompt', async t => {
+// a READY identity without startup controls is adopted once and reported.
+test('startup prompt missing is reported once per adopted identity, not with a prompt', async t => {
   const f = routerFixture(t); f.put('origin'); f.put('a'); f.put('with-prompt');
   const prompt = f.db.insertControl('startup', { sessionGroup: 'with-prompt', appendAckSuffix: false });
   f.current.get('with-prompt').startupControlIds = [prompt.id];
@@ -173,8 +173,8 @@ test('T01 startup prompt missing is reported once per adopted identity, not with
   assert.equal(missing().find(x => x.session_id === 'after-clear').session_group, 'a');
 });
 
-// IF-70: the two independent age limits are visible exactly once at startup.
-test('IF70 pending and recovery age limits print once despite reinitialize and ticks', async t => {
+// the two independent age limits are sible exactly once at startup.
+test('pending and recovery age limits print once despite reinitialize and ticks', async t => {
   const f = routerFixture(t); f.put('origin');
   f.options.pendingMaxAgeSeconds = 123; f.options.recoverMaxAgeSeconds = 456;
   const router = f.create(); await router.initialize(); await router.initialize(); await f.rounds(4);
@@ -182,8 +182,8 @@ test('IF70 pending and recovery age limits print once despite reinitialize and t
     ['C4_PENDING_MAX_AGE_SECONDS=123', 'C4_RECOVER_MAX_AGE_SECONDS=456']);
 });
 
-// ZYLO-98: invalid cadence must not disable maintenance or run it every tick.
-test('T07 diagnostic maintenance interval rejects non-positive and non-integer values', async t => {
+// invalid cadence must not disable maintenance or run it every tick.
+test('diagnostic maintenance interval rejects non-positive and non-integer values', async t => {
   const f = routerFixture(t);
   for (const value of [0, -1, NaN, Infinity, 1.5, '60000']) {
     f.options.diagnosticsIntervalMs = value;

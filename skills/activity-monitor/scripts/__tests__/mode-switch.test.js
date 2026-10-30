@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ModeSwitchCoordinator } from '../mode-switch.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
-import { M1RestartConfirmation } from '../m1-restart-confirmation.js';
+import { LauncherRestartConfirmation } from '../launcher-restart-confirmation.js';
 
 const error = code => Object.assign(new Error(code), { code });
 function fixture(overrides = {}) {
@@ -31,7 +31,7 @@ function fixture(overrides = {}) {
 }
 const request = { version: 1, type: 'mode_switch', requestId: 'mode-test', target: 'multi' };
 
-test('IF-38 admission priority: D9, config, noop, legacy, manual and unreadable intent', async () => {
+test('admission priority: , config, noop, legacy, manual and unreadable intent', async () => {
   const f = fixture(), owner = f.create();
   f.row = { run_id: 'old', target_mode: 'single' }; f.deps.readMode = () => { throw error('CONFIG_UNREADABLE'); };
   assert.deepEqual(await owner.handle(request), { ok: false, code: 'transition_open', runId: 'old', target: 'single' });
@@ -47,7 +47,7 @@ test('IF-38 admission priority: D9, config, noop, legacy, manual and unreadable 
   owner.readRequests = () => []; assert.equal((await owner.handle(request)).result, 'accepted'); assert.deepEqual(f.calls, ['begin']);
 });
 
-test('IF-38 actual admission wrapper defers corrupt F9 until after noop/open checks', async () => {
+test('actual admission wrapper defers corrupt until after noop/open checks', async () => {
   const f = fixture(), owner = f.create(); f.mode = 'multi';
   const store = { read: () => { throw error('requests_unreadable'); } };
   owner.readRequests = () => store.read();
@@ -57,7 +57,7 @@ test('IF-38 actual admission wrapper defers corrupt F9 until after noop/open che
   f.row = { run_id: 'already', target_mode: 'multi' }; assert.equal((await admission.handle(request)).code, 'transition_open');
 });
 
-test('IF-38 automatic migration requires all three conditions and emits success only after commit', async () => {
+test('automatic migration requires all three conditions and emits success only after commit', async () => {
   const f = fixture(), owner = f.create(); await owner.automatic(); assert.deepEqual(f.calls, []);
   owner.readMode = () => ({ mode: null, keyPresent: false }); f.legacy = true; await owner.automatic(); assert.deepEqual(f.calls, []);
   f.legacy = false; f.row = { run_id: 'existing' }; await owner.automatic(); assert.deepEqual(f.calls, []);
@@ -69,7 +69,7 @@ test('IF-38 automatic migration requires all three conditions and emits success 
   assert.equal(f.events.filter(event => event.event === 'auto_migration_begin').length, 1);
 });
 
-test('IF-39 stages only move forward and conversion never repeats after cutover', async () => {
+test('stages only move forward and conversion never repeats after cutover', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request);
   await owner.advance(); assert.equal(f.row.phase, 'converting'); assert.equal(f.fences[0].sessionGroup, '*');
   await owner.advance(); assert.equal(f.row.phase, 'cutover');
@@ -77,7 +77,7 @@ test('IF-39 stages only move forward and conversion never repeats after cutover'
   assert.deepEqual(f.calls, ['begin', 'absorb', 'convert', 'machine', 'allSessionGroups', 'cutover', 'writeMode', 'complete']);
 });
 
-for (const phase of ['gating', 'converting', 'cutover']) test(`IF-39 recovery preserves ${phase} state and rejects conflicting F1`, async () => {
+for (const phase of ['gating', 'converting', 'cutover']) test(`recovery preserves ${phase} state and rejects conflicting`, async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); f.row = { ...f.row, phase }; f.mode = 'invalid';
   await owner.advance(); assert.equal(f.row.reason, 'config_unreadable'); assert.equal(f.row.phase, phase);
   f.mode = 'multi'; await owner.advance();
@@ -85,7 +85,7 @@ for (const phase of ['gating', 'converting', 'cutover']) test(`IF-39 recovery pr
   assert.equal(f.calls.includes('absorb'), false); assert.equal(f.calls.includes('convert'), false);
 });
 
-test('IF-66 blocked events deduplicate consecutive reasons, A to B to A emits and success unblocks', async () => {
+test('blocked events deduplicate consecutive reasons, A to B to A emits and success unblocks', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); f.controls.machine = { running: 2, runningWithoutDeadline: 2 };
   await owner.advance(); await owner.advance();
   f.controls.machine = { running: 0, runningWithoutDeadline: 0 }; f.controls.allSessionGroups = { running: 2, runningWithoutDeadline: 2 }; await owner.advance();
@@ -95,7 +95,7 @@ test('IF-66 blocked events deduplicate consecutive reasons, A to B to A emits an
   assert.equal(f.events.filter(x => x.event === 'transition_unblocked').length, 1); assert.equal(f.row.reason, null);
 });
 
-test('IF-39 conversion failure retains phase and gate, then retries without absorbing again', async () => {
+test('conversion failure retains phase and gate, then retries without absorbing again', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); await owner.advance();
   owner.convert = () => { throw Object.assign(error('EIO'), { step: 'export' }); };
   await owner.advance(); await owner.advance(); assert.equal(f.row.reason, 'conversion_failed:export:EIO');
@@ -104,7 +104,7 @@ test('IF-39 conversion failure retains phase and gate, then retries without abso
   assert.equal(f.calls.filter(x => x === 'absorb').length, 1);
 });
 
-test('IF-39 observation errors and failed D8 reads never become empty input', async () => {
+test('observation errors and failed reads never become empty input', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); f.scenes = [{ present: true, observationError: error('TMUX_UNAVAILABLE') }];
   await assert.rejects(owner.advance(), { code: 'INVALID_OBSERVATION' }); assert.equal(f.row.phase, 'gating');
   f.scenes = [];
@@ -112,7 +112,7 @@ test('IF-39 observation errors and failed D8 reads never become empty input', as
   assert.equal(f.calls.includes('absorb'), false);
 });
 
-test('IF-39 extra fence prevents expiration/cutover and complete transaction is never replaced by clear', async () => {
+test('extra fence prevents expiration/cutover and complete transaction is never replaced by clear', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); await owner.advance();
   f.fences.push({ sessionGroup: 'tg:a', reason: 'model_config', runId: 'old' });
   await owner.advance(); assert.equal(f.row.reason, 'fence_extra:tg:a'); assert.equal(f.calls.includes('machine'), false);
@@ -123,9 +123,9 @@ test('IF-39 extra fence prevents expiration/cutover and complete transaction is 
   fails = false; await owner.advance(); assert.equal(f.row.phase, 'complete');
 });
 
-test('IF-39 PM2 adjacent ticks keep baseline/timer and confirmed attempt survives DB failure', async () => {
+test('PM2 adjacent ticks keep baseline/timer and confirmed attempt survives DB failure', async () => {
   let time = 1800000000000, restarts = 0, lists = 0, locked = false;
-  const restart = new M1RestartConfirmation({ now: () => time, restart: async () => { assert.equal(locked, false); restarts++; }, list: async () => { assert.equal(locked, false); lists++; return [{ name: 'c4-dispatcher', pm2_env: { status: 'online', pm_uptime: 1800000000001 } }]; } });
+  const restart = new LauncherRestartConfirmation({ now: () => time, restart: async () => { assert.equal(locked, false); restarts++; }, list: async () => { assert.equal(locked, false); lists++; return [{ name: 'c4-dispatcher', pm2_env: { status: 'online', pm_uptime: 1800000000001 } }]; } });
   const f = fixture({ restart, now: () => time, serialize: async action => { assert.equal(locked, false); locked = true; try { return await action(); } finally { locked = false; } } }), owner = f.create();
   await owner.handle(request); await owner.advance(); await owner.advance(); await owner.advance();
   assert.equal(owner.attempt.writtenAt, time); time += 1000; await new Promise(resolve => setImmediate(resolve));
@@ -135,30 +135,30 @@ test('IF-39 PM2 adjacent ticks keep baseline/timer and confirmed attempt survive
   assert.equal(f.row.phase, 'complete'); assert.equal(restarts, 1); assert.equal(lists, 1);
 });
 
-for (const phase of ['before_rename', 'after_rename']) test(`IF10-9 config ${phase} failure keeps gate and recovers forward`, async () => {
+for (const phase of ['before_rename', 'after_rename']) test(`config ${phase} failure keeps gate and recovers forward`, async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); await owner.advance(); await owner.advance();
   owner.writeMode = () => { if (phase === 'after_rename') f.mode = 'multi'; throw Object.assign(error('CONFIG_WRITE_FAILED'), { phase }); };
   await owner.advance(); assert.equal(f.row.reason, 'config_write_failed:CONFIG_WRITE_FAILED'); assert.equal(f.row.phase, 'cutover'); assert.equal(f.fences.length, 1);
   owner.writeMode = value => { f.mode = value; }; await owner.advance(); assert.equal(f.row.phase, 'complete');
 });
 
-test('IF-38 second config read fails closed before begin', async () => {
+test('second config read fails closed before begin', async () => {
   const f = fixture(); let reads = 0;
   const owner = f.create(); owner.readMode = () => { if (++reads === 2) throw error('EIO'); return { mode: 'single' }; };
   assert.deepEqual(await owner.handle(request), { ok:false, code:'config_unreadable' });
   assert.deepEqual(f.calls, []);
 });
 
-test('IF-39 restart rejection retains cutover and gate then starts fresh attempt', async () => {
+test('restart rejection retains cutover and gate then starts fresh attempt', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request); await owner.advance(); await owner.advance();
   owner.restart.advance = async () => { throw error('PM2_FAILED'); };
-  await owner.advance(); assert.equal(f.row.reason, 'm1_restart_unconfirmed'); assert.equal(owner.attempt, null);
+  await owner.advance(); assert.equal(f.row.reason, 'launcher_restart_unconfirmed'); assert.equal(owner.attempt, null);
   assert.equal(f.row.phase, 'cutover'); assert.equal(f.fences.length, 1);
   owner.restart.advance = async () => ({ confirmed: true }); await owner.advance();
-  assert.equal(f.row.phase, 'complete'); assert.equal(f.events.filter(x => x.event === 'transition_m1_restart_failed').length, 1);
+  assert.equal(f.row.phase, 'complete'); assert.equal(f.events.filter(x => x.event === 'transition_launcher_restart_failed').length, 1);
 });
 
-for (const code of ['DB_BUSY', 'DB_READ_FAILED']) test(`IF-39 missing-deadline detail ${code} propagates without blocking or absorbing`, async () => {
+for (const code of ['DB_BUSY', 'DB_READ_FAILED']) test(`missing-deadline detail ${code} propagates without blocking or absorbing`, async () => {
   const f = fixture();
   const expected = Object.assign(error(code), { persisted: [] });
   f.db.listRunningControlsWithoutDeadline = target => { assert.deepEqual(target, { machine: true }); throw expected; };
@@ -171,7 +171,7 @@ for (const code of ['DB_BUSY', 'DB_READ_FAILED']) test(`IF-39 missing-deadline d
   assert.equal(f.events.some(event => event.event === 'transition_blocked'), false);
 });
 
-test('IF-39 gating lists both scopes once before counts and blocks from returned ids', async () => {
+test('gating lists both scopes once before counts and blocks from returned ids', async () => {
   const f = fixture(), reads = [];
   f.db.listRunningControlsWithoutDeadline = target => { reads.push(target); return target.machine ? [] : [9, 12]; };
   f.db.countNonTerminalControls = () => { throw new Error('counts must not precede missing-deadline lists'); };
@@ -181,7 +181,7 @@ test('IF-39 gating lists both scopes once before counts and blocks from returned
   assert.equal(f.row.phase, 'gating'); assert.equal(f.calls.includes('absorb'), false);
 });
 
-test('IF-39 empty deadline lists allow absorption and only running counts gate it', async () => {
+test('empty deadline lists allow absorption and only running counts gate it', async () => {
   const f = fixture(), reads = [];
   f.db.listRunningControlsWithoutDeadline = target => { reads.push(['list', target]); return []; };
   let running = 1;
@@ -197,7 +197,7 @@ test('IF-39 empty deadline lists allow absorption and only running counts gate i
   assert.deepEqual(reads, [['list', { machine: true }], ['list', { allSessionGroups: true }], ['count', { machine: true }], ['count', { allSessionGroups: true }]]);
 });
 
-test('IF-39 multi reclaim preserves existing reasons, waits starting scenes, cleans before counts', async () => {
+test('multi reclaim preserves existing reasons, waits starting scenes, cleans before counts', async () => {
   const f = fixture(); f.mode='multi'; const order=[];
   f.scenes=[{sessionGroup:'origin',present:true,ready:true,runId:'o'}, {sessionGroup:'tg:a',present:true,ready:true,runId:'a'}, {sessionGroup:'tg:b',present:true,ready:false,runId:'b'}];
   f.fences=[{sessionGroup:'tg:a',reason:'model_config',runId:'a',createdAt:1800000000}];
@@ -211,7 +211,7 @@ test('IF-39 multi reclaim preserves existing reasons, waits starting scenes, cle
   assert.equal(f.fences.some(x=>x.sessionGroup==='*'),true);
 });
 
-test('IF-39 single reclaim uses global scope without creating a per-group fence', async () => {
+test('single reclaim uses global scope without creating a per-group fence', async () => {
   const f=fixture(), calls=[]; f.scenes=[{sessionGroup:'origin',present:true,ready:true,runId:'single-run'}];
   f.deps.lifecycle.advanceReclaim=async (...args)=>calls.push(args);
   const owner=f.create(); await owner.handle(request); await owner.advance();
@@ -219,14 +219,14 @@ test('IF-39 single reclaim uses global scope without creating a per-group fence'
   assert.deepEqual(calls[0][2],{unfenced:true}); assert.deepEqual(f.fences.map(x=>x.sessionGroup),['*']); assert.equal(f.row.phase,'gating');
 });
 
-test('IF-36/38 automatic migration respects durable manual intent and unreadable intent',async()=>{
+test('automatic migration respects durable manual intent and unreadable intent',async()=>{
  const f=fixture({readMode:()=>({mode:null,keyPresent:false})}), owner=f.create(); f.requests=[{reason:'manual_restart'}];
  await owner.automatic(); assert.deepEqual(f.calls,[]);
  owner.readRequests=()=>{throw error('requests_unreadable');}; await assert.rejects(owner.automatic(),{code:'requests_unreadable'}); assert.deepEqual(f.calls,[]);
 });
 
 
-test('IF-38 changed F1 between admission reads rejects before creating D9', async () => {
+test('changed between admission reads rejects before creating', async () => {
   const f = fixture(), owner = f.create();
   let reads = 0;
   owner.readMode = () => ({ mode: ++reads === 1 ? 'single' : 'multi', keyPresent: true });
@@ -239,7 +239,7 @@ test('IF-38 changed F1 between admission reads rejects before creating D9', asyn
 
 
 
-test('IF-39 accepted gating continues without re-reading later damaged F9', async () => {
+test('accepted gating continues without re-reading later damaged', async () => {
   const f = fixture(), owner = f.create();
   await owner.handle(request);
   owner.readRequests = () => { throw error('requests_unreadable'); };
@@ -249,7 +249,7 @@ test('IF-39 accepted gating continues without re-reading later damaged F9', asyn
   assert.equal(f.calls.filter(call => call === 'absorb').length, 1);
 });
 
-test('IF-39 cutover writes F1 before the completion-only extra fence check', async () => {
+test('cutover writes before the completion-only extra fence check', async () => {
   const f = fixture(), owner = f.create();
   await owner.handle(request); await owner.advance(); await owner.advance();
   f.fences.push({ sessionGroup: 'tg:a', reason: 'model_config', runId: 'old' });
@@ -261,7 +261,7 @@ test('IF-39 cutover writes F1 before the completion-only extra fence check', asy
 });
 
 
-test('IF-39 machine blocker still reads each deadline scope exactly once', async () => {
+test('machine blocker still reads each deadline scope exactly once', async () => {
   const f = fixture(), reads = [];
   f.db.listRunningControlsWithoutDeadline = target => { reads.push(target); return target.machine ? [3] : [8]; };
   const owner = f.create(); await owner.handle(request); await owner.advance();
@@ -269,7 +269,7 @@ test('IF-39 machine blocker still reads each deadline scope exactly once', async
   assert.equal(f.row.reason, 'running_control_without_deadline:machine:3');
 });
 
-test('IF-39 first unknown observation adds no session fence or reclaim', async () => {
+test('first unknown observation adds no session fence or reclaim', async () => {
   const f = fixture(); f.mode = 'multi';
   f.scenes = [{sessionGroup:'tg:a', present:true, ready:true, runId:'a', observationError:error('TMUX_UNAVAILABLE')}];
   const reclaimed = []; f.deps.lifecycle.advanceReclaim = async fence => { reclaimed.push(fence); };
@@ -279,7 +279,7 @@ test('IF-39 first unknown observation adds no session fence or reclaim', async (
   assert.deepEqual(reclaimed, []); assert.equal(f.calls.includes('absorb'), false);
 });
 
-test('IF-39 unknown second observation prevents absorption', async () => {
+test('unknown second observation prevents absorption', async () => {
   const f = fixture(); let reads = 0;
   f.deps.observe = () => ++reads === 1 ? [] : [{present:false, observationError:error('TMUX_UNAVAILABLE')}];
   const owner = f.create(); await owner.handle(request);

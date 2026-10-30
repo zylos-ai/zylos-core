@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-test('T06 statusLine child publishes samples without early Sync or rotation controls',t=>{
+test('statusLine child publishes samples without early Sync or rotation controls',t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'statusline-control-boundary-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const scripts=path.join(root,'.claude/skills/comm-bridge/scripts');fs.mkdirSync(scripts,{recursive:true});
   fs.writeFileSync(path.join(scripts,'package.json'),'{"type":"module"}');

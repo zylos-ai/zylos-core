@@ -6,7 +6,7 @@ import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { SupervisorLegacyStatus } from '../supervisor-legacy-status.js';
 import { publishSessionStatus } from '../status-writer.js';
 function fixture(t) {
-  const f=readyTmuxTarget(t,{prefix:'p05-legacy-',mode:'single',runtimeProcess:true});
+  const f=readyTmuxTarget(t,{prefix:'supervisor-legacy-',mode:'single',runtimeProcess:true});
   f.tmux('new-session','-d','-s','claude-main','-e','ZYLOS_RUN_ID=',path.join(f.root,'claude'),'120');
   const pid=Number(f.tmux('display-message','-p','-t','=claude-main:','#{pane_pid}'));
   const dir=path.join(f.root,'activity-monitor'),foreground={version:1,session_id:'old-session',claude_pid:pid,runtime:'claude',observed_at:Date.now()};
@@ -18,7 +18,7 @@ function fixture(t) {
   const observer=new SupervisorLegacyStatus({env:f.env,connectionOptions:{socketPath:f.socketPath,binary:f.binary},now:()=>now,readHealth:()=>({health:'ok'})});
   t.after(()=>observer.close());return {...f,dir,foreground,observer,now};
 }
-test('T01/T08 legacy and new Origin publish separate identities; newest unrelated transcript cannot make legacy busy', {timeout:15000}, async t=>{
+test('legacy and new Origin publish separate identities; newest unrelated transcript cannot make legacy busy', {timeout:15000}, async t=>{
   const f=fixture(t),legacy=await f.observer.tick();
   assert.equal(legacy.sessionId,'old-session');assert.equal(legacy.runId,null);assert.equal(legacy.state,'idle');
   const statusFile=path.join(f.root,'activity-monitor/session-groups/origin/agent-status.json');
@@ -30,7 +30,7 @@ test('T01/T08 legacy and new Origin publish separate identities; newest unrelate
   f.tmux('kill-session','-t','=claude-main');await f.observer.tick();assert.equal(fs.readFileSync(oldFile,'utf8'),before);
   assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));
 });
-test('T01/T08 legacy foreground from another PID or unobservable tmux never publishes state', {timeout:15000}, async t=>{
+test('legacy foreground from another PID or unobservable tmux never publishes state', {timeout:15000}, async t=>{
   const f=fixture(t);fs.writeFileSync(path.join(f.dir,'foreground-session.json'),JSON.stringify({...f.foreground,claude_pid:process.pid}));
   assert.equal(await f.observer.tick(),undefined);assert.equal(fs.existsSync(path.join(f.dir,'agent-status.json')),false);
   fs.writeFileSync(path.join(f.dir,'foreground-session.json'),JSON.stringify(f.foreground));

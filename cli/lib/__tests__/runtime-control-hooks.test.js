@@ -17,7 +17,7 @@ function authOptions(group = 'origin') {
     exec: (...args) => calls.push(args) };
 }
 
-test('P06 2.9: permission approval targets the current Claude run despite a Codex default', async () => {
+test('permission approval targets the current Claude run despite a Codex default', async () => {
   const options = authOptions();
   assert.deepEqual(await approvePermission(payload, options), { skipped: false });
   const args = options.calls[0][1];
@@ -32,7 +32,7 @@ test('P06 2.9: permission approval targets the current Claude run despite a Code
   assert.equal(single.calls[0][1].includes('--group'), false);
 });
 
-test('P06 2.9: subagents, missing run, disabled and malformed policy never enqueue', async () => {
+test('subagents, missing run, disabled and malformed policy never enqueue', async () => {
   for (const options of [
     { ...authOptions(), env: {} },
     { ...authOptions(), readConfig: () => ({ auto_approve_permission: false }) },
@@ -54,14 +54,14 @@ function restartOptions(config = {}) {
     exec: (...args) => calls.push(args), exists: () => true, log: () => {}, errorLog: () => {} };
 }
 
-test('P06 2.10: stable single restart uses require-idle', async () => {
+test('stable single restart uses require-idle', async () => {
   const options = restartOptions({ session_mode: 'single' });
   assert.equal((await enqueueRestartIfNeeded(options)).submitted, true);
   assert.ok(options.calls[0][1].includes('--require-idle'));
   assert.equal(options.calls[0][1].includes('--group'), false);
 });
 
-test('P06 2.10: unreadable mode or transition never falls back to exit', async () => {
+test('unreadable mode or transition never falls back to exit', async () => {
   for (const options of [
     { ...restartOptions(), readMode: () => { throw Object.assign(new Error('unreadable'), { code: 'CONFIG_UNREADABLE' }); } },
     { ...restartOptions(), readTransition: () => { throw new Error('unreadable transition'); } },
@@ -79,7 +79,7 @@ function sockFixture(outcome, lookup = 'unknown') {
     lookupRestart: async (...args) => { lookups.push(args); return lookup; } };
 }
 
-test('IB-40/43 hook consumer uses P05 submit, frozen envelope and accepted results', async () => {
+test('hook consumer uses submit, frozen envelope and accepted results', async () => {
   for (const result of ['accepted', 'already_accepted', 'done_empty']) {
     const runCount = result === 'done_empty' ? 0 : 3;
     const options = sockFixture({ kind: 'accepted', sent: true,
@@ -100,7 +100,7 @@ test('IB-40/43 hook consumer uses P05 submit, frozen envelope and accepted resul
   }
 });
 
-test('IB-40/43 definitive rejection and sent:false never look up, resubmit or fall back to exit', async () => {
+test('definitive rejection and sent:false never look up, resubmit or fall back to exit', async () => {
   for (const code of ['single_mode', 'manual_restart_pending', 'requests_unreadable', 'request_conflict', 'invalid_request', 'entry_not_open']) {
     const options = sockFixture({ kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code } });
     const actual = await enqueueRestartIfNeeded(options);
@@ -116,7 +116,7 @@ test('IB-40/43 definitive rejection and sent:false never look up, resubmit or fa
   }
 });
 
-test('IB-40 single_mode falls back only after fresh stable single reads and keeps require-idle', async () => {
+test('single_mode falls back only after fresh stable single reads and keeps require-idle', async () => {
   const rejection = { kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code: 'single_mode' } };
   const options = sockFixture(rejection);
   let reads = 0, transitions = 0;
@@ -147,7 +147,7 @@ test('IB-40 single_mode falls back only after fresh stable single reads and keep
   }
 });
 
-test('IB-40/43 all uncertain outcomes use one same-deadline lookup and never resubmit', async () => {
+test('all uncertain outcomes use one same-deadline lookup and never resubmit', async () => {
   for (const kind of ['no_reply', 'invalid_reply', 'timeout', 'deadline_exceeded']) {
     for (const lookup of ['accepted', 'done', 'unknown', 'deadline_exceeded']) {
       const options = sockFixture({ kind, sent: true }, lookup);
@@ -160,7 +160,7 @@ test('IB-40/43 all uncertain outcomes use one same-deadline lookup and never res
   }
 });
 
-test('IB-40/43 lookup failure and exhausted budget remain fail closed', async () => {
+test('lookup failure and exhausted budget remain fail closed', async () => {
   const failed = sockFixture({ kind: 'no_reply', sent: true });
   failed.lookupRestart = () => { throw Error('unreadable'); };
   const actual = await enqueueRestartIfNeeded(failed);
@@ -170,7 +170,7 @@ test('IB-40/43 lookup failure and exhausted budget remain fail closed', async ()
   assert.equal(expired.submits.length, 0); assert.equal(expired.lookups.length, 0); assert.equal(expired.calls.length, 0);
 });
 
-test('P06 2.2: both-runtime preparation preserves unrelated hook identity', () => {
+test('both-runtime preparation preserves unrelated hook identity', () => {
   assert.equal(isCoreCodexHook('node /custom/session-start-orchestrator.js', '/instance'), false);
   assert.equal(isCoreCodexHook('node /instance/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --shard identity', '/instance'), true);
   const desired = desiredClaudeHooks({ zylosDir: '/isolated-instance', existsSync: () => false });
@@ -182,8 +182,8 @@ test('P06 2.2: both-runtime preparation preserves unrelated hook identity', () =
   assert.equal(failed.fatal, true);
 });
 
-test('P06 2.2/2.11: init hook sync generates both runtime assets idempotently without restart', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-hook-sync-'));
+test('init hook sync generates both runtime assets idempotently without restart', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-hook-sync-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
   fs.mkdirSync(home);
@@ -213,8 +213,8 @@ test('P06 2.2/2.11: init hook sync generates both runtime assets idempotently wi
   assert.match(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8'), /trust_level/);
 });
 
-test('P06 2.11: init hook sync preserves unreadable settings and reports failure before Codex generation', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-bad-hook-sync-'));
+test('init hook sync preserves unreadable settings and reports failure before Codex generation', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-bad-hook-sync-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const settingsPath = path.join(root, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
@@ -226,8 +226,8 @@ test('P06 2.11: init hook sync preserves unreadable settings and reports failure
   }
 });
 
-test('P06 review: upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preserves them', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-upgrade-hooks-'));
+test('upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preserves them', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-upgrade-hooks-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const root = path.join(home, 'zylos');
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });

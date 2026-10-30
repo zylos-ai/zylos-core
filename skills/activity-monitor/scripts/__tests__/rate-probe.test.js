@@ -7,10 +7,10 @@ import { randomUUID } from 'node:crypto';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 
-// DM-63: actual observer/coordinator/F10; injected runtime screen and control
-// acknowledgements. No model API, real quota, M1 process or tmux is involved.
+// actual observer/coordinator; injected runtime screen and control
+// acknowledgements. No model API, real quota, launcher process or tmux is involved.
 function fixture(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'i2-rate-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rate-probe-')));
   let now = 1800000000000, matches = {}, coordinator, observer;
   let scenes = [{ sessionGroup: 'telegram:a', runtime: 'codex', runId: randomUUID(),
     sessionId: 'session-a', present: true, ready: true }];
@@ -87,11 +87,11 @@ async function verifyRateRecovery(t, { expired }) {
   assert.equal(f.health().scheduling.cooldownUntil, 0);
 }
 
-for (const expired of [false, true]) test(`DM-63 injected rate limit, ${expired ? 'probe-driven zero' : 'future cooldown'}, auth restart/release, then successful probe`, async t => {
+for (const expired of [false, true]) test(`injected rate limit, ${expired ? 'probe-driven zero' : 'future cooldown'}, auth restart/release, then successful probe`, async t => {
   await verifyRateRecovery(t, { expired });
 });
 
-test('DM-63 no independent rate limit: auth restart/release returns directly to ok', async t => {
+test('no independent rate limit: auth restart/release returns directly to ok', async t => {
   const f = fixture(t); await f.reopen();
   assert.equal((await f.probe({ force: true, evidence: { authFailure: { detected: true } } })).classification, 'auth_error');
   assert.equal(f.health().rateLimitActive, false); await f.reopen();

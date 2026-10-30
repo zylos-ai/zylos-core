@@ -13,10 +13,10 @@ const argMax = Number(execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8' })
 assert.ok(Number.isSafeInteger(argMax) && argMax > 0);
 
 for (const absorbed of [false, true]) {
-  test(`IF-68 ${absorbed ? 'absorbed' : 'ordinary'} real CLI failure set retains exactly the committed audit`, { timeout: 30000 }, async t => {
+  test(`${absorbed ? 'absorbed' : 'ordinary'} real CLI failure set retains exactly the committed audit`, { timeout: 30000 }, async t => {
     for (const fault of ['success', 'E2BIG', 'EACCES', 'ENOENT', 'missing', 'deleted', 'syntax', 'DB_BUSY']) {
       await t.test(fault, t => {
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p09-send-cli-'));
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-routing-send-cli-'));
         t.after(() => fs.rmSync(root, { recursive: true, force: true }));
         fs.mkdirSync(path.join(root, 'comm-bridge'));
         fs.mkdirSync(path.join(root, '.zylos'));

@@ -8,7 +8,7 @@ export const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function setupLaunch(t) {
   const scripts = [];
   let server, killed = false;
-  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'p02-launch-',socketName:'socket',trim:false,
+  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'session-runtime-launch-',socketName:'socket',trim:false,
     beforeCleanup:()=>{
       if (!killed && server) { try { process.kill(server, 'SIGCONT'); } catch {} }
       for (const script of scripts) script.cleanup();

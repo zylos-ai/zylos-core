@@ -8,10 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { isolatedTmux } from '../../../../../test/helpers/isolated-tmux.js';
 import { seedCodexTrustFixture } from '../../../../../test/helpers/codex-trust.js';
-const worker=fileURLToPath(new URL('./i2-if63-worker.js',import.meta.url));
+const worker=fileURLToPath(new URL('./launch-admission-worker.js',import.meta.url));
 export const T=1800000000000;
 export async function fixture(t,{health='unavailable',budget={},mode='multi'}={}) {
- const children=[];const tm=isolatedTmux(t,{prefix:'if63-',beforeCleanup:async()=>{if(process.env.IF63_TRACE_DIR){const dir=path.join(process.env.IF63_TRACE_DIR,createHash('sha256').update(t.name).digest('hex').slice(0,12));fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'case.json'),JSON.stringify({name:t.name,root,processes:children.map(p=>({role:p.role,pid:p.child.pid}))}));for(const role of ['m1','m4'])if(fs.existsSync(path.join(root,role+'.jsonl')))fs.copyFileSync(path.join(root,role+'.jsonl'),path.join(dir,role+'.jsonl'));}for(const p of children)await p.kill()}});
+ const children=[];const tm=isolatedTmux(t,{prefix:'launch-admission-',beforeCleanup:async()=>{if(process.env.LAUNCH_ADMISSION_TRACE_DIR){const dir=path.join(process.env.LAUNCH_ADMISSION_TRACE_DIR,createHash('sha256').update(t.name).digest('hex').slice(0,12));fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'case.json'),JSON.stringify({name:t.name,root,processes:children.map(p=>({role:p.role,pid:p.child.pid}))}));for(const role of ['m1','m4'])if(fs.existsSync(path.join(root,role+'.jsonl')))fs.copyFileSync(path.join(root,role+'.jsonl'),path.join(dir,role+'.jsonl'));}for(const p of children)await p.kill()}});
  const root=fs.realpathSync(tm.dir);let clock=T;
  fs.mkdirSync(path.join(root,'.zylos'));fs.mkdirSync(path.join(root,'comm-bridge'));
  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:mode}));seedCodexTrustFixture({root,home:root});

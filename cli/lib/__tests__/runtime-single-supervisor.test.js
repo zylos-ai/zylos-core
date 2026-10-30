@@ -79,10 +79,10 @@ setInterval(() => {}, 1000);
   return { live, record, events, launches };
 }
 
-// IF-47 xv(a): actual M4 admission/lifecycle, C4 ledger and tmux. The named
+// : actual supervisor admission/lifecycle, C4 ledger and tmux. The named
 // sleeper is a controlled runtime process; no authenticated model is used.
 for (const json of [false, true]) {
-  test(`IF-47 xv(a) single ${json ? 'JSON' : 'text'} stops before ledger settlement and restarts on the new baseline`, { timeout: 30000 }, async t => {
+  test(`single ${json ? 'JSON' : 'text'} stops before ledger settlement and restarts on the new baseline`, { timeout: 30000 }, async t => {
     const f = readyTmuxTarget(t, { prefix: 'rt-m4-', mode: 'single', runtimeProcess: true });
     f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
     const configFile = path.join(f.root, '.zylos/config.json');
@@ -149,7 +149,7 @@ for (const json of [false, true]) {
     assert.equal(admitted[0].expectedRunId, old.runId);
     assert.match(admitted[0].requestId, /^cli-rt-/);
     assert.equal(Object.hasOwn(admitted[0], 'expectedSessionId'), false);
-    // IF-47 xv(a): stop first, retain the fence/request until the pre-fence
+    // : stop first, retain the fence/request until the pre-fence
     // conversation settles. Completing it early would hide reversed ordering.
     await service.supervisor.loop.tick();
     const afterTick = await scenes.readIdentity(null);
@@ -158,13 +158,13 @@ for (const json of [false, true]) {
       conversation: f.db.prepare('SELECT id,status FROM conversations WHERE id=?').get(conversation.id),
       fences: db.listDrainFences(), pending: service.supervisor.admission.readRequests(), logs,
       diagnostics: diagnostics() };
-    if (process.env.P06_SINGLE_M4_EVIDENCE_DIR) {
-      fs.mkdirSync(process.env.P06_SINGLE_M4_EVIDENCE_DIR, { recursive: true });
-      fs.writeFileSync(path.join(process.env.P06_SINGLE_M4_EVIDENCE_DIR, `${json ? 'json' : 'text'}-before-conversation-end.json`), JSON.stringify(evidence, null, 2) + '\n');
+    if (process.env.SINGLE_MODE_SUPERVISOR_EVIDENCE_DIR) {
+      fs.mkdirSync(process.env.SINGLE_MODE_SUPERVISOR_EVIDENCE_DIR, { recursive: true });
+      fs.writeFileSync(path.join(process.env.SINGLE_MODE_SUPERVISOR_EVIDENCE_DIR, `${json ? 'json' : 'text'}-before-conversation-end.json`), JSON.stringify(evidence, null, 2) + '\n');
     }
     assert.equal(evidence.runningConversations, 1);
     assert.equal(evidence.conversation.status, 'running');
-    assert.equal(afterTick.present, false, 'IF-47 xv(a): M4 stops the old session while its claimed conversation is still running');
+    assert.equal(afterTick.present, false, ' xv(a): supervisor stops the old session while its claimed conversation is still running');
     assert.equal(evidence.pending.length, 1);
     assert.equal(evidence.pending[0].requestId, requests[0].requestId);
     assert.equal(evidence.fences.length, 1);
@@ -185,8 +185,8 @@ for (const json of [false, true]) {
     assert.notEqual(replacement.live.runId, old.runId);
     assert.equal(replacement.live.runtime, 'codex');
     assert.deepEqual(replacement.live.launchConfig, { runtime: 'codex', mode: 'default' });
-    if (process.env.P06_SINGLE_M4_EVIDENCE_DIR) {
-      fs.writeFileSync(path.join(process.env.P06_SINGLE_M4_EVIDENCE_DIR, `${json ? 'json' : 'text'}-completed.json`),
+    if (process.env.SINGLE_MODE_SUPERVISOR_EVIDENCE_DIR) {
+      fs.writeFileSync(path.join(process.env.SINGLE_MODE_SUPERVISOR_EVIDENCE_DIR, `${json ? 'json' : 'text'}-completed.json`),
         JSON.stringify({ ...evidence, done, replacement, pendingAfter: service.supervisor.admission.readRequests(),
           fencesAfter: db.listDrainFences() }, null, 2) + '\n');
     }

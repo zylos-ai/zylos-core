@@ -76,7 +76,7 @@ async function commitProgress(f, scope, ids) {
   const after = fs.readFileSync(state, 'utf8'); return { before, after };
 }
 
-for (const source of ['single', 'multi']) test(`IF67 ${source}: converted W4, P06 replacement, real query/send CLI and guarded Sync preserve route/body bytes`, async () => {
+for (const source of ['single', 'multi']) test(`${source}: converted , replacement, real query/send CLI and guarded Sync preserve route/body bytes`, async () => {
   const f = fixture(source);
   const variants = [
     ['A', 'a'.repeat(65536), 'route-A'], ['H', 'hello', 'h'.repeat(20 * 1024)],
@@ -154,7 +154,7 @@ for (const source of ['single', 'multi']) test(`IF67 ${source}: converted W4, P0
   assert.deepEqual(extractAbsorbedBlock(fs.readFileSync(remainingPath, 'utf8')).entries.map(e => e.id), rows.filter(r => ['O','FAILED'].includes(r.name)).map(r => r.id));
 }, 90000);
 
-for (const source of ['single','multi']) test(`IF67 B ${source}: 1000 converted entries, actual reply progress, 10→990→empty guarded commits`, async () => {
+for (const source of ['single','multi']) test(`B ${source}: 1000 converted entries, actual reply progress, 10→990→empty guarded commits`, async () => {
   const f = fixture(source); for (let n = 0; n < 1000; n++) f.add('x', 'route-' + n);
   const converted = f.convert(), runId = converted.row.run_id, before = inputSnapshot(f), scope = source === 'single' ? 'demo:a' : '*';
   await boot(f, scope, 'fx-b-0', converted.handoff);
@@ -164,7 +164,7 @@ for (const source of ['single','multi']) test(`IF67 B ${source}: 1000 converted 
   async function handle(ids) {
     for (const id of ids) {
       const full = JSON.parse(f.query.absorbed({ runId, id, json: true })).data; assert.equal(full.data, 'x');
-      // P09 production path with the same real D9/D1 transaction and argv child
+      // production path with the same real / transaction and argv child
       // as the CLI; avoids 1000 extra parent Node startups in the bulk case.
       await sendExternal(readAbsorbedReply(runId, String(id), f.api), 'ack', { api: f.api, skillsDir: f.skills, env: f.env, appendFallback: async () => {} }); evidence.push(id);
     }
@@ -180,7 +180,7 @@ for (const source of ['single','multi']) test(`IF67 B ${source}: 1000 converted 
   assert.equal(argv(f).length, 1000); assert.deepEqual(inputSnapshot(f), before);
 }, 180000);
 
-test('IF67 unsafe-integer IDs are rejected without misrouting or sending', () => {
+test('unsafe-integer IDs are rejected without misrouting or sending', () => {
   const f = fixture('single'), row = f.add('x', 'exact-route'), converted = f.convert(), runId = converted.row.run_id;
   const exact = '1000000000000000001'; f.db.prepare('UPDATE conversations SET id=? WHERE id=?').run(BigInt(exact), row.id);
   f.db.prepare('UPDATE mode_transitions SET absorbed_ids=? WHERE run_id=?').run(`[${exact}]`, runId);

@@ -10,7 +10,7 @@ const binary = process.env.TEST_TMUX_BIN || 'tmux';
 const ready = async () => ({ runId: 'r1', sessionId: 's1', ts: 1, startupControlIds: [] });
 async function fixture(t) {
   let connection;
-  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'p02-target-',socketName:'tmux.sock',beforeCleanup:()=>connection?.close()});
+  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'session-runtime-target-',socketName:'tmux.sock',beforeCleanup:()=>connection?.close()});
   tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', '-e', 'ZYLOS_RUN_ID=r1', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', 'sleep', '120');
   connection = await openTmuxConnection({ binary, socketPath, sessionName: 'fixture' });
   return { connection, tmux, socketPath, dir, options: { connection, tmuxName: 'fixture', readReady: ready } };
@@ -95,7 +95,7 @@ test('same socket restart fails its generation guard without replay', async t =>
   const replacement = await openTmuxConnection({binary,socketPath}); assert.notEqual(await serverGeneration(replacement),target.serverGeneration); replacement.close();
 });
 test('absent server differs from unexecutable transport; missing generation rejected', async t => {
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-no-server-')); t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-no-server-')); t.after(()=>fs.rm(dir,{recursive:true,force:true}));
   const absent = await openTmuxConnection({binary,socketPath:path.join(dir,'absent')});
   const missing = await openTmuxConnection({binary:path.join(dir,'missing')});
   t.after(()=>{absent.close();missing.close();});

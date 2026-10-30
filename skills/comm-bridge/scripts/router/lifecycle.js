@@ -9,7 +9,8 @@ const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js
 import { createSinglePreparation, createLegacyMigration } from './resident.js';
 
 // Only stale derived samples and pre-existing lifecycle caches are reset.
-// F3 remains until the startup hook replaces it; F6 history belongs to M4.
+// The current-session sample remains until the startup hook replaces it;
+// lifecycle history belongs to the supervisor.
 const lifecycleCaches = ['tool-event-stream-state.json', 'session-tool-state.json', 'foreground-session.json'];
 
 export function createLifecycleProviders({ env = process.env, tmux = {}, now = Date.now,

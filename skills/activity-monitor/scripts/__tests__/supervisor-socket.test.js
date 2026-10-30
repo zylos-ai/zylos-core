@@ -22,7 +22,7 @@ async function socketFixture(t, deps) {
   };
   send.handler=handler;return send;
 }
-test('IF-14 actual socket scopes v2 delivery, rejects stale runs and maps v1 timestamp', async t => {
+test('actual socket scopes v2 delivery, rejects stale runs and maps v1 timestamp', async t => {
   const delivered=[],groups=[],logs=[];let mode='multi';
   const exchange=await socketFixture(t,{readMode:()=>({mode}),readRun:group=>{groups.push(group);return {runId:'r',runtime:'claude'};},onDelivered:event=>delivered.push(event),log:line=>logs.push(line)});
   const v2={version:2,type:'notify_delivered',requestId:'n',conversationId:1,channel:'telegram',sessionGroup:'telegram:a',runId:'r',runtime:'claude',pastedAt:1792000000000};
@@ -35,17 +35,17 @@ test('IF-14 actual socket scopes v2 delivery, rejects stale runs and maps v1 tim
   assert.equal((await exchange({...v2,pastedAt:'wrong'})).code,'invalid_request');
   assert.deepEqual(groups,['telegram:a','telegram:a','origin',null]);
 });
-test('T04 first line is consumed once and malformed requests do not enter admission', async t => {
+test('first line is consumed once and malformed requests do not enter admission', async t => {
   const accepted=[];const exchange=await socketFixture(t,{admission:{handle:async r=>{accepted.push(r);return {ok:true};}}});
   assert.equal((await exchange('bad\n')).code,'invalid_request');assert.equal((await exchange('[]\n')).code,'invalid_request');
   assert.equal((await exchange('{"type":"first"}\n{"type":"second"}\n')).ok,true);assert.deepEqual(accepted,[{type:'first'}]);
 });
-test('T04 uncertain admission write closes without a fabricated rejection; route preserves baseline error', async t => {
+test('uncertain admission write closes without a fabricated rejection; route preserves baseline error', async t => {
   const exchange=await socketFixture(t,{admission:{handle:async()=>{throw Object.assign(new Error('disk'),{code:'EIO'});}},router:{route:async()=>{throw new Error('routing failed');}}});
   assert.equal(await exchange({version:1,type:'restart_all',requestId:'u'}),null);
   const failed=await exchange({version:2,type:'route',requestId:'r'});assert.equal(failed.reason,'message_router_error');assert.equal(failed.recovered,false);
 });
-test('DM-42 real process dies after F9 commit before reply; recovered owner preserves idempotence', async t => {
+test('real process dies after commit before reply; recovered owner preserves idempotence', async t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-crash-'));const socketPath=path.join(root,'am.sock');
   const children=new Set();t.after(async()=>{for(const child of children){child.kill('SIGKILL');await once(child,'exit').catch(()=>{});}fs.rmSync(root,{recursive:true,force:true});});
   const admissionURL=new URL('../supervisor-admission.js',import.meta.url).href;
@@ -73,7 +73,7 @@ server.listen(socket,()=>process.send('ready'));`;
   await start(false);const reply=await submit(input,{socketPath});assert.equal(reply.kind,'accepted');assert.equal(reply.reply.result,'already_accepted');assert.equal(reply.reply.runCount,2);
 });
 
-test('T01 socket shutdown drain waits accepted async route mutations and closed entry rejects bypass paths', async t=>{
+test('socket shutdown drain waits accepted async route mutations and closed entry rejects bypass paths', async t=>{
   let release,started;const blocked=new Promise(resolve=>release=resolve),entered=new Promise(resolve=>started=resolve);
   let open=true,mutated=false,calls=0;
   const send=await socketFixture(t,{isOpen:()=>open,router:{route:async()=>{calls++;started();await blocked;mutated=true;return {ok:true};}},

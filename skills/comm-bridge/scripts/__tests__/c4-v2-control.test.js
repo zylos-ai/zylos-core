@@ -9,7 +9,7 @@ const add = (s, sessionGroup, content = 'work', options = {}) => s.insertControl
 const row = (db, id) => db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
 const binding = run => ({ expectedRunId: run, tmuxTarget: { serverGeneration: 'gen', sessionId: '$1', paneId: '%2' } });
 
-test('IF15 NULL scope is allowed only in single, fails closed on bad F1 and every open transition phase', t => {
+test('NULL scope is allowed only in single, fails closed on bad and every open transition phase', t => {
   const { store: multi, db } = fixture(t);
   assert.throws(() => add(multi, null), { code: 'CONTROL_TARGET_REQUIRED' });
   assert.equal(db.prepare('SELECT count(*) n FROM control_queue').get().n, 0);
@@ -27,7 +27,7 @@ test('IF15 NULL scope is allowed only in single, fails closed on bad F1 and ever
   }
   assert.equal(local.prepare('SELECT count(*) n FROM control_queue').get().n, 1);
 });
-test('DM23 supersede is scoped by content, group and normalized binding, never running', t => {
+test('supersede is scoped by content, group and normalized binding, never running', t => {
   const { store: s, db } = fixture(t, single);
   const a = add(s, 'a'), b = add(s, 'b'), machine = add(s, null);
   const current = add(s, 'a'); assert.equal(current.superseded_count, 1);
@@ -68,7 +68,7 @@ test('scope selectors, availability and two-connection CAS exclude machine/other
   peer.setDrainFence('*'); assert.equal(s.claimControl(future.id), false);
   assert.equal(s.getNextPendingControl(NOW + 1, { sessionGroups: ['future'] }), null);
 });
-test('DM24/25 three targets count and expire only pending, preserve running and terminal rows', t => {
+test('three targets count and expire only pending, preserve running and terminal rows', t => {
   for (const [target, scopes] of [[{ sessionGroup: 'a' }, ['a']], [{ machine: true }, [null]], [{ allSessionGroups: true }, ['a', 'b']]]) {
     const { store: s, db } = fixture(t, single);
     const rows = [];
@@ -87,7 +87,7 @@ test('DM24/25 three targets count and expire only pending, preserve running and 
     }
   }
 });
-test('DM26 stale running uses strict timestamp boundary and all target forms', t => {
+test('stale running uses strict timestamp boundary and all target forms', t => {
   for (const target of [{ sessionGroup: 'a' }, { machine: true }, { allSessionGroups: true }]) {
     const { store: s, db } = fixture(t, single); const expected = [];
     for (const scope of ['a', 'b', null]) for (const delta of [-1, 0, 1]) {
@@ -99,7 +99,7 @@ test('DM26 stale running uses strict timestamp boundary and all target forms', t
     for (const id of expected) assert.equal(row(db, id).last_error, 'SESSION_ENDED');
   }
 });
-test('DM27 manual expire only active rows and target APIs reject ambiguous shapes', t => {
+test('manual expire only active rows and target APIs reject ambiguous shapes', t => {
   const { store: s, db } = fixture(t, single);
   for (const status of ['pending', 'running', 'done', 'failed', 'timeout', 'superseded']) {
     const r = add(s, 'a', status); db.prepare('UPDATE control_queue SET status=? WHERE id=?').run(status, r.id);
@@ -109,7 +109,7 @@ test('DM27 manual expire only active rows and target APIs reject ambiguous shape
   assert.throws(() => s.expireControlById(99999), { code: 'CONTROL_NOT_ACTIVE' });
   for (const invalid of [{}, { sessionGroup: 'a', machine: true }, { machine: false }, { allSessionGroups: false }, { sessionGroup: '*' }]) for (const method of ['countNonTerminalControls', 'expirePendingControls', 'listRunningControlsWithoutDeadline']) assert.throws(() => s[method](invalid));
 });
-test('IB12 stale targeted running control ends without retry or another claim', t => {
+test('stale targeted running control ends without retry or another claim', t => {
   let now = NOW;
   const { store: s, db, filename } = fixture(t, { ...single, now: () => now * 1000 }, true);
   const observer = new Database(filename, { readonly: true }); t.after(() => observer.close());
@@ -128,7 +128,7 @@ test('IB12 stale targeted running control ends without retry or another claim', 
   assert.equal(s.failStaleTargetControl(selected.id), null);
   assert.deepEqual(row(observer, selected.id), expected, 'terminal retries do not change timestamp or retry_count');
 });
-test('IB12 stale target rejects pending, unbound, terminal and absent controls without writes', t => {
+test('stale target rejects pending, unbound, terminal and absent controls without writes', t => {
   const { store: s, db, filename } = fixture(t, single, true);
   const observer = new Database(filename, { readonly: true }); t.after(() => observer.close());
   const snapshots = () => observer.prepare('SELECT * FROM control_queue ORDER BY id').all();

@@ -11,14 +11,14 @@ function fixture(mode, groups, transition = null) {
     insertControl: (text, options) => { calls.push({ text, options }); return { id: calls.length }; },
   } };
 }
-test('IF44: multi queues exactly each live group with idle, priority2 and no ack', async () => {
+test('multi queues exactly each live group with idle, priority2 and no ack', async () => {
   const { calls, d } = fixture('multi', ['origin', 'telegram:one', 'lark:two']);
   const result = await requestRotation({}, d);
   assert.equal(result.enqueued.length, 3);
   assert.deepEqual(calls.map(call => call.options.sessionGroup), ['origin', 'telegram:one', 'lark:two']);
   for (const call of calls) assert.deepEqual(call, { text: IDENTITY_ROTATION_PROMPT, options: { sessionGroup: call.options.sessionGroup, priority: 2, requireIdle: true, appendAckSuffix: false } });
 });
-test('IF44: single uses one NULL target only when its origin session exists', async () => {
+test('single uses one NULL target only when its origin session exists', async () => {
   for (const mode of ['single', null]) {
     const { calls, d } = fixture(mode, ['origin', 'telegram:old']);
     await requestRotation({}, d);
@@ -34,7 +34,7 @@ test('IF44: single uses one NULL target only when its origin session exists', as
   await requestRotation({}, d);
   assert.equal(calls.length, 0);
 });
-test('IF44: transition, bad config or failed observation prevent all enqueue', async () => {
+test('transition, bad config or failed observation prevent all enqueue', async () => {
   const f = fixture('multi', ['origin'], { runId: 'transition' });
   await assert.rejects(requestRotation({}, f.d), { code: 'TRANSITION_OPEN' });
   assert.equal(f.calls.length, 0);
@@ -45,7 +45,7 @@ test('IF44: transition, bad config or failed observation prevent all enqueue', a
     assert.equal(calls.length, 0);
   }
 });
-test('IF44: partial queue failure reports committed IDs and never retries', async () => {
+test('partial queue failure reports committed IDs and never retries', async () => {
   const { d } = fixture('multi', ['origin', 'a', 'b']);
   let count = 0;
   d.insertControl = () => { if (++count === 2) throw Object.assign(new Error('rejected'), { code: 'FENCE_ACTIVE' }); return { id: 99 }; };
@@ -56,7 +56,7 @@ test('IF44: partial queue failure reports committed IDs and never retries', asyn
   });
   assert.equal(count, 2);
 });
-test('P07 fixed prompts distinguish background work from reclaim wait and identity handoff', () => {
+test('fixed prompts distinguish background work from reclaim wait and identity handoff', () => {
   assert.match(GROUP_SYNC_PROMPT, /Do not wait/);
   assert.match(ORIGIN_SYNC_PROMPT, /Do not wait/);
   assert.match(PRE_RECLAIM_SYNC_PROMPT, /Wait for it to finish before acknowledging/);
@@ -65,7 +65,7 @@ test('P07 fixed prompts distinguish background work from reclaim wait and identi
   assert.equal(SYNC_BACKLOG_ALERT('origin', 10, 20), SYNC_BACKLOG_ALERT('origin', 10, 20));
 });
 
-test('IF44: real control transactions supersede repeat requests and preserve exact options', async t => {
+test('real control transactions supersede repeat requests and preserve exact options', async t => {
   const { fixture: storeFixture } = await import('../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js');
   for (const mode of ['multi', 'single']) {
     const { store, db } = storeFixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: mode } }) });

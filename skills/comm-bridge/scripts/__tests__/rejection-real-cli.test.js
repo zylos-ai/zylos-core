@@ -25,7 +25,7 @@ async function cli(root, name, args) {
   } finally { clearTimeout(timer); }
 }
 
-test('IF-05/DM-51 actual receive CLI uses real P04 F14 append, queries it, and survives a read-only directory', { timeout: 30000 }, async t => {
+test('actual receive CLI uses real append, queries it, and survives a read-only directory', { timeout: 30000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const data = path.join(root, 'comm-bridge');

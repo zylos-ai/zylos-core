@@ -8,7 +8,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { encodeGroupCharacters as enc, decodeGroupCharacters as dec } from '../session-group-codec.js';
 export const groups = ['origin','telegram:g-100123','telegram:g-1','wechat:abc_chatroom','lark','larkx','lark:x','lark:oc_x:omt_y','openmax:dm.AbC','ns:a:b','ns:a.b','ns:a_b','ns:a__b','ns:a_cb','ns:AbC','ns:abc','ns:x:','ns:x.', `${'n'.repeat(32)}:${'A'.repeat(95)}`];
 // Deterministic generated inputs exercise character combinations; legality remains
-// delegated to the real P01 parser.
+// delegated to the real parser.
 let seed = 8731;
 for (let i = 0; i < 100; i++) {
   let name = 'A';
@@ -21,7 +21,7 @@ function* words(alphabet, max, prefix = '') {
   yield prefix;
   if (prefix.length < max) for (const char of alphabet) yield* words(alphabet, max, prefix + char);
 }
-test('M2 codec exhaustive roundtrip, injection, canonical decoding and bad-encoder control', () => {
+test('codec exhaustive roundtrip, injection, canonical decoding and bad-encoder control', () => {
   const seen = new Set(); let inputs = 0;
   for (const value of words('aA_:.-', 8)) {
     const encoded = enc(value);
@@ -57,7 +57,7 @@ test('group names preserve case/length, reject invalid and allow distinct extens
   for (const name of ['zylos-group-', 'zylos-group-Foo', 'zylos-group-void', 'zylos-group-lark:x','zylos-group-lark.x','zylos-group-lark=','zylos-group-+lark','claude-main','codex-main','zylos-setup']) assert.equal(p.groupFromTmuxName(name), null);
 });
 test('pure paths and environment precedence never create directories', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p02-paths-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'session-runtime-paths-'));
   try {
     const env = { ZYLOS_DIR: path.join(root, 'uncreated'), HOME: '/unused' };
     assert.deepEqual(p.runDirFromEnv(env), { dir: `${env.ZYLOS_DIR}/activity-monitor`, sessionGroup:null, kind:'legacy' });
@@ -82,7 +82,7 @@ test('list performs one async argv call; only absent server is empty, other fail
   await assert.rejects(p.listGroupTmuxSessions({exec:async()=> 'zylos-group-origin\tbad\n'}),{code:'TMUX_RESPONSE_INVALID'});
 });
 test('real private tmux: names, timestamps, exact targets and missing server', async t => {
-  const {dir:root,socketPath:socket,binary,tmux}=isolatedTmux(t,{prefix:'p02-tmux-',socketName:'socket',trim:false});
+  const {dir:root,socketPath:socket,binary,tmux}=isolatedTmux(t,{prefix:'session-runtime-tmux-',socketName:'socket',trim:false});
   await assert.rejects(p.listGroupTmuxSessions({socketPath:socket,binary:path.join(root,'missing-tmux')}),{code:'ENOENT'});
   const deniedBinary=path.join(root,'denied-tmux');
   fs.writeFileSync(deniedBinary,'#!/bin/sh\nexit 0\n',{mode:0o600});
@@ -98,15 +98,15 @@ test('real private tmux: names, timestamps, exact targets and missing server', a
   assert.throws(()=>tmux('has-session','-t',short)); assert.throws(()=>tmux('kill-session','-t',short));
   tmux('has-session','-t',p.tmuxSessionTarget(p.tmuxNameForGroup('telegram:g-100123')));
   const pane=p.tmuxPaneTarget(p.tmuxNameForGroup('origin'));
-  tmux('send-keys','-t',pane,'-l','p02-private-marker');
-  assert.match(tmux('capture-pane','-p','-t',pane),/p02-private-marker/);
+  tmux('send-keys','-t',pane,'-l','session-runtime-private-marker');
+  assert.match(tmux('capture-pane','-p','-t',pane),/session-runtime-private-marker/);
 });
 
 // A subprocess proves both event-loop responsiveness and natural exit while the
 // private server remains frozen (tmux passes its client pipes to the server).
 test('async list keeps timers responsive and exits after frozen-server timeout', {timeout:12000}, async t => {
   let server,child,exited;
-  const {dir,socketPath,binary,tmux}=isolatedTmux(t,{prefix:'p02-list-',tmuxArgs:['-u'],timeout:2000,beforeCleanup:async()=>{
+  const {dir,socketPath,binary,tmux}=isolatedTmux(t,{prefix:'session-runtime-list-',tmuxArgs:['-u'],timeout:2000,beforeCleanup:async()=>{
     if(child && child.exitCode===null && child.signalCode===null) child.kill('SIGKILL');
     if(exited) await exited;
     if(server) try{process.kill(server,'SIGKILL');}catch{}

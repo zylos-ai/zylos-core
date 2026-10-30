@@ -9,7 +9,7 @@ import { withMemoryLock } from '../sync-lock.js';
 const moduleUrl = new URL('../sync-lock.js', import.meta.url).href;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'memory-lock-'));
 
-// DM-40: callback process retains the lock after acquisition helper exits.
+// callback process retains the lock after acquisition helper exits.
 test('parent retains F8, timeout cannot execute a late callback, inode stays fixed', async () => {
   const run = tmp();
   await withMemoryLock(run, async () => {
@@ -22,7 +22,7 @@ test('parent retains F8, timeout cannot execute a late callback, inode stays fix
   await withMemoryLock(run, () => {});
 });
 
-// DM-40: real stopped holder, full 10s wait, resume, and process death.
+// real stopped holder, full 10s wait, resume, and process death.
 test('SIGSTOP retains F8 for 10 seconds; SIGCONT and kill release normally', { timeout: 16000 }, async () => {
   const run = tmp();
   const child = spawn(process.execPath, ['--input-type=module', '-e', `

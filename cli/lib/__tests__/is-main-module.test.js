@@ -9,7 +9,7 @@ import { isMainModule as bridgeMain } from '../../../skills/comm-bridge/scripts/
 import { isMainModule as memoryMain } from '../../../skills/zylos-memory/scripts/is-main-module.js';
 
 for (const [skill, isMainModule] of [['activity-monitor', activityMain], ['comm-bridge', bridgeMain], ['zylos-memory', memoryMain]]) {
-  test(`ZYLO-85: ${skill} main-module helper preserves path identity`, t => {
+  test(`${skill} main-module helper preserves path identity`, t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'main-module-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const file = path.join(root, 'entry.js'), other = path.join(root, 'other.js'), alias = path.join(root, 'alias.js');

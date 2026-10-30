@@ -32,7 +32,7 @@ function fixture(t) {
     read:()=>health.store('claude').read(),set:(patch,budget={})=>{const s=health.store('claude').read();Object.assign(s,patch);Object.assign(s.scheduling,budget);health.store('claude').write(s);}};
 }
 
-// IF-62 A/B: all ordered decisions and response field relationships.
+// A/B: all ordered decisions and response field relationships.
 test('start registration validates request and evaluates restrictions in order',async t=>{
   const f=fixture(t);
   for(const change of [{version:2},{requestId:'bad'},{runtime:'BAD'},{runId:'bad'},{sessionGroup:'origin'},{sessionGroup:'*'},{sessionGroup:null}]) assert.equal((await f.health.registerStartAttempt(f.request(change))).code,'invalid_request');
@@ -52,7 +52,7 @@ test('start registration validates request and evaluates restrictions in order',
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'attempt_backoff');
 });
 
-test('IF-62/DM-68 concurrent same-runtime requests commit exactly one attempt and reopen preserves backoff',async t=>{
+test('concurrent same-runtime requests commit exactly one attempt and reopen preserves backoff',async t=>{
   const f=fixture(t), first=f.request(), second=f.request({sessionGroup:'lark:two'});
   const replies=await Promise.all([f.health.registerStartAttempt(first),f.health.registerStartAttempt(second)]);
   assert.equal(replies.filter(r=>r.result==='registered').length,1);assert.equal(f.read().scheduling.restartFailureCount,1);
@@ -63,7 +63,7 @@ test('IF-62/DM-68 concurrent same-runtime requests commit exactly one attempt an
   assert.equal((await restarted.registerStartAttempt(f.request())).notBefore,f.now()+300000);
 });
 
-test('IF-62 publication failure does not install association or claim registration',async t=>{
+test('publication failure does not install association or claim registration',async t=>{
   const f=fixture(t), before=fs.readFileSync(f.health.store('claude').file,'utf8');
   f.health.store('claude').write=()=>{throw new Error('write failed');};
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'health_write_failed');
@@ -71,7 +71,7 @@ test('IF-62 publication failure does not install association or claim registrati
   assert.equal(fs.readFileSync(f.health.store('claude').file,'utf8'),before);
 });
 
-test('DM-69/70 exact run association is consumed once, stale and unrelated runs cannot consume it',async t=>{
+test('exact run association is consumed once, stale and unrelated runs cannot consume it',async t=>{
   const f=fixture(t), request=f.request();await f.health.registerStartAttempt(request);
   const result=runId=>({runtime:'claude',runId,current:{runtime:'claude',runId},terminal:'timeout'});
   const stale=await f.health.applyProbeResult({...result(request.runId),current:{runtime:'claude',runId:randomUUID()}});
@@ -81,7 +81,7 @@ test('DM-69/70 exact run association is consumed once, stale and unrelated runs 
   await f.health.applyProbeResult(result(request.runId));assert.equal(f.read().scheduling.restartFailureCount,3);
 });
 
-test('DM-71 restart loses only association and conservatively counts the later failure once',async t=>{
+test('restart loses only association and conservatively counts the later failure once',async t=>{
   const f=fixture(t), request=f.request();await f.health.registerStartAttempt(request);
   const restarted=new RuntimeHealthCoordinator(f.options);
   await restarted.applyProbeResult({runtime:'claude',runId:request.runId,current:{runtime:'claude',runId:request.runId},terminal:'timeout'});
@@ -89,7 +89,7 @@ test('DM-71 restart loses only association and conservatively counts the later f
   assert.equal((await restarted.registerStartAttempt(f.request())).notBefore,f.now()+300000);
 });
 
-test('DM-72 down registration leaves count unchanged; user acceleration is single-use including same second',async t=>{
+test('down registration leaves count unchanged; user acceleration is single-use including same second',async t=>{
   const f=fixture(t);f.set({health:'down'},{restartFailureCount:8,lastDownCheckAt:f.now()/1000-20});
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'down_retry_interval');
   assert.equal(await f.health.notifyUserMessage('claude'),true);
@@ -98,7 +98,7 @@ test('DM-72 down registration leaves count unchanged; user acceleration is singl
   assert.equal(await f.health.notifyUserMessage('claude'),false);
 });
 
-test('DM-45/72 cooldown restore retains budget, rate-limit acceleration clears cooldown but not count',async t=>{
+test('cooldown restore retains budget, rate-limit acceleration clears cooldown but not count',async t=>{
   const f=fixture(t);f.set({health:'rate_limited'},{restartFailureCount:3,lastRecoveryAt:f.now()/1000-500,cooldownUntil:f.now()/1000-1});
   await f.health.restore('claude');assert.equal(f.read().health,'rate_limited');assert.equal(f.read().scheduling.restartFailureCount,3);assert.equal(f.read().scheduling.cooldownUntil,0);
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'attempt_backoff');
@@ -106,14 +106,14 @@ test('DM-45/72 cooldown restore retains budget, rate-limit acceleration clears c
   assert.deepEqual(scheduling(f.read()),[4,f.now()/1000,0]);
 });
 
-test('IB-35 done outranks screen, rate limit outranks simultaneous authentication and keeps budgets',async t=>{
+test('done outranks screen, rate limit outranks simultaneous authentication and keeps budgets',async t=>{
   const f=fixture(t), runId=randomUUID(), input={runtime:'claude',runId,current:{runtime:'claude',runId},terminal:'timeout',matches:{rateLimit:{detected:true,cooldownUntil:f.now()/1000+100},authFailure:{detected:true}}};
   assert.equal(classifyRecoveryResult(input),'rate_limited');await f.health.applyProbeResult(input);
   assert.equal(f.read().health,'rate_limited');assert.equal(f.read().rateLimitActive,true);
   await f.health.applyProbeResult({...input,terminal:'done'});assert.equal(f.read().health,'ok');assert.equal(f.read().rateLimitActive,false);assert.equal(f.read().reason,'');
 });
 
-test('DM-63 auth success captures old targets and cannot clear independent limit before all stops and fences',async t=>{
+test('auth success captures old targets and cannot clear independent limit before all stops and fences',async t=>{
   const f=fixture(t);f.set({health:'rate_limited'},{cooldownUntil:f.now()/1000+100,restartFailureCount:3});
   const runId=randomUUID(), scene={runtime:'claude',runId,sessionGroup:'lark:a'};
   await f.health.applyProbeResult({runtime:'claude',runId,current:scene,terminal:'timeout',matches:{authFailure:{detected:true}}});
@@ -133,7 +133,7 @@ test('#16a demand aggregates runtime sets, excludes fences and never converts qu
   await assert.rejects(aggregateRuntimeDemand({...options,resolveTargetRuntime:()=>{throw new Error('DB_BUSY');}}),/DB_BUSY/);
 });
 
-// T08 health hook groups and reason-roundtrip acceptance, real file publish/reopen.
+// health hook groups and reason-roundtrip acceptance, real file publish/reopen.
 test('groups retain independent markers, frozen replies and raw group spelling across restart',t=>{
   const f=fixture(t), now=f.now(), identity={runtime:'claude',session_id:'session',claude_pid:12};
   const store=new HealthStore({zylosDir:f.root,now:f.now,freezeNotice:({event,sessionGroup})=>({event_id:event.event_id,conversation_id:sessionGroup,channel:'test',endpoint:sessionGroup,health:'rate_limited',reason:'rate_limit_five_hour',notice:{eligible:true},created_at:event.received_at,status:'pending',...identity})});
@@ -157,27 +157,27 @@ test('old singleton migration atomically keeps budget and claims sending as unce
   new HealthStore({zylosDir:f.root,now:f.now}).read();assert.equal(fs.readFileSync(store.file,'utf8'),committed);
 });
 
-test('IB-35 nonterminal controls cannot mutate durable health or consume registered association',async t=>{
+test('nonterminal controls cannot mutate durable health or consume registered association',async t=>{
   const f=fixture(t),request=f.request();await f.health.registerStartAttempt(request);const before=fs.readFileSync(f.health.store('claude').file,'utf8');
   for(const terminal of ['pending','running',undefined])assert.equal((await f.health.applyProbeResult({runtime:'claude',runId:request.runId,current:request,terminal})).classification,'pending');
   assert.equal(fs.readFileSync(f.health.store('claude').file,'utf8'),before);assert.equal(f.health.associations.get('claude').runId,request.runId);
 });
 
-test('IB-33 new auth failure invalidates a previously successful credential capture',async t=>{
+test('new auth failure invalidates a previously successful credential capture',async t=>{
   const f=fixture(t),runId=randomUUID(),scene={runtime:'claude',runId,sessionGroup:'telegram:a'};f.set({health:'auth_failed'});
   await f.health.beginAuthRecovery('claude',{status:'success'},[scene]);
   await f.health.applyProbeResult({runtime:'claude',runId,current:scene,terminal:'failed',matches:{authFailure:{detected:true}}});
   assert.equal(await f.health.completeAuthRecovery('claude',{isGone:()=>true}),false);assert.equal(f.read().health,'auth_failed');
 });
 
-test('T02 accepted current-process failure outranks conflicting screen evidence on failed recovery',async t=>{
+test('accepted current-process failure outranks conflicting screen evidence on failed recovery',async t=>{
   const f=fixture(t),runId=randomUUID(),identity={runtime:'claude',session_id:'session',claude_pid:44};
   await f.health.consumeHook('claude',{schema_version:1,source:'hook',runtime:'claude',...identity,event_id:randomUUID(),prompt_id:'prompt',event:'stop_failure',error:'authentication_failed',received_at:f.now()},{identity,sessionGroup:'telegram:a'});
   const answer=await f.health.applyProbeResult({runtime:'claude',runId,current:{runtime:'claude',runId},identity,terminal:'failed',matches:{rateLimit:{detected:true}}});
   assert.equal(answer.classification,'auth_error');assert.equal(f.read().health,'auth_failed');assert.equal(f.read().source,'hook');assert.equal(f.read().reason,'authentication_failed');
 });
 
-// ZYLO-99 P3-3 / DM-47: route writes public health, every recovery entry consumes it.
+// / route writes public health, every recovery entry consumes it.
 test('down and recovering share the normalized negative cache across all recovery entries', async t => {
   for (const health of ['down', 'recovering']) {
     const f = fixture(t);
@@ -207,7 +207,7 @@ test('down and recovering share the normalized negative cache across all recover
   }
 });
 
-// IF-62 / #17: all entrypoints honor cooldown then backoff, including exact boundary.
+// #17: all entrypoints honor cooldown then backoff, including exact boundary.
 test('registration, demand and inbound routing agree on cooldown and backoff boundaries', async t => {
   for (const health of ['rate_limited', 'unavailable', 'down']) {
     const f = fixture(t), seconds = f.now() / 1000;

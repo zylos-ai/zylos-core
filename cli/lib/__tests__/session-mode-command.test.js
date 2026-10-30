@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { executeSessionMode, sessionModeCommand } from '../../commands/session-mode.js';
 
 for (const args of [[], ['switch'], ['switch','bad'], ['switch','multi','extra'], ['switch','multi','--force'], ['switch','multi','--json','--json']]) {
-  test(`IB44 invalid arguments never submit: ${JSON.stringify(args)}`, async () => {
+  test(`invalid arguments never submit: ${JSON.stringify(args)}`, async () => {
     let calls = 0;
     const result = await executeSessionMode(args, { send: () => { calls++; } });
     assert.equal(result.error.code, 'INVALID_ARGUMENT'); assert.deepEqual(result.error.persisted, []); assert.equal(calls, 0);
   });
 }
 for (const target of ['single', 'multi']) for (const kind of ['accepted', 'noop']) {
-  test(`IB44 ${target} ${kind} submits once with one absolute deadline`, async () => {
+  test(`${target} ${kind} submits once with one absolute deadline`, async () => {
     const calls = [];
     const result = await executeSessionMode(['switch',target,'--json'], {
       now: () => 1000, requestId: () => 'request-1',
@@ -23,7 +23,7 @@ for (const target of ['single', 'multi']) for (const kind of ['accepted', 'noop'
   });
 }
 for (const code of ['transition_open','config_unreadable','legacy_session_present','manual_restart_pending','requests_unreadable','entry_not_open','invalid_request']) {
-  test(`IB44 ${code} is returned without retry or lookup`, async () => {
+  test(`${code} is returned without retry or lookup`, async () => {
     let calls = 0;
     const result = await executeSessionMode(['switch','multi'], {
       send: async () => { calls++; return { kind:'rejected',sent:true,reply:{code,...(code==='transition_open'?{runId:'run-2',target:'single'}:{})} }; },
@@ -33,12 +33,12 @@ for (const code of ['transition_open','config_unreadable','legacy_session_presen
     if (code==='transition_open') assert.equal(result.error.runId,'run-2');
   });
 }
-for (const kind of ['connect_failed','deadline_exceeded']) test(`IB44 unsent ${kind} is known unsubmitted`, async () => {
+for (const kind of ['connect_failed','deadline_exceeded']) test(`unsent ${kind} is known unsubmitted`, async () => {
   const result = await executeSessionMode(['switch','multi'], { send: async () => ({kind,sent:false}), lookup: () => assert.fail('unsent') });
   assert.equal(result.error.code,kind); assert.deepEqual(result.error.persisted,[]);
 });
 for (const kind of ['no_reply','invalid_reply','timeout','deadline_exceeded']) for (const observed of ['accepted','done','unknown','deadline_exceeded','throw']) {
-  test(`IB44 ${kind} observes ${observed} without resetting deadline or retrying`, async () => {
+  test(`${kind} observes ${observed} without resetting deadline or retrying`, async () => {
     const calls=[];
     const result = await executeSessionMode(['switch','multi'], {
       deadlineAt:12345,
@@ -51,7 +51,7 @@ for (const kind of ['no_reply','invalid_reply','timeout','deadline_exceeded']) f
     else { assert.equal(result.error.code,kind); assert.equal(result.error.persisted,null); }
   });
 }
-test('IB44 JSON command emits exactly one envelope and rejects with exit 1', async t => {
+test('JSON command emits exactly one envelope and rejects with exit 1', async t => {
   const previous=process.exitCode; t.after(()=>{process.exitCode=previous;});
   const output=[]; t.mock.method(console,'log',line=>output.push(line)); t.mock.method(console,'error',()=>assert.fail('JSON uses stdout'));
   await sessionModeCommand(['switch','bad','--json']);

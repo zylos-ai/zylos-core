@@ -14,7 +14,7 @@ async function launch(t,f){
  const kill=async()=>{if(child.exitCode===null&&child.signalCode===null){const done=once(child,'exit');child.kill('SIGKILL');await done;}};t.after(kill);assert.equal((await next()).ready,true);
  return {child,next,kill,async command(value){child.send(value);const result=await next();assert.equal(result.error,undefined);return result;}};
 }
-test('IF-28 single actual M4 SIGKILL recaptures old run without D8; finite control blocks while deadline-less permits cleanup',{timeout:20000},async t=>{
+test('single actual supervisor SIGKILL recaptures old run without ; finite control blocks while deadline-less permits cleanup',{timeout:20000},async t=>{
  const f=readyTmuxTarget(t,{prefix:'single-auth-entry-',mode:'single',runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
  const store=new HealthStore({zylosDir:f.root,runtime:'claude'}),state=store.read();state.health='auth_failed';state.reason='authentication_failed';store.write(state);
  const first=await launch(t,f);await first.command('pending');let observed=await first.command('tick');

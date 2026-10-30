@@ -19,7 +19,7 @@ const scenes=new SupervisorScenes({env:process.env,connectionOptions:{socketPath
 const observeGroup=scenes.observeGroup.bind(scenes);scenes.observeGroup=async group=>{const scene=await observeGroup(group);return holding&&scene.present?{...scene,processRunning:undefined}:scene;};
 const service=await startSupervisor({env:process.env,db:{...db,getDb:()=>database,...(authMode?{listPendingSessionGroups:()=>pending?[{sessionGroup:'origin'}]:[],countRunningConversations:()=>running}:{}),resolveSessionLaunchConfig:()=>({runtime:expectedRuntime,mode:'default'}),getModeTransition:()=>holding?{phase:'fixture_hold'}:db.getModeTransition()},scenes,requestStore:requests,
  readMode:()=>({mode:'multi'}),readConfiguration:()=>({mode:'multi',runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',
- // Successful reclaim scenarios explicitly provide the P07 reader contract.
+ // Successful reclaim scenarios explicitly provide the reader contract.
  readSyncMarker:()=>({held:false,stale:false}),
  ...(authMode?{checkAuth:async()=>{checks++;return {status:'success'};}}:{}),
  machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},sendAlert:()=>{throw new Error('No external send');},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});

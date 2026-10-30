@@ -27,14 +27,14 @@ function setup(t) {
   return { ...f, events, order, dependencies };
 }
 
-test('IF-01 validates before route/D5/D6; name/group errors emit one F14 and ordinary argument errors none', async t => {
+test('validates before route/; name/group errors emit one and ordinary argument errors none', async t => {
   const f = setup(t); let routed = 0, events = 0;
   f.dependencies.queryRoute = async () => { routed++; return pending; };
   f.dependencies.appendEntryEvent = async () => { events++; return true; };
   for (const name of ['', '-x', 'x'.repeat(96), 'a b']) {
     await assert.rejects(receive([...input, '--session-group', name], f.dependencies), { code: name.length > 95 ? 'SESSION_GROUP_TOO_LONG' : 'SESSION_GROUP_INVALID' });
   }
-  await assert.rejects(receive(['--channel', 'p09-not-installed', '--content', 'text', '--no-reply'], f.dependencies), { code: 'INVALID_ARGS' });
+  await assert.rejects(receive(['--channel', 'payload-routing-not-installed', '--content', 'text', '--no-reply'], f.dependencies), { code: 'INVALID_ARGS' });
   assert.equal(events, 5);
   await assert.rejects(receive(['--channel', 'chat', '--endpoint', '', '--content', 'text'], f.dependencies), { code: 'INVALID_ARGS' });
   assert.equal(events, 5);
@@ -46,13 +46,13 @@ test('IF-01 validates before route/D5/D6; name/group errors emit one F14 and ord
   assert.throws(() => parseReceiveArgs([...input, '--priority']), { code: 'INVALID_ARGS' });
 });
 
-test('IB-01 option-like nonempty text is retained as message content', async t => {
+test('option-like nonempty text is retained as message content', async t => {
   const f = setup(t);
   const result = await receive(['--channel', 'chat', '--content', '--- notes'], f.dependencies);
   assert.equal(f.db.prepare('SELECT content FROM conversations WHERE id=?').get(result.id).content, '--- notes');
 });
 
-test('IF-02 explicit pending/transition/rate-limit takes precedence; unavailable and noReply stay failed', async t => {
+test('explicit pending/transition/rate-limit takes precedence; unavailable and noReply stay failed', async t => {
   const f = setup(t);
   for (const route of [pending, { ...pending, transitionHold: true }, rejected]) {
     f.dependencies.queryRoute = async () => route;
@@ -68,7 +68,7 @@ test('IF-02 explicit pending/transition/rate-limit takes precedence; unavailable
   assert.equal(f.store.getNextPending({ sessionGroups: ['chat:New'] }), null);
 });
 
-test('IF-02/05 auth final group and failure category survive event/cooldown/send failures after commit', async t => {
+test('auth final group and failure category survive event/cooldown/send failures after commit', async t => {
   const f = setup(t);
   for (const result of ['failed', 'unconfirmed']) {
     f.dependencies.queryRoute = async request => { assert.equal(request.sessionGroup, result === 'failed' ? null : 'chat:Team'); return auth(result); };
@@ -89,7 +89,7 @@ test('IF-02/05 auth final group and failure category survive event/cooldown/send
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE status='failed' AND delivery_action='auth_rejected'").get().n, 4);
 });
 
-test('IF-05 real rollback/DB_BUSY prevent F14 and cooldown; postcommit uncertainty preserves failed row', async t => {
+test('real rollback/DB_BUSY prevent and cooldown; postcommit uncertainty preserves failed row', async t => {
   const f = setup(t); f.dependencies.queryRoute = async () => auth('failed');
   f.db.exec("CREATE TRIGGER reject_inbound AFTER INSERT ON conversations BEGIN SELECT RAISE(ABORT,'injected'); END");
   await assert.rejects(receive(input, f.dependencies), { code: 'DB_WRITE_FAILED', persisted: [] });
@@ -108,7 +108,7 @@ test('IF-05 real rollback/DB_BUSY prevent F14 and cooldown; postcommit uncertain
   await assert.rejects(receive(input, f.dependencies), { code: 'INTERNAL_ERROR', persisted: null });
 });
 
-test('IF-05 preserves data-layer contract errors and marks unexpected postcommit errors unknown', async t => {
+test('preserves data-layer contract errors and marks unexpected postcommit errors unknown', async t => {
   const f = setup(t);
   for (const code of ['SESSION_GROUP_INVALID', 'SESSION_GROUP_TOO_LONG', 'NAMESPACE_EXHAUSTED']) {
     f.dependencies.db = { ...f.store, insertConversation: () => { throw dataError(code, 'contract rejection'); } };
@@ -119,7 +119,7 @@ test('IF-05 preserves data-layer contract errors and marks unexpected postcommit
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, 1);
 });
 
-test('IB-04 suppression conditional update is postcommit and retains terminal failed state', async t => {
+test('suppression conditional update is postcommit and retains terminal failed state', async t => {
   const f = setup(t); f.dependencies.queryRoute = async () => rejected;
   f.dependencies.reserveStatusNotice = () => ({ suppressed: true });
   const reply = await receive(input, f.dependencies);
@@ -131,7 +131,7 @@ test('IB-04 suppression conditional update is postcommit and retains terminal fa
   assert.equal(failed.action, 'suppressed'); assert.equal(f.db.prepare('SELECT delivery_action AS a FROM conversations WHERE id=?').get(failed.id).a, null);
 });
 
-test('IB-02 v2 correlation/branches reject malformed responses and fall back exactly once', async () => {
+test('v2 correlation/branches reject malformed responses and fall back exactly once', async () => {
   const request = { type: 'route', requestId: '1-1', noReply: false };
   const response = { version: 2, type: 'route', requestId: '1-1', ...pending };
   assert.equal(validRouteResponse(response, request), true);
@@ -142,7 +142,7 @@ test('IB-02 v2 correlation/branches reject malformed responses and fall back exa
   }
 });
 
-test('IB-02 rejects unknown decisions and missing reply text on otherwise valid rejection responses', async () => {
+test('rejects unknown decisions and missing reply text on otherwise valid rejection responses', async () => {
   const request = { type: 'route', requestId: 'rejection', noReply: false };
   const response = { version: 2, type: 'route', requestId: request.requestId, ...rejected };
   const authResponse = { ...response, ...auth('unconfirmed') };
@@ -159,7 +159,7 @@ test('IB-02 rejects unknown decisions and missing reply text on otherwise valid 
   }
 });
 
-test('IF-04 fallback six-level order, target runtime only, and Core external auth distinction', async () => {
+test('fallback six-level order, target runtime only, and Core external auth distinction', async () => {
   for (const coreSide of [false, true]) {
     const request = { sessionGroup: 'chat:A', componentName: 'chat', coreSide };
     const reads = [];
@@ -185,7 +185,7 @@ test('IF-04 fallback six-level order, target runtime only, and Core external aut
   }
 });
 
-test('DM-50 six tuple distinguishes groups/runtime/reason, supports missing health and delimiter-bearing endpoint', () => {
+test('six tuple distinguishes groups/runtime/reason, supports missing health and delimiter-bearing endpoint', () => {
   const key = (group, runtime, health, reason, endpoint = 'room::x|msg:1') => statusNoticeKey('chat', endpoint, health, reason, group, runtime);
   assert.equal(new Set([key('chat:A', 'claude'), key('chat:B', 'claude'), key('chat:A', 'codex'), key('chat:A', 'claude', 'ok', 'other')]).size, 4);
   assert.deepEqual(JSON.parse(key('chat:A', 'codex').slice(3)), ['chat', 'room::x', 'chat:A', 'codex', 'unavailable', 'unavailable']);
@@ -193,7 +193,7 @@ test('DM-50 six tuple distinguishes groups/runtime/reason, supports missing heal
   assert.notEqual(key('chat:A', 'codex', 'ok', 'x::y', 'a'), key('chat:A', 'codex', 'ok', 'y', 'a::x'));
 });
 
-test('IF-06/DM-51 query current/rotated logs, ignores incomplete/bad lines, remains read only, refuses errors', async t => {
+test('query current/rotated logs, ignores incomplete/bad lines, remains read only, refuses errors', async t => {
   const f = setup(t); f.dependencies.queryRoute = async () => auth('failed');
   const reply = await receive([...input, '--no-reply'], f.dependencies);
   const filename = path.join(path.dirname(f.filename), 'receive-events.jsonl');
@@ -222,7 +222,7 @@ test('IF-06/DM-51 query current/rotated logs, ignores incomplete/bad lines, rema
   assert.equal(queryRejection(String(reply.id), deps).detail, 'future evidence');
 });
 
-test('F14 sanitizes bytes via frozen P04 append API and reports append failure', async () => {
+test('sanitizes bytes a frozen append API and reports append failure', async () => {
   const events = []; const dependencies = { now: () => 123, createJsonlStream: () => ({ append: async row => events.push(row) }) };
   await appendEntryEvent({ event: 'auth_rejected', endpoint: 'r|req:1|msg:2|parent:3', detail: '\u0000' + 'x'.repeat(600) }, dependencies);
   assert.equal(events[0].ts, 123); assert.equal(events[0].endpoint, 'r'); assert.equal(events[0].detail.length, 500);

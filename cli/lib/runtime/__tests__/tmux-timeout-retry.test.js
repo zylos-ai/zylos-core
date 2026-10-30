@@ -7,7 +7,7 @@ import { resolveSessionTarget, revalidateSessionTarget } from '../session-target
 test('bound command timeout preserves executor for the original guarded retry', async t => {
   let connection;
   const { binary, socketPath, tmux } = isolatedTmux(t, {
-    prefix: 'p02-timeout-retry-', beforeCleanup: () => connection?.close(),
+    prefix: 'session-runtime-timeout-retry-', beforeCleanup: () => connection?.close(),
   });
   tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture',
     '-e', 'ZYLOS_RUN_ID=timeout-run', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude"}', 'sleep', '30');

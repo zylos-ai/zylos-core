@@ -19,7 +19,7 @@ function request(proc, message) {
 }
 async function stop(proc) { proc.kill('SIGKILL'); await proc.closed; }
 
-// DM-40 / IB-52: opening the inbox does not let rotation cross the write.
+// opening the inbox does not let rotation cross the write.
 test('producer stopped after open excludes rotation until append closes', async () => {
   const env = fixture(); const scope = await memoryScope(env); const producer = child(env);
   try {
@@ -36,7 +36,7 @@ test('producer stopped after open excludes rotation until append closes', async 
   } finally { await stop(producer); }
 });
 
-// DM-40: two independent processes contend for each expired marker.
+// two independent processes contend for each expired marker.
 test('1000 simultaneous stale-marker takeovers admit exactly one owner', { timeout: 90000 }, async () => {
   const env = fixture(); const scope = await memoryScope(env);
   const children = [child(env), child(env)];
@@ -54,7 +54,7 @@ test('1000 simultaneous stale-marker takeovers admit exactly one owner', { timeo
   } finally { await Promise.all(children.map(stop)); }
 });
 
-// IB-52: actual append and rename in separate processes share the fixed inode.
+// actual append and rename in separate processes share the fixed inode.
 test('two producers append 1000 records each with a 10ms rotating consumer', { timeout: 90000 }, async () => {
   const env = fixture(); const scope = await memoryScope(env);
   const children = [child(env), child(env), child(env)];

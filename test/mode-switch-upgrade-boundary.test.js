@@ -9,7 +9,7 @@ import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 const cleanups = [];
 afterEach(async () => { while (cleanups.length) await cleanups.pop()(); });
 
-test('real M4 service recreation preserves legacy delay, same D9 and blocked status', async () => {
+test('real supervisor service recreation preserves legacy delay, same and blocked status', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-upgrade-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const { db, store } = storeFixture({ after: fn => cleanups.push(fn) }, { now: () => 1800000000000 }, path.join(root, 'c4.db'));
@@ -17,14 +17,14 @@ test('real M4 service recreation preserves legacy delay, same D9 and blocked sta
   const database = { ...store, getDb: () => db, beginModeTransition(...args) { begins++; return store.beginModeTransition(...args); } };
   const mode = () => ({ mode: null, keyPresent: false });
   const scenes = { observe: async () => [], observeGroup: async () => ({ present: false }), readIdentity: async () => ({ present: false }), listRuns: async () => [], readRun: async () => null };
-  // P11 owns cutoff/publication and installation completion checks.
+  // owns cutoff/publication and installation completion checks.
   const restoreServices = async () => {
     service = await startSupervisor({ env: { ...process.env, HOME: root, ZYLOS_DIR: root }, db: database,
       scenes, readMode: mode, readConfig: () => ({ runtime: 'claude' }), legacyPresent: () => legacyPresent,
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
       loopOptions: { schedule: () => 1, cancel() {} }, readSyncMarker: () => ({ held: false, stale: false }),
       convertModeTransition: () => { throw Object.assign(new Error('export offline'), { step: 'export', code: 'EIO' }); },
-      restartM1Confirmation: { advance: () => { throw new Error('restart must not run while conversion blocked'); } },
+      restartLauncherConfirmation: { advance: () => { throw new Error('restart must not run while conversion blocked'); } },
       sendAlert: () => { throw new Error('external send forbidden'); }, log() {},
     });
     const started = service;

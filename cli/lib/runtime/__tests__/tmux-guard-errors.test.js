@@ -6,7 +6,7 @@ import path from 'node:path';
 import { openTmuxConnection, serverGeneration } from '../tmux-connection.js';
 
 async function fixture(t) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-guard-errors-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'session-runtime-guard-errors-'));
   const binary = path.join(dir, 'tmux');
   const mode = path.join(dir, 'mode');
   await fs.writeFile(mode, 'payload');

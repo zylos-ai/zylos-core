@@ -64,8 +64,8 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   try {
     const module=await import(new URL('../../zylos-memory/scripts/sync-lock.js',import.meta.url));syncReader=module.readSyncMarker;
     Object.assign(prompts,await import(new URL('../../zylos-memory/scripts/sync-prompts.js',import.meta.url)));
-    if(typeof syncReader!=='function')throw unavailable('P07 Sync marker reader');
-  }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;dependencyMissing('P07 Sync marker reader','Sync actions retain their state');}
+    if(typeof syncReader!=='function')throw unavailable('Sync marker reader');
+  }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;dependencyMissing('Sync marker reader','Sync actions retain their state');}
   const healthIdentity=scene=>Number.isSafeInteger(scene.runtimePid)?{runtime:scene.runtime,session_id:scene.sessionId,claude_pid:scene.runtimePid}:null;
   supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,missingDependencies,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
     readConfiguration:async()=>{
@@ -74,9 +74,9 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       configuration={...raw,...lifecycleConfiguration,mode,legacy,capacityUnavailable:false};
       try {
         const pool=await loadCoreModule('session-pool-config.js');
-        if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('P04 pool configuration reader');
+        if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('Session pool configuration reader');
         configuration.capacity=pool.resolveSessionPoolSize({env,config:raw});
-      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('P04 pool configuration reader','eviction');}
+      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('Session pool configuration reader','eviction');}
       return configuration;
     },
     legacyPresent:async()=>{
@@ -95,7 +95,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     checkAuth:runtime=>getSessionAdapter(runtime).checkAuth(),
     matchScreen:(runtime,screen)=>(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
     resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name,toolInput:tool.input,config:configuration}),
-    readSyncMarker:options=>{if(!syncReader)throw unavailable('P07 Sync marker reader');return syncReader(options);},prompts,
+    readSyncMarker:options=>{if(!syncReader)throw unavailable('Sync marker reader');return syncReader(options);},prompts,
     freezeNotice:options=>{
       const mode=configuration?.mode ?? readMode().mode;
       if(!['single','multi'].includes(mode))throw Object.assign(new Error('Notice mode is unavailable'),{code:'CONFIG_UNREADABLE'});

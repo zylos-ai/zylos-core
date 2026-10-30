@@ -1,5 +1,5 @@
 import * as reader from '../../cli/lib/session-state-reader.js';
-const { method, args } = JSON.parse(process.env.P02_READER_CALL);
+const { method, args } = JSON.parse(process.env.SESSION_READER_CALL);
 try {
   const pending=reader[method](...args);
   const promise=pending instanceof Promise;

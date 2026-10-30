@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { fixture, launch } from './fixtures/i2-manual-harness.js';
+import { fixture, launch } from './fixtures/manual-restart-harness.js';
 
 async function waiting(t, variant = '') {
   const f = fixture(t), db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
@@ -23,8 +23,8 @@ async function waiting(t, variant = '') {
   assert.equal(f.db.prepare("SELECT status FROM conversations WHERE content='inflight'").pluck().get(), 'delivered');
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await second.stop();
 }
-test('IF-32 [a] SIGKILL real M4 while waiting for actual SQLite inflight delivery resumes same row and withdraws gate only after accounting', { timeout: 25000 }, async t => waiting(t));
-test('IF-32 clearing D8 on M4 restart fails the retained-wait assertion', { timeout: 25000 }, async t => assert.rejects(waiting(t, 'clear-all'), { code: 'ERR_ASSERTION', message: /inflight restart must preserve D8/ }));
+test('[a] SIGKILL real supervisor while waiting for actual SQLite inflight delivery resumes same row and withdraws gate only after accounting', { timeout: 25000 }, async t => waiting(t));
+test('clearing on supervisor restart fails the retained-wait assertion', { timeout: 25000 }, async t => assert.rejects(waiting(t, 'clear-all'), { code: 'ERR_ASSERTION', message: /inflight restart must preserve D8/ }));
 
 async function manualRetained(t, variant = '') {
   const f = fixture(t), db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
@@ -39,5 +39,5 @@ async function manualRetained(t, variant = '') {
   }
   await second.stop();
 }
-test('IF-32 SIGKILL real M4 retains manual_restart row and never lets generic reclaim clear or stop it', { timeout: 25000 }, async t => manualRetained(t));
-test('IF-32 generic reclaim clearing a manual row is detected after actual M4 restart', { timeout: 25000 }, async t => assert.rejects(manualRetained(t, 'clear-manual'), { code: 'ERR_ASSERTION', message: /manual fence must survive restart/ }));
+test('SIGKILL real supervisor retains manual_restart row and never lets generic reclaim clear or stop it', { timeout: 25000 }, async t => manualRetained(t));
+test('generic reclaim clearing a manual row is detected after actual supervisor restart', { timeout: 25000 }, async t => assert.rejects(manualRetained(t, 'clear-manual'), { code: 'ERR_ASSERTION', message: /manual fence must survive restart/ }));

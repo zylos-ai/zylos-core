@@ -7,13 +7,13 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const driver=fileURLToPath(new URL('../../../test/helpers/public-reader-driver.js',import.meta.url));
 async function fixture(t,{server=true}={}) {
-  const f=isolatedTmux(t,{prefix:'p02-public-reader-',socketName:'private.sock'});
+  const f=isolatedTmux(t,{prefix:'session-runtime-public-reader-',socketName:'private.sock'});
   const {dir,tmux}=f;
   const env=tmuxClientEnv(f,{...process.env,ZYLOS_DIR:dir});
   if(server) tmux('-f','/dev/null','new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=r1','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}','sleep','120');
   const run=path.join(dir,'activity-monitor','session-groups','origin'); await fs.mkdir(run,{recursive:true});
   const write=(name,value)=>fs.writeFile(path.join(run,name),JSON.stringify(value));
-  const call=(method,args,extra={})=>JSON.parse(execFileSync(process.execPath,[driver],{encoding:'utf8',timeout:20000,env:{...env,...extra,P02_READER_CALL:JSON.stringify({method,args})}}));
+  const call=(method,args,extra={})=>JSON.parse(execFileSync(process.execPath,[driver],{encoding:'utf8',timeout:20000,env:{...env,...extra,SESSION_READER_CALL:JSON.stringify({method,args})}}));
   return {dir,env,call,write,tmux};
 }
 test('public async reader returns live identity and valid real F2/F3/status/usage',async t=>{
@@ -44,7 +44,7 @@ test('public no-server observation is absent and status not_running without serv
 test('public async reader rejects invalid options and unavailable tmux',async t=>{
   const {call}=await fixture(t,{server:false});
   assert.match(call('readSessionState',[null,{freshnessMs:-1}]).error.message,/freshnessMs/);
-  const unavailable=call('readLiveIdentity',[null],{PATH:'/p02-no-binaries'});
+  const unavailable=call('readLiveIdentity',[null],{PATH:'/session-runtime-no-binaries'});
   assert.equal(unavailable.error.code,'TMUX_UNAVAILABLE');
   assert.equal(unavailable.error.cause,'error');
 });

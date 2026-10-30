@@ -7,7 +7,7 @@ import { memoryScope, withMemoryLock } from '../sync-lock.js';
 import { appendInbox, appendSession } from '../memory-append.js';
 const fixture = group => ({ ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'memory-append-')), ZYLOS_RUN_ID: 'run-1', ...(group ? { ZYLOS_SESSION_GROUP: group } : {}) });
 
-test('IB-52 group/global append, configured TZ dates, multiline session', async () => {
+test('group/global append, configured TZ dates, multiline session', async () => {
   for (const group of [undefined, 'lark:oc_b']) {
     const env = fixture(group);
     fs.writeFileSync(path.join(env.ZYLOS_DIR, '.env'), 'TZ=Asia/Singapore\n');
@@ -23,7 +23,7 @@ test('IB-52 group/global append, configured TZ dates, multiline session', async 
   }
 });
 
-test('IB-52 invalid records do not write; partial write rolls back under F8', async () => {
+test('invalid records do not write; partial write rolls back under', async () => {
   const env = fixture('lark:oc_b');
   for (const content of ['', '\n', 'a\nb', 'a\r\nb', 'a\u2028b']) {
     await assert.rejects(appendInbox({ kind: 'fact', content, env }), { code: 'INVALID_INPUT' });
@@ -57,7 +57,7 @@ test('legacy global append contends on the same origin memory lock as single Syn
   await appendInbox({ kind: 'fact', content: 'after release', env: legacyEnv });
 });
 
-// IB-52: session append needs only the final byte, not the entire daily log.
+// session append needs only the final byte, not the entire daily log.
 test('session append reads one trailing byte and preserves a missing newline', async () => {
   const env = fixture();
   const now = () => new Date('2026-10-10T12:00:00Z');

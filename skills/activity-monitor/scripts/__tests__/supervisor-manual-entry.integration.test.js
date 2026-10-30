@@ -35,9 +35,9 @@ async function scenario(t,mode,mutant=''){
  assert.deepEqual(done.requests,[]);assert.deepEqual(done.fences,[]);
  const exited=once(second.child,'exit');await second.command('stop');assert.equal((await exited)[0],0);
 }
-for(const mode of ['single','multi'])test(`IF-36 ${mode} actual M4/client lost reply requery retains original target and preserves same-name replacement`,{timeout:20000},async t=>{await scenario(t,mode);});
+for(const mode of ['single','multi'])test(`${mode} actual supervisor/client lost reply requery retains original target and preserves same-name replacement`,{timeout:20000},async t=>{await scenario(t,mode);});
 
-for(const pause of ['before-remove','after-remove'])test(`DM-42 actual manual M4 SIGKILL ${pause} preserves truthful completion without resubmission`,{timeout:20000},async t=>{
+for(const pause of ['before-remove','after-remove'])test(`actual manual supervisor SIGKILL ${pause} preserves truthful completion without resubmission`,{timeout:20000},async t=>{
  const f=readyTmuxTarget(t,{prefix:'manual-remove-entry-',mode:'multi',runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
  const request={version:1,type:'manual_restart',requestId:'manual-remove',expectedRunId:'run-1'};
  const first=await launch(t,f,'multi',pause);await first.command('release');

@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { enqueueMachineControl } from '../machine-control.js';
 import { SupervisorMachineTasks } from '../supervisor-machine-tasks.js';
 
-test('IF-17 all machine notices select Origin in multi and NULL single without fallback',async()=>{
+test('all machine notices select Origin in multi and NULL single without fallback',async()=>{
   for(const mode of ['single','multi']) {
     let args;const result=await enqueueMachineControl(['enqueue','--content','notice','--priority','3','--no-ack-suffix'],{readMode:()=>({mode}),run:input=>{args=input;return {ok:false,output:'TRANSITION_OPEN'};}});
     assert.equal(result.ok,false);assert.equal(args.includes('--group'),mode==='multi');
@@ -24,14 +24,14 @@ function fixture(t,{hour=3,config={}}={}) {
   t.after(()=>tasks.stop());return {root,calls,state,tasks,setNow:n=>now=n};
 }
 const settle=async tasks=>Promise.all([...tasks.pending.values()]);
-test('T07 daily maintenance runs at preserved hours and records success only after child finishes',async t=>{
+test('daily maintenance runs at preserved hours and records success only after child finishes',async t=>{
   const f=fixture(t);let resolve;f.tasks.execute=script=>{f.calls.scripts.push(path.basename(script));return new Promise(r=>resolve=r);};
   await f.tasks.tick();await f.tasks.tick();assert.deepEqual(f.calls.scripts,['daily-commit.js']);assert.equal(f.tasks.state('daily-memory-commit-state'),null);
   resolve('');await settle(f.tasks);await f.tasks.tick();assert.equal(f.calls.scripts.length,1);assert.ok(f.tasks.state('daily-memory-commit-state').last_date);
   f.setNow(new Date(2026,9,25,6).getTime());f.tasks.execute=async script=>f.calls.scripts.push(path.basename(script));await f.tasks.tick();await settle(f.tasks);
   assert.deepEqual(f.calls.scripts,['daily-commit.js','upgrade-check.js']);
 });
-test('T07 health and daily upgrade preserve gates; refusal does not mark delivered or retry without scope',async t=>{
+test('health and daily upgrade preserve gates; refusal does not mark delivered or retry without scope',async t=>{
   const f=fixture(t,{hour:5,config:{daily_upgrade_enabled:true,health_check_enabled:true}});
   f.tasks.enqueue=async args=>{f.calls.controls.push(args);return {ok:false,output:'TRANSITION_OPEN'};};
   await f.tasks.tick();await settle(f.tasks);assert.equal(f.calls.controls.length,2);
@@ -40,7 +40,7 @@ test('T07 health and daily upgrade preserve gates; refusal does not mark deliver
   assert.ok(f.tasks.state('daily-upgrade-state'));assert.ok(f.tasks.state('health-check-state'));assert.equal(f.calls.controls.length,4);
   await f.tasks.tick();await settle(f.tasks);assert.equal(f.calls.controls.length,4);
 });
-test('T08 per-runtime account tasks remain single flight and read sampler rather than global usage files',async t=>{
+test('per-runtime account tasks remain single flight and read sampler rather than global usage files',async t=>{
   const f=fixture(t,{hour:10,config:{usage_monitor_enabled:true}});const samples=[];
   f.tasks.readUsage=async runtime=>{samples.push(runtime);return {sevenDay:{usedPercentage:30}};};
   await f.tasks.tick();await settle(f.tasks);

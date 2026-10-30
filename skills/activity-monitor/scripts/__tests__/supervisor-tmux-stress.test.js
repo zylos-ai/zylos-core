@@ -13,13 +13,13 @@ const exec = promisify(execFile);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
 // Required AGENTS tmux matrix real-path stress. Opt-in keeps ordinary unit runs short.
-// Ported from the validated P02 stress scenario to the shared fixture + official runner.
+// Ported from the validated stress scenario to the shared fixture + official runner.
 test('matrix real launch/delivery under same-socket create/kill churn', {
-  skip: process.env.P05_TMUX_STRESS !== '1', timeout: 600000,
+  skip: process.env.TMUX_STRESS_ENABLED !== '1', timeout: 600000,
 }, async t => {
-  const launchRounds = Number(process.env.P05_LAUNCH_ROUNDS || 300);
-  const deliveryRounds = Number(process.env.P05_DELIVERY_ROUNDS || 150);
-  const f = isolatedTmux(t, { prefix: 'p05-stress-', socketName: 'tmux.sock', timeout: 6000 });
+  const launchRounds = Number(process.env.TMUX_STRESS_LAUNCH_ROUNDS || 300);
+  const deliveryRounds = Number(process.env.TMUX_STRESS_DELIVERY_ROUNDS || 150);
+  const f = isolatedTmux(t, { prefix: 'supervisor-stress-', socketName: 'tmux.sock', timeout: 6000 });
   const env = { ...process.env, HOME: f.dir, ZYLOS_DIR: f.dir, LANG: 'C.UTF-8', TERM: 'xterm-256color' };
   delete env.TMUX; delete env.TMUX_PANE;
   const tmux = async (...args) => (await exec(f.binary, ['-u', '-S', f.socketPath, '-N', ...args], { env, timeout: 6000 })).stdout.trim();
@@ -84,7 +84,7 @@ setInterval(()=>{},1000);
     stopping = true; await churn;
     try { await live(); } catch { stats.serverLost = true; }
     t.diagnostic(JSON.stringify(stats));
-    if (process.env.P05_STRESS_RESULT) await fs.writeFile(process.env.P05_STRESS_RESULT, JSON.stringify(stats, null, 2));
+    if (process.env.TMUX_STRESS_RESULT) await fs.writeFile(process.env.TMUX_STRESS_RESULT, JSON.stringify(stats, null, 2));
   }
   assert.deepEqual(stats.errors, []); assert.equal(stats.serverLost, false);
   assert.equal(stats.launchRounds, launchRounds); assert.equal(stats.deliveryRounds, deliveryRounds);

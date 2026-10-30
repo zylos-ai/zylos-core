@@ -7,7 +7,7 @@ import { routerFixture } from './helpers/router-fixture.js';
 import { createRouterDiagnostics } from '../router/diagnostics.js';
 import { createJsonlStream } from '../../../../cli/lib/jsonl-stream.js';
 
-// IF-31 / IF10-11a caller side: diagnostic history is not authority.
+// caller side: diagnostic history is not authority.
 test('false, truncated, removed and rotated diagnostics leave router decisions unchanged', async t => {
   const results = [];
   for (const variant of ['empty', 'false', 'truncated', 'removed', 'rotated', 'write-failed']) {

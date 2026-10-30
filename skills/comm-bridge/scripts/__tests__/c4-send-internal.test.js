@@ -44,13 +44,13 @@ function assertPair(f,content,sender='chat:a',target='chat:b',sessionId='session
   for(const row of rows)assert.equal(f.db.prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(row.session_group).head_id,row.id);
   return input.id;
 }
-test('IF-45 real stdin CLI writes one atomic pair, preserves bytes and records matching sender F3',async t=>{
+test('real stdin CLI writes one atomic pair, preserves bytes and records matching sender',async t=>{
   const f=setup(t),content='  中文\n"quotes" $x \\n and `literal`';
   const result=await run(f,undefined,content+' \t\n');assert.equal(result.code,0,result.stderr);
   const id=assertPair(f,content);assert.equal(result.stdout,`[C4] internal message queued for chat:b (id ${id})\n`);
 });
 
-test('IF-45 rejects all invalid send forms without changing conversations or heads',async t=>{
+test('rejects all invalid send forms without changing conversations or heads',async t=>{
   const f=setup(t),before=snapshot(f);
   const cases=[
     {env:{ZYLOS_SESSION_GROUP:''},code:'NO_SENDER_GROUP'},
@@ -69,13 +69,13 @@ test('IF-45 rejects all invalid send forms without changing conversations or hea
   for(const c of cases){const result=await run(f,c.args,c.body,c.env);assert.equal(result.code,1,JSON.stringify(c));assert.match(result.stderr,new RegExp(`^Error: ${c.code}:`));assert.deepEqual(snapshot(f),before);}
 });
 
-test('IF-45 empty stdin never calls the store or identity reader, even without a sender',async()=>{
+test('empty stdin never calls the store or identity reader, even without a sender',async()=>{
   let calls=0;const forbidden=()=>{calls++;throw new Error('must not be called');};
   await assert.rejects(sendInternal(['internal','chat:b'],async()=> '\n \t',{env:{},insertMessage:forbidden,readIdentity:forbidden}),{code:'EMPTY_CONTENT'});
   assert.equal(calls,0);
 });
 
-test('IF-45 origin and inherited background group work without a mode or target-health gate',async t=>{
+test('origin and inherited background group work without a mode or target-health gate',async t=>{
   const f=setup(t);
   // A late Origin retains its old environment even after a single cutover.
   fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({session_mode:'single',runtime:'claude'}));
@@ -84,7 +84,7 @@ test('IF-45 origin and inherited background group work without a mode or target-
   const g=setup(t);const toOrigin=await run(g,['internal','origin'],'origin target\n');assert.equal(toOrigin.code,0,toOrigin.stderr);assertPair(g,'origin target','chat:a','origin');
 });
 
-test('IF-45 stale, missing and malformed F3 identities store NULL without rejecting the message',async t=>{
+test('stale, missing and malformed identities store NULL without rejecting the message',async t=>{
   for(const kind of ['run-mismatch','no-run','missing','malformed']){
     const f=setup(t),file=path.join(f.root,'activity-monitor/session-groups/chat:a/current-session.json');
     if(kind==='missing')fs.unlinkSync(file);if(kind==='malformed')fs.writeFileSync(file,'{');
@@ -93,7 +93,7 @@ test('IF-45 stale, missing and malformed F3 identities store NULL without reject
   }
 });
 
-test('IF-45 fenced target without a session still queues and leaves its fence intact',async t=>{
+test('fenced target without a session still queues and leaves its fence intact',async t=>{
   const f=setup(t);
   f.store.setDrainFence('chat:b',{reason:'ttl',runId:'target-run'});
   const before=f.db.prepare('SELECT * FROM drain_fences').all();
@@ -104,12 +104,12 @@ test('IF-45 fenced target without a session still queues and leaves its fence in
 });
 
 function injectInboundFailure(f){f.db.exec("CREATE TRIGGER reject_internal_in BEFORE INSERT ON conversations WHEN NEW.channel='internal' AND NEW.direction='in' BEGIN SELECT RAISE(ABORT,'fixture inbound failure'); END");}
-test('IF-45 real CLI failure after outbound insert rolls back both rows and both heads',async t=>{
+test('real CLI failure after outbound insert rolls back both rows and both heads',async t=>{
   const f=setup(t);injectInboundFailure(f);const before=snapshot(f);const result=await run(f);
   assert.equal(result.code,1);assert.match(result.stderr,/^Error: DB_WRITE_FAILED:/);assert.deepEqual(snapshot(f),before);
 });
 
-test('IF-45 concurrent real CLI A-to-B and B-to-A commit whole pairs and monotonic heads',{timeout:15000},async t=>{
+test('concurrent real CLI A-to-B and B-to-A commit whole pairs and monotonic heads',{timeout:15000},async t=>{
   const f=setup(t);
   const workers=[['chat:a','chat:b','a-to-b'],['chat:b','chat:a','b-to-a']].map(([sender,target,body])=>{
     const child=spawn(process.execPath,['--import',guard,'--import',barrier,command,'internal',target],{

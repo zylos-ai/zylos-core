@@ -30,7 +30,7 @@ function memoryTree(root) {
 }
 function snapshotDb(db) { return ['conversations', 'mode_transitions', 'drain_fences', 'checkpoints'].map(table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()); }
 
-test('IF39/DM41 single→multi preserves source and archives target once; all 1000 Pending rows and empty-scope input survive byte-identical replay', () => {
+test('single→multi preserves source and archives target once; all 1000 Pending rows and empty-scope input survive byte-identical replay', () => {
   const f = fixture(); f.put('state.md', 'source state'); f.put('inbox.md', 'source inbox'); f.put('handoff.md', 'source handoff');
   f.put('session-groups/foo:a/state.md', 'old target'); f.put('session-groups/foo:a/inbox.20261027T090000000Z.md', 'old segment'); f.put('session-groups/origin/handoff.md', 'old target handoff');
   for (let n = 0; n < 1000; n++) f.add('a', n === 0 ? '汉'.repeat(300) + '\n\t\0' : n === 1 ? '' : `message${n}`, "route'$(`touch nope`)" + 'x'.repeat(200));
@@ -51,12 +51,12 @@ test('IF39/DM41 single→multi preserves source and archives target once; all 10
   assert.equal(f.read('session-groups/foo:a/state.md'), state); assert.equal(f.store.getModeTransition().cutoff, row.cutoff); assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').get(late.id).status, 'pending');
 });
 
-test('IF39/#4b converts every absorbed summary across more than 200 scopes', () => {
+test('#4b converts every absorbed summary across more than 200 scopes', () => {
   const f = fixture(); for (let n = 0; n < 205; n++) f.add('g' + n); const row = f.begin(); const out = f.convert()(row);
   assert.equal(out.scopes.length, 206); const handoff = fs.readFileSync(out.handoff, 'utf8'); assert.equal(handoff.split('\n').filter(line => line.startsWith('- scope=')).length, 205);
 });
 
-test('IF39 multi→single retains dormant source groups outside coverage snapshot and deterministic export bytes', () => {
+test('multi→single retains dormant source groups outside coverage snapshot and deterministic export bytes', () => {
   const f = fixture('multi'); f.add('active', 'pending');
   const done = f.store.insertConversation('out', 'foo', 'e', 'already covered', { groupName: 'sleep', wholeGroup: true });
   f.store.createCheckpoint(done.session_group, done.id, 'covered');
@@ -69,7 +69,7 @@ test('IF39 multi→single retains dormant source groups outside coverage snapsho
   const tree = memoryTree(f.root); f.convert()(row); assert.deepEqual(memoryTree(f.root), tree);
 });
 
-for (const direction of ['single', 'multi']) test(`DM41 ${direction} archive conflicts preserve both copies and recover without replacing archived data`, () => {
+for (const direction of ['single', 'multi']) test(`${direction} archive conflicts preserve both copies and recover without replacing archived data`, () => {
   const f = fixture(direction); f.add(); const row = f.begin(); const target = direction === 'single' ? 'session-groups/foo:a' : '.'; const previous = `mode-switch/${row.run_id}/previous/${direction === 'single' ? 'foo:a' : '_global'}`;
   f.put(`${target}/state.md`, 'new source conflict'); f.put(`${previous}/state.md`, 'original archive');
   assert.throws(() => f.convert()(row), { code: 'EEXIST', step: 'archive' });
@@ -78,7 +78,7 @@ for (const direction of ['single', 'multi']) test(`DM41 ${direction} archive con
   f.convert()(row); assert.equal(f.read(`${previous}/state.md`), 'original archive');
 });
 
-for (const failurePoint of ['archive', 'skeleton', 'handoff']) test(`DM41 failure after ${failurePoint} restarts with byte-identical final files and source untouched`, () => {
+for (const failurePoint of ['archive', 'skeleton', 'handoff']) test(`failure after ${failurePoint} restarts with byte-identical final files and source untouched`, () => {
   const f = fixture(); f.add(); f.put('state.md', 'source'); f.put('session-groups/foo:a/state.md', 'old'); f.put('session-groups/foo:a/inbox.md', 'old inbox'); const row = f.begin();
   const expectedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-reference-')); cleanups.push(() => fs.rmSync(expectedRoot, { recursive: true, force: true }));
   fs.cpSync(path.join(f.root, 'memory'), path.join(expectedRoot, 'memory'), { recursive: true });
@@ -90,13 +90,13 @@ for (const failurePoint of ['archive', 'skeleton', 'handoff']) test(`DM41 failur
   assert.deepEqual(memoryTree(f.root), expected); assert.equal(f.read('state.md'), 'source');
 });
 
-test('IF39 missing absorbed D1 row aborts before any archive or target write', () => {
+test('missing absorbed row aborts before any archive or target write', () => {
   const f = fixture(); const message = f.add(); const row = f.begin(); f.put('session-groups/foo:a/state.md', 'old'); const tree = memoryTree(f.root);
   f.db.prepare('DELETE FROM conversations WHERE id=?').run(message.id);
   assert.throws(() => f.convert()(row), { code: 'ABSORBED_MISMATCH', step: 'check' }); assert.deepEqual(memoryTree(f.root), tree);
 });
 
-for (const mutant of ['drop-pending', 'append-state', 'omit-old-handoff']) test(`IF39 completion check rejects on-disk ${mutant}, normal writer passes same fixture`, () => {
+for (const mutant of ['drop-pending', 'append-state', 'omit-old-handoff']) test(`completion check rejects on-disk ${mutant}, normal writer passes same fixture`, () => {
   const f = fixture(); f.add(); f.put('session-groups/origin/handoff.md', 'old handoff'); const row = f.begin(); f.convert()(row);
   const writeFile = (file, text, options) => {
     if (mutant === 'drop-pending' && file.endsWith('state.md')) text = text.replace(/^- #\d+ .*\n/m, '');
@@ -107,7 +107,7 @@ for (const mutant of ['drop-pending', 'append-state', 'omit-old-handoff']) test(
   assert.throws(() => f.convert({ writeFile })(row), { code: 'ABSORBED_MISMATCH', step: 'check' }); f.convert()(row);
 });
 
-for (const suffix of ["space ' $(not-run) ", 'control\n']) test(`IB08 W4 actual commands preserve script path and IDs for ${JSON.stringify(suffix)}`, () => {
+for (const suffix of ["space ' $(not-run) ", 'control\n']) test(`actual commands preserve script path and IDs for ${JSON.stringify(suffix)}`, () => {
   const f = fixture('single', suffix); f.add('a', 'text', "'; touch injected; '"); const row = f.begin(); const out = f.convert()(row); const handoff = fs.readFileSync(out.handoff, 'utf8');
   const commands = handoff.split('\n').filter(line => line.startsWith('node '));
   if (suffix.includes('\n')) { assert.equal(commands.length, 0); assert.ok(handoff.includes(replyVia({ id: 1 }, path.join(f.root, '.claude/skills/comm-bridge/scripts/c4-send.js')))); return; }
@@ -118,7 +118,7 @@ for (const suffix of ["space ' $(not-run) ", 'control\n']) test(`IB08 W4 actual 
   assert.deepEqual(replies, [['--absorbed-reply', row.run_id, '1'], ['--absorbed', '--run-id', row.run_id, '--id', '1']]);
 });
 
-for (const source of ['single', 'multi']) for (const point of ['archive', 'skeleton', 'handoff']) test(`DM41 real SIGKILL ${source} after ${point} resumes same run/cutoff and exact output`, () => {
+for (const source of ['single', 'multi']) for (const point of ['archive', 'skeleton', 'handoff']) test(`real SIGKILL ${source} after ${point} resumes same run/cutoff and exact output`, () => {
   const f = fixture(source); f.add(); f.put('state.md', 'global old'); f.put('inbox.md', 'global inbox'); f.put('handoff.md', 'global handoff');
   f.put('session-groups/foo:a/state.md', 'group old'); f.put('session-groups/foo:a/inbox.md', 'group inbox'); f.put('session-groups/origin/handoff.md', 'origin handoff');
   const row = f.begin(); const beforeDb = snapshotDb(f.db);
@@ -133,7 +133,7 @@ for (const source of ['single', 'multi']) for (const point of ['archive', 'skele
   assert.deepEqual(memoryTree(f.root), expected);
 });
 
-test('DM41 successive reverse conversions retain old handoff entrypoints without claiming semantic completion', () => {
+test('successive reverse conversions retain old handoff entrypoints without claiming semantic completion', () => {
   const f = fixture(); f.add(); f.put('state.md', 'old single'); f.put('handoff.md', 'uncompleted single handoff');
   const first = f.begin(); const a = f.convert()(first);
   f.store.setModeTransitionPhase(first.run_id, 'cutover'); f.store.setModeTransitionPhase(first.run_id, 'complete');
@@ -172,7 +172,7 @@ for (const point of ['export', 'check']) test(`conversion ${point} I/O failure p
   f.convert()(row); assert.deepEqual(snapshotDb(f.db), before);
 });
 
-for (const source of ['single', 'multi']) test(`IF39 ${source} recovery materials contain all source files but only previous target handoffs`, () => {
+for (const source of ['single', 'multi']) test(`${source} recovery materials contain all source files but only previous target handoffs`, () => {
   const f = fixture(source); f.add('a');
   const sourceDir = source === 'single' ? '' : 'session-groups/foo:a/';
   const targetDir = source === 'single' ? 'session-groups/foo:a/' : '';
@@ -191,7 +191,7 @@ for (const source of ['single', 'multi']) test(`IF39 ${source} recovery material
   assert.deepEqual(f.convert()(row).materials, expected);
 });
 
-test('IF39 renderer dropping one Pending entry while retaining the heading fails check and retains D9/gate', () => {
+test('renderer dropping one Pending entry while retaining the heading fails check and retains /gate', () => {
   const f = fixture(); f.add('a', 'first'); f.add('a', 'second');
   const row = f.begin(); const before = snapshotDb(f.db); let removed = false;
   const renderState = options => {
@@ -219,7 +219,7 @@ test('W6 single ungrouped export excludes grouped rows inside the same cutoff', 
   assert.equal(expected.length, 2);
 });
 
-test('IB08 W4 empty absorbed set needs no command even when the Core path contains control characters', () => {
+test('empty absorbed set needs no command even when the Core path contains control characters', () => {
   const f = fixture('single', 'control\n'); const row = f.begin();
   const out = f.convert()(row); const handoff = fs.readFileSync(out.handoff, 'utf8');
   assert.ok(handoff.includes('本次没有被吸收来信，无需按 id 回复或读取全文。'));

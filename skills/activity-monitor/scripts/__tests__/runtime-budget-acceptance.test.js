@@ -40,7 +40,7 @@ function fixture(t, Coordinator = RuntimeHealthCoordinator) {
 function budget(f) { const s = f.read().scheduling; return [s.restartFailureCount, s.lastRecoveryAt]; }
 function result(request, extra = {}) { return { runtime: 'claude', runId: request.runId, current: { ...request }, terminal: 'timeout', ...extra }; }
 
-test('DM-68 registration survives observed appearance, READY, exit', async t => {
+test('registration survives observed appearance, READY, exit', async t => {
   const f = fixture(t); f.clock(T + 60); const request = f.request();
   registered(await f.health.registerStartAttempt(request));assert.deepEqual(schedulingValues(f.read()), [2, T + 60, 0]);
   const before = fs.readFileSync(f.store.file, 'utf8');
@@ -66,7 +66,7 @@ async function linkedSequence(t, Coordinator) {
   await auth.health.applyProbeResult(result(authRequest, { matches: { authFailure: { detected: true } } }));
   assert.equal(auth.read().health, 'auth_failed'); assert.deepEqual(budget(auth), [2, T + 60]);
 }
-test('DM-69 exact bound/Origin/auth rows', async t => {
+test('exact bound/Origin/auth rows', async t => {
   await linkedSequence(t, RuntimeHealthCoordinator);
 });
 
@@ -81,7 +81,7 @@ async function lostReplySequence(t, Coordinator) {
   await f.health.applyProbeResult(result(r2)); assert.deepEqual(budget(f), [3, T + 61]);
   assert.equal(f.health.associations.get('claude').runId, r1.runId);
 }
-test('DM-70 lost r1 reply, unregistered same-group r2 and stale identity', async t => {
+test('lost reply, unregistered same-group and stale identity', async t => {
   await lostReplySequence(t, RuntimeHealthCoordinator);
 });
 
@@ -97,7 +97,7 @@ async function accelerationSequences(t, Coordinator) {
   assert.equal(limited.read().scheduling.cooldownUntil, 0); assert.equal(limited.read().scheduling.lastUserMessageRecoveryAt, T + 1);
   registered(await limited.health.registerStartAttempt(limited.request()));assert.deepEqual(schedulingValues(limited.read()), [4, T + 1, 0]);
 }
-test('DM-72 down, unavailable and rate-message budget sequences', async t => {
+test('down, unavailable and rate-message budget sequences', async t => {
   await accelerationSequences(t, RuntimeHealthCoordinator);
 });
 
@@ -119,15 +119,15 @@ async function cacheSequence(t, Router) {
   fs.writeFileSync(f, current); now += 29999; assert.equal(eligible().code,'probe_cache');
   now++; assert.equal(eligible().eligible,true);
 }
-test('DM-47 runtime cache bytes, v1 rejection/removal, exact expiry and shared-path control', async t => {
+test('runtime cache bytes, v1 rejection/removal, exact expiry and shared-path control', async t => {
   await cacheSequence(t, MessageRouter);
   class Bad extends MessageRouter { cachePath() { return path.join(this.cacheDirectory, 'shared.json'); } }
   await assert.rejects(cacheSequence(t, Bad), { code: 'ENOENT' });
 });
 
-// IF-62 A: ordered predicates, exact reply fields, and file side effects. Socket
+// A: ordered predicates, exact reply fields, and file side effects. Socket
 // framing/invalid JSON is covered separately by supervisor-request/socket tests.
-test('IF-62 A exact decision rows, missing/unreadable F10 and no F11 writes', async t => {
+test('A exact decision rows, missing/unreadable and no writes', async t => {
   const cases = [
     ['ok', 'ok', {}, T, 'not_restricted'],
     ['auth', 'auth_failed', {}, T, 'auth_blocked'],
@@ -183,6 +183,6 @@ async function failedPublish(t, Coordinator) {
   const reply = await f.health.registerStartAttempt(f.request()); assert.equal(reply.code, 'health_write_failed');
   assert.equal(fs.readFileSync(f.store.file, 'utf8'), bytes); assert.equal(f.health.associations.size, 0);
 }
-test('IF-62 detects same-second acceleration, probe notBefore and false registration on publication failure', async t => {
+test('detects same-second acceleration, probe notBefore and false registration on publication failure', async t => {
   await sameSecond(t, RuntimeHealthCoordinator); await probeFields(t, RuntimeHealthCoordinator); await failedPublish(t, RuntimeHealthCoordinator);
 });

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import { M1RestartConfirmation } from '../m1-restart-confirmation.js';
+import { LauncherRestartConfirmation } from '../launcher-restart-confirmation.js';
 const execute = promisify(execFile);
 async function settled(checker) {
   const end = Date.now() + 10000;
@@ -24,10 +24,10 @@ async function decided(checker, input) {
     await delay(20);
   }
 }
-// IF-41 / IB-47: exercise the production PM2 CLI transport against a private
-// daemon. A successful CLI exit alone must not confirm M1's generation.
-test('IF-41 real private PM2 confirms exact online generation, rejects false success and cleans its daemon', { timeout: 45000 }, async t => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'p05-m1-pm2-')));
+// exercise the production PM2 CLI transport against a private
+// daemon. A successful CLI exit alone must not confirm launcher's generation.
+test('real private PM2 confirms exact online generation, rejects false success and cleans its daemon', { timeout: 45000 }, async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'launcher-pm2-')));
   const home = path.join(root, 'pm2'); fs.mkdirSync(home);
   // Resolve the declared test dependency, never a host-global PM2 executable.
   // Both the production transport and fixture commands use this private entry.
@@ -70,7 +70,7 @@ test('IF-41 real private PM2 confirms exact online generation, rejects false suc
   const unrelatedPid = before.find(row => row.name === 'unrelated-fixture').pid;
   assert.equal(original.pm2_env.status, 'online');
   const input = { runId: 'transition-real', writtenAt: Date.now() };
-  const checker = new M1RestartConfirmation();
+  const checker = new LauncherRestartConfirmation();
   assert.deepEqual(await decided(checker, input), { confirmed: true, pending: false });
   const after = await rows();
   const restarted = after.find(row => row.name === 'c4-dispatcher');
@@ -80,34 +80,34 @@ test('IF-41 real private PM2 confirms exact online generation, rejects false suc
   assert.equal(after.find(row => row.name === 'unrelated-fixture').pid, unrelatedPid);
 
   // Genuine successful PM2 commands deliberately do not establish the target
-  // postcondition: unrelated restart, stopped M1, or a mismatched process name.
+  // postcondition: unrelated restart, stopped launcher, or a mismatched process name.
   const events = [];
   for (const scenario of ['old-uptime', 'stopped', 'wrong-name']) {
     let clock = Date.now();
     const options = { now: () => clock, timeoutMs: 2000, diagnostic: event => events.push(event),
       processName: scenario === 'wrong-name' ? 'missing-fixture' : 'c4-dispatcher',
       restart: () => command(scenario === 'stopped' ? ['stop', 'c4-dispatcher'] : ['restart', 'unrelated-fixture']) };
-    const candidate = new M1RestartConfirmation(options);
+    const candidate = new LauncherRestartConfirmation(options);
     const pending = { runId: scenario, writtenAt: scenario === 'old-uptime' ? Date.now() : 0 };
     assert.equal((await candidate.advance(pending)).pending, true); await settled(candidate);
     assert.deepEqual(await candidate.advance(pending), { confirmed: false, pending: true }, scenario);
     clock += 2000;
-    assert.deepEqual(await candidate.advance(pending), { confirmed: false, pending: false, reason: 'm1_restart_unconfirmed' });
+    assert.deepEqual(await candidate.advance(pending), { confirmed: false, pending: false, reason: 'launcher_restart_unconfirmed' });
   }
 
   // Real PM2 error and a real child timeout remain unconfirmed, even if a
   // delayed restart request could have reached this private daemon.
   for (const options of [{ processName: 'missing-fixture' }, { timeoutMs: 1 }]) {
-    const candidate = new M1RestartConfirmation({ ...options, diagnostic: event => events.push(event) });
+    const candidate = new LauncherRestartConfirmation({ ...options, diagnostic: event => events.push(event) });
     const pending = { runId: options.timeoutMs ? 'timeout' : 'error', writtenAt: 0 };
     await candidate.advance(pending); await settled(candidate);
-    assert.deepEqual(await candidate.advance(pending), { confirmed: false, pending: false, reason: 'm1_restart_unconfirmed' });
+    assert.deepEqual(await candidate.advance(pending), { confirmed: false, pending: false, reason: 'launcher_restart_unconfirmed' });
   }
   assert.equal(events.length, 5);
 
   // Known-bad variant: treating successful `pm2 restart` exit as confirmation.
   // The exact stale-generation assertion above must reject this implementation.
-  class ExitCodeOnly extends M1RestartConfirmation {
+  class ExitCodeOnly extends LauncherRestartConfirmation {
     async advance() { await this.restart({ name: this.processName, timeoutMs: this.timeoutMs }); return { confirmed: true, pending: false }; }
   }
   const bad = new ExitCodeOnly({ restart: () => command(['restart', 'unrelated-fixture']) });

@@ -13,11 +13,11 @@ function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunc
  const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
-test('T01 assembly: restore health before admission; no-launch empty round executes',async t=>{
+test('assembly: restore health before admission; no-launch empty round executes',async t=>{
  const {supervisor}=fixture(t);assert.equal(supervisor.admission.open,false);await supervisor.loop.start();assert.equal(supervisor.admission.open,true);assert.equal(supervisor.health.stores.size,2);
  const reply=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'empty',reason:'upgrade'});assert.equal(reply.result,'done_empty');
 });
-test('DM-54 assembly: damaged F9 retained while existing lifecycle loop stays scheduled',async t=>{
+test('assembly: damaged retained while existing lifecycle loop stays scheduled',async t=>{
  const {supervisor,calls,file}=fixture(t,{badRequests:true});await supervisor.loop.start();assert.equal(supervisor.admission.open,true);assert.equal(fs.readFileSync(file,'utf8'),'broken');assert.ok(calls.some(row=>row.error==='requests_unreadable'));
  const reply=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'bad',reason:'upgrade'});assert.equal(reply.code,'requests_unreadable');assert.equal(fs.readFileSync(file,'utf8'),'broken');
 });
@@ -29,7 +29,7 @@ async function capturedAuthRecovery(supervisor,runtime='claude') {
  await supervisor.health.beginAuthRecovery(runtime,{status:'success'},[]);
 }
 
-test('IF-31 assembly: unwritable diagnostic output cannot block completed authentication recovery',async t=>{
+test('assembly: unwritable diagnostic output cannot block completed authentication recovery',async t=>{
  const {supervisor,calls,root}=fixture(t);
  await supervisor.loop.deps.readConfiguration();
  await capturedAuthRecovery(supervisor);
@@ -44,7 +44,7 @@ test('IF-31 assembly: unwritable diagnostic output cannot block completed authen
  assert.ok(calls.some(row=>row.phase==='log-maintenance'));
 });
 
-test('T01/T02 assembly: one failed probe poll cannot starve another runtime or auth recovery',async t=>{
+test('assembly: one failed probe poll cannot starve another runtime or auth recovery',async t=>{
  const {supervisor,calls}=fixture(t);
  await supervisor.loop.deps.readConfiguration();await capturedAuthRecovery(supervisor,'codex');
  const polled=[];
@@ -58,7 +58,7 @@ test('T01/T02 assembly: one failed probe poll cannot starve another runtime or a
 });
 
 
-test('T01/IB-41 assembly: config reclaim resolves mode at admission, after F1 cutover',async t=>{
+test('assembly: config reclaim resolves mode at admission, after cutover',async t=>{
  let mode='single';const selected=[];
  const {supervisor}=fixture(t,{readMode:()=>({mode}),resolveLaunchConfig:input=>{selected.push(input);return {runtime:'claude',mode:'default'};}});
  await supervisor.loop.deps.readConfiguration();
@@ -67,7 +67,7 @@ test('T01/IB-41 assembly: config reclaim resolves mode at admission, after F1 cu
  assert.deepEqual(selected,[{sessionGroup:'chat:A',sessionMode:'single'},{sessionGroup:'chat:A',sessionMode:'multi'}]);
 });
 
-test('T02/T08 assembly: stopped, unknown, or no-longer-ready processes cannot refresh F4',async t=>{
+test('assembly: stopped, unknown, or no-longer-ready processes cannot refresh',async t=>{
  const {supervisor,scenes,root}=fixture(t);
  const scene={sessionGroup:'chat:A',runtime:'claude',runId:'r',sessionId:'s',runDir:root,createdAt:100,ready:true,present:true,processRunning:true};
  const file=path.join(root,'agent-status.json');fs.writeFileSync(file,'prior state');let observations=0;
@@ -85,7 +85,7 @@ test('T02/T08 assembly: stopped, unknown, or no-longer-ready processes cannot re
 });
 
 
-test('T02/T08 assembly: hooks and status share the round sample; replacement identity blocks publication',async t=>{
+test('assembly: hooks and status share the round sample; replacement identity blocks publication',async t=>{
  const consumed=[];let current,replaceDuringConsume=false;
  const {supervisor,scenes,root}=fixture(t,{consumeHealthEvents:async scene=>{
   consumed.push(scene.runtimePid);
@@ -103,7 +103,7 @@ test('T02/T08 assembly: hooks and status share the round sample; replacement ide
 });
 
 
-test('T01 shutdown: accepted lifecycle mutation finishes before Supervisor stop resolves',async t=>{
+test('shutdown: accepted lifecycle mutation finishes before Supervisor stop resolves',async t=>{
  const {supervisor}=fixture(t);supervisor.admission.openEntry();
  let release,entered;const running=new Promise(resolve=>{entered=resolve;});
  const barrier=new Promise(resolve=>{release=resolve;});let written=false;
@@ -115,7 +115,7 @@ test('T01 shutdown: accepted lifecycle mutation finishes before Supervisor stop 
 });
 
 
-test('T01 shutdown: detached route auth and accepted health writes drain before return',async t=>{
+test('shutdown: detached route auth and accepted health writes drain before return',async t=>{
  let releaseAuth,enteredAuth;const authEntered=new Promise(resolve=>{enteredAuth=resolve;});
  const authBarrier=new Promise(resolve=>{releaseAuth=resolve;});
  const {supervisor}=fixture(t,{checkAuth:async()=>{enteredAuth();await authBarrier;return {status:'success'};}});
@@ -131,8 +131,8 @@ test('T01 shutdown: detached route auth and accepted health writes drain before 
  assert.equal((await supervisor.router.checkAuth('claude')).reason,'supervisor_stopping');
 });
 
-// B2 / T08: metrics uses the lifecycle round, including its stop updates.
-test('T08 assembly: metrics reuses scene and fence snapshots and excludes stopped entries',async t=>{
+// B2 / metrics uses the lifecycle round, including its stop updates.
+test('assembly: metrics reuses scene and fence snapshots and excludes stopped entries',async t=>{
  const {supervisor,scenes,db,root}=fixture(t);
  await supervisor.loop.deps.readConfiguration();
  scenes.observe=async()=>{throw new Error('metrics must not resample scenes');};
@@ -147,7 +147,7 @@ test('T08 assembly: metrics reuses scene and fence snapshots and excludes stoppe
 });
 
 // B2: confirmed health/exit cleanup must update the shared publication sample.
-for(const source of ['health','exit'])test(`T08 assembly: ${source} stop removes the run from subsequent round metrics`,async t=>{
+for(const source of ['health','exit'])test(`assembly: ${source} stop removes the run from subsequent round metrics`,async t=>{
  const {supervisor,scenes,root}=fixture(t);
  const scene={sessionGroup:'chat:stop',runtime:'claude',runId:'r',sessionId:'s',runDir:root,createdAt:100,present:true,ready:true,processRunning:source==='health'};
  scenes.observe=async()=>[scene];scenes.readIdentity=async()=>scene;scenes.observeGroup=async()=>scene;
@@ -162,7 +162,7 @@ for(const source of ['health','exit'])test(`T08 assembly: ${source} stop removes
  assert.equal(metrics.ready,0);assert.equal(metrics.starting,0);
 });
 
-test('T08 assembly: single auth null scope invalidates only its matching Origin run',async t=>{
+test('assembly: single auth null scope invalidates only its matching Origin run',async t=>{
  const {supervisor,scenes}=fixture(t);
  const original={sessionGroup:'origin',runId:'old',present:true,ready:true};
  scenes.observe=async()=>[original];scenes.stop=async()=>{};
@@ -179,14 +179,14 @@ test('C3 each unavailable dependency logs once while unrelated failures remain v
  const {supervisor,calls}=fixture(t);
  await supervisor.loop.deps.advanceTransition({});await supervisor.loop.deps.advanceTransition({});
  const report=supervisor.loop.deps.reportError;
- for(const dependency of ['P04 pool','P07 Sync','P10 migration'])for(let i=0;i<3;i++)report(Object.assign(new Error(dependency),{code:'DEPENDENCY_UNAVAILABLE'}),{phase:'fixture',sessionGroup:String(i)});
+ for(const dependency of [' pool',' Sync',' migration'])for(let i=0;i<3;i++)report(Object.assign(new Error(dependency),{code:'DEPENDENCY_UNAVAILABLE'}),{phase:'fixture',sessionGroup:String(i)});
  for(let i=0;i<2;i++)report(Object.assign(new Error('unrelated failure'),{code:'EIO'}));
  assert.equal(calls.filter(row=>row.error==='DEPENDENCY_UNAVAILABLE').length,3);
  assert.equal(calls.filter(row=>row.error==='EIO').length,2);
 });
 
 
-test('IB-37 real supervisor rounds deduplicate configuration read failures and reset on recovery', async t => {
+test('real supervisor rounds deduplicate configuration read failures and reset on recovery', async t => {
   let failure = null;
   const { supervisor, root, calls, db } = fixture(t, {
     readConfiguration: async () => {
@@ -215,7 +215,7 @@ test('IB-37 real supervisor rounds deduplicate configuration read failures and r
 });
 
 
-test('IB-37 open transition configuration failure does not emit automatic-migration skip', async t => {
+test('open transition configuration failure does not emit automatic-migration skip', async t => {
   let failure = null;
   const { supervisor, root, calls, db } = fixture(t, {
     readConfiguration: async () => {
@@ -240,7 +240,7 @@ test('IB-37 open transition configuration failure does not emit automatic-migrat
   assert.equal(events.filter(row => row.event === 'transition_blocked').length, 1);
 });
 
-test('T01 unreadable startup configuration stops before transition sampling or migration diagnostics', async t => {
+test('unreadable startup configuration stops before transition sampling or migration diagnostics', async t => {
   const failure = Object.assign(new Error('unreadable startup configuration'), { code: 'EIO' });
   const { supervisor, root, calls, db } = fixture(t, { readConfiguration: async () => { throw failure; } });
   let transitionReads = 0;
@@ -253,7 +253,7 @@ test('T01 unreadable startup configuration stops before transition sampling or m
   assert.equal(fs.existsSync(path.join(root, 'activity-monitor/supervisor-events.jsonl')), false);
 });
 
-test('IB-37 configuration recovery during an open transition resets automatic-skip deduplication', async t => {
+test('configuration recovery during an open transition resets automatic-skip deduplication', async t => {
   let failure = null, transition = null;
   const { supervisor, root, db } = fixture(t, {
     readMode: () => {

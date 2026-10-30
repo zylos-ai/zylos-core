@@ -9,7 +9,7 @@ import { groupRunDir } from '../session-group-paths.js';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 
-test('ZYLO-85: activity and migration entrypoints execute through aliases and stay inert on import', async t => {
+test('activity and migration entrypoints execute through aliases and stay inert on import', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'entrypoint-alias-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const alias = path.join(directory, 'alias');

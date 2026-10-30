@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../../test/helpers/ready-tmux-target.js';
 import { submit } from '../../../../../cli/lib/am-sock-client.js';
-const worker = fileURLToPath(new URL('./i2-manual-worker.js', import.meta.url));
+const worker = fileURLToPath(new URL('./manual-restart-worker.js', import.meta.url));
 export function fixture(t, mode = 'multi', runtime = 'claude') {
   const f = readyTmuxTarget(t, { prefix: 'i2mr-', mode, runtime, runtimeProcess: true });
   f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
@@ -22,7 +22,7 @@ export function launch(t, f, variant = '') {
   let stderr = ''; child.stderr.on('data', data => stderr += data);
   const inbox = [], waiters = [];
   child.on('message', value => waiters.length ? waiters.shift().resolve(value) : inbox.push(value));
-  child.on('exit', (code, signal) => { for (const waiter of waiters.splice(0)) waiter.reject(new Error(`M4 exited ${code ?? signal}: ${stderr}`)); });
+  child.on('exit', (code, signal) => { for (const waiter of waiters.splice(0)) waiter.reject(new Error(`supervisor exited ${code ?? signal}: ${stderr}`)); });
   const next = () => inbox.length ? Promise.resolve(inbox.shift()) : new Promise((resolve, reject) => waiters.push({ resolve, reject }));
   const kill = async () => { if (child.exitCode === null && child.signalCode === null) { const done = once(child, 'exit'); child.kill('SIGKILL'); assert.equal((await done)[1], 'SIGKILL'); } };
   t.after(kill);

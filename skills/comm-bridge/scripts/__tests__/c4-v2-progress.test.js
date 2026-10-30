@@ -11,7 +11,7 @@ function fixture(t) {
   const cps = () => db.prepare('SELECT * FROM checkpoints ORDER BY id').all();
   return { db, store, seed, cps };
 }
-test('DM-19 checkpoint rejects gap, regression, per-group head overflow and invalid summaries without writes', t => {
+test('checkpoint rejects gap, regression, per-group head overflow and invalid summaries without writes', t => {
   const { store, seed, cps } = fixture(t);
   seed(9); seed(10, 'foo', 'pending'); seed(20); seed(100, 'bar');
   const before = cps();
@@ -25,7 +25,7 @@ test('DM-19 checkpoint rejects gap, regression, per-group head overflow and inva
   assert.throws(() => store.createCheckpoint('bar', 101, 'cross-group head'), { code: 'CHECKPOINT_BEYOND_HEAD' });
   assert.equal(cps().length, before.length + 1);
 });
-test('DM-20 initial NULL checkpoint is zero, and baseline uses latest id while coverage uses maximum end', t => {
+test('initial NULL checkpoint is zero, and baseline uses latest id while coverage uses maximum end', t => {
   const { db, store, seed } = fixture(t);
   db.prepare("INSERT INTO checkpoints(summary,start_conversation_id,end_conversation_id,session_group,no_content) VALUES('initial',NULL,NULL,'*',0)").run();
   seed(1); seed(2); seed(3);
@@ -37,7 +37,7 @@ test('DM-20 initial NULL checkpoint is zero, and baseline uses latest id while c
   db.prepare("INSERT INTO checkpoints(summary,end_conversation_id,session_group,no_content) VALUES('later-null',NULL,'*',0)").run();
   assert.equal(store.legacyBaselineEnd(), 0); assert.equal(store.getGlobalCoverageEnd(), 3);
 });
-test('DM-21 content checkpoint isolation and no-content rows do not hide content', t => {
+test('content checkpoint isolation and no-content rows do not hide content', t => {
   const { store, seed } = fixture(t); seed(1); seed(2); seed(3); seed(4);
   store.createCheckpoint('*', 1, 'global');
   assert.equal(store.getLatestContentCheckpoint('foo'), null);
@@ -48,7 +48,7 @@ test('DM-21 content checkpoint isolation and no-content rows do not hide content
   const global = store.createCheckpoint('*', 4, 'new global');
   assert.equal(store.getLatestContentCheckpoint('foo'), null); assert.equal(store.getLatestContentCheckpoint('*').id, global.id);
 });
-for (const terminal of ['failed', 'switch_absorbed']) test(`DM-22 ${terminal} crosses frontier but does not enter unsummarized range`, t => {
+for (const terminal of ['failed', 'switch_absorbed']) test(`${terminal} crosses frontier but does not enter unsummarized range`, t => {
   const { store, seed } = fixture(t); seed(9); store.createCheckpoint('foo', 9, 'coverage'); seed(10, 'foo', terminal); seed(11);
   assert.equal(store.getDeliveredFrontier('foo'), 11);
   assert.equal(store.getUnsummarizedRange('foo').count, 1);
@@ -58,7 +58,7 @@ for (const terminal of ['failed', 'switch_absorbed']) test(`DM-22 ${terminal} cr
   assert.equal(store.getGlobalDeliveredFrontier(), 11);
   assert.throws(() => store.getUnsummarizedConversations('foo', { upToConversationId: 13 }), { code: 'UPTO_BEYOND_FRONTIER' });
 });
-test('IF-21 tail uses fixed coverage and includes only delivered input or output despite later Sync', t => {
+test('tail uses fixed coverage and includes only delivered input or output despite later Sync', t => {
   const { store, seed } = fixture(t);
   seed(1); store.createCheckpoint('foo', 1, 'old');
   seed(2); seed(3, 'foo', 'failed'); seed(4, 'foo', 'pending'); seed(5, 'foo', 'delivered', 'out'); seed(6, 'bar'); seed(7);
@@ -91,7 +91,7 @@ test('Origin cursor rejection and trigger failure leave both cursor columns unch
   db.exec("CREATE TRIGGER reject_cursor BEFORE UPDATE ON origin_sync_cursors BEGIN SELECT RAISE(ABORT,'reject cursor'); END");
   assert.throws(() => store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id }), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(read(), before);
 });
-test('calibration: DM-22 assertion detects a mutant that blocks on failed input', async t => {
+test('calibration: assertion detects a mutant that blocks on failed input', async t => {
   const mutatedCreateStore = await modifiedStore('c4-store-progress.js',
     "status NOT IN ('delivered','failed','switch_absorbed')", "status NOT IN ('delivered','switch_absorbed')");
   const { db, store, seed } = fixture(t); seed(9); store.createCheckpoint('foo', 9, 'coverage'); seed(10, 'foo', 'failed'); seed(11);
@@ -103,7 +103,7 @@ for (const [name, ends, baseline] of [
   ['FX-BL1', [null, 300, 800], 800],
   ['FX-BL2', [300, 800, null], 0],
   ['FX-BL3', [null, 800, 500], 500],
-]) test(`DM-57 ${name} migrates historical baseline shape and preserves identical new-group reads`, async t => {
+]) test(`${name} migrates historical baseline shape and preserves identical new-group reads`, async t => {
   const { seedV1 } = await import('./helpers/c4-v2-fixtures.js');
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db);
   db.exec('DELETE FROM checkpoints');

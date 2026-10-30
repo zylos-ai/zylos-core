@@ -7,12 +7,12 @@ import { publishBootstrapReady } from '../bootstrap-ready.js';
 import { readBootstrapIdentity } from '../bootstrap-identity.js';
 
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-ready-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-ready-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return { env: { ZYLOS_RUN_ID: 'run' }, scopeReader: async () => ({ dir }), identityReader: async () => ({ runtime: 'codex' }), dir };
 }
 
-test('IF-19 local publication follows enqueue and retains the exact control IDs', async t => {
+test('local publication follows enqueue and retains the exact control IDs', async t => {
   const f = fixture(t), file = path.join(f.dir, 'current-session.json');
   const result = await publishBootstrapReady({ source: 'startup', session_id: 's' }, { ...f, now: () => 42,
     enqueue: async () => { assert.equal(fs.existsSync(file), false); return { startupControlIds: [4, 7] }; } });
@@ -20,7 +20,7 @@ test('IF-19 local publication follows enqueue and retains the exact control IDs'
   assert.equal(result.sessionId, 's');
 });
 
-test('IF-20 compact, resume, child and missing identity never enqueue or publish', async t => {
+test('compact, resume, child and missing identity never enqueue or publish', async t => {
   const f = fixture(t);
   const options = { ...f, enqueue: async () => { throw Error('must not enqueue'); }, scopeReader: () => { throw Error('must not resolve'); } };
   for (const payload of [{ source: 'compact', session_id: 's' }, { source: 'resume', session_id: 's' },
@@ -30,7 +30,7 @@ test('IF-20 compact, resume, child and missing identity never enqueue or publish
   assert.equal(fs.readdirSync(f.dir).length, 0);
 });
 
-test('IF-20 clear keeps old F3 on publication failure; enqueue failure can still publish empty IDs', async t => {
+test('clear keeps old on publication failure; enqueue failure can still publish empty IDs', async t => {
   const f = fixture(t), file = path.join(f.dir, 'current-session.json');
   fs.writeFileSync(file, 'old');
   await assert.rejects(publishBootstrapReady({ source: 'clear', session_id: 'new' }, { ...f,
@@ -41,14 +41,14 @@ test('IF-20 clear keeps old F3 on publication failure; enqueue failure can still
   assert.equal(record.sessionId, 'new');
 });
 
-test('IF-20 rejected managed identity leaves F3 untouched and does not enqueue', async t => {
+test('rejected managed identity leaves untouched and does not enqueue', async t => {
   const f = fixture(t);
   await assert.rejects(publishBootstrapReady({ source: 'startup', session_id: 's' }, { ...f,
     identityReader: async () => { throw Error('stale'); }, enqueue: async () => { assert.fail('enqueue before identity'); } }), /stale/);
   assert.equal(fs.readdirSync(f.dir).length, 0);
 });
 
-test('P06 2.1 READY identity binds the current run and pane without process ancestry', async () => {
+test('READY identity binds the current run and pane without process ancestry', async () => {
   const scope = { kind: 'group', sessionGroup: 'origin' };
   const env = { ZYLOS_RUN_ID: 'r', ZYLOS_SESSION_GROUP: 'origin', TMUX_PANE: '%3' };
   const target = { present: true, runtime: 'codex', paneId: '%3', runId: 'r', rawF2: { ZYLOS_SESSION_GROUP: 'origin' } };
@@ -62,7 +62,7 @@ test('P06 2.1 READY identity binds the current run and pane without process ance
   assert.equal(closed, 3);
 });
 
-test('IF-20 legacy foreground identity requires a runtime ancestor in the observed pane', async () => {
+test('legacy foreground identity requires a runtime ancestor in the observed pane', async () => {
   const target = { present: true, runtime: 'codex', paneId: '%3', runId: null };
   const options = { env: {}, pid: 30,
     load: async () => ({ LEGACY_TMUX_NAMES: ['codex-main'] }),

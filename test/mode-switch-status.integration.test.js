@@ -25,7 +25,7 @@ function fixture() {
 }
 const statusOptions = root => ({ zylosDir: root, readMode: () => ({ mode: 'single', keyPresent: true }), readPm2: () => 'stopped' });
 
-test('IF31 E real P01 state survives deleted, rotated, and unreadable diagnostic stream with M4 stopped', async () => {
+test('E real state survives deleted, rotated, and unreadable diagnostic stream with supervisor stopped', async () => {
   const { root, filename, database, store } = fixture();
   const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
   const reason = 'running_control_without_deadline:machine:17'; store.setModeTransitionPhase(runId, 'gating', { reason });
@@ -45,7 +45,7 @@ test('IF31 E real P01 state survives deleted, rotated, and unreadable diagnostic
   expect(fs.readFileSync(filename)).toEqual(beforeBytes);
 });
 
-test('IF66 status observes completed D9 through P01 reader and new instance null without writes', async () => {
+test('status observes completed through reader and new instance null without writes', async () => {
   const { root, filename, database, store } = fixture();
   let data = await readSessionModeStatus(statusOptions(root));
   expect(data.transition).toBeNull(); expect(data.lastCompleted).toBeNull(); expect(data.globalGate.present).toBe(false);
@@ -58,7 +58,7 @@ test('IF66 status observes completed D9 through P01 reader and new instance null
   expect(fs.readFileSync(filename)).toEqual(before);
 });
 
-test('IB44 actual socket is connected exactly once without sending a request', async () => {
+test('actual socket is connected exactly once without sending a request', async () => {
   const { root, database } = fixture(); database.close();
   let connections = 0, bytes = 0;
   const peers = new Set();
@@ -73,7 +73,7 @@ test('IB44 actual socket is connected exactly once without sending a request', a
   } finally { for (const peer of peers) peer.destroy(); await new Promise(resolve => server.close(resolve)); }
 });
 
-test('IB44 missing database fails without bootstrapping directories or SQLite files', async () => {
+test('missing database fails without bootstrapping directories or SQLite files', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-status-missing-')); roots.push(root);
   await expect(readSessionModeStatus(statusOptions(root))).rejects.toThrow();
   expect(fs.readdirSync(root)).toEqual([]);
@@ -94,7 +94,7 @@ async function publicStatus(root, args = ['--json'], extraEnv = {}) {
   } catch (error) { return error; }
 }
 
-test('public status CLI reports real blocked D9 with M4 absent, no PM2 startup or database writes', async () => {
+test('public status CLI reports real blocked with supervisor absent, no PM2 startup or database writes', async () => {
   const { root, filename, database, store } = fixture();
   const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
   store.setModeTransitionPhase(runId, 'gating', { reason: 'running_control_without_deadline:machine:17' });
@@ -152,7 +152,7 @@ test('public status CLI connects once to real am.sock and transmits zero request
   } finally { for (const peer of peers) peer.destroy(); await new Promise(resolve => server.close(resolve)); }
 });
 
-test('IB44 public status leaves a pending schema migration byte-identical instead of upgrading the database', async () => {
+test('public status leaves a pending schema migration byte-identical instead of upgrading the database', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-status-old-schema-')); roots.push(root);
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   const filename = path.join(root, 'comm-bridge', 'c4.db');
@@ -210,7 +210,7 @@ test('public status default PM2 shim records invocation and cannot start a daemo
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 
-test('IF66 missing PM2 socket skips the CLI and leaves no daemon after public status exits', async () => {
+test('missing PM2 socket skips the CLI and leaves no daemon after public status exits', async () => {
   const { root, database } = fixture(); database.close();
   const env = pm2Cli(root, `fs.mkdirSync(process.env.PM2_HOME, { recursive: true });
 fs.writeFileSync(path.join(process.env.PM2_HOME, 'pm2.pid'), String(process.pid));
@@ -222,7 +222,7 @@ console.log('[]');`);
   expect(fs.existsSync(path.join(root, 'private-pm2'))).toBe(false);
 });
 
-test('IF66 residual PM2 socket skips jlist and does not start a daemon', async () => {
+test('residual PM2 socket skips jlist and does not start a daemon', async () => {
   const { root, database } = fixture(); database.close();
   const home = path.join(root, 'private-pm2'); fs.mkdirSync(home);
   const socketPath = path.join(home, 'rpc.sock');
@@ -255,7 +255,7 @@ for (const [label, output, status] of [
   ['no activity-monitor', '[]', 'not_found'],
   ['activity-monitor online', '[{"name":"activity-monitor","pm2_env":{"status":"online"}}]', 'online'],
   ['activity-monitor stopped', '[{"name":"activity-monitor","pm2_env":{"status":"stopped"}}]', 'stopped'],
-]) test(`IF66 existing PM2 socket uses public jlist: ${label}`, async () => {
+]) test(`existing PM2 socket uses public jlist: ${label}`, async () => {
   const { root, database } = fixture(); database.close();
   const env = pm2Cli(root, `console.log('PM2 version notice');
 console.log(${JSON.stringify(output)});`);
@@ -274,7 +274,7 @@ for (const [label, body, message] of [
   // fail the assertion without leaving a long-lived fixture process.
   ['timeout', "setTimeout(() => { console.log('[]'); }, 2000);", 'Unable to collect PM2 process status'],
   ['invalid output', "console.log('not JSON');", 'PM2 returned invalid JSON'],
-]) test(`IF66 public status preserves authoritative state when PM2 jlist has ${label}`, async () => {
+]) test(`public status preserves authoritative state when PM2 jlist has ${label}`, async () => {
   const { root, database, store } = fixture();
   const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); database.close();
   const env = pm2Cli(root, body); const server = await pm2Socket(root);

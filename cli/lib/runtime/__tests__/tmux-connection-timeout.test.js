@@ -7,7 +7,7 @@ import { execFileSync, spawn } from 'node:child_process';
 // leaves those pipes open while the server is frozen, keeping Node alive.
 test('connection timeout releases stdio and exits before a frozen server resumes', { timeout: 10000 }, async t => {
   let server, child, exited;
-  const {socketPath,binary,tmux}=isolatedTmux(t,{prefix:'p02-connection-timeout-',socketName:'tmux.sock',beforeCleanup:async()=>{
+  const {socketPath,binary,tmux}=isolatedTmux(t,{prefix:'session-runtime-connection-timeout-',socketName:'tmux.sock',beforeCleanup:async()=>{
     if (server) try { process.kill(server, 'SIGCONT'); } catch {}
     if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     if (exited) await exited;

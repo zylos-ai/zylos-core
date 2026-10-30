@@ -7,7 +7,7 @@ import { HealthEventReader } from '../health-event-reader.js';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { appendEvent } from '../../../../cli/lib/event-log.js';
 
-test('T02 F6 cursor keeps failed commit retryable and restarted reader deduplicates through F10',async t=>{
+test('cursor keeps failed commit retryable and restarted reader deduplicates through',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'health-reader-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const now=Date.now(),scene={sessionGroup:'telegram:a',runtime:'claude',runDir:path.join(root,'group')},identity={runtime:'claude',session_id:'session',claude_pid:123};
   const health=new RuntimeHealthCoordinator({zylosDir:root,now:()=>now}), reader=new HealthEventReader({coordinator:health,zylosDir:root,now:()=>now,quota:()=>null});t.after(()=>reader.close());
@@ -19,7 +19,7 @@ test('T02 F6 cursor keeps failed commit retryable and restarted reader deduplica
   assert.equal((await restarted.consumeScene(scene,identity))[0].reason,'replay');
 });
 
-test('T02 F6 ingestion enriches from its own current F5, never another group or legacy quota',async t=>{
+test('ingestion enriches from its own current , never another group or legacy quota',async t=>{
  const {publishContextSample}=await import('../context-monitor.js');
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'health-reader-quota-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const now=Date.now(),captured=[];

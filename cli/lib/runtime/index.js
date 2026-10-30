@@ -1,4 +1,4 @@
-/** Runtime selection is explicit: use the observed runtime or IB-58 result. */
+/** Runtime selection is explicit: use the observed runtime or resolved configuration. */
 import { ClaudeAdapter } from './claude.js';
 import { CodexAdapter } from './codex.js';
 const REGISTRY = { claude: ClaudeAdapter, codex: CodexAdapter };

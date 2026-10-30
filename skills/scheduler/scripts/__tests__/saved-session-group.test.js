@@ -34,7 +34,7 @@ function fixture(t) {
 const pair = task => [task.session_component, task.session_group_name];
 const add = (f, args = [], group) => { const answer = f.run(['add', 'fixture', '--in', '1 hour', ...args], group); assert.equal(answer.status, 0, answer.stderr); return f.read().at(-1); };
 
-test('DM-58 actual add covers seven saved-target cases; no namespace allocation or D6 requirement', t => {
+test('actual add covers seven saved-target cases; no namespace allocation or requirement', t => {
   const f = fixture(t);
   assert.deepEqual(pair(add(f, [], 'tg:g-1')), ['telegram', 'g-1']);
   assert.deepEqual(pair(add(f, ['--reply-channel', 'telegram', '--reply-endpoint', '-1', '--reply-session-group', 'g-1'], 'tg:dm')), ['telegram', 'g-1']);
@@ -51,7 +51,7 @@ test('DM-58 actual add covers seven saved-target cases; no namespace allocation 
   assert.equal(f.c4.prepare('SELECT count(*) AS n FROM group_heads').get().n, 0);
 });
 
-test('DM-58 actual add/update reject malformed L, missing X and uninstalled/illegal X with no task or D5 mutation', t => {
+test('actual add/update reject malformed L, missing X and uninstalled/illegal X with no task or mutation', t => {
   const f = fixture(t), task = add(f, ['--reply-channel', 'telegram', '--reply-endpoint', '-1', '--reply-session-group', 'g-kept']);
   for (const args of [
     ['--reply-session-group', 'x'], ['--reply-channel', 'telegram', '--reply-session-group', ''],
@@ -72,7 +72,7 @@ test('DM-58 actual add/update reject malformed L, missing X and uninstalled/ille
   assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), f.before);
 });
 
-test('DM-58 update recomputes explicit target; clear and ordinary fields preserve saved values, including NULL', t => {
+test('update recomputes explicit target; clear and ordinary fields preserve saved values, including NULL', t => {
   const f = fixture(t);
   for (const initial of [[], ['--reply-channel', 'telegram', '--reply-endpoint', '-1', '--reply-session-group', 'g-old']]) {
     const task = add(f, initial);
@@ -89,7 +89,7 @@ test('DM-58 update recomputes explicit target; clear and ordinary fields preserv
   }
 });
 
-test('DM-58 task INSERT failure leaves namespace bindings unchanged', t => {
+test('task INSERT failure leaves namespace bindings unchanged', t => {
   const f = fixture(t); add(f);
   const db = new Database(path.join(f.root, 'scheduler/scheduler.db'));
   db.exec("CREATE TRIGGER deny_task BEFORE INSERT ON tasks BEGIN SELECT RAISE(ABORT,'test insert failure'); END"); db.close();
@@ -99,7 +99,7 @@ test('DM-58 task INSERT failure leaves namespace bindings unchanged', t => {
   assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), f.before);
 });
 
-test('DM-58 paired routes reject incomplete add/update without changing any task field', t => {
+test('paired routes reject incomplete add/update without changing any task field', t => {
   const f = fixture(t);
   const plain = add(f, [], 'tg:creator');
   for (const args of [['--reply-channel', 'telegram'], ['--reply-endpoint', '-1002'],
@@ -128,7 +128,7 @@ test('DM-58 paired routes reject incomplete add/update without changing any task
   assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), f.before);
 });
 
-test('DM-58 single mode ignores latest lark input and other-group tmux hints', t => {
+test('single mode ignores latest lark input and other-group tmux hints', t => {
   const f = fixture(t);
   fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ session_mode: 'single' }));
@@ -145,7 +145,7 @@ test('DM-58 single mode ignores latest lark input and other-group tmux hints', t
     const bootstrap = `import cp from 'node:child_process';
       import { syncBuiltinESMExports } from 'node:module';
       for (const name of ['exec','execSync','execFile','execFileSync','spawn','spawnSync','fork'])
-        cp[name] = () => { throw new Error('P08 forbidden session probe'); };
+        cp[name] = () => { throw new Error(' forbidden session probe'); };
       syncBuiltinESMExports();
       process.argv = [process.execPath, ${JSON.stringify(cli)}, 'add', 'interference', '--in', '1 hour'];
       await import(${JSON.stringify(new URL('../cli.js', import.meta.url).href)});`;
@@ -159,7 +159,7 @@ test('DM-58 single mode ignores latest lark input and other-group tmux hints', t
   assert.deepEqual(f.c4.prepare('SELECT * FROM conversations ORDER BY id').all(), beforeMessages);
 });
 
-test('DM-58 pure resolver never looks up explicit targets; environment lookup is readonly, clear does not infer editor group', () => {
+test('pure resolver never looks up explicit targets; environment lookup is readonly, clear does not infer editor group', () => {
   let lookups = 0;
   const deps = { env: { ZYLOS_SESSION_GROUP: 'tg:editor' }, validate: () => {}, lookup: namespace => { lookups++; assert.equal(namespace, 'tg'); return 'telegram'; } };
   assert.deepEqual(pair(resolveSavedSessionGroup({ 'reply-channel': 'lark', 'reply-endpoint': 'chat-new', 'reply-session-group': 'new' }, { ...deps, lookup: () => { throw new Error('D5 read forbidden'); } })), ['lark', 'new']);

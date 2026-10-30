@@ -24,7 +24,7 @@ export async function executeSessionMode(args, {
   try {
     response = await send({ version: 1, type: 'mode_switch', requestId: requestId(), target }, { deadlineAt: deadline });
   } catch (error) {
-    // A transport exception cannot establish whether a request reached M4.
+    // A transport exception cannot establish whether a request reached the supervisor.
     return failure(error.code ?? 'no_reply', `Switch result unknown: ${error.message}`, null);
   }
   if (response.kind === 'accepted') {

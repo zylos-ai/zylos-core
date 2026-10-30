@@ -1,4 +1,4 @@
-/** Shared M2 paths and strict, reversible tmux group names (IB-26). */
+/** Shared session-group paths and strict, reversible tmux group names. */
 import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';

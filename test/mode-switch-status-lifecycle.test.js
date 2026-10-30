@@ -8,7 +8,7 @@ import { startSupervisor } from '../skills/activity-monitor/scripts/supervisor-m
 import { createModeSwitchConverter } from '../skills/activity-monitor/scripts/mode-switch-convert.js';
 import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 
-test('real M4 reason/events and readonly status agree through block, recovery and stopped supervisor', async () => {
+test('real supervisor reason/events and readonly status agree through block, recovery and stopped supervisor', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-visible-')); const cleanup = [];
   const { db, store } = storeFixture({ after: fn => cleanup.push(fn) }, {}, path.join(root, 'c4.db'));
   let mode = 'single', failExport = true, service;
@@ -22,7 +22,7 @@ test('real M4 reason/events and readonly status agree through block, recovery an
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} }, loopOptions: { schedule: () => 1, cancel() {} },
       readSyncMarker: () => ({ held: false, stale: false }),
       convertModeTransition: row => { if (failExport) throw Object.assign(new Error('export fixture failure'), { step: 'export', code: 'EIO' }); return converter(row); },
-      writeMode: target => { mode = target; }, restartM1Confirmation: { advance: () => ({ confirmed: true }) },
+      writeMode: target => { mode = target; }, restartLauncherConfirmation: { advance: () => ({ confirmed: true }) },
       sendAlert: () => { throw new Error('external notification forbidden'); }, log() {},
     });
     const reply = await service.supervisor.admission.handle({ version: 1, type: 'mode_switch', requestId: 'visible', target: 'multi' });

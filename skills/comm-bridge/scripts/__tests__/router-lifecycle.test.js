@@ -18,7 +18,7 @@ async function until(predicate) {
   assert.fail('isolated target did not reach the expected state');
 }
 
-// P04 T01/T03, M1 §6 and DM F3/F6: resetting origin must not erase legacy
+// launcher §6 and DM: resetting origin must not erase legacy
 // upgrade progress, another group's state, or current-session/event history.
 test('single preparation cleans origin samples/caches, preserves history and legacy files, and builds real instructions', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-lifecycle-'));
@@ -123,7 +123,7 @@ test('unknown actual runtime is never inferred from a legacy name or origin READ
   assert.equal(entries[0].stopped, false); assert.equal(f.tmux('has-session', '-t', '=claude-main'), '');
 });
 
-// IB-29: an old idle sample cannot authorize graceful legacy exit.
+// an old idle sample cannot authorize graceful legacy exit.
 test('legacy idle sample must be fresh; malformed and stale samples leave the session running', async t => {
   const f = tmuxFixture(t), input = await f.start();
   let clock = Date.now();

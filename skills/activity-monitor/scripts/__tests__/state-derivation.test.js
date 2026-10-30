@@ -11,7 +11,7 @@ import {SupervisorHealthObserver} from '../supervisor-health-observer.js';
 import {appendEvent, rotateEventLog} from '../../../../cli/lib/event-log.js';
 
 function fixture(t,runtime) {
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'i2-state-'));
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'state-derivation-'));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  let clock=1792000000000;
  const scene={sessionGroup:'origin',runtime,runId:'r',sessionId:'s',ready:true,present:true};
@@ -38,7 +38,7 @@ function assertActive(f) {
  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.root,'agent-status.json'))),JSON.parse(JSON.stringify(state)));
 }
 for(const runtime of ['claude','codex']) {
- test(`P05 state derivation: ${runtime} prompt screen, fresh statusline and interrupt cannot complete a tool`,async t=>{
+ test(`state derivation: ${runtime} prompt screen, fresh statusline and interrupt cannot complete a tool`,async t=>{
   const f=fixture(t,runtime);f.activity.consume([f.row('pre_tool',{tool_use_id:'active',tool:'Bash'})]);
   f.delivered();f.advance(5000);f.freshStatus();await f.observer.tick();
   assert.equal(f.captures.length,1);assertActive(f);
@@ -49,7 +49,7 @@ for(const runtime of ['claude','codex']) {
   f.activity.consume([f.row('post_tool',{tool_use_id:'active'})]);f.advance(3001);
   assert.equal(f.publish().active_tools,0);assert.equal(f.publish().state,'idle');assert.deepEqual(f.errors,[]);
  });
- test(`P05 state derivation negative control: ${runtime} screen-clears-tools is rejected by the same F4 assertion`,async t=>{
+ test(`state derivation oracle: ${runtime} screen-clears-tools is rejected by the same assertion`,async t=>{
   const f=fixture(t,runtime);f.activity.consume([f.row('pre_tool',{tool_use_id:'active',tool:'Bash'})]);
   assertActive(f);
   const capture=f.observer.readScreen;
@@ -57,7 +57,7 @@ for(const runtime of ['claude','codex']) {
   f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.captures.length,1);
   assert.throws(()=>assertActive(f),{code:'ERR_ASSERTION'});
  });
- test(`P05 state derivation: ${runtime} continuous rotations and disappearing directory preserve factual tools`,t=>{
+ test(`state derivation: ${runtime} continuous rotations and disappearing directory preserve factual tools`,t=>{
   const f=fixture(t,runtime),log=path.join(f.root,'events.jsonl');
   appendEvent(log,f.row('pre_tool',{tool_use_id:'a',tool:'Bash'}));
   assert.equal(f.activity.read(f.now).tools.length,1);

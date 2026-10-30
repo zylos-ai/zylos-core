@@ -1,4 +1,4 @@
-import { M1RestartConfirmation } from './m1-restart-confirmation.js';
+import { LauncherRestartConfirmation } from './launcher-restart-confirmation.js';
 import { binaryCompare as groupSort } from '../../comm-bridge/scripts/c4-query-format.js';
 
 const failure = (code, message) => Object.assign(new Error(message), { code, persisted: [] });
@@ -12,7 +12,7 @@ const modes = new Set(['single', 'multi']);
 export class ModeSwitchCoordinator {
   constructor({ db, readMode, readConfiguration, readRequests, legacyPresent, observe,
     lifecycle, serialize = operation => operation(), convert, writeMode,
-    restart = new M1RestartConfirmation(), diagnostic = () => {}, now = Date.now } = {}) {
+    restart = new LauncherRestartConfirmation(), diagnostic = () => {}, now = Date.now } = {}) {
     Object.assign(this, { db, readMode, readConfiguration, readRequests, legacyPresent,
       observe, lifecycle, serialize, convert, writeMode, restart, diagnostic, now });
     this.lastReasons = new Map();
@@ -88,7 +88,7 @@ export class ModeSwitchCoordinator {
       if (!result.confirmed) {
         await this.serialize(async () => {
           const row = await this.db.getModeTransition();
-          if (row?.run_id === attempt.runId && row.phase === 'cutover') await this.block(row, 'm1_restart_unconfirmed', 'transition_m1_restart_failed');
+          if (row?.run_id === attempt.runId && row.phase === 'cutover') await this.block(row, 'launcher_restart_unconfirmed', 'transition_launcher_restart_failed');
         });
         if (this.attempt === attempt) this.attempt = null;
         return;
@@ -104,7 +104,7 @@ export class ModeSwitchCoordinator {
       if (mode !== row.target_mode) { await this.block(row, `mode_conflict:${row.phase}:${mode}`); return; }
       if (!await this.onlyGlobal(row)) return;
       await this.unblock(row);
-      // P01 atomically verifies the global transition fence and removes it.
+      // The store atomically verifies the global transition fence and removes it.
       await this.db.setModeTransitionPhase(row.run_id, 'complete');
       this.event('transition_complete', row, { phase: 'complete', reason: null });
       this.attempt = null;
@@ -166,7 +166,8 @@ export class ModeSwitchCoordinator {
         await this.db.setDrainFence(scene.sessionGroup, { reason: 'mode_switch', runId: scene.runId });
       }
       context.fences = await this.db.listDrainFences();
-      // P05 owns stale-control cleanup and reclaim. Other reasons stay theirs.
+      // Lifecycle reconciliation owns stale-control cleanup and reclaim.
+      // Fences created for other reasons remain owned by their producers.
       for (const fence of context.fences) if (fence.sessionGroup !== '*') await this.lifecycle.advanceReclaim(fence, context);
     }
     const missingDeadlines = [];

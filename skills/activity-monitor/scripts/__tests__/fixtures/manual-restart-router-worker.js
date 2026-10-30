@@ -1,4 +1,4 @@
-// Real M1 dispatcher composition; only state freshness and external launch failure
+// Real launcher dispatcher composition; only state freshness and external launch failure
 // are controlled. Paste/keys use the production adapter and bound tmux target.
 import fs from 'node:fs';
 import path from 'node:path';

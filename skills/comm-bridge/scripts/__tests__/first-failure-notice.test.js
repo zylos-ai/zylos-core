@@ -221,7 +221,7 @@ for (const boundary of ['identity-changed','intent-changed','send-failed']) {
     assert.equal(f.db.prepare('SELECT count(*) n FROM status_notice_cooldowns').get().n,0);
   });
 }
-test('T02 grouped failure freezes its own message and publishes notice updates through runtime serialization',async t=>{
+test('grouped failure freezes its own message and publishes notice updates through runtime serialization',async t=>{
   const f=fixture(t);f.store.freezeNotice=input=>freezeFirstFailureNotice(f.db,input);
   inbound(f.db,1);inbound(f.db,2);f.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run('telegram:a',1);f.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run('telegram:b',2);
   const result=f.store.consume(event,{identity,sessionGroup:'telegram:a'});assert.equal(result.status,'processed');

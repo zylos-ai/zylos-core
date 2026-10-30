@@ -70,7 +70,7 @@ function transitionView(row) {
   };
 }
 
-/** Read authoritative state independently of M4. Diagnostics affect display fields only. */
+/** Read authoritative state independently of supervisor. Diagnostics affect display fields only. */
 export async function readSessionModeStatus(options = {}) {
   const zylosDir = options.zylosDir ?? ZYLOS_DIR;
   let sessionMode;
@@ -81,7 +81,7 @@ export async function readSessionModeStatus(options = {}) {
   const db = options.db ?? (owned = await openReadStore(zylosDir)).store;
   let row, fence, completed;
   try {
-    // Do not convert any C4 failure into absence. These are the P01 query APIs.
+    // Do not convert any C4 failure into absence. These are authoritative store queries.
     row = await db.getModeTransition();
     fence = await db.getDrainFence('*');
     completed = await db.getLastCompletedModeTransition();
@@ -111,8 +111,8 @@ export async function readSessionModeStatus(options = {}) {
   const result = { sessionMode, transition, globalGate, blocked, lastEvents,
     supervisor: reachable ? 'reachable' : 'unreachable', lastCompleted };
   if (!reachable) {
-    // IB-44 requires the PM2 observation alongside unreachable; this additive
-    // display field never replaces D9, the global gate or socket reachability.
+    // Include PM2 observation alongside an unreachable supervisor. This additive
+    // display field never replaces the transition record, global gate, or socket reachability.
     try { result.supervisorPm2 = { status: await (options.readPm2 ?? readSupervisorPm2)(), error: null }; }
     catch (error) { result.supervisorPm2 = { status: 'unobservable', error: errorView(error) }; }
   }
