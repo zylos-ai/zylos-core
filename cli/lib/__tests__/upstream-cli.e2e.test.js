@@ -27,6 +27,7 @@ function fixture(t) {
   fs.writeFileSync(path.join(packageRoot, 'SKILL.md'), '---\nname: mirror-fixture\nversion: 2.0.0\ndescription: Isolated routing fixture\n---\n');
   fs.writeFileSync(path.join(packageRoot, 'payload.txt'), 'fixture payload\n');
   fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({name:'zylos',version:'2.0.0',type:'module'}));
+  fs.writeFileSync(path.join(packageRoot, 'CHANGELOG.md'), '# Changelog\n\n## 2.0.0\n\nFixture core change.\n');
   fs.mkdirSync(path.join(packageRoot, 'cli/lib'), {recursive:true});
   fs.writeFileSync(path.join(packageRoot, 'cli/lib/upgrade-entry.js'), `
     import fs from 'node:fs';
@@ -78,13 +79,13 @@ function fixture(t) {
     ZYLOS_GH_RETRY_DELAY_MS: '', ROUTING_LOG: log, ROUTING_TARBALL: tarball,
     ROUTING_SKILL: path.join(packageRoot, 'SKILL.md'), ROUTING_PROFILE: profilePath,
   };
-  const run = (args, extraEnv = {}) => spawnSync(process.execPath, [cli, ...args], {
-    cwd: root, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 30000,
+  const run = (args, extraEnv = {}, input) => spawnSync(process.execPath, [cli, ...args], {
+    cwd: root, env: { ...env, ...extraEnv }, input, encoding: 'utf8', timeout: 30000,
   });
   const readLog = () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   const save = source => fs.writeFileSync(path.join(configDir, 'upstreams.json'), JSON.stringify({ schemaVersion: 1, source }));
   const success = result => { assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`); return result; };
-  return { root, bin, zylosDir, configDir, profilePath, log, run, readLog, save, success };
+  return { root, bin, zylosDir, configDir, profilePath, log, env, run, readLog, save, success };
 }
 
 test('CLI saved routing covers remote registry, real add pipeline, component/self checks and upgrade', t => {
@@ -113,7 +114,7 @@ test('CLI saved routing covers remote registry, real add pipeline, component/sel
 test('CLI self upgrade delegates to the downloaded entry and preserves its streams and exit status', t => {
   const f = fixture(t), handoffFile = path.join(f.root, 'handoff.json');
   f.save({ type:'local', path:f.profilePath });
-  const result = f.run(['upgrade', '--self', '--yes'], {
+  const result = f.run(['upgrade', '--self', '--yes', '--json'], {
     ROUTING_HANDOFF: handoffFile,
     ROUTING_TARGET_EXIT: '7',
   });
@@ -126,6 +127,24 @@ test('CLI self upgrade delegates to the downloaded entry and preserves its strea
   assert.equal(path.isAbsolute(handoff.tempDir), true);
   assert.equal(path.isAbsolute(handoff.installedRoot), true);
   assert.equal(path.isAbsolute(handoff.zylosDir), true);
+});
+
+test('CLI self upgrade cancellation preserves baseline display and does not run the target entry', {skip:process.platform !== 'linux'}, t => {
+  const f = fixture(t), handoffFile = path.join(f.root, 'handoff.json');
+  f.save({type:'local', path:f.profilePath});
+  const command = `"${process.execPath}" "${cli}" upgrade --self`;
+  const result = spawnSync('script', ['-qfec', command, '/dev/null'], {
+    cwd:f.root, env:{...f.env, ROUTING_HANDOFF:handoffFile}, input:'n\n', encoding:'utf8', timeout:30000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const output = result.stdout.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '');
+  assert.match(output, /zylos-core.*0\.9\.3.*2\.0\.0/s);
+  assert.match(output, /Target package: 2\.0\.0 \(tag:v2\.0\.0\)/);
+  assert.match(output, /CHANGELOG.*Fixture core change\./s);
+  assert.match(output, /Proceed with zylos-core upgrade\? \[y\/N\]: n\nUpgrade cancelled\./);
+  assert.doesNotMatch(output, /target stdout/);
+  assert.equal(result.stderr, '');
+  assert.equal(fs.existsSync(handoffFile), false);
 });
 
 test('CLI self upgrade rejects an uninitialized Zylos directory before recovery discovery', t => {

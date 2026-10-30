@@ -1075,6 +1075,7 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
  */
 async function upgradeSelfCore({ branch, beta = false } = {}) {
   const jsonOutput = process.argv.includes('--json');
+  const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = null;
 
   try {
@@ -1125,6 +1126,43 @@ async function upgradeSelfCore({ branch, beta = false } = {}) {
     if (!validation.success) {
       console.log(JSON.stringify(validation));
       return 1;
+    }
+
+    const fullCoreChangelog = readCoreChangelog(tempDir);
+    const coreChangelog = filterChangelog(fullCoreChangelog, check.current);
+    const allLocalChanges = detectCoreSkillChanges();
+
+    if (!jsonOutput) {
+      console.log(`\n${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
+      const targetVersion = check.latest || (branch ? `branch:${branch}` : 'unknown');
+      const targetRef = branch ? `branch:${branch}` : `tag:v${check.latest}`;
+      console.log(dim(`Target package: ${targetVersion} (${targetRef})`));
+
+      if (allLocalChanges.length > 0) {
+        console.log(`\n${warn('LOCAL MODIFICATIONS DETECTED:')}`);
+        for (const { skill, changes } of allLocalChanges) {
+          for (const f of changes.modified) console.log(`  ${yellow('M')} ${skill}/${f}`);
+          for (const f of changes.added) console.log(`  ${green('A')} ${skill}/${f}`);
+        }
+      }
+
+      if (coreChangelog) {
+        console.log(`\n${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}`);
+        console.log(heading('CHANGELOG'));
+        console.log(`${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}`);
+        console.log(coreChangelog);
+        console.log(`${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}\n`);
+      }
+    }
+
+    if (!skipConfirm) {
+      const confirmed = await promptYesNo('Proceed with zylos-core upgrade? [y/N]: ');
+      if (!confirmed) {
+        console.log('Upgrade cancelled.');
+        return 0;
+      }
+    } else if (!jsonOutput) {
+      console.log(`Upgrading ${bold('zylos-core')}...`);
     }
 
     return runDownloadedUpgrade({
