@@ -128,11 +128,13 @@ export class ObserverManager {
     this._idleTimer.unref?.();
   }
 
-  async createLease(context, { target = this.target, runId } = {}) {
+  async createLease(context, { target = this.target } = {}) {
     this._requireAdmin(context);
-    if (this.resolveOrigin && (typeof runId !== 'string' || !runId)) throw new ObserverManagerError('target_mismatch', 'Refresh and confirm the current Origin run');
-    const origin = this.resolveOrigin ? await this.resolveOrigin() : null;
-    if (this.resolveOrigin && (!origin?.runId || origin.runId !== runId)) throw new ObserverManagerError('target_mismatch', 'Refresh and confirm the current Origin run');
+    let origin = null;
+    if (this.resolveOrigin) {
+      try { origin = await this.resolveOrigin(); } catch {}
+      if (!origin?.runId) throw new ObserverManagerError('target_mismatch', 'Current Origin run is unavailable');
+    }
     if (target !== this.target) throw new ObserverManagerError('target_mismatch', 'Observer target is not this producer');
     if (this._shuttingDown || this._lifecycleTransitions > 0) {
       throw new ObserverManagerError('operation_obsolete', 'Observer lifecycle is changing');

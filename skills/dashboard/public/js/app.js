@@ -2172,7 +2172,7 @@ async function openObserver() {
     // Keep lease acquisition observable after cancellation so a late ID can be
     // released against its original target. Frame/status fetches are abortable.
     const leaseResp = await fetch(`${endpoints.api}/leases`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Observer-Run': state.dashboardState?.runId || '' }
+      method: 'POST', headers: { 'Content-Type': 'application/json' }
     });
     const lease = await leaseResp.json().catch(() => ({}));
     if (!leaseResp.ok) throw observerRequestError(lease, leaseResp.status);
