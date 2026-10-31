@@ -29,7 +29,7 @@ for(const mode of ['pane-disappears','executor-times-out'])test(`real paste ${mo
     buffer=commands[0][2];privateFile=commands[0][3];
     // Keep load and the injected failure in the same guarded server command list.
     if(mode==='pane-disappears')return batch([commands[0],['kill-pane','-t',f.target.paneId],commands[1]],options);
-    return batch([commands[0],['wait-for','p02-never-signalled']],{timeoutMs:100});
+    return batch([commands[0],['wait-for','session-runtime-never-signalled']],{timeoutMs:100});
   };
   await assert.rejects(f.adapter.sendText({target:f.target,connection:f.connection,text:'private-message-body'}),{code:'PASTE_FAILED',...(mode==='executor-times-out'?{cause:'timeout'}:{})});
   assert.match(buffer,/^zylos-/);

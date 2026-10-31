@@ -9,7 +9,7 @@ import { notifyDelivered } from '../router/notify.js';
 
 const fields = { conversationId: 42, channel: 'telegram', sessionGroup: 'telegram:g-1', runId: 'observed-run', runtime: 'codex', pastedAt: 1792000003456 };
 
-// P04 T05 / IB-13 client only. Ledger independence is asserted by delivery tests.
+// client only. Ledger independence is asserted by delivery tests.
 test('one real socket receives the exact v2 line without providing an acknowledgment', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'notify-'));
   const socketPath = path.join(dir, 'am.sock'), sockets = new Set();

@@ -39,7 +39,7 @@ async function transport(type, fields) {
     queueMicrotask(() => socket.emit('connect')); return socket;
   } });
 }
-test('IF-37 complete legal branch inventory, unknown extensions and every branch required field', async () => {
+test('complete legal branch inventory, unknown extensions and every branch required field', async () => {
   for (const [type, branches] of Object.entries(good)) {
     for (const fields of branches) {
       const reply = { ...envelope(type), ...fields };
@@ -60,7 +60,7 @@ test('IF-37 complete legal branch inventory, unknown extensions and every branch
     }
   }
 });
-test('IF-37 literal invalid reason/code, incompatible ok/result and field relationships are uncertain replies', async () => {
+test('literal invalid reason/code, incompatible ok/result and field relationships are uncertain replies', async () => {
   const cases = [
     ['restart_all', { ok: true, result: 'unknown_result', runCount: 0 }],
     ['manual_restart', { ok: false, result: 'rejected', reason: 'unknown_reason' }],
@@ -79,7 +79,7 @@ test('IF-37 literal invalid reason/code, incompatible ok/result and field relati
 });
 
 // Removed registration metadata is an unknown extension on every branch.
-test('IF-62 start_attempt ignores retired attempt metadata, including malformed values', async () => {
+test('start_attempt ignores retired attempt metadata, including malformed values', async () => {
   const extensions = [
     { attemptCount: 1 },
     { attemptAt: 1792000000000, attemptCount: '1' },

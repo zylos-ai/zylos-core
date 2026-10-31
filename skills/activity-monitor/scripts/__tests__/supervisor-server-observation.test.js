@@ -20,7 +20,7 @@ function fixture(cause='timeout') {
   const provider = new SupervisorServerObservation(base, { guard });
   return { provider, base, guard, scene, alerts, setFailure: v => failed = v, advance: ms => now += ms };
 }
-for(const cause of ['timeout','error'])test(`T02 ${cause} unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict`, async () => {
+for(const cause of ['timeout','error'])test(`${cause} unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict`, async () => {
   const f = fixture(cause); await f.provider.observe(); f.setFailure(true);
   const [unknown] = await f.provider.observe();
   assert.equal(unknown.present, true); assert.equal(unknown.ready, false);
@@ -30,7 +30,7 @@ for(const cause of ['timeout','error'])test(`T02 ${cause} unknown socket retains
   const cold = fixture(cause); cold.setFailure(true);
   await assert.rejects(cold.provider.observe(), { code: 'TMUX_UNAVAILABLE' });
 });
-test('T02 unavailable occupancy remains unknown after ten minutes without synthetic exits', async () => {
+test('unavailable occupancy remains unknown after ten minutes without synthetic exits', async () => {
   const f = fixture(); await f.provider.observe(); f.setFailure(true);
   await f.provider.observe(); f.advance(600000);
   const [unknown] = await f.provider.observe();
@@ -38,7 +38,7 @@ test('T02 unavailable occupancy remains unknown after ten minutes without synthe
   assert.deepEqual(await f.provider.advance(),{status:'unavailable'});
   assert.equal(f.alerts.length,1);
 });
-test('T02 observed no-server follows absence and clears cached occupancy and alerts', async () => {
+test('observed no-server follows absence and clears cached occupancy and alerts', async () => {
   const f = fixture(); await f.provider.observe(); f.setFailure(true); await f.provider.observe();
   f.base.observe = async () => { throw Object.assign(new Error(),{code:'TMUX_NO_SERVER'}); };
   await assert.rejects(f.provider.observe(),{code:'TMUX_NO_SERVER'});
@@ -48,12 +48,12 @@ test('T02 observed no-server follows absence and clears cached occupancy and ale
   f.base.observe = async () => { throw unavailable(); };
   await assert.rejects(f.provider.observe(),{code:'TMUX_UNAVAILABLE'});
 });
-test('T02 F1 alert target splits at first colon and rejects invalid/control-character destinations', () => {
+test('alert target splits at first colon and rejects invalid/control-character destinations', () => {
   assert.deepEqual(parseServerAlertTarget('web-console:console'), { channel: 'web-console', endpoint: 'console' });
   assert.deepEqual(parseServerAlertTarget('feishu:abc|type:p2p'), { channel: 'feishu', endpoint: 'abc|type:p2p' });
   for (const value of [null, '', ':foo', 'foo:', 'foo:bar\n']) assert.equal(parseServerAlertTarget(value), null);
 });
-test('T02 scene observations add no server probes and forwarded failures reach alert timing', async () => {
+test('scene observations add no server probes and forwarded failures reach alert timing', async () => {
   const f = fixture();
   Object.defineProperty(f.base,'connectionOptions',{get(){throw Error('unexpected server probe');}});
   let observations = 0;
@@ -71,7 +71,7 @@ test('T02 scene observations add no server probes and forwarded failures reach a
   f.base.listRuns = async () => [{...f.scene,observationError:unavailable()}];
   await assert.rejects(f.provider.listRuns(),{code:'TMUX_UNAVAILABLE'});
 });
-test('T02 a non-tmux group error preserves all occupancy and does not start a server outage', async () => {
+test('a non-tmux group error preserves all occupancy and does not start a server outage', async () => {
   const f = fixture();
   const failedGroup = { sessionGroup: 'broken', present: true, ready: false, tmuxTarget: null,
     observationError: Object.assign(new Error('activity read failed'), {code:'EACCES'}) };
@@ -86,7 +86,7 @@ test('T02 a non-tmux group error preserves all occupancy and does not start a se
   f.base.observe = async () => { throw unavailable(); };
   assert.deepEqual((await f.provider.observe()).map(scene => scene.sessionGroup), ['origin', 'broken']);
 });
-test('T02 unknown occupancy has one shape after full observation or identity reads', async () => {
+test('unknown occupancy has one shape after full observation or identity reads', async () => {
   const snapshots = [];
   for (const identityLast of [false, true]) {
     const f = fixture();
@@ -109,15 +109,15 @@ test('T02 unknown occupancy has one shape after full observation or identity rea
   }
   assert.deepEqual(snapshots[0],snapshots[1]);
 });
-test('T02 identity-only observation does not manufacture a full occupancy snapshot', async () => {
+test('identity-only observation does not manufacture a full occupancy snapshot', async () => {
   const f = fixture();
   await f.provider.readIdentity('origin');
   f.setFailure(true);
   await assert.rejects(f.provider.observe(), {code:'TMUX_UNAVAILABLE'});
 });
 
-// T02 / review P3-2: two actual decorator socket scopes share one guard.
-test('T02 one failed socket retains its episode while another socket succeeds', async()=>{
+// two actual decorator socket scopes share one guard.
+test('one failed socket retains its episode while another socket succeeds', async()=>{
   let now=0;const alerts=[];
   const guard=new SupervisorServerHealth({now:()=>now,sendAlert:(target,message)=>alerts.push({target,message})});
   const make=(socketKey)=>{
@@ -140,8 +140,8 @@ test('T02 one failed socket retains its episode while another socket succeeds', 
   assert.equal(guard.episodes.has('socket-a'),false);assert.equal(guard.episodes.has('socket-b'),true);
 });
 
-// T02 / review P3-2: observation failure never authorizes termination.
-test('T02 prolonged timeout and command errors never signal or end the real isolated server',{timeout:15000},async t=>{
+// observation failure never authorizes termination.
+test('prolonged timeout and command errors never signal or end the real isolated server',{timeout:15000},async t=>{
   const f=readyTmuxTarget(t,{prefix:'server-observe-only-',mode:'multi',ledger:false});
   let now=0,cause=null;const alerts=[];
   const base=new SupervisorScenes({env:f.env,connectionOptions:{socketPath:f.socketPath,binary:f.binary},

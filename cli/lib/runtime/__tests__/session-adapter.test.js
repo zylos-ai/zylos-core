@@ -79,7 +79,7 @@ test('launch script is private, execs runtime, and omits group in single',async(
   try { const content=await fs.readFile(s.file,'utf8'); assert.match(content,/exec env -i/); assert.equal(content.includes('ZYLOS_SESSION_GROUP'),false); assert.equal((await fs.stat(s.file)).mode & 0o777,0o600); } finally {s.cleanup();}
 });
 test('auth checks use injected home/environment/executor without production auth',async()=> {
-  const home=await fs.mkdtemp(path.join(os.tmpdir(),'p02-auth-')); const env={HOME:home,PATH:'/empty',CODEX_HOME:path.join(home,'codex')};
+  const home=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-auth-')); const env={HOME:home,PATH:'/empty',CODEX_HOME:path.join(home,'codex')};
   try {
     const claude=new ClaudeAdapter({root:home,env,execFile:async (_,__,options)=>{assert.equal(options.env.HOME,home);return {stdout:'ok'};}});
     assert.equal((await claude.checkAuth()).status,'success');
@@ -134,7 +134,7 @@ test('isRunning cannot infer absence when the server generation changes',async()
 });
 
 test('runtime help leaves the event loop available and maps execution errors',async()=>{
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'p02-help-'));
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-help-'));
   const command=path.join(root,'runtime');
   try {
     await fs.writeFile(command,'#!/bin/sh\nsleep 0.2\nprintf " --model MODEL --effort EFFORT "\n',{mode:0o700});
@@ -149,7 +149,7 @@ test('runtime help leaves the event loop available and maps execution errors',as
 });
 
 test('native auth status is asynchronous and preserves isolated auth precedence',async()=>{
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'p02-native-auth-'));
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-native-auth-'));
   const command=path.join(root,'runtime');
   const env={HOME:root,ZYLOS_DIR:root,ANTHROPIC_API_KEY:'synthetic-api',CLAUDE_CODE_OAUTH_TOKEN:'synthetic-token'};
   const executable=status=>`#!${process.execPath}\nif (process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN || process.argv.slice(2).join(' ') !== 'auth status') process.exit(2);\nsetTimeout(()=>process.stdout.write(${JSON.stringify(JSON.stringify(status))}),100);\n`;

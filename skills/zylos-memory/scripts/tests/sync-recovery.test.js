@@ -12,7 +12,7 @@ import { renderStateSkeleton } from '../state-format.js';
 import { cleanup, list, commit } from '../sync-files.js';
 const segment = '20261019T053002123Z';
 async function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p07-crash-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-workflow-crash-'));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   const { db, store } = storeFixture(t, {}, path.join(root, 'comm-bridge', 'c4.db'));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'crash-test', ZYLOS_SESSION_GROUP: 'origin' };
@@ -38,7 +38,7 @@ async function killAt(t, f, phase, end) {
   assert.equal(child.signalCode, 'SIGKILL');
   return stage;
 }
-test('DM39 two real checkpoint-before-rename crashes retain inputs and both delta summaries', async t => {
+test('two real checkpoint-before-rename crashes retain inputs and both delta summaries', async t => {
   const f = await fixture(t);
   for (const end of [1, 2]) {
     assert.equal(await killAt(t, f, 'before-rename', end), 'checkpoint-written');
@@ -51,7 +51,7 @@ test('DM39 two real checkpoint-before-rename crashes retain inputs and both delt
   await commit({ ...f.settings, input: { followedUpIds: [] } });
   assert.match(fs.readFileSync(f.state, 'utf8'), /Recovered/); assert.equal(fs.existsSync(f.piece), false);
 });
-test('DM39 real rename-before-delete crash publishes state and cleanup removes retained committed input', async t => {
+test('real rename-before-delete crash publishes state and cleanup removes retained committed input', async t => {
   const f = await fixture(t);
   assert.equal(await killAt(t, f, 'after-rename', 2), 'state-published');
   assert.match(fs.readFileSync(f.state, 'utf8'), /Recovered/);

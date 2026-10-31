@@ -22,7 +22,7 @@ async function waitFor(read, predicate) {
 
 async function fixture(t) {
   let connection;
-  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'p02-send-race-',socketName:'socket',tmuxArgs:['-u'],beforeCleanup:()=>connection?.close()});
+  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'session-runtime-send-race-',socketName:'socket',tmuxArgs:['-u'],beforeCleanup:()=>connection?.close()});
   const input = path.join(dir, 'input');
   const ready = path.join(dir, 'ready');
   const start = async () => {

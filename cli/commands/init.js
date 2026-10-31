@@ -1,3 +1,4 @@
+import { applyDashboardRoute } from '../lib/dashboard-install.js';
 import { savePm2ProcessList } from '../lib/pm2-save.js';
 import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
 import { githubUrl } from '../lib/upstreams.js';
@@ -735,6 +736,21 @@ function copyMissingTree(src, dest) {
   }
 }
 
+function syncPackagedClaudeMemoryAgents() {
+  const agentsRoot = path.join(PACKAGE_ROOT, 'skills/zylos-memory/agents');
+  if (!fs.lstatSync(agentsRoot).isDirectory() || fs.lstatSync(agentsRoot).isSymbolicLink()) {
+    throw Error('Missing packaged Claude agent directory');
+  }
+  const agents = fs.readdirSync(agentsRoot).filter(name => name.endsWith('.md')).sort();
+  if (!agents.length) throw Error('No packaged Claude memory agents');
+
+  const destination = path.join(ZYLOS_DIR, '.claude/agents');
+  fs.mkdirSync(destination, { recursive: true });
+  for (const name of agents) {
+    fs.copyFileSync(path.join(agentsRoot, name), path.join(destination, name));
+  }
+}
+
 /**
  * Deploy template files to the zylos directory.
  * - ecosystem.config.cjs: always updated (managed by zylos-core)
@@ -788,6 +804,7 @@ export function deployTemplates({ freshInstall = false } = {}) {
   if (fs.existsSync(claudeSrc)) {
     copyMissingTree(claudeSrc, claudeDest);
   }
+  syncPackagedClaudeMemoryAgents();
 
   // runtime-env.manifest — create from template if missing
   const manifestSrc = path.join(TEMPLATES_SRC, 'runtime-env.manifest.example');
@@ -1063,10 +1080,15 @@ function initializeDatabases() {
  * Prepare and start core services via PM2 ecosystem config.
  * @returns {number} Number of services successfully started
  */
-function startCoreServices(webPassword = null) {
+export function startCoreServices(webPassword = null) {
   installSkillDependencies();
   ensureWebConsolePassword(webPassword);
+  try {
+    execFileSync(process.execPath, [path.join(SKILLS_DIR, 'dashboard', 'hooks', 'post-install.js')], { stdio: 'inherit', env: { ...process.env, ZYLOS_DIR } });
+  } catch (err) { console.log(`  ${warn(`Dashboard configuration failed: ${err.message}`)}`); }
   initializeDatabases();
+  const dashboardRoute = applyDashboardRoute({ zylosDir: ZYLOS_DIR });
+  if (dashboardRoute.state !== 'done') console.log(`  ${warn('Dashboard route requires attention: ' + dashboardRoute.error?.message)}`);
 
   const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
   if (!fs.existsSync(ecosystemPath)) {

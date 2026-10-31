@@ -30,7 +30,7 @@ function sender(extra = {}) {
     render: () => 'notice', diagnostic: () => {}, log: () => {}, ...extra });
 }
 
-test('IF70 runtime resolution and public health: single/multi, scene/config/unknown, after real expiry', async t => {
+test('runtime resolution and public health: single/multi, scene/config/unknown, after real expiry', async t => {
   const f = fixture(t, { now: () => NOW * 1000 });
   for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex']) {
     for (const [healthRecord, expected] of [[{ missing: true }, 'ok'], [{ unreadable: true }, 'unavailable'],
@@ -63,7 +63,7 @@ test('IF70 runtime resolution and public health: single/multi, scene/config/unkn
   }
 });
 
-test('IF70 late expiry reuses exact launch resolution; live runtime still takes precedence', async t => {
+test('late expiry reuses exact launch resolution; live runtime still takes precedence', async t => {
   const f = fixture(t, { now: () => NOW * 1000 }), original = expired(f), runtimes = [];
   const frozen = { runtime: 'codex', mode: 'override', model: 'saved-model' };
   const handler = createPendingExpiryHandler({ isComponent: () => true,
@@ -74,7 +74,7 @@ test('IF70 late expiry reuses exact launch resolution; live runtime still takes 
   assert.deepEqual(runtimes, ['codex', 'claude']);
 });
 
-test('IF70 eligibility uses D1 route only: noReply/system/void/internal skip; scheduler-shaped row sends', async t => {
+test('eligibility uses route only: noReply/system/void/internal skip; scheduler-shaped row sends', async t => {
   const f = fixture(t, { now: () => NOW * 1000 }); let sent = 0;
   const handler = createPendingExpiryHandler({ isComponent: channel => channel === 'chat',
     resolveSessionLaunchConfig: () => ({ runtime: 'claude' }), readRuntimeHealth: () => ({ missing: true }),
@@ -88,7 +88,7 @@ test('IF70 eligibility uses D1 route only: noReply/system/void/internal skip; sc
   assert.equal(sent, 1);
 });
 
-test('IF70 real D1 and D4 retain pending_expired across sent/suppressed/failed/uncertain and shared template', async t => {
+test('real and retain pending_expired across sent/suppressed/failed/uncertain and shared template', async t => {
   const f = fixture(t, { now: () => NOW * 1000 });
   const config = { language: 'en', brand: 'Expiry Test', templates: { inbound: { unavailable: { zh: '过期测试。', en: 'Configured expiry body.' } } } };
   for (const outcome of ['sent', 'suppressed', 'failed', 'uncertain']) {
@@ -110,7 +110,7 @@ test('IF70 real D1 and D4 retain pending_expired across sent/suppressed/failed/u
   }
 });
 
-test('IF70 scheduler calls expiry receipt only after commit, skips launch/start_attempt, continues next fresh row', async t => {
+test('scheduler calls expiry receipt only after commit, skips launch/start_attempt, continues next fresh row', async t => {
   const f = routerFixture(t); f.put('origin'); f.put('chat');
   const old = f.add('chat'), fresh = f.add('chat');
   f.sqlite.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(f.now() / 1000 - 1801, old.id);

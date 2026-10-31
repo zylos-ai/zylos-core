@@ -55,7 +55,7 @@ for(const mode of ['command-failure','disconnect','target-remains'])test(`real t
  const original=f.snapshot('target');
  interceptCommand(f,(args,run,connection)=>{
   if(args[0]!=='kill-session')return run();
-  if(mode==='command-failure')return run(['p02-deliberately-invalid-command']);
+  if(mode==='command-failure')return run(['session-runtime-deliberately-invalid-command']);
   if(mode==='target-remains')return Promise.resolve('');
   connection.close();return run();
  });

@@ -20,7 +20,7 @@ function fixture(t, filename = ':memory:') {
 function converting(store, source = 'single') {
   const { runId } = store.beginModeTransition(source, source === 'single' ? 'multi' : 'single'); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
 }
-test('DM-28 absorption includes legacy empty scope, snapshots original coverage, and is replay stable', t => {
+test('absorption includes legacy empty scope, snapshots original coverage, and is replay stable', t => {
   const { db, store } = fixture(t);
   const a = store.insertConversation('out', 'foo', 'e', 'covered'); store.createCheckpoint('*', a.id, 'global');
   const b = store.insertConversation('in', 'foo', 'e', 'pending');
@@ -32,14 +32,14 @@ test('DM-28 absorption includes legacy empty scope, snapshots original coverage,
   const later = store.insertConversation('in', 'new', 'e', 'later');
   assert.deepEqual(store.absorbForTransition(runId), first); assert.equal(db.prepare('SELECT status FROM conversations WHERE id=?').get(later.id).status, 'pending');
 });
-test('DM-28 SQL abort after status writes rolls back D1 and all D9 progress columns', t => {
+test('SQL abort after status writes rolls back and all progress columns', t => {
   const { db, store, state } = fixture(t); store.insertConversation('in', 'foo', 'e', 'pending');
   const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
   const before = state();
   db.exec("CREATE TRIGGER reject_absorb BEFORE UPDATE ON mode_transitions WHEN NEW.phase='converting' BEGIN SELECT RAISE(ABORT,'reject progress'); END");
   assert.throws(() => store.absorbForTransition(runId), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(state(), before);
 });
-for (const moment of ['before', 'after']) test(`DM-28 process death ${moment} commit leaves one atomic absorption outcome`, t => {
+for (const moment of ['before', 'after']) test(`process death ${moment} commit leaves one atomic absorption outcome`, t => {
   const dir = mkdtempSync(join(tmpdir(), 'c4-transition-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const filename = join(dir, 'db.sqlite'); const { db, store, state } = fixture(t, filename);
   const row = store.insertConversation('in', 'foo', 'e', 'pending'); const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
@@ -55,7 +55,7 @@ process.kill(process.pid,'SIGKILL');`;
   if (moment === 'before') assert.deepEqual(state(), before);
   else { assert.equal(store.getModeTransition({ runId }).phase, 'converting'); assert.deepEqual(store.getModeTransition({ runId }).absorbed_ids, [row.id]); assert.equal(db.prepare('SELECT status FROM conversations WHERE id=?').get(row.id).status, 'switch_absorbed'); }
 });
-for (const obstacle of ['extra-fence', 'running', 'missing-global']) test(`DM-29 absorption rejects ${obstacle} without any data change`, t => {
+for (const obstacle of ['extra-fence', 'running', 'missing-global']) test(`absorption rejects ${obstacle} without any data change`, t => {
   const { store, state } = fixture(t); const row = store.insertConversation('in', 'foo', 'e', 'pending');
   if (obstacle === 'running') store.claimConversation(row.id);
   const { runId } = store.beginModeTransition('single', 'multi');
@@ -63,7 +63,7 @@ for (const obstacle of ['extra-fence', 'running', 'missing-global']) test(`DM-29
   if (obstacle === 'extra-fence') store.setDrainFence('foo', { reason: 'ttl', runId: 'old' });
   const before = state(); assert.throws(() => store.absorbForTransition(runId), { code: 'TRANSITION_PRECONDITION' }); assert.deepEqual(state(), before);
 });
-test('DM-30 begin enforces one open transition and all forbidden phase edges reject', t => {
+test('begin enforces one open transition and all forbidden phase edges reject', t => {
   const { db, store, state } = fixture(t);
   assert.throws(() => store.beginModeTransition('single', 'single'), { code: 'TRANSITION_SAME_MODE' });
   const { runId } = store.beginModeTransition('single', 'multi'); const initial = state();
@@ -77,7 +77,7 @@ test('DM-30 begin enforces one open transition and all forbidden phase edges rej
   store.setModeTransitionPhase(runId, 'complete');
   for (const phase of ['gating', 'converting', 'cutover']) assert.throws(() => store.setModeTransitionPhase(runId, phase), { code: 'PHASE_TRANSITION_INVALID' });
 });
-test('DM-31 multi cutover writes exactly one empty content boundary and retries do not duplicate', t => {
+test('multi cutover writes exactly one empty content boundary and retries do not duplicate', t => {
   const { db, store } = fixture(t);
   const a = store.insertConversation('out', 'foo', 'e', 'a'); store.createCheckpoint('foo', a.id, 'summary');
   const b = store.insertConversation('in', 'foo', 'e', 'pending'); const runId = converting(store, 'multi');
@@ -87,7 +87,7 @@ test('DM-31 multi cutover writes exactly one empty content boundary and retries 
   assert.equal(rows.length, 1); assert.equal(rows[0].end_conversation_id, b.id); assert.equal(rows[0].summary, ''); assert.equal(rows[0].no_content, 0);
   assert.equal(store.getModeTransition({ runId }).phase, 'cutover');
 });
-test('DM-31 cutover boundary validation or post-checkpoint SQL failure rolls back both tables', t => {
+test('cutover boundary validation or post-checkpoint SQL failure rolls back both tables', t => {
   const { db, store, state } = fixture(t); const row = store.insertConversation('in', 'foo', 'e', 'pending'); const runId = converting(store, 'multi');
   db.prepare("UPDATE conversations SET status='pending' WHERE id=?").run(row.id);
   const gap = state(); assert.throws(() => store.setModeTransitionPhase(runId, 'cutover'), { code: 'CHECKPOINT_GAP' }); assert.deepEqual(state(), gap);
@@ -95,7 +95,7 @@ test('DM-31 cutover boundary validation or post-checkpoint SQL failure rolls bac
   const before = state(); db.exec("CREATE TRIGGER reject_cutover BEFORE UPDATE ON mode_transitions WHEN NEW.phase='cutover' BEGIN SELECT RAISE(ABORT,'reject cutover'); END");
   assert.throws(() => store.setModeTransitionPhase(runId, 'cutover'), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(state(), before);
 });
-for (const obstacle of ['extra-fence', 'manual-global', 'phase-write-fails', 'none']) test(`DM-32 complete and fence removal are atomic with ${obstacle}`, t => {
+for (const obstacle of ['extra-fence', 'manual-global', 'phase-write-fails', 'none']) test(`complete and fence removal are atomic with ${obstacle}`, t => {
   const { db, store, state } = fixture(t); store.insertConversation('in', 'foo', 'e', 'pending'); const runId = converting(store); store.setModeTransitionPhase(runId, 'cutover');
   if (obstacle === 'extra-fence') store.setDrainFence('foo', { reason: 'ttl', runId: 'old' });
   if (obstacle === 'manual-global') db.prepare("UPDATE drain_fences SET reason='manual_restart',run_id='other' WHERE session_group='*'").run();
@@ -213,31 +213,31 @@ test('getLastCompletedModeTransition: NORMAL WAL reads committed row while write
 });
 
 
-// DM-62 / P01: library snapshots and static Router census. Directory/skeleton
-// creation and real Router transport belong to P10/P04 integration, not this test.
-function dm62Heads(reader) {
+// library snapshots and static Router census. Directory/skeleton
+// creation and real Router transport belong to integration, not this test.
+function transitionHeads(reader) {
   return reader.prepare('SELECT session_group, head_id FROM group_heads ORDER BY session_group COLLATE BINARY')
     .all().map(row => ({ sessionGroup: row.session_group, headId: row.head_id }));
 }
-function assertDm62Heads(actual, expected) {
-  assert.deepEqual(actual, expected, 'DM-62 conversion must include every group and its current head');
+function assertTransitionHeads(actual, expected) {
+  assert.deepEqual(actual, expected, ' conversion must include every group and its current head');
 }
-function assertDm62RouterCensus(sources) {
+function assertTransitionRouterCensus(sources) {
   // Include aliases/imports as well as calls: a newly imported D6 reader must
   // trigger review even when hidden behind a local name. Direct SQL is forbidden.
   const d6Readers = /\b(?:group_heads|listGroupHeads|listGroups|getLastActivity|getOriginSyncBacklog|absorbForTransition)\b/;
   for (const [name, source] of sources) {
-    assert.doesNotMatch(source, d6Readers, `DM-62 Router must not access D6: ${name}`);
+    assert.doesNotMatch(source, d6Readers, ` Router must not access D6: ${name}`);
   }
 }
-const dm62RouterSources = () => [
+const transitionRouterSources = () => [
   ['c4-dispatcher.js', readFileSync(new URL('../c4-dispatcher.js', import.meta.url), 'utf8')],
   ...readdirSync(new URL('../router/', import.meta.url)).filter(name => name.endsWith('.js')).map(name =>
     [`router/${name}`, readFileSync(new URL(`../router/${name}`, import.meta.url), 'utf8')]),
   ['message-router.js', readFileSync(new URL('../../../activity-monitor/scripts/message-router.js', import.meta.url), 'utf8')],
 ];
-function dm62Fixture(t, create = createStore) {
-  const dir = mkdtempSync(join(tmpdir(), 'c4-dm62-'));
+function transitionFixture(t, create = createStore) {
+  const dir = mkdtempSync(join(tmpdir(), 'c4-transition-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const filename = join(dir, 'db.sqlite');
   const { db } = fixture(t, filename);
@@ -247,7 +247,7 @@ function dm62Fixture(t, create = createStore) {
   const origin = store.insertConversation('in', 'system', null, 'origin');
   const whole = store.insertConversation('in', 'chat', null, 'whole');
   const subgroup = store.insertConversation('in', 'chat', 'room', 'subgroup', { groupName: 'room' });
-  const beforeGate = dm62Heads(reader);
+  const beforeGate = transitionHeads(reader);
   assert.deepEqual(beforeGate, [
     { sessionGroup: 'chat', headId: whole.id },
     { sessionGroup: 'chat:room', headId: subgroup.id },
@@ -259,10 +259,10 @@ function dm62Fixture(t, create = createStore) {
   assert.equal(reader.prepare('SELECT phase FROM mode_transitions WHERE run_id=?').get(runId).phase, 'gating');
   const { cutoff } = store.absorbForTransition(runId);
   assert.equal(reader.prepare('SELECT phase FROM mode_transitions WHERE run_id=?').get(runId).phase, 'converting');
-  assert.ok(dm62Heads(reader).some(row => row.headId === duringGate.id));
+  assert.ok(transitionHeads(reader).some(row => row.headId === duringGate.id));
   return { db, reader, store, runId, cutoff, beforeGate };
 }
-function dm62Snapshot(db, reader, store) {
+function transitionSnapshot(db, reader, store) {
   const before = allTables(reader);
   const changes = db.prepare('SELECT total_changes() AS n').get().n;
   const sql = [], prepare = db.prepare;
@@ -271,16 +271,16 @@ function dm62Snapshot(db, reader, store) {
   let heads;
   try { heads = store.listGroupHeads(); }
   finally { db.pragma('query_only=OFF'); db.prepare = prepare; }
-  assertDm62Heads(heads, dm62Heads(reader));
-  assert.equal(sql.length, 1, 'DM-62 snapshot must use one statement');
+  assertTransitionHeads(heads, transitionHeads(reader));
+  assert.equal(sql.length, 1, ' snapshot must use one statement');
   assert.match(sql[0], /^SELECT\b/i);
-  assert.deepEqual(allTables(reader), before, 'DM-62 snapshot must not change any table');
+  assert.deepEqual(allTables(reader), before, ' snapshot must not change any table');
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, changes);
   return heads;
 }
-test('DM-62 full heads snapshots include gated and post-cutoff groups; delivery primitives never read D6', t => {
-  const { db, reader, store, runId, cutoff, beforeGate } = dm62Fixture(t);
-  const first = dm62Snapshot(db, reader, store);
+test('full heads snapshots include gated and post-cutoff groups; delivery primitives never read', t => {
+  const { db, reader, store, runId, cutoff, beforeGate } = transitionFixture(t);
+  const first = transitionSnapshot(db, reader, store);
   assert.equal(first.length, beforeGate.length + 1);
   // Keep the global gate active while a second connection writes a new group
   // and advances an existing head after the frozen absorption cutoff.
@@ -290,7 +290,7 @@ test('DM-62 full heads snapshots include gated and post-cutoff groups; delivery 
     const late = incoming.insertConversation('in', 'chat', 'A', 'after cutoff', { groupName: 'A' });
     const advance = incoming.insertConversation('in', 'chat', 'room', 'advance', { groupName: 'room' });
     assert.ok(late.id > cutoff); assert.ok(advance.id > cutoff);
-    const second = dm62Snapshot(db, reader, store);
+    const second = transitionSnapshot(db, reader, store);
     assert.equal(second.length, first.length + 1);
     assert.equal(second.find(row => row.sessionGroup === 'chat:room').headId, advance.id);
     assert.ok(!first.some(row => row.sessionGroup === 'chat:A'), 'earlier result remains a snapshot');
@@ -298,44 +298,44 @@ test('DM-62 full heads snapshots include gated and post-cutoff groups; delivery 
     assert.deepEqual(second.map(row => row.sessionGroup), ['chat', 'chat:A', 'chat:gated', 'chat:room', 'origin']);
     store.setModeTransitionPhase(runId, 'cutover');
     store.setModeTransitionPhase(runId, 'complete');
-    const headsBeforeDelivery = dm62Heads(reader);
+    const headsBeforeDelivery = transitionHeads(reader);
     const sql = [], prepare = db.prepare;
     db.prepare = function(statement) { sql.push(statement); return prepare.call(this, statement); };
     try {
       const next = store.getNextPending();
       assert.equal(next.id, late.id);
       assert.equal(store.claimConversation(next.id), true);
-      assert.equal(store.markDelivered(next.id, { sessionId: 'dm62-isolated-session' }), true);
+      assert.equal(store.markDelivered(next.id, { sessionId: 'transition-isolated-session' }), true);
     } finally { db.prepare = prepare; }
     assert.ok(sql.length > 0);
-    for (const statement of sql) assert.doesNotMatch(statement, /\bgroup_heads\b/i, 'DM-62 delivery must not read D6');
+    for (const statement of sql) assert.doesNotMatch(statement, /\bgroup_heads\b/i, ' delivery must not read D6');
     assert.deepEqual(reader.prepare('SELECT status,session_id FROM conversations WHERE id=?').get(late.id),
-      { status: 'delivered', session_id: 'dm62-isolated-session' });
-    assert.deepEqual(dm62Heads(reader), headsBeforeDelivery);
+      { status: 'delivered', session_id: 'transition-isolated-session' });
+    assert.deepEqual(transitionHeads(reader), headsBeforeDelivery);
   } finally { writer.close(); }
-  assertDm62RouterCensus(dm62RouterSources());
+  assertTransitionRouterCensus(transitionRouterSources());
 });
-test('DM-62 calibration: omission of one conversion group turns the same oracle red', async t => {
+test('calibration: omission of one conversion group turns the same oracle red', async t => {
   const mutant = await modifiedStore('c4-store-transition.js',
     'FROM group_heads ORDER BY session_group COLLATE BINARY',
     "FROM group_heads WHERE session_group<>\\'chat:gated\\' ORDER BY session_group COLLATE BINARY");
-  const { db, reader, store } = dm62Fixture(t, mutant);
-  assert.throws(() => dm62Snapshot(db, reader, store), error => {
+  const { db, reader, store } = transitionFixture(t, mutant);
+  assert.throws(() => transitionSnapshot(db, reader, store), error => {
     assert.ok(error instanceof assert.AssertionError);
-    assert.match(error.message, /DM-62 conversion must include every group/);
+    assert.match(error.message, / conversion must include every group/);
     t.diagnostic(`EXPECTED RED: ${error.message.split('\n')[0]}`);
     return true;
   });
 });
 for (const access of ['listGroupHeads()', "db.prepare('SELECT * FROM group_heads').all()", 'getLastActivity(group)']) {
-  test(`DM-62 calibration: Router access ${access} turns the same census red`, t => {
-    const sources = dm62RouterSources();
-    assertDm62RouterCensus(sources);
+  test(`calibration: Router access ${access} turns the same census red`, t => {
+    const sources = transitionRouterSources();
+    assertTransitionRouterCensus(sources);
     sources[0][1] += `\n${access};\n`;
-    assert.throws(() => assertDm62RouterCensus(sources), error => {
+    assert.throws(() => assertTransitionRouterCensus(sources), error => {
       assert.ok(error instanceof assert.AssertionError);
-      assert.match(error.message, /DM-62 Router must not access D6/);
-      t.diagnostic(`EXPECTED RED: DM-62 Router must not access D6 (${access})`);
+      assert.match(error.message, / Router must not access D6/);
+      t.diagnostic(`EXPECTED RED:  Router must not access D6 (${access})`);
       return true;
     });
   });

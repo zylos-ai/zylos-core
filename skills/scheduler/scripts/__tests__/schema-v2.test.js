@@ -19,7 +19,7 @@ function verify(db, before) {
   assert.deepEqual(rows.map(({ session_component, session_group_name, ...row }) => row), before.rows);
   assert.ok(rows.every(row => row.session_component === null && row.session_group_name === null));
 }
-for (const name of ['scheduler-v0.1.0.sql', 'scheduler-v0.9.0-v1.sql']) test(`DM-10 ${name} preserves bytes, no inferred group, repeat entry is inert`, t => {
+for (const name of ['scheduler-v0.1.0.sql', 'scheduler-v0.9.0-v1.sql']) test(`${name} preserves bytes, no inferred group, repeat entry is inert`, t => {
   const db = seed(t, name);
   db.exec('CREATE TABLE user_data(id INTEGER); ALTER TABLE tasks ADD COLUMN user_extra TEXT');
   const before = snapshot(db); let calls = 0;
@@ -28,7 +28,7 @@ for (const name of ['scheduler-v0.1.0.sql', 'scheduler-v0.9.0-v1.sql']) test(`DM
   const done = snapshot(db); guardDatabase(db, counted); guardDatabase(db, counted);
   assert.equal(calls, 1); assert.deepEqual(snapshot(db), done);
 });
-test('DM-10 DDL or version publish failure rolls back both new columns, rows and version', t => {
+test('DDL or version publish failure rolls back both new columns, rows and version', t => {
   for (const phase of ['ddl', 'version']) {
     const db = seed(t, 'scheduler-v0.9.0-v1.sql'), before = snapshot(db);
     let failed;

@@ -40,7 +40,7 @@ test('explicit group validation preserves invalid-versus-too-long errors before 
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before);
 });
 test('saved changed and desired survive failed F1 or running observation; no fence or model loss', async t => {
-  for (const overrides of [{ readSessionMode: () => { throw new Error('F1 failed'); } }, { observeRunning: async () => { await new Promise(resolve => setImmediate(resolve)); throw Object.assign(new Error('P02 unavailable'), { code: 'TMUX_UNAVAILABLE' }); } }]) {
+  for (const overrides of [{ readSessionMode: () => { throw new Error('F1 failed'); } }, { observeRunning: async () => { await new Promise(resolve => setImmediate(resolve)); throw Object.assign(new Error(' unavailable'), { code: 'TMUX_UNAVAILABLE' }); } }]) {
     const { store, handler } = fixture(t, overrides);
     store.setSessionModelConfig({ sessionGroup: 'chat:A', runtime: 'codex', model: 'm', effort: 'high' });
     const request = { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' };

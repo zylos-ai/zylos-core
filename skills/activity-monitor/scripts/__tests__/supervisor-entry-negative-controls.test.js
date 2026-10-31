@@ -37,10 +37,10 @@ async function corruptScenario(t,mutant){
  const response=await f.request({version:1,type:'restart_all',requestId:'corruption',reason:'upgrade'});
  assert.equal(response.code,'requests_unreadable');assert.equal(fs.readFileSync(f.file,'utf8'),'{unreadable-original');assert.deepEqual(f.db.listDrainFences(),[]);
 }
-test('IF-34 actual entry refuses corrupt F9 and detects reset-to-empty recovery implementation',async t=>{await corruptScenario(t,false);await assert.rejects(corruptScenario(t,true),{code:'ERR_ASSERTION'});});
+test('actual entry refuses corrupt and detects reset-to-empty recovery implementation',async t=>{await corruptScenario(t,false);await assert.rejects(corruptScenario(t,true),{code:'ERR_ASSERTION'});});
 async function duplicateScenario(t,mutant){
  const f=await fixture(t,'duplicate',mutant),request={version:1,type:'ready_for_config_reclaim',requestId:'config-retry',sessionGroup:'telegram:one',expectedRunId:'run-1'};
  assert.equal((await f.request(request)).result,'accepted');assert.equal(f.writes(),1);
  assert.equal((await f.request(request)).result,'already_accepted');assert.equal(f.writes(),1);assert.equal(f.db.listDrainFences().length,1);
 }
-test('IF-35 actual entry config retry performs no second gate insertion attempt; duplicate-write implementation fails',async t=>{await duplicateScenario(t,false);await assert.rejects(duplicateScenario(t,true),{code:'ERR_ASSERTION'});});
+test('actual entry config retry performs no second gate insertion attempt; duplicate-write implementation fails',async t=>{await duplicateScenario(t,false);await assert.rejects(duplicateScenario(t,true),{code:'ERR_ASSERTION'});});

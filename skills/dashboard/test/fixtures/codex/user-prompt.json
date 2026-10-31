@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "codex-session-1",
+  "turn_id": "codex-turn-1",
+  "transcript_path": "/tmp/zylos-dashboard-codex/rollout-codex-session-1.jsonl",
+  "model": "gpt-5.3-codex",
+  "permission_mode": "default",
+  "prompt": "[REDACTED_PROMPT]"
+}

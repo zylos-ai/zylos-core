@@ -74,8 +74,8 @@ try {
     fs.symlinkSync(binary, path.join(binDir, 'tmux'));
     const supervisorLog = path.join(output, `tmux-${version}-supervisor-stress.json`);
     const env = { ...process.env, TEST_TMUX_BIN: binary, PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
-      ZYLOS_TMUX_CHURN_STRESS: '1', P05_TMUX_STRESS: '1',
-      P05_LAUNCH_ROUNDS: '300', P05_DELIVERY_ROUNDS: '150', P05_STRESS_RESULT: supervisorLog };
+      ZYLOS_TMUX_CHURN_STRESS: '1', TMUX_STRESS_ENABLED: '1',
+      TMUX_STRESS_LAUNCH_ROUNDS: '300', TMUX_STRESS_DELIVERY_ROUNDS: '150', TMUX_STRESS_RESULT: supervisorLog };
     delete env.ZYLOS_TMUX_BAD_CONTROL;
     const runtimeLog = path.join(output, `tmux-${version}-runtime.tap`);
     console.log(`${version}: ${tests.length} runtime/caller files, including adapter and supervisor stress`);

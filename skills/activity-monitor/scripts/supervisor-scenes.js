@@ -1,7 +1,5 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { loadCoreModule } from './core-modules.js';
 import { tmuxError as fail } from '../../comm-bridge/scripts/tmux-protocol.js';
 const { groupRunDir, listGroupTmuxSessions, tmuxNameForGroup } = await loadCoreModule('session-group-paths.js');
@@ -21,26 +19,6 @@ function validTarget(value) {
 const scopeMatches = (group, target) => group === null ? !target.rawF2?.ZYLOS_SESSION_GROUP : target.rawF2?.ZYLOS_SESSION_GROUP === group;
 const sameRun = (scene, target) => target.present && target.runId === scene.runId && target.runtime === scene.runtime &&
   target.serverGeneration === scene.tmuxTarget?.serverGeneration && target.tmuxSessionId === scene.tmuxTarget?.sessionId;
-const exec = promisify(execFile);
-
-export async function readProcessContextSwitches(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-  try {
-    if (process.platform === 'linux') {
-      const text = await fs.readFile(`/proc/${pid}/status`, 'utf8');
-      const voluntary = text.match(/^voluntary_ctxt_switches:\s+(\d+)$/m);
-      const involuntary = text.match(/^nonvoluntary_ctxt_switches:\s+(\d+)$/m);
-      return voluntary && involuntary ? Number(voluntary[1]) + Number(involuntary[1]) : null;
-    }
-    if (process.platform === 'darwin') {
-      const { stdout } = await exec('top', ['-l', '1', '-pid', String(pid), '-stats', 'pid,csw', '-s', '0'], { timeout: 5000 });
-      const row = stdout.split('\n').map(line => line.match(/^\s*(\d+)\s+(\d+)\s*$/)).find(match => match && Number(match[1]) === pid);
-      return row ? Number(row[2]) : null;
-    }
-  } catch { /* Missing process/sample is unknown, never a zero activity sample. */ }
-  return null;
-}
-
 /** Current observations, not a session registry. Every action reacquires a bounded
  * executor and pins it to the original object before any mutating command.
  * Activity and usage providers must return facts for the supplied run/session.
@@ -49,10 +27,9 @@ export class SupervisorScenes {
   constructor({ env = process.env, connectionOptions = {}, readMode, readActivity,
     readUsage, now = Date.now, open = openTmuxConnection, observeTarget = observeSessionTarget,
     listSessions = listGroupTmuxSessions, readProcessTree = systemProcessTree, adapterFor = getSessionAdapter,
-    readContextSwitches = readProcessContextSwitches, reportError = () => {} } = {}) {
+    reportError = () => {} } = {}) {
     Object.assign(this, { env, connectionOptions, readMode, readActivity, readUsage, now,
-      open, observeTarget, listSessions, readProcessTree, adapterFor, readContextSwitches, reportError });
-    this.processSamples = new Map();
+      open, observeTarget, listSessions, readProcessTree, adapterFor, reportError });
     this.readReady = async group => {
       try { return JSON.parse(await fs.readFile(path.join(groupRunDir(group ?? 'origin', env), 'current-session.json'), 'utf8')); }
       catch { return null; }
@@ -99,14 +76,7 @@ export class SupervisorScenes {
       if (process.runtimeObservation === 'present') {
         scene.runtimePid = process.runtime === target.runtime ? process.runtimePid : undefined;
         if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
-          const count = await this.readContextSwitches(scene.runtimePid), now = this.now();
-          const key = scene.sessionGroup ?? 'origin';
-          const previous = this.processSamples.get(key);
-          const changedAt = Number.isFinite(count) && previous?.runId === scene.runId && previous?.pid === scene.runtimePid && previous?.count === count ? previous.changedAt : now;
-          scene.contextSwitches = Number.isFinite(count) ? count : undefined;
-          scene.proc = { pid: scene.runtimePid, alive: true, frozen: Number.isFinite(count) ? now - changedAt >= 60000 : null, last_sample_at: now };
-          if (Number.isFinite(count)) this.processSamples.set(key, { runId: scene.runId, pid: scene.runtimePid, count, changedAt });
-          else this.processSamples.delete(key);
+          scene.proc = { pid: scene.runtimePid, alive: true, last_sample_at: this.now() };
           if (scene.ready && scene.runtime === 'claude') scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
         }
       }

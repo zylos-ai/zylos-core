@@ -129,7 +129,7 @@ They do not inspect indexes, triggers, or views, and a core table rebuild can
 lose user-created indexes or triggers. A same-count edit can change row meaning
 without being detected, so review dependent objects and relevant content.
 
-When migration is needed, both protected and backup-only self-upgrades rehearse
+When migration is needed, protected self-upgrades rehearse
 the target migration chain on isolated SQLite backup copies before service stop.
 A passed rehearsal is only an early warning check. After service stop, the
 updater takes and verifies the authoritative snapshots and reruns the full
@@ -146,10 +146,10 @@ wrong-owner entry blocks cleanup. Formal snapshot groups are unaffected.
 
 An installed older updater runs preflight before the target release is installed.
 It may reject extra tables or columns and cannot use the new release's rules.
-If this blocks first adoption, follow
-[First adoption](https://github.com/zylos-ai/zylos-core/blob/main/docs/self-upgrade-recovery.md#first-adoption): verify a
-complete backup and row accounting, then use an operator-approved temporary
-relocation plan before running the old CLI. Do not discard the extension data.
+For supported source versions and recovery boundaries, see
+[Self-upgrade and recovery](https://github.com/zylos-ai/zylos-core/blob/main/docs/self-upgrade-recovery.md).
+Older installations first use `zylos upgrade --self --branch release/0.9`;
+retain complete backups and extension data when handling an old updater's rejection.
 
 ### Step 1: Check + Download to Temp
 
@@ -202,10 +202,11 @@ Deploy templates according to the decisions made in Step 2:
 - Changed files: follow user's choice (overwrite or keep)
 - Unchanged files: skip
 
-### Step 5: Review Conflicts + Restart
+### Step 5: Review Conflicts + Completion
 
 1. **If `mergeConflicts` exists**: Review each conflict. Read backup and installed versions, re-apply local changes.
-2. If the upgrade changed hooks or skills, execute `restart-claude` to load new configuration.
+2. Read the CLI's completion and restart result. Protected Core upgrade submits its own restart request; follow any reported recovery action without submitting another restart.
+3. If `dashboard.state` is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed.
 
 ## C4 Mode — Component Upgrade
 
@@ -333,5 +334,6 @@ User: `upgrade zylos confirm`
    an incompatibility, resolve it before retrying; no schema-extension flag bypasses it.
 2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
 3. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
-4. If hooks/skills changed, execute restart-claude
-5. Reply with version change and change summary
+4. Read the CLI completion and restart result; protected Core upgrade submits its own restart request. Follow its reported recovery action without submitting another restart.
+5. If `dashboard.state` is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed.
+6. Reply with version change and change summary

@@ -10,10 +10,10 @@ import Database from 'better-sqlite3';
 const self = fileURLToPath(import.meta.url);
 const selected = process.argv[2];
 
-// IF-65 caller budget checks (②) and the caller-entry portion of ⑤ belong to
-// P05/P11. These cases cover only the two C4 public reads and their shared DB.
+// caller budget checks and the caller-entry portion of belong to
+// . These cases cover only the two C4 public reads and their shared DB.
 if (!selected) {
-  test('IF-65 records actual Node, driver and embedded SQLite versions', t => {
+  test('records actual Node, driver and embedded SQLite versions', t => {
     const db = new Database(':memory:');
     try {
       t.diagnostic(JSON.stringify({ node: process.version,
@@ -23,7 +23,7 @@ if (!selected) {
   });
   for (const entry of ['transition', 'audit']) {
     for (const scenario of ['wal', 'shared', 'busy', 'started']) {
-      test(`IF-65 public ${entry}: ${scenario}`, t => {
+      test(`public ${entry}: ${scenario}`, t => {
         const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', self, `${entry}:${scenario}`],
           { encoding: 'utf8', timeout: 15000 });
         t.diagnostic(child.stdout.trim());

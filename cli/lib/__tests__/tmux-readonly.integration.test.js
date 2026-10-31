@@ -29,7 +29,7 @@ test('tmux >= 3.4 delivers Enter and Escape alongside a read-only client', { tim
     assert.match(scriptVersion, /util-linux/, 'requires util-linux script on Linux');
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-tmux-readonly-'));
-  const prefix = ['-L', `zylos-test-${process.pid}-${Date.now()}`, '-f', '/dev/null'];
+  const prefix = ['-S', path.join(dir, 'sock'), '-f', '/dev/null'];
   const run = args => execFileSync(binary, [...prefix, ...args], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'pipe'] });
   let client;
   const sink = path.join(dir, 'bytes');

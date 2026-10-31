@@ -55,10 +55,10 @@ async function scenario(t,{restart,mutant=''}){
   }
   return f.store.read().scheduling.restartFailureCount;
 }
-test('DM-71 real M4 SIGKILL twice loses only association; actual Sock and observer retain conservative budget',{timeout:30000},async t=>{
+test('real supervisor SIGKILL twice loses only association; actual Sock and observer retain conservative budget',{timeout:30000},async t=>{
   assert.equal(await scenario(t,{restart:false}),2);assert.equal(await scenario(t,{restart:true}),4);
 });
-test('DM-71 rejects double-result counting and early-backoff implementations under the same restart harness',{timeout:30000},async t=>{
+test('rejects double-result counting and early-backoff implementations under the same restart harness',{timeout:30000},async t=>{
   for(const mutant of ['double-result','early-backoff'])await assert.rejects(scenario(t,{restart:true,mutant}),{code:'ERR_ASSERTION'});
 });
 async function boundary(t,mutant=''){
@@ -69,12 +69,12 @@ async function boundary(t,mutant=''){
   await w.command({type:'clock',now:(T+300)*1000});const allowed=await register(f.root);
   registered(allowed);assert.deepEqual(scheduling(f.store.read()),[3,T+300,0]);
 }
-test('DM-45 actual entry preserves expired rate-limit budget at +299/+300; restart-clears-budget mutant fails',{timeout:15000},async t=>{
+test('actual entry preserves expired rate-limit budget at +299/+300; restart-clears-budget mutant fails',{timeout:15000},async t=>{
   await boundary(t);await assert.rejects(boundary(t,'clear-budget'),{code:'ERR_ASSERTION'});
 });
 
-// DM-45 recovery samples through the same production entry, including quarantine bytes.
-test('DM-45 actual M4 startup retains health/cooldown/budget, quarantines corruption and retains acceleration throttle',{timeout:20000},async t=>{
+// recovery samples through the same production entry, including quarantine bytes.
+test('actual supervisor startup retains health/cooldown/budget, quarantines corruption and retains acceleration throttle',{timeout:20000},async t=>{
   for(const sample of [
     {health:'rate_limited',cooldown:T+100,count:2,last:T-500,due:false},
     {health:'rate_limited',cooldown:T-100,count:2,last:T-500,due:true},

@@ -3,7 +3,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import { afterAll, afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 import Database from '../skills/web-console/node_modules/better-sqlite3/lib/index.js';
 import WebSocket from '../skills/web-console/node_modules/ws/wrapper.mjs';
 
@@ -11,6 +11,7 @@ const SERVER_PATH = path.resolve('skills/web-console/scripts/server.js');
 const SQLITE_MODULE = path.resolve('skills/web-console/node_modules/better-sqlite3/lib/index.js');
 
 let ctx;
+const testRoots = new Set();
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -72,6 +73,7 @@ db.close();
 
 async function startServer({ maxUploadMb = 20 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wc-routes-'));
+  testRoots.add(root);
   const dbPath = path.join(root, 'comm-bridge', 'c4.db');
   const skillsDir = path.join(root, 'skills');
   fs.mkdirSync(path.join(root, 'activity-monitor'), { recursive: true });
@@ -119,6 +121,7 @@ function stopServer(active) {
   if (!active) return;
   active.child.kill('SIGTERM');
   fs.rmSync(active.root, { recursive: true, force: true });
+  testRoots.delete(active.root);
 }
 
 function rows(dbPath) {
@@ -150,6 +153,11 @@ beforeEach(() => {
 
 afterEach(() => {
   stopServer(ctx);
+});
+
+afterAll(() => {
+  for (const root of testRoots) fs.rmSync(root, { recursive: true, force: true });
+  testRoots.clear();
 });
 
 describe('web-console attachment routes', () => {

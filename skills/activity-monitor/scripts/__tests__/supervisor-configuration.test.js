@@ -24,7 +24,7 @@ function fromFile(t, environment = {}) {
   return JSON.parse(execFileSync(process.execPath, [worker], { env: { ...env, ...environment }, timeout: 15000, encoding: 'utf8' }));
 }
 
-// P05 T05/T06 regression: real config.json must reach lifecycle decisions.
+// regression: real config.json must reach lifecycle decisions.
 test('entry honors the 1M Claude 30% threshold and configured 60s TTL from config.json', t => {
   const result = fromFile(t), resolved = result.configuration;
   assert.deepEqual(resolved.rotationThresholds, { claude: 30, codex: 45 });

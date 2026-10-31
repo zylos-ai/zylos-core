@@ -41,7 +41,7 @@ function fixture(t, create = createSupervisor) {
     prepared: async () => { while (owner.observer.preparations.size) await Promise.all([...owner.observer.preparations]); } };
 }
 
-test('IF-29 composed owner four result branches and stale identity preserve pending demand and retry budget', async t => {
+test('composed owner four result branches and stale identity preserve pending demand and retry budget', async t => {
   for (const [label, terminal, matches, expected, count] of [
     ['done', 'done', { rateLimit: { detected: true }, authFailure: { detected: true } }, 'ok', 0],
     ['rate-before-auth', 'failed', { rateLimit: { detected: true, cooldownUntil: 1792000200 }, authFailure: { detected: true } }, 'rate_limited', 0],
@@ -72,7 +72,7 @@ async function appearance(t, create) {
   f.state.current = []; await f.owner.health.noteRunExited('claude', f.scene.runId); assert.deepEqual(values(), expected);
   f.clock(1792000359); assert.equal((await f.owner.health.registerStartAttempt({ ...request, runId: randomUUID() })).notBefore, 1792000360000);
 }
-test('DM-68 composed appearance/READY/exit retains attempt budget', async t => {
+test('composed appearance/READY/exit retains attempt budget', async t => {
   await appearance(t, createSupervisor);
 
 });
@@ -90,7 +90,7 @@ async function readerTrace(t, reader) {
   assert.deepEqual(result, { missing: true });
   assert.deepEqual(accesses, [path.join(root, 'activity-monitor/runtime-health/codex.json')]);
 }
-test('DM-46 local F10 reader traces only requested missing runtime', async t => {
+test('local reader traces only requested missing runtime', async t => {
   await readerTrace(t, readRuntimeHealth);
 
 });

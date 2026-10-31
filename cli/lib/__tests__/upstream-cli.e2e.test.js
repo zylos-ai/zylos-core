@@ -5,25 +5,35 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { activateFreshSplitInstructions } from '../runtime/instruction-builder.js';
+import { codexAppServerFixtureSource } from '../../../test/helpers/codex-trust.js';
 
 const cli = path.resolve(import.meta.dirname, '../../zylos.js');
 const coreRoot = path.resolve(import.meta.dirname, '../../..');
-const installedVersion = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../../../package.json'), 'utf8')).version;
 function makeProfile(host = 'mirror.example.test') {
   return { schemaVersion: 1, revision: host, providers: { github: {
     apiBase: `https://${host}/api/`, rawBase: `https://${host}/raw/`, downloadBase: `https://${host}/download/`,
   } } };
 }
 function fixture(t, { initialized = false } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upstream-cli-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upstream-cli-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), zylosDir = path.join(home, 'zylos'), bin = path.join(root, 'bin');
   const configDir = path.join(zylosDir, '.zylos');
   fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(bin);
+  const pm2Home = path.join(root, 'pm2'), tmpDir = path.join(root, 'tmp');
+  fs.mkdirSync(pm2Home);
+  fs.mkdirSync(tmpDir);
   fs.writeFileSync(path.join(configDir, 'components.json'), '{}');
   let candidateRoot = coreRoot;
   if (initialized) {
+    fs.writeFileSync(path.join(bin, 'codex'), `#!${process.execPath}
+const fs = require('node:fs');
+${codexAppServerFixtureSource()}
+if (process.argv[2] === '--version') console.log('codex-fixture');
+else if (process.argv[2] === 'login' && process.argv[3] === 'status') console.log('Logged in using ChatGPT');
+else process.exit(1);
+`, { mode: 0o755 });
     // Model the installed package: development-only per-skill dependencies
     // are not part of its source payload and must not be copied by init.
     candidateRoot = path.join(root, 'core');
@@ -48,17 +58,6 @@ function fixture(t, { initialized = false } = {}) {
   fs.mkdirSync(packageRoot);
   fs.writeFileSync(path.join(packageRoot, 'SKILL.md'), '---\nname: mirror-fixture\nversion: 2.0.0\ndescription: Isolated routing fixture\n---\n');
   fs.writeFileSync(path.join(packageRoot, 'payload.txt'), 'fixture payload\n');
-  fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({name:'zylos',version:'2.0.0',type:'module'}));
-  fs.writeFileSync(path.join(packageRoot, 'CHANGELOG.md'), '# Changelog\n\n## 2.0.0\n\nFixture core change.\n');
-  fs.mkdirSync(path.join(packageRoot, 'cli/lib'), {recursive:true});
-  fs.writeFileSync(path.join(packageRoot, 'cli/lib/upgrade-entry.js'), `
-    import fs from 'node:fs';
-    const input = fs.readFileSync(0, 'utf8');
-    if (process.env.ROUTING_HANDOFF) fs.writeFileSync(process.env.ROUTING_HANDOFF, input);
-    process.stdout.write('target stdout\\n');
-    process.stderr.write('target stderr\\n');
-    process.exitCode = Number(process.env.ROUTING_TARGET_EXIT || 0);
-  `);
   const tarball = path.join(root, 'fixture.tar.gz');
   execFileSync('tar', ['czf', tarball, '-C', root, 'package']);
   fs.writeFileSync(path.join(bin, 'curl.cjs'), `
@@ -97,13 +96,14 @@ function fixture(t, { initialized = false } = {}) {
   fs.writeFileSync(path.join(bin, 'pm2'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o755 });
   const env = {
     HOME: home, ZYLOS_DIR: zylosDir, PATH: `${bin}:${process.env.PATH}`,
+    PM2_HOME: pm2Home, TMPDIR: tmpDir,
     ZYLOS_PACKAGE_ROOT: candidateRoot,
     GITHUB_TOKEN: 'fixture-token-never-forward-to-custom-hosts', GH_TOKEN: '',
     ZYLOS_GH_RETRY_DELAY_MS: '', ROUTING_LOG: log, ROUTING_TARBALL: tarball,
     ROUTING_SKILL: path.join(packageRoot, 'SKILL.md'), ROUTING_PROFILE: profilePath,
   };
-  const run = (args, extraEnv = {}, input) => spawnSync(process.execPath, [initialized ? path.join(candidateRoot, 'cli/zylos.js') : cli, ...args], {
-    cwd: root, env: { ...env, ...extraEnv }, input, encoding: 'utf8', timeout: 30000,
+  const run = (args, extraEnv = {}) => spawnSync(process.execPath, [initialized ? path.join(candidateRoot, 'cli/zylos.js') : cli, ...args], {
+    cwd: root, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 30000,
   });
   const readLog = () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   const save = source => fs.writeFileSync(path.join(configDir, 'upstreams.json'), JSON.stringify({ schemaVersion: 1, source }));
@@ -114,7 +114,7 @@ function fixture(t, { initialized = false } = {}) {
     return result;
   };
   const cleanup = () => fs.rmSync(root, { recursive: true, force: true });
-  return { root, bin, zylosDir, configDir, profilePath, log, env, run, readLog, save, success, cleanup };
+  return { root, zylosDir, candidateRoot, bin, configDir, profilePath, log, run, readLog, save, success, cleanup };
 }
 
 test('CLI saved routing covers remote registry, real add pipeline, component/self checks and upgrade', t => {
@@ -138,134 +138,6 @@ test('CLI saved routing covers remote registry, real add pipeline, component/sel
     assert.equal(new URL(req.url).hostname, 'mirror.example.test');
     assert.equal(req.input.includes('fixture-token'), false);
   }
-});
-
-test('CLI self upgrade delegates to the downloaded entry and preserves its streams and exit status', t => {
-  const f = fixture(t), handoffFile = path.join(f.root, 'handoff.json');
-  f.save({ type:'local', path:f.profilePath });
-  const result = f.run(['upgrade', '--self', '--yes', '--json'], {
-    ROUTING_HANDOFF: handoffFile,
-    ROUTING_TARGET_EXIT: '7',
-  });
-  assert.equal(result.status, 7);
-  assert.equal(result.stdout, 'target stdout\n');
-  assert.equal(result.stderr, 'target stderr\n');
-  const handoff = JSON.parse(fs.readFileSync(handoffFile, 'utf8'));
-  assert.equal(handoff.schemaVersion, 1);
-  assert.equal(handoff.fromVersion, installedVersion);
-  assert.equal(path.isAbsolute(handoff.tempDir), true);
-  assert.equal(path.isAbsolute(handoff.installedRoot), true);
-  assert.equal(path.isAbsolute(handoff.zylosDir), true);
-});
-
-test('CLI self upgrade cancellation preserves baseline display and does not run the target entry', {skip:process.platform !== 'linux'}, t => {
-  const f = fixture(t), handoffFile = path.join(f.root, 'handoff.json');
-  f.save({type:'local', path:f.profilePath});
-  const command = `"${process.execPath}" "${cli}" upgrade --self`;
-  const result = spawnSync('script', ['-qfec', command, '/dev/null'], {
-    cwd:f.root, env:{...f.env, ROUTING_HANDOFF:handoffFile}, input:'n\n', encoding:'utf8', timeout:30000,
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const output = result.stdout.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '');
-  assert.match(output, new RegExp(`zylos-core.*${installedVersion.replaceAll('.', '\\.')}.*2\\.0\\.0`, 's'));
-  assert.match(output, /Target package: 2\.0\.0 \(tag:v2\.0\.0\)/);
-  assert.match(output, /CHANGELOG.*Fixture core change\./s);
-  assert.match(output, /Proceed with zylos-core upgrade\? \[y\/N\]: n\nUpgrade cancelled\./);
-  assert.doesNotMatch(output, /target stdout/);
-  assert.equal(result.stderr, '');
-  assert.equal(fs.existsSync(handoffFile), false);
-});
-
-test('CLI self upgrade reports an uninitialized Zylos directory as text without --json', t => {
-  const f = fixture(t);
-  fs.rmSync(f.zylosDir, {recursive:true});
-  const result = f.run(['upgrade', '--self', '--yes']);
-  assert.equal(result.status, 1);
-  assert.equal(result.stdout, '');
-  assert.equal(result.stderr, `Error: Zylos is not initialized at ${f.zylosDir}. Run "zylos init" first.\n`);
-  assert.deepEqual(f.readLog(), []);
-});
-
-test('CLI self upgrade reports an uninitialized Zylos directory as JSON without recovery state', t => {
-  const f = fixture(t);
-  fs.rmSync(f.zylosDir, {recursive:true});
-  const result = f.run(['upgrade', '--self', '--yes', '--json']);
-  assert.equal(result.status, 1);
-  assert.equal(result.stderr, '');
-  const output = JSON.parse(result.stdout);
-  assert.deepEqual(output, {
-    success:false,
-    code:'ZYLOS_NOT_INITIALIZED',
-    error:`Zylos is not initialized at ${f.zylosDir}. Run "zylos init" first.`,
-    persisted:[],
-  });
-  assert.equal(Object.hasOwn(output, 'recovery_required'), false);
-  assert.deepEqual(f.readLog(), []);
-});
-
-test('CLI self upgrade rejects overwrite mode as text before any download request', t => {
-  const f = fixture(t);
-  const result = f.run(['upgrade', '--self', '--mode', 'overwrite', '--yes']);
-  assert.equal(result.status, 1);
-  assert.equal(result.stdout, '');
-  assert.equal(result.stderr, 'Error: Core self-upgrade supports only --mode merge.\n');
-  assert.deepEqual(f.readLog(), []);
-});
-
-test('CLI self upgrade rejects overwrite mode as JSON before any download request', t => {
-  const f = fixture(t);
-  const result = f.run(['upgrade', '--self', '--mode', 'overwrite', '--yes', '--json']);
-  assert.equal(result.status, 1);
-  assert.equal(result.stderr, '');
-  assert.deepEqual(JSON.parse(result.stdout), {
-    success:false,
-    code:'INVALID_ARGS',
-    error:'Core self-upgrade supports only --mode merge.',
-    persisted:[],
-  });
-  assert.deepEqual(f.readLog(), []);
-});
-
-function installUnfinishedRecovery(f) {
-  f.save({type:'local', path:f.profilePath});
-  const stable = path.join(f.zylosDir, '.zylos/upgrade');
-  const transaction = path.join(f.zylosDir, '.backup/self-upgrade/tx');
-  fs.mkdirSync(stable, {recursive:true, mode:0o700});
-  fs.mkdirSync(transaction, {recursive:true, mode:0o700});
-  fs.writeFileSync(path.join(stable, 'maintenance.cjs'), "'use strict';\n", {mode:0o600});
-  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `
-    exports.bootstrap = () => ({
-      active:true,
-      blocked:true,
-      recovery_required:true,
-      error:'unfinished transaction',
-    });
-  `, {mode:0o600});
-}
-
-test('CLI self upgrade reports unfinished recovery as text before any download request', t => {
-  const f = fixture(t);
-  installUnfinishedRecovery(f);
-  const result = f.run(['upgrade', '--self', '--yes']);
-  assert.equal(result.status, 1);
-  assert.equal(result.stdout, '');
-  assert.equal(result.stderr, 'Error: unfinished transaction\nNext: zylos recovery status\n');
-  assert.deepEqual(f.readLog(), []);
-});
-
-test('CLI self upgrade reports unfinished recovery as JSON before any download request', t => {
-  const f = fixture(t);
-  installUnfinishedRecovery(f);
-  const result = f.run(['upgrade', '--self', '--yes', '--json']);
-  assert.equal(result.status, 1);
-  assert.equal(result.stderr, '');
-  assert.equal(result.stdout.trim().split('\n').length, 1);
-  const output = JSON.parse(result.stdout);
-  assert.equal(output.code, 'UPGRADE_RECOVERY_REQUIRED');
-  assert.deepEqual(output.persisted, []);
-  assert.equal(output.next, 'zylos recovery status');
-  assert.equal(output.recovery_required, true);
-  assert.deepEqual(f.readLog(), []);
 });
 
 test('CLI operation freezes profile while later processes read the new local generation', t => {
@@ -357,6 +229,55 @@ test('init environment source applies only to that process and preserves saved s
     assert.equal(next.trustSelectedBy, saved ? 'saved' : 'default');
     assert.deepEqual(next.trust.allowedHosts, saved ? ['saved.example.test'] : []);
     f.cleanup();
+  }
+});
+
+test('real init installs packaged Claude memory agents and rejects invalid sources', t => {
+  const args = ['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'];
+  const prepare = f => {
+    for (const name of ['tmux', 'npm']) fs.writeFileSync(path.join(f.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(f.bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', { mode: 0o755 });
+  };
+
+  const installed = fixture(t, { initialized: true });
+  prepare(installed);
+  fs.rmSync(installed.zylosDir, { recursive: true, force: true });
+  fs.mkdirSync(installed.zylosDir, { recursive: true });
+  fs.symlinkSync(path.join(coreRoot, 'node_modules'), path.join(installed.zylosDir, 'node_modules'), 'dir');
+  installed.success(installed.run(args));
+
+  const source = path.join(installed.candidateRoot, 'skills/zylos-memory/agents');
+  const destination = path.join(installed.zylosDir, '.claude/agents');
+  const agents = fs.readdirSync(source).filter(name => name.endsWith('.md')).sort();
+  assert.deepEqual(agents, ['zylos-global-sync.md', 'zylos-group-sync.md', 'zylos-origin-sync.md']);
+  for (const name of agents) {
+    assert.deepEqual(fs.readFileSync(path.join(destination, name)), fs.readFileSync(path.join(source, name)));
+  }
+
+  const unrelated = path.join(destination, 'user-agent.md');
+  fs.writeFileSync(unrelated, 'preserve me\n');
+  fs.writeFileSync(path.join(destination, agents[0]), 'stale definition\n');
+  installed.success(installed.run(args));
+  assert.equal(fs.readFileSync(unrelated, 'utf8'), 'preserve me\n');
+  for (const name of agents) {
+    assert.deepEqual(fs.readFileSync(path.join(destination, name)), fs.readFileSync(path.join(source, name)));
+  }
+
+  for (const invalid of ['missing', 'symlink', 'empty']) {
+    const f = fixture(t, { initialized: true });
+    prepare(f);
+    const agentsRoot = path.join(f.candidateRoot, 'skills/zylos-memory/agents');
+    fs.rmSync(agentsRoot, { recursive: true, force: true });
+    if (invalid === 'symlink') fs.symlinkSync(path.join(f.candidateRoot, 'templates'), agentsRoot, 'dir');
+    if (invalid === 'empty') fs.mkdirSync(agentsRoot);
+    const result = f.run(args);
+    const diagnostic = `${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-9;]*m/g, '');
+    assert.equal(result.status, 1, diagnostic);
+    assert.match(diagnostic, invalid === 'missing'
+      ? /ENOENT.*skills\/zylos-memory\/agents/
+      : invalid === 'symlink'
+        ? /Missing packaged Claude agent directory/
+        : /No packaged Claude memory agents/);
   }
 });
 

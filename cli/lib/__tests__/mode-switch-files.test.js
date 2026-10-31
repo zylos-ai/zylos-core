@@ -16,7 +16,7 @@ test('W4 fixed first line roundtrip; free body retained; all malformed fields fa
  for(const bad of [{...record,cutoff:-1},{...record,cutoff:1.2},{...record,source:'unknown'},{...record,target:'single'}]) assert.throws(()=>p.formatModeSwitchHeader(bad),{code:'MODE_SWITCH_HEADER_INVALID'});
 });
 test('atomic replacement: fsync before rename, full overwrite, no business markers or moves',()=>{
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'p02-atomic-')); const target=path.join(root,'handoff.md'); const calls=[];
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'session-runtime-atomic-')); const target=path.join(root,'handoff.md'); const calls=[];
  const wrapped={...fs}; for(const method of ['openSync','writeFileSync','fsyncSync','renameSync']) wrapped[method]=(...args)=>{calls.push([method,...args]);return fs[method](...args);};
  try {
   fs.writeFileSync(target,'old'); assert.deepEqual(p.writeModeSwitchFile(target,'new\nwhole',{fsImpl:wrapped}),{committed:true});
@@ -28,7 +28,7 @@ test('atomic replacement: fsync before rename, full overwrite, no business marke
  } finally {fs.rmSync(root,{recursive:true,force:true});}
 });
 test('write faults preserve old file before rename and report unknown at/after rename',()=>{
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'p02-fault-')); const target=path.join(root,'handoff.md');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'session-runtime-fault-')); const target=path.join(root,'handoff.md');
  try {
   for(const phase of ['write','sync','rename-before','rename-after','directory-sync']) {
    fs.writeFileSync(target,'old'); let syncs=0;

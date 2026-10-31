@@ -6,7 +6,7 @@ import path from 'node:path';
 const {createSessionReader}=await import('../session-state-reader-async.js');
 const {readRuntimeHealth}=await import('../session-state-reader.js');
 const identity={present:true,ready:true,runtime:'claude',runId:'run',sessionId:'session',createdAt:123,serverGeneration:'generation',tmuxSessionId:'$1',paneId:'%1',tmuxName:'zylos-group-lark=x',launchConfig:{runtime:'claude'}};
-function fixture(){const root=fs.mkdtempSync(path.join(os.tmpdir(),'p02-state-'));const dir=path.join(root,'activity-monitor/session-groups/lark:x');fs.mkdirSync(dir,{recursive:true});return {root,dir,env:{ZYLOS_DIR:root},clean:()=>fs.rmSync(root,{recursive:true,force:true})};}
+function fixture(){const root=fs.mkdtempSync(path.join(os.tmpdir(),'session-runtime-state-'));const dir=path.join(root,'activity-monitor/session-groups/lark:x');fs.mkdirSync(dir,{recursive:true});return {root,dir,env:{ZYLOS_DIR:root},clean:()=>fs.rmSync(root,{recursive:true,force:true})};}
 function put(file,value,mtime=1000){fs.writeFileSync(file,typeof value==='string'?value:JSON.stringify(value));fs.utimesSync(file,mtime/1000,mtime/1000);}
 const status=()=>({runId:'run',sessionId:'session',marker:'sample'});
 const usage=()=>({session_id:'session',zylos:{v:1,runId:'run',capturedAt:1000}});

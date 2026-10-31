@@ -1,7 +1,7 @@
 {
   "type": "module",
   "scripts": {
-    "test": "node --test scripts/__tests__/*.test.js"
+    "test": "cd ../.. && node scripts/run-node-tests.js $(node scripts/run-node-tests.js --list | grep '^skills/activity-monitor/')"
   },
   "dependencies": {
     "dotenv": "^16.6.1"

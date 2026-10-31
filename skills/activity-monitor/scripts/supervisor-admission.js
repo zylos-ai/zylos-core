@@ -48,14 +48,16 @@ export class SupervisorAdmission {
     return this.serialize(async () => {
       if (!this.open) return reply({ ok: false, code: 'entry_not_open' });
       try {
+        // Mode switching has its own ordered checks; F9 is consulted only after
+        // open transition, configuration, noop and legacy-session checks.
+        if (request.type === 'mode_switch') {
+          return reply(await this.modeSwitch(request));
+        }
         const rows = this.store.read();
         switch (request.type) {
           case 'restart_all': return reply(await this.restart(request, rows));
           case 'manual_restart': return reply(await this.manual(request, rows));
           case 'ready_for_config_reclaim': return reply(await this.config(request, rows));
-          case 'mode_switch':
-            if (!this.modeSwitch) return reply({ ok: false, code: 'entry_not_open' });
-            return reply(await this.modeSwitch(request, { requests: rows }));
           default: return reply({ ok: false, code: 'invalid_request' });
         }
       } catch (error) {

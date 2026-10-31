@@ -49,7 +49,7 @@ function fixture(Class = SupervisorLifecycle) {
   return f;
 }
 
-// P05 T05 / IF-32: persisted fences resume from facts; in-flight work is never guessed away.
+// persisted fences resume from facts; in-flight work is never guessed away.
 test('reclaim waits conversations and controls, then stops the same run and clears', async () => {
   const f = fixture(), row = f.fence(); f.conversations = 1;
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'waiting_inflight');
@@ -58,6 +58,25 @@ test('reclaim waits conversations and controls, then stops the same run and clea
   f.runningControls = 0;
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
   assert.deepEqual(f.stops, ['run-a']); assert.equal(f.fences.size, 0);
+});
+test('mode-switch duplicate reclaim calls cannot shorten the 3s idle confirmation', async () => {
+  const f = fixture();
+  f.scenes[0].idleSince = f.now;
+  const started = f.now;
+  for (const elapsed of [0, 1, 2999]) {
+    f.now = started + elapsed;
+    const fence = f.fence('mode_switch'), context = f.context;
+    // Coordinator gating and the loop may both visit the same fence in one
+    // round. Neither repeated reads nor a renewed fence advance elapsed time.
+    assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'cancelled');
+    assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'changed');
+    assert.deepEqual(f.stops, [], `must not stop after ${elapsed}ms of idle`);
+  }
+  f.now = started + 3000;
+  const fence = f.fence('mode_switch'), context = f.context;
+  assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'done');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'changed');
+  assert.deepEqual(f.stops, ['run-a']);
 });
 test('ordinary busy cancels with TTL reset; model_config busy retains its fence', async () => {
   for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
@@ -102,7 +121,7 @@ test('Origin checks both Sync markers; stale markers permit reclaim', async () =
   f.fence('upgrade', 'origin'); f.deps.readSyncMarker = () => ({ held: true, stale: true });
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
 });
-// IF-28: no D8 in single auth; deadline-less controls ignored and final race holds.
+// no in single auth; deadline-less controls ignored and final race holds.
 test('single auth ignores only deadline-less controls and retries a final count race', async () => {
   const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene(null)];
   f.runningControls = 1; f.withoutDeadline = 1;
@@ -114,7 +133,7 @@ test('single auth ignores only deadline-less controls and retries a final count 
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context, { unfenced: true, singleAuth: true }), 'done');
   assert.deepEqual(f.markerReads.map(x => x.kind), ['global', 'global']);
 });
-// P05 T05: final conversation check preserves the reclaim fence.
+// final conversation check preserves the reclaim fence.
 async function finalRaceAssertion(Class) {
   const f = fixture(Class), row = f.fence('model_config'); let reads = 0;
   f.db.countRunningConversations = () => ++reads > 1 ? 1 : 0;
@@ -125,7 +144,7 @@ test('final conversation recheck', async () => {
   await finalRaceAssertion(SupervisorLifecycle);
 
 });
-// P05 T05 reclaim-policy: TTL preparation is cancellable; all real terminal statuses recheck.
+// reclaim-policy: TTL preparation is cancellable; all real terminal statuses recheck.
 test('TTL preparation cancels on new messages or replaced run without fencing', async () => {
   for (const change of ['message', 'replacement']) {
     const f = fixture(); f.unsummarized = 2;
@@ -164,7 +183,7 @@ test('LRU uses current occupied startup capacity and excludes model_config from 
   f.scenes = [scene('a', { state: 'busy' })]; f.fences.clear();
   await f.lifecycle.checkEviction(f.scenes, f.context); assert.equal(f.fences.size, 0);
 });
-// P05 T06: rotation only from current valid sample, and successful writes own the cooldown.
+// rotation only from current valid sample, and successful writes own the cooldown.
 test('rotation cooldown follows successful write and run/session pair', async () => {
   const f = fixture(); f.scenes[0].usagePercent = null;
   await f.lifecycle.checkRotation(f.scenes[0], f.context); assert.equal(f.controls.length, 0);
@@ -177,7 +196,7 @@ test('rotation cooldown follows successful write and run/session pair', async ()
   f.scenes[0].sessionId = 'session-2'; await f.lifecycle.checkRotation(f.scenes[0], f.context);
   assert.equal(f.controls.length, 2); assert.equal(f.events.some(e => e.event === 'rotate_done'), false);
 });
-// P05 T06 / IF10-7d: full immutable input comparison; no fence before acceptance.
+// full immutable input comparison; no fence before acceptance.
 test('configuration compares full input and never fabricates missing snapshot', async () => {
   const f = fixture(); f.scenes[0].launchConfig = null;
   await f.lifecycle.reconcileConfiguration(f.context); assert.equal(f.controls.length, 0); assert.equal(f.events[0].event, 'config_snapshot_unavailable');
@@ -188,7 +207,7 @@ test('configuration compares full input and never fabricates missing snapshot', 
   f.expected = { ...f.scenes[0].launchConfig }; f.now += 300001;
   await f.lifecycle.reconcileConfiguration(f.context); assert.equal(f.controls.length, 1);
 });
-// P05 T06 / M5 trigger conditions: count>0, per-scope marker, minimum interval, Origin checkpoint age.
+// trigger conditions: count>0, per-scope marker, minimum interval, Origin checkpoint age.
 test('regular Sync new-run request obeys held marker and minimum interval', async () => {
   const f = fixture(); f.unsummarized = 1; f.marker = { held: true, stale: false };
   await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 0);
@@ -215,7 +234,7 @@ test('backlog alert routes to Origin, dedupes six hours, and holds during manual
   f.now += 600000; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(alerts().length, 1);
   f.now += 21_600_000; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(alerts().length, 2);
 });
-// P05 T07 / IF-34: immutable restart list and durable delete before diagnostic.
+// immutable restart list and durable delete before diagnostic.
 test('upgrade waits startup and unknown inventory; new run never joins original restart list', async () => {
   const f = fixture(); f.requests = [{ reason: 'upgrade', requestId: 'req', runIds: ['run-a'] }];
   f.scenes[0].ready = false; await f.lifecycle.advanceRestarts(f.context); assert.equal(f.fences.size, 0);
@@ -228,7 +247,7 @@ test('failed F9 deletion preserves restart and does not emit completion', async 
   f.deps.requests.remove = () => { throw new Error('disk full'); };
   await assert.rejects(f.lifecycle.advanceRestarts(f.context)); assert.equal(f.requests.length, 1); assert.equal(f.events.length, 0);
 });
-// P05 T07 / IF-36: run identity, crash windows, no idle/control-ack wait, no replacement retarget.
+// run identity, crash windows, no idle/control-ack wait, no replacement retarget.
 test('manual stops requested Origin run immediately then waits only real conversation drain', async () => {
   const f = fixture(); f.scenes = [scene('origin', { state: 'busy' })];
   f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
@@ -254,7 +273,7 @@ test('manual mode, group-fence and global-fence conflicts preserve captured requ
   }
 });
 
-// IF-35 / DM F2: malformed observations cannot authorize config reclamation.
+// DM : malformed observations cannot authorize config reclamation.
 test('config reconciliation rejects malformed snapshots and invalid expected input without controls', async () => {
   const f = fixture();
   const invalid = [null, [], { runtime: 'other', mode: 'default' }, { runtime: 'claude', mode: 'default', model: 'x' },
@@ -273,7 +292,7 @@ test('config reconciliation rejects malformed snapshots and invalid expected inp
   assert.equal(f.controls.length, 0);
 });
 
-// T05 TTL: invalid numeric source timestamps must not act as expired activity.
+// TTL: invalid numeric source timestamps must not act as expired activity.
 test('nonfinite activity timestamps cannot begin TTL or eviction reclamation', async () => {
   for (const timestamp of [NaN, Infinity, -Infinity]) {
     const f = fixture(); f.lastActivity = timestamp;
@@ -284,7 +303,7 @@ test('nonfinite activity timestamps cannot begin TTL or eviction reclamation', a
   }
 });
 
-// T01/T08 recovery / M4 2.12: orphan manual gates are preserved and alerted.
+// recovery / supervisor: orphan manual gates are preserved and alerted.
 test('orphan manual fences retain both scopes and alert once per episode without blocking on delivery', async () => {
   const f = fixture(); const alerts = []; const releases = [];
   f.deps.alert = event => { alerts.push(event); return new Promise(resolve => { releases.push(resolve); }); };
@@ -297,7 +316,7 @@ test('orphan manual fences retain both scopes and alert once per episode without
   assert.equal(alerts.length, 3); releases.splice(0).forEach(resolve => resolve());
 });
 
-// T01 recovery must diagnose conflicts even when D9 suppresses advanceManual.
+// recovery must diagnose conflicts even when suppresses advanceManual.
 test('manual fence diagnostics remain available during an active transition', async () => {
   const f = fixture(); f.fence('manual_restart', '*');
   f.transition = { phase: 'draining' };
@@ -315,7 +334,7 @@ test('reclaim preflight rejects unavailable or malformed Sync dependencies befor
     for (const unavailable of ['missing', 'throws', 'invalid']) {
       const f = fixture(); f.scenes[0].state = 'busy';
       f.deps.readSyncMarker = unavailable === 'missing' ? undefined : unavailable === 'invalid' ? () => null :
-        () => { throw Object.assign(new Error('P07 unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
+        () => { throw Object.assign(new Error(' unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
       await assert.rejects(f.lifecycle.beginReclaim(f.scenes[0], reason, f.context), {
         code: unavailable === 'invalid' ? 'INVALID_OBSERVATION' : 'DEPENDENCY_UNAVAILABLE',
       });
@@ -330,9 +349,9 @@ test('reclaim preflight rejects unavailable or malformed Sync dependencies befor
   await assert.rejects(f.lifecycle.beginReclaim(f.scenes[0], 'upgrade', f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
   assert.equal(f.fences.size, 0);
 });
-test('TTL without backlog and restart requests cannot leave fences when P07 is unavailable', async () => {
+test('TTL without backlog and restart requests cannot leave fences when is unavailable', async () => {
   const f = fixture(); f.scenes.push(scene('origin'));
-  f.deps.readSyncMarker = () => { throw Object.assign(new Error('P07 unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
+  f.deps.readSyncMarker = () => { throw Object.assign(new Error(' unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
   await assert.rejects(f.lifecycle.checkTtl(f.scenes[0], f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
   f.requests = [{ reason: 'upgrade', requestId: 'upgrade', runIds: ['run-a', 'run-origin'] }];
   await assert.rejects(f.lifecycle.advanceRestarts(f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
@@ -486,7 +505,7 @@ test('unreadable intent blocks new lifecycle writes while authoritative D8 recla
   assert.deepEqual(f.stops, ['run-a']); assert.equal(f.fences.size, 0);
 });
 
-// B4 / M4 8.9: replacement races after the round snapshot, before the guarded stop.
+// B4 / supervisor: replacement races after the round snapshot, before the guarded stop.
 test('manual replacement after fence acquisition is preserved without calling stop', async () => {
   const f = fixture(); f.scenes = [scene('origin')];
   f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
@@ -522,7 +541,7 @@ test('C3 unavailable capacity defers eviction; malformed resolved capacity remai
  }
 });
 
-test('P05 LRU selects the oldest activity among multiple eligible idle groups regardless of enumeration order', async () => {
+test('LRU selects the oldest activity among multiple eligible idle groups regardless of enumeration order', async () => {
   for (const order of [['newer', 'oldest', 'middle'], ['middle', 'newer', 'oldest']]) {
     const f = fixture(); f.context.configuration.capacity = 3;
     f.scenes = order.map(group => scene(group)); f.pending = [{ sessionGroup: 'waiting' }];

@@ -24,7 +24,7 @@ function setup(t) {
 }
 const request = { channel: 'demo', endpoint: 'endpoint' };
 
-test('IF-57 legacy argument precedence and trailing group option preserve content', () => {
+test('legacy argument precedence and trailing group option preserve content', () => {
   for (const isTTY of [true, false]) {
     assert.deepEqual(parseSendArgs(['demo', 'ep', 'body', '--session-group', 'group'], { isTTY }),
       { kind: 'external', channel: 'demo', endpoint: 'ep', message: 'body', groupName: 'group', stdin: false });
@@ -38,7 +38,7 @@ test('IF-57 legacy argument precedence and trailing group option preserve conten
   }
 });
 
-test('IF-07 current identity must match inherited run; legacy reads only foreground identity', t => {
+test('current identity must match inherited run; legacy reads only foreground identity', t => {
   const { dir } = setup(t);
   const env = { ZYLOS_DIR: dir, ZYLOS_RUN_ID: 'run-a', ZYLOS_SESSION_GROUP: 'demo:g' };
   const runDir = path.join(dir, 'activity-monitor', 'session-groups', 'demo:g');
@@ -51,7 +51,7 @@ test('IF-07 current identity must match inherited run; legacy reads only foregro
   assert.equal(senderSessionId({ ZYLOS_DIR: dir }), 'legacy');
 });
 
-test('IB-10 void requires environment ownership and retains delivered record without component', t => {
+test('void requires environment ownership and retains delivered record without component', t => {
   const { api, db, dir, store } = setup(t);
   assert.throws(() => recordVoid(request, 'note', { api, env: { ZYLOS_DIR: dir } }), { code: 'NO_SESSION_ENV' });
   assert.throws(() => recordVoid(request, 'note', { api, env: { ZYLOS_SESSION_GROUP: 'demo:missing' } }), { code: 'UNKNOWN_GROUP' });
@@ -65,7 +65,7 @@ test('IB-10 void requires environment ownership and retains delivered record wit
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 3);
 });
 
-test('IF-68 precheck failures leave D1 D5 D6 empty and never invoke component', async t => {
+test('precheck failures leave empty and never invoke component', async t => {
   const { api, db, dir, script, marker } = setup(t);
   const options = { api, skillsDir: dir };
   for (const endpoint of ['x\0y', 'x'.repeat(131072)]) {
@@ -77,7 +77,7 @@ test('IF-68 precheck failures leave D1 D5 D6 empty and never invoke component', 
   for (const table of ['conversations', 'channel_namespaces', 'group_heads']) assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n, 0);
 });
 
-test('IF-68 audit rollback prevents component; actual exit failure preserves audit', async t => {
+test('audit rollback prevents component; actual exit failure preserves audit', async t => {
   const { api, db, dir, script, marker } = setup(t);
   db.exec("CREATE TRIGGER reject_send BEFORE INSERT ON conversations BEGIN SELECT RAISE(ABORT,'reject'); END");
   await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir }), { code: 'DB_WRITE_FAILED' });
@@ -102,7 +102,7 @@ test('#6b absorbed reply reads actual D9 and D1 in one transaction and preserves
   assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_MISMATCH' });
 });
 
-test('IF-68 real component receives maximum endpoint and preserves shell metacharacters', async t => {
+test('real component receives maximum endpoint and preserves shell metacharacters', async t => {
   const { api, dir, script, db, filename } = setup(t);
   const output = path.join(dir, 'argv.json');
   const sqlite = createRequire(import.meta.url).resolve('better-sqlite3');
@@ -117,7 +117,7 @@ test('IF-68 real component receives maximum endpoint and preserves shell metacha
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 2);
 });
 
-test('IF-68 actual E2BIG and script deletion after audit preserve delivered rows', async t => {
+test('actual E2BIG and script deletion after audit preserve delivered rows', async t => {
   const { api, dir, script, marker, db } = setup(t);
   const argMax = Number(execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8' }).trim());
   assert.ok(Number.isSafeInteger(argMax) && argMax > 0, 'getconf must report a positive argument limit');
@@ -133,7 +133,7 @@ test('IF-68 actual E2BIG and script deletion after audit preserve delivered rows
   assert.equal(fs.existsSync(marker), false);
 });
 
-test('IF-07 actual outbound history and explicit group resolution log only committed fallback records', async t => {
+test('actual outbound history and explicit group resolution log only committed fallback records', async t => {
   const { api, store, db, dir } = setup(t);
   store.registerChannelNamespace('demo', 'namespace');
   store.insertConversation('in', 'demo', 'endpoint', 'old', {groupName:'old'});
@@ -162,7 +162,7 @@ test('IF-07 actual outbound history and explicit group resolution log only commi
   assert.equal(row.status, 'delivered'); assert.equal(diagnostics, 1);
 });
 
-test('IF-07 matching and stale F3 run identities persist exact session_id or NULL in committed audit', async t => {
+test('matching and stale run identities persist exact session_id or NULL in committed audit', async t => {
   const { api, db, dir } = setup(t);
   const runDir = path.join(dir,'activity-monitor/session-groups/demo:room');
   fs.mkdirSync(runDir,{recursive:true});

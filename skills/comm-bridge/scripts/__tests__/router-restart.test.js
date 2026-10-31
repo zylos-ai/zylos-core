@@ -23,7 +23,7 @@ function persistedRouter(t) {
   put('origin');
   const api = () => ({ ...database.store,
     // Legacy ancillary operations are not exposed by createStore. D1 recovery,
-    // claim and finalization, and D3 insert/claim use the real P01 implementation.
+    // claim and finalization, and insert/claim use the real implementation.
     getControlById: id => database.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
     expireTimedOutControls: seconds => database.db.prepare("UPDATE control_queue SET status='timeout' WHERE status IN ('pending','running') AND ack_deadline_at<?").run(seconds).changes,
     cleanupControlQueue: cutoff => database.db.prepare("DELETE FROM control_queue WHERE status IN ('done','timeout','cancelled') AND created_at<?").run(cutoff).changes,
@@ -76,7 +76,7 @@ function persistedRouter(t) {
 }
 
 for (const sceneState of ['absent', 'unready', 'ready']) {
-  test(`T01 restart-state fixture: running with ${sceneState} scene recovers before startup and business`, async t => {
+  test(`restart-state fixture: running with ${sceneState} scene recovers before startup and business`, async t => {
     const f = persistedRouter(t); const row = f.add();
     const first = f.create(); await first.initialize(); await f.rounds(3);
     assert.equal(f.row(row.id).status, 'running'); assert.equal(first.state.activations.size, 1);
@@ -107,7 +107,7 @@ for (const sceneState of ['absent', 'unready', 'ready']) {
   });
 }
 
-test('T01 persisted restart recovery respects 1799/1800/1801 and exhausted retry, logs each dead letter once', async t => {
+test('persisted restart recovery respects 1799/1800/1801 and exhausted retry, logs each dead letter once', async t => {
   const f = persistedRouter(t); const first = f.create(); await first.initialize();
   const inputs = [[1799, 0], [1800, 0], [1801, 0], [20, 1]];
   const rows = inputs.map(([age, retry]) => {

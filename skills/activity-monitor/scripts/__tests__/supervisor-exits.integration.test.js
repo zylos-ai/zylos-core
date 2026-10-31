@@ -5,14 +5,14 @@ import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
 import { SupervisorExits } from '../supervisor-exits.js';
 function setup(t) {
- const f=readyTmuxTarget(t,{prefix:'p05-runtime-exit-',mode:'multi',runtimeProcess:true});
+ const f=readyTmuxTarget(t,{prefix:'supervisor-runtime-exit-',mode:'multi',runtimeProcess:true});
  const db=createStore(f.db,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'multi'}})});
  const scenes=new SupervisorScenes({env:f.env,connectionOptions:{socketPath:f.socketPath,binary:f.binary},readMode:()=>({mode:'multi'}),readActivity:()=>({state:'idle'}),readUsage:()=>null});
  const events=[],errors=[];
  const exits=new SupervisorExits({scenes,db,env:f.env,readMode:()=>({mode:'multi'}),serialize:fn=>fn(),diagnostic:event=>events.push(event),reportError:error=>errors.push(error)});
  return {f,db,scenes,exits,events,errors};
 }
-// P05 T01: actual isolated process exit + SQLite authorities + pinned adapter stop.
+// actual isolated process exit + SQLite authorities + pinned adapter stop.
 test('runtime SIGKILL removes only its exited managed session and records crash', {timeout:15000},async t=>{
  const {f,scenes,exits,events,errors}=setup(t);
  f.tmux('new-session','-d','-s','fixture-manual','sleep','120');

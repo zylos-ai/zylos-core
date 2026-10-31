@@ -65,7 +65,7 @@ test('present verified original ecosystem retains startOrRestart behavior', t =>
 });
 test('new-code ready verification allows intentional regenerated ecosystem bytes', t => {
   const f = fixture(t, {ecosystem:true});
-  f.j.phase='new_verifying';
+  f.j.phase='upgrade_complete';
   fs.appendFileSync(f.file, '// legitimate updated ecosystem');
   assert.doesNotThrow(() => m.start(f.j));
   assert.equal(f.commands[0][1], 'startOrRestart');

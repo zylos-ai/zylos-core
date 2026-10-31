@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 const cliPath = fileURLToPath(new URL('../c4-control.js', import.meta.url));
 const packageRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
-// IF-16 process fallback integration: real consumer/resolver, tmux and process
+// process fallback integration: real consumer/resolver, tmux and process
 // tree, but a named sleeping executable, NOT a real Claude runtime launch.
 function fixture(t, mode, recognized) {
   // F1 intentionally differs from the observed named process.
@@ -17,7 +17,7 @@ function fixture(t, mode, recognized) {
   assert.doesNotMatch(tmux('show-environment', '-t', '=zylos-group-origin'), /^ZYLOS_MODEL_CONFIG=/m);
   const rows = () => db.prepare('SELECT * FROM control_queue ORDER BY id').all();
   const run = expectedRuntime => {
-    const result = spawnSync(process.execPath, [cliPath, 'enqueue', '--content', 'IF-16 fixture', '--no-ack-suffix',
+    const result = spawnSync(process.execPath, [cliPath, 'enqueue', '--content', ' fixture', '--no-ack-suffix',
       '--target-run', 'fixture-run', '--expected-session', 'fixture-session', '--expected-runtime', expectedRuntime,
       '--json', ...(mode === 'multi' ? ['--group', 'origin'] : [])], { env, encoding: 'utf8', timeout: 20000 });
     assert.equal(result.error, undefined);
@@ -29,7 +29,7 @@ function fixture(t, mode, recognized) {
 }
 
 for (const mode of ['single', 'multi']) {
-  test(`IF-16 no F2 named process: matching runtime binds, mismatch preserves rows (${mode})`, t => {
+  test(`no named process: matching runtime binds, mismatch preserves rows (${mode})`, t => {
     const { tmux, rows, run } = fixture(t, mode, true);
     assert.deepEqual(rows(), []);
     const success = run('claude');
@@ -58,7 +58,7 @@ for (const mode of ['single', 'multi']) {
     assert.equal(tmux('list-clients', '-F', '#{client_pid}'), '');
   });
 
-  test(`IF-16 no F2 unrecognized process refuses without insert (${mode})`, t => {
+  test(`no unrecognized process refuses without insert (${mode})`, t => {
     const { tmux, rows, run } = fixture(t, mode, false);
     const before = rows();
     const unknown = run('claude');

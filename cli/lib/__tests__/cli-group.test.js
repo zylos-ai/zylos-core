@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { groupCommand } from '../../commands/group.js';
 import { resolveCliSession } from '../cli-session.js';
 
-test('IF-47 group delegates selector/actions verbatim to the formal wrapper', async () => {
+test('group delegates selector/actions verbatim to the formal wrapper', async () => {
   const previous = process.exitCode;
   try {
     for (const kind of ['runtime', 'model']) {
@@ -24,7 +24,7 @@ test('CLI entry loads and invalid status arguments produce one structured result
   const parsed = JSON.parse(lines[0]); assert.equal(parsed.error.code, 'INVALID_ARGUMENT'); assert.deepEqual(parsed.error.persisted, []);
 });
 
-test('IF-47 group text explains null running using mode before runtime comparison', async () => {
+test('group text explains null running using mode before runtime comparison', async () => {
   const previous = process.exitCode;
   try {
     for (const [sessionMode, expected] of [['single', /only in multi/], ['multi', /current group runtime is claude/]]) {

@@ -27,7 +27,7 @@ function run({ home, root }, source) {
   return JSON.parse(result.stdout.trim().split('\n').at(-1));
 }
 
-test('IF-47/DM-48 default init imports real migration ensure and preserves unreadable records', t => {
+test('default init imports real migration ensure and preserves unreadable records', t => {
   for (const state of ['fresh', 'existing', 'unreadable']) {
     const context = fixture(t);
     fs.writeFileSync(path.join(context.root, 'memory', 'references.md'), '# References\n');
@@ -61,7 +61,7 @@ test('IF-47/DM-48 default init imports real migration ensure and preserves unrea
   }
 });
 
-test('IF-47 init template generator prepares dual hooks and assets report unavailable native trust', t => {
+test('init template generator prepares dual hooks and assets report unavailable native trust', t => {
   const context = fixture(t);
   const instruction = path.join(context.root, 'instructions.md');
   fs.writeFileSync(instruction, '# Fixture instructions\n');
@@ -94,7 +94,7 @@ test('IF-47 init template generator prepares dual hooks and assets report unavai
   assert.equal(fs.readFileSync(configPath, 'utf8'), config);
 });
 
-test('IF-47 init template sync never restarts or invokes the wrapper CLI', async t => {
+test('init template sync never restarts or invokes the wrapper CLI', async t => {
   const { home, root } = fixture(t);
   const wrapperLog = path.join(home, 'wrapper.jsonl'), restartLog = path.join(home, 'restart.jsonl');
   const recorder = file => `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(file)}, JSON.stringify(process.argv.slice(2)) + '\\n');\n`;

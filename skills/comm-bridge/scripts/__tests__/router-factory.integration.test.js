@@ -70,7 +70,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
   };
 }
 
-for (const phase of ['paste','enter','idle','backoff']) test(`IF12 factory: ${phase} wait holds only its lane; real claims/settlement preserve same-group order`, async t => {
+for (const phase of ['paste','enter','idle','backoff']) test(`factory: ${phase} wait holds only its lane; real claims/settlement preserve same-group order`, async t => {
   const f = setup(t, { phase });
   const first = f.add(f.a, `first-${phase}`, { requireIdle: phase === 'idle' }), second = f.add(f.a, `second-${phase}`), other = f.add(f.b, `other-${phase}`);
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick();
@@ -88,7 +88,7 @@ for (const phase of ['paste','enter','idle','backoff']) test(`IF12 factory: ${ph
   assert.ok(f.calls.find(c => c[0] === 'paste' && c[1] === f.a)[2].includes('---- reply via:'));
 });
 
-test('IF70 factory: real expiry + shared D4 sender happen post-commit, then next fresh row delivers', async t => {
+test('factory: real expiry + shared sender happen post-commit, then next fresh row delivers', async t => {
   const f = setup(t), old = f.add(), fresh = f.add(f.a, 'fresh after expiry');
   f.db.getDb().prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(Math.floor(Date.now()/1000)-1801, old.id);
   const attempts = [], config = { language: 'en', brand: 'Factory' };
@@ -108,7 +108,7 @@ test('IF70 factory: real expiry + shared D4 sender happen post-commit, then next
   assert.ok(f.db.getStatusNoticeCooldowns().some(c => c.cooldown_key.includes('pending_expired')));
 });
 
-test('T01 factory: actual unreadable F1 remains inert once, even if config repaired', async t => {
+test('factory: actual unreadable remains inert once, even if config repaired', async t => {
   const f = setup(t); fs.writeFileSync(CONFIG_FILE, '{broken');
   const alerts = []; f.overrides.alert = (...args) => alerts.push(args);
   f.overrides.listGroupTmuxSessions = async () => assert.fail('inert factory must not observe terminals');
@@ -118,7 +118,7 @@ test('T01 factory: actual unreadable F1 remains inert once, even if config repai
   assert.equal(dispatcher.state.inert, true); assert.equal(alerts.length, 1);
 });
 
-test('T01/T04 factory: actual single F1 directs a non-null D1 group through null origin target', async t => {
+test('factory: actual single directs a non-null group through null origin target', async t => {
   const f = setup(t, { mode: 'single' }), row = f.add();
   assert.equal(f.row(row.id).session_group, f.a);
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick(); await dispatcher.idle();
@@ -127,7 +127,7 @@ test('T01/T04 factory: actual single F1 directs a non-null D1 group through null
   assert.equal(f.calls.find(c => c[0] === 'notify')[1].sessionGroup, null);
 });
 
-test('IF12 factory oracle rejects a known-bad scheduler that waits for previous lanes', async t => {
+test('factory oracle rejects a known-bad scheduler that waits for previous lanes', async t => {
   const schedulerURL = new URL('../router/scheduler.js', import.meta.url), factoryURL = new URL('../router/factory.js', import.meta.url);
   const original = fs.readFileSync(schedulerURL, 'utf8');
   const before = 'const work = lane(group).kick();';
@@ -149,7 +149,7 @@ test('IF12 factory oracle rejects a known-bad scheduler that waits for previous 
   assert.equal(f.row(second.id).status, 'delivered');
 });
 
-test('IF12 factory: blocked paste in live A does not prevent absent B from launching and delivering', async t => {
+test('factory: blocked paste in live A does not prevent absent B from launching and delivering', async t => {
   const f = setup(t, { phase: 'paste' }), bScene = f.scenes.get(f.b);
   f.scenes.delete(f.b);
   const originalAdapter = f.overrides.getSessionAdapter;
@@ -171,7 +171,7 @@ test('IF12 factory: blocked paste in live A does not prevent absent B from launc
   assert.equal(f.row(first.id).status, 'delivered');
 });
 
-test('IF12 factory: held launch in absent A does not block existing READY B delivery', async t => {
+test('factory: held launch in absent A does not block existing READY B delivery', async t => {
   const launchHold = deferred(); t.after(() => launchHold.resolve());
   const f = setup(t), aScene = f.scenes.get(f.a); let launching = false;
   f.scenes.delete(f.a);
@@ -192,10 +192,10 @@ test('IF12 factory: held launch in absent A does not block existing READY B deli
   assert.equal(f.row(first.id).status, 'delivered');
 });
 
-// T03 READY deadline / Howard TG7342: omit configuration so the real factory
+// READY deadline / Howard TG7342: omit configuration so the real factory
 // selects the one product default for both runtimes; advance only fake time.
 for (const runtime of ['claude', 'codex']) for (const outcome of ['timeout', 'boundary-ready', 'late-launch']) {
-  test(`T03 factory default READY deadline is 30000ms: ${runtime}/${outcome}`, async t => {
+  test(`factory default READY deadline is 30000ms: ${runtime}/${outcome}`, async t => {
     const gate = deferred(); t.after(() => gate.resolve());
     const f = setup(t);
     t.after(() => f.db.getDb().prepare("UPDATE conversations SET status='failed' WHERE session_group IN (?,?) AND status IN ('pending','running')").run(f.a,f.b));

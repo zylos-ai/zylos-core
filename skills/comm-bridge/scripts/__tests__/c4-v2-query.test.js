@@ -209,6 +209,15 @@ test('gating is empty; summary scope order and single target aggregation follow 
   const single = absorb(store, 'multi', 'single');
   assert.deepEqual(JSON.parse(query.absorbed({ runId: single, summary: true, json: true })).data.items[0].bySourceGroup, { 'foo:z': 1 });
 });
+test('summary scope order and continuation use BINARY rather than locale collation', t => {
+  const { store, query } = fixture(t);
+  for (const groupName of ['a', 'B']) store.insertConversation('in', 'foo', 'e', 'x', { groupName });
+  const runId = absorb(store);
+  const summary = JSON.parse(query.absorbed({ runId, summary: true, json: true })).data;
+  assert.deepEqual(summary.items.map(item => item.scope), ['foo:B', 'foo:a']);
+  const next = JSON.parse(query.absorbed({ runId, summary: true, scopeAfter: 'foo:B', json: true })).data;
+  assert.deepEqual(next.items.map(item => item.scope), ['foo:a']);
+});
 test('mismatch error lists exactly first 20 ids and retains total count', () => {
   const ids = Array.from({ length: 10000 }, (_, i) => i + 1);
   for (const json of [false, true]) {
@@ -232,8 +241,10 @@ test('summary defaults to 50 scopes and paginates up to 200 in BINARY order with
       if (json) {
         const { data } = JSON.parse(output);
         assert.ok(data.count > 0 && data.count <= 17);
+        assert.equal(data.scopes, 205);
         scopes.push(...data.items.map(x => x.scope)); scopeAfter = data.nextScope ?? undefined;
       } else {
+        assert.match(output.split('\n')[0], / scopes=205$/);
         const page = [...output.matchAll(/^scope=(\S+) count=/gm)].map(m => m[1]);
         scopes.push(...page);
         const footer = output.match(/count=(\d+) nextScope=(\S+)\n$/);
@@ -266,7 +277,7 @@ test('reply-via survives real POSIX shell parsing byte-for-byte', t => {
   for (const endpoint of ['\0', '\n', '\x7f', 'x'.repeat(131072)]) assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: endpoint }, path), /不可用/);
   assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: 'e' }, path + '\n'), /Core 路径含控制字符/);
 });
-test('IB50 global/group reads preserve scopes, checkpoint metadata and truncation upper bound', t => {
+test('global/group reads preserve scopes, checkpoint metadata and truncation upper bound', t => {
   const { store, query } = fixture(t);
   const a = store.insertConversation('out', 'foo', 'e', 'a');
   store.createCheckpoint('foo', a.id, 'summary');
@@ -281,7 +292,7 @@ test('IB50 global/group reads preserve scopes, checkpoint metadata and truncatio
   assert.throws(() => query.unsummarized({ group: 'foo', upToConversationId: 999 }), { code: 'UPTO_BEYOND_FRONTIER' });
   assert.equal(query.checkpoints({ group: 'foo', after: 0 })[0].summary, 'summary');
 });
-test('IB56 ordering uses latest head while matching/preview use latest external input', t => {
+test('ordering uses latest head while matching/preview use latest external input', t => {
   const { store, query } = fixture(t);
   store.insertConversation('in', 'Foo', 'e1', '研发群', { groupName: 'a' });
   store.insertConversation('in', 'bar', 'e2', 'other');

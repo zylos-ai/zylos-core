@@ -14,7 +14,7 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 // Captured from the official 0.164.0 TUI using a loopback Responses fixture;
 // only cwd/transcript paths were sanitized. Tool payloads below follow
 // openai/codex rust-v0.164.0 codex-rs/hooks/src/schema.rs.
-it('ZYLO-85: installed Codex hooks connect native payloads to group activity; removal fails the contract', () => {
+it('installed Codex hooks connect native payloads to group activity; removal fails the contract', () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-activity-chain-'));
   try {
     const zylosDir = path.join(fixture, 'zylos');

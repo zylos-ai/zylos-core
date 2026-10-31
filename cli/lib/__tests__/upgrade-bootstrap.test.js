@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import crypto from 'node:crypto';
 import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {test} from 'node:test';
@@ -26,7 +25,7 @@ function fixture(t) {
   return {root, stable, api, journal};
 }
 
-function readyJournal(f, phase = 'new_data_ready', extra = {}) {
+function readyJournal(f, phase = 'restored_data_ready', extra = {}) {
   const digest = 'a'.repeat(64);
   return f.journal('tx', {
     phase,
@@ -43,27 +42,10 @@ function readyJournal(f, phase = 'new_data_ready', extra = {}) {
       cliRoot: path.join(f.root, 'original-cli'), cliHash: digest,
       workerPath: path.join(f.root, 'original-cli/lib/worker.js'), workerHash: digest,
       ecosystemHash: null,
-      databases: ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'].map(source => ({ source, exists: true })),
+      databases: ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db', 'components/dashboard/dashboard.db'].map(source => ({ source, exists: true })),
     },
     ...extra,
   });
-}
-
-function installFrozenRunner(dir, source) {
-  const files = {
-    'runner.cjs': source,
-    'maintenance.cjs': "'use strict';\n",
-    'installer.cjs': "'use strict';\n",
-  };
-  const hashes = {};
-  for (const [name, content] of Object.entries(files)) {
-    fs.writeFileSync(path.join(dir, name), content, {mode:0o600});
-    hashes[name] = crypto.createHash('sha256').update(content).digest('hex');
-  }
-  const journalFile = path.join(dir, 'journal.json');
-  const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'));
-  fs.writeFileSync(journalFile, JSON.stringify({...journal, nodePath:process.execPath, recoveryHashes:hashes}), {mode:0o600});
-  return hashes;
 }
 
 
@@ -99,84 +81,57 @@ test('status and discovery do not depend on runtime capability or recovery modul
 
 test('live controller is observed without entering resume', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
-  const executed = path.join(f.root, 'executed');
-  installFrozenRunner(dir, `require('node:fs').writeFileSync(${JSON.stringify(executed)}, 'yes');`);
   const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  t.mock.method(m, 'canRecognizeProcesses', () => true);
+  t.mock.method(m, 'alive', () => true);
   m.durable(path.join(dir, 'controller.json'), m.identity());
   const out = f.api.bootstrap(f.root, {once: true});
   assert.equal(out.controllerAlive, true);
   assert.equal(out.observing, true);
-  assert.equal(fs.existsSync(executed), false);
 });
 
 test('once resumes exactly the attributed transaction and does not launch a runtime', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
-  const record = path.join(f.root, 'runner-args.json');
-  installFrozenRunner(dir, `
-    const fs=require('node:fs'),path=require('node:path');
-    fs.writeFileSync(${JSON.stringify(record)},JSON.stringify(process.argv.slice(2)));
-    const dir=process.argv[process.argv.length-1],root=path.resolve(dir,'../../..');
-    fs.rmSync(path.join(root,'.zylos/upgrade/active.json'));
-    fs.rmSync(dir,{recursive:true});
-    process.stdout.write(JSON.stringify({success:true})+'\\n');
-  `);
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  t.mock.method(m, 'canRecognizeProcesses', () => true);
+  fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'throw Error("stable recovery must not execute");');
+  fs.writeFileSync(path.join(dir, 'runner.cjs'), 'exports.resume = dir => ({resumed: dir});');
+  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+  const journal = m.read(path.join(dir, 'journal.json'));
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   const out = f.api.bootstrap(f.root, {once: true});
-  assert.equal(out.active, false);
-  assert.equal(out.resumed, true);
-  assert.deepEqual(JSON.parse(fs.readFileSync(record, 'utf8')), ['resume','--transaction-dir',dir]);
+  assert.equal(out.resumed, dir);
+  assert.equal(out.launched, undefined);
 });
 
-test('a failing frozen runner keeps recovery required and reports its exit status', {skip:process.platform==='darwin'}, t => {
+test('once rejects changed transaction recovery code before executing it', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
-  installFrozenRunner(dir, 'process.exit(9);');
-  const out = f.api.bootstrap(f.root, {once:true});
-  assert.equal(out.active, true);
-  assert.equal(out.recovery_required, true);
-  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
-  assert.match(out.error, /exited 9/);
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  t.mock.method(m, 'canRecognizeProcesses', () => true);
+  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+  fs.writeFileSync(path.join(dir, 'runner.cjs'), 'exports.resume = () => ({resumed:true});');
+  const journal = m.read(path.join(dir, 'journal.json'));
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
+  fs.appendFileSync(path.join(dir, 'runner.cjs'), '\nthrow Error("changed runner executed");');
+  assert.throws(() => f.api.bootstrap(f.root, {once:true}), /transaction recovery material changed/);
 });
 
-test('a successful frozen runner must leave no transaction or active marker', {skip:process.platform==='darwin'}, t => {
+test('restricted process visibility refuses automatic bootstrap recovery on Linux', {skip:process.platform!=='linux'}, t => {
   const f = fixture(t), dir = f.journal();
-  installFrozenRunner(dir, `
-    const fs=require('node:fs'),path=require('node:path');
-    const dir=process.argv[process.argv.length-1],root=path.resolve(dir,'../../..');
-    fs.rmSync(path.join(root,'.zylos/upgrade/active.json'));
-  `);
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  t.mock.method(m, 'canRecognizeProcesses', () => false);
+  const executed = path.join(dir, 'runner-executed');
+  fs.writeFileSync(path.join(dir, 'runner.cjs'), `exports.resume = () => { require('node:fs').writeFileSync(${JSON.stringify(executed)}, 'executed'); return {resumed:true}; };`);
+  for (const name of ['maintenance.cjs', 'installer.cjs']) fs.writeFileSync(path.join(dir, name), 'module.exports = {};');
+  const journal = m.read(path.join(dir, 'journal.json'));
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   const out = f.api.bootstrap(f.root, {once:true});
-  assert.equal(out.active, true);
-  assert.equal(out.recovery_required, true);
-  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
-  assert.match(out.error, /clean terminal state/);
-  assert.equal(fs.existsSync(dir), true);
-});
-
-test('changed frozen recovery material is rejected before runner execution', {skip:process.platform==='darwin'}, t => {
-  const f = fixture(t), dir = f.journal();
-  const executed = path.join(f.root, 'executed');
-  installFrozenRunner(dir, `require('node:fs').writeFileSync(${JSON.stringify(executed)}, 'yes');`);
-  fs.appendFileSync(path.join(dir, 'runner.cjs'), '\n// changed\n');
-  const out = f.api.bootstrap(f.root, {once:true});
-  assert.equal(out.recovery_required, true);
-  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
-  assert.match(out.error, /hash mismatch/);
   assert.equal(fs.existsSync(executed), false);
-});
-
-test('an existing descriptor must name the fixed layout and the same recovery hashes', {skip:process.platform==='darwin'}, t => {
-  const f = fixture(t), dir = f.journal();
-  const hashes = installFrozenRunner(dir, '');
-  fs.writeFileSync(path.join(dir, 'descriptor.json'), JSON.stringify({
-    formatVersion:1, transactionId:'tx', nodePath:process.execPath,
-    runnerPath:path.join(dir, 'elsewhere.cjs'),
-    driverClosureRoot:path.join(dir, 'sqlite-runtime'),
-    workerPath:path.join(dir, 'sqlite-runtime/core-db-backup-worker.js'),
-    driverPath:path.join(dir, 'sqlite-runtime/node_modules/better-sqlite3/lib/index.js'),
-    hashes,
-  }), {mode:0o600});
-  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.automaticResume, false);
   assert.equal(out.recovery_required, true);
-  assert.match(out.error, /fixed layout/);
+  assert.equal(out.blocked, true);
+  assert.match(out.error, /manual recovery/);
+  assert.doesNotMatch(out.prompt, /--once/);
 });
 
 test('stale or invalid controller material leaves an isolated recovery cue', t => {
@@ -190,7 +145,7 @@ test('stale or invalid controller material leaves an isolated recovery cue', t =
 });
 
 test('READY provides a nonblocking recovery cue and terminal evidence ends discovery', t => {
-  for (const phase of ['new_data_ready', 'new_verifying', 'restored_data_ready', 'restored_verifying', 'upgrade_complete']) {
+  for (const phase of ['restored_data_ready', 'restored_verifying', 'upgrade_complete']) {
     const f = fixture(t);
     readyJournal(f, phase, phase === 'upgrade_complete' ? {
       cleanupPending: true,

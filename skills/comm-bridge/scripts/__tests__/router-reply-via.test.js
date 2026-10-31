@@ -29,7 +29,7 @@ function fixture(t) {
   return scriptPath;
 }
 
-// P04 T06 / IF-08, IF-69: byte identity through the shell, not string snapshots.
+// byte identity through the shell, not string snapshots.
 test('reply-via preserves endpoint and script bytes in whole, local, single and internal scopes', t => {
   const scriptPath = fixture(t);
   for (const endpoint of ['-100123|msg:88', "it's $(x)", '`id`', 'a"b\\c']) {
@@ -100,9 +100,9 @@ test('fetch formatting and lane formatting use the same original-row route', asy
   }
 });
 
-test('frozen W4 absorbed reply command uses IB-06 argv without ordinary endpoint interpolation', t => {
+test('frozen absorbed reply command uses argv without ordinary endpoint interpolation', t => {
   const scriptPath = fixture(t), runId = '11111111-2222-4333-8444-555555555555';
-  // Frozen IB-48 example; actual W4 generation belongs to P10.
+  // Frozen example; actual generation belongs to .
   assert.deepEqual(execute(`node ${shellQuote(scriptPath)} --absorbed-reply ${runId} 501`),
     [scriptPath, '--absorbed-reply', runId, '501'].map(hex));
 });

@@ -78,7 +78,7 @@ async function command(f, json, flags = []) {
 
 for (const json of [false, true]) {
   const output = json ? 'JSON' : 'text';
-  for (const credentials of [false, true]) test(`IF-47 vi single ${output} target already effective credentials=${credentials}`, async t => {
+  for (const credentials of [false, true]) test(`single ${output} target already effective credentials=${credentials}`, async t => {
     const f = await fixture(t, { baseline: 'codex', live: { ...old, runtime: 'codex' } });
     const before = fs.readFileSync(f.file, 'utf8');
     const { data } = await command(f, json, credentials ? ['--save-apikey', 'fixture-value'] : []);
@@ -86,7 +86,7 @@ for (const json of [false, true]) {
     assert.equal(f.calls.requests.length, 0); assert.equal(f.calls.credentials, Number(credentials));
     if (!credentials) { assert.equal(f.calls.writes, 0); assert.equal(fs.readFileSync(f.file, 'utf8'), before); }
   });
-  test(`IF-47 xv(b) ${output} unchanged retries only on the next invocation`, async t => {
+  test(`${output} unchanged retries only on the next invocation`, async t => {
     const f = await fixture(t, { response: { ok: false, result: 'rejected', reason: 'not_ready' } });
     const first = await command(f, json);
     assert.equal(first.data.result, 'saved'); assert.equal(first.data.groups[0].status, 'pending_reclaim');
@@ -109,7 +109,7 @@ for (const json of [false, true]) {
     ['already stopped', { ok: true, result: 'already_stopped' }, 'not_running', 'already_stopped', null, null],
     ['xv(g) stale', { ok: false, result: 'stale_target', currentRunId: 'new-run' }, 'unknown', 'stale_target', 'new-run', 'RECLAIM_NOT_SUBMITTED'],
     ['public reject', { ok: false, code: 'entry_not_open' }, 'pending_reclaim', 'not_submitted', 'entry_not_open', 'RECLAIM_NOT_SUBMITTED'],
-  ]) test(`IF-47 ${output} socket ${label}`, async t => {
+  ]) test(`${output} socket ${label}`, async t => {
     const f = await fixture(t, { response }); const { data } = await command(f, json);
     assert.equal(data.groups[0].status, status); assert.equal(data.reclaim.result, result); assert.equal(data.reclaim.reason, reason);
     assert.deepEqual(data.warnings.map(row => row.code), warning ? [warning] : []);
@@ -120,18 +120,18 @@ for (const json of [false, true]) {
     ['xv(d) absent', { present: false }, 'not_running'], ['xv(e) unrecognized runtime', { ...old, runtime: 'unknown' }, 'unknown'],
     ['xv(e) missing launch config', { ...old, launchConfig: null }, 'unknown'], ['xv(e) missing runId', { ...old, runId: null }, 'unknown'],
     ['xv(e) read error', new Error('tmux read failed'), 'unknown'],
-  ]) test(`IF-47 ${output} ${label} never submits`, async t => {
+  ]) test(`${output} ${label} never submits`, async t => {
     const f = await fixture(t, { live }); const { data } = await command(f, json);
     assert.equal(data.groups[0].status, status); assert.equal(data.reclaim, null); assert.equal(f.calls.requests.length, 0);
     assert.equal(data.groupsComplete, !(live instanceof Error));
     if (live instanceof Error) assert.equal(data.observationErrors[0].sessionGroup, 'origin');
   });
-  test(`IF-47 xv(f) ${output} missing socket retains success`, async t => {
+  test(`${output} missing socket retains success`, async t => {
     const f = await fixture(t, { disconnected: true }); const { data } = await command(f, json);
     assert.equal(data.reclaim.result, 'not_submitted'); assert.equal(data.reclaim.reason, 'connect_failed');
     assert.equal(data.warnings[0].code, 'RECLAIM_NOT_SUBMITTED'); assert.equal(f.calls.lookup, 0);
   });
-  for (const lookup of ['accepted', 'done', 'unknown']) test(`IF-47 xv(h) ${output} lost socket reply lookup=${lookup}`, async t => {
+  for (const lookup of ['accepted', 'done', 'unknown']) test(`${output} lost socket reply lookup=${lookup}`, async t => {
     const f = await fixture(t, { response: 'lost', lookup }); const { data } = await command(f, json);
     assert.equal(data.reclaim.result, lookup === 'unknown' ? 'unknown' : 'accepted');
     assert.deepEqual(data.warnings.map(row => row.code), lookup === 'unknown' ? ['RECLAIM_RESULT_UNKNOWN'] : []);

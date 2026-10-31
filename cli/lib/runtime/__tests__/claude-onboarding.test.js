@@ -6,7 +6,7 @@ import { ClaudeAdapter } from '../claude.js';
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 
 function fixture(t) {
-  const tmux = isolatedTmux(t, { prefix: 'p02-onboarding-' });
+  const tmux = isolatedTmux(t, { prefix: 'session-runtime-onboarding-' });
   const home = path.join(fs.realpathSync(tmux.dir), 'home');
   const root = path.join(home, 'zylos');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });

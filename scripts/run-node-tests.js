@@ -6,6 +6,8 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const TEST_ROOTS = [
+  path.join(ROOT, 'skills', 'dashboard', 'test'),
+  path.join(ROOT, 'skills', 'web-console', 'scripts', '__tests__'),
   path.join(ROOT, 'cli', 'lib', '__tests__'),
   path.join(ROOT, 'cli', 'lib', 'runtime', '__tests__'),
   path.join(ROOT, 'skills', 'activity-monitor', 'scripts', '__tests__'),
@@ -30,6 +32,11 @@ function walk(dir, files = []) {
 
 function isNodeTest(file) {
   const rel = path.relative(ROOT, file).split(path.sep).join('/');
+  // These integration entries use Jest and are selected by jest.config.js.
+  if (rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js'
+      || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js') return false;
+  if (rel.startsWith('skills/dashboard/test/')) return true;
+  if (rel.startsWith('skills/web-console/scripts/__tests__/')) return true;
   if (rel.startsWith('cli/lib/__tests__/')) return true;
   if (rel.startsWith('cli/lib/runtime/__tests__/')) return true;
   if (rel.startsWith('skills/activity-monitor/scripts/__tests__/')) return true;
@@ -66,11 +73,19 @@ if (testFiles.length === 0) {
 
 console.log(`Running ${testFiles.length} Node test files`);
 const environment = createTestEnvironment();
+const tmpdir = path.join(environment.root, 'tmp');
+let failed = true;
 try {
+  fs.mkdirSync(tmpdir);
+  const env = { ...process.env, TMPDIR: tmpdir };
+  // Runtime identity belongs to each fixture, never the agent running tests.
+  for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP']) delete env[key];
   const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...testFiles], {
-    stdio: 'inherit',
+    stdio: 'inherit', cwd: ROOT, env,
   });
   process.exitCode = result.status ?? 1;
+  failed = process.exitCode !== 0;
 } finally {
-  environment.cleanup();
+  environment.cleanup({ preserveTmp: failed });
+  if (failed) console.error(`Test temporary files retained at ${tmpdir}`);
 }

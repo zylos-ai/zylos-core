@@ -53,7 +53,7 @@ function setup(t, options = {}) {
     create: override => createDelivery(deps, { periodicEnabled: false, ...options, ...override }) };
 }
 
-// T04 / IB-11, IB-12, IB-13: actual conditional ledger with bound I/O fixture.
+// actual conditional ledger with bound I/O fixture.
 test('successful paste notifies immediately, reads current same-run F3 and drains before markDelivered', async t => {
   const f = setup(t), row = f.message();
   f.deps.notifyDelivered = data => { f.calls.push(['notify', data]); return new Promise(() => {}); };
@@ -187,7 +187,7 @@ test('byte delay and Claude fallback preserve baseline boundaries', () => {
   assert.equal(checkClaudeFallbackInputBox('──────────\n❯ text\n──────────'), 'has_content');
 });
 
-// T04 delayed callback drain: independently held callback cannot outlive ledger.
+// delayed callback drain: independently held callback cannot outlive ledger.
 test('periodic Enter callback is drained before ledger; no delayed send survives settlement', async t => {
   const f = setup(t), row = f.message(), pasteWait = deferred(), periodicStarted = deferred(), callbackWait = deferred();
   f.deps.now = Date.now;
@@ -250,8 +250,8 @@ test('F4 reader failure is offline, while valid READY bypass control can recover
   const control = f.control('[KEYSTROKE]Enter', { bypass_state: 1 }); await d.deliverControl(control); assert.equal(control.status, 'done');
 });
 
-// T07: actual delivery decisions through the real diagnostic writer and JSONL file.
-test('T07 JSONL records successful settlement, stale settlement and distinct gate releases', async t => {
+// actual delivery decisions through the real diagnostic writer and JSONL file.
+test('JSONL records successful settlement, stale settlement and distinct gate releases', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'delivery-jsonl-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'router-events.jsonl');

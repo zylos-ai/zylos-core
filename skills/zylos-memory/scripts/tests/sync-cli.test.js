@@ -11,8 +11,8 @@ const rootPath = fileURLToPath(new URL('../../../../', import.meta.url));
 function run(script, args, env, input = '') {
   return spawnSync(process.execPath, [fileURLToPath(new URL(`../${script}.js`, import.meta.url)), ...args], { env, input, encoding: 'utf8', timeout: 15000 });
 }
-test('IB51 CLI exits distinguish malformed input, ownership loss, lock timeout and successful commit', async t => {
-  const f = readyTmuxTarget(t, { prefix: 'p07-cli-', mode: 'single', packageRoot: rootPath });
+test('CLI exits distinguish malformed input, ownership loss, lock timeout and successful commit', async t => {
+  const f = readyTmuxTarget(t, { prefix: 'model-workflow-cli-', mode: 'single', packageRoot: rootPath });
   const env = { ...f.env, ZYLOS_RUN_ID: f.ready.runId };
   const runDir = path.join(f.root, 'activity-monitor/session-groups/origin');
   const memoryDir = path.join(f.root, 'memory'); fs.mkdirSync(memoryDir);

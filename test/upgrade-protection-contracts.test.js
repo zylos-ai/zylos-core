@@ -14,7 +14,7 @@ beforeEach(() => {
 afterEach(()=>fs.rmSync(root,{recursive:true,force:true}));
 function transaction(id, phase, extra={}) {
   const dir=path.join(root,'.backup','self-upgrade',id);fs.mkdirSync(dir,{recursive:true,mode:0o700});
-  const journal={formatVersion:1,transactionId:id,zylosDir:root,phase,initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'a'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'b'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'c'.repeat(64),ecosystemHash:null,databases:m.DB_PATHS.map(source=>({source,exists:true}))},nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db',id),snapshotManifestHash:'d'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'e'.repeat(64)}],originalServices:[],installationIntent:true,cleanup:{complete:false},...extra};
+  const journal={formatVersion:1,transactionId:id,zylosDir:root,phase,initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'a'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'b'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'c'.repeat(64),ecosystemHash:null,databases:[...m.DB_PATHS,'components/dashboard/dashboard.db'].map(source=>({source,exists:true}))},nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db',id),snapshotManifestHash:'d'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'e'.repeat(64)}],originalServices:[],installationIntent:true,cleanup:{complete:false},...extra};
   m.durable(path.join(dir,'journal.json'),journal);return {dir,journal};
 }
 function terminal(id) {return transaction(id,'restored_complete',{cleanup:{complete:true,markerRemoved:true,servicesRestored:true},terminalEvidence:{verified:true,kind:'code_data_services'}});}
@@ -23,10 +23,16 @@ test('100 verified terminal directories do not hide one active transaction',()=>
  transaction('active','restoring');
  const result=m.discover(root);expect(result.diagnostics).toEqual([]);expect(result.candidates.map(c=>c.journal.transactionId)).toEqual(['active']);expect(result.blocked).toBe(true);
 });
-test('full data ready allows normal DB access while recovery remains discoverable',()=>{
- for(const phase of ['new_data_ready','new_verifying','restored_data_ready','restored_verifying']) {
+test('restored data ready allows normal DB access while recovery remains discoverable',()=>{
+ for(const phase of ['restored_data_ready','restored_verifying']) {
   const {dir,journal}=transaction('ready',phase);m.marker(root,dir,journal);
   expect(m.discover(root).blocked).toBe(false);expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
+ }
+});
+test('removed new-generation READY phases keep normal DB access isolated',()=>{
+ for(const phase of ['new_data_ready','new_verifying']) {
+  const {dir,journal}=transaction('obsolete-ready',phase);m.marker(root,dir,journal);
+  expect(m.discover(root).blocked).toBe(true);expect(()=>m.assertCoreDatabaseAvailable(root)).toThrow();
  }
 });
 test('unmarked preparation stays visible to explicit discovery without gating ordinary writes',()=>{

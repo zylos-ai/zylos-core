@@ -35,7 +35,7 @@ function afterRuntimeRead(t, db, callback) {
   return () => fired;
 }
 
-test('IF46/DM33 F1 is read once and D10/D11 retain one WAL snapshot across a peer commit', t => {
+test('is read once and / retain one WAL snapshot across a peer commit', t => {
   let reads = 0;
   const f = peerFixture(t, { readConfig: () => ({ state: 'ok', config: { runtime: ++reads === 1 ? 'claude' : 'codex', session_mode: 'multi' } }) });
   f.store.setSessionModelConfig(pair('claude', 'old-model', 'low'));

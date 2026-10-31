@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { ModeSwitchCoordinator } from '../mode-switch.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { RestartRequestStore, validateRestartRequests } from '../restart-request-store.js';
 
@@ -21,7 +22,7 @@ function fixture(t) {
   const admission = new SupervisorAdmission(deps); admission.openEntry();
   return { root, file, store, state, db, admission, deps };
 }
-test('IF-34/DM-42 restart persists exact snapshot before reply and survives owner reconstruction', async t => {
+test('restart persists exact snapshot before reply and survives owner reconstruction', async t => {
   const f = fixture(t); const response = await f.admission.handle(restart('upgrade'));
   assert.equal(response.result, 'accepted'); assert.equal(response.runCount, 3);
   assert.deepEqual(f.store.read()[0].runIds, ['r1','r2','starting']);
@@ -30,7 +31,7 @@ test('IF-34/DM-42 restart persists exact snapshot before reply and survives owne
   assert.equal((await next.handle(restart('upgrade'))).result, 'already_accepted'); assert.equal(f.store.read()[0].runIds.length, 3);
   assert.equal((await next.handle(manual({requestId:'upgrade'}))).reason, 'request_conflict');
 });
-test('IF-34 restart empty writes only completion and steady single refuses', async t => {
+test('restart empty writes only completion and steady single refuses', async t => {
   const f = fixture(t); f.state.runs = [];
   assert.equal((await f.admission.handle(restart('empty'))).result, 'done_empty'); assert.equal(fs.existsSync(f.file), false);
   assert.deepEqual(f.state.events, [{event:'restart_done', requestId:'empty'}]);
@@ -38,8 +39,10 @@ test('IF-34 restart empty writes only completion and steady single refuses', asy
   f.state.transition = {phase:'gating'}; f.state.runs = [{runId:'legacy'}];
   assert.equal((await f.admission.handle(restart('during-transition'))).result, 'accepted');
 });
-test('DM-54 invalid F9 refuses admission without changing any byte', async t => {
+test('invalid refuses admission without changing any byte', async t => {
   const f = fixture(t);
+  const modeSwitch = new ModeSwitchCoordinator({ db:f.db, readRequests:()=>f.store.read(), readMode:()=>({mode:'single'}), legacyPresent:()=>false });
+  f.admission.modeSwitch = (...args) => modeSwitch.handle(...args);
   const good = {requestId:'x', reason:'upgrade', acceptedAt:1792000000000, runIds:['r1']};
   for (const content of ['{', '{}', JSON.stringify([{...good, extra:true}]), JSON.stringify([good,good]), JSON.stringify([{...good,runIds:[]}]), JSON.stringify([{...good,acceptedAt:null}])]) {
     fs.writeFileSync(f.file, content);
@@ -50,13 +53,13 @@ test('DM-54 invalid F9 refuses admission without changing any byte', async t => 
   }
   assert.equal(validateRestartRequests([good]), true);
 });
-test('IF-34 unknown live identity and write failures never return false accepted', async t => {
+test('unknown live identity and write failures never return false accepted', async t => {
   const f = fixture(t); f.state.runs = [{runId:'r1'}, {runId:null}];
   await assert.rejects(f.admission.handle(restart('unknown')), {code:'IDENTITY_UNAVAILABLE'}); assert.deepEqual(f.store.read(), []);
   f.state.runs = [{runId:'r1'}]; f.store.publish = () => {throw Object.assign(new Error('disk'),{code:'EIO'});};
   await assert.rejects(f.admission.handle(restart('disk')), {code:'EIO'}); assert.deepEqual(f.store.read(), []);
 });
-test('IF-36 manual idempotence precedes all conflicts and stores the run identity', async t => {
+test('manual idempotence precedes all conflicts and stores the run identity', async t => {
   const f = fixture(t); assert.equal((await f.admission.handle(manual())).result, 'accepted');
   const row = f.store.read()[0]; assert.equal(row.expectedRunId,'r1'); assert.equal(Object.hasOwn(row,'tmuxTarget'),false); assert.equal(row.mode,'multi');
   f.state.transition = {phase:'gating'}; f.state.fences.set('*',{reason:'transition'});
@@ -64,7 +67,7 @@ test('IF-36 manual idempotence precedes all conflicts and stores the run identit
   assert.equal((await f.admission.handle(manual({expectedRunId:'new'}))).reason,'request_conflict');
   assert.equal((await f.admission.handle(restart('upgrade'))).code,'manual_restart_pending');
 });
-test('IF-36 conflicts precede absent-target result in frozen order', async t => {
+test('conflicts precede absent-target result in frozen order', async t => {
   const f = fixture(t); f.state.run = null;
   f.state.transition = {}; assert.equal((await f.admission.handle(manual())).reason,'transition_open'); f.state.transition = null;
   await f.admission.handle(restart('upgrade')); assert.equal((await f.admission.handle(manual())).reason,'restart_all_pending'); f.store.write([]);
@@ -74,14 +77,14 @@ test('IF-36 conflicts precede absent-target result in frozen order', async t => 
   assert.equal((await f.admission.handle(noTarget)).result,'already_stopped');
   f.state.run={}; assert.equal((await f.admission.handle(noTarget)).reason,'target_required');
 });
-test('IF-36 stale, incomplete and starting identity cannot become manual targets', async t => {
+test('stale, incomplete and starting identity cannot become manual targets', async t => {
   const f = fixture(t); f.state.run.runId='new';
   const stale=await f.admission.handle(manual()); assert.equal(stale.result,'stale_target'); assert.equal(stale.currentRunId,'new');
   f.state.run.runId=null; assert.equal((await f.admission.handle(manual())).reason,'identity_unavailable');
   f.state.run.runId='r1'; f.state.run.ready=false; assert.equal((await f.admission.handle(manual())).reason,'not_ready');
   assert.deepEqual(f.store.read(),[]);
 });
-test('IF-35 config rechecks complete snapshot and current input; same run fence is idempotent', async t => {
+test('config rechecks complete snapshot and current input; same run fence is idempotent', async t => {
   const f=fixture(t); f.state.run.launchConfig={runtime:'claude',mode:'override',model:'a'};
   assert.equal((await f.admission.handle(config())).reason,'snapshot_unavailable');
   f.state.run.launchConfig={runtime:'claude',mode:'default'}; f.state.expected={runtime:'claude',mode:'default'};
@@ -91,7 +94,7 @@ test('IF-35 config rechecks complete snapshot and current input; same run fence 
   f.state.expected=f.state.run.launchConfig; assert.equal((await f.admission.handle(config())).result,'already_accepted');
   f.state.run.runId='new'; assert.equal((await f.admission.handle(config())).reason,'run_changed');
 });
-test('IF-35 config conflicts hold and DB failure does not acknowledge', async t => {
+test('config conflicts hold and DB failure does not acknowledge', async t => {
   const f=fixture(t); f.state.mode='single'; assert.equal((await f.admission.handle(config())).reason,'not_multi'); f.state.mode='multi';
   f.state.fences.set('*',{reason:'mode_switch'}); assert.equal((await f.admission.handle(config())).reason,'transition_open'); f.state.fences.clear();
   f.state.fences.set('telegram:a',{reason:'ttl',runId:'r1'}); assert.equal((await f.admission.handle(config())).reason,'other_fence'); f.state.fences.clear();
@@ -99,7 +102,7 @@ test('IF-35 config conflicts hold and DB failure does not acknowledge', async t 
   f.db.setDrainFence=()=>{throw Object.assign(new Error('busy'),{code:'DB_BUSY'});};
   await assert.rejects(f.admission.handle(config()),{code:'DB_BUSY'});
 });
-test('T04 shared lifecycle queue serializes snapshots without nesting runtime writes', async t => {
+test('shared lifecycle queue serializes snapshots without nesting runtime writes', async t => {
   const f=fixture(t); const order=[]; let release;
   const lock=f.admission.serialize(async()=>{order.push('lifecycle'); await new Promise(r=>release=r);});
   const queued=f.admission.handle(restart('queued')).then(()=>order.push('admitted'));
@@ -109,7 +112,7 @@ test('T04 shared lifecycle queue serializes snapshots without nesting runtime wr
   release(); await Promise.all([lock,queued]); assert.deepEqual(order,['lifecycle','admitted']);
 });
 
-test('T04 startup gate rejects four new request families and keeps start_attempt unclassified until ready', async t => {
+test('startup gate rejects four new request families and keeps start_attempt unclassified until ready', async t => {
   const f=fixture(t);f.admission.closeEntry();
   for(const request of [restart('a'),manual(),config(),{version:1,type:'mode_switch',requestId:'m',target:'single'}]) {
     assert.equal((await f.admission.handle(request)).code,'entry_not_open');
@@ -118,7 +121,7 @@ test('T04 startup gate rejects four new request families and keeps start_attempt
   assert.deepEqual(f.store.read(),[]);
 });
 
-// IF-35 / F2: only the complete runtime-specific shape can authorize a fence.
+// : only the complete runtime-specific shape can authorize a fence.
 test('config admission refuses malformed snapshots and fails closed on invalid expected config', async t => {
   const f = fixture(t);
   const invalid = [[], { runtime:'unknown', mode:'default' }, { runtime:'claude', mode:'default', extra:true },
@@ -152,7 +155,7 @@ test('P2 config reclaim missing or failed dependency cannot fence a receiving gr
  assert.equal((await f.admission.handle(config())).result,'accepted');assert.equal(calls,1);
 });
 
-// B4 / IF-36: session identity is an admission check; the durable execution target is the run.
+// B4 / session identity is an admission check; the durable execution target is the run.
 test('manual admission checks optional sessionId once without requiring a tmux descriptor', async t => {
   const f = fixture(t); f.state.run.sessionId='session-1';
   assert.equal((await f.admission.handle(manual({expectedSessionId:'old-session'}))).reason,'identity_unavailable');

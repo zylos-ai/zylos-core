@@ -65,7 +65,7 @@ export class MessageRouter {
     if (health === 'ok') { this.clearCache(runtime); return this.decision(request, runtime, { health, reason, decision: 'pending' }); }
     if (health === 'auth_failed') return this.authDecision(request, runtime, state);
     // No eligible scene means no probe took place. Keep input acceleration
-    // available for M1 to register a launch in its next scheduling round.
+    // available for the dispatcher to register a launch in its next scheduling round.
     if (gate.eligible && !probe?.noTarget) this.writeNegativeCache(runtime, health, reason);
     return this.decision(request, runtime, { health, reason, ...(health === 'rate_limited' ? { decision: 'pending' } : { recovered: false }), ...(gate.code === 'probe_cache' ? { cacheHit: true } : {}) });
   }

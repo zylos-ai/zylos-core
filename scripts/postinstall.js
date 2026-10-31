@@ -2,14 +2,12 @@
  * Postinstall script - runs after `npm install -g zylos`
  *
  * Two responsibilities:
- * 1. Sync Core Skills (skipped during self-upgrade — step 5 handles it)
+ * 1. Sync Core Skills (skipped by ZYLOS_SKIP_POSTINSTALL)
  * 2. Sync settings.json hooks/statusLine and refresh Codex config backfills
- *    (ALWAYS runs when zylos is initialized)
  *
- * Settings sync runs even when ZYLOS_SKIP_POSTINSTALL is set because this is
- * the only reliable hook where the NEWLY INSTALLED code executes during
- * self-upgrade. The old version's in-memory upgrader may not know about new
- * config fields or backfills, so this postinstall catches them.
+ * Legacy upgrades still sync settings with ZYLOS_SKIP_POSTINSTALL set.
+ * Protected upgrades use ZYLOS_PROTECTED_INSTALL=1 to defer all writes to
+ * their transaction's post-cutoff publication.
  */
 
 import fs from 'node:fs';
@@ -132,8 +130,7 @@ function isSourceCheckoutInstall(env, packageRoot) {
 }
 
 function main() {
-  // CI: skip everything
-  if (process.env.CI) return;
+  if (process.env.CI || process.env.ZYLOS_PROTECTED_INSTALL === '1') return;
 
   // npm install / npm ci in a source checkout: never write to the live instance
   if (isSourceCheckoutInstall(process.env, fs.realpathSync(path.join(__dirname, '..')))) return;
@@ -145,20 +142,11 @@ function main() {
     return;
   }
 
-  const isSelfUpgrade = process.env.ZYLOS_SKIP_POSTINSTALL === '1';
-
-  if (!isSelfUpgrade) {
-    // Fresh install or manual `npm install -g` — sync skills
-    // During self-upgrade, step 5 handles skill sync with smart merge
+  if (process.env.ZYLOS_SKIP_POSTINSTALL !== '1') {
     syncSkills();
     try { deployUpgradeBootstrap(ZYLOS_DIR); }
     catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }
   }
-
-  // Settings sync ALWAYS runs when zylos is initialized.
-  // During self-upgrade this is defense-in-depth: the old version's step 8
-  // may lack knowledge of new config fields. This postinstall is the only
-  // code path where the newly installed version's logic executes.
   syncSettings();
 }
 

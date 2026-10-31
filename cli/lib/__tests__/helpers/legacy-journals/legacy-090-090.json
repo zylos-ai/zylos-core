@@ -1,0 +1,231 @@
+{
+  "formatVersion": 1,
+  "transactionId": "legacy-090-090",
+  "zylosDir": "/legacy/user/zylos",
+  "skillsDir": "/legacy/user/zylos/.claude/skills",
+  "nodePath": "/legacy/node/bin/node",
+  "from": "0.9.0",
+  "to": "0.9.0",
+  "phase": "upgrade_complete",
+  "installationIntent": true,
+  "automaticCompensation": true,
+  "automaticResume": true,
+  "coreManifest": [
+    {
+      "name": "legacy-skill-0",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-1",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-2",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-3",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-4",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-5",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-6",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-7",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-8",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-9",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-10",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-11",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-12",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "legacy-skill-13",
+      "existedBefore": true,
+      "backedUp": true,
+      "originalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "originalServices": [
+    {
+      "name": "legacy-service-0",
+      "status": "online",
+      "pid": 1000,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-0/service.js"
+    },
+    {
+      "name": "legacy-service-1",
+      "status": "online",
+      "pid": 1001,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-1/service.js"
+    },
+    {
+      "name": "legacy-service-2",
+      "status": "online",
+      "pid": 1002,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-2/service.js"
+    },
+    {
+      "name": "legacy-service-3",
+      "status": "online",
+      "pid": 1003,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-3/service.js"
+    },
+    {
+      "name": "legacy-service-4",
+      "status": "online",
+      "pid": 1004,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-4/service.js"
+    },
+    {
+      "name": "legacy-service-5",
+      "status": "online",
+      "pid": 1005,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-5/service.js"
+    },
+    {
+      "name": "legacy-service-6",
+      "status": "online",
+      "pid": 1006,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-6/service.js"
+    },
+    {
+      "name": "legacy-service-7",
+      "status": "online",
+      "pid": 1007,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-7/service.js"
+    },
+    {
+      "name": "legacy-service-8",
+      "status": "online",
+      "pid": 1008,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-8/service.js"
+    },
+    {
+      "name": "legacy-service-9",
+      "status": "online",
+      "pid": 1009,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-9/service.js"
+    },
+    {
+      "name": "legacy-service-10",
+      "status": "online",
+      "pid": 1010,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-10/service.js"
+    },
+    {
+      "name": "legacy-service-11",
+      "status": "online",
+      "pid": 1011,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-11/service.js"
+    },
+    {
+      "name": "legacy-service-12",
+      "status": "online",
+      "pid": 1012,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-12/service.js"
+    },
+    {
+      "name": "legacy-service-13",
+      "status": "online",
+      "pid": 1013,
+      "script": "/legacy/user/zylos/.claude/skills/legacy-service-13/service.js"
+    }
+  ],
+  "knownProcesses": [],
+  "initialIdentity": {
+    "cliRoot": "/legacy/node/lib/node_modules/zylos/cli",
+    "cliHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "packageJson": "/legacy/node/lib/node_modules/zylos/package.json",
+    "packageHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "nodePath": "/legacy/node/bin/node",
+    "workerPath": "/legacy/node/lib/node_modules/zylos/cli/lib/core-db-backup-worker.js",
+    "workerHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "ecosystemHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "databases": [
+      {
+        "source": "comm-bridge/c4.db",
+        "exists": true
+      },
+      {
+        "source": "scheduler/scheduler.db",
+        "exists": true
+      },
+      {
+        "source": "web-console/web-console.db",
+        "exists": true
+      }
+    ]
+  },
+  "cleanup": {
+    "complete": true,
+    "codeRemoved": true,
+    "servicesRestored": true
+  },
+  "updatedAt": "2026-10-14T13:23:54.047Z",
+  "dbBackupDir": "/legacy/user/zylos/.backup/db/legacy-090-090",
+  "snapshotManifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "installerStarted": true,
+  "installerStage": "install",
+  "installerPid": 1234,
+  "installerExitConfirmed": true,
+  "installerExitUnconfirmed": false,
+  "finalizerStarted": true,
+  "finalizerPid": 1234,
+  "finalizerExitConfirmed": true,
+  "terminalEvidence": {
+    "verified": true,
+    "kind": "code_data_services"
+  },
+  "finalizerExitUnconfirmed": false
+}

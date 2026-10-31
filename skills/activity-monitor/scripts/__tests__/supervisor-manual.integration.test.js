@@ -19,11 +19,11 @@ function start(t, f, requestsFile, mode, pause) {
   const message = Promise.race([once(child, 'message').then(([value]) => value), exited.then(([code]) => { throw new Error(`worker exited ${code}: ${stderr}`); })]);
   return { child, exited, message };
 }
-// IF-36 / DM F9 / M4 2.12: real crash windows with durable intent + SQLite gate.
+// DM / supervisor: real crash windows with durable intent + SQLite gate.
 // The Origin name plus runId is the target; renamed runs and replacements survive.
 for (const mode of ['single', 'multi']) for (const pause of ['after-intent', 'after-fence', 'after-stop', 'after-clear']) {
   test(`manual ${mode} resumes after SIGKILL ${pause} without stopping replacement`, { timeout: 15000 }, async t => {
-    const f = readyTmuxTarget(t, { prefix: 'p05-manual-', mode });
+    const f = readyTmuxTarget(t, { prefix: 'supervisor-manual-', mode });
     f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
     const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
     const scenes = new SupervisorScenes({ env: f.env, connectionOptions: { socketPath: f.socketPath, binary: f.binary }, readMode: () => ({ mode }) });

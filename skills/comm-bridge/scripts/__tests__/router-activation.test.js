@@ -6,7 +6,7 @@ import { validStartAttemptReply } from '../router/activation.js';
 async function pump(f, count = 4) { for (let i = 0; i < count; i++) { f.router.tick(); await flush(); } }
 const calls = (f, kind) => f.calls.filter(row => row[0] === kind);
 
-test('T03 restricted admission precedes claim and preserves one launchConfig/runId', async t => {
+test('restricted admission precedes claim and preserves one launchConfig/runId', async t => {
   const f = routerFixture(t); f.put('origin', { runtime: 'codex' }); const row = f.add('a');
   f.health.set('claude', { health: 'unavailable' });
   const submit = f.deps.submit;
@@ -17,7 +17,7 @@ test('T03 restricted admission precedes claim and preserves one launchConfig/run
   assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).session_id, 'session-a');
 });
 
-test('T03 same runtime single-flight, independent runtime advances, U suppresses current round only', async t => {
+test('same runtime single-flight, independent runtime advances, U suppresses current round only', async t => {
   const f = routerFixture(t, { poolSize: 4 });
   f.health.set('claude', { health: 'unavailable' }); f.health.set('codex', { health: 'rate_limited' });
   f.add('a'); f.add('b'); f.add('c');
@@ -37,7 +37,7 @@ test('T03 same runtime single-flight, independent runtime advances, U suppresses
   assert.equal(calls(f,'launch').length, 0);
 });
 
-test('T03 admission reply is discarded if candidate, capacity or scene changed', async t => {
+test('admission reply is discarded if candidate, capacity or scene changed', async t => {
   for (const change of ['fence','capacity','scene','candidate']) {
     await t.test(change, async t => {
       const f = routerFixture(t, { poolSize: 1 }); f.put('origin', { runtime: 'codex' }); const row = f.add('a');
@@ -55,7 +55,7 @@ test('T03 admission reply is discarded if candidate, capacity or scene changed',
   }
 });
 
-test('T03 missing/unreadable health fail open, auth blocks, existing runtime avoids registration', async t => {
+test('missing/unreadable health fail open, auth blocks, existing runtime avoids registration', async t => {
   for (const state of ['missing','unreadable','auth_failed','ok','scene']) {
     await t.test(state, async t => {
       const f = routerFixture(t); f.put('origin', { runtime: state === 'scene' ? 'claude' : 'codex' }); const row = f.add('a');
@@ -68,7 +68,7 @@ test('T03 missing/unreadable health fail open, auth blocks, existing runtime avo
   }
 });
 
-test('T03 late launch and unconfirmed stop retain running row and capacity', async t => {
+test('late launch and unconfirmed stop retain running row and capacity', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); const a = f.add('a'), b = f.add('b');
   const hold = deferred(); let stopConfirmed = false;
   f.deps.getSessionAdapter = () => ({ launch: async input => { f.calls.push(['launch', input]); await hold.promise;
@@ -84,7 +84,7 @@ test('T03 late launch and unconfirmed stop retain running row and capacity', asy
   assert.equal(f.row(a.id).status, 'pending'); assert.equal(f.row(a.id).retry_count, 1);
 });
 
-test('T03 NAME_CONFLICT requeues without retry and startup control invalidation precedes launch', async t => {
+test('NAME_CONFLICT requeues without retry and startup control invalidation precedes launch', async t => {
   const f = routerFixture(t); f.put('origin'); const row = f.add('a');
   const control = f.db.insertControl('old', { sessionGroup: 'a', appendAckSuffix: false });
   f.deps.getSessionAdapter = () => ({ launch: async () => {
@@ -95,7 +95,7 @@ test('T03 NAME_CONFLICT requeues without retry and startup control invalidation 
   assert.ok(f.events.some(x => x.event === 'launch_name_conflict'));
 });
 
-test('IB34 branch validation rejects missing, forbidden, wrong units and mismatched identity', () => {
+test('branch validation rejects missing, forbidden, wrong units and mismatched identity', () => {
   const request = { version: 1, type: 'start_attempt', requestId: 'sa-test' };
   const valid = { ...request, ok: true, result: 'registered', reason: 'recovery_due' };
   assert.ok(validStartAttemptReply({ ...valid, future: true }, request));
@@ -115,7 +115,7 @@ test('IB34 branch validation rejects missing, forbidden, wrong units and mismatc
   }
 });
 
-test('T03 timeout observation failures alert and retain the running row and reservation', async t => {
+test('timeout observation failures alert and retain the running row and reservation', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
   const a = f.add('a'), b = f.add('b');
   const adapter = f.deps.getSessionAdapter;
@@ -145,7 +145,7 @@ test('T03 timeout observation failures alert and retain the running row and rese
   assert.equal(router.state.activations.has('a'), false);
 });
 
-// I2 R9 / T03: the one fresh post-launch read decides timeout convergence.
+// / the one fresh post-launch read decides timeout convergence.
 for (const ready of [false, true]) {
   test(`timeout takes one fresh observation; READY=${ready}`, async t => {
     const f = routerFixture(t, { poolSize: 1 }); f.put('origin');

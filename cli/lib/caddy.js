@@ -17,14 +17,17 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { CADDYFILE, CADDY_BIN, getZylosConfig } from './config.js';
 
 /**
  * Check if Caddy is available (binary + Caddyfile exist).
  */
-export function isCaddyAvailable() {
-  return fs.existsSync(CADDY_BIN) && fs.existsSync(CADDYFILE);
+export function isCaddyAvailable(zylosDir) {
+  const caddyBin = zylosDir ? path.join(zylosDir, 'bin/caddy') : CADDY_BIN;
+  const caddyfile = zylosDir ? path.join(zylosDir, 'http/Caddyfile') : CADDYFILE;
+  return fs.existsSync(caddyBin) && fs.existsSync(caddyfile);
 }
 
 /**

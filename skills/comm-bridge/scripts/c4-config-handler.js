@@ -41,7 +41,7 @@ function sameLaunch(left, right) {
     (left.mode === 'default' || (left.model === right.model && left.effort === right.effort));
 }
 
-// Observation is an explicit P02 adapter boundary. identityVerified must prove the
+// Observation is an explicit runtime-adapter boundary. identityVerified must prove the
 // snapshot/current-session files belong to this run; presence alone is insufficient.
 export function classifyConfigRunning({ kind, runtime, sessionMode, resolved, fence, observation }) {
   if (sessionMode === 'single' || (kind === 'model' && runtime !== resolved.runtime)) return null;

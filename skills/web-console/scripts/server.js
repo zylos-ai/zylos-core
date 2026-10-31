@@ -34,7 +34,8 @@ import {
 import { openDb, DB_PATH as WC_DB_PATH, SessionStore, PersistentUploadRegistry } from './db.js';
 import * as wcSchema from './schema.js';
 import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
-import { getDb as getC4Db } from '../../comm-bridge/scripts/c4-db.js';
+import { loadConsoleStatusReader } from './session-status.js';
+import { getDb as getC4Db, getChannelNamespace } from '../../comm-bridge/scripts/c4-db.js';
 import { preflightDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,7 +52,6 @@ const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const SKILLS_DIR = process.env.WEB_CONSOLE_SKILLS_DIR || path.join(os.homedir(), 'zylos', '.claude', 'skills');
 const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DB_DIR, 'c4.db');
-const STATUS_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json');
 const MEDIA_DIR = path.join(ZYLOS_DIR, 'web-console', 'media');
 const MAX_UPLOAD_MB = Number.parseInt(process.env.WEB_CONSOLE_MAX_UPLOAD_MB || '20', 10);
 const MAX_UPLOAD_BYTES = Math.max(1, MAX_UPLOAD_MB) * 1024 * 1024;
@@ -151,16 +151,7 @@ let lastMessageId = 0;
 /**
  * Read current Claude status
  */
-function readStatus() {
-  try {
-    if (fs.existsSync(STATUS_FILE)) {
-      return JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
-    }
-    return { state: 'unknown', message: 'Status file not found' };
-  } catch (err) {
-    return { state: 'error', message: err.message };
-  }
-}
+const readStatus = await loadConsoleStatusReader(getChannelNamespace);
 
 /**
  * Strip internal routing info from message content for display
@@ -368,10 +359,14 @@ function getMediaRow(messageId) {
 /**
  * Check for status changes and new messages
  */
-function checkUpdates() {
+let checkingUpdates = false;
+async function checkUpdates() {
+  if (checkingUpdates) return;
+  checkingUpdates = true;
+  try {
   // Check status changes
-  const currentStatus = readStatus();
-  if (!lastStatus || currentStatus.state !== lastStatus.state) {
+  const currentStatus = await readStatus();
+  if (!lastStatus || JSON.stringify(currentStatus) !== JSON.stringify(lastStatus)) {
     lastStatus = currentStatus;
     broadcast('status', currentStatus);
   }
@@ -382,6 +377,7 @@ function checkUpdates() {
     lastMessageId = Math.max(...newMessages.map(m => m.id));
     broadcast('messages', newMessages);
   }
+  } finally { checkingUpdates = false; }
 }
 
 // Start update checker (every 500ms for responsiveness)
@@ -414,8 +410,9 @@ wss.on('connection', (ws, req) => {
   console.log(`WebSocket client connected (${clients.size} total)`);
 
   // Send current status immediately
-  const status = readStatus();
-  ws.send(JSON.stringify({ type: 'status', data: status }));
+  readStatus().then(status => {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'status', data: status }));
+  });
 
   // Handle client messages
   ws.on('message', async (data) => {
@@ -460,8 +457,8 @@ wss.on('connection', (ws, req) => {
 /**
  * Get Claude status (HTTP fallback)
  */
-app.get('/api/status', (req, res) => {
-  res.json(readStatus());
+app.get('/api/status', async (req, res) => {
+  res.json(await readStatus());
 });
 
 /**

@@ -4,8 +4,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
@@ -15,12 +15,6 @@ import {
   downloadCoreToTemp, readChangelog as readCoreChangelog,
   cleanupTemp as cleanupCoreTemp,
 } from '../lib/self-upgrade.js';
-import {
-  resumeUnfinishedUpgrade,
-  runDownloadedUpgrade,
-  upgradeBridgeFailure,
-  validateDownloadedCore,
-} from '../lib/upgrade-bridge.js';
 import { detectChanges } from '../lib/manifest.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { linkBins, unlinkBins } from '../lib/bin.js';
@@ -29,7 +23,9 @@ import { acquireLock, releaseLock } from '../lib/lock.js';
 import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
-import { requestRuntimeRestart } from '../lib/request-runtime-restart.js';
+import { resumeFinalize } from '../lib/upgrade-resume.js';
+import { recoverBeforeUpgrade } from '../lib/upgrade-discovery.js';
+import { upgradeFailureCode, upgradeFailureMessage } from '../lib/upgrade-admission.js';
 
 /**
  * Print a single upgrade step result in real time.
@@ -133,58 +129,6 @@ export function formatC4Reply(type, data) {
       if (skill?.caddy?.notice) r += `\n\nCaddy routes: ${skill.caddy.notice}`;
       return r;
     }
-    case 'self-upgrade': {
-      const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles, instructionFilesRebuilt, settingsChanged } = data;
-      if (!success) {
-        let r = `zylos-core upgrade failed${failedStep==null?'':` (step ${failedStep})`}: ${error}`;
-        if (rollback?.steps?.length) r += '\nRollback: ' + rollback.steps.map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
-        const protection=formatSelfUpgradeProtection(data);if(protection)r+='\n'+protection;
-        return r;
-      }
-      let r = `zylos-core upgraded: ${from} -> ${to}`;
-      if (changelog) r += `\n\nChangelog:\n${changelog}`;
-      if (mergedFiles?.length > 0) {
-        r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
-      }
-      if (mergeConflicts?.length > 0) {
-        const withBackup = mergeConflicts.filter(c => c.backupPath);
-        const withoutBackup = mergeConflicts.filter(c => !c.backupPath);
-        if (withBackup.length > 0) {
-          r += '\n\nConflict files (local backed up, new version applied):';
-          for (const c of withBackup) r += `\n  ${c.skill}/${c.file} → backup: ${c.backupPath}`;
-          r += '\n\nUse Claude to review and re-merge backed-up local changes.';
-        }
-        if (withoutBackup.length > 0) {
-          r += `\n\nOverwritten without backup (${withoutBackup.length}): ${withoutBackup.map(c => `${c.skill}/${c.file}`).join(', ')}`;
-        }
-      }
-      if (migrationHints?.length > 0) {
-        r += '\n\nACTION REQUIRED - Hook changes in ~/zylos/.claude/settings.json:';
-        for (const hint of migrationHints) {
-          if (hint.type === 'missing_hook') {
-            r += `\n  [${hint.event}] ADD: ${hint.command} (timeout: ${hint.timeout}ms)`;
-          } else if (hint.type === 'modified_hook') {
-            r += `\n  [${hint.event}] UPDATE: ${hint.command} (timeout: ${hint.timeout}ms)`;
-          } else if (hint.type === 'removed_hook') {
-            r += `\n  [${hint.event}] REMOVE: ${hint.command}`;
-          }
-        }
-        r += '\nPlease update hooks in ~/zylos/.claude/settings.json and restart Claude to apply.';
-      }
-      if (instructionFilesRebuilt || settingsChanged) {
-        const what = [
-          instructionFilesRebuilt && 'instruction files',
-          settingsChanged && 'hook settings',
-        ].filter(Boolean).join(' and ');
-        if (data.runtimeRestart?.ok === false) {
-          r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated. ${data.runtimeRestart.error.message} (${data.runtimeRestart.error.code})`;
-        } else {
-          r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated — Claude will restart automatically to load the new configuration. No action needed.`;
-        }
-      }
-      const protection=formatSelfUpgradeProtection(data);if(protection)r+='\n'+protection;
-      return r;
-    }
     case 'check-all': {
       const { total, updatable, components } = data;
       const failed = components.filter(c => !c.success);
@@ -256,58 +200,84 @@ export function formatC4Reply(type, data) {
   }
 }
 
-// Shared human/C4 details preserve the independent upgrade and recovery outcomes.
-export function formatSelfUpgradeProtection(data) {
-  const lines=[];
-  for(const dir of data.rehearsalCleanup?.removed || [])lines.push(`Removed rehearsal copy: ${dir}`);
-  for(const warning of data.rehearsalCleanup?.warnings || [])lines.push(`Rehearsal cleanup warning: ${warning}`);
-  if(data.backupOnly){
-    lines.push(`Database snapshot: ${data.dbSnapshotVerified?'verified':'not verified; installation not started'}`);
-    lines.push('Automatic database recovery: disabled; recovery is manual');
-    if(data.protectionUnavailableReason)lines.push(data.protectionUnavailableReason);
-    if(data.backupDir)lines.push(`Code backup: ${data.backupDir}`);
-    lines.push(`Manual recovery required: ${data.manualRecovery?.required?'yes':'no'}`);
-    if(data.manualRecovery?.instructions)lines.push(data.manualRecovery.instructions);
-    for(const warning of data.backupWarnings||[])lines.push(`Backup warning: ${warning}`);
+export function formatSelfUpgradeCompletion(data) {
+  const lines = [];
+  if (data.completion) {
+    for (const [key, label] of [['install', 'Installation'], ['dashboard', 'Dashboard'],
+      ['sessionRestart', 'Session restart'], ['modeTransition', 'Mode transition']]) {
+      lines.push(`${label}: ${data.completion[key] ?? 'unknown'}`);
+    }
   }
-  if(typeof data.preInstallProtection==='boolean')lines.push(`Pre-install protection: ${data.preInstallProtection?'enabled':'unavailable'}`);
-  if(data.preInstallProtection && data.dbSnapshotVerified)lines.push('Database snapshot: verified');
-  if(data.automaticCompensation===true)lines.push('Automatic compensation: available for observed failures after writer exit is confirmed');
-  if(data.automaticResume===false)lines.push('Interrupted upgrade: manual recovery required; automatic takeover is disabled');
-  if(data.dbBackupDir)lines.push(`Database snapshots: ${data.dbBackupDir}`);
-  const databases=data.databases||data.dbManifest?.databases;
-  if(Array.isArray(databases))for(const db of databases){
-    lines.push(`  ${db.source}: ${db.status}${db.userVersion!=null?` (schema ${db.userVersion})`:''}`);
-    for(const table of db.extensions?.tables || [])lines.push(`    Accepted extra table: ${table}`);
-    for(const {table,column} of db.extensions?.columns || [])lines.push(`    Accepted extra column: ${table}.${column}`);
+  for (const item of data.dashboard?.errors || []) {
+    const detail = item.message || item.location;
+    lines.push(`Dashboard ${item.item || 'error'}: ${item.code || 'failed'}${detail ? ': ' + detail : ''}`);
   }
-  if(data.transactionDir)lines.push(`Recovery materials: ${data.transactionDir}`);
-  if(data.archiveDir)lines.push(`Archived recovery materials: ${data.archiveDir}`);
-  const rb=data.rollback;
-  if(rb){
-    const attempted=rb.attempted??rb.performed;
-    const completed=rb.completed??(rb.steps?.length?rb.steps.every(step=>step.success===true):undefined);
-    const boolean=value=>typeof value==='boolean'?String(value):'unknown';
-    lines.push(`Rollback attempted=${boolean(attempted)} completed=${boolean(completed)} stage=${rb.stage||'unknown'}${rb.error?': '+rb.error:''}`);
-  }else if(data.preInstallProtection&&data.success)lines.push('Rollback attempted=false completed=false stage=upgrade_complete');
-  const required=data.recovery_required??rb?.recovery_required??(data.preInstallProtection&&data.success?false:undefined);
-  if(typeof required==='boolean')lines.push(`Recovery required: ${required?'yes; maintenance remains active':'no'}`);
-  const warnings=[...(data.cleanupWarnings||[]),...(rb?.warnings||[])];
-  for(const warning of new Set(warnings))lines.push(`Cleanup warning: ${warning}`);
+  const restart = data.sessionRestart;
+  if (restart?.requestId || restart?.data?.requestId) lines.push(`Restart request: ${restart.requestId || restart.data.requestId}`);
+  if (restart?.ok === false) {
+    lines.push(`Session restart failed: ${restart.error?.code || 'RESTART_UNAVAILABLE'}${restart.error?.message ? ': ' + restart.error.message : ''}`);
+  }
+  if (data.modeStatus?.state === 'unavailable') {
+    lines.push(`Mode status: unavailable${data.modeStatus.error?.message ? ': ' + data.modeStatus.error.message : ''}`);
+  }
+  for (const warning of data.publication?.warnings || []) {
+    lines.push(`Configuration not published (${warning.targetId || 'unknown target'}): ${warning.code || 'warning'}${warning.error ? ': ' + warning.error : ''}`);
+  }
+  for (const warning of data.preparationWarnings || []) {
+    lines.push(`Preparation warning: ${typeof warning === 'string' ? warning : warning.message || warning.code || JSON.stringify(warning)}`);
+  }
+  for (const warning of data.warnings || []) {
+    lines.push(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}`);
+  }
+  if (data.checkpointAudit?.state === 'incomplete') {
+    lines.push(`Checkpoint audit: incomplete${data.checkpointAudit.error ? ': ' + data.checkpointAudit.error : ''}`);
+  } else if (data.checkpointAudit?.items?.length) {
+    lines.push(`Checkpoint audit: ${JSON.stringify(data.checkpointAudit.items)}`);
+  }
+  if (data.settingsChanged) {
+    lines.push('Hook settings updated.');
+    if (!data.completion && !restart) lines.push('Restart the runtime to load the updated configuration.');
+  }
+  if (data.completion?.sessionRestart === 'manual_required' || restart?.ok === false) {
+    lines.push(restart?.error?.code === 'restart_result_unknown'
+      ? 'Restart submission result is unknown; inspect the request before taking further action. Do not resubmit automatically.'
+      : 'Manual runtime restart required after resolving the reported restart failure.');
+  }
+  if (data.next) lines.push(data.next);
+  if (data.recoveryError) lines.push(`Recovery journal error: ${data.recoveryError}`);
   return lines.join('\n');
 }
 
-export function printSelfUpgradeProtection(data) {
-  const text=formatSelfUpgradeProtection(data);if(text)console.log(text);
+export function parseUpgradeFinalizeOptions(args) {
+  const resume = args.includes('--resume-finalize');
+  const status = args.includes('--status');
+  const invalid = message => { throw Object.assign(new Error(message), { code: 'INVALID_ARGS', persisted: [] }); };
+  if (status && !resume) invalid('--status requires --resume-finalize.');
+  if (resume) {
+    const allowed = new Set(['--resume-finalize', '--status', '--json']);
+    for (let i = 0; i < args.length; i++) {
+      if (!allowed.has(args[i])) invalid('--resume-finalize accepts only --status and --json.');
+    }
+  }
+  return { resume, status };
 }
 
-function printSelfUpgradeFailure(failure, jsonOutput) {
-  if (jsonOutput) {
-    console.log(JSON.stringify(failure));
-    return;
+export function formatFinalizeResult(result) {
+  const lines = [];
+  if (!result.ok) lines.push(`${result.error.code}: ${result.error.message}`);
+  const data = result.data;
+  if (data) {
+    lines.push(`Transaction: ${data.transactionId}`, `Core: ${data.core.state}`, `Dashboard: ${data.dashboard.state}`);
+    for (const item of data.core.failedItems || []) lines.push(`Core failure: ${item.id}${item.targetId ? `/${item.targetId}` : ''}: ${item.code || item.message}`);
+    for (const warning of data.core.warnings || []) {
+      lines.push(`Warning: ${typeof warning === 'string' ? warning : [warning.targetId, warning.code, warning.error || warning.message].filter(Boolean).join(': ')}`);
+    }
+    for (const item of data.dashboard.errors || []) lines.push(`Dashboard failure: ${item.item || item.id}: ${item.code || item.message}`);
+    const completion = formatSelfUpgradeCompletion({...data, dashboard:undefined, next:undefined});
+    if(completion) lines.push(completion);
+    if (data.next) lines.push(`Next: ${data.next}`);
   }
-  console.error(`Error: ${failure.error}`);
-  if (failure.next) console.error(`Next: ${failure.next}`);
+  return lines.join('\n');
 }
 
 export async function upgradeComponent(args) {
@@ -321,6 +291,28 @@ export async function upgradeComponent(args) {
   const skipEval = args.includes('--skip-eval');
   const beta = args.includes('--beta');
   const hasTempDirFlag = args.includes('--temp-dir');
+  let finalizeOptions;
+  try {
+    finalizeOptions = parseUpgradeFinalizeOptions(args);
+  } catch (err) {
+    const output = { ok: false, error: { code: err.code || 'INVALID_ARGS', message: err.message, persisted: [] } };
+    if (jsonOutput) console.log(JSON.stringify(output, null, 2));
+    else console.error(formatFinalizeResult(output));
+    process.exit(1);
+  }
+  if (finalizeOptions.resume) {
+    let output;
+    try {
+      output = await resumeFinalize(ZYLOS_DIR, { status: finalizeOptions.status });
+    } catch (err) {
+      output = { ok: false, error: { code: err.code || 'FINALIZE_INCOMPLETE', message: err.message, persisted: err.persisted || [] } };
+      if (err.data) output.data = err.data;
+    }
+    if (jsonOutput) console.log(JSON.stringify(output, null, 2));
+    else console.log(formatFinalizeResult(output));
+    if (!output.ok) process.exit(1);
+    return;
+  }
 
   if (hasTempDirFlag) {
     const msg = '--temp-dir is not supported.';
@@ -373,15 +365,15 @@ export async function upgradeComponent(args) {
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
     if (mode !== 'merge') {
-      printSelfUpgradeFailure(upgradeBridgeFailure('Core self-upgrade supports only --mode merge.', { code: 'INVALID_ARGS' }), jsonOutput);
-      process.exitCode = 1;
+      await upgradeSelfCore({ mode, jsonOutput });
+      process.exit(1);
       return;
     }
     if (checkOnly) {
       return handleSelfCheckOnly({ jsonOutput, branch, beta });
     }
-    const exitCode = await upgradeSelfCore({ branch, beta });
-    if (exitCode !== 0) process.exitCode = exitCode;
+    const ok = await upgradeSelfCore({ branch, beta, mode, jsonOutput, skipConfirm: skipConfirm || explicitConfirm });
+    if (!ok) process.exit(process.exitCode || 1);
     return;
   }
 
@@ -395,6 +387,7 @@ export async function upgradeComponent(args) {
     console.error('Usage: zylos upgrade <name> [options]');
     console.error('       zylos upgrade --all');
     console.error('       zylos upgrade --self');
+    console.error('       zylos upgrade --resume-finalize [--status] [--json]');
     console.log('\nOptions:');
     console.log('  --check        Check for updates only (downloads to temp for comparison)');
     console.log('  --json         Output in JSON format');
@@ -412,6 +405,12 @@ export async function upgradeComponent(args) {
   }
 
   // Verify component is installed (both in components.json and skill directory)
+  if (target === 'dashboard') {
+    const result = { action: 'upgrade', success: false, component: target, error: 'core_managed', message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
+    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
+    process.exitCode = 1;
+    return;
+  }
   const components = loadComponents();
   const skillDir = path.join(SKILLS_DIR, target);
 
@@ -876,7 +875,7 @@ function cleanOldBackups(skillDir) {
  */
 async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval, beta = false, mode = 'merge' }) {
   const components = loadComponents();
-  const names = Object.keys(components);
+  const names = Object.keys(components).filter(name => name !== 'dashboard');
 
   if (names.length === 0) {
     if (jsonOutput) {
@@ -1082,128 +1081,115 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
   cleanupCoreTemp(tempDir);
 }
 
-/** Request one runtime restart after the self-upgrade services have returned. */
-export async function restartAfterSelfUpgrade(result, { requestRestart = requestRuntimeRestart } = {}) {
-  // P11 owns merging hook and instruction requests in the upgrade finalizer.
-  // This legacy result flag requests one restart after the services return.
-  if (result.success && result.instructionFilesRebuilt) {
-    try {
-      result.runtimeRestart = await requestRestart({ afterServiceRestart: true });
-      if (!result.runtimeRestart.ok) console.error(`Warning: ${result.runtimeRestart.error.message} (${result.runtimeRestart.error.code})`);
-    } catch (error) {
-      result.runtimeRestart = { ok: false, error: { code: error.code || 'restart_submission_failed',
-        message: `Runtime restart was not submitted: ${error.message}. All currently running managed sessions, including Origin, need manual restart.` } };
-      console.error(`Warning: ${result.runtimeRestart.error.message}`);
-    }
-  }
-  return result;
-}
-
 /**
  * Upgrade zylos-core itself.
- * The installed package only resolves and downloads the target. The target
- * package owns every stateful upgrade step through its upgrade-entry.js.
+ * The downloaded package owns all upgrade actions and transaction locking.
+ *
+ * Returns true on success, false on failure.
+ * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ branch, beta = false } = {}) {
-  const jsonOutput = process.argv.includes('--json');
-  const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
-  let tempDir = null;
+function assertDownloadedUpgradePackage(tempDir) {
+  for (const file of ['package.json', 'cli/lib/upgrade-entry.js']) {
+    let stat;
+    try { stat = fs.statSync(path.join(tempDir, file)); }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
+    if (!stat?.isFile()) throw new Error('Incomplete target package: ' + file);
+  }
+}
 
+export function runDownloadedUpgrade(handoff, { spawn = spawnSync } = {}) {
+  assertDownloadedUpgradePackage(handoff.tempDir);
+  const script = path.join(handoff.tempDir, 'cli/lib/upgrade-entry.js');
+  const child = spawn(process.execPath, [script], {
+    input: JSON.stringify(handoff), stdio: ['pipe', 'inherit', 'inherit'], env: { ...process.env },
+  });
+  if (child.error) throw child.error;
+  return child.status ?? 1;
+}
+
+function outputSelfUpgradeFailure(output, message, next) {
+  output.error(`Error: ${message}`);
+  if (next) output.error(`Next: ${next}`);
+}
+
+export async function upgradeSelfCore({ branch, beta = false, mode = 'merge', jsonOutput = false, skipConfirm = false } = {}, deps = {}) {
+  const output = deps.console ?? globalThis.console;
+  if(mode!=='merge') {
+    const failure={success:false,code:'INVALID_ARGS',error:'Core self-upgrade supports only --mode merge.',persisted:[]};
+    if(jsonOutput)output.log(JSON.stringify(failure));
+    else outputSelfUpgradeFailure(output, failure.error);
+    return false;
+  }
   try {
-    if (!fs.existsSync(ZYLOS_DIR)) {
-      printSelfUpgradeFailure(upgradeBridgeFailure(
-        `Zylos is not initialized at ${ZYLOS_DIR}. Run "zylos init" first.`,
-        { code: 'ZYLOS_NOT_INITIALIZED' },
-      ), jsonOutput);
-      return 1;
-    }
-
-    const recovery = resumeUnfinishedUpgrade(ZYLOS_DIR);
-    if (!recovery.success) {
-      printSelfUpgradeFailure(recovery.failure, jsonOutput);
-      return 1;
-    }
-
-    const check = checkForCoreUpdates({ branch, beta });
-    if (!check.success) {
-      printSelfUpgradeFailure(upgradeBridgeFailure(check.message || check.error), jsonOutput);
-      return 1;
-    }
-
-    if (!branch && check.success && !check.hasUpdate) {
-      if (jsonOutput) {
-        const output = { action: 'check', target: 'zylos-core', ...check };
-        output.reply = formatC4Reply('self-check', check);
-        console.log(JSON.stringify(output, null, 2));
-      } else {
-        console.log(success(`${bold('zylos-core')} is up to date (v${check.current})`));
-      }
-      return 0;
-    }
-
-    let dlResult;
-    try {
-      dlResult = downloadCoreToTemp(check.latest, branch);
-    } catch (err) {
-      dlResult = { success: false, error: err.message };
-    }
-    if (!dlResult.success) {
-      printSelfUpgradeFailure(upgradeBridgeFailure(dlResult.error), jsonOutput);
-      return 1;
-    }
-    tempDir = dlResult.tempDir;
-
-    const validation = validateDownloadedCore(tempDir);
-    if (!validation.success) {
-      printSelfUpgradeFailure(validation, jsonOutput);
-      return 1;
-    }
-
-    const fullCoreChangelog = readCoreChangelog(tempDir);
-    const coreChangelog = filterChangelog(fullCoreChangelog, check.current);
-    const allLocalChanges = detectCoreSkillChanges();
+    const root=deps.zylosDir ?? ZYLOS_DIR;
+    if(!fs.existsSync(root))throw Object.assign(Error('Zylos deployment directory is missing. Initialize this deployment before upgrading.'),{code:'ZYLOS_NOT_INITIALIZED'});
+    (deps.recoverBeforeUpgrade ?? recoverBeforeUpgrade)(root);
+  } catch (error) {
+    const output = deps.console ?? globalThis.console;
+    if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error),
+      persisted:error.persisted || [], recovery_required:error.recovery_required === true, ...(error.next ? {next:error.next} : {})}));
+    else outputSelfUpgradeFailure(output, error.message, error.next);
+    return false;
+  }
+  let check;
+  try { check = (deps.checkForCoreUpdates ?? checkForCoreUpdates)({ branch, beta }); }
+  catch (error) {
+    if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]}));
+    else outputSelfUpgradeFailure(output, upgradeFailureMessage(error), error.next);
+    return false;
+  }
+  if (!check.success) {
+    const error = {code:check.code, message:check.message || check.error || 'Core version check failed.'};
+    if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]}));
+    else outputSelfUpgradeFailure(output, upgradeFailureMessage(error), check.next);
+    return false;
+  }
+  if (!branch && !check.hasUpdate) {
+    if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }));
+    else output.log('zylos-core is up to date (v' + check.current + ')');
+    return true;
+  }
+  let tempDir;
+  try {
+    const download = (deps.downloadCoreToTemp ?? downloadCoreToTemp)(check.latest, branch);
+    if (!download.success) throw Object.assign(new Error(download.error || download.message || 'Core download failed.'), {code:download.code});
+    tempDir = download.tempDir;
+    assertDownloadedUpgradePackage(tempDir);
 
     if (!jsonOutput) {
-      console.log(`\n${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
-      const targetVersion = check.latest || (branch ? `branch:${branch}` : 'unknown');
-      const targetRef = branch ? `branch:${branch}` : `tag:v${check.latest}`;
-      console.log(dim(`Target package: ${targetVersion} (${targetRef})`));
+      const fullChangelog = (deps.readCoreChangelog ?? readCoreChangelog)(tempDir);
+      const changelog = (deps.filterChangelog ?? filterChangelog)(fullChangelog, check.current);
+      const localChanges = (deps.detectCoreSkillChanges ?? detectCoreSkillChanges)();
 
-      if (allLocalChanges.length > 0) {
-        console.log(`\n${warn('LOCAL MODIFICATIONS DETECTED:')}`);
-        for (const { skill, changes } of allLocalChanges) {
-          for (const f of changes.modified) console.log(`  ${yellow('M')} ${skill}/${f}`);
-          for (const f of changes.added) console.log(`  ${green('A')} ${skill}/${f}`);
+      output.log(`${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
+      if (localChanges.length > 0) {
+        output.log(`\n${warn('Local modifications:')}`);
+        for (const { skill, changes } of localChanges) {
+          for (const file of changes.modified) output.log(`  ${yellow('M')} ${skill}/${file}`);
+          for (const file of changes.added) output.log(`  ${green('A')} ${skill}/${file}`);
         }
       }
-
-      if (coreChangelog) {
-        console.log(`\n${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}`);
-        console.log(heading('CHANGELOG'));
-        console.log(`${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}`);
-        console.log(coreChangelog);
-        console.log(`${heading('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')}\n`);
-      }
+      if (changelog) output.log(`\n${heading('Changelog:')}\n${changelog}`);
     }
 
-    if (!skipConfirm) {
-      const confirmed = await promptYesNo('Proceed with zylos-core upgrade? [y/N]: ');
-      if (!confirmed) {
-        console.log('Upgrade cancelled.');
-        return 0;
-      }
-    } else if (!jsonOutput) {
-      console.log(`Upgrading ${bold('zylos-core')}...`);
+    if (!skipConfirm && !await (deps.promptYesNo ?? promptYesNo)('Proceed with zylos-core upgrade? [y/N]: ')) {
+      if (!jsonOutput) output.log('Upgrade cancelled.');
+      return true;
     }
 
-    return runDownloadedUpgrade({
-      tempDir: path.resolve(tempDir),
-      fromVersion: check.current,
-      installedRoot: path.resolve(import.meta.dirname, '..', '..'),
-      zylosDir: path.resolve(ZYLOS_DIR),
+    const exitCode = (deps.runDownloadedUpgrade ?? runDownloadedUpgrade)({
+      schemaVersion: 1, fromVersion: check.current, tempDir,
+      installedRoot: deps.installedRoot ?? path.resolve(import.meta.dirname, '../..'),
+      zylosDir: deps.zylosDir ?? ZYLOS_DIR,
     });
+    process.exitCode = exitCode;
+    return exitCode === 0;
+  } catch (error) {
+    if (jsonOutput) output.log(JSON.stringify({ success: false, code: upgradeFailureCode(error), error: upgradeFailureMessage(error), persisted:[] }));
+    else outputSelfUpgradeFailure(output, upgradeFailureMessage(error), error.next);
+    return false;
   } finally {
-    cleanupCoreTemp(tempDir);
+    if (tempDir) (deps.cleanupCoreTemp ?? cleanupCoreTemp)(tempDir);
   }
 }
 
@@ -1239,6 +1225,14 @@ export async function uninstallComponent(args) {
     console.log('  --yes, -y  Skip confirmation (keeps data)');
     console.log('  --self     Uninstall zylos entirely from the system');
     process.exit(1);
+  }
+
+  if (target === 'dashboard') {
+    const result = { action: checkOnly ? 'uninstall_check' : 'uninstall', success: false, component: target,
+      error: 'core_managed', message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
+    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
+    process.exitCode = 1;
+    return;
   }
 
   if (checkOnly) {
@@ -1534,6 +1528,14 @@ export async function infoComponent(args) {
   if (!target) {
     console.error('Usage: zylos info <name> [--json]');
     process.exit(1);
+  }
+
+  if (target === 'dashboard') {
+    const result = { action: 'info', success: false, component: target, error: 'core_managed',
+      message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
+    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
+    process.exitCode = 1;
+    return;
   }
 
   const components = loadComponents();

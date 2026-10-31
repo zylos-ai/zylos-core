@@ -9,7 +9,7 @@ import { acquire, memoryScope } from '../sync-lock.js';
 
 const segment = '20261019T053002123Z';
 async function fixture(t, group = 'telegram:test') {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p07-files-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-workflow-files-'));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'test-run' };
   delete env.ZYLOS_SESSION_GROUP;
   if (group !== null) env.ZYLOS_SESSION_GROUP = group;
@@ -30,7 +30,7 @@ const write = (f, ids = [1, 2, 3]) => {
   return official;
 };
 
-test('IB51 commit preserves original bytes/title and removes only supplied IDs, including duplicates', async t => {
+test('commit preserves original bytes/title and removes only supplied IDs, including duplicates', async t => {
   const f = await fixture(t), original = write(f), block = extractAbsorbedBlock(original);
   await commit({ ...f.settings, input: { followedUpIds: [1, 1] } }, f.deps);
   const actual = fs.readFileSync(f.state, 'utf8'), after = extractAbsorbedBlock(actual);
@@ -44,7 +44,7 @@ test('IB51 commit preserves original bytes/title and removes only supplied IDs, 
   assert.doesNotMatch(fs.readFileSync(f.state, 'utf8'), /切换来信/);
 });
 
-test('IB51 commit uses body despite corrupt official header and strips temporary copies with warning', async t => {
+test('commit uses body despite corrupt official header and strips temporary copies with warning', async t => {
   const f = await fixture(t), original = write(f);
   fs.writeFileSync(f.state, original.replace('zylos-state v1', 'broken'));
   fs.writeFileSync(f.temporary, f.skeleton([9, 10]).replace('## Headline\n', '## Headline\nModel text\n'));
@@ -54,7 +54,7 @@ test('IB51 commit uses body despite corrupt official header and strips temporary
   assert.match(actual, /Model text/); assert.equal(f.warnings.length, 1); assert.doesNotMatch(actual, /#9 |#10 /);
 });
 
-test('IB51 extraction is only at Pending start, stops at non-entry, preserves CRLF bytes', async t => {
+test('extraction is only at Pending start, stops at non-entry, preserves CRLF bytes', async t => {
   const f = await fixture(t), original = write(f).replaceAll('\n', '\r\n');
   const block = extractAbsorbedBlock(original);
   const interrupted = original.replace(block.entries[1].raw, 'ordinary task\r\n' + block.entries[1].raw);
@@ -67,7 +67,7 @@ test('IB51 extraction is only at Pending start, stops at non-entry, preserves CR
   assert.equal(extractAbsorbedBlock(fs.readFileSync(f.state, 'utf8')).entries.length, 0);
 });
 
-test('IB51 invalid follow-up input does not replace state or remove segments', async t => {
+test('invalid follow-up input does not replace state or remove segments', async t => {
   const f = await fixture(t), original = write(f);
   for (const input of [undefined, '', '{', {}, [], { followedUpIds: null }, { followedUpIds: [0] }, { followedUpIds: [1.2] }, { followedUpIds: ['1'] }, { followedUpIds: [9] }]) {
     await assert.rejects(commit({ ...f.settings, input }, f.deps), { code: 'INVALID_INPUT' });
@@ -76,7 +76,7 @@ test('IB51 invalid follow-up input does not replace state or remove segments', a
   }
 });
 
-test('IB51 missing/invalid temporary state rejects before publication and deletion', async t => {
+test('missing/invalid temporary state rejects before publication and deletion', async t => {
   const f = await fixture(t), original = write(f);
   for (const content of [null, 'broken', f.skeleton().replace('## Commitments', 'wrong'), f.skeleton().replace('scope=telegram:test', 'scope=origin')]) {
     if (content === null) fs.unlinkSync(f.temporary); else fs.writeFileSync(f.temporary, content);
@@ -86,7 +86,7 @@ test('IB51 missing/invalid temporary state rejects before publication and deleti
   }
 });
 
-test('IB51 absent official file accepts empty follow-ups, unknown ID remains invalid', async t => {
+test('absent official file accepts empty follow-ups, unknown ID remains invalid', async t => {
   const f = await fixture(t);
   fs.writeFileSync(f.temporary, f.skeleton());
   await assert.rejects(commit({ ...f.settings, input: { followedUpIds: [1] } }, f.deps), { code: 'INVALID_INPUT' });
@@ -94,7 +94,7 @@ test('IB51 absent official file accepts empty follow-ups, unknown ID remains inv
   assert.equal(fs.readFileSync(f.state, 'utf8'), f.skeleton());
 });
 
-test('IB51 rename commits even if segment deletion fails; next cleanup can retry', async t => {
+test('rename commits even if segment deletion fails; next cleanup can retry', async t => {
   const f = await fixture(t); write(f);
   const target = path.join(f.memoryDir, `inbox.${segment}.md`);
   fs.unlinkSync(target); fs.mkdirSync(target);
@@ -104,7 +104,7 @@ test('IB51 rename commits even if segment deletion fails; next cleanup can retry
   await cleanup(f.settings, f.deps); assert.equal(fs.existsSync(target), false);
 });
 
-test('IB51 cleanup trusts only valid headers and retains own temporary file', async t => {
+test('cleanup trusts only valid headers and retains own temporary file', async t => {
   const f = await fixture(t); write(f);
   fs.writeFileSync(f.state, 'broken');
   fs.writeFileSync(path.join(f.memoryDir, 'state.md.old.tmp'), 'old');
@@ -115,7 +115,7 @@ test('IB51 cleanup trusts only valid headers and retains own temporary file', as
   assert.equal(f.warnings.length, 1);
 });
 
-test('IB51 rotate skips missing/empty input; list returns sorted uncommitted segments', async t => {
+test('rotate skips missing/empty input; list returns sorted uncommitted segments', async t => {
   const f = await fixture(t), inbox = path.join(f.memoryDir, 'inbox.md');
   assert.equal(await rotate(f.settings, f.deps), null);
   fs.writeFileSync(inbox, ''); assert.equal(await rotate(f.settings, f.deps), null);
@@ -127,7 +127,7 @@ test('IB51 rotate skips missing/empty input; list returns sorted uncommitted seg
   fs.writeFileSync(f.state, 'broken'); assert.deepEqual(await list(f.settings), [id, segment].sort());
 });
 
-test('IB51 old token cannot commit, cleanup, rotate or checkpoint', async t => {
+test('old token cannot commit, cleanup, rotate or checkpoint', async t => {
   const f = await fixture(t), original = write(f), settings = { ...f.settings, token: 'b'.repeat(32) };
   for (const operation of [() => cleanup(settings, f.deps), () => rotate(settings, f.deps), () => commit({ ...settings, input: { followedUpIds: [] } }, f.deps), () => checkpoint({ ...settings, end: 0, summary: 'x' }, { ...f.deps, database: { createCheckpoint() { assert.fail('old token wrote checkpoint'); } } })]) {
     await assert.rejects(operation(), { code: 'TOKEN_MISMATCH' });
@@ -135,7 +135,7 @@ test('IB51 old token cannot commit, cleanup, rotate or checkpoint', async t => {
   }
 });
 
-test('IB51 1000 entries retain 990 original lines through a second empty-follow-up cycle', async t => {
+test('entries retain 990 original lines through a second empty-follow-up cycle', async t => {
   for (const group of ['telegram:test', 'origin', null]) {
     const f = await fixture(t, group), original = write(f, Array.from({ length: 1000 }, (_, i) => i + 1));
     const block = extractAbsorbedBlock(original);
@@ -148,7 +148,7 @@ test('IB51 1000 entries retain 990 original lines through a second empty-follow-
   }
 });
 
-test('IB51 cleanup deletion failure is a failed step, not a successful cleanup', async t => {
+test('cleanup deletion failure is a failed step, not a successful cleanup', async t => {
   const f = await fixture(t); write(f);
   fs.writeFileSync(f.state, fs.readFileSync(f.temporary, 'utf8'));
   const target = path.join(f.memoryDir, `inbox.${segment}.md`);
@@ -157,8 +157,8 @@ test('IB51 cleanup deletion failure is a failed step, not a successful cleanup',
   assert.equal(fs.existsSync(target), true);
 });
 
-// IB48/IB51: renderer and extractor share line syntax; retained block is first.
-test('IB48 round trip and IB51 model Pending text preserve the exact retained document', async t => {
+// renderer and extractor share line syntax; retained block is first.
+test('round trip and model Pending text preserve the exact retained document', async t => {
   const f = await fixture(t), original = write(f, [1, 2, 3]);
   const block = extractAbsorbedBlock(original);
   assert.equal(block.entries.length, 3);

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** M4 observes and reconciles sessions; M1 exclusively owns process launch. */
+/** The supervisor observes and reconciles sessions; the dispatcher owns process launch. */
 import { isMainModule } from './is-main-module.js';
 import { startSupervisor } from './supervisor-main.js';
 

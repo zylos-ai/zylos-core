@@ -197,7 +197,7 @@ test('real isolated sender child captures one bilingual notice without writing t
   assert.equal(await processFirstFailureNotices(options),0);
 });
 
-// P05 §4 health hook acceptance: preserve the recovered snapshot branch, then
+// §4 health hook acceptance: preserve the recovered snapshot branch, then
 // prove a strictly later failure commits health, marker and new frozen route
 // together for the same PID/session. No identity change hides the regression.
 async function exactRecoveryRegression(t) {

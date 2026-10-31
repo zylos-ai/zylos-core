@@ -12,7 +12,7 @@ function fixture(t,runtime='claude') {
     readMode:()=>({mode:'multi'}),readAccountUsage:async r=>{calls.samples.push(r);return limits;},runC4Control:args=>{calls.control.push(args);return {ok:true,output:'control 1'};},log:()=>{}});
   return {dir,monitor,calls,setLimits:value=>limits=value};
 }
-test('T08 account monitor samples every invocation and never consumes old output files',async t=>{
+test('account monitor samples every invocation and never consumes old output files',async t=>{
   const f=fixture(t);fs.writeFileSync(path.join(f.dir,'usage.json'),JSON.stringify({weeklyAll:{percent:99},tier:'critical'}));
   await f.monitor.runMonitor({currentTime:1000});let state=JSON.parse(fs.readFileSync(path.join(f.dir,'usage.json')));
   assert.equal(state.weeklyAll.percent,45);assert.equal(state.session.percent,null);assert.equal(state.statusShape,'account_sampler');
@@ -20,7 +20,7 @@ test('T08 account monitor samples every invocation and never consumes old output
   state=JSON.parse(fs.readFileSync(path.join(f.dir,'usage.json')));assert.equal(state.weeklyAll.percent,60);assert.deepEqual(f.calls.samples,['claude','claude']);
   f.setLimits(null);await f.monitor.runAlert({currentTime:3000});assert.equal(f.calls.control.length,0);
 });
-test('IF-17 usage alert samples current account and targets Origin with preserved delivery options',async t=>{
+test('usage alert samples current account and targets Origin with preserved delivery options',async t=>{
   const f=fixture(t,'codex');f.setLimits({sevenDay:{usedPercentage:96,resetsAt:2000},fiveHour:{usedPercentage:70}});
   assert.equal(await f.monitor.runAlert({currentTime:2000}),true);
   assert.deepEqual(f.calls.samples,['codex']);assert.equal(f.calls.control.length,1);
@@ -28,7 +28,7 @@ test('IF-17 usage alert samples current account and targets Origin with preserve
   assert.ok(args.includes('--no-ack-suffix'));assert.ok(args.includes('--available-in'));
   const state=JSON.parse(fs.readFileSync(path.join(f.dir,'alert.json')));assert.equal(state.sourceRuntime,'codex');assert.equal(state.lastNotifiedAt,new Date(2000000).toISOString());
 });
-test('T08 same-tier cooldown suppresses duplicate and enqueue failure never records notification',async t=>{
+test('same-tier cooldown suppresses duplicate and enqueue failure never records notification',async t=>{
   const f=fixture(t);f.setLimits({seven_day:{used_percentage:92}});
   fs.writeFileSync(path.join(f.dir,'alert.json'),JSON.stringify({lastNotifiedTier:'high',lastNotifiedAt:new Date(1000000).toISOString()}));
   await f.monitor.runAlert({currentTime:2000});assert.equal(f.calls.control.length,0);

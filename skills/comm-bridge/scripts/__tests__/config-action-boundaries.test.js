@@ -70,4 +70,4 @@ test('c4-config constants import without loading Core or reading F1', () => fixt
 
 // Dispatcher mode/startup boundaries now exercise the production router entry in
 // session-delivery.test.js and router-factory.integration.test.js. Unlike the
-// retired loop, M1 reads mode once and remains inert on malformed startup F1.
+// retired loop, dispatcher reads mode once and remains inert on malformed startup .

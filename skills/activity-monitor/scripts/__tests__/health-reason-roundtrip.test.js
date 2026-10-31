@@ -13,9 +13,9 @@ import { freezeFirstFailureNotice, processFirstFailureNotices } from '../../../c
 import { HealthStore } from '../health-store.js';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { publishSessionStatus } from '../status-writer.js';
-function root(t) {const dir=fs.mkdtempSync(path.join(os.tmpdir(),'p05-reason-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
+function root(t) {const dir=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-reason-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 const allowed=['rate_limit_unclassified','rate_limit_five_hour','rate_limit_seven_day','authentication_failed','billing_error','overloaded','server_error','model_not_found','hook_evidence_unordered','health_storage_unavailable'];
-// P05 health-reason-roundtrip: actual F10 serialization, new owner and F4 projection.
+// health-reason-roundtrip: actual serialization, new owner and projection.
 test('six persisted health states round-trip allowed, empty and unknown reasons through new owner and projection',t=>{
  const zylosDir=root(t);let cases=0;
  for(const health of ['ok','rate_limited','auth_failed','unavailable','recovering','down'])for(const reason of [...allowed,'','unknown private text',null]) {

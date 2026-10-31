@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt} from '../runtime/upgrade-context.js';
+import {createRequire} from 'node:module';
+import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt,discoverUpgradeContext} from '../runtime/upgrade-context.js';
+import {recoveryCommand} from '../../commands/recovery.js';
+const maintenance = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 test('Codex recovery replaces the sole positional startup prompt and shell quoting preserves hostile text',()=>{
  const prompt="recovery $(false) `false` 'quotes'\nnext line";
  const args=applyUpgradePrompt(['--no-daemon','old startup prompt'],prompt,1);
@@ -38,29 +41,121 @@ test('unmarked historical transactions do not require stable startup helpers', t
  }
 });
 
-test('unmarked historical transactions reach startup discovery and the tmux launcher', t => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-history-startup-')));
-  t.after(() => fs.rmSync(root, {recursive:true, force:true}));
-  const stable = path.join(root, '.zylos/upgrade');
-  fs.mkdirSync(stable, {recursive:true, mode:0o700});
-  fs.mkdirSync(path.join(root, '.backup/self-upgrade/tx'), {recursive:true, mode:0o700});
-  fs.writeFileSync(path.join(stable, 'maintenance.cjs'), "'use strict';\n", {mode:0o600});
-  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `
-    exports.bootstrap = () => ({active:true, blocked:true, prompt:'historical recovery prompt'});
-  `, {mode:0o600});
-  assert.equal(upgradeStartupPrompt(root), 'historical recovery prompt');
+function publishedTransaction(t) {
+ const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-startup-published-')));
+ t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const dir = path.join(root,'.backup/self-upgrade/tx');
+ fs.mkdirSync(dir,{recursive:true,mode:0o700});
+ const executed = path.join(root,'recovery-executed');
+ for (const [source,name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
+ fs.writeFileSync(path.join(dir,'runner.cjs'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(executed)},JSON.stringify(process.argv.slice(2)));fs.rmSync(${JSON.stringify(dir)},{recursive:true});console.log(JSON.stringify({recovery_required:false,stage:'aborted_before_install'}));`);
+ const journal={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:false,initialIdentity:{},recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(dir,name))]))};
+ maintenance.update(dir,journal);
+ return {root,dir,journal,executed};
+}
 
-  const specPath = path.join(root, 'spec.json');
-  fs.writeFileSync(specPath, JSON.stringify({
-    command: process.execPath,
-    args: ['-e', 'console.log(process.argv[1])', 'ordinary prompt'],
-    promptIndex: 2,
-    cwd: root,
-    env: {PATH:process.env.PATH, HOME:root, ZYLOS_DIR:root},
-  }), {mode:0o600});
-  const result = spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), specPath], {encoding:'utf8'});
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), 'historical recovery prompt');
+test('startup runs the published transaction runner before a stable bootstrap or marker exists', {skip:process.platform!=='linux'}, t => {
+ t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
+ const f=publishedTransaction(t);
+ assert.equal(fs.existsSync(path.join(f.root,'.zylos')),false);
+ assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
+ assert.deepEqual(JSON.parse(fs.readFileSync(f.executed,'utf8')),['resume','--transaction-dir',f.dir]);
+});
+
+test('read-only discovery preserves published recovery material without executing the runner', t => {
+ const f=publishedTransaction(t);
+ const before=fs.readFileSync(path.join(f.dir,'journal.json'),'utf8');
+ const context=discoverUpgradeContext(f.root,{recover:false});
+ assert.equal(context.active,true);
+ assert.equal(context.candidates.length,1);
+ assert.equal(fs.existsSync(f.executed),false);
+ assert.equal(fs.readFileSync(path.join(f.dir,'journal.json'),'utf8'),before);
+});
+
+test('recovery resume output directs a closed transaction to forward finalization', {skip:process.platform!=='linux'}, async t => {
+ const f=publishedTransaction(t),hash='a'.repeat(64);
+ fs.copyFileSync(path.resolve('cli/lib/upgrade-recovery.cjs'),path.join(f.dir,'runner.cjs'));
+ Object.assign(f.journal,{phase:'compensation_closed',snapshotManifestHash:hash,originalServices:[],lastError:'EACCES: retained diagnostic',
+  compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:hash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
+  postCutoff:{formatVersion:1,items:{hooks:{state:'done',attempts:1,lastError:null}}},dashboardInstall:null});
+ f.journal.recoveryHashes=Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(f.dir,name))]));
+ maintenance.durable(path.join(f.dir,'journal.json'),f.journal);
+ const output=[],log=console.log,exitCode=process.exitCode;
+ console.log=value=>output.push(String(value));
+ try {await recoveryCommand(['resume'],{root:f.root});}
+ finally {console.log=log;process.exitCode=exitCode;}
+ assert.equal(output.length,1);
+ assert.match(output[0],/zylos upgrade --resume-finalize/);
+ assert.match(output[0],/Do not use zylos recovery resume/);
+});
+
+test('pre-marker recovery material remains isolated with corrupt or absent journal publication', t => {
+ for (const damage of ['corrupt','missing','partial-recovery']) {
+  const f=publishedTransaction(t);
+  if(damage==='corrupt')fs.writeFileSync(path.join(f.dir,'journal.json'),'{broken');
+  else fs.unlinkSync(path.join(f.dir,'journal.json'));
+  if(damage==='partial-recovery')for(const name of ['runner.cjs','installer.cjs'])fs.unlinkSync(path.join(f.dir,name));
+  const context=discoverUpgradeContext(f.root);
+  assert.equal(context.active,true);assert.equal(context.blocked,true);assert.equal(context.recovery_required,true);
+  assert.equal(fs.existsSync(f.executed),false);
+ }
+});
+
+test('completed historical transactions with retained recovery files leave ordinary startup untouched', t => {
+ const f=publishedTransaction(t),digest='a'.repeat(64);
+ Object.assign(f.journal,{phase:'aborted_before_install',skillsDir:path.join(f.root,'.claude/skills'),
+  coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
+  initialIdentity:{nodePath:process.execPath,packageJson:path.join(f.root,'package.json'),packageHash:digest,cliRoot:path.join(f.root,'cli'),cliHash:digest,workerPath:path.join(f.root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:maintenance.databasePaths(2).map(source=>({source,exists:true}))},
+  cleanup:{complete:true,servicesRestored:true},terminalEvidence:{verified:true,kind:'original_deployment_and_readonly_data'}});
+ maintenance.update(f.dir,f.journal);
+ assert.equal(maintenance.terminalValid(f.journal),true);
+ assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
+ assert.equal(fs.existsSync(f.executed),false);
+});
+
+test('startup observes a live published controller without executing its recovery runner', {skip:process.platform!=='linux'}, t => {
+ t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
+ t.mock.method(maintenance,'alive',()=>true);
+ const f=publishedTransaction(t);
+ maintenance.durable(path.join(f.dir,'controller.json'),maintenance.identity());
+ const context=discoverUpgradeContext(f.root);
+ assert.equal(context.controllerAlive,true);
+ assert.equal(context.observing,true);
+ assert.equal(fs.existsSync(f.executed),false);
+});
+
+test('startup rejects modified transaction recovery and unrecognizable ownership without executing code', {skip:process.platform!=='linux'}, t => {
+ t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
+ for(const attack of ['modified-runner','unknown-process']) {
+  const f=publishedTransaction(t),recognize=maintenance.canRecognizeProcesses;
+  if(attack==='modified-runner')fs.appendFileSync(path.join(f.dir,'runner.cjs'),'\n// changed');
+  else {
+   const hash='a'.repeat(64);
+   Object.assign(f.journal,{phase:'compensation_closed',snapshotManifestHash:hash,
+    compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:hash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
+    postCutoff:{formatVersion:1,items:{hooks:{state:'pending',attempts:0,lastError:null}}},dashboardInstall:null});
+   maintenance.update(f.dir,f.journal);
+   maintenance.canRecognizeProcesses=()=>false;
+  }
+  let context;
+  try{context=discoverUpgradeContext(f.root);}finally{maintenance.canRecognizeProcesses=recognize;}
+  assert.equal(context.recovery_required,true);
+  assert.equal(context.blocked,true);
+  if(attack==='unknown-process')assert.doesNotMatch(context.prompt,/zylos upgrade --resume-finalize/);
+  assert.equal(fs.existsSync(f.executed),false);
+ }
+});
+
+test('startup diagnostics preserve active READY availability despite unrelated damaged history', t => {
+ const f=publishedTransaction(t),digest='a'.repeat(64);
+ Object.assign(f.journal,{phase:'restored_data_ready',installationIntent:true,skillsDir:path.join(f.root,'.claude/skills'),dbBackupDir:path.join(f.root,'.backup/db/tx'),snapshotManifestHash:digest,
+  coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
+  initialIdentity:{nodePath:process.execPath,packageJson:path.join(f.root,'package.json'),packageHash:digest,cliRoot:path.join(f.root,'cli'),cliHash:digest,workerPath:path.join(f.root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:maintenance.databasePaths(2).map(source=>({source,exists:true}))}});
+ maintenance.update(f.dir,f.journal);maintenance.marker(f.root,f.dir,f.journal);
+ const unrelated=path.join(f.root,'.backup/self-upgrade/old');fs.mkdirSync(unrelated);fs.writeFileSync(path.join(unrelated,'journal.json'),'{');
+ const context=discoverUpgradeContext(f.root);
+ assert.equal(context.active,true);assert.equal(context.blocked,false);assert.equal(context.recovery_required,true);
+ assert.equal(fs.existsSync(f.executed),false);
 });
 
  test('nonblocking recovery cue remains available alongside normal context', t => {

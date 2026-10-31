@@ -1,0 +1,5 @@
+{"type":"session_meta","timestamp":"2026-05-23T01:00:00.000Z","payload":{"id":"codex-session-1","originator":"codex-tui","cli_version":"0.130.0","source":"cli"}}
+{"type":"turn_context","timestamp":"2026-05-23T01:00:00.000Z","payload":{"model":"gpt-5.3-codex"}}
+{"type":"event_msg","timestamp":"2026-05-23T01:00:01.000Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":37.5,"window_minutes":300,"resets_at":1779516000},"secondary":{"used_percent":12.25,"window_minutes":10080,"resets_at":1780083600}},"info":{"last_token_usage":{"input_tokens":12000,"output_tokens":800,"cached_input_tokens":3000,"reasoning_output_tokens":150},"total_token_usage":{"input_tokens":20000,"output_tokens":1400,"cached_input_tokens":5000},"model_context_window":200000}}}
+{"type":"event_msg","timestamp":"2026-05-23T01:00:02.000Z","payload":{"type":"task_complete","duration_ms":45123,"time_to_first_token_ms":987}}
+{"type":"event_msg","timestamp":"2026-05-23T01:00:03.000Z","payload":{"type":"response_item","item":{"type":"function_call","name":"functions.exec_command","call_id":"call-1"}}}

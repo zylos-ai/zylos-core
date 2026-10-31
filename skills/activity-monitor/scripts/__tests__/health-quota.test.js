@@ -78,7 +78,7 @@ test('reader rejects malformed, oversized, or nonregular snapshot files',t=>{
   const file=path.join(options.zylosDir,'activity-monitor','health-quota','claude.json');
   for(const content of ['{',JSON.stringify({...snapshot,padding:'x'.repeat(3000)})]) {fs.writeFileSync(file,content);assert.equal(read(),null);}
 });
-test('T08/DM-53: context monitor preserves native status and excludes raw failed input from logs',t=>{
+test('context monitor preserves native status and excludes raw failed input from logs',t=>{
   const {options}=fixture(t);
   const script=fileURLToPath(new URL('../context-monitor.js',import.meta.url));
   const env={...process.env,ZYLOS_DIR:options.zylosDir};
@@ -92,7 +92,7 @@ test('T08/DM-53: context monitor preserves native status and excludes raw failed
   assert.equal(fs.readFileSync(path.join(options.zylosDir,'activity-monitor','hook-activity-errors.log'),'utf8').includes('SECRET_RAW_INPUT'),false);
 });
 
-test('T02/T08: first-failure quota reads exact F5 run/session and never the legacy latest snapshot',async t=>{
+test('first-failure quota reads exact run/session and never the legacy latest snapshot',async t=>{
   const {readScopedHealthQuota}=await import('../health-quota.js');
   const {publishContextSample}=await import('../context-monitor.js');
   const {identity,options}=fixture(t);writeHealthQuota(status,options);

@@ -7,10 +7,10 @@ import { tmuxNameForGroup } from '../../../../cli/lib/session-group-paths.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
 import { startSupervisor } from '../supervisor-main.js';
 
-// IF-03 A-D and unbound: actual M4 entry resolver and adapter observations on
+// A-D and unbound: actual supervisor entry resolver and adapter observations on
 // the shared isolated tmux fixture. No native authenticated runtime is used.
 async function routingFixture(t, wrongConfig = false) {
-  const f = readyTmuxTarget(t, { prefix: 'p05-routing-', mode: 'multi', runtimeProcess: true });
+  const f = readyTmuxTarget(t, { prefix: 'supervisor-routing-', mode: 'multi', runtimeProcess: true });
   const executable = path.join(f.root, 'codex');
   fs.copyFileSync(path.join(f.root, 'claude'), executable);
   for (const [group, config, command] of [
@@ -41,7 +41,7 @@ async function routingFixture(t, wrongConfig = false) {
   return { route, configReads, removeOrigin: () => f.tmux('kill-session', '-t', '=zylos-group-origin') };
 }
 
-test('IF-03 actual entry selects live snapshot/process over new config, preserves unknown, resolves absent and unbound', { timeout: 15000 }, async t => {
+test('actual entry selects live snapshot/process over new config, preserves unknown, resolves absent and unbound', { timeout: 15000 }, async t => {
   const f = await routingFixture(t);
   for (const group of ['lark:a', 'lark:c']) {
     const result = await f.route(group); assert.equal(result.runtime, 'codex'); assert.notEqual(result.observation, 'runtime_unknown');
@@ -55,7 +55,7 @@ test('IF-03 actual entry selects live snapshot/process over new config, preserve
   assert.deepEqual(f.configReads.map(row => row.sessionGroup), ['lark:b', null]);
 });
 
-test('IF-03 live-runtime assertions reject a configured-runtime-only resolver', { timeout: 15000 }, async t => {
+test('live-runtime assertions reject a configured-runtime-only resolver', { timeout: 15000 }, async t => {
   const f = await routingFixture(t, true);
   for (const group of ['lark:a', 'lark:c']) {
     await assert.rejects(async () => assert.equal((await f.route(group)).runtime, 'codex'), { code: 'ERR_ASSERTION' });

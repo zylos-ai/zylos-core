@@ -54,7 +54,7 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, s
     throw new Error(`${name}: invalid schema version ${version}; restore compatible code/data`);
   }
   if (version > supported) {
-    throw new Error(`${name}: schema version ${version} exceeds supported ${supported}; restore compatible code/data`);
+    throw Object.assign(new Error(`${name}: schema version ${version} exceeds supported ${supported}; restore compatible code/data`), {code:'SCHEMA_TOO_NEW'});
   }
   const objects = db.prepare("SELECT name, type FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all();
   const names = objects.filter(row => row.type === 'table').map(row => row.name);
@@ -328,6 +328,7 @@ export function migrateDatabase(db, owner, { allowNew = false, strict = true, al
       try { db.exec('ROLLBACK'); }
       catch (rollbackError) { error.rollbackError = rollbackError; }
     }
+    error.code ||= 'SCHEMA_MIGRATION_FAILED';
     throw error;
   }
   return owner.inspectSchema(db, options);

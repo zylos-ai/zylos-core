@@ -18,7 +18,7 @@ export async function until(read,check) {
 }
 export async function fixture(t,{origin=true}={}) {
   const cleanup=[];
-  const {dir,socketPath,binary,tmux:command}=isolatedTmux(t,{prefix:'p02-tmux-stop-',
+  const {dir,socketPath,binary,tmux:command}=isolatedTmux(t,{prefix:'session-runtime-tmux-stop-',
     beforeCleanup:async()=>{for(const close of cleanup)await close();}});
   if(origin)command('-f','/dev/null','new-session','-d','-s','origin','-e','ZYLOS_RUN_ID=outside-origin','sleep 60');
   const snapshot=name=>command('display-message','-p','-t',`=${name}:`,'#{session_id}:#{pane_id}:#{pane_pid}:#{ZYLOS_RUN_ID}');

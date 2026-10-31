@@ -19,7 +19,9 @@ import { RestartRequestStore } from './restart-request-store.js';
 import { findMatchingToolRule } from './tool-rules.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
-const { zylosRoot } = await loadCoreModule('session-group-paths.js');
+const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
+const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
+const { zylosRoot, LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 const { matchClaudeScreen } = await loadCoreModule('heartbeat/claude-probe.js');
 const { matchCodexScreen } = await loadCoreModule('heartbeat/codex-probe.js');
@@ -62,8 +64,8 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   try {
     const module=await import(new URL('../../zylos-memory/scripts/sync-lock.js',import.meta.url));syncReader=module.readSyncMarker;
     Object.assign(prompts,await import(new URL('../../zylos-memory/scripts/sync-prompts.js',import.meta.url)));
-    if(typeof syncReader!=='function')throw unavailable('P07 Sync marker reader');
-  }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;dependencyMissing('P07 Sync marker reader','Sync actions retain their state');}
+    if(typeof syncReader!=='function')throw unavailable('Sync marker reader');
+  }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;dependencyMissing('Sync marker reader','Sync actions retain their state');}
   const healthIdentity=scene=>Number.isSafeInteger(scene.runtimePid)?{runtime:scene.runtime,session_id:scene.sessionId,claude_pid:scene.runtimePid}:null;
   supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,missingDependencies,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
     readConfiguration:async()=>{
@@ -72,17 +74,28 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       configuration={...raw,...lifecycleConfiguration,mode,legacy,capacityUnavailable:false};
       try {
         const pool=await loadCoreModule('session-pool-config.js');
-        if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('P04 pool configuration reader');
+        if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('Session pool configuration reader');
         configuration.capacity=pool.resolveSessionPoolSize({env,config:raw});
-      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('P04 pool configuration reader','eviction');}
+      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('Session pool configuration reader','eviction');}
       return configuration;
     },
-    advanceAutomaticMigration:async()=>{throw unavailable('P10 automatic migration owner');},
+    legacyPresent:async()=>{
+      let connection;
+      try {
+        connection=await openTmuxConnection(baseScenes.connectionOptions ?? {});
+        for(const tmuxName of LEGACY_TMUX_NAMES) {
+          const target=await observeSessionTarget({sessionGroup:null,tmuxName,connection});
+          if(target.present)return true;
+        }
+        return false;
+      } catch(error) { if(error.code==='TMUX_NO_SERVER')return false;throw error; }
+      finally {await connection?.close();}
+    },
     resolveTargetRuntime:async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).mode==='single'?null:group),
     checkAuth:runtime=>getSessionAdapter(runtime).checkAuth(),
     matchScreen:(runtime,screen)=>(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
     resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name,toolInput:tool.input,config:configuration}),
-    readSyncMarker:options=>{if(!syncReader)throw unavailable('P07 Sync marker reader');return syncReader(options);},prompts,
+    readSyncMarker:options=>{if(!syncReader)throw unavailable('Sync marker reader');return syncReader(options);},prompts,
     freezeNotice:options=>{
       const mode=configuration?.mode ?? readMode().mode;
       if(!['single','multi'].includes(mode))throw Object.assign(new Error('Notice mode is unavailable'),{code:'CONFIG_UNREADABLE'});
