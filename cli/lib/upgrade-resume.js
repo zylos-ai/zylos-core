@@ -107,6 +107,7 @@ export async function resumeFinalize(root,{status=false}={},deps={}) {
     if(result.dashboard) {
       data.dashboard=result.dashboard;
     }
+    if(result.success && Object.hasOwn(result,'next')) data.next=result.next;
     if(result.success) return {ok:true,data};
     data.core.state='failed';
     if(!data.core.failedItems.length || data.core.failedItems[0].code==='FINALIZE_INCOMPLETE') data.core.failedItems=[{id:result.failedStep ? `step${result.failedStep}`:'finalize',code:upgradeFailureCode(result),reason:result.error}];

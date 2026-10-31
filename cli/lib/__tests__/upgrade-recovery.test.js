@@ -87,6 +87,8 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  // Package restoration has already completed in this database recovery fixture;
  // dedicated package tests exercise replacement and verification failures.
  const originalSnapshot=path.join(dir,'code/original-package');fs.cpSync(installedRoot,originalSnapshot,{recursive:true,verbatimSymlinks:true});
+ fs.chmodSync(originalSnapshot,fs.statSync(installedRoot).mode);
+ fs.chmodSync(path.join(originalSnapshot,'cli'),fs.statSync(originalCli).mode);
  j.originalPackage={path:originalSnapshot,treeHash:m.treeHash(originalSnapshot,{excludeNodeModules:false,includeModes:true}),sourceVersion:j.from,sourceRoot:installedRoot};j.originalPackageRestored=true;
  const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};j.recoveryHashes=descriptor.hashes;m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
  const calls=[];m.stop=()=>calls.push('stop');m.start=()=>calls.push('start');m.verifyServices=()=>calls.push('verify');
@@ -538,30 +540,38 @@ test('interrupted data-ready upgrade resumes while retaining an extra column',as
 test('complete compensation restores old code/data, preserves rescue, removes sidecars and retains terminal materials',async t=>{
  const f=await fixture(t,{missing:true});change(f);fs.mkdirSync(path.dirname(f.db('scheduler/scheduler.db')),{recursive:true});fs.writeFileSync(f.db('scheduler/scheduler.db'),'new-db');
  const original=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(result.stage,'restored_complete');assert.ok(!fs.existsSync(f.db('scheduler/scheduler.db')));assert.ok(!fs.existsSync(f.db('comm-bridge/c4.db-wal')));
- const archived=path.join(f.root,'.backup/self-upgrade/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
+ const archived=path.join(f.root,'.backup/self-upgrade/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/scheduler_scheduler.db')),Buffer.from('new-db'));assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
 });
-for(const dashboard of [false,true])test(`format 2 compensation ${dashboard?'restores backed up Dashboard':'refuses unexpected Dashboard created after a missing snapshot'}`,async t=>{
- const f=await fixture(t,{formatVersion:2,dashboard});
+test('format 2 compensation preserves a Dashboard created after a missing snapshot',async t=>{
+ const f=await fixture(t,{formatVersion:2,dashboard:false});
  assert.equal(f.snapshot.manifest.formatVersion,2);assert.equal(f.snapshot.manifest.databases.length,4);
  const file=f.db('components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});
  const snapshotRow=f.snapshot.manifest.databases.find(row=>row.source==='components/dashboard/dashboard.db');
- const original=dashboard?fs.readFileSync(path.join(f.snapshot.dbBackupDir,snapshotRow.file)):null;
- if(dashboard){const db=new Database(file);db.exec("INSERT INTO events VALUES ('changed')");db.close();}
- else fs.writeFileSync(file,'new Dashboard generation is outside compensation');
- fs.writeFileSync(file+'-wal','new-wal');fs.writeFileSync(file+'-shm','new-shm');
- const before=[file,file+'-wal',file+'-shm'].map(p=>fs.readFileSync(p));
+ assert.equal(snapshotRow.status,'missing');
+ const db=new Database(file);db.exec("CREATE TABLE events(value TEXT);INSERT INTO events VALUES ('new-generation')");db.close();
+ const before=fs.readFileSync(file),beforeHash=f.m.hash(file);
  change(f);
  const result=f.r.resume(f.dir);
- if(!dashboard){
-  assert.equal(result.recovery_required,true,JSON.stringify(result));
-  assert.match(result.error,/Expected missing database exists/);
-  assert.deepEqual([file,file+'-wal',file+'-shm'].map(p=>fs.readFileSync(p)),before);
-  assert.equal(f.load().dbRestore?.['components/dashboard/dashboard.db'],undefined);
-  assert.deepEqual(f.calls,['stop','stop']);
-  return;
- }
  assert.equal(result.stage,'restored_complete',JSON.stringify(result));assert.equal(result.recovery_required,false);
- if(dashboard){assert.deepEqual(fs.readFileSync(file),original);assert.equal(fs.existsSync(file+'-wal'),false);assert.equal(fs.existsSync(file+'-shm'),false);assert.equal(f.load().dbRestore['components/dashboard/dashboard.db'].complete,true);}
+ for(const row of f.snapshot.manifest.databases.slice(0,3))assert.equal(f.m.hash(f.db(row.source)),row.sha256,row.source);
+ assert.equal(f.m.hash(file),beforeHash);assert.deepEqual(fs.readFileSync(file),before);
+ const preserved=new Database(file,{readonly:true,fileMustExist:true});
+ try {assert.deepEqual(preserved.prepare('SELECT value FROM events').all(),[{value:'new-generation'}]);}finally{preserved.close();}
+ assert.equal(f.load().dbRestore?.['components/dashboard/dashboard.db'],undefined);
+ assert.deepEqual(f.calls,['stop','start','verify']);
+});
+test('format 2 compensation restores a backed up Dashboard',async t=>{
+ const f=await fixture(t,{formatVersion:2,dashboard:true});
+ assert.equal(f.snapshot.manifest.formatVersion,2);assert.equal(f.snapshot.manifest.databases.length,4);
+ const file=f.db('components/dashboard/dashboard.db');
+ const snapshotRow=f.snapshot.manifest.databases.find(row=>row.source==='components/dashboard/dashboard.db');
+ const original=fs.readFileSync(path.join(f.snapshot.dbBackupDir,snapshotRow.file));
+ const db=new Database(file);db.exec("INSERT INTO events VALUES ('changed')");db.close();
+ fs.writeFileSync(file+'-wal','new-wal');fs.writeFileSync(file+'-shm','new-shm');
+ change(f);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.stage,'restored_complete',JSON.stringify(result));assert.equal(result.recovery_required,false);
+ assert.deepEqual(fs.readFileSync(file),original);assert.equal(fs.existsSync(file+'-wal'),false);assert.equal(fs.existsSync(file+'-shm'),false);assert.equal(f.load().dbRestore['components/dashboard/dashboard.db'].complete,true);
  assert.deepEqual(f.calls,['stop','start','verify']);
 });
 test('Dashboard controlled migration rejects an owner still needing migration', async t => {

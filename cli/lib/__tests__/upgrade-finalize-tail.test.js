@@ -178,6 +178,8 @@ for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dash
   assert.equal(result.completion.dashboard,result.dashboard.state);
   assert.equal(result.dashboard.errors.length,failing?1:0);
   if(failing)assert.equal(result.dashboard.errors[0].item,failing==='verify'?'dashboard':failing);
+  if(failing){assert.match(result.next,/dashboard\.errors/);assert.match(result.next,/zylos init/);}
+  else assert.equal(result.next,null);
 });
 
 test('Dashboard owns verification timeout and receives no overall deadline',async t=>{
@@ -242,6 +244,17 @@ test('Dashboard persists independent failure and retries it without repeating co
   assert.equal(third.completion.dashboard,'ready');
   assert.equal(calls.filter(item=>item==='registration').length,2);
   assert.equal(calls.filter(item=>item==='route').length,3);
+});
+
+test('first Dashboard takeover records unavailable Caddy as skipped without degradation',async t=>{
+  const {ctx,journal}=protectedReaderFixture(t),calls=[];
+  ctx.journal.firstTakeover=true;ctx.firstDashboardTakeover=true;
+  journal.dashboardInstall={dbCopy:{ok:true,error:null},items:Object.fromEntries(['registration','route'].map(item=>[item,{state:'pending',attempts:0,lastError:null}]))};
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{protectedSuccess:()=>{},dashboardOwner:{
+    applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:'skipped'}),verifyDashboard:()=>({state:'ready',checks:{health:true},errors:[]})
+  }}));
+  assert.equal(result.dashboard.state,'ready');assert.equal(result.next,null);
+  assert.deepEqual(journal.dashboardInstall.items.route,{state:'skipped',attempts:1,lastError:null});
 });
 
 test('unfinished publication blocks actual maintenance reader refresh and service start',async t=>{

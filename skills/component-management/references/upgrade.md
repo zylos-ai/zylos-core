@@ -206,6 +206,7 @@ Deploy templates according to the decisions made in Step 2:
 
 1. **If `mergeConflicts` exists**: Review each conflict. Read backup and installed versions, re-apply local changes.
 2. Read the CLI's completion and restart result. Protected Core upgrade submits its own restart request; follow any reported recovery action without submitting another restart.
+3. If `dashboard.state` is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed.
 
 ## C4 Mode — Component Upgrade
 
@@ -334,4 +335,5 @@ User: `upgrade zylos confirm`
 2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
 3. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
 4. Read the CLI completion and restart result; protected Core upgrade submits its own restart request. Follow its reported recovery action without submitting another restart.
-5. Reply with version change and change summary
+5. If `dashboard.state` is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed.
+6. Reply with version change and change summary

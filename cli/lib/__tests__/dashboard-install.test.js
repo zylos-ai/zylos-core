@@ -46,9 +46,9 @@ test('registration uses one managed service, preserves config bytes, never insta
  assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'.claude/settings.json'))).hooks.Stop[0].hooks[0].command,'third-party');
  const calls=fs.readFileSync(path.join(dir,'pm2-calls'),'utf8');assert.equal(calls.split('\n').filter(l=>l.includes('"start"')).length,2);
 });
-test('missing Caddy returns failed instead of claiming manual route done',t=>{
+test('missing Caddy skips managed routing',t=>{
  const {dir,bin}=fixture(t);fs.unlinkSync(path.join(bin,'caddy'));
- const result=applyDashboardRoute({zylosDir:dir});assert.equal(result.state,'failed');assert.equal(result.error.code,'route_failed');
+ assert.deepEqual(applyDashboardRoute({zylosDir:dir}),{state:'skipped'});
 });
 test('registration preserves the original password and live session credentials',async t=>{
  const {dir,data}=fixture(t);
@@ -188,6 +188,15 @@ test('public verification makes one health request at the fixed Dashboard prefix
  const failed=await verifyDashboard({zylosDir:f.dir});
  assert.equal(failed.state,'degraded');assert.equal(failed.checks.health,true);assert.equal(failed.checks.route,false);
  assert.equal(failed.errors[0].code,'route_failed');assert.equal(requests.length,2);
+});
+
+test('verification omits public routing when managed Caddy is unavailable',async t=>{
+ const f=await healthFixture(t,(_req,res)=>healthy(res));
+ fs.unlinkSync(path.join(f.bin,'caddy'));
+ fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
+ fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'dashboard.example.test'}));
+ assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true},errors:[]});
+ assert.deepEqual(f.requests,['/api/health']);
 });
 
 test('health diagnostics retain observed failure when the shared window ends',async t=>{
