@@ -55,7 +55,7 @@ export class SupervisorLegacyStatus {
         state:!activity.transcriptMtimeMs && !activity.events.length && !activity.tools.length?'unknown':activity.state,
         health:publicHealth(health.health),idle_seconds:Math.max(0,Math.floor((now-activity.lastActivityAt)/1000)),
         last_activity:activity.lastActivityAt,active_tools:activity.tools.length,last_api_activity:activity.lastActivityAt,
-        active_tool_details:activity.tools,proc:{pid:foreground.claude_pid,alive:true,frozen:null,last_sample_at:now},updated_at:now};
+        active_tool_details:activity.tools,proc:{pid:foreground.claude_pid,alive:true,last_sample_at:now},updated_at:now};
       if(health.health!=='ok' && health.reason)payload.unavailable_reason=health.reason;
       durableJson(path.join(this.directory,'agent-status.json'),payload);
       return payload;
