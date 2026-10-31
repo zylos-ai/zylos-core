@@ -736,6 +736,21 @@ function copyMissingTree(src, dest) {
   }
 }
 
+function syncPackagedClaudeMemoryAgents() {
+  const agentsRoot = path.join(PACKAGE_ROOT, 'skills/zylos-memory/agents');
+  if (!fs.lstatSync(agentsRoot).isDirectory() || fs.lstatSync(agentsRoot).isSymbolicLink()) {
+    throw Error('Missing packaged Claude agent directory');
+  }
+  const agents = fs.readdirSync(agentsRoot).filter(name => name.endsWith('.md')).sort();
+  if (!agents.length) throw Error('No packaged Claude memory agents');
+
+  const destination = path.join(ZYLOS_DIR, '.claude/agents');
+  fs.mkdirSync(destination, { recursive: true });
+  for (const name of agents) {
+    fs.copyFileSync(path.join(agentsRoot, name), path.join(destination, name));
+  }
+}
+
 /**
  * Deploy template files to the zylos directory.
  * - ecosystem.config.cjs: always updated (managed by zylos-core)
@@ -789,6 +804,7 @@ export function deployTemplates({ freshInstall = false } = {}) {
   if (fs.existsSync(claudeSrc)) {
     copyMissingTree(claudeSrc, claudeDest);
   }
+  syncPackagedClaudeMemoryAgents();
 
   // runtime-env.manifest — create from template if missing
   const manifestSrc = path.join(TEMPLATES_SRC, 'runtime-env.manifest.example');
