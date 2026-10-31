@@ -53,7 +53,9 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    this batch, not a later observed frontier, is the checkpoint target. A read
    failure ends the run before any cleanup/rotation.
 3. Run `sync-files.js cleanup --token T`, then `sync-files.js rotate --token T`.
-   Read the current group state, run `sync-files.js list`, and read every listed
+   Read the current group state, then run the read-only `sync-files.js list`
+   without `--token`; adding `--token` returns `INVALID_INPUT` and ends this run.
+   Read every listed
    uncommitted segment in segment-ID order. Read dated session logs from the
    state's synced date onward; if the header/date is unknown, read the latest
    seven days. A missing state starts from an empty four-section state. A bad
@@ -140,6 +142,8 @@ state, commit, and failure sequence, with these differences:
 
 - Omit every `--group` on unsummarized/checkpoint reads. Never read group folders.
   Multiple source groups still yield one global checkpoint.
+- As in Group Sync, run the read-only `sync-files.js list`.
+  Do not add `--token`; doing so returns `INVALID_INPUT` and ends this run.
 - After reading global state, segments, and dated logs, also read shared self
   files. Complete necessary shared edits through `edit_memory` **before**
   checkpoint. Any necessary self-write failure stops checkpoint, temporary state,
