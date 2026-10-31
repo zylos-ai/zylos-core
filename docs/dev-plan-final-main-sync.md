@@ -377,10 +377,12 @@ trap 'rm -rf "$lockcheck"' EXIT
 git clone --no-local --no-checkout "$(git rev-parse --show-toplevel)" "$lockcheck/repo"
 git -C "$lockcheck/repo" checkout --detach HEAD
 mkdir -p "$lockcheck/home" "$lockcheck/zylos"
-env HOME="$lockcheck/home" ZYLOS_DIR="$lockcheck/zylos" \
-  npm --prefix "$lockcheck/repo" install --package-lock-only --ignore-scripts \
-  --no-audit --no-fund
-git -C "$lockcheck/repo" diff --exit-code -- package.json package-lock.json
+(
+  cd "$lockcheck/repo"
+  env HOME="$lockcheck/home" ZYLOS_DIR="$lockcheck/zylos" \
+    npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+  git diff --exit-code -- package.json package-lock.json
+)
 ```
 
 Then run:
