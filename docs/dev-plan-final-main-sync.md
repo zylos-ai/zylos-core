@@ -84,23 +84,64 @@ The 1.x launch path differs materially from 0.9.3:
 - `upgrade-context.js` owns transaction-history detection, trusted discovery,
   the actual automatic recovery attempt, post-recovery classification, prompt
   selection, and argv prompt application.
+- `skills/comm-bridge/scripts/c4-session-init.js` is a later SessionStart hook,
+  not the runtime launch owner. Its local `recoveryContext()` intentionally
+  checks only `.zylos/upgrade/active.json` and the stable bootstrap. It does not
+  scan `.backup/self-upgrade/<transaction>` when no stable marker exists.
 
 Therefore the #922 behavior lands in the common `SessionAdapter` argv assembly
-boundary and the existing `upgrade-context.js` prompt application boundary. It
-does not land in `CodexAdapter` or `ClaudeAdapter`: doing so would duplicate the
-same recovery attempt and would bypass future runtimes using `SessionAdapter`.
+boundary, using the already-existing discovery and prompt application exported
+by `upgrade-context.js`. It does not land in `CodexAdapter` or `ClaudeAdapter`:
+doing so would duplicate the same recovery attempt and would bypass future
+runtimes using `SessionAdapter`.
+
+### 3.1 Reviewed call-chain gap and ownership decision
+
+The frozen Base proves the following distinction:
+
+1. Direct `discoverUpgradeContext()` already scans transaction history. For a
+   transaction-local publication with no stable marker it can run the verified
+   transaction recovery closure, re-read durable state, and return an
+   active/blocked/recovery-required context with the existing `SYSTEM RECOVERY
+   TASK` prompt when recovery fails.
+2. The compatibility `tmux-launcher.js` already calls that discovery and applies
+   its result before spawning. A runner that exits nonzero while leaving the
+   transaction unfinished therefore produces the correct replacement prompt on
+   this legacy path, without `undefined`.
+3. Actual 1.x Claude and Codex launches do not execute that launcher. Their
+   path is `SessionAdapter.launch()` -> `buildRuntimeArgs()` ->
+   `writeSessionLaunchScript()` -> `settleLaunch()`, and the generated script
+   directly `exec`s the runtime.
+4. The C4 SessionStart hook runs too late to own launch argv and, without a
+   stable marker, deliberately cannot rediscover a history-only publication.
+
+The missing contract is therefore exactly one call at the common launch owner:
+after ordinary argv construction and before launch-script creation,
+`SessionAdapter.launch()` must call `discoverUpgradeContext(root)` once and pass
+the selected prompt through `applyUpgradePrompt()`. For Codex the prompt index
+is the final ordinary kick argument; for Claude it is absent, so the selected
+prompt is appended as its only positional startup message.
+
+Do not add transaction scanning to the C4 hook. That would create a second
+recovery authority after runtime launch, execute outside the pre-C4 isolation
+boundary, and still fail to guarantee the runtime received argv at exec time.
+Do not route `SessionAdapter` back through `tmux-launcher.js`; that would revive
+the retired JSON/spec launcher architecture and disturb the current shell,
+environment, target identity, and settlement contracts.
 
 Expected Phase 2 shape:
 
 - keep `discoverUpgradeContext()` as the single recovery/detection authority;
-- add at most one small Base-native helper that applies its returned context to
-  runtime argv, or perform that application directly in `SessionAdapter` if the
-  helper would not remove duplication;
-- call discovery once per launch path;
+- reuse the existing `applyUpgradePrompt()` helper; do not add a second helper;
+- call discovery exactly once in `SessionAdapter.launch()` after
+  `buildRuntimeArgs()` and before `writeSessionLaunchScript()`;
+- select `args.length - 1` only for Codex's existing kick prompt and no index for
+  Claude;
 - apply the prompt after ordinary argv is built but before the launch script is
   written or tmux is created;
-- use the same application semantics from `tmux-launcher.js` so the compatibility
-  path and `SessionAdapter` cannot drift.
+- leave `tmux-launcher.js`, `upgrade-context.js`, and `c4-session-init.js`
+  unchanged unless a failing contract test first proves an existing helper
+  defect and the plan is revised before that product edit.
 
 This is prompt plumbing around an existing recovery mechanism. It adds no new
 recovery mechanism, state, environment variable, result field, error code,
@@ -114,18 +155,19 @@ semantic reconstruction, never by choosing an entire side.
 | File | Target state | Source of truth | Completion condition |
 | --- | --- | --- | --- |
 | `cli/lib/runtime/codex.js` | Preserve the Base `SessionAdapter` subclass, trust preflight, and auth flow. Do not reintroduce the 0.9.3 direct `resumeUpgradeForStartup()` call. | Base architecture plus #922 Codex result contract | Codex gets recovery through the common session launch boundary; ordinary kick remains exact; no `undefined` appears. |
-| `cli/lib/runtime/tmux-launcher.js` | Preserve Base process spawning, unlink-before-spawn, signal forwarding, and exit logging. Use the common Base-native prompt application semantics around the existing discovery result. | Base launcher plus #922 tmux result contract | Failed recovery leaves the real prompt in argv; success/no transaction leaves the original argv; recovery is attempted once. |
-| `cli/lib/runtime/upgrade-context.js` | Preserve Base history scan, ownership/controller checks, `recoverBeforeUpgrade()`, closed-recovery wording, trusted stable fallback, cache invalidation, and prompt text. Only expose/reuse the minimum prompt-to-argv application needed by both launch paths. | Base recovery implementation; #922 only supplies the observable result | No detection/recovery diff beyond prompt propagation; all existing discovery tests remain valid. |
+| `cli/lib/runtime/tmux-launcher.js` | Keep the Base file unchanged. It already discovers history-only transactions and applies blocked/non-blocking prompts before spawn. Do not route the 1.x adapter through it. | Base launcher plus the independently reproduced nonzero-runner result | Failed recovery remains covered as a compatibility control; no legacy launcher architecture is revived. |
+| `cli/lib/runtime/upgrade-context.js` | Keep the Base file unchanged. Reuse its existing `discoverUpgradeContext()` and `applyUpgradePrompt()` exports exactly; preserve history scan, ownership/controller checks, `recoverBeforeUpgrade()`, closed-recovery wording, stable fallback, cache invalidation, and prompt text. | Base recovery implementation; #922 only supplies the missing consumer | No detection, recovery, result-shape, or prompt-application diff; all existing discovery tests remain valid. |
 | `cli/lib/__tests__/runtime-launch.test.js` | Extend the current real `SessionAdapter` + real isolated tmux harness for Claude and Codex. Do not restore 0.9.3 child-process mocks or old adapter APIs. | Base test architecture plus #922 runtime outcomes | Positive failed-recovery cases cover both adapters; success/no-transaction controls prove unchanged argv and exact Codex kick; real product code is exercised. |
 | `cli/lib/__tests__/upgrade-startup-context.test.js` | Extend the existing recovery/discovery suite with real deployed bootstrap/maintenance/recovery materials and tmux-launcher coverage. Keep neutral test names. | Base fixture conventions plus #922 discovery/tmux outcomes | Failure, success, history-only, live controller, and no-transaction cases are executable without source rewriting or source re-evaluation. |
 | `package.json` | Keep Base unchanged at `1.0.0-beta.1`. | Frozen Base | Version remains `1.0.0-beta.1`; no dependency/script drift. |
 | `package-lock.json` | Keep Base root and package version at `1.0.0-beta.1`; retain the Base dependency graph. | Frozen Base and `package.json` | Lock root name/version match `package.json`; lock generation produces no diff. |
 
-One additional Base-native file is expected to change:
+One additional Base-native file is the sole planned production change:
 `cli/lib/runtime/session-adapter.js`, because that is where Claude and Codex now
-share final argv assembly. If implementation evidence shows a smaller existing
-common boundary, use it and update this plan before code; do not silently move
-the behavior.
+share final argv assembly. `skills/comm-bridge/scripts/c4-session-init.js` is an
+explicit unchanged control: its stable-marker-only behavior remains intentional.
+If implementation evidence contradicts this ownership decision, update and
+re-review this plan before code; do not silently move the behavior.
 
 ## 5. Audit of non-conflicting automatic hunks
 
@@ -155,7 +197,7 @@ validate target/name/capability → continue or fail before tmux creation // Bas
 canonicalize root and build clean env → preserve existing launch isolation // Base SessionAdapter
 build ordinary runtime argv → Claude args or Codex args ending in exact kick // Base buildRuntimeArgs
 discover upgrade context once → run existing automatic recovery and durable recheck // Base discoverUpgradeContext
-context.blocked → replace positional prompt, or append a prompt for Claude // Base applyUpgradePrompt
+context.blocked → replace Codex's final kick, or append a prompt for Claude // Base applyUpgradePrompt
 context.active && !context.controllerAlive && context.prompt → append cue to ordinary prompt // #922 contract
 otherwise → keep argv byte-for-byte unchanged // #922 no-transaction/success contract
 write one-shot shell launcher → no recovery data in env or persistent files // Base SessionAdapter
@@ -165,7 +207,9 @@ settle tmux launch → preserve current session identity and cleanup // Base Ses
 For Codex, the prompt index is the existing final kick argument. For Claude,
 there is no ordinary positional prompt, so a required recovery prompt is appended
 as the sole positional startup message. Prompt application must no-op on null or
-empty prompt; concatenation never sees `undefined`.
+empty prompt; concatenation never sees `undefined`. Discovery happens before
+`writeSessionLaunchScript()`, so both runtimes receive the prompt in the argv
+that the one-shot script directly execs.
 
 ### 6.2 tmux launcher compatibility path
 
@@ -177,6 +221,9 @@ active non-controller context with prompt → append to indexed ordinary prompt 
 success/live controller/no transaction → leave spec.args unchanged // #922 controls
 spawn child and forward signals/exit → preserve current behavior // Base tmux launcher
 ```
+
+This is a regression/control path only. Phase 2 does not edit it and does not
+make `SessionAdapter` call it.
 
 ### 6.3 Recovery outcomes
 
@@ -202,9 +249,15 @@ no transaction/material → return inactive; launch normally // Base no-transact
   `vm`, `compileFunction`, `eval`, `new Function`, or runtime source rewriting.
 - Build failure fixtures from the real deployed `upgrade-bootstrap.cjs`,
   `upgrade-maintenance.cjs`, and frozen transaction recovery code. Create a
-  valid published transaction whose real runner exits/fails while durable
-  unfinished state remains; do not replace the product runner with a canned
-  fake to obtain the positive result.
+  valid transaction-local publication with no `.zylos/upgrade/active.json` and
+  a hash-verified transaction runner that exits `9` while durable unfinished
+  state remains. The fixture validates the product's real discovery, runner
+  invocation, durable re-read, and launch plumbing; it must not stub
+  `discoverUpgradeContext()` or replace imported launch code with re-evaluated
+  source. The exit-9 runner is the explicit child-process fault boundary, not a
+  replacement for product discovery: publish it through the real transaction
+  journal/hashes alongside the real maintenance and installer materials, then
+  let the real `recoverBeforeUpgrade()` path invoke and classify it.
 - Isolate `HOME`, `PM2_HOME`, `TMPDIR`, `ZYLOS_DIR`, and the tmux socket. Register
   cleanup for transaction directories, launch scripts, sessions, sockets, and
   processes even when an assertion fails.
@@ -220,6 +273,25 @@ no transaction/material → return inactive; launch normally // Base no-transact
 | live controller | control | control | control | Runner is not executed and no recovery prompt is injected. |
 | Codex prompt safety | n/a | positive and negative | where Codex spec is used | Final prompt never contains `undefined`; blocking replaces, non-blocking appends once. |
 
+The decisive positive case must traverse the actual adapter boundary for each
+runtime:
+
+```text
+transaction-local publication, no stable marker, runner exit 9
+  -> SessionAdapter.launch()
+  -> real discoverUpgradeContext(root)
+  -> real buildRuntimeArgs()/applyUpgradePrompt()
+  -> real writeSessionLaunchScript()/settleLaunch()
+  -> runtime fixture observes argv
+```
+
+Claude must observe the recovery prompt as its sole positional startup message.
+Codex must observe that prompt in place of the ordinary sentinel, with neither
+the sentinel nor `undefined` retained. A paired no-transaction run must preserve
+Claude's argv and Codex's exact sentinel. Direct discovery and
+`tmux-launcher.js` cases remain controls; they do not satisfy the adapter-path
+acceptance by themselves. The C4 hook is not used to make either assertion.
+
 ### 7.3 Frozen-Base baseline comparison
 
 Before editing product code, run the targeted suites on frozen Base and record
@@ -229,6 +301,12 @@ recovery fixtures. After implementation, repeat with fresh fixtures and the same
 inputs. Compare the Base `discoverUpgradeContext()` result and prompt text with
 the new launch argv result; the only permitted delta is that the already-selected
 prompt now reaches the Base runtime launch path after a failed recovery.
+
+Record Luna's reviewed Base baseline separately: the two existing targeted files
+currently report 42 tests / 41 pass / 1 macOS skip / 0 fail, exit 0. That baseline
+proves existing discovery and compatibility-launcher behavior, but not the new
+adapter-path acceptance; the added end-to-end adapter cases must fail on frozen
+Base for missing prompt propagation and pass only after the SessionAdapter edit.
 
 This is a before/after black-box comparison. Do not copy or dynamically evaluate
 the frozen source inside a test.
@@ -275,14 +353,16 @@ Phase 1 consists of one plan-only commit and a Draft PR to
 
 After Luna approves this plan, Phase 2 may add only:
 
-- the minimum Base-native prompt plumbing in `upgrade-context.js`,
-  `session-adapter.js`, and `tmux-launcher.js`;
+- the minimum Base-native discovery and prompt-application call in
+  `session-adapter.js`;
 - targeted tests in the two existing neutral test files;
 - a plan correction commit when review changes this design.
 
-`codex.js`, `package.json`, `package-lock.json`, and `CHANGELOG.md` are expected
-to remain at the Base target state unless Luna identifies evidence that requires
-a plan revision before code. No new production mechanism is planned.
+`codex.js`, `tmux-launcher.js`, `upgrade-context.js`,
+`skills/comm-bridge/scripts/c4-session-init.js`, `package.json`,
+`package-lock.json`, and `CHANGELOG.md` are expected to remain at the Base target
+state unless Luna identifies evidence that requires a plan revision before code.
+No new production mechanism is planned.
 
 Do not mix the plan and product implementation into one commit. Do not use a
 cherry-pick message. Before Phase 2 delivery, review the entire
