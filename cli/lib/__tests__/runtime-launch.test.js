@@ -62,9 +62,10 @@ function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', h
 }
 
 function publishStartupRecovery(root, { succeed = false, controller = false } = {}) {
-  const dir = path.join(root, '.backup/self-upgrade/tx');
+  const canonicalRoot = fs.realpathSync(root);
+  const dir = path.join(canonicalRoot, '.backup/self-upgrade/tx');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const executed = path.join(root, 'recovery-executed');
+  const executed = path.join(canonicalRoot, 'recovery-executed');
   for (const [source, name] of [
     ['upgrade-maintenance.cjs', 'maintenance.cjs'],
     ['upgrade-installer.cjs', 'installer.cjs'],
@@ -84,7 +85,7 @@ ${succeed
   const journal = {
     formatVersion: 1,
     transactionId: 'tx',
-    zylosDir: root,
+    zylosDir: canonicalRoot,
     nodePath: process.execPath,
     from: '1.0.0-beta.1',
     phase: 'preparing',
@@ -98,14 +99,14 @@ ${succeed
     Object.assign(journal, {
       phase: 'restored_data_ready',
       installationIntent: true,
-      skillsDir: path.join(root, '.claude/skills'),
-      dbBackupDir: path.join(root, '.backup/db/tx'),
+      skillsDir: path.join(canonicalRoot, '.claude/skills'),
+      dbBackupDir: path.join(canonicalRoot, '.backup/db/tx'),
       snapshotManifestHash: digest,
       coreManifest: [{name:'core', existedBefore:true, backedUp:true, originalHash:digest}],
       originalServices: [],
       initialIdentity: {
-        nodePath:process.execPath, packageJson:path.join(root,'package.json'), packageHash:digest,
-        cliRoot:path.join(root,'cli'), cliHash:digest, workerPath:path.join(root,'cli/worker.js'),
+        nodePath:process.execPath, packageJson:path.join(canonicalRoot,'package.json'), packageHash:digest,
+        cliRoot:path.join(canonicalRoot,'cli'), cliHash:digest, workerPath:path.join(canonicalRoot,'cli/worker.js'),
         workerHash:digest, ecosystemHash:null,
         databases:maintenance.databasePaths(2).map(source=>({source,exists:true})),
       },
@@ -203,7 +204,10 @@ for (const Cls of [ClaudeAdapter, CodexAdapter]) {
     assert.deepEqual(JSON.parse(fs.readFileSync(recovery.executed, 'utf8')), ['resume', '--transaction-dir', recovery.dir]);
     assert.match(p.args.at(-1), /SYSTEM RECOVERY TASK/);
     assert.doesNotMatch(p.args.at(-1), /undefined/);
-    if (Cls === CodexAdapter) assert.equal(p.args.includes(sentinel), false);
+    if (Cls === CodexAdapter) {
+      assert.equal(p.args.includes(sentinel), false);
+      assert.equal(p.args.at(-1).includes(sentinel), false);
+    }
   });
 
   test(`${Cls.name}: successful automatic startup recovery preserves ordinary argv`, async t => {
