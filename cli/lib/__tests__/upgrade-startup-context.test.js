@@ -41,16 +41,23 @@ test('unmarked historical transactions do not require stable startup helpers', t
  }
 });
 
-function publishedTransaction(t) {
+function publishedTransaction(t, {fail = false, controller = false} = {}) {
  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-startup-published-')));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const dir = path.join(root,'.backup/self-upgrade/tx');
  fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const executed = path.join(root,'recovery-executed');
- for (const [source,name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
- fs.writeFileSync(path.join(dir,'runner.cjs'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(executed)},JSON.stringify(process.argv.slice(2)));fs.rmSync(${JSON.stringify(dir)},{recursive:true});console.log(JSON.stringify({recovery_required:false,stage:'aborted_before_install'}));`);
+ for (const [source,name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs'],['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-recovery.cjs','recovery.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
+ fs.writeFileSync(path.join(dir,'runner.cjs'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(executed)},JSON.stringify(process.argv.slice(2)));${fail?'process.exit(9);':`fs.rmSync(${JSON.stringify(dir)},{recursive:true});console.log(JSON.stringify({recovery_required:false,stage:'aborted_before_install'}));`}`);
  const journal={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:false,initialIdentity:{},recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(dir,name))]))};
+ if(controller){
+  const digest='a'.repeat(64);
+  Object.assign(journal,{phase:'restored_data_ready',installationIntent:true,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:digest,
+   coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
+   initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:digest,cliRoot:path.join(root,'cli'),cliHash:digest,workerPath:path.join(root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:maintenance.databasePaths(2).map(source=>({source,exists:true}))}});
+ }
  maintenance.update(dir,journal);
+ if(controller)maintenance.durable(path.join(dir,'controller.json'),maintenance.identity());
  return {root,dir,journal,executed};
 }
 
@@ -60,6 +67,16 @@ test('startup runs the published transaction runner before a stable bootstrap or
  assert.equal(fs.existsSync(path.join(f.root,'.zylos')),false);
  assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
  assert.deepEqual(JSON.parse(fs.readFileSync(f.executed,'utf8')),['resume','--transaction-dir',f.dir]);
+});
+
+test('failed startup recovery preserves history and returns the recovery prompt', {skip:process.platform!=='linux'}, t => {
+ t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
+ const f=publishedTransaction(t,{fail:true});
+ const context=discoverUpgradeContext(f.root);
+ assert.equal(context.active,true);assert.equal(context.blocked,true);assert.equal(context.recovery_required,true);
+ assert.match(context.prompt,/SYSTEM RECOVERY TASK/);
+ assert.deepEqual(JSON.parse(fs.readFileSync(f.executed,'utf8')),['resume','--transaction-dir',f.dir]);
+ assert.equal(fs.existsSync(f.dir),true);
 });
 
 test('read-only discovery preserves published recovery material without executing the runner', t => {
@@ -194,6 +211,38 @@ test('tmux launcher preserves ordinary prompt for available databases and replac
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), blocked ? 'recovery prompt' : 'ordinary prompt\n\nrecovery prompt');
   }
+});
+
+test('tmux launcher handles history-only recovery outcomes before spawning', {skip:process.platform!=='linux'}, t => {
+  const launch = root => {
+    const specPath = path.join(root, 'spec.json');
+    fs.writeFileSync(specPath, JSON.stringify({
+      command: process.execPath,
+      args: ['-e', 'console.log(process.argv[1])', 'ordinary prompt'],
+      promptIndex: 2,
+      cwd: root,
+      env: { PATH: process.env.PATH, HOME: root, PM2_HOME: path.join(root, 'pm2'), TMPDIR: root, ZYLOS_DIR: root },
+    }));
+    return spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), specPath], {encoding:'utf8'});
+  };
+
+  const failed=publishedTransaction(t,{fail:true}),failedResult=launch(failed.root);
+  assert.equal(failedResult.status,0,failedResult.stderr);
+  assert.match(failedResult.stdout,/SYSTEM RECOVERY TASK/);assert.doesNotMatch(failedResult.stdout,/ordinary prompt/);
+  assert.equal(fs.existsSync(failed.executed),true);
+
+  const succeeded=publishedTransaction(t),succeededResult=launch(succeeded.root);
+  assert.equal(succeededResult.status,0,succeededResult.stderr);assert.equal(succeededResult.stdout.trim(),'ordinary prompt');
+  assert.equal(fs.existsSync(succeeded.executed),true);
+
+  const observed=publishedTransaction(t,{controller:true}),observedResult=launch(observed.root);
+  assert.equal(observedResult.status,0,observedResult.stderr);assert.equal(observedResult.stdout.trim(),'ordinary prompt');
+  assert.equal(fs.existsSync(observed.executed),false);
+
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-launcher-ordinary-')));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const ordinaryResult=launch(root);
+  assert.equal(ordinaryResult.status,0,ordinaryResult.stderr);assert.equal(ordinaryResult.stdout.trim(),'ordinary prompt');
 });
 
 test('C4 delivered-tail hook reads normal context after READY but isolates blocked recovery', t => {
