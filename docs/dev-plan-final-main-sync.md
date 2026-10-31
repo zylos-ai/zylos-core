@@ -2,8 +2,11 @@
 
 ## 1. Scope and hard boundaries
 
-This plan ports the effective behavior of Core `main` pull request #922 into the
-1.x multi-session line. It is not a merge of `main` into the multi-session line.
+This plan integrates the frozen Core `main` tip into an independent feature
+branch based on the 1.x multi-session Base. The Phase 2 merge direction is
+`main` -> feature branch; the resulting Draft PR still targets
+`multi-session/base`. This is not authorization to merge the multi-session line
+or this PR into `main`.
 
 Frozen inputs:
 
@@ -16,17 +19,30 @@ Frozen inputs:
 Before Phase 2, fetch both refs again and require all four values above to remain
 exact. If either branch has advanced, stop and request a new scope; do not widen
 this plan. The implementation branch and PR target remain independent of
-`main`; the PR base is `multi-session/base`.
+`main`; the PR base is `multi-session/base`. After the frozen-value check,
+Phase 2 must start the real integration with:
+
+```bash
+git merge --no-ff --no-commit 6655a3814f5efa0fe0675865721f06dee6b32202
+```
+
+Resolve all seven content conflicts semantically, review the automatically
+merged `CHANGELOG.md`, run the scoped checks, and then create the merge commit.
+Do not abort the merge merely to replace it with manual copying: the resulting
+feature head must have the frozen `main` tip as an ancestor.
 
 The following remain forbidden in this task:
 
-- merging or cherry-picking `main`;
+- cherry-picking `main`, or substituting manual copies for the required frozen
+  `main` -> feature-branch merge;
 - changing `main` or `multi-session/base` directly;
 - targeting a PR at `main`;
-- tagging, releasing, deploying, or merging the PR;
+- merging the feature branch or PR into `main` or `multi-session/base`;
+- tagging, releasing, or deploying;
 - changing upgrade discovery rules, `scanHistory` behavior, recovery ownership,
   runner/bootstrap behavior, prompt text, or the upgrade bridge;
-- importing 0.9.3 version or release metadata into the 1.x line.
+- resolving current package metadata to 0.9.3, or adding 0.9.3 product behavior
+  outside the required historical `CHANGELOG.md` section.
 
 Phase 1 changes only this plan. Product and test changes start only after Luna
 explicitly accepts the plan.
@@ -59,16 +75,19 @@ recovery attempt and post-child durable-state decision inside
 the Base launch boundary; do not restore the 0.9.3 bootstrap API or its
 `resume/status/scanHistory` option structure.
 
-### 2.2 #921 / `6655a381`: release-line metadata not to port
+### 2.2 #921 / `6655a381`: preserve history, not current 0.9.3 metadata
 
-#921 changes only `CHANGELOG.md`, `package.json`, and `package-lock.json` for the
-0.9.3 release. Its useful historical fact is that #922 shipped on the 0.9.3
-line; this plan and the PR description retain that provenance.
+#921 changes `CHANGELOG.md`, `package.json`, and `package-lock.json` for the
+0.9.3 release. The complete automatically merged `CHANGELOG.md` history section
+must remain in the final tree: it records the released #910/#922 work and the
+bridge upgrade path, so removing it would make the historical sequence jump
+from 0.9.2 to 1.x.
 
-Do not import the 0.9.3 release section, bridge notice, version value, or lockfile
-root version. Preserve the Base release history already present in
-`CHANGELOG.md` and keep all 1.x package version fields at `1.0.0-beta.1`. The
-task explicitly excludes extra version and release-note work.
+Historical changelog content is distinct from the current package metadata.
+Resolve `package.json` and `package-lock.json` to the Base's current
+`1.0.0-beta.1` values and dependency graph; do not leave their root/current
+versions at 0.9.3. Do not rewrite the automatically merged 0.9.3 changelog as a
+new 1.x release entry, and do not add any other release-note or version work.
 
 ## 3. 1.x Base architecture and landing layer
 
@@ -155,12 +174,12 @@ semantic reconstruction, never by choosing an entire side.
 | File | Target state | Source of truth | Completion condition |
 | --- | --- | --- | --- |
 | `cli/lib/runtime/codex.js` | Preserve the Base `SessionAdapter` subclass, trust preflight, and auth flow. Do not reintroduce the 0.9.3 direct `resumeUpgradeForStartup()` call. | Base architecture plus #922 Codex result contract | Codex gets recovery through the common session launch boundary; ordinary kick remains exact; no `undefined` appears. |
-| `cli/lib/runtime/tmux-launcher.js` | Keep the Base file unchanged. It already discovers history-only transactions and applies blocked/non-blocking prompts before spawn. Do not route the 1.x adapter through it. | Base launcher plus the independently reproduced nonzero-runner result | Failed recovery remains covered as a compatibility control; no legacy launcher architecture is revived. |
-| `cli/lib/runtime/upgrade-context.js` | Keep the Base file unchanged. Reuse its existing `discoverUpgradeContext()` and `applyUpgradePrompt()` exports exactly; preserve history scan, ownership/controller checks, `recoverBeforeUpgrade()`, closed-recovery wording, stable fallback, cache invalidation, and prompt text. | Base recovery implementation; #922 only supplies the missing consumer | No detection, recovery, result-shape, or prompt-application diff; all existing discovery tests remain valid. |
+| `cli/lib/runtime/tmux-launcher.js` | Resolve the merge conflict to the Base final behavior. It already discovers history-only transactions and applies blocked/non-blocking prompts before spawn; do not route the 1.x adapter through it. | Base launcher plus the independently reproduced nonzero-runner result | The resolved final tree is behaviorally identical to Base for this file; failed recovery remains covered as a compatibility control and no legacy launcher architecture is revived. |
+| `cli/lib/runtime/upgrade-context.js` | Resolve the merge conflict to the Base final behavior. Reuse its existing `discoverUpgradeContext()` and `applyUpgradePrompt()` exports exactly; preserve history scan, ownership/controller checks, `recoverBeforeUpgrade()`, closed-recovery wording, stable fallback, cache invalidation, and prompt text. | Base recovery implementation; #922 only supplies the missing consumer | The resolved final tree has no unsupported detection, recovery, result-shape, or prompt-application behavior delta; all existing discovery tests remain valid. |
 | `cli/lib/__tests__/runtime-launch.test.js` | Extend the current real `SessionAdapter` + real isolated tmux harness for Claude and Codex. Do not restore 0.9.3 child-process mocks or old adapter APIs. | Base test architecture plus #922 runtime outcomes | Positive failed-recovery cases cover both adapters; success/no-transaction controls prove unchanged argv and exact Codex kick; real product code is exercised. |
 | `cli/lib/__tests__/upgrade-startup-context.test.js` | Extend the existing recovery/discovery suite with real deployed bootstrap/maintenance/recovery materials and tmux-launcher coverage. Keep neutral test names. | Base fixture conventions plus #922 discovery/tmux outcomes | Failure, success, history-only, live controller, and no-transaction cases are executable without source rewriting or source re-evaluation. |
-| `package.json` | Keep Base unchanged at `1.0.0-beta.1`. | Frozen Base | Version remains `1.0.0-beta.1`; no dependency/script drift. |
-| `package-lock.json` | Keep Base root and package version at `1.0.0-beta.1`; retain the Base dependency graph. | Frozen Base and `package.json` | Lock root name/version match `package.json`; lock generation produces no diff. |
+| `package.json` | Resolve the merge conflict to Base's current `1.0.0-beta.1` metadata. | Frozen Base; historical 0.9.3 data belongs only in CHANGELOG | Version remains `1.0.0-beta.1`; no dependency/script drift. |
+| `package-lock.json` | Resolve the merge conflict so root/current package version remains `1.0.0-beta.1` and the Base dependency graph is retained. | Frozen Base and resolved `package.json` | Lock root name/version match `package.json`; isolated lock-only regeneration produces no diff. |
 
 One additional Base-native file is the sole planned production change:
 `cli/lib/runtime/session-adapter.js`, because that is where Claude and Codex now
@@ -173,17 +192,20 @@ re-review this plan before code; do not silently move the behavior.
 
 The frozen main range changes exactly eight files. Seven are the conflicts
 listed above. The only non-conflicting merge result is `CHANGELOG.md`, containing
-the 0.9.3 release section and bridge notice.
+the complete 0.9.3 history section for #910/#922 and the bridge upgrade path.
 
-Phase 2 must not run a merge or cherry-pick, so no automatic hunk should enter
-the branch. Before delivery:
+Phase 2 must perform the frozen merge and keep that automatic changelog result.
+Before delivery:
 
 1. compare `de52f673..origin/main` and confirm the same eight-file set;
 2. regenerate `merge-tree` and confirm the same seven conflicts plus the single
    automatic `CHANGELOG.md` result;
-3. inspect the entire PR diff and confirm that no 0.9.3 changelog, package
-   version, release branch, or bridge-only behavior entered;
-4. inspect every changed line outside the planned runtime/test files and treat
+3. after the merge, require `git merge-base --is-ancestor 6655a381 HEAD` to
+   succeed and inspect `CHANGELOG.md` to confirm the complete historical 0.9.3
+   section was preserved exactly once;
+4. inspect the entire PR diff and confirm that no 0.9.3 current package
+   version, release-branch behavior, or bridge-only product behavior entered;
+5. inspect every changed line outside the planned runtime/test files and treat
    any extra file as a blocker requiring plan revision.
 
 ## 6. Execution pseudocode
@@ -332,16 +354,51 @@ added task-specific e2e may be run if this plan is revised to name it first.
 
 ### 7.5 Structural checks
 
-```text
-package.json.version == 1.0.0-beta.1
-package-lock.json.version == 1.0.0-beta.1
-package-lock.json.packages[""].version == 1.0.0-beta.1
-package-lock-only regeneration in an isolated temporary clone → no diff
-git diff --check → clean
-git diff origin/multi-session/base...HEAD → only planned docs/runtime/tests
-git rev-parse origin/main origin/multi-session/base and merge-base → frozen values
-merge-tree conflict inventory → unchanged unless Luna explicitly re-scopes
+Check the resolved current versions directly:
+
+```bash
+node -e '
+  const fs = require("node:fs");
+  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+  if (pkg.version !== "1.0.0-beta.1" ||
+      lock.version !== "1.0.0-beta.1" ||
+      lock.packages?.[""]?.version !== "1.0.0-beta.1") process.exit(1);
+'
 ```
+
+Verify package/lock consistency in a disposable clone. Lifecycle scripts are
+disabled, and both `HOME` and `ZYLOS_DIR` point inside the disposable directory,
+so this command cannot sync skills into the live deployment:
+
+```bash
+lockcheck="$(mktemp -d)"
+trap 'rm -rf "$lockcheck"' EXIT
+git clone --no-local --no-checkout "$(git rev-parse --show-toplevel)" "$lockcheck/repo"
+git -C "$lockcheck/repo" checkout --detach HEAD
+mkdir -p "$lockcheck/home" "$lockcheck/zylos"
+env HOME="$lockcheck/home" ZYLOS_DIR="$lockcheck/zylos" \
+  npm --prefix "$lockcheck/repo" install --package-lock-only --ignore-scripts \
+  --no-audit --no-fund
+git -C "$lockcheck/repo" diff --exit-code -- package.json package-lock.json
+```
+
+Then run:
+
+```bash
+git diff --check
+git diff origin/multi-session/base...HEAD -- \
+  CHANGELOG.md docs/dev-plan-final-main-sync.md cli/lib/runtime \
+  cli/lib/__tests__ package.json package-lock.json
+test "$(git rev-parse origin/main)" = 6655a3814f5efa0fe0675865721f06dee6b32202
+test "$(git rev-parse origin/multi-session/base)" = f027ac0551183b1785cedd19d187326882e57654
+test "$(git merge-base origin/main origin/multi-session/base)" = de52f673f7e984abe0e3c6eb497664cd54de0c95
+git merge-base --is-ancestor 6655a3814f5efa0fe0675865721f06dee6b32202 HEAD
+```
+
+Before starting the merge, regenerate the frozen `merge-tree` inventory and
+require the same seven conflicts. After resolution, use the full PR diff and
+the ancestor check—not a second synthetic merge-tree—as the final proof.
 
 Evidence logs, fixture artifacts, mutation output, and acceptance tables stay
 outside the repository and are summarized in the issue/PR delivery text.
@@ -351,18 +408,22 @@ outside the repository and are summarized in the issue/PR delivery text.
 Phase 1 consists of one plan-only commit and a Draft PR to
 `multi-session/base`.
 
-After Luna approves this plan, Phase 2 may add only:
+After Luna approves this plan, Phase 2 must merge the frozen `main` tip into the
+feature branch, preserve the automatically merged complete 0.9.3 changelog
+history, semantically resolve all seven conflicts, and may add only:
 
 - the minimum Base-native discovery and prompt-application call in
   `session-adapter.js`;
 - targeted tests in the two existing neutral test files;
 - a plan correction commit when review changes this design.
 
-`codex.js`, `tmux-launcher.js`, `upgrade-context.js`,
-`skills/comm-bridge/scripts/c4-session-init.js`, `package.json`,
-`package-lock.json`, and `CHANGELOG.md` are expected to remain at the Base target
-state unless Luna identifies evidence that requires a plan revision before code.
-No new production mechanism is planned.
+`codex.js`, `tmux-launcher.js`, `upgrade-context.js`, `package.json`, and
+`package-lock.json` are conflict-resolution files: they will be touched while
+recording the merge, but their final product/current-version semantics must stay
+at the Base target state unless Luna identifies evidence that requires a plan
+revision before code. `CHANGELOG.md` is the deliberate exception: retain the
+automatically merged historical 0.9.3 section. The C4 SessionStart hook remains
+unchanged. No new production mechanism is planned.
 
 Do not mix the plan and product implementation into one commit. Do not use a
 cherry-pick message. Before Phase 2 delivery, review the entire
@@ -373,13 +434,15 @@ finding to its fix, test, and contract clause.
 
 - deciding whether or when the multi-session line merges into `main`;
 - merging this PR;
-- version bump, changelog release section, tag, release, package publication,
-  deployment, or live upgrade;
+- a new 1.x version bump or new 1.x changelog release section, tag, release,
+  package publication, deployment, or live upgrade; preserving the frozen
+  0.9.3 historical changelog is required integration work, not a new release;
 - changing macOS recovery eligibility or adding a manual takeover command;
 - changing transaction discovery, ownership, controller identity, hash checks,
   recovery prompt copy, runner/bootstrap/maintenance, or upgrade bridge logic;
-- full Node/Jest, all existing e2e, mutation, final merge trial, and the complete
-  tmux compatibility matrix, which belong to Luna's DGX acceptance.
+- full Node/Jest, all existing e2e, mutation, the final PR-to-Base merge trial,
+  and the complete tmux compatibility matrix, which belong to Luna's DGX
+  acceptance.
 
 ## 10. Phase 1 handoff checklist
 
@@ -392,6 +455,6 @@ The plan-review comment must include:
 - unresolved decisions, or an explicit `none`;
 - checks run and their exit codes;
 - checks intentionally not run: product tests, full suites, e2e, mutation,
-  merge trial, release, and deploy;
+  PR-to-Base merge trial, release, and deploy;
 - a request for Luna's explicit Phase 2 approval. Until that approval arrives,
   no product or test code is written.
