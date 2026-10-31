@@ -50,7 +50,9 @@ test('macOS parent records npm failure and releases controller after installed m
   const saved=f.read();assert.ok(saved.installerPid>0);assert.equal(saved.installerExitConfirmed,true);assert.equal(saved.installerExitUnconfirmed,false);
   assert.doesNotThrow(()=>f.ctx.releaseControl());f.ctx.releaseControl=null;
   assert.equal(fs.existsSync(path.join(f.dir,'controller.json')),false);
-  assert.equal(f.ctx.maintenance,require(path.join(f.root,'.zylos/upgrade/maintenance.cjs')));
+  const stagingMaintenance=path.join(f.root,'.backup/self-upgrade-staging',f.ctx.transactionId,'maintenance.cjs');
+  assert.ok(require.cache[stagingMaintenance]);assert.equal(f.ctx.maintenance,require.cache[stagingMaintenance].exports);
+  assert.ok(require.cache[f.installed]);assert.notEqual(f.ctx.maintenance,require.cache[f.installed].exports);
   assert.equal(fs.existsSync(path.join(f.dir,'macos-recovery-helper')),false);
 });
 

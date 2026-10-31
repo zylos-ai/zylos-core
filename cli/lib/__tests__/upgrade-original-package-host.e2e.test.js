@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {createRequire} from 'node:module';
 import {createProtectedPackageCrashFixture} from './helpers/protected-package-crash.js';
 
 const enabled = process.env.ZYLOS_RUN_ORIGINAL_PACKAGE_HOST_E2E === '1';
+const automaticRecovery = createRequire(import.meta.url)('../upgrade-maintenance.cjs').canRecognizeProcesses();
 
 function assertServicesRecovered(f, from = 0) {
   const state = f.serviceState();
@@ -45,7 +47,7 @@ for (const targetBinChanged of [false, true]) test(`real package directory compe
 });
 
 test('real package directory compensation resumes across interrupted copy and bin repair', {
-  skip: !enabled,
+  skip: !enabled || (!automaticRecovery && 'automatic process recognition unavailable'),
   timeout: 2400000,
 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'original-package-reentry-'));
