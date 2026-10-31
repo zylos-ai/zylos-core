@@ -67,8 +67,8 @@ test('transition and accepted Origin manual request suppress pending health kill
 test('watchdog waits interrupt grace without synthesizing tool completion',async t=>{
   const f=fixture(t);f.setState({tools:[{id:'one',name:'Bash',startedAt:f.now()-11000}]});await f.observer.tick();assert.equal(f.interrupts.length,1);f.advance(5000);await f.observer.tick();assert.equal(f.stops.length,0);f.advance(1);await f.observer.tick();assert.equal(f.events[0].event,'tool_timeout_Bash');assert.equal(f.health().health,'ok');
 });
-test('active tool with unchanged context switches for 150 seconds keeps scene running',async t=>{
-  const f=fixture(t);f.observer.resolveToolRule=()=>null;f.setState({tools:[{id:'one'}],contextSwitches:10});await f.observer.tick();f.advance(150000);await f.observer.tick();assert.deepEqual(f.stops,[]);assert.deepEqual(f.events,[]);assert.equal(f.health().health,'ok');
+test('active tool remains running past the former process-sample interval',async t=>{
+  const f=fixture(t);f.observer.resolveToolRule=()=>null;f.setState({tools:[{id:'one'}]});await f.observer.tick();f.advance(150000);await f.observer.tick();assert.deepEqual(f.stops,[]);assert.deepEqual(f.events,[]);assert.equal(f.health().health,'ok');
 });
 test('pane rate needs two delivered hits and auth requires failed checkAuth',async t=>{
   const f=fixture(t);f.delivered();f.setMatches({rateLimit:{detected:true}});f.advance(5000);await f.observer.tick();assert.equal(f.health().health,'ok');

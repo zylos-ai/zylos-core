@@ -32,8 +32,8 @@ test('single lists Origin identity but machine observation retains NULL scope', 
   assert.equal(machine.sessionGroup, null); assert.equal(machine.ready, true);
   assert.ok(Number.isSafeInteger(machine.runtimePid));
   assert.deepEqual(machine.healthIdentity, { runtime: 'claude', session_id: 'session-1', claude_pid: machine.runtimePid });
-  assert.equal(machine.proc.pid, machine.runtimePid); assert.equal(machine.proc.alive, true);
-  assert.ok(Number.isFinite(machine.contextSwitches));
+  assert.deepEqual(machine.proc, { pid: machine.runtimePid, alive: true, last_sample_at: machine.proc.last_sample_at });
+  assert.equal(Number.isFinite(machine.proc.last_sample_at), true);
 });
 test('unknown process data remains unknown and unreadable tmux is never absent', { timeout: 15000 }, async t => {
   const f = readyTmuxTarget(t, { prefix: 'supervisor-unknown-scene-', mode: 'multi' });
@@ -47,7 +47,7 @@ test('unknown process data remains unknown and unreadable tmux is never absent',
 test('identity-only checks skip process, usage and activity sampling and reject a changed run', { timeout: 15000 }, async t => {
   const f = readyTmuxTarget(t, { prefix: 'supervisor-identity-', mode: 'multi' });
   const unexpected = () => { throw Error('identity check sampled activity'); };
-  const scenes = service(f, { readProcessTree: unexpected, readActivity: unexpected, readUsage: unexpected, readContextSwitches: unexpected });
+  const scenes = service(f, { readProcessTree: unexpected, readActivity: unexpected, readUsage: unexpected });
   const old = await scenes.readIdentity('origin');
   assert.equal(old.ready, true); assert.equal(old.runId, 'run-1');
   assert.deepEqual(await scenes.bindTarget(old), { expectedRunId:'run-1', tmuxTarget:old.tmuxTarget });

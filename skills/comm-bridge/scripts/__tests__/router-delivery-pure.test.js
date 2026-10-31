@@ -269,7 +269,7 @@ describe('isRecoveryHeartbeatPhase', () => {
 
 describe('shouldAutoAckHeartbeat', () => {
   const heartbeatItem = { content: 'Heartbeat check. [phase=primary]' };
-  const aliveProc = { alive: true, frozen: false, lastDelta: 1 };
+  const aliveProc = { alive: true };
 
   for (const phase of ['primary', 'stuck', 'down-check', 'unknown']) {
     it(`keeps busy-path auto-ack for ${phase} when activity hooks confirm work`, () => {
@@ -347,11 +347,11 @@ describe('shouldAutoAckHeartbeat', () => {
     }), false);
   });
 
-  it('does not auto-ack idle heartbeats when proc-state says the agent is frozen', () => {
+  it('does not auto-ack idle heartbeats when activity hooks do not confirm work', () => {
     assert.equal(shouldAutoAckHeartbeat({
       item: heartbeatItem,
       agentState: { state: 'idle', health: 'ok', idleSeconds: 10, healthy: true },
-      procState: { alive: true, frozen: true, lastDelta: 0 },
+      procState: { alive: true },
       confirmedActive: false
     }), false);
   });

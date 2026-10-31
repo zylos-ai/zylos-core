@@ -27,6 +27,7 @@ test('legacy and new Origin publish separate identities; newest unrelated transc
   assert.equal(JSON.parse(fs.readFileSync(statusFile)).sessionId,'session-1');
   const oldFile=path.join(f.dir,'agent-status.json'),before=fs.readFileSync(oldFile,'utf8');
   assert.equal(JSON.parse(before).sessionId,'old-session');
+  assert.deepEqual(JSON.parse(before).proc,{pid:f.foreground.claude_pid,alive:true,last_sample_at:f.now});
   f.tmux('kill-session','-t','=claude-main');await f.observer.tick();assert.equal(fs.readFileSync(oldFile,'utf8'),before);
   assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));
 });
