@@ -8,6 +8,7 @@ import { validateUpgradeHandoff, upgradeFailureCode, upgradeFailureMessage } fro
 import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged, assertDashboardUninstalled } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
+import { recoveryNext } from './upgrade-discovery.js';
 
 export function resolveUpgradeNpmCli() {
   for (const directory of String(process.env.PATH || '').split(path.delimiter)) {
@@ -113,7 +114,7 @@ export async function runUpgradeEntry(input, deps = {}) {
     const prior = m.discover(input.zylosDir);
     if (prior.candidates.length || prior.diagnostics.length || prior.marker) {
       throw Object.assign(new Error('Unfinished upgrade requires recovery before another installation.'), {code:'UPGRADE_RECOVERY_REQUIRED', recovery_required:true,
-        next:'Run zylos recovery status, then zylos recovery resume before upgrading.'});
+        next:recoveryNext(prior, m, 'Run zylos recovery status, then zylos recovery resume before upgrading.')});
     }
     ctx = (deps.inspect ?? inspectUpgradeSource)(input, deps);
     ctx.protectedNpmCli = (deps.resolveNpm ?? resolveUpgradeNpmCli)();
@@ -155,6 +156,10 @@ if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process
     result = {success:false, code:error instanceof SyntaxError ? 'INVALID_UPGRADE_HANDOFF' : upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]};
   }
   for(const warning of result.warnings || []) process.stderr.write(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}\n`);
+  for(const item of result.checkpointAudit?.items || []) {
+    if(item?.repairRequired === true) process.stderr.write(`Checkpoint warning: checkpoint ${item.checkpointId} exceeds the available conversation range and requires repair.\n`);
+  }
+  if(result.checkpointAudit?.state === 'incomplete') process.stderr.write('Checkpoint audit warning: audit incomplete; checkpoint consistency could not be verified.\n');
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exitCode = result.success ? 0 : 1;
 }

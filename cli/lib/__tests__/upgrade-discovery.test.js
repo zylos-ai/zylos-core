@@ -40,10 +40,18 @@ test('upgrade discovery delegates only to the verified transaction runner before
   assert.equal(result.result.completed,true);
 });
 
-for (const kind of ['ambiguous','unrecognizable','changed','failed','remaining']) test(`upgrade discovery rejects ${kind} recovery without starting a new upgrade`, () => {
+for (const kind of ['ambiguous','diagnostics','unrecognizable','changed','failed','remaining']) test(`upgrade discovery rejects ${kind} recovery without starting a new upgrade`, () => {
   const f = fixture();
-  if (kind==='ambiguous') f.m.discover=()=>({candidates:[],diagnostics:['unsafe'],marker:null});
-  if (kind==='unrecognizable') f.m.canRecognizeProcesses=()=>false;
+  if (kind==='ambiguous') {
+    const candidate=f.m.discover().candidates[0];
+    f.m.discover=()=>({candidates:[candidate,candidate],diagnostics:[],marker:null});
+    f.m.classifyCutoff=()=> 'closed';
+  }
+  if (kind==='diagnostics') f.m.discover=()=>({candidates:[],diagnostics:['unsafe'],marker:null});
+  if (kind==='unrecognizable') {
+    f.m.canRecognizeProcesses=()=>false;
+    f.m.classifyCutoff=()=> 'closed';
+  }
   if (kind==='changed') f.m.hash=()=> 'b'.repeat(64);
   let calls=0;
   assert.throws(()=>recoverBeforeUpgrade('/isolated',{maintenance:f.m,spawn() {
@@ -57,4 +65,17 @@ for (const kind of ['ambiguous','unrecognizable','changed','failed','remaining']
     return true;
   });
   assert.equal(calls,['failed','remaining'].includes(kind)?1:0);
+});
+
+test('closed recovery failure directs the caller to forward finalization', () => {
+  const f=fixture();
+  f.m.classifyCutoff=()=> 'closed';
+  assert.throws(()=>recoverBeforeUpgrade('/isolated',{maintenance:f.m,spawn(){
+    return {status:1,stdout:JSON.stringify({recovery_required:true,error:'compensation is closed'})};
+  }}),error=>{
+    assert.equal(error.code,'UPGRADE_RECOVERY_REQUIRED');
+    assert.match(error.next,/zylos upgrade --resume-finalize/);
+    assert.doesNotMatch(error.next,/zylos recovery resume/);
+    return true;
+  });
 });

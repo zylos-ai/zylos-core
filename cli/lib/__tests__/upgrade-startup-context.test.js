@@ -6,6 +6,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt,discoverUpgradeContext} from '../runtime/upgrade-context.js';
+import {recoveryCommand} from '../../commands/recovery.js';
 const maintenance = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 test('Codex recovery replaces the sole positional startup prompt and shell quoting preserves hostile text',()=>{
  const prompt="recovery $(false) `false` 'quotes'\nnext line";
@@ -71,6 +72,23 @@ test('read-only discovery preserves published recovery material without executin
  assert.equal(fs.readFileSync(path.join(f.dir,'journal.json'),'utf8'),before);
 });
 
+test('recovery resume output directs a closed transaction to forward finalization', {skip:process.platform!=='linux'}, async t => {
+ const f=publishedTransaction(t),hash='a'.repeat(64);
+ fs.copyFileSync(path.resolve('cli/lib/upgrade-recovery.cjs'),path.join(f.dir,'runner.cjs'));
+ Object.assign(f.journal,{phase:'compensation_closed',snapshotManifestHash:hash,originalServices:[],lastError:'EACCES: retained diagnostic',
+  compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:hash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
+  postCutoff:{formatVersion:1,items:{hooks:{state:'done',attempts:1,lastError:null}}},dashboardInstall:null});
+ f.journal.recoveryHashes=Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(f.dir,name))]));
+ maintenance.durable(path.join(f.dir,'journal.json'),f.journal);
+ const output=[],log=console.log,exitCode=process.exitCode;
+ console.log=value=>output.push(String(value));
+ try {await recoveryCommand(['resume'],{root:f.root});}
+ finally {console.log=log;process.exitCode=exitCode;}
+ assert.equal(output.length,1);
+ assert.match(output[0],/zylos upgrade --resume-finalize/);
+ assert.match(output[0],/Do not use zylos recovery resume/);
+});
+
 test('pre-marker recovery material remains isolated with corrupt or absent journal publication', t => {
  for (const damage of ['corrupt','missing','partial-recovery']) {
   const f=publishedTransaction(t);
@@ -111,11 +129,19 @@ test('startup rejects modified transaction recovery and unrecognizable ownership
  for(const attack of ['modified-runner','unknown-process']) {
   const f=publishedTransaction(t),recognize=maintenance.canRecognizeProcesses;
   if(attack==='modified-runner')fs.appendFileSync(path.join(f.dir,'runner.cjs'),'\n// changed');
-  else maintenance.canRecognizeProcesses=()=>false;
+  else {
+   const hash='a'.repeat(64);
+   Object.assign(f.journal,{phase:'compensation_closed',snapshotManifestHash:hash,
+    compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:hash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
+    postCutoff:{formatVersion:1,items:{hooks:{state:'pending',attempts:0,lastError:null}}},dashboardInstall:null});
+   maintenance.update(f.dir,f.journal);
+   maintenance.canRecognizeProcesses=()=>false;
+  }
   let context;
   try{context=discoverUpgradeContext(f.root);}finally{maintenance.canRecognizeProcesses=recognize;}
   assert.equal(context.recovery_required,true);
   assert.equal(context.blocked,true);
+  if(attack==='unknown-process')assert.doesNotMatch(context.prompt,/zylos upgrade --resume-finalize/);
   assert.equal(fs.existsSync(f.executed),false);
  }
 });

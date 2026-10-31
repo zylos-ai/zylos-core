@@ -4,6 +4,12 @@ const fs = require('node:fs'),
   path = require('node:path');
 const m = require('./maintenance.cjs');
 const failureCode = value => typeof value?.code === 'string' && value.code.length > 0 ? value.code : 'UPGRADE_FAILED';
+function closedRecoveryError(lastError) {
+  const guidance = 'compensation is closed; use zylos upgrade --resume-finalize';
+  return typeof lastError === 'string' && lastError.trim()
+    ? lastError.includes(guidance) ? lastError : `${lastError}; ${guidance}`
+    : guidance;
+}
 function fail(dir, j, error) {
   try {
     m.marker(j.zylosDir, dir, j);
@@ -380,7 +386,7 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     const cutoff = m.classifyCutoff(j);
     if (cutoff === 'untrusted') throw Object.assign(Error('untrusted cutoff requires manual recovery'), {code: 'CUTOFF_UNTRUSTED'});
     if (cutoff === 'closed' && j.phase !== 'upgrade_complete') {
-      return fail(dir, j, 'compensation is closed; use zylos upgrade --resume-finalize');
+      return fail(dir, j, closedRecoveryError(j.lastError));
     }
     m.verifyFinalizerExit(dir, j);
     if (m.terminalValid(j)) {
