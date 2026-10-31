@@ -1009,6 +1009,7 @@ async function handleApi(req, res, pathname, url) {
     sendJson(res, 200, {
       ok: true,
       service: 'zylos-dashboard',
+      pid: process.pid,
       startedAt: startedAt.toISOString(),
       uptimeSeconds: Math.round(process.uptime()),
       phase: 'phase2a',
