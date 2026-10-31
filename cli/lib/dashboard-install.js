@@ -121,15 +121,21 @@ export async function verifyDashboard({ zylosDir }) {
   try { loc = settings(zylosDir); }
   catch { return { state: 'degraded', checks: { health: false }, errors: [{ item: 'health', code: 'health_failed', location: locations(zylosDir).config }] }; }
   const localUrl = `http://127.0.0.1:${loc.port}/api/health`;
-  let expectedPid;
-  try { expectedPid = managedPid(JSON.parse(run('pm2', ['jlist'], zylosDir)), loc); }
-  catch {}
-  if (expectedPid == null) {
-    return { state: 'degraded', checks: { health: false }, errors: [{ item: 'health', code: 'health_failed', location: localUrl }] };
-  }
+  let confirmedPid;
   let observedFailure = false;
   do {
-    try { await health(localUrl, expectedPid); checks.health = true; break; }
+    const timeout = remaining();
+    if (!timeout) break;
+    let expectedPid;
+    try { expectedPid = managedPid(JSON.parse(run('pm2', ['jlist'], zylosDir, timeout)), loc); }
+    catch {}
+    try {
+      if (expectedPid == null) throw Error('Dashboard managed process is unavailable');
+      await health(localUrl, expectedPid);
+      confirmedPid = expectedPid;
+      checks.health = true;
+      break;
+    }
     catch (error) {
       if (timedOut(error)) break;
       observedFailure = true;
@@ -150,7 +156,7 @@ export async function verifyDashboard({ zylosDir }) {
       const publicBase = new URL(`${port != null ? 'http' : protocol}://${domain}${port != null ? ':' + port : ''}`);
       if (publicBase.username || publicBase.password || publicBase.pathname !== '/' || publicBase.search || publicBase.hash) throw Error('Invalid public URL');
       routeLocation = new URL('/dashboard/api/health', publicBase).href;
-      await health(routeLocation, expectedPid);
+      await health(routeLocation, confirmedPid);
       checks.route = true;
     }
   } catch (error) { failed('route', timedOut(error) ? 'verify_timeout' : 'route_failed', routeLocation); }

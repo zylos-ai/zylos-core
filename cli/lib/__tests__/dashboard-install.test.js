@@ -92,6 +92,10 @@ function pm2Result(f, entries) {
  fs.writeFileSync(path.join(f.dir,'pm2-result.json'),JSON.stringify(entries));
  fs.writeFileSync(path.join(f.bin,'pm2'),`#!${process.execPath}\nimport fs from 'node:fs';import path from 'node:path';const root=process.env.ZYLOS_DIR;const args=process.argv.slice(2);fs.appendFileSync(path.join(root,'pm2-calls'),JSON.stringify(args)+'\\n');if(args[0]==='jlist')process.stdout.write(fs.readFileSync(path.join(root,'pm2-result.json')));`,{mode:0o755});
 }
+function pm2Sequence(f, results) {
+ fs.writeFileSync(path.join(f.dir,'pm2-results.json'),JSON.stringify(results));
+ fs.writeFileSync(path.join(f.bin,'pm2'),`#!${process.execPath}\nimport fs from 'node:fs';import path from 'node:path';const root=process.env.ZYLOS_DIR;const args=process.argv.slice(2);fs.appendFileSync(path.join(root,'pm2-calls'),JSON.stringify(args)+'\\n');if(args[0]==='jlist'){const file=path.join(root,'pm2-results.json');const results=JSON.parse(fs.readFileSync(file));const current=results.length>1?results.shift():results[0];fs.writeFileSync(file,JSON.stringify(results));console.log(JSON.stringify(current));}`,{mode:0o755});
+}
 function managedEntry(f) {
  return {name:'zylos-dashboard',pid:MANAGED_PID,pm2_env:{status:'online',pm_exec_path:path.join(f.code,'src/index.js'),pm_cwd:f.code}};
 }
@@ -166,6 +170,30 @@ test('verification polls local health until the service reports ready',async t=>
  assert.equal(result.state,'ready');assert.equal(f.requests.length,3);
 });
 
+test('verification recovers when the managed pid appears during the readiness window',async t=>{
+ const f=await healthFixture(t,(_req,res)=>healthy(res));
+ const missing=managedEntry(f);delete missing.pid;
+ pm2Sequence(f,[[missing],[managedEntry(f)]]);
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.state,'ready');assert.deepEqual(f.requests,['/api/health']);
+ assert.deepEqual(fs.readFileSync(path.join(f.dir,'pm2-calls'),'utf8').trim().split('\n').map(JSON.parse),[['jlist'],['jlist']]);
+});
+
+test('verification follows a replaced managed process during the readiness window',async t=>{
+ const f=await healthFixture(t,(_req,res)=>healthy(res));
+ const old=managedEntry(f);old.pid=MANAGED_PID-1;
+ pm2Sequence(f,[[old],[managedEntry(f)]]);
+ const publicRequests=[];
+ const proxy=http.createServer((req,res)=>{publicRequests.push(req.url);healthy(res);});
+ await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));
+ t.after(()=>new Promise(resolve=>{proxy.closeAllConnections();proxy.close(resolve);}));
+ fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
+ fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'127.0.0.1',protocol:'https',port:proxy.address().port}));
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.deepEqual(result,{state:'ready',checks:{health:true,route:true},errors:[]});
+ assert.deepEqual(f.requests,['/api/health','/api/health']);assert.deepEqual(publicRequests,['/dashboard/api/health']);
+});
+
 test('verification rejects health served by a different process',async t=>{
  let now=1000;
  const f=await healthFixture(t,(_req,res)=>{now+=30001;healthy(res,MANAGED_PID+1);});
@@ -175,17 +203,21 @@ test('verification rejects health served by a different process',async t=>{
  assert.deepEqual(result.errors.map(error=>error.code),['health_failed']);
 });
 
-test('verification requires one managed entry with a positive pid',async t=>{
+test('verification reports health failure after the readiness window when the managed pid stays unavailable',async t=>{
  const f=await healthFixture(t,(_req,res)=>healthy(res));
- for(const pid of [undefined,0,-1,1.5,String(MANAGED_PID)]){
-  const invalid=managedEntry(f);if(pid===undefined)delete invalid.pid;else invalid.pid=pid;pm2Result(f,[invalid]);
-  assert.deepEqual((await verifyDashboard({zylosDir:f.dir})).errors.map(error=>error.code),['health_failed']);
- }
- const valid=managedEntry(f);pm2Result(f,[valid,{...valid}]);
- assert.deepEqual((await verifyDashboard({zylosDir:f.dir})).errors.map(error=>error.code),['health_failed']);
+ let now=1000;t.mock.method(Date,'now',()=>{now+=10001;return now;});
+ const missing=managedEntry(f);delete missing.pid;
+ const zero=managedEntry(f);zero.pid=0;
+ const negative=managedEntry(f);negative.pid=-1;
+ const fractional=managedEntry(f);fractional.pid=1.5;
+ const string=managedEntry(f);string.pid=String(MANAGED_PID);
+ const valid=managedEntry(f);
  const wrong={...valid,pm2_env:{...valid.pm2_env,pm_exec_path:'/other/dashboard/src/index.js'}};
- pm2Result(f,[wrong]);
- assert.deepEqual((await verifyDashboard({zylosDir:f.dir})).errors.map(error=>error.code),['health_failed']);
+ for(const entries of [[missing],[zero],[negative],[fractional],[string],[valid,{...valid}],[wrong]]){
+  pm2Result(f,entries);
+  const result=await verifyDashboard({zylosDir:f.dir});
+  assert.equal(result.state,'degraded');assert.deepEqual(result.errors.map(error=>error.code),['health_failed']);
+ }
  assert.deepEqual(f.requests,[]);
  pm2Result(f,[wrong,valid]);
  assert.equal((await verifyDashboard({zylosDir:f.dir})).state,'ready');
