@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { RuntimeAdapter } from './base.js';
 import { adapterError, runtimeExecutable, runtimeHelpAsync, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, hasNativeClaudeAuthAsync } from './session-command.js';
 import { settleLaunch } from './session-launch.js';
+import { applyUpgradePrompt, discoverUpgradeContext } from './upgrade-context.js';
 import { ZYLOS_DIR } from '../config.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, isIdentityError } from './tmux-protocol.js';
 
@@ -136,7 +137,16 @@ export class SessionAdapter extends RuntimeAdapter {
         delete cleanEnv.ANTHROPIC_API_KEY;
         delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
       }
-      const args = buildRuntimeArgs(this.runtimeId, launchConfig, {root, help});
+      let args = buildRuntimeArgs(this.runtimeId, launchConfig, {root, help});
+      const upgrade = discoverUpgradeContext(root);
+      if (upgrade.blocked || (upgrade.active && !upgrade.controllerAlive && upgrade.prompt)) {
+        args = applyUpgradePrompt(
+          args,
+          upgrade.prompt,
+          this.runtimeId === 'codex' ? args.length - 1 : undefined,
+          { append: !upgrade.blocked }
+        );
+      }
       const script = writeSessionLaunchScript({command,args,env:cleanEnv,root,multi:sessionMode === 'multi'});
       return await settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux:this.options.tmux});
     } catch (error) {
