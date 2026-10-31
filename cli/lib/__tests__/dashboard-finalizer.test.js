@@ -39,7 +39,7 @@ if(args[0]==='start' && process.env.FAIL_MIGRATION==='1') {
   try {new Store(path.join(root,'components/dashboard/dashboard.db')).close();}
   catch(error) {fs.writeFileSync(path.join(root,'migration-error'),error.message);process.exit(1);}
 }
-if(args[0]==='jlist')console.log(JSON.stringify([{name:'zylos-dashboard',pm2_env:{status:'online',pm_exec_path:path.join(code,'src/index.js'),pm_cwd:code}}]));
+if(args[0]==='jlist')console.log(JSON.stringify([{name:'zylos-dashboard',pid:4242,pm2_env:{status:'online',pm_exec_path:path.join(code,'src/index.js'),pm_cwd:code}}]));
 `, { mode: 0o755 });
   for (const item of ['home','pm2-home','tmp']) fs.mkdirSync(path.join(root,item));
   const env = { ...process.env, HOME:path.join(root,'home'), PM2_HOME:path.join(root,'pm2-home'), TMPDIR:path.join(root,'tmp'), ZYLOS_DIR: root, PATH: bin + path.delimiter + process.env.PATH };
