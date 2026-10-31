@@ -99,7 +99,9 @@ test('Dashboard entry rejects malformed Host on HTTP and both upgrade routes wit
       const response = await httpRequest(port, host);
       assert.equal(response.status, 400);
       assert.deepEqual(JSON.parse(response.body), { error: 'invalid_request' });
-      assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).status, 200);
+      const health = await fetch(`http://127.0.0.1:${port}/api/health`);
+      assert.equal(health.status, 200);
+      assert.equal((await health.json()).pid, process.pid);
     }
     const reset = new EventEmitter();
     let destroyed = false;

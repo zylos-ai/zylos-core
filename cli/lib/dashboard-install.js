@@ -29,6 +29,11 @@ function matches(processes, loc) {
     && path.resolve(found[0].pm2_env.pm_exec_path || '') === path.join(loc.code, 'src/index.js')
     && path.resolve(found[0].pm2_env.pm_cwd || '') === loc.code;
 }
+function managedPid(processes, loc) {
+  const found = processes.filter(p => p.name === name
+    && path.resolve(p.pm2_env?.pm_exec_path || '') === path.join(loc.code, 'src/index.js'));
+  return found.length === 1 && Number.isInteger(found[0].pid) && found[0].pid > 0 ? found[0].pid : null;
+}
 
 export function copyDashboardDb(zylosDir, txDir) {
   try {
@@ -101,12 +106,12 @@ export async function verifyDashboard({ zylosDir }) {
   const deadline = Date.now() + READY_LIMIT;
   const remaining = () => Math.max(0, Math.floor(deadline - Date.now()));
   const timedOut = error => error.code === 'verify_timeout' || ['TimeoutError', 'AbortError'].includes(error.name);
-  const health = async url => {
+  const health = async (url, expectedPid) => {
     const timeout = remaining();
     if (!timeout) throw Object.assign(Error('Dashboard verification timed out'), { code: 'verify_timeout' });
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(timeout) });
     const body = await response.json();
-    if (!response.ok || body.ok !== true || body.service !== name) throw Error('Dashboard health failed');
+    if (!response.ok || body.ok !== true || body.service !== name || body.pid !== expectedPid) throw Error('Dashboard health failed');
   };
   const failed = (item, code, location) => {
     checks[item] = false;
@@ -116,9 +121,15 @@ export async function verifyDashboard({ zylosDir }) {
   try { loc = settings(zylosDir); }
   catch { return { state: 'degraded', checks: { health: false }, errors: [{ item: 'health', code: 'health_failed', location: locations(zylosDir).config }] }; }
   const localUrl = `http://127.0.0.1:${loc.port}/api/health`;
+  let expectedPid;
+  try { expectedPid = managedPid(JSON.parse(run('pm2', ['jlist'], zylosDir)), loc); }
+  catch {}
+  if (expectedPid == null) {
+    return { state: 'degraded', checks: { health: false }, errors: [{ item: 'health', code: 'health_failed', location: localUrl }] };
+  }
   let observedFailure = false;
   do {
-    try { await health(localUrl); checks.health = true; break; }
+    try { await health(localUrl, expectedPid); checks.health = true; break; }
     catch (error) {
       if (timedOut(error)) break;
       observedFailure = true;
@@ -139,7 +150,7 @@ export async function verifyDashboard({ zylosDir }) {
       const publicBase = new URL(`${port != null ? 'http' : protocol}://${domain}${port != null ? ':' + port : ''}`);
       if (publicBase.username || publicBase.password || publicBase.pathname !== '/' || publicBase.search || publicBase.hash) throw Error('Invalid public URL');
       routeLocation = new URL('/dashboard/api/health', publicBase).href;
-      await health(routeLocation);
+      await health(routeLocation, expectedPid);
       checks.route = true;
     }
   } catch (error) { failed('route', timedOut(error) ? 'verify_timeout' : 'route_failed', routeLocation); }
