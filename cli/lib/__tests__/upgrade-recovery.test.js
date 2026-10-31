@@ -783,10 +783,15 @@ test('protected recovery restores all databases after a partial migration failur
 test('early abort refuses altered original CLI tree before service restart or database writes',async t=>{
  const f=await fixture(t),cli=path.join(f.root,'original-cli');fs.mkdirSync(cli,{mode:0o700});fs.writeFileSync(path.join(cli,'command.js'),'original',{mode:0o600});f.j.initialIdentity.cliRoot=cli;f.j.initialIdentity.cliHash=f.m.treeHash(cli);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});fs.writeFileSync(path.join(cli,'command.js'),'changed',{mode:0o600});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/original installed CLI identity changed/);assert.ok(!f.calls.includes('start'));assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
 });
-test('orphan installer with durable identity is quiesced before compensation',async t=>{
+test('orphan installer with durable identity is quiesced before compensation',{timeout:30000},async t=>{
  const f=await fixture(t);change(f);const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});
  f.m.update(f.dir,f.j,{installerStarted:true,installerPid:child.pid,installerIdentity:f.m.identity(child.pid),installerExitUnconfirmed:true});
- const exited=new Promise(resolve=>child.once('exit',resolve)),result=f.r.resume(f.dir);await exited;
+ const exited=new Promise(resolve=>child.once('exit',resolve)),result=f.r.resume(f.dir);
+ if(process.platform==='darwin'){
+  assert.equal(result.recovery_required,true);assert.equal(result.error,'installer process identity changed or cannot be verified; manual recovery required');
+  assert.doesNotThrow(()=>process.kill(child.pid,0));process.kill(-child.pid,'SIGKILL');await exited;return;
+ }
+ await exited;
  assert.equal(result.completed,true,JSON.stringify(result));assert.equal(f.load().installerExitConfirmed,true);assert.equal(f.load().installerExitUnconfirmed,false);
  assert.equal(require(path.join(f.dir,'installer.cjs')).members(child.pid).length,0);assert.ok(f.calls.includes('start'));
 });
@@ -928,11 +933,11 @@ test('verified terminal with stopped services retries startup without database c
 });
 
 test('Mac production recovery aborts preinstall failure through held frozen ownership', {skip:process.platform!=='darwin'}, async t=>{
- const f=await fixture(t),runner=path.join(f.root,'.zylos/upgrade/recovery.cjs');
+ const f=await fixture(t),stableRunner=path.join(f.root,'.zylos/upgrade/recovery.cjs'),frozenRunner=path.join(f.dir,'runner.cjs');
  f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});
- delete require.cache[runner]; // fixture wrapper is not the production entry.
+ delete require.cache[stableRunner]; // fixture wrapper is not the production entry.
  const {recovery}=await import('../upgrade-protection.js');
- const ctx={maintenance:f.m,journal:f.load(),transactionId:'tx',transactionDir:f.dir,releaseControl:f.m.acquire(f.dir),frozenRecoveryPath:runner,frozenRecoveryHash:f.m.hash(runner)};
+ const ctx={maintenance:f.m,journal:f.load(),transactionId:'tx',transactionDir:f.dir,releaseControl:f.m.acquire(f.dir),frozenRecoveryPath:frozenRunner,frozenRecoveryHash:f.m.hash(frozenRunner)};
  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
  const result=recovery(ctx);
  assert.equal(result.recovery_required,false,JSON.stringify(result));

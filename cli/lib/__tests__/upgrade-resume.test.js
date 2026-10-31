@@ -64,7 +64,7 @@ test('recorded Dashboard copy and installation failures remain degraded',()=>{
 
 test('successful resume reports its runtime observation but later status stays unverified',async t=>{
   const f=fixture(t),observed={state:'ready',errors:[]};
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete'});
     return {success:true,dashboard:observed};
   }});
@@ -77,7 +77,7 @@ for(const unknown of [false,true]) test(`resume retains ${unknown?'unknown':'acc
   const observations={completion:{install:'done',dashboard:'ready',sessionRestart:unknown?'manual_required':'accepted',modeTransition:'unknown'},
     sessionRestart:unknown?{ok:false,requestId:'repair-request',error:{code:'restart_result_unknown',message:'reply lost'}}:{ok:true,data:{result:'accepted',requestId:'repair-request'}},
     checkpointAudit:{state:'incomplete',error:'DB_BUSY'},modeStatus:{state:'unavailable',error:{message:'session-mode status unavailable'}}};
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete'});
     return {success:true,dashboard:{state:'ready',errors:[]},...observations};
   }});
@@ -96,7 +96,7 @@ for(const unknown of [false,true]) test(`resume retains ${unknown?'unknown':'acc
 test('successful resume uses the shared finalizer Dashboard result directly',async t=>{
   const f=fixture(t);
   f.journal={...f.journal,dashboardInstall:{dbCopy:{ok:false,error:{code:'COPY_FAILED'}},items:{}}};
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete'});
     return {success:true,dashboard:{state:'ready',errors:[]},next:null};
   }});
@@ -108,7 +108,7 @@ test('successful resume uses the shared finalizer Dashboard result directly',asy
 for(const success of [false,true]) test(`resume retains structured runtime warnings after ${success?'successful':'failed'} finalization`,async t=>{
   const f=fixture(t);
   const warnings=[{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'}];
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     f.m.update(f.dir,ctx.journal,{phase:success?'upgrade_complete':'recovery_required',resumePhase:'compensation_closed'});
     return {success,warnings,...(success?{}:{error:'memory prerequisite unavailable',code:'MEMORY_UNAVAILABLE'})};
   }});
@@ -118,7 +118,7 @@ for(const success of [false,true]) test(`resume retains structured runtime warni
 
 test('snapshot hash drift is rejected before any modifications even when closed facts agree',async t=>{
   const f=fixture(t);fs.appendFileSync(path.join(f.db,'manifest.json'),' ');
-  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m}),{code:'CUTOFF_UNTRUSTED'});
+  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux'}),{code:'CUTOFF_UNTRUSTED'});
   assert.deepEqual(f.calls,['lock','unlock']);
 });
 
@@ -129,7 +129,7 @@ for(const stage of ['lock','stop']) test(`snapshot drift during ${stage} is reje
     fs.appendFileSync(path.join(f.db,'manifest.json'),' ');
     return result;
   };
-  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:()=>assert.fail('finalizer called')}),{code:'CUTOFF_UNTRUSTED'});
+  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:()=>assert.fail('finalizer called')}),{code:'CUTOFF_UNTRUSTED'});
   assert.equal(f.calls.includes('stop'),stage==='stop');
   assert.equal(f.calls.at(-1),'unlock');
 });
@@ -142,7 +142,7 @@ for(const defect of ['schema','identity']) test(`snapshot ${defect} is rejected 
   fs.writeFileSync(file,JSON.stringify(manifest));
   const hash=actual.hash(file);
   f.journal={...f.journal,snapshotManifestHash:hash,compensationCutoff:{...f.journal.compensationCutoff,snapshotManifestHash:hash}};
-  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m}),{code:'CUTOFF_UNTRUSTED'});
+  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux'}),{code:'CUTOFF_UNTRUSTED'});
   assert.deepEqual(f.calls,['lock','unlock']);
 });
 
@@ -151,7 +151,7 @@ for(const status of [false,true]) test(`installing transaction is NOT_RESUMABLE 
   const {compensationCutoff,...open}=f.journal;
   f.journal={...open,phase:'installing'};
   const before=structuredClone(f.journal);
-  await assert.rejects(resumeFinalize(f.root,{status},{maintenance:f.m,finalize:()=>assert.fail('finalizer called')}),{code:'NOT_RESUMABLE'});
+  await assert.rejects(resumeFinalize(f.root,{status},{maintenance:f.m,platform:'linux',finalize:()=>assert.fail('finalizer called')}),{code:'NOT_RESUMABLE'});
   assert.deepEqual(f.journal,before);
   assert.deepEqual(f.calls,[]);
   assert.equal(actual.classifyCutoff(f.journal),'none');
@@ -160,7 +160,7 @@ for(const status of [false,true]) test(`installing transaction is NOT_RESUMABLE 
 
 for(const [code,expectedCode] of [['LOCK_TIMEOUT','LOCK_TIMEOUT'],['','UPGRADE_FAILED'],[7,'UPGRADE_FAILED']]) test(`forward repair normalizes failedItems code ${JSON.stringify(code)}`,async t=>{
   const f=fixture(t);
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:()=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:()=>{
     throw Object.assign(Error('configuration lock timed out'),{step:4,code});
   }});
   const expected={id:'step4',code:expectedCode,reason:'configuration lock timed out'};
@@ -188,7 +188,7 @@ test('restricted Linux forward repair requires manual recovery before acquiring 
 test('persisted tracks intermediate durable changes but excludes in-memory mutations and failed writes',async t=>{
   const f=fixture(t);
   f.journal={...f.journal,probe:'original'};
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     ctx.maintenance.update(f.dir,ctx.journal,{updatedAt:'2026-01-01T00:00:00.000Z'});
     ctx.maintenance.update(f.dir,ctx.journal,{probe:'intermediate'});
     ctx.maintenance.update(f.dir,ctx.journal,{probe:'original'});
@@ -210,7 +210,7 @@ test('persisted tracks intermediate durable changes but excludes in-memory mutat
 
 test('persisted includes a journal replacement even when a later durability check fails',async t=>{
   const f=fixture(t);
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     const original=f.m.update;
     f.m.update=(...args)=>{original(...args);throw Error('directory fsync failed');};
     assert.throws(()=>ctx.maintenance.update(f.dir,ctx.journal,{committedBeforeError:true}),/directory fsync failed/);
@@ -223,7 +223,7 @@ test('persisted includes a journal replacement even when a later durability chec
 test('transaction replacement while obtaining the lock never repairs the replacement',async t=>{
   const f=fixture(t),original=f.m.acquire;
   f.m.acquire=()=>{const release=original();f.m.discover=()=>({candidates:[{dir:f.dir+'-other',journal:{...f.journal,transactionId:'other'}}],diagnostics:[]});return release;};
-  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m}),{code:'CUTOFF_UNTRUSTED'});
+  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux'}),{code:'CUTOFF_UNTRUSTED'});
   assert.deepEqual(f.calls,['lock','unlock']);
 });
 
@@ -237,14 +237,14 @@ test('NOT_RESUMABLE after lock acquisition stays unchanged and releases the lock
     before=structuredClone(f.journal);
     return release;
   };
-  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,finalize:()=>assert.fail('finalizer called')}),{code:'NOT_RESUMABLE'});
+  await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',finalize:()=>assert.fail('finalizer called')}),{code:'NOT_RESUMABLE'});
   assert.deepEqual(f.journal,before);
   assert.deepEqual(f.calls,['lock','unlock']);
 });
 
 test('unconfirmed finalizer exit blocks isolation and publication and preserves the journal',async t=>{
   const f=fixture(t),before=structuredClone(f.journal);
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{f.calls.push('quiesce');throw Error('finalizer still active');},finalize:()=>assert.fail('published')});
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{f.calls.push('quiesce');throw Error('finalizer still active');},finalize:()=>assert.fail('published')});
   assert.equal(result.ok,false);assert.equal(result.error.code,'FINALIZE_INCOMPLETE');
   assert.match(result.error.message,/still active/);assert.equal(result.data.core.state,'failed');
   assert.deepEqual(f.journal,before);assert.deepEqual(f.calls,['lock','quiesce','unlock']);
@@ -254,7 +254,7 @@ test('shared recovery exit verification rejects missing trusted materials before
   const f=fixture(t);
   f.journal={...f.journal,installerStarted:true,installerExitConfirmed:false};
   const before=structuredClone(f.journal);
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,finalize:()=>assert.fail('published')});
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',finalize:()=>assert.fail('published')});
   assert.equal(result.ok,false);
   assert.match(result.error.message,/runner\.cjs/);
   assert.deepEqual(f.journal,before);
@@ -263,7 +263,7 @@ test('shared recovery exit verification rejects missing trusted materials before
 
 test('resume confirms process exit, isolates writers, and passes persistent context without an overall budget',async t=>{
   const f=fixture(t);
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>f.calls.push('quiesce'),finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>f.calls.push('quiesce'),finalize:async ctx=>{
     f.calls.push('finalize');assert.equal(Object.getPrototypeOf(ctx.maintenance),f.m);
     assert.equal(ctx.dbManifest.id,ctx.transactionId);
     assert.equal(ctx.transactionId,f.journal.transactionId);assert.equal(Object.hasOwn(ctx,'budget'),false);
@@ -277,7 +277,7 @@ test('resume confirms process exit, isolates writers, and passes persistent cont
 
 test('terminal execution only finishes cleanup and does not quiesce or resume services',async t=>{
   const f=fixture(t);f.journal={...f.journal,phase:'upgrade_complete'};
-  assert.equal((await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>assert.fail('quiesce'),finalize:()=>assert.fail('finalize')})).ok,true);
+  assert.equal((await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>assert.fail('quiesce'),finalize:()=>assert.fail('finalize')})).ok,true);
   assert.deepEqual(f.calls,['lock','cleanup','unlock']);
 });
 
@@ -298,7 +298,7 @@ for(const corrupt of [false,true]) test(`resume preserves default reader access 
   f.m.update=(...args)=>{update(...args);save();};
   let stopped=0;
   f.m.stop=()=>{stopped++;assert.doesNotThrow(()=>reader.assertCoreDatabaseAvailable(f.root));};
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     assert.equal(f.journal.phase,'compensation_closed');
     assert.doesNotThrow(()=>reader.assertCoreDatabaseAvailable(f.root));
     if(corrupt) {
@@ -320,7 +320,7 @@ for(const corrupt of [false,true]) test(`resume preserves default reader access 
 test('fresh Dashboard observation preserves errors supplied by the shared finalizer',async t=>{
   const f=fixture(t);
   f.journal={...f.journal,dashboardInstall:{dbCopy:{ok:false,error:{code:'COPY_FAILED',message:'copy denied'}},items:{}}};
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete'});
     return {success:true,dashboard:{state:'degraded',errors:[
       {item:'dbCopy',code:'COPY_FAILED',location:'copy denied'},
@@ -342,7 +342,7 @@ test('real partial publication reports retained replace bytes when a later targe
   f.journal={...f.journal,postCutoff:preparePostCutoff({zylosDir:f.root,transactionDir:f.dir,homeDir:f.root,runtime:'claude',
     replacements:[{id:'t01',path:'CLAUDE.md',content:'new'},{id:'t02',path:'AGENTS.md',content:'new'}]})};
   fs.writeFileSync(path.join(f.root,'AGENTS.md'),'conflict');
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async ctx=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     const publication=await publishPostCutoff(ctx);
     return {success:publication.ok,error:publication.lastError?.code};
   }});
@@ -358,7 +358,7 @@ test('resume does not attribute unrelated target mutations to the finalizer',asy
   const f=fixture(t);
   f.journal={...f.journal,postCutoff:preparePostCutoff({zylosDir:f.root,transactionDir:f.dir,homeDir:f.root,
     replacements:[{path:'CLAUDE.md',content:'expected'}]})};
-  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},finalize:async()=>{
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async()=>{
     fs.writeFileSync(path.join(f.root,'CLAUDE.md'),'external write');
     return {success:false,error:'controlled failure'};
   }});
