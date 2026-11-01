@@ -12,6 +12,7 @@ import { loadComponents, saveComponents } from '../lib/components.js';
 import { checkForUpdates, getLocalSourceUpgradeError, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates,
+  checkCoreTargetVersion,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
   cleanupTemp as cleanupCoreTemp,
 } from '../lib/self-upgrade.js';
@@ -317,6 +318,23 @@ export async function upgradeComponent(args) {
   const beta = args.includes('--beta');
   const hasTempDirFlag = args.includes('--temp-dir');
 
+  const versionIndex = args.indexOf('--version');
+  const version = versionIndex === -1 ? undefined : args[versionIndex + 1];
+  let versionError;
+  if (args.some(arg => arg.startsWith('--version='))) {
+    versionError = 'Use --version <SemVer>, for example --version 1.0.0.';
+  } else if (versionIndex !== -1) {
+    if (!version || version.startsWith('-')) versionError = '--version requires a full SemVer, for example --version 1.0.0.';
+    else if (args.lastIndexOf('--version') !== versionIndex) versionError = '--version may only be specified once.';
+    else if (!upgradeSelf || upgradeAll) versionError = '--version is supported only with --self.';
+    else if (args.includes('--branch') || beta) versionError = '--version cannot be combined with --branch or --beta.';
+  }
+  if (versionError) {
+    printSelfUpgradeFailure(upgradeBridgeFailure(versionError, { code: 'INVALID_ARGS' }), jsonOutput);
+    process.exitCode = 1;
+    return;
+  }
+
   if (hasTempDirFlag) {
     const msg = '--temp-dir is not supported.';
     if (jsonOutput) {
@@ -356,7 +374,7 @@ export async function upgradeComponent(args) {
   }
 
   // Get target component (filter out flags and flag values)
-  const flagsWithValues = new Set(['--branch', '--mode']);
+  const flagsWithValues = new Set(['--branch', '--mode', '--version']);
   const target = args.find((a, i) => {
     if (a.startsWith('-')) return false;
     if (a === 'confirm') return false;
@@ -367,15 +385,20 @@ export async function upgradeComponent(args) {
 
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
+    if (version !== undefined && target) {
+      printSelfUpgradeFailure(upgradeBridgeFailure('--version cannot be combined with a component name.', { code: 'INVALID_ARGS' }), jsonOutput);
+      process.exitCode = 1;
+      return;
+    }
     if (mode !== 'merge') {
       printSelfUpgradeFailure(upgradeBridgeFailure('Core self-upgrade supports only --mode merge.', { code: 'INVALID_ARGS' }), jsonOutput);
       process.exitCode = 1;
       return;
     }
     if (checkOnly) {
-      return handleSelfCheckOnly({ jsonOutput, branch, beta });
+      return handleSelfCheckOnly({ jsonOutput, branch, beta, version });
     }
-    const exitCode = await upgradeSelfCore({ branch, beta });
+    const exitCode = await upgradeSelfCore({ branch, beta, version });
     if (exitCode !== 0) process.exitCode = exitCode;
     return;
   }
@@ -395,7 +418,9 @@ export async function upgradeComponent(args) {
     console.log('  --json         Output in JSON format');
     console.log('  --yes, -y      Skip confirmation');
     console.log('  --skip-eval    Skip upgrade analysis of local changes');
-    console.log('  --beta         Include prerelease (beta) versions');
+    console.log('  --beta         Include prereleases (Core: within the installed major only)');
+    console.log('  --version <v>  Exact SemVer target, only with --self; allows a new major, refuses downgrades');
+    console.log('                 Cannot combine with --branch or --beta; e.g. --version 1.0.0');
     console.log('  --branch <b>   Upgrade from a specific branch (e.g. feat/xxx)');
     console.log('  --mode <m>     Merge mode: "merge" (default, smart three-way) or "overwrite"');
     console.log('\nExamples:');
@@ -988,10 +1013,11 @@ function detectCoreSkillChanges() {
 
 /**
  * Handle --self --check: check for zylos-core updates only (no lock needed).
- * Downloads new version to temp dir for file comparison by Claude.
+ * Explicit versions check only precedence and tag existence; other checks
+ * download to a temp directory for file comparison by Claude.
  */
-function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
-  const check = checkForCoreUpdates({ branch, beta });
+function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
+  const check = checkForCoreUpdates({ branch, beta, version });
 
   if (!check.success) {
     if (jsonOutput) {
@@ -1002,6 +1028,16 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
       console.error(`Error: ${check.message}`);
     }
     process.exit(1);
+  }
+
+  if (version !== undefined) {
+    const message = check.hasUpdate
+      ? 'Version constraints satisfied and exact release tag found. Starting-version acceptance is determined by the target upgrade entry.'
+      : 'Already at this version (SemVer precedence). No upgrade will run; the target tag and starting-version acceptance were not checked.';
+    const reply = `zylos-core: ${check.current} -> ${check.latest}. ${message}`;
+    if (jsonOutput) console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check, message, reply }, null, 2));
+    else console.log(reply);
+    return;
   }
 
   // When update is available (or --branch forces re-check): download to temp, read changelog, detect local changes
@@ -1082,12 +1118,27 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
  * The installed package only resolves and downloads the target. The target
  * package owns every stateful upgrade step through its upgrade-entry.js.
  */
-async function upgradeSelfCore({ branch, beta = false } = {}) {
+async function upgradeSelfCore({ branch, beta = false, version } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = null;
 
   try {
+    if (version !== undefined) {
+      const local = checkCoreTargetVersion(version);
+      if (!local.success) {
+        printSelfUpgradeFailure(upgradeBridgeFailure(local.message, { code: local.error }), jsonOutput);
+        return 1;
+      }
+      if (!local.hasUpdate) {
+        if (jsonOutput) {
+          console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...local, reply: `zylos-core is already at version ${local.current} (SemVer precedence).` }, null, 2));
+        } else {
+          console.log(success(`zylos-core is already at version ${local.current} (SemVer precedence).`));
+        }
+        return 0;
+      }
+    }
     if (!fs.existsSync(ZYLOS_DIR)) {
       printSelfUpgradeFailure(upgradeBridgeFailure(
         `Zylos is not initialized at ${ZYLOS_DIR}. Run "zylos init" first.`,
@@ -1102,7 +1153,7 @@ async function upgradeSelfCore({ branch, beta = false } = {}) {
       return 1;
     }
 
-    const check = checkForCoreUpdates({ branch, beta });
+    const check = checkForCoreUpdates({ branch, beta, version });
     if (!check.success) {
       printSelfUpgradeFailure(upgradeBridgeFailure(check.message || check.error), jsonOutput);
       return 1;
