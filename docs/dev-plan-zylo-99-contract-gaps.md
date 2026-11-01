@@ -59,7 +59,7 @@ Update the unique contract and all affected consumers:
 - `core/session-architecture/implementation-interfaces.md`: in IB-41, state that ordinary groups do not read F9; for Origin, F9 unreadable returns `{ok:false,result:'rejected',reason:'requests_unreadable'}`, creates no D8 fence, and is retryable after repair. Add the eighth reason to the reply set and IB-43 reply matrix. State that the agent preserves its completed handoff and does not exit while repairing/retrying.
 - `core/session-architecture/zylos-session-m4-pool-supervisor.md`: in §2.11.1 admission ordering, add the ordinary/Origin split and the fail-closed F9 branch without changing other admission precedence.
 - `core/session-architecture/implementation-plan-p05-m4-supervisor.md`: reconcile its admission pseudocode and acceptance mapping with the amended contract.
-- Reconcile the paired current visual artifact if its rendered contract text contains the affected M4/IB-41 statements. Do not edit history documents.
+- Reconcile `core/session-architecture/zylos-session-m4-pool-supervisor-visual.html` in the same change because the M4 admission flow changes. Do not edit history documents.
 
 Completion condition: the current docs contain one consistent definition of the new branch, the examples/reply matrix accept it, no text implies ordinary groups consult F9, and the docs PR is independently reviewed and merged to `main`. Record the merged SHA before dependent Task E. Independent Tasks B–D and F–H may proceed after this plan is Ready while the docs PR is reviewed.
 
@@ -94,7 +94,7 @@ otherwise → omit unavailable_since // DM §6.4; existing health projection
 
 Files:
 
-- `cli/lib/session-group-paths.js` for the shared runtime-group root path if no current exported helper owns it;
+- `cli/lib/session-group-paths.js`: add the shared runtime-group root helper used by both `groupRunDir` and maintenance discovery;
 - `skills/activity-monitor/scripts/supervisor.js`;
 - `skills/activity-monitor/scripts/__tests__/supervisor-assembly.test.js` or a narrowly named adjacent maintenance test.
 
@@ -167,11 +167,10 @@ Files:
 
 - `skills/activity-monitor/scripts/supervisor-loop.js`
 - `skills/activity-monitor/scripts/supervisor.js`
-- `skills/activity-monitor/scripts/supervisor-main.js` only if dependency wiring is required;
 - `skills/activity-monitor/scripts/__tests__/supervisor-loop.test.js`
 - `skills/activity-monitor/scripts/__tests__/supervisor-assembly.test.js` or `supervisor-main` tests for the actual alert path.
 
-When the initial strict configuration read fails, keep `configurationError`, do not restore/open admission/schedule a round, log the error, and call the existing supervisor system-alert transport once with a functional event name and error reason. Alert delivery failure is logged and must not make the daemon schedule work or repeatedly retry from the loop.
+When the initial strict configuration read fails, keep `configurationError`, do not restore/open admission/schedule a round, log the error, and have `SupervisorLoop.start()` call a startup-alert dependency once with a functional event name and error reason. Wire that dependency in `createSupervisor()` to the existing `deps.alert` transport already supplied by `supervisor-main.js`; do not add a second transport. Alert delivery failure is logged and must not make the daemon schedule work or repeatedly retry from the loop.
 
 Completion condition: one alert attempt occurs per supervisor process start, the configured target/Web Console fallback is reused, admission remains closed, no timer or lifecycle work starts, and an alert failure leaves the same fail-closed state.
 
@@ -188,16 +187,21 @@ Files:
 
 - `skills/activity-monitor/scripts/supervisor-exits.js`
 - `skills/activity-monitor/scripts/supervisor.js`
+- `skills/activity-monitor/scripts/supervisor-lifecycle.js`
 - `skills/activity-monitor/scripts/__tests__/supervisor-exits.integration.test.js`
+- `skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js`
 - `skills/activity-monitor/scripts/__tests__/supervisor-assembly.test.js` and/or `supervisor-restart-entry.integration.test.js` for the real lifecycle wiring.
 
-Add a narrow `SupervisorExits` operation that removes a previous observation only when group and run ID match. Invoke it after `scenes.stop(scene)` has confirmed the requested tmux is gone, before a future observation can classify that run. Do not forget before stop confirmation and do not delete a replacement run tracked under the same group.
+Add a narrow `SupervisorExits` operation that removes a previous observation only when group and run ID match, and pass it into `SupervisorLifecycle` as an explicit intentional-stop callback. Normalize the lifecycle's single-mode `null` scope to the exit tracker's observed `origin` key before matching; multi groups keep their exact group. Do not put the call in shared `stopScene`: that wrapper is also used by health recovery and `SupervisorExits` crash cleanup.
+
+In ordinary `advanceReclaim`, invoke the callback for `(group, fence.runId)` only after `this.d.stop(scene)` resolves and therefore confirms the requested target is gone, before `reclaim_done`/fence completion. In `advanceManual`, invoke it for `(targetGroup, request.expectedRunId)` only after the stop resolves, or after the existing `RUNID_MISMATCH` result has established that the requested old run is already absent, and before `manual_restart_done`. Do not forget before those confirmation points and do not delete a replacement run tracked under the same group.
 
 Completion condition: successful ordinary and manual reclaim of a primed old run produces `reclaim_done`/`manual_restart_done` but no later `crash_detected`; an adapter stop failure retains the old observation; a different replacement run is retained; a real ungated unexpected exit still emits exactly one `crash_detected`.
 
 ```text
 adapter stop throws or cannot confirm target gone → keep previous exit observation // M4 §2.3 stop boundary
-adapter stop confirms target run gone → forget only matching (group, runId) observation // M4 §2.2–2.3
+ordinary reclaim stop confirms target run gone → forget only matching (group, runId) before reclaim completion // M4 §2.2–2.3
+manual restart stop confirms target gone, including existing RUNID_MISMATCH old-target-gone result → forget only matching (group, runId) before manual completion // M4 §2.12
 next exit pass sees intentionally stopped old run absent → no crash classification // M4 §2.2
 ungated run disappears without confirmed intentional stop → existing crash_detected path // M4 §2.2
 ```
@@ -209,15 +213,15 @@ Files:
 - `skills/activity-monitor/scripts/supervisor-lifecycle.js`
 - `skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js`
 
-When the post-idle in-flight assertion becomes nonzero for an ordinary fenced reclaim, clear the fence, reset TTL when applicable, emit `reclaim_cancelled` with functional reason `inflight_after_idle`, then throw `RECLAIM_INFLIGHT`. Keep current exceptions: single auth returns `waiting_inflight` without a fence/cancellation; `model_config` retains its fence and throws without claiming cancellation.
+When the post-idle in-flight assertion becomes nonzero for an ordinary fenced reclaim, attempt `reclaim_cancelled` with functional reason `inflight_after_idle` first, then clear the matching fence, reset TTL when applicable, and throw `RECLAIM_INFLIGHT`. The existing diagnostic helper is non-blocking: if append fails it reports the error and the safety cleanup continues, but the attempt must precede fence removal. Keep current exceptions: single auth returns `waiting_inflight` without a fence/cancellation; `model_config` retains its fence and throws without claiming cancellation.
 
-Completion condition: the diagnostic is committed before the thrown error for ordinary TTL/evict/upgrade/auth/mode-switch; TTL reset remains; `model_config` and single auth retain their existing fence/retry and diagnostic behavior.
+Completion condition: the cancellation diagnostic is attempted before fence removal and before the thrown error for ordinary TTL/evict/upgrade/auth/mode-switch; a diagnostic append failure remains non-blocking and is reported; TTL reset remains; `model_config` and single auth retain their existing fence/retry and diagnostic behavior.
 
 ```text
 final count is zero → continue stop path // M4 §2.3 [c]
 final count nonzero AND single auth → waiting_inflight; keep auth block; no cancellation event // M4 §2.3 exception
 final count nonzero AND model_config → retain fence; throw RECLAIM_INFLIGHT; no cancellation event // M4 §2.11 exception
-final count nonzero AND ordinary fenced reclaim → clear fence; reset TTL if ttl; emit reclaim_cancelled(reason=inflight_after_idle); throw RECLAIM_INFLIGHT // M4 §2.3 [c], §3.4
+final count nonzero AND ordinary fenced reclaim → attempt reclaim_cancelled(reason=inflight_after_idle); clear matching fence; reset TTL if ttl; throw RECLAIM_INFLIGHT // M4 §2.3 [c], §3.4
 ```
 
 ## 5. Executable acceptance matrix
@@ -232,8 +236,8 @@ All Node tests run only through `node scripts/run-node-tests.js ...` with fresh 
 | Ordinary F9 independence | Poison F9 and submit config reclaim for an ordinary group | normal existing result from run/config checks; F9 bytes unchanged; no F9 read spy call | unconditional store read causes request failure |
 | Origin F9 fail-closed/retry | Poison F9, submit Origin request, then repair F9 and retry | first reply is valid rejected/`requests_unreadable`, no D8/stop/file rewrite; CLI guidance contains repair/retry/no-exit; second request follows normal result | treat poison as empty; first request incorrectly creates D8 |
 | Startup config alert | Initial reader throws; alert succeeds and separately throws; call tick/start again | exactly one alert attempt, error logged, admission closed, zero timers/round actions in both cases | omit alert call; positive count assertion fails |
-| Intentional stop exit memory | Prime exit tracker, execute confirmed ordinary and manual stop, clear their gates, then observe again | no `crash_detected`; matching old run forgotten; replacement remains; real unexpected exit positive control emits once | remove forget call; old run is misclassified after gate removal |
-| Final in-flight cancellation | For each ordinary reason, make first count zero/idle true and second count nonzero; repeat for model_config and single auth | ordinary: fence clear → event with `inflight_after_idle` → throw; model_config: fence retained/no event/throw; single: waiting/no event | omit event; ordinary order/assertion fails while exception cases remain green |
+| Intentional stop exit memory | Prime exit tracker; execute confirmed multi ordinary and multi/single manual lifecycle stops; separately exercise health-stop and ungated-crash cleanup callers of shared `stopScene`; then observe again | ordinary/manual: no `crash_detected`, matching old run forgotten before completion (single `null` scope matches the observed `origin` key); replacement remains; health/ungated paths do not call the intentional callback; real unexpected exit emits once | omit single-key normalization, move forget into shared `stopScene`, or remove the lifecycle callback; the corresponding key/caller/old-run assertion fails |
+| Final in-flight cancellation | For each ordinary reason, make first count zero/idle true and second count nonzero; repeat for model_config and single auth; separately make diagnostic append fail | ordinary: event attempt with `inflight_after_idle` → matching fence clear → TTL reset if applicable → throw; append failure is reported but still clears/throws; model_config: fence retained/no event/throw; single: waiting/no event | clear before event; order assertion fails while exception cases remain green |
 
 Relevant targeted self-test commands will be enumerated in the delivery note from the changed files. Full Node/Jest/opt-in e2e, mutation testing, environment snapshots, and trial merge are Luna's review/acceptance work, not the development author's self-test burden.
 
