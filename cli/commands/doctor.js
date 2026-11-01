@@ -823,7 +823,8 @@ export async function doctorCommand(args, upstreamSource) {
       }
       const results = await withUpstreamSnapshot(prepared, () => concurrentMap(targets, async (target) => {
         try {
-          const latest = await fetchLatestTagAsync(target.repo);
+          const latest = await fetchLatestTagAsync(target.repo, target.name === 'zylos-core'
+            ? { major: target.current.replace(/^v/, '').split('.')[0] } : {});
           if (latest && compareSemverDesc(target.current, latest) > 0) {
             return { ...target, latest };
           }
