@@ -7,6 +7,18 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { submit } from '../../../../cli/lib/am-sock-client.js';
+
+/**
+ * Integration boundary: real supervisor/manual-restart entry, private tmux adapter,
+ * socket client, restart-request file, and isolated test database.
+ * Run when changing manual-restart admission/completion, intentional-stop exit
+ * classification, the supervisor socket client, or their real tmux wiring.
+ * Skip when changes cannot affect those boundaries (for example, comments or
+ * unit-only health/status projections).
+ * ISOLATION REQUIRED: run only through scripts/run-node-tests.js with fresh HOME,
+ * ZYLOS_DIR, PM2_HOME, a short TMPDIR, a private tmux socket, and the test database.
+ * Never run this case against a live Zylos environment or production resources.
+ */
 const worker=fileURLToPath(new URL('./fixtures/supervisor-manual-entry-worker.js',import.meta.url));
 async function launch(t,f,mode,pause=''){
  const child=fork(worker,[f.socketPath,f.binary,mode,pause],{env:{...process.env,...f.env},silent:true});let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
