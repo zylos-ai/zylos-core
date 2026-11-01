@@ -194,6 +194,21 @@ test('assembly: single auth null scope invalidates only its matching Origin run'
  assert.equal(context.scenes[0].present,true);assert.equal(context.scenes[0].runId,'replacement');
 });
 
+test('assembly: single null scope forgets the exact Origin run from the shared exit memory',async t=>{
+ const {supervisor,scenes,db,root}=fixture(t,{readMode:()=>({mode:'single'})});
+ const original={sessionGroup:'origin',runId:'old',runtime:'claude',sessionId:'session-old',present:true,ready:true,processRunning:true};
+ scenes.observeGroup=async()=>({present:false});
+ db.countGlobalRunningConversations=()=>0;db.countNonTerminalControls=()=>({running:0,runningWithoutDeadline:0});
+ db.expireStaleRunningControls=()=>[];
+ await supervisor.loop.deps.observeExits([original]);
+ const context={configuration:{mode:'single'},scenes:[{...original,processRunning:false}],fences:[],restartRequests:[]};
+ assert.equal(await supervisor.lifecycle.advanceReclaim({reason:'auth',runId:'old'},context,{unfenced:true,singleAuth:true}),'done');
+ await supervisor.loop.deps.observeExits([]);
+ const eventsFile=path.join(root,'activity-monitor','supervisor-events.jsonl');
+ const events=fs.existsSync(eventsFile)?fs.readFileSync(eventsFile,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[];
+ assert.equal(events.some(row=>row.event==='crash_detected' && row.runId==='old'),false);
+});
+
 test('C3 each unavailable dependency logs once while unrelated failures remain visible',async t=>{
  const {supervisor,calls}=fixture(t);
  await supervisor.loop.deps.advanceTransition({});await supervisor.loop.deps.advanceTransition({});

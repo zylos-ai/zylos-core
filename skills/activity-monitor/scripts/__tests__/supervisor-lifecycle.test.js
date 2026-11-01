@@ -130,8 +130,10 @@ test('single auth ignores only deadline-less controls and retries a final count 
   f.db.countGlobalRunningConversations = () => ++reads > 1 ? 1 : 0;
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context, { unfenced: true, singleAuth: true }), 'waiting_inflight');
   assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
+  assert.equal(f.events.some(event => event.event === 'reclaim_cancelled'), false);
   f.db.countGlobalRunningConversations = () => 0;
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context, { unfenced: true, singleAuth: true }), 'done');
+  assert.deepEqual(f.forgotten, [[null, 'run-null']]);
   assert.deepEqual(f.markerReads.map(x => x.kind), ['global', 'global']);
 });
 // final conversation check preserves the reclaim fence.
@@ -140,6 +142,7 @@ async function finalRaceAssertion(Class) {
   f.db.countRunningConversations = () => ++reads > 1 ? 1 : 0;
   await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'RECLAIM_INFLIGHT' });
   assert.equal(f.fences.size, 1); assert.deepEqual(f.stops, []);
+  assert.equal(f.events.some(event => event.event === 'reclaim_cancelled'), false);
 }
 test('final conversation recheck', async () => {
   await finalRaceAssertion(SupervisorLifecycle);
@@ -538,6 +541,7 @@ test('manual adapter RUNID_MISMATCH after fresh observation completes old reques
   f.deps.stop = target => { f.stops.push(target.runId); f.scenes = [scene('origin', { runId: 'replacement' })]; throw Object.assign(new Error('run replaced before adapter stop'), { code: 'RUNID_MISMATCH' }); };
   await f.lifecycle.advanceManual(context);
   assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.scenes[0].runId, 'replacement');
+  assert.deepEqual(f.forgotten, [['origin', 'run-origin']]);
   assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0);
   assert.equal(f.events.at(-1).event, 'manual_restart_done');
 });
