@@ -174,6 +174,7 @@ test('unverified conversation fails; live control accepted, dead control retried
 test('stop before delivery requeues the claimed row without tmux I/O', async t => {
   for (const type of ['conversation', 'control']) await t.test(type, async t => {
     const f = setup(t), row = type === 'conversation' ? f.message() : f.control();
+    f.deps.openTmuxConnection = async () => { f.calls.push(['open']); return f.connection; };
     const delivery = f.create();
     await delivery.stop();
     const result = await (type === 'conversation'
@@ -182,7 +183,7 @@ test('stop before delivery requeues the claimed row without tmux I/O', async t =
     assert.equal(result.delivered, false);
     assert.equal(result.blocked, true);
     assert.equal(type === 'conversation' ? f.row(row.id).status : row.status, 'pending');
-    assert.equal(f.calls.some(call => ['resolve', 'paste', 'keys', 'capture', 'command'].includes(call[0])), false);
+    assert.equal(f.calls.some(call => ['open', 'resolve', 'paste', 'keys', 'capture', 'command'].includes(call[0])), false);
     assert.ok(f.calls.some(call => call[0] === 'diagnostic' && call[1] === 'release' && call[2].code === 'delivery_stopped'));
   });
 });
