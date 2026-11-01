@@ -47,8 +47,11 @@ export const tmuxPaneTarget = name => `=${name}:`;
 export function groupMemoryDir(group, env = process.env) {
   return path.join(zylosRoot(env), 'memory', 'session-groups', assertSessionGroup(group));
 }
+export function sessionGroupRunRoot(env = process.env) {
+  return path.join(zylosRoot(env), 'activity-monitor', 'session-groups');
+}
 export function groupRunDir(group, env = process.env) {
-  return path.join(zylosRoot(env), 'activity-monitor', 'session-groups', assertSessionGroup(group));
+  return path.join(sessionGroupRunRoot(env), assertSessionGroup(group));
 }
 export function legacyRunDir(env = process.env) {
   return path.join(zylosRoot(env), 'activity-monitor');

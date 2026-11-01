@@ -28,3 +28,10 @@ test('successful adapter stop is final; no caller post-stop observation',async()
  f.observer.scenes.observeGroup=async()=>{assert.equal(++observations,1);return observe();};
  await f.observer.advance([stopped]);assert.equal(observations,1);assert.equal(f.stops.length,1);assert.equal(f.events.length,1);
 });
+test('intentional forget removes only the exact observed run',async()=>{
+ const f=fixture();await f.observer.advance([f.scene]);
+ assert.equal(f.observer.forget(f.scene.sessionGroup,'replacement'),false);
+ assert.equal(f.observer.previous.get(f.scene.sessionGroup)?.runId,'r1');
+ assert.equal(f.observer.forget(f.scene.sessionGroup,'r1'),true);
+ assert.equal(f.observer.previous.has(f.scene.sessionGroup),false);
+});

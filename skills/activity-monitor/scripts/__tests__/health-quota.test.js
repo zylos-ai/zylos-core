@@ -78,7 +78,7 @@ test('reader rejects malformed, oversized, or nonregular snapshot files',t=>{
   const file=path.join(options.zylosDir,'activity-monitor','health-quota','claude.json');
   for(const content of ['{',JSON.stringify({...snapshot,padding:'x'.repeat(3000)})]) {fs.writeFileSync(file,content);assert.equal(read(),null);}
 });
-test('context monitor preserves native status and excludes raw failed input from logs',t=>{
+test('context monitor preserves native status and identifies publication failures without exposing input',t=>{
   const {options}=fixture(t);
   const script=fileURLToPath(new URL('../context-monitor.js',import.meta.url));
   const env={...process.env,ZYLOS_DIR:options.zylosDir};
@@ -89,7 +89,33 @@ test('context monitor preserves native status and excludes raw failed input from
   assert.deepEqual(written,payload);assert.equal(Object.hasOwn(written,'zylos'),false);
   const invalid=spawnSync(process.execPath,[script],{env,input:'{"SECRET_RAW_INPUT":',encoding:'utf8'});
   assert.equal(invalid.status,0);
-  assert.equal(fs.readFileSync(path.join(options.zylosDir,'activity-monitor','hook-activity-errors.log'),'utf8').includes('SECRET_RAW_INPUT'),false);
+  const legacyLog=fs.readFileSync(path.join(options.zylosDir,'activity-monitor','hook-activity-errors.log'),'utf8');
+  assert.match(legacyLog,/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z session_group="unknown" run_id="unknown" statusline: invalid sample or publication failure\n$/);
+  assert.equal(legacyLog.includes('SECRET_RAW_INPUT'),false);
+
+  const invoke=(name,extraEnv,input='{"broken":')=>{
+    const root=path.join(options.zylosDir,name);
+    const result=spawnSync(process.execPath,[script],{env:{...process.env,ZYLOS_DIR:root,...extraEnv},input,encoding:'utf8'});
+    assert.equal(result.status,0);assert.equal(result.stdout,'');
+    return {root,log:path.join(root,'activity-monitor','hook-activity-errors.log')};
+  };
+  const groupedRoot=path.join(options.zylosDir,'grouped');
+  fs.mkdirSync(path.join(groupedRoot,'activity-monitor/session-groups/telegram:a/statusline.json'),{recursive:true});
+  const grouped=invoke('grouped',{ZYLOS_SESSION_GROUP:'telegram:a',ZYLOS_RUN_ID:'run-group'},JSON.stringify(payload));
+  assert.match(fs.readFileSync(grouped.log,'utf8'),/session_group="telegram:a" run_id="run-group" statusline:/);
+  assert.equal(fs.existsSync(path.join(groupedRoot,'activity-monitor/session-groups/telegram:a/events.jsonl')),false);
+
+  const single=invoke('single',{ZYLOS_RUN_ID:'run-single'});
+  assert.match(fs.readFileSync(single.log,'utf8'),/session_group="origin" run_id="run-single" statusline:/);
+  const missingRun=invoke('missing-run',{ZYLOS_SESSION_GROUP:'telegram:a'});
+  assert.match(fs.readFileSync(missingRun.log,'utf8'),/session_group="unknown" run_id="unknown" statusline:/);
+  const invalidIdentity=invoke('invalid',{ZYLOS_SESSION_GROUP:'..\/bad',ZYLOS_RUN_ID:'run-invalid'});
+  assert.match(fs.readFileSync(invalidIdentity.log,'utf8'),/session_group="unknown" run_id="unknown" statusline:/);
+
+  const unwritableRoot=path.join(options.zylosDir,'unwritable');
+  fs.mkdirSync(path.join(unwritableRoot,'activity-monitor','hook-activity-errors.log'),{recursive:true});
+  const unwritable=spawnSync(process.execPath,[script],{env:{...process.env,ZYLOS_DIR:unwritableRoot,ZYLOS_RUN_ID:'run'},input:'{',encoding:'utf8'});
+  assert.equal(unwritable.status,0);assert.equal(unwritable.stdout,'');
 });
 
 test('first-failure quota reads exact run/session and never the legacy latest snapshot',async t=>{

@@ -12,7 +12,7 @@ const integer = Number.isSafeInteger;
 const oneOf = (x, values) => values.includes(x);
 const absent = (x, keys) => keys.every(k => !Object.hasOwn(x, k));
 const publicCodes = ['invalid_request', 'entry_not_open'];
-const configReasons = ['not_multi', 'transition_open', 'run_changed', 'not_ready', 'snapshot_unavailable', 'other_fence', 'manual_restart_pending'];
+const configReasons = ['not_multi', 'transition_open', 'run_changed', 'not_ready', 'snapshot_unavailable', 'other_fence', 'manual_restart_pending', 'requests_unreadable'];
 const manualReasons = ['target_required', 'transition_open', 'restart_all_pending', 'fence_conflict', 'manual_restart_pending', 'identity_unavailable', 'not_ready', 'requests_unreadable', 'request_conflict'];
 
 /** Validate the first reply line, including branch relationships rather than types alone. */

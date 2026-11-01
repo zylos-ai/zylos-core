@@ -6,6 +6,19 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
+
+/**
+ * Integration boundary: real supervisor/reclaim recovery, private tmux adapter,
+ * retained drain-fence state, intentional-stop exit classification, and isolated
+ * test database.
+ * Run when changing reclaim recovery/completion, intentional-stop exit
+ * classification, drain-fence persistence, or their real tmux wiring.
+ * Skip when changes cannot affect those boundaries (for example, comments or
+ * unit-only health/status projections).
+ * ISOLATION REQUIRED: run only through scripts/run-node-tests.js with fresh HOME,
+ * ZYLOS_DIR, PM2_HOME, a short TMPDIR, a private tmux socket, and the test database.
+ * Never run this case against a live Zylos environment or production resources.
+ */
 const worker=fileURLToPath(new URL('./fixtures/supervisor-reclaim-entry-worker.js',import.meta.url));
 function launch(t,f,pause=''){
  const child=fork(worker,[f.socketPath,f.binary,pause],{env:{...process.env,...f.env},silent:true});let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
@@ -19,7 +32,7 @@ async function scenario(t,pause,mutant=''){
  const f=readyTmuxTarget(t,{prefix:'reclaim-entry-',mode:'multi',runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
  const db=createStore(f.db,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'multi'}})});db.setDrainFence('origin',{reason:'upgrade',runId:'run-1'});
  const first=launch(t,f,pause);assert.deepEqual(await first.next(),{barrier:pause});await first.kill();assert.equal(db.getDrainFence('origin').runId,'run-1');
- const second=launch(t,f,mutant),result=await second.next();assert.equal(result.ready,true);assert.equal(result.fence,null);assert.equal(result.present,false);
+ const second=launch(t,f,mutant),result=await second.next();assert.equal(result.ready,true);assert.equal(result.fence,null);assert.equal(result.present,false);assert.equal(result.crashes,0);
  assert.equal(db.getDrainFence('origin'),null);assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));
  const exited=once(second.child,'exit');second.child.send('stop');assert.deepEqual(await second.next(),{stopped:true});assert.equal((await exited)[0],0);
 }

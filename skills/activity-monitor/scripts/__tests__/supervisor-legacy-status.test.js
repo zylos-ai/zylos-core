@@ -38,3 +38,13 @@ test('legacy foreground from another PID or unobservable tmux never publishes st
   f.observer.open=async()=>{throw Object.assign(new Error('timeout'),{code:'TMUX_UNAVAILABLE'});};
   await assert.rejects(f.observer.tick(),{code:'TMUX_UNAVAILABLE'});assert.equal(fs.existsSync(path.join(f.dir,'agent-status.json')),false);
 });
+test('legacy status shares unavailable-time and rate-limit field projection', {timeout:15000}, async t=>{
+  const f=fixture(t),file=path.join(f.dir,'agent-status.json');
+  f.observer.readHealth=()=>({health:'down',reason:'probe_failed',scheduling:{unavailableSince:321}});
+  let value=await f.observer.tick();assert.equal(value.health,'unavailable');assert.equal(value.unavailable_since,321);
+  assert.equal(value.unavailable_reason,'probe_failed');
+  f.observer.readHealth=()=>({health:'rate_limited',scheduling:{unavailableSince:321,cooldownUntil:654,rateLimitResetTime:'later'}});
+  value=await f.observer.tick();assert.equal('unavailable_since' in value,false);
+  assert.equal(value.cooldown_until,654);assert.equal(value.rate_limit_reset,'later');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)),value);
+});

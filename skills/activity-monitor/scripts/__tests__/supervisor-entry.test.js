@@ -8,7 +8,14 @@ import { fork } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
 import { main as monitorMain } from '../monitor.js';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { resolveSessionPoolSize } from '../../../../cli/lib/session-pool-config.js';
+import { startSupervisor } from '../supervisor-main.js';
+import { RestartRequestStore } from '../restart-request-store.js';
+import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
+import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
+import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
+const Database=createRequire(new URL('../../../comm-bridge/package.json',import.meta.url))('better-sqlite3');
 const repository=fileURLToPath(new URL('../../../../',import.meta.url));
 const entry=fileURLToPath(new URL('../supervisor-main.js',import.meta.url));
 const worker=fileURLToPath(new URL('./fixtures/supervisor-entry-worker.js',import.meta.url));
@@ -52,6 +59,41 @@ async function stop(worker) {
   const exited=once(worker.child,'exit');worker.child.send('stop');assert.deepEqual(await worker.next(),{stopped:true});
   const [code]=await exited;assert.equal(code,0,worker.stderr());
 }
+
+async function configReclaimEntry(t) {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'config-reclaim-entry-'));
+  fs.mkdirSync(path.join(root,'comm-bridge'));fs.mkdirSync(path.join(root,'activity-monitor'));
+  const database=new Database(path.join(root,'comm-bridge/c4.db'));guardDatabase(database,schema);
+  const db=createStore(database,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'multi'}})});
+  const file=path.join(root,'activity-monitor/restart-requests.json');fs.writeFileSync(file,'{unreadable-original');
+  const requests=new RestartRequestStore({file});let gateWrites=0;
+  const scene={runId:'run-1',ready:true,launchConfig:{runtime:'claude',mode:'default'}};
+  const service=await startSupervisor({env:{...process.env,ZYLOS_DIR:root},
+    db:{...db,getDb:()=>database,resolveSessionLaunchConfig:()=>({runtime:'codex',mode:'default'}),setDrainFence:(...args)=>{gateWrites++;return db.setDrainFence(...args);}},
+    scenes:{observe:async()=>[],readIdentity(group){return this.observeGroup(group);},observeGroup:async()=>({present:false}),listRuns:async()=>[{runId:'run-1'}],readRun:async()=>scene},
+    requestStore:requests,readMode:()=>({mode:'multi'}),readConfiguration:()=>({mode:'multi',runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',
+    readSyncMarker:()=>({held:false,stale:false}),machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
+  t.after(async()=>{await service.stop();database.close();fs.rmSync(root,{recursive:true,force:true});});
+  return {root,file,db,writes:()=>gateWrites};
+}
+
+/**
+ * Integration boundary: actual supervisor socket admission, restart-request file,
+ * config-reclaim fence writes, and the isolated C4 test database.
+ * Run when config-reclaim admission, F9 reads, reply validation, or retry behavior changes.
+ * Skip when changes cannot affect that boundary, such as status projection or comments.
+ * ISOLATION REQUIRED: run only through scripts/run-node-tests.js with fresh HOME,
+ * ZYLOS_DIR, PM2_HOME, a short TMPDIR, and the test database; never use live resources.
+ */
+test('actual config-reclaim entry isolates ordinary groups from corrupt restart state and keeps Origin retryable',async t=>{
+  const f=await configReclaimEntry(t);
+  const ordinary={version:1,type:'ready_for_config_reclaim',requestId:'ordinary-config',sessionGroup:'telegram:one',expectedRunId:'run-1'};
+  assert.equal((await request(f.root,ordinary)).result,'accepted');assert.equal(fs.readFileSync(f.file,'utf8'),'{unreadable-original');assert.equal(f.writes(),1);
+  const origin={...ordinary,requestId:'origin-config',sessionGroup:'origin'};
+  const rejected=await request(f.root,origin);assert.equal(rejected.result,'rejected');assert.equal(rejected.reason,'requests_unreadable');
+  assert.equal(fs.readFileSync(f.file,'utf8'),'{unreadable-original');assert.equal(f.writes(),1);assert.equal(f.db.getDrainFence('origin'),null);
+  fs.writeFileSync(f.file,'[]');assert.equal((await request(f.root,origin)).result,'accepted');assert.equal(f.writes(),2);
+});
 test('actual entry restores before Sock admission and shuts down with a partial-line peer', {timeout:15000}, async t=>{
   const root=prepare(t),w=launch(t,root,{packageRoot:withoutPoolReader(root)});const ready=await w.next();assert.equal(ready.admissionOpen,true);
   assert.ok(ready.logs.some(row=>row?.error==='DEPENDENCY_UNAVAILABLE'&&row.dependency==='Session pool configuration reader'));

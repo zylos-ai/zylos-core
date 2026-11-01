@@ -53,11 +53,21 @@ export class SupervisorAdmission {
         if (request.type === 'mode_switch') {
           return reply(await this.modeSwitch(request));
         }
+        if (request.type === 'ready_for_config_reclaim') {
+          let rows = [];
+          if (request.sessionGroup === 'origin') {
+            try { rows = this.store.read(); }
+            catch (error) {
+              if (error.code !== 'requests_unreadable') throw error;
+              return reply({ ok: false, result: 'rejected', reason: error.code });
+            }
+          }
+          return reply(await this.config(request, rows));
+        }
         const rows = this.store.read();
         switch (request.type) {
           case 'restart_all': return reply(await this.restart(request, rows));
           case 'manual_restart': return reply(await this.manual(request, rows));
-          case 'ready_for_config_reclaim': return reply(await this.config(request, rows));
           default: return reply({ ok: false, code: 'invalid_request' });
         }
       } catch (error) {

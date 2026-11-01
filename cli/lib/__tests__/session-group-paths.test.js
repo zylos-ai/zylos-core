@@ -65,6 +65,8 @@ test('pure paths and environment precedence never create directories', () => {
     assert.deepEqual(p.runDirFromEnv({...env, ZYLOS_RUN_ID:'run', ZYLOS_SESSION_GROUP:'lark:x'}), {dir:`${env.ZYLOS_DIR}/activity-monitor/session-groups/lark:x`, sessionGroup:'lark:x',kind:'group'});
     for (const bad of ['', undefined, '../escape']) assert.throws(() => p.runDirFromEnv({...env, ZYLOS_RUN_ID:'run', ZYLOS_SESSION_GROUP:bad}), {code:'SESSION_GROUP_INVALID'});
     assert.equal(p.groupMemoryDir('lark:x', env), `${env.ZYLOS_DIR}/memory/session-groups/lark:x`);
+    assert.equal(p.sessionGroupRunRoot(env), `${env.ZYLOS_DIR}/activity-monitor/session-groups`);
+    assert.equal(p.groupRunDir('lark:x', env), `${p.sessionGroupRunRoot(env)}/lark:x`);
     assert.equal(p.legacyRunDir({HOME:root}), `${root}/zylos/activity-monitor`);
     for (const [fn,file] of [['routerDiagnosticPath','comm-bridge/router-events.jsonl'],['supervisorDiagnosticPath','activity-monitor/supervisor-events.jsonl'],['poolMetricsPath','activity-monitor/pool-metrics.jsonl'],['hookErrorLogPath','activity-monitor/hook-activity-errors.log']]) assert.equal(p[fn](env), `${env.ZYLOS_DIR}/${file}`);
     assert.deepEqual(fs.readdirSync(root), []);

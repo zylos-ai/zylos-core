@@ -10,6 +10,7 @@ export class SupervisorLoop {
     this.timer = null;
     this.configuration = null;
     this.configurationError = null;
+    this.startupAlerted = false;
   }
 
   async start() {
@@ -22,6 +23,18 @@ export class SupervisorLoop {
       // Bad startup configuration is terminal for this process's scheduling.
       // Keep the daemon observable; recovery requires a deliberate restart.
       await this.deps.reportError(error, { phase: 'configuration' });
+      if (!this.startupAlerted) {
+        this.startupAlerted = true;
+        try {
+          await this.deps.startupAlert?.({
+            event: 'startup_configuration_unreadable',
+            session_group: '*',
+            reason: error.code ?? error.message,
+          });
+        } catch (alertError) {
+          await this.deps.reportError(alertError, { phase: 'startup-alert' });
+        }
+      }
       return;
     }
     try {

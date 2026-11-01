@@ -7,6 +7,18 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { submit } from '../../../../cli/lib/am-sock-client.js';
+
+/**
+ * Integration boundary: real supervisor/manual-restart entry, private tmux adapter,
+ * socket client, restart-request file, and isolated test database.
+ * Run when changing manual-restart admission/completion, intentional-stop exit
+ * classification, the supervisor socket client, or their real tmux wiring.
+ * Skip when changes cannot affect those boundaries (for example, comments or
+ * unit-only health/status projections).
+ * ISOLATION REQUIRED: run only through scripts/run-node-tests.js with fresh HOME,
+ * ZYLOS_DIR, PM2_HOME, a short TMPDIR, a private tmux socket, and the test database.
+ * Never run this case against a live Zylos environment or production resources.
+ */
 const worker=fileURLToPath(new URL('./fixtures/supervisor-manual-entry-worker.js',import.meta.url));
 async function launch(t,f,mode,pause=''){
  const child=fork(worker,[f.socketPath,f.binary,mode,pause],{env:{...process.env,...f.env},silent:true});let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
@@ -32,7 +44,7 @@ async function scenario(t,mode,mutant=''){
  await second.command('release');const done=await second.command('tick');
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));assert.equal(f.tmux('show-environment','-t','=zylos-group-origin','ZYLOS_RUN_ID'),'ZYLOS_RUN_ID=replacement');
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-original'));assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));
- assert.deepEqual(done.requests,[]);assert.deepEqual(done.fences,[]);
+ assert.deepEqual(done.requests,[]);assert.deepEqual(done.fences,[]);assert.equal(done.crashes,0);
  const exited=once(second.child,'exit');await second.command('stop');assert.equal((await exited)[0],0);
 }
 for(const mode of ['single','multi'])test(`${mode} actual supervisor/client lost reply requery retains original target and preserves same-name replacement`,{timeout:20000},async t=>{await scenario(t,mode);});
@@ -48,7 +60,7 @@ for(const pause of ['before-remove','after-remove'])test(`actual manual supervis
  const events=path.join(f.root,'activity-monitor/supervisor-events.jsonl');
  const completions=()=>fs.existsSync(events)?fs.readFileSync(events,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(e=>e.event==='manual_restart_done'&&e.requestId===request.requestId).length:0;
  assert.equal(completions(),0);
- const second=await launch(t,f,'multi');await second.command('release');let observed=await second.command('tick');assert.deepEqual(observed.requests,[]);assert.deepEqual(observed.fences,[]);
+ const second=await launch(t,f,'multi');await second.command('release');let observed=await second.command('tick');assert.deepEqual(observed.requests,[]);assert.deepEqual(observed.fences,[]);assert.equal(observed.crashes,0);
  // No request is submitted after restart. A deleted F9 row without completion log
  // is unknown history, not permission to synthesize another accepted request.
  assert.equal(completions(),pause==='before-remove'?1:0);observed=await second.command('tick');assert.deepEqual(observed.requests,[]);assert.equal(completions(),pause==='before-remove'?1:0);

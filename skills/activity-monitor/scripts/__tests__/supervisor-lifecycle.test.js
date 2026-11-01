@@ -7,7 +7,7 @@ const scene = (sessionGroup = 'a', extra = {}) => ({ sessionGroup, present: true
   processRunning: true, state: 'idle', idleSince: 0, runDir: '/isolated/run',
   launchConfig: { runtime: 'claude', mode: 'default' }, ...extra });
 function fixture(Class = SupervisorLifecycle) {
-  const f = { now: 2_000_000, scenes: [scene()], fences: new Map(), requests: [], controls: [], events: [], stops: [],
+  const f = { now: 2_000_000, scenes: [scene()], fences: new Map(), requests: [], controls: [], events: [], stops: [], forgotten: [],
     conversations: 0, runningControls: 0, withoutDeadline: 0, lastActivity: 0, unsummarized: 0,
     transition: null, pending: [], marker: { held: false, stale: false }, markerReads: [],
     backlog: { total: 0, groups: [] }, expected: { runtime: 'claude', mode: 'default' },
@@ -35,8 +35,9 @@ function fixture(Class = SupervisorLifecycle) {
     resolveSessionLaunchConfig: () => f.expected,
   };
   f.deps = { db: f.db, observe: () => f.scenes,
-    observeGroup: group => f.scenes.find(s => s.sessionGroup === group) ?? { present: false },
+    observeGroup: group => f.scenes.find(s => s.sessionGroup === group || group === null && s.sessionGroup === 'origin') ?? { present: false },
     stop: s => { f.stops.push(s.runId); f.scenes = f.scenes.filter(x => x.runId !== s.runId); },
+    intentionalStop: (group, runId) => { f.forgotten.push([group, runId]); },
     readSyncMarker: args => { f.markerReads.push(args); return f.marker; },
     requests: { read: () => f.requests, remove: id => { f.requests = f.requests.filter(r => r.requestId !== id); } },
     bindTarget: s => ({ expectedRunId: s.runId }),
@@ -57,7 +58,7 @@ test('reclaim waits conversations and controls, then stops the same run and clea
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'waiting_inflight');
   f.runningControls = 0;
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
-  assert.deepEqual(f.stops, ['run-a']); assert.equal(f.fences.size, 0);
+  assert.deepEqual(f.stops, ['run-a']); assert.deepEqual(f.forgotten,[['a','run-a']]); assert.equal(f.fences.size, 0);
 });
 test('mode-switch duplicate reclaim calls cannot shorten the 3s idle confirmation', async () => {
   const f = fixture();
@@ -96,13 +97,13 @@ test('unknown process waits; failed observation retains its own fence', async ()
 });
 test('exited runtime cleans residual tmux without idle or marker; replacement stays untouched', async () => {
   const f = fixture(), row = f.fence(); f.scenes[0].processRunning = false; f.scenes[0].state = 'busy';
-  assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done'); assert.equal(f.markerReads.length, 0);
+  assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done'); assert.equal(f.markerReads.length, 0); assert.deepEqual(f.forgotten,[['a','run-a']]);
   const g = fixture(), old = g.fence(); g.scenes[0].runId = 'replacement';
-  assert.equal(await g.lifecycle.advanceReclaim(old, g.context), 'done'); assert.deepEqual(g.stops, []); assert.equal(g.scenes.length, 1);
+  assert.equal(await g.lifecycle.advanceReclaim(old, g.context), 'done'); assert.deepEqual(g.stops, []); assert.deepEqual(g.forgotten,[['a','run-a']]); assert.equal(g.scenes.length, 1);
 });
 test('unconfirmed stop and failed DB reads cannot remove the durable fence', async () => {
   const f = fixture(), row = f.fence(); f.deps.stop = () => { throw Object.assign(new Error('stop failed'), { code: 'STOP_UNCONFIRMED' }); };
-  await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'STOP_UNCONFIRMED' }); assert.equal(f.fences.size, 1);
+  await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'STOP_UNCONFIRMED' }); assert.equal(f.fences.size, 1); assert.deepEqual(f.forgotten,[]);
   f.db.countRunningConversations = () => { throw Object.assign(new Error('busy'), { code: 'DB_BUSY' }); };
   await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'DB_BUSY' }); assert.equal(f.fences.size, 1);
 });
@@ -129,8 +130,10 @@ test('single auth ignores only deadline-less controls and retries a final count 
   f.db.countGlobalRunningConversations = () => ++reads > 1 ? 1 : 0;
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context, { unfenced: true, singleAuth: true }), 'waiting_inflight');
   assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
+  assert.equal(f.events.some(event => event.event === 'reclaim_cancelled'), false);
   f.db.countGlobalRunningConversations = () => 0;
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context, { unfenced: true, singleAuth: true }), 'done');
+  assert.deepEqual(f.forgotten, [[null, 'run-null']]);
   assert.deepEqual(f.markerReads.map(x => x.kind), ['global', 'global']);
 });
 // final conversation check preserves the reclaim fence.
@@ -139,10 +142,23 @@ async function finalRaceAssertion(Class) {
   f.db.countRunningConversations = () => ++reads > 1 ? 1 : 0;
   await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'RECLAIM_INFLIGHT' });
   assert.equal(f.fences.size, 1); assert.deepEqual(f.stops, []);
+  assert.equal(f.events.some(event => event.event === 'reclaim_cancelled'), false);
 }
 test('final conversation recheck', async () => {
   await finalRaceAssertion(SupervisorLifecycle);
 
+});
+test('ordinary final in-flight race records cancellation before cleanup and remains safe if diagnostics fail',async()=>{
+ for(const reason of ['ttl','evict','upgrade','auth','mode_switch']){
+  const f=fixture(),row=f.fence(reason);let reads=0;
+  f.db.countRunningConversations=()=>++reads>1?1:0;
+  f.deps.diagnostic=event=>{assert.equal(event.event,'reclaim_cancelled');assert.equal(event.reason,'inflight_after_idle');assert.equal(f.fences.has('a'),true);if(reason==='auth')throw new Error('diagnostic failed');f.events.push(event);};
+  const reported=[];f.deps.reportError=error=>reported.push(error.message);
+  await assert.rejects(f.lifecycle.advanceReclaim(row,f.context),{code:'RECLAIM_INFLIGHT'});
+  assert.equal(f.fences.size,0);assert.deepEqual(f.stops,[]);
+  assert.equal(f.lifecycle.ttlReset.has('a'),reason==='ttl');
+  assert.deepEqual(reported,reason==='auth'?['diagnostic failed']:[]);
+ }
 });
 // reclaim-policy: TTL preparation is cancellable; all real terminal statuses recheck.
 test('TTL preparation cancels on new messages or replaced run without fencing', async () => {
@@ -252,7 +268,7 @@ test('manual stops requested Origin run immediately then waits only real convers
   const f = fixture(); f.scenes = [scene('origin', { state: 'busy' })];
   f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
   f.conversations = 1; f.runningControls = 1; f.marker.held = true;
-  await f.lifecycle.advanceManual(f.context); assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.requests.length, 1); assert.equal(f.fences.size, 1);
+  await f.lifecycle.advanceManual(f.context); assert.deepEqual(f.stops, ['run-origin']); assert.deepEqual(f.forgotten,[['origin','run-origin']]); assert.equal(f.requests.length, 1); assert.equal(f.fences.size, 1);
   f.scenes = [scene('origin', { runId: 'replacement' })]; f.conversations = 0;
   f.lifecycle = new SupervisorLifecycle(f.deps, { now: () => f.now });
   await f.lifecycle.advanceManual(f.context); assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0);
@@ -261,7 +277,7 @@ test('manual crash after clear removes request without recreating fence or selec
   const f = fixture(); f.scenes = [scene('origin', { runId: 'replacement' })];
   f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'old' }];
   f.db.setDrainFence = () => { throw new Error('must not recreate'); };
-  await f.lifecycle.advanceManual(f.context); assert.equal(f.requests.length, 0); assert.deepEqual(f.stops, []);
+  await f.lifecycle.advanceManual(f.context); assert.equal(f.requests.length, 0); assert.deepEqual(f.stops, []); assert.deepEqual(f.forgotten,[['origin','old']]);
 });
 test('manual mode, group-fence and global-fence conflicts preserve captured request', async () => {
   for (const conflict of ['mode', 'group', 'global']) {
@@ -525,6 +541,7 @@ test('manual adapter RUNID_MISMATCH after fresh observation completes old reques
   f.deps.stop = target => { f.stops.push(target.runId); f.scenes = [scene('origin', { runId: 'replacement' })]; throw Object.assign(new Error('run replaced before adapter stop'), { code: 'RUNID_MISMATCH' }); };
   await f.lifecycle.advanceManual(context);
   assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.scenes[0].runId, 'replacement');
+  assert.deepEqual(f.forgotten, [['origin', 'run-origin']]);
   assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0);
   assert.equal(f.events.at(-1).event, 'manual_restart_done');
 });

@@ -11,7 +11,7 @@ const good = {
   ],
   ready_for_config_reclaim: [
     ...['accepted', 'already_accepted', 'unchanged'].map(result => ({ ok: true, result })),
-    ...['not_multi', 'transition_open', 'run_changed', 'not_ready', 'snapshot_unavailable', 'other_fence', 'manual_restart_pending'].map(reason => ({ ok: false, result: 'rejected', reason })),
+    ...['not_multi', 'transition_open', 'run_changed', 'not_ready', 'snapshot_unavailable', 'other_fence', 'manual_restart_pending', 'requests_unreadable'].map(reason => ({ ok: false, result: 'rejected', reason })),
   ],
   manual_restart: [
     ...['accepted', 'already_accepted', 'already_stopped'].map(result => ({ ok: true, result })),

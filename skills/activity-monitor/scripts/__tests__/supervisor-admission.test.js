@@ -94,6 +94,26 @@ test('config rechecks complete snapshot and current input; same run fence is ide
   f.state.expected=f.state.run.launchConfig; assert.equal((await f.admission.handle(config())).result,'already_accepted');
   f.state.run.runId='new'; assert.equal((await f.admission.handle(config())).reason,'run_changed');
 });
+test('config reclaim skips unreadable restart requests for ordinary groups and fails closed for origin', async t => {
+  const f=fixture(t); let reads=0, preflights=0;
+  const read=f.store.read.bind(f.store); f.store.read=()=>{reads++;return read();};
+  f.admission.preflightReclaim=async()=>{preflights++;};
+  fs.writeFileSync(f.file,'{unreadable-original');
+  assert.equal((await f.admission.handle(config())).result,'accepted');
+  assert.equal(reads,0); assert.equal(preflights,1);
+  assert.equal(fs.readFileSync(f.file,'utf8'),'{unreadable-original');
+  f.state.fences.clear();
+  const origin=config({sessionGroup:'origin'});
+  assert.deepEqual(await f.admission.handle(origin),{version:1,type:'ready_for_config_reclaim',requestId:'config',ok:false,result:'rejected',reason:'requests_unreadable'});
+  assert.equal(reads,1); assert.equal(preflights,1); assert.equal(f.state.fences.size,0);
+  assert.equal(fs.readFileSync(f.file,'utf8'),'{unreadable-original');
+  f.store.write([]);
+  assert.equal((await f.admission.handle(origin)).result,'accepted');
+  assert.equal(reads,2); assert.equal(preflights,2);
+  assert.deepEqual(f.state.fences.get('origin'),{reason:'model_config',runId:'r1'});
+  f.state.fences.clear(); f.admission.preflightReclaim=async()=>{throw Object.assign(new Error('unrelated dependency'),{code:'requests_unreadable'});};
+  await assert.rejects(f.admission.handle(config()),{code:'requests_unreadable'});
+});
 test('config conflicts hold and DB failure does not acknowledge', async t => {
   const f=fixture(t); f.state.mode='single'; assert.equal((await f.admission.handle(config())).reason,'not_multi'); f.state.mode='multi';
   f.state.fences.set('*',{reason:'mode_switch'}); assert.equal((await f.admission.handle(config())).reason,'transition_open'); f.state.fences.clear();

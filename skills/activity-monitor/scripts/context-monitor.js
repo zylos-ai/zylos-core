@@ -6,6 +6,25 @@ import path from 'node:path';
 import { isMainModule } from './is-main-module.js';
 const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
+function failureIdentity(env) {
+  try {
+    const location = runDirFromEnv(env);
+    const runId = typeof env.ZYLOS_RUN_ID === 'string' && env.ZYLOS_RUN_ID.trim()
+      ? env.ZYLOS_RUN_ID : null;
+    if (location.kind === 'legacy' || !runId) return { sessionGroup: 'unknown', runId: 'unknown' };
+    return { sessionGroup: location.sessionGroup ?? 'origin', runId };
+  } catch {
+    return { sessionGroup: 'unknown', runId: 'unknown' };
+  }
+}
+
+function appendPublicationFailure(env = process.env, now = Date.now()) {
+  const identity = failureIdentity(env);
+  const file = hookErrorLogPath(env);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${new Date(now).toISOString()} session_group=${JSON.stringify(identity.sessionGroup)} run_id=${JSON.stringify(identity.runId)} statusline: invalid sample or publication failure\n`);
+}
+
 export function publishContextSample(raw, { env = process.env, now = Date.now() } = {}) {
   const status = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('Invalid statusLine sample');
@@ -36,7 +55,7 @@ if (isMainModule(import.meta.url)) {
   process.stdin.on('end', () => {
     try { if (input.trim()) publishContextSample(input); }
     catch (error) {
-      try { fs.appendFileSync(hookErrorLogPath(), `${new Date().toISOString()} statusline: invalid sample or publication failure\n`); } catch {}
+      try { appendPublicationFailure(); } catch {}
     }
   });
 }

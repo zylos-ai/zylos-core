@@ -26,6 +26,7 @@ test('validates all five reply branches and mandatory relationships', () => {
     ['restart_all', { ok: true, result: 'unknown', runCount: 1 }, false],
     ['ready_for_config_reclaim', { ok: true, result: 'unchanged' }, true],
     ['ready_for_config_reclaim', { ok: false, result: 'rejected', reason: 'other_fence' }, true],
+    ['ready_for_config_reclaim', { ok: false, result: 'rejected', reason: 'requests_unreadable' }, true],
     ['ready_for_config_reclaim', { ok: false, result: 'rejected', reason: 'bad' }, false],
     ['manual_restart', { ok: false, result: 'stale_target', currentRunId: 'r2' }, true],
     ['manual_restart', { ok: false, result: 'stale_target' }, false],
