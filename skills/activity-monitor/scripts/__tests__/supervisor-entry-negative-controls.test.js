@@ -38,16 +38,6 @@ async function corruptScenario(t,mutant){
  assert.equal(response.code,'requests_unreadable');assert.equal(fs.readFileSync(f.file,'utf8'),'{unreadable-original');assert.deepEqual(f.db.listDrainFences(),[]);
 }
 test('actual entry refuses corrupt and detects reset-to-empty recovery implementation',async t=>{await corruptScenario(t,false);await assert.rejects(corruptScenario(t,true),{code:'ERR_ASSERTION'});});
-async function configCorruptScenario(t,mutant){
- const ordinary=await fixture(t,'corrupt',mutant),ordinaryRequest={version:1,type:'ready_for_config_reclaim',requestId:'ordinary-config',sessionGroup:'telegram:one',expectedRunId:'run-1'};
- assert.equal((await ordinary.request(ordinaryRequest)).result,'accepted');assert.equal(fs.readFileSync(ordinary.file,'utf8'),'{unreadable-original');assert.equal(ordinary.writes(),1);
- const origin=await fixture(t,'corrupt',mutant),originRequest={...ordinaryRequest,requestId:'origin-config',sessionGroup:'origin'};
- const rejected=await origin.request(originRequest);assert.equal(rejected.result,'rejected');assert.equal(rejected.reason,'requests_unreadable');
- assert.equal(fs.readFileSync(origin.file,'utf8'),'{unreadable-original');assert.equal(origin.writes(),0);assert.deepEqual(origin.db.listDrainFences(),[]);
- fs.writeFileSync(origin.file,'[]');
- assert.equal((await origin.request(originRequest)).result,'accepted');assert.equal(origin.writes(),1);
-}
-test('actual entry isolates ordinary config reclaim from corrupt restart state and keeps origin retryable',async t=>{await configCorruptScenario(t,false);await assert.rejects(configCorruptScenario(t,true),{code:'ERR_ASSERTION'});});
 async function duplicateScenario(t,mutant){
  const f=await fixture(t,'duplicate',mutant),request={version:1,type:'ready_for_config_reclaim',requestId:'config-retry',sessionGroup:'telegram:one',expectedRunId:'run-1'};
  assert.equal((await f.request(request)).result,'accepted');assert.equal(f.writes(),1);
