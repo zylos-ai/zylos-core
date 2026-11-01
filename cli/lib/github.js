@@ -282,29 +282,49 @@ async function fetchTagsJsonAsync(repo, snapshot, page = 1) {
 
 // ── Public API ───────────────────────────────────────────────────
 
+// Shared synchronous pagination for latest-release and exact-tag selection.
+function* fetchTagPages(repo, snapshot) {
+  for (let page = 1; ; page++) {
+    const json = withRateLimitRetrySync(() => fetchTagsJsonSync(repo, snapshot, page), `${repo} tags`);
+    const batch = JSON.parse(json);
+    if (!Array.isArray(batch)) throw new Error('Invalid tags response');
+    yield batch;
+    if (batch.length < 100) return;
+  }
+}
+
+/** Check for an exact tag name, using the same paginated tag source as updates. */
+export function fetchExactTag(repo, tag) {
+  const snapshot = getUpstreamSnapshot();
+  try {
+    for (const batch of fetchTagPages(repo, snapshot)) {
+      if (batch.some(entry => entry.name === tag)) return true;
+    }
+    return false;
+  } catch (err) {
+    const msg = err.stderr?.toString().trim() || err.message || 'unknown error';
+    throw new Error(`Failed to fetch tags for ${repo}: ${sanitizeError(msg)}`);
+  }
+}
+
 /**
  * Fetch the latest version tag from a GitHub repo (synchronous).
- * Looks for tags matching v*.*.* pattern and returns the highest semver.
- *
  * @param {string} repo - GitHub repo in "org/name" format
  * @param {object} [opts]
- * @param {boolean} [opts.includePrerelease=false] - Include prerelease (beta) tags
- * @param {string} [opts.major] - Restrict selection to this major version, across all tag pages
- * @returns {string|null} Latest version (without 'v' prefix) or null if no matching tags
- * @throws {Error} On network/API failures (callers should catch and handle)
+ * @param {boolean} [opts.includePrerelease=false] - Include prerelease tags
+ * @param {string} [opts.major] - Restrict selection across all tag pages
+ * @returns {string|null} Latest version without 'v', or null if none match
+ * @throws {Error} On network/API failures
  */
 export function fetchLatestTag(repo, { includePrerelease = false, major } = {}) {
   const snapshot = getUpstreamSnapshot();
   try {
     const tags = [];
-    for (let page = 1; ; page++) {
-      const json = withRateLimitRetrySync(() => fetchTagsJsonSync(repo, snapshot, page), `${repo} tags`);
-      const batch = JSON.parse(json);
-      if (!Array.isArray(batch)) throw new Error('Invalid tags response');
+    for (const batch of fetchTagPages(repo, snapshot)) {
       tags.push(...batch);
       // Major-scoped checks must also find releases beyond the first page.
       // Unscoped component checks retain their existing first-page behavior.
-      if (major === undefined || batch.length < 100) break;
+      if (major === undefined) break;
     }
     return parseTagsResponse(JSON.stringify(tags), { includePrerelease, major });
   } catch (err) {
