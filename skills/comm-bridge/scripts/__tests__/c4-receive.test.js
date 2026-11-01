@@ -10,18 +10,38 @@ import Database from 'better-sqlite3';
 
 const CLI_PATH = fileURLToPath(new URL('../c4-receive.js', import.meta.url));
 
-function cliRaw(args, env = {}) {
-  const result = spawnSync('node', [CLI_PATH, ...args], {
-    env: { ...process.env, ...env },
-    encoding: 'utf8'
+function cliOptions(args, env) {
+  const root = fs.realpathSync(env.ZYLOS_DIR);
+  const dbPath = path.join(root, 'comm-bridge', 'c4.db');
+  const amSocket = path.join(root, 'activity-monitor', 'am.sock');
+  for (const name of ['HOME', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'PATH']) {
+    assert.ok(fs.realpathSync(env[name]).startsWith(root + path.sep), `${name} must stay inside the fixture`);
+  }
+  for (const target of [dbPath, amSocket]) {
+    assert.ok(fs.realpathSync(path.dirname(target)).startsWith(root + path.sep));
+    if (fs.existsSync(target)) assert.ok(fs.realpathSync(target).startsWith(root + path.sep));
+  }
+  assert.equal(fs.realpathSync(path.join(env.PATH, 'node')), fs.realpathSync(process.execPath));
+  assert.equal(env.TMUX, `${path.join(env.TMUX_TMPDIR, 'private.sock')},0,0`);
+  // Read back actual destinations and arguments before spawning the real CLI.
+  console.log('CLI isolation:', JSON.stringify({ command: process.execPath, args: [CLI_PATH, ...args], env, dbPath, amSocket }));
+  return { cwd: root, env, timeout: 15000, killSignal: 'SIGKILL' };
+}
+
+function cliRaw(args, env) {
+  const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
+    ...cliOptions(args, env),
+    encoding: 'utf8',
   });
+  assert.equal(result.error, undefined, String(result.error));
+  assert.equal(result.signal, null);
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
 
-function cliRawAsync(args, env = {}) {
+function cliRawAsync(args, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn('node', [CLI_PATH, ...args], {
-      env: { ...process.env, ...env },
+    const child = spawn(process.execPath, [CLI_PATH, ...args], {
+      ...cliOptions(args, env),
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let stdout = '';
@@ -31,34 +51,74 @@ function cliRawAsync(args, env = {}) {
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('error', reject);
-    child.on('close', status => resolve({ stdout, stderr, status }));
+    child.on('close', (status, signal) => {
+      if (signal) reject(new Error(`CLI terminated by ${signal}`));
+      else resolve({ stdout, stderr, status });
+    });
   });
 }
 
+function createFixture() {
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'c4r-')));
+  const env = {
+    ZYLOS_DIR: tmpDir,
+    HOME: path.join(tmpDir, 'home'),
+    PM2_HOME: path.join(tmpDir, 'pm2'),
+    TMPDIR: path.join(tmpDir, 'tmp'),
+    TMUX_TMPDIR: path.join(tmpDir, 'tmux'),
+    PATH: path.join(tmpDir, 'bin'),
+    LANG: 'C',
+    TZ: 'UTC',
+  };
+  env.TMUX = `${path.join(env.TMUX_TMPDIR, 'private.sock')},0,0`;
+  for (const name of ['HOME', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'PATH']) {
+    fs.mkdirSync(env[name], { recursive: true });
+  }
+  for (const relative of ['activity-monitor', 'comm-bridge']) {
+    fs.mkdirSync(path.join(tmpDir, relative), { recursive: true });
+  }
+  fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"type":"module"}\n');
+  fs.symlinkSync(process.execPath, path.join(env.PATH, 'node'));
+  for (const command of ['pm2', 'tmux', 'curl', 'wget', 'ssh', 'git', 'npm']) {
+    fs.writeFileSync(path.join(env.PATH, command), `#!${process.execPath}
+import fs from 'node:fs';
+fs.appendFileSync(${JSON.stringify(path.join(tmpDir, 'unexpected-commands'))}, ${JSON.stringify(command)}+'\\n');
+process.exit(99);
+`, { mode: 0o755 });
+  }
+  return { tmpDir, env };
+}
+
+function cleanupFixture(tmpDir) {
+  try {
+    assert.equal(fs.existsSync(path.join(tmpDir, 'unexpected-commands')), false, 'no service or network command may run');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 function withTmpDir(fn) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-receive-'));
-  fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
-  const env = { ZYLOS_DIR: tmpDir };
+  const { tmpDir, env } = createFixture();
   try {
     return fn({ tmpDir, env });
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanupFixture(tmpDir);
   }
 }
 
 async function withTmpDirAsync(fn) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-receive-'));
-  fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
-  const env = { ZYLOS_DIR: tmpDir };
+  const { tmpDir, env } = createFixture();
   try {
     return await fn({ tmpDir, env });
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanupFixture(tmpDir);
   }
 }
 
 function openDb(tmpDir) {
-  return new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
+  const dbPath = path.join(tmpDir, 'comm-bridge', 'c4.db');
+  assert.ok(fs.realpathSync(dbPath).startsWith(fs.realpathSync(tmpDir) + path.sep));
+  return new Database(dbPath);
 }
 
 function readCooldownRows(tmpDir) {
@@ -137,18 +197,8 @@ async function withRouteServer(tmpDir, handler, fn) {
   }
 }
 
-/**
- * Parse JSON from the CLI stdout. The DB init log line ("[C4-DB] Database initialized")
- * may precede the JSON line, so we find the last line that starts with '{'.
- */
 function parseJsonStdout(stdout) {
-  const lines = stdout.trim().split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].startsWith('{')) {
-      return JSON.parse(lines[i]);
-    }
-  }
-  throw new Error(`No JSON found in stdout: ${stdout}`);
+  return JSON.parse(stdout);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +304,160 @@ describe('c4-receive basic intake', () => {
       assert.equal(row.require_idle, 1);
     });
   });
+});
+
+describe('c4-receive unknown option compatibility', () => {
+  // Boundary: forward component arguments must not change persisted intake.
+  // Run when receive parsing/storage changes; skip for unrelated send/dispatcher changes.
+  it('stores the same stable fields with and without a session group', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'test-channel'), { recursive: true });
+      const args = ['--channel', 'test-channel', '--endpoint', 'compat-ep', '--priority', '2',
+        '--require-idle', '--json', '--content', 'same inbound content'];
+      const baseline = cliRaw(args, env);
+      const forwarded = cliRaw(['--session-group', 'team', ...args], env);
+      assert.equal(baseline.status, 0, baseline.stderr);
+      assert.equal(forwarded.status, 0, forwarded.stderr);
+      const first = parseJsonStdout(baseline.stdout);
+      const second = parseJsonStdout(forwarded.stdout);
+      assert.equal(first.ok, true);
+      assert.equal(second.ok, true);
+      assert.equal(forwarded.stderr, 'Ignored unknown option: --session-group\n');
+      const db = openDb(tmpDir);
+      try {
+        const rows = [first, second].map(({ id }) => db.prepare('SELECT * FROM conversations WHERE id = ?').get(id));
+        assert.ok(rows.every(Boolean));
+        const stable = rows.map(({ id, timestamp, ...fields }) => fields);
+        assert.deepEqual(stable[1], stable[0]);
+        assert.equal(stable[1].content, 'same inbound content');
+        assert.equal(stable[1].endpoint_id, 'compat-ep');
+        assert.equal(stable[1].require_idle, 1);
+        assert.equal(stable[1].priority, 2);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  // Boundary: an unknown switch cannot consume the next known option.
+  // Run when receive parsing changes; skip for unrelated storage/send changes.
+  it('keeps a known content option immediately after an unknown switch', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const r = cliRaw(['--no-reply', '--json', '--some-flag', '--content', 'known content'], env);
+      assert.equal(r.status, 0, r.stderr);
+      const out = parseJsonStdout(r.stdout);
+      assert.equal(out.ok, true);
+      assert.equal(r.stderr, 'Ignored unknown option: --some-flag\n');
+      const db = openDb(tmpDir);
+      try {
+        assert.equal(db.prepare('SELECT content FROM conversations WHERE id = ?').get(out.id).content, 'known content');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  // Boundary: an unknown final token has no value to consume.
+  // Run when receive parsing changes; skip for unrelated storage/send changes.
+  it('ignores an unknown option at the end of the arguments', () => {
+    withTmpDir(({ env }) => {
+      const r = cliRaw(['--no-reply', '--json', '--content', 'tail content', '--future-switch'], env);
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(parseJsonStdout(r.stdout).ok, true);
+      assert.equal(r.stderr, 'Ignored unknown option: --future-switch\n');
+    });
+  });
+
+  // Boundary: each ignored option reports only its name, including inline
+  // values; '=' does not change the ordinary following-word skip rule.
+  // Run when receive diagnostics/parsing changes; skip for unrelated send changes.
+  it('reports each unknown name without separate or inline values', () => {
+    withTmpDir(({ env }) => {
+      const r = cliRaw(['--no-reply', '--json', '--first', 'private-value',
+        '--inline=inline-private=more', 'second-private', '--last', '--content', 'visible'], env);
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(parseJsonStdout(r.stdout).ok, true);
+      assert.equal(r.stderr, 'Ignored unknown option: --first\nIgnored unknown option: --inline\nIgnored unknown option: --last\n');
+      for (const value of ['private-value', 'inline-private', 'more', 'second-private']) {
+        assert.equal(r.stderr.includes(value), false);
+      }
+    });
+  });
+
+  // Boundary: inline unknown values remain unknown, and the next known flag is
+  // still parsed. Run when receive parsing/diagnostics changes; otherwise skip.
+  it('does not consume a known flag after an inline unknown option', () => {
+    withTmpDir(({ env }) => {
+      const r = cliRaw(['--no-reply', '--json', '--future=private', '--content', 'visible'], env);
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(parseJsonStdout(r.stdout).ok, true);
+      assert.equal(r.stderr, 'Ignored unknown option: --future\n');
+    });
+  });
+
+  for (const value of ['-x', '']) {
+    // Boundary: only a '--' prefix prevents a following value from being skipped.
+    // Run when unknown argument skipping changes; skip for unrelated DB/send changes.
+    it(`skips a following non-double-dash value: ${JSON.stringify(value)}`, () => {
+      withTmpDir(({ env }) => {
+        const r = cliRaw(['--no-reply', '--json', '--future', value, '--content', 'visible'], env);
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(parseJsonStdout(r.stdout).ok, true);
+        assert.equal(r.stderr, 'Ignored unknown option: --future\n');
+      });
+    });
+  }
+
+  for (const extra of [['stray'], ['--future', 'value', 'stray']]) {
+    // Boundary: at most one unknown-option value is skipped; other bare words
+    // retain the existing error. Run when receive parsing changes; otherwise skip.
+    it(`rejects an unconsumed extra word: ${extra.join(' ')}`, () => {
+      withTmpDir(({ tmpDir, env }) => {
+        const r = cliRaw(['--no-reply', '--json', '--content', 'visible', ...extra], env);
+        assert.equal(r.status, 1);
+        const out = parseJsonStdout(r.stdout);
+        assert.deepEqual(out.error, { code: 'INVALID_ARGS', message: 'Unexpected argument: stray' });
+        assert.equal(r.stderr, extra.length === 1 ? '' : 'Ignored unknown option: --future\n');
+        assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'c4.db')), false);
+      });
+    });
+  }
+
+  // Boundary: known value-taking options still consume the next token
+  // unconditionally. Run when receive parsing changes; otherwise skip.
+  it('stores a double-dash content value without treating it as an option', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const r = cliRaw(['--no-reply', '--json', '--content', '--future-content'], env);
+      assert.equal(r.status, 0, r.stderr);
+      const out = parseJsonStdout(r.stdout);
+      assert.equal(r.stderr, '');
+      const db = openDb(tmpDir);
+      try {
+        assert.equal(db.prepare('SELECT content FROM conversations WHERE id = ?').get(out.id).content, '--future-content');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  for (const { args, message } of [
+    { args: ['--no-reply', '--priority', '5', '--content', 'x'], message: '--priority must be an integer 1, 2, or 3' },
+    { args: ['--no-reply'], message: '--content is required' },
+    { args: ['--content', 'x'], message: '--channel is required unless --no-reply is set' },
+  ]) {
+    // Boundary: ignored forward arguments cannot bypass known validation.
+    // Run when parsing/validation changes; skip for unrelated storage/send changes.
+    it(`preserves known validation after ignoring an option: ${message}`, () => {
+      withTmpDir(({ tmpDir, env }) => {
+        const r = cliRaw(['--json', '--session-group', 'team', ...args], env);
+        assert.equal(r.status, 1);
+        const out = parseJsonStdout(r.stdout);
+        assert.deepEqual(out.error, { code: 'INVALID_ARGS', message });
+        assert.equal(r.stderr, 'Ignored unknown option: --session-group\n');
+        assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'c4.db')), false);
+      });
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

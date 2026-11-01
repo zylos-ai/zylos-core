@@ -23,6 +23,8 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 | `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles |
 | `--json` | Output structured JSON instead of plain text |
 
+Unknown options are ignored with an `Ignored unknown option: --name` notice on stderr; the next word is also skipped when it does not start with `--`, and option values are never included in the notice.
+
 ## Priority Levels
 
 | Priority | Type | Description |
