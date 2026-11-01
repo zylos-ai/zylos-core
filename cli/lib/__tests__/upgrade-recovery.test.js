@@ -37,6 +37,7 @@ async function fixture(t,{missing=false,wal=false}={}) {
   fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
  }
  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/sqlite-schema.js'),path.join(skillsDir,'comm-bridge/scripts/sqlite-schema.js'));
+ fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/upgrade-admission.js'),path.join(skillsDir,'comm-bridge/scripts/upgrade-admission.js'));
  for(const item of CORE_DATABASES){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
   for(const [name,columns] of Object.entries(mod.TABLES)){const defs=mod.COLUMN_DEFINITIONS?.[name]||{};db.exec(`CREATE TABLE "${name}" (${columns.map(c=>`"${c}" ${defs[c]?.type||'TEXT'}${defs[c]?.pk?' PRIMARY KEY':''}`).join(',')})`);}
   db.pragma(`user_version=${mod.SUPPORTED_SCHEMA_VERSION}`);if(wal)db.pragma('journal_mode=WAL');db.close();

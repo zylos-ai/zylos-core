@@ -43,7 +43,7 @@ function originalVerified(dir, j) {
   }
   for (const e of j.coreManifest) {
     const p = m.target(j, e.name);
-    if (e.existedBefore ? !fs.existsSync(p) || m.treeHash(p) !== e.originalHash : fs.existsSync(p)) throw Error('original core deployment changed: ' + e.name);
+    if (e.existedBefore ? !fs.existsSync(p) || m.treeHash(p, {excludeNodeModules: !j.targetOwned}) !== e.originalHash : fs.existsSync(p)) throw Error('original core deployment changed: ' + e.name);
   }
   const ecosystem = path.join(j.zylosDir, 'pm2', 'ecosystem.config.cjs');
   if (j.initialIdentity.ecosystemHash ? !fs.existsSync(ecosystem) || m.hash(ecosystem) !== j.initialIdentity.ecosystemHash : fs.existsSync(ecosystem)) throw Error('original ecosystem changed');
@@ -166,6 +166,16 @@ function rescue(dir, j) {
     m.update(dir, j);
   }
 }
+function validateCoreBackups(dir, j) {
+  for (const e of j.coreManifest) {
+    const target = m.target(j, e.name);
+    const backup = path.join(dir, 'code', 'skills', e.name);
+    if (!e.existedBefore && fs.existsSync(target) && m.read(path.join(target,'.zylos/upgrade-owner.json')).transactionId !== j.transactionId) throw Error('new core directory provenance unknown: ' + e.name);
+    if (e.existedBefore && (!e.backedUp || !fs.existsSync(backup) || m.treeHash(backup, {excludeNodeModules:!j.targetOwned}) !== e.originalHash)) throw Error('invalid core backup: ' + e.name);
+    if (j.codeRestore?.[e.name]?.complete && e.existedBefore && m.treeHash(m.target(j,e.name), {excludeNodeModules:!j.targetOwned}) !== e.originalHash) throw Error('completed core restore changed: ' + e.name);
+  }
+  if (j.initialIdentity.ecosystemHash && m.hash(path.join(dir,'code/pm2/ecosystem.config.cjs')) !== j.initialIdentity.ecosystemHash) throw Error('ecosystem backup invalid');
+}
 function restoreCore(dir, j) {
   j.codeRestore ||= {};
   for (const e of j.coreManifest) {
@@ -173,13 +183,13 @@ function restoreCore(dir, j) {
       backup = path.join(dir, 'code', 'skills', e.name),
       state = j.codeRestore[e.name];
     if (e.existedBefore) {
-      if (!e.backedUp || !fs.existsSync(backup) || m.treeHash(backup) !== e.originalHash) throw Error('invalid core backup: ' + e.name);
+      if (!e.backedUp || !fs.existsSync(backup) || m.treeHash(backup, {excludeNodeModules: !j.targetOwned}) !== e.originalHash) throw Error('invalid core backup: ' + e.name);
       if (state?.complete) {
-        if (!fs.existsSync(p) || m.treeHash(p) !== e.originalHash) throw Error('completed core restore changed: ' + e.name);
+        if (!fs.existsSync(p) || m.treeHash(p, {excludeNodeModules: !j.targetOwned}) !== e.originalHash) throw Error('completed core restore changed: ' + e.name);
         continue;
       }
-      m.sync(backup, p);
-      if (m.treeHash(p) !== e.originalHash) throw Error('core restore verification failed');
+      m.sync(backup, p, {excludeNodeModules: !j.targetOwned});
+      if (m.treeHash(p, {excludeNodeModules: !j.targetOwned}) !== e.originalHash) throw Error('core restore verification failed');
     } else if (fs.existsSync(p)) {
       const ownership = path.join(p, '.zylos', 'upgrade-owner.json');
       if (!fs.existsSync(ownership) || m.read(ownership).transactionId !== j.transactionId) throw Error('new core directory provenance unknown: ' + e.name);
@@ -403,7 +413,15 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     // Journal identity and phase are authoritative only while holding the
     // controller. Never restore using the pre-lock snapshot.
     j = m.transaction(root, dir);
+    const cutoff = m.classifyCutoff(j);
+    if (cutoff === 'untrusted') return {attempted:false,completed:false,stage:j.phase,error:'untrusted compensation cutoff; manual recovery required',recovery_required:true};
     verifyFinalizerExit(dir, j);
+    if (cutoff === 'closed' && !m.terminalValid(j)) {
+      m.marker(root, dir, j);
+      m.stop(j);
+      m.update(dir, j, {phase:'recovery_required',resumePhase:j.phase === 'recovery_required' ? j.resumePhase : j.phase,error:'compensation is closed; complete and verify the target deployment manually'});
+      return {attempted:false,completed:false,stage:j.phase,error:j.error,recovery_required:true};
+    }
     if (m.terminalValid(j)) {
       if (j.terminalServicesStopped) {
         m.start(j);
@@ -437,7 +455,16 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     m.stop(j);
     const d = m.read(path.join(dir, 'descriptor.json'));
     m.validateDescriptor(dir, j, d);
-    if (j.databaseMode === 'unchanged') {
+    if (j.targetOwned) {
+      validateCoreBackups(dir, j);
+      const snapshot = validateSnapshot(dir, j);
+      rescue(dir, j);
+      m.restoreOriginalPackage(dir, j);
+      restoreCore(dir, j);
+      replaceDatabases(dir, j, snapshot);
+      const checked = m.preflight(dir, j, snapshot);
+      if (checked.success === false) throw Error(checked.error || 'restored preflight failed');
+    } else if (j.databaseMode === 'unchanged') {
       restoreCore(dir, j);
     } else {
       const snapshot = validateSnapshot(dir, j);

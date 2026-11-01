@@ -14,6 +14,33 @@ function recoveryFiles(runnerName = 'runner.cjs') {
 
   return files;
 }
+export function resolveProtectedNpmCli() {
+  for(const directory of String(process.env.PATH||'').split(path.delimiter)){
+    if(!path.isAbsolute(directory))continue;
+    try{const file=fs.realpathSync(path.join(directory,'npm')),st=fs.statSync(file);if(path.basename(file)==='npm-cli.js'&&st.isFile()){fs.accessSync(file,fs.constants.R_OK);return file;}}catch{}
+  }
+  throw Error('trusted npm-cli.js entry is unavailable');
+}
+export function runProtectedInstaller(ctx,{stage,npmCli,args,cwd,timeout=180000}) {
+  const maintenance = maintenanceFor(ctx);
+  cwd=fs.realpathSync(cwd);
+  const dir=ctx.transactionDir,j=maintenance.read(path.join(dir,'journal.json'));
+  maintenance.validateDescriptor(dir,j,maintenance.read(path.join(dir,'descriptor.json')));
+  // A crash before spawnSync returns leaves no reliable PID evidence. Recovery
+  // must remain blocked in that case; parent death never proves npm has exited.
+  maintenance.update(dir,j,{installerStarted:true,installerStage:stage,installerPid:null,installerExitConfirmed:false,installerExitUnconfirmed:false});
+  ctx.journal=j;
+  const result=spawnSync(process.execPath,[npmCli,...args],{cwd,env:{...process.env,ZYLOS_SKIP_POSTINSTALL:'1',...(ctx.targetOwned ? {ZYLOS_PROTECTED_INSTALL:'1'} : {})},encoding:'utf8',stdio:['ignore','pipe','pipe'],detached:true,timeout,killSignal:'SIGKILL',maxBuffer:4*1024*1024});
+  const saved=maintenance.read(path.join(dir,'journal.json'));
+  maintenance.update(dir,saved,{installerPid:result.pid||null});
+  let verified;
+  try { verified=require(path.join(dir,'finalizer.cjs')).quiesce(dir,saved,{terminate:true,kind:'installer'}); }
+  catch(error){verified={confirmed:false,error:error.message};}
+  maintenance.update(dir,saved,{installerExitConfirmed:verified.confirmed,installerExitUnconfirmed:!verified.confirmed});ctx.journal=saved;
+  if(!verified.confirmed)throw Error(verified.error||'installer process exit unconfirmed');
+  if(result.error||result.status!==0){const error=Error(result.error?.message||String(result.stderr||'').trim()||'npm '+stage+' exited '+result.status);error.stderr=String(result.stderr||'');throw error;}
+  return String(result.stdout||'');
+}
 export function deployUpgradeBootstrap(root) {
   const prior = maintenance.discover(root);
   if (prior.candidates.length || prior.diagnostics.length || prior.marker) throw Error('cannot replace stable bootstrap during an unresolved upgrade');
@@ -89,7 +116,7 @@ export function beginUpgrade(ctx, {
       name,
       existedBefore: fs.existsSync(p),
       backedUp: false,
-      originalHash: fs.existsSync(p) ? maintenance.treeHash(p) : null
+      originalHash: fs.existsSync(p) ? maintenance.treeHash(p, {excludeNodeModules: !ctx.targetOwned}) : null
     };
   });
   const packageJson = path.join(ctx.coreDir, 'package.json'),
@@ -103,6 +130,7 @@ export function beginUpgrade(ctx, {
     from: ctx.from,
     to: ctx.to,
     phase: 'preparing',
+    targetOwned: ctx.targetOwned === true,
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
     installationIntent: false,
     automaticCompensation: true,
@@ -252,12 +280,13 @@ export function saveProtectedCode(ctx) {
     if (!e.existedBefore) continue;
     const p = maintenance.target(j, e.name),
       dest = path.join(ctx.backupDir, 'skills', e.name);
-    fs.cpSync(p, dest, {
+    if (j.targetOwned) maintenance.copyTreePreservingModes(p, dest);
+    else fs.cpSync(p, dest, {
       recursive: true,
       verbatimSymlinks: true,
       filter: s => path.relative(p, s).split(path.sep)[0] !== 'node_modules'
     });
-    if (maintenance.treeHash(dest) !== e.originalHash) throw Error('core backup changed during copy');
+    if (maintenance.treeHash(dest, {excludeNodeModules: !j.targetOwned}) !== e.originalHash) throw Error('core backup changed during copy');
     maintenance.fsyncTree(dest);
     maintenance.fsyncDir(path.dirname(dest));
     e.backedUp = true;
@@ -372,6 +401,16 @@ export function recovery(ctx) {
     saved = maintenance.transaction(root, dir);
     ctx.journal = saved;
     ctx.transactionDir = dir;
+    const cutoff = maintenance.classifyCutoff(saved);
+    if (cutoff === 'untrusted') throw Error('untrusted compensation cutoff; manual recovery required');
+    if (cutoff === 'closed' && !maintenance.terminalValid(saved)) {
+      maintenance.marker(root, dir, saved);
+      let error = 'compensation is closed; complete and verify the target deployment manually';
+      try { maintenance.stop(saved); } catch (cause) { error += '; isolation: ' + cause.message; }
+      maintenance.update(dir, saved, {phase:'recovery_required', resumePhase:saved.phase === 'recovery_required' ? saved.resumePhase : saved.phase, error});
+      if (!ctx.finalizerExitUnconfirmed) release();
+      return {attempted:false, completed:false, stage:saved.phase, error, recovery_required:true};
+    }
     // This entry is the parent's explicit failed-upgrade path, whereas direct
     // bootstrap resume is interruption continuation. A failed new finalizer
     // after data_ready must compensate, even if a later startup retry could
@@ -473,28 +512,52 @@ export function recovery(ctx) {
     };
   }
 }
+export function prepareTargetData(ctx, overrides = {}, {ready = false} = {}) {
+  const m = maintenanceFor(ctx), dir = ctx.transactionDir;
+  const j = m.transaction(ctx.journal.zylosDir, dir);
+  const phases = ready ? ['new_data_ready', 'new_verifying'] : ['installing'];
+  if (!j.targetOwned || !phases.includes(j.phase) || !j.installationIntent || j.transactionId !== ctx.transactionId) throw Error('target data verification requires own protected transaction');
+  if (!ready && j.databaseMode !== 'unchanged') {
+    (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
+  }
+  const checked = (overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true});
+  if (checked.success === false) throw Error(checked.error || 'target data verification failed');
+  ctx.databases = checked.databases || null;
+  ctx.journal = j;
+  return checked;
+}
+export function closeCompensation(ctx) {
+  const m = maintenanceFor(ctx), dir = ctx.transactionDir;
+  const j = m.transaction(ctx.journal.zylosDir, dir);
+  if (!j.targetOwned || j.phase !== 'installing' || j.transactionId !== ctx.transactionId || !j.installationIntent || m.classifyCutoff(j) !== 'none') throw Error('compensation cutoff requires own installing transaction');
+  const marker = m.read(path.join(j.zylosDir, '.zylos/upgrade/active.json'));
+  if (marker.transactionId !== j.transactionId || marker.transactionDir !== dir) throw Error('active transaction changed before compensation cutoff');
+  m.update(dir, j, {phase:'compensation_closed', compensationCutoff:{formatVersion:1,closed:true,transactionId:j.transactionId,from:j.from,to:j.to,snapshotManifestHash:j.snapshotManifestHash}});
+  const saved = m.transaction(j.zylosDir, dir);
+  if (m.classifyCutoff(saved) !== 'closed') throw Error('compensation cutoff is not durable');
+  ctx.journal = saved;
+}
 export function protectedDataReady(ctx, overrides = {}) {
   const maintenance = maintenanceFor(ctx);
   const dir = ctx.transactionDir,
     j = maintenance.read(path.join(dir, 'journal.json'));
-  if(j.phase!=='installing' || j.installationIntent!==true || j.transactionId!==ctx.transactionId) throw Error('data-ready requires own installing transaction');
-  // This function runs in the newly installed finalizer. Use its worker, not
-  // the frozen snapshot worker whose code predates the installed migrations.
-  if (j.databaseMode !== 'unchanged') {
-    (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
-    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true});
-    ctx.databases=verified?.databases || null;
-    const checked = maintenance.preflight(dir, j, null);
-    if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');
+  if (j.targetOwned) {
+    if (j.phase !== 'compensation_closed' || maintenance.classifyCutoff(j) !== 'closed' || j.transactionId !== ctx.transactionId) throw Error('data-ready requires own closed compensation cutoff');
+  } else {
+    if(j.phase!=='installing' || j.installationIntent!==true || j.transactionId!==ctx.transactionId) throw Error('data-ready requires own installing transaction');
+    if (j.databaseMode !== 'unchanged') {
+      (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
+      const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true});
+      ctx.databases=verified?.databases || null;
+      const checked = maintenance.preflight(dir, j, null);
+      if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');
+    }
   }
   const current=maintenance.transaction(j.zylosDir,dir);
   const marker=maintenance.read(path.join(j.zylosDir,'.zylos/upgrade/active.json'));
-  if(current.phase!=='installing' || current.installationIntent!==true || current.transactionId!==j.transactionId || marker.transactionId!==j.transactionId || marker.transactionDir!==dir) throw Error('active migration transaction changed before data-ready');
-  maintenance.update(dir, current, {
-    phase: 'new_data_ready'
-  });
+  if(current.phase!==j.phase || current.installationIntent!==true || current.transactionId!==j.transactionId || marker.transactionId!==j.transactionId || marker.transactionDir!==dir) throw Error('active transaction changed before data-ready');
+  maintenance.update(dir, current, {phase:'new_data_ready'});
   ctx.journal = current;
-  // READY permits normal access; retain the marker until verified terminal exit.
 }
 export function protectedSuccess(ctx) {
   const maintenance = maintenanceFor(ctx);

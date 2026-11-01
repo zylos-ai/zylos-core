@@ -1,5 +1,8 @@
+import { rejectLegacySchemaProbe } from './upgrade-admission.js';
 import { migrateSchema } from './c4-migrations.js';
 import { inspectLayout } from './sqlite-schema.js';
+rejectLegacySchemaProbe();
+
 export const SUPPORTED_SCHEMA_VERSION = 1;
 export const supportsNewDatabase = true;
 // Unmarked released layouts enter the explicit schema migration chain at 0.

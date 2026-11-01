@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
+const {isDeepStrictEqual} = require('node:util');
 const SELF_HASH = crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
 const READY = new Set(['new_data_ready', 'new_verifying', 'restored_data_ready', 'restored_verifying']);
 const TERMINAL = new Set(['upgrade_complete', 'restored_complete', 'aborted_before_install']);
@@ -105,6 +106,8 @@ function validateReadyJournal(j) {
   });
 }
 function terminalValid(j) {
+  const cutoff = classifyCutoff(j);
+  if (cutoff === 'untrusted' || cutoff === 'closed' && j.phase !== 'upgrade_complete') return false;
   // A verified success awaiting code cleanup must never authorize compensation.
   // Legacy complete terminals remain readable; only this explicit new shape
   // permits incomplete cleanup to retain terminal authority.
@@ -152,6 +155,8 @@ function hasRecoveryHistory(root) {
   // Unmarked clean terminals are history, not authority to execute recovery.
   // Inspect only bounded JSON/structure here, without owner/mode checks or code.
   const cleanTerminal = (j, id) => {
+    const cutoff = classifyCutoff(j);
+    if (cutoff === 'untrusted' || cutoff === 'closed' && j.phase !== 'upgrade_complete') return false;
     const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
     const absolute = value => typeof value === 'string' && path.isAbsolute(value) && path.resolve(value) === value;
     const dbs = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'];
@@ -502,11 +507,44 @@ function acquire(dir, {
     serializedController(location, 'release', value);
   };
 }
+// The cutoff is an immutable fact, not a phase ordering constraint. Manual
+// forward repair can move recovery_required -> new_data_ready -> upgrade_complete.
+function classifyCutoff(j) {
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return 'untrusted';
+  const present = Object.prototype.hasOwnProperty.call(j, 'compensationCutoff');
+  if (!present) {
+    const phase = j.phase === 'recovery_required' ? j.resumePhase : j.phase;
+    return phase === 'compensation_closed' || j.targetOwned === true && ['new_data_ready', 'new_verifying', 'upgrade_complete'].includes(phase)
+      ? 'untrusted' : 'none';
+  }
+  const c = j.compensationCutoff;
+  const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  if (!c || typeof c !== 'object' || Array.isArray(c) || c.formatVersion !== 1 || c.closed !== true ||
+      c.transactionId !== j.transactionId || c.from !== j.from || c.to !== j.to ||
+      typeof c.from !== 'string' || !c.from || typeof c.to !== 'string' || !c.to ||
+      !digest(c.snapshotManifestHash) || c.snapshotManifestHash !== j.snapshotManifestHash) return 'untrusted';
+  return 'closed';
+}
 function update(dir, j, changes = {}) {
-  Object.assign(j, changes, {
-    updatedAt: new Date().toISOString()
-  });
-  durable(path.join(dir, 'journal.json'), j);
+  const file = path.join(dir, 'journal.json');
+  const next = {...j, ...changes, updatedAt:new Date().toISOString()};
+  if (fs.existsSync(file)) {
+    const saved = read(file);
+    const cutoff = classifyCutoff(saved);
+    if (cutoff !== 'none') {
+      if (!isDeepStrictEqual(saved.compensationCutoff, next.compensationCutoff) ||
+          classifyCutoff(next) !== cutoff) throw Error('compensation cutoff facts are immutable');
+    } else if (Object.prototype.hasOwnProperty.call(next, 'compensationCutoff') && classifyCutoff(next) !== 'closed') {
+      throw Error('invalid compensation cutoff facts');
+    }
+  } else if (Object.prototype.hasOwnProperty.call(next, 'compensationCutoff') && classifyCutoff(next) !== 'closed') {
+    throw Error('invalid compensation cutoff facts');
+  }
+  durable(file, next);
+  const saved = read(file);
+  if (!isDeepStrictEqual(saved, JSON.parse(JSON.stringify(next)))) throw Error('durable upgrade journal readback mismatch');
+  // Preserve nested references used by the existing backup/restore loops.
+  Object.assign(j, next);
   return j;
 }
 function marker(root, dir, j) {
@@ -623,15 +661,17 @@ function verifyServices(j) {
   } while (Date.now() < deadline);
   throw Error('original services did not become online');
 }
-function treeHash(dir) {
+function treeHash(dir, {excludeNodeModules = true, includeModes = false} = {}) {
   const h = crypto.createHash('sha256');
+  if (includeModes) h.update('root-mode:' + (fs.statSync(dir).mode & 0o7777) + '\0');
   function walk(current, prefix = '') {
     for (const n of fs.readdirSync(current).sort()) {
-      if (!prefix && n === 'node_modules') continue;
+      if (excludeNodeModules && !prefix && n === 'node_modules') continue;
       const p = path.join(current, n),
         rel = prefix + n,
         s = fs.lstatSync(p);
       h.update(rel + '\0');
+      if (includeModes && !s.isSymbolicLink()) h.update('mode:' + (s.mode & 0o7777) + '\0');
       if (s.isSymbolicLink()) h.update('link:' + fs.readlinkSync(p));else if (s.isDirectory()) {
         h.update('dir');
         walk(p, rel + '/');
@@ -656,6 +696,18 @@ function fsyncTree(dir) {
   }
   fsyncDir(dir);
 }
+function copyTreePreservingModes(src, dest) {
+  fs.cpSync(src, dest, {recursive:true, verbatimSymlinks:true});
+  function apply(source, target) {
+    const sourceStat = fs.lstatSync(source);
+    if (sourceStat.isSymbolicLink()) return;
+    if (sourceStat.isDirectory()) {
+      for (const name of fs.readdirSync(source)) apply(path.join(source, name), path.join(target, name));
+    } else if (!sourceStat.isFile()) throw Error('unsupported deployment file');
+    fs.chmodSync(target, sourceStat.mode & 0o7777);
+  }
+  apply(src, dest);
+}
 function target(j, name) {
   if (!ID.test(name) || !j.coreManifest.some(e => e.name === name)) throw Error('invalid core member');
   const root = fs.realpathSync(j.skillsDir),
@@ -669,7 +721,14 @@ function target(j, name) {
   if (st?.isSymbolicLink()) throw Error('individual core skill symlink rejected');
   return p;
 }
-function sync(src, dest) {
+function sync(src, dest, {excludeNodeModules = true} = {}) {
+  if (!excludeNodeModules) {
+    fs.rmSync(dest, {recursive:true, force:true});
+    copyTreePreservingModes(src, dest);
+    fsyncTree(dest);
+    fsyncDir(path.dirname(dest));
+    return;
+  }
   fs.mkdirSync(dest, {
     recursive: true
   });
@@ -768,6 +827,138 @@ function renameIntent(dir, j, key, source, dest, expectedHash) {
   a.done = true;
   update(dir, j);
 }
+function packageBins(metadata) {
+  const result = new Map();
+  const declared = typeof metadata?.bin === 'string'
+    ? {[String(metadata.name || '').split('/').pop()]:metadata.bin}
+    : metadata?.bin;
+  if (declared === undefined) return result;
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) throw Error('invalid installed package bin mapping');
+  for (const [name, target] of Object.entries(declared)) {
+    if (!name || name === '.' || name === '..' || path.basename(name) !== name || typeof target !== 'string' || !target) throw Error('invalid installed package bin mapping');
+    result.set(name, target);
+  }
+  return result;
+}
+function globalPackageLayout(sourceRoot) {
+  sourceRoot = path.resolve(sourceRoot);
+  const suffix = path.join('lib', 'node_modules', 'zylos');
+  const prefix = path.dirname(path.dirname(path.dirname(sourceRoot)));
+  if (path.join(prefix, suffix) !== sourceRoot) throw Error('installed package root is outside the supported global npm layout');
+  return {sourceRoot, prefix, binDir:path.join(prefix, 'bin')};
+}
+function validateSupportedGlobalLayout(sourceRoot, metadata, {recovery = false} = {}) {
+  const unsupported = message => Object.assign(Error(message), {code:'UNSUPPORTED_INSTALL_LAYOUT'});
+  let layout;
+  try { layout = globalPackageLayout(sourceRoot); }
+  catch { throw unsupported('Installed Core is outside the supported global npm layout.'); }
+  sourceRoot = layout.sourceRoot;
+  let rootStat;
+  try { rootStat = fs.lstatSync(sourceRoot); } catch (error) {
+    if (!recovery || error.code !== 'ENOENT') throw unsupported('Installed Core must use the supported global npm layout.');
+  }
+  if (rootStat && (!rootStat.isDirectory() || rootStat.isSymbolicLink())) {
+    throw unsupported('Installed Core must be a real global package directory.');
+  }
+  const {binDir} = layout;
+  let binStat;
+  try { binStat = fs.lstatSync(binDir); } catch { throw unsupported('The global npm bin directory is unavailable.'); }
+  if (!binStat.isDirectory() || binStat.isSymbolicLink() || fs.realpathSync(binDir) !== binDir) throw unsupported('The global npm bin path must be a real directory.');
+  if (rootStat && fs.realpathSync(sourceRoot) !== sourceRoot) throw unsupported('Installed Core must use its canonical global package path.');
+  if (fs.realpathSync(path.dirname(sourceRoot)) !== path.dirname(sourceRoot)) throw unsupported('The global npm package parent must be canonical.');
+  if (metadata?.name !== 'zylos') throw unsupported('Installed Core package identity does not match the global layout.');
+  if (recovery) {
+    for (const [name] of packageBins(metadata)) {
+      const link = path.join(binDir, name);
+      let stat;
+      try { stat = fs.lstatSync(link); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (!stat.isSymbolicLink() || !path.resolve(binDir, fs.readlinkSync(link)).startsWith(sourceRoot + path.sep)) throw unsupported('Global bin path is not owned by the Core package.');
+    }
+    return layout;
+  }
+  for (const [name, target] of packageBins(metadata)) {
+    const expected = path.resolve(sourceRoot, target);
+    if (expected === sourceRoot || !expected.startsWith(sourceRoot + path.sep)) throw unsupported('Installed Core declares an unsafe bin target.');
+    let targetStat;
+    try { targetStat = fs.statSync(expected); } catch { throw unsupported('Installed Core bin targets are unavailable.'); }
+    if (!targetStat.isFile()) throw unsupported('Installed Core bin targets must be files.');
+    const link = path.join(binDir, name);
+    let stat;
+    try { stat = fs.lstatSync(link); } catch { throw unsupported('Installed Core bin links do not match package metadata.'); }
+    if (!stat.isSymbolicLink()) {
+      throw unsupported('Installed Core bin links do not match package metadata.');
+    }
+    const resolved = path.resolve(binDir, fs.readlinkSync(link));
+    if (resolved !== expected) throw unsupported('Installed Core bin links do not match package metadata.');
+  }
+  return layout;
+}
+function reconcilePackageBins(sourceRoot, originalMetadata) {
+  const desired = packageBins(originalMetadata);
+  const {binDir} = validateSupportedGlobalLayout(sourceRoot, originalMetadata, {recovery:true});
+  for (const [name, target] of desired) {
+    const link = path.join(binDir, name), expected = path.resolve(sourceRoot, target);
+    if (expected === sourceRoot || !expected.startsWith(sourceRoot + path.sep)) throw Error('installed package bin target escapes package root');
+    if (!fs.statSync(expected).isFile()) throw Error('installed package bin target is not a file: ' + name);
+    let stat;
+    try { stat = fs.lstatSync(link); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (stat?.isSymbolicLink()) {
+      const current = path.resolve(binDir, fs.readlinkSync(link));
+      if (current === expected) continue;
+      if (current === sourceRoot || current.startsWith(sourceRoot + path.sep)) fs.unlinkSync(link);
+      else throw Error('global package bin link is not owned by the package: ' + name);
+    }
+    else if (stat) throw Error('global package bin path is not a symlink: ' + name);
+    fs.symlinkSync(path.relative(binDir, expected), link);
+  }
+  fsyncDir(binDir);
+}
+function restoreOriginalPackage(dir, j) {
+  if (classifyCutoff(j) !== 'none') throw Error('compensation is closed or untrusted; do not restore the original package');
+  verifyContainedExit(dir, j);
+  if (j.installationIntent !== true) return false;
+  const original = j.originalPackage;
+  const sourceRoot = original?.sourceRoot;
+  const snapshot = path.join(path.resolve(dir), 'code', 'original-package');
+  if (!original || original.path !== snapshot || sourceRoot !== path.dirname(j.initialIdentity.packageJson) || original.sourceVersion !== j.from ||
+      typeof original.treeHash !== 'string' || !/^[a-f0-9]{64}$/.test(original.treeHash)) throw Error('original package preservation evidence missing');
+  privatePath(snapshot, {directory:true});
+  if (fs.realpathSync(snapshot) !== snapshot || treeHash(snapshot, {excludeNodeModules:false, includeModes:true}) !== original.treeHash) {
+    throw Error('original package snapshot changed');
+  }
+  const metadata = read(path.join(snapshot, 'package.json'));
+  if (metadata.version !== original.sourceVersion) throw Error('original package snapshot version changed');
+  let currentHash = null;
+  try {
+    validateSupportedGlobalLayout(sourceRoot, metadata, {recovery:true});
+    currentHash = treeHash(sourceRoot, {excludeNodeModules:false, includeModes:true});
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (j.originalPackageRestored && currentHash !== original.treeHash) {
+    throw Error('completed original package restore changed; manual recovery required');
+  }
+  if (currentHash !== original.treeHash) {
+    validateSupportedGlobalLayout(sourceRoot, metadata, {recovery:true});
+    fs.rmSync(sourceRoot, {recursive:true, force:true});
+    copyTreePreservingModes(snapshot, sourceRoot);
+    fsyncTree(sourceRoot);
+    fsyncDir(path.dirname(sourceRoot));
+    if (treeHash(sourceRoot, {excludeNodeModules:false, includeModes:true}) !== original.treeHash) throw Error('original package restore verification failed');
+  }
+  if (j.originalPackageRestored) validateSupportedGlobalLayout(sourceRoot, metadata);
+  else reconcilePackageBins(sourceRoot, metadata);
+  if (!j.originalPackageRestored) update(dir, j, {originalPackageRestored:true});
+  if (hash(j.initialIdentity.packageJson) !== j.initialIdentity.packageHash || treeHash(j.initialIdentity.cliRoot) !== j.initialIdentity.cliHash) throw Error('restored installed package identity mismatch');
+}
+function verifyContainedExit(dir, j) {
+  for (const kind of ['installer', 'finalizer']) {
+    if (!j[kind + 'ExitUnconfirmed'] && (!j[kind + 'Started'] || j[kind + 'ExitConfirmed'])) continue;
+    const descriptor = read(path.join(dir, 'descriptor.json'));
+    validateDescriptor(dir, j, descriptor);
+    const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {terminate:false, kind});
+    if (!result.confirmed) throw Error(result.error || kind + ' exit requires verification before package restore');
+    update(dir, j, {[kind + 'ExitUnconfirmed']:false, [kind + 'ExitConfirmed']:true});
+  }
+}
 function finishTerminal(dir, j) {
   if (!terminalValid(j)) throw Error('cannot finish unverified terminal');
   // Re-read durable authority: the caller may still hold the child's old state.
@@ -814,6 +1005,10 @@ module.exports = {
   TERMINAL,
   hash,
   treeHash,
+  copyTreePreservingModes,
+  classifyCutoff,
+  validateSupportedGlobalLayout,
+  restoreOriginalPackage,
   fsyncTree,
   durable,
   fsyncDir,

@@ -1,5 +1,197 @@
 # Protected self-upgrade and file-only recovery
 
+## Upgrade through the fixed 0.9.3 bridge
+
+**The upcoming 0.9.4 target-owned executor accepts an installed Core 0.9.3 or later.**
+If your installed version is lower, first use the fixed bridge:
+
+```sh
+zylos --version
+zylos upgrade --self --branch release/0.9.3
+zylos --version
+```
+
+Check that the last command reports **0.9.3** before upgrading to the target
+release. `release/0.9.3` stays on the v0.9.3 commit; it is not a moving alias for
+the next release. An instance already on 0.9.3 must skip this bridge operation.
+After the target release is published, run `zylos upgrade --self`, review its
+version and changelog, and check `zylos --version` again after success.
+
+The bridge command requires an old CLI that understands `--branch`. The released
+0.9.1/0.9.2 workers load the target's schema probe and can reject a direct jump
+before stopping services. Some older workers do not execute target code before
+installation, so the target cannot promise an early block for every direct
+jump. Very old CLIs can ignore `--branch`; stop for an operator to arrange and
+verify the fixed bridge instead of assuming that the command selected it. This
+limit does not mean that older installations cannot use a reviewed bridge
+route. Keep the first-adoption backups described below when the old worker
+lacks database protection.
+
+## Target-owned installation and its recovery boundary
+
+The installed 0.9.3 CLI resolves, downloads, checks and confirms the target, then
+hands execution to that target's `cli/lib/upgrade-entry.js`. The target validates
+the installed source and deployment identity, preserves the original global npm
+package and core skill dependencies, and runs the existing backup, service stop,
+installation, configuration synchronization, service start and verification
+steps. An upgrade from this target to a future release is likewise executed by
+that future target, not by this release's executor.
+
+The data set remains the three single-session databases:
+`comm-bridge/c4.db`, `scheduler/scheduler.db`, and `web-console/web-console.db`.
+Their supported schema version remains 1. All three receive coordinated,
+verified snapshots before installation, including when versions already match.
+Managed services are the existing PM2 records whose script paths belong to the
+core skills directory; recovery uses the recorded original service set.
+
+Automatic compensation is bounded:
+
+- **Before shared configuration publication:** after verified writer exit,
+  failures can restore the saved original global package/bin links, declared
+  core skills and their dependencies, PM2 ecosystem, and the three databases.
+  A failed upgrade remains a failed upgrade even when compensation completes.
+- **Before the first shared configuration step:** the target durably closes
+  compensation after data preparation and offline verification. This cutoff
+  remains closed through later phase changes; it cannot be reopened by retry.
+- **After the cutoff:** failures retain the target package and current data,
+  isolate services, and require the operator's forward repair below. Automatic
+  recovery does not replace databases with the old snapshot on this path.
+- **Unknown ownership, unconfirmed installer/finalizer exit, or damaged
+  material:** retain maintenance and require manual inspection. Linux crash
+  takeover still requires verifiable process identity and `flock`; macOS
+  automatic compensation requires the same live controller. A controller crash
+  on macOS is a manual case. No installer supervisor or automatic post-cutoff
+  finalization command is introduced.
+
+Target-owned installation requires the protected path; it refuses installation
+if that protection cannot be established. The older backup-only and code-only
+recovery behavior in the legacy reference below is not a fallback for this
+executor. The target suppresses the entire npm postinstall during protected
+installation so settings are first published under its control. The legacy
+`ZYLOS_SKIP_POSTINSTALL=1` behavior remains unchanged for older workers reaching
+the bridge.
+
+## Manual forward repair after the cutoff
+
+This is an operator/local-agent procedure in an exclusive maintenance window,
+not a new `recovery` command. Run it from a separate operator shell or local
+repair process that survives a runtime restart. Keep the dispatcher and automatic
+runtime launch entry points stopped until their queued work is handled. Do not
+rerun npm installation or database migration, restore the old databases, delete
+only the marker, or hand-edit `terminalEvidence` to manufacture success.
+
+1. **Preserve and identify the attempt.** Copy the journal, descriptor, active
+   marker, failure output, current configurations and an operation log to a
+   private evidence directory outside the transaction's `code/` cleanup area.
+   Retain the snapshots. Match `transactionId`, `from`, `to`, deployment and
+   skills roots, recorded original services, and descriptor hashes. Check that
+   the actual installed global package has the recorded target name/version and
+   matches the retained target installation material. Record which shared
+   steps completed, partly completed, or did not run; a package version alone
+   does not establish configuration readiness.
+2. **Establish exclusive ownership and real exit.** Stop the instance's managed
+   services and launch entry points. Confirm that the old controller, npm,
+   finalizer and database writers have exited. For recorded installer/finalizer
+   process groups, use the saved `finalizer.cjs` helper's
+   `quiesce(transactionDir, journal, {kind: 'installer', terminate: false})`
+   and repeat with `kind: 'finalizer'`.
+   Only a confirmed result permits recording that kind's exit through the
+   frozen maintenance module's `update`. Missing PID evidence is not success.
+   On Linux use the verified frozen module's `acquire(transactionDir)`.
+   On macOS retain the original live owner's capability when available. For
+   an interrupted owner, an operator must first stop the entire instance and
+   its launch entry points and independently establish an exclusive OS-level
+   maintenance window; preserve and move the stale admission file before
+   acquiring a new one. Never automate this handoff from PID absence or age.
+   If exit, identity or exclusivity cannot be established, stop here and keep
+   maintenance active.
+3. **Complete the target's shared publication.** Import the verified installed
+   target's `self-upgrade.js`. Set the repair context's `tempDir` and
+   `packageRoot` to that target package, `zylosDir` to the deployment root, and
+   `transactionDir`/`transactionId` to the saved attempt. Set
+   `preInstallProtection=true` and reload `ctx.journal` from that transaction.
+   Call the existing
+   `step7_syncInstructions(ctx)` and inspect its instructions, runtime-env and
+   format-metadata results. Apply step 8 manually: only when `memory/state.md`
+   exists and has no `## Onboarding` section, append that section with
+   `- Status: skipped`, preserving the rest. Step 8 is not an exported API.
+   Run `node <target-package>/cli/lib/sync-settings-hooks.js` for step 9 and
+   call `step10_ensureCodexConfig()` for step 10 with the correct instance
+   HOME/ZYLOS_DIR and npm prefix. Repair errors and inspect user configuration
+   preservation; do not ignore an unexplained warning or replay completed
+   non-idempotent work.
+4. **Verify readiness and handle a queued runtime restart.** While services are
+   stopped, call the target `core-db-backup.js` export `runCoreDbWorker` with
+   `{action: 'offline-preflight', zylosDir, schemaRoot: skillsDir, requireCurrent: true}`.
+   Check all three owners' compatibility and meaningful current user data,
+   including custom tables/columns. Do not compare current business data with
+   the old snapshot hash. After shared publication and these checks succeed,
+   use the held frozen maintenance module's `update` to write `new_data_ready`,
+   retaining the cutoff unchanged. Phase progression is not monotonic: the
+   manual route can move from `recovery_required` to `new_data_ready`.
+
+   **The settings sync script can enqueue `/exit` in C4** when Claude hooks
+   change. It calls `enqueueRestartIfNeeded`; enqueue failure is non-fatal, so
+   inspect the actual queue rather than assuming a request exists. Keep the
+   dispatcher stopped. Once `new_data_ready` permits normal C4 access, identify
+   only this repair's pending restart row(s) in this instance's
+   `comm-bridge/c4.db`, retain their IDs/content in the operation log, and
+   perform the required runtime restart manually from the separate operator
+   shell. After the restart has actually completed, acknowledge only those
+   handled IDs with the deployed existing command:
+
+   ```sh
+   node <deployment>/.claude/skills/comm-bridge/scripts/c4-control.js ack --id <control-id>
+   ```
+
+   Do not acknowledge unrelated work or release the dispatcher merely to
+   consume a restart during repair. In an isolated rehearsal, keep the
+   dispatcher off throughout and inspect this enqueue only in the isolated C4
+   database; no restart may reach a real session.
+5. **Start and verify the original service set.** Reconstruct
+   `ctx.servicesWereRunning` from the journal's original services and use the
+   target's existing `step11_startCoreServices(ctx)` so PM2 reads the target
+   ecosystem. Verify that exact set with frozen
+   `maintenance.verifyServices(journal)`. Separately inspect PM2
+   records and compare their actual script/package roots with the target. Recheck target database compatibility and preserved user rows.
+   Commit skill baselines only for successfully synchronized skills using
+   `saveMergeBaseline(destDir, srcDir, manifest)` from `manifest.js`: retain
+   step 5's `pendingBaselines` when available. New skills use the target
+   source's `generateManifest(srcDir)`; merge paths use
+   `mergeResult.nextManifest`. If the in-memory result was lost, the current
+   `smartSync` implementation derives `nextManifest` from that exact target
+   source, so reconstruct it only after verifying the original sync succeeded
+   and the source is unchanged. Never generate an upstream baseline from
+   deployed files containing user modifications.
+6. **Finish through verified success, then check admission.** Save the real
+   validation output in the operation log. Only after all preceding steps pass,
+   clear `terminalServicesStopped` through `update` only if the original
+   services were actually verified online, then invoke the existing
+   `upgrade-protection.js` export `protectedSuccess(ctx)` with the verified
+   frozen maintenance module on `ctx.maintenance`. This forms the normal
+   `upgrade_complete` evidence and calls `finishTerminal`; do not write its
+   evidence fields by hand. Read back `terminalValid=true`, `cleanup.complete=true`, service and
+   exit confirmations, and removal of the active marker by `finishTerminal`.
+   Release controller ownership. Confirm through `maintenance.discover` and
+   a normal read-only upgrade check that this transaction no longer blocks
+   admission. Leave the clean historical journal and snapshots in place.
+
+If shared publication, readiness, service verification or persistence fails,
+stop services again and retain the marker and `recovery_required` with the
+cutoff unchanged. If only cleanup fails after a verified terminal, retry the
+existing `finishTerminal` cleanup; never replay compensation. An unchanged
+cutoff must survive `recovery_required` → `new_data_ready` → `upgrade_complete`.
+This procedure neither changes the 1.x interfaces nor supplies unattended
+macOS takeover.
+
+## Legacy updater reference
+
+The remaining sections describe the source-owned protected updater used by
+older releases. In particular, their backup-only mode, matching-schema database
+retention and incomplete global-package restoration are historical limits;
+they do not override the target-owned guarantees and cutoff above. Use them to
+assess the old worker on the first leg to the fixed 0.9.3 bridge.
+
 Every Core upgrade snapshots
 `comm-bridge/c4.db`, `scheduler/scheduler.db`, and `web-console/web-console.db`
 after stopping services and before npm installation. When migration is needed,
