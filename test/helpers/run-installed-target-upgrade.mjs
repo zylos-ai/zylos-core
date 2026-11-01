@@ -109,10 +109,28 @@ async function exerciseFailure(kind) {
   const m = protection.maintenance;
   const packageBefore = m.treeHash(input.installedRoot, {excludeNodeModules:false,includeModes:true});
   let captured, targetPackage, retainedRows, inodeBefore, writer;
+  let finalizerCalled = false, installerFailed = false;
   const states = [];
   const handoff = {schemaVersion:1,fromVersion:'0.9.3',tempDir:targetRoot,installedRoot:input.installedRoot,zylosDir:input.zylosDir};
   const result = await entry.runUpgradeEntry(handoff, {
+    ...(kind === 'installer' ? {install:ctx => {
+      captured = ctx;
+      const missing = path.join(input.root,'missing-archive.tgz');
+      assert.equal(fs.existsSync(missing),false);
+      return entry.installUpgradeTarget(ctx,{runInstaller:(context,options) => {
+        if (options.stage !== 'install') return protection.runProtectedInstaller(context,options);
+        try {
+          return protection.runProtectedInstaller(context,{...options,args:['install','-g',missing]});
+        } catch (error) {
+          assert.match(error.stderr || '',/enoent/i,'the actual npm install must reject the missing archive');
+          installerFailed = true;
+          throw error;
+        }
+      }});
+    }} : {}),
     finalize:async ctx => {
+      finalizerCalled = true;
+      assert.notEqual(kind,'installer','finalizer must not run after npm installation failure');
       captured = ctx;
       assert.equal(read(path.join(ctx.coreDir,'package.json')).version, '0.9.4', 'real npm installation must precede fault injection');
       targetPackage = m.treeHash(ctx.coreDir, {excludeNodeModules:false,includeModes:true});
@@ -150,7 +168,7 @@ async function exerciseFailure(kind) {
   assert.ok(captured?.transactionDir);
   const dir = captured.transactionDir;
   const journal = m.read(path.join(dir,'journal.json'));
-  if (kind === 'before-cutoff') {
+  if (kind === 'before-cutoff' || kind === 'installer') {
     const restored = {packageHash:m.treeHash(input.installedRoot,{excludeNodeModules:false,includeModes:true}),
       skills:journal.coreManifest.map(item => ({name:item.name,expected:item.originalHash,
         actual:item.existedBefore ? m.treeHash(m.target(journal,item.name),{excludeNodeModules:false}) : null,
@@ -160,7 +178,7 @@ async function exerciseFailure(kind) {
     databaseRows({note:'after-restoration'});
     const laterRows = databaseRows();
     const reentry = resumeFrozen(dir);
-    emit({result,restored,packageProof,reentry,laterRows,afterReentry:databaseRows()});
+    emit({result,restored,packageProof,reentry,laterRows,afterReentry:databaseRows(),finalizerCalled,installerFailed});
     return;
   }
   if (kind !== 'manual') {

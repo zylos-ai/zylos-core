@@ -23,7 +23,7 @@ import {afterEach, describe, expect, test} from '@jest/globals';
  *
  * Set ZYLOS_TARGET_UPGRADE_INTEGRATION=1 and ZYLOS_TARGET_UPGRADE_FIXTURE to a
  * JSON catalog below an OS temporary directory:
- * {fixtures:{success:config, legacy:config, beforeCutoff:config, manual:config,
+ * {fixtures:{success:config, legacy:config, installer:config, beforeCutoff:config, manual:config,
  *  descriptor:config, snapshot:config, writer:config}}. Each config is
  * {root,nodePath,npmCliPath,tmuxBinary,nodeVersion,npmVersion,pm2Version,
  *  webConsolePort}, with a distinct root and port. The legacy fixture starts
@@ -227,6 +227,32 @@ suite('real target-owned global installation', () => {
     expect(fs.existsSync(path.join(zylosDir,'.zylos/upgrade/active.json'))).toBe(false);
     const transactions=fs.readdirSync(path.join(zylosDir,'.backup/self-upgrade')).map(id => read(path.join(zylosDir,'.backup/self-upgrade',id,'journal.json')));
     expect(transactions.some(j => j.from === '0.9.2' && j.to === '0.9.3' && j.phase === 'upgrade_complete' && j.cleanup.complete)).toBe(true);
+  },600000);
+
+  // Coverage: real npm pack, durable installation intent, and a real npm
+  // install command failing on a missing archive, followed by frozen restore.
+  // Run for installer failure/recovery changes; skip without isolated fixture.
+  test('compensates after the real npm installer rejects an unavailable archive', () => {
+    admitFixture('installer');
+    const before=nodeOperation({mode:'databases',seed:true});
+    const report=nodeOperation({mode:'failure',kind:'installer',installedRoot,candidateDir},480000);
+    expect(report.installerFailed).toBe(true);
+    expect(report.finalizerCalled).toBe(false);
+    expect(report.result.success).toBe(false);
+    expect(report.result.recovery_required).toBe(false);
+    expect(report.restored.journal.installationIntent).toBe(true);
+    expect(report.restored.journal.installerStage).toBe('install');
+    expect(report.packageProof.after).toBe(report.packageProof.before);
+    expect(report.restored.rows).toEqual(before);
+    for (const skill of report.restored.skills) {
+      expect(skill.actual).toBe(skill.expected);
+      expect(skill.exists).toBe(skill.expected !== null);
+    }
+    expect(report.restored.journal.phase).toBe('restored_complete');
+    expect(report.reentry.recovery_required).toBe(false);
+    expect(report.afterReentry).toEqual(report.laterRows);
+    expect(read(path.join(installedRoot,'package.json')).version).toBe('0.9.3');
+    expect(pm2List().filter(item => item.pm2_env.status === 'online').map(item => item.name)).toEqual(['web-console']);
   },600000);
 
   // Coverage: actual npm install and target skill/dependency synchronization,
