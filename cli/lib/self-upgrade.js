@@ -67,14 +67,14 @@ export function getCurrentVersion() {
 
 /**
  * Get latest zylos-core version from GitHub.
- * Uses tag-based detection (unified with component upgrades).
+ * Uses tag-based detection within the installed major version.
  * Falls back to package.json on a branch when --branch is specified.
  *
  * @param {object} [opts]
  * @param {string} [opts.branch] - Branch to read from (reads package.json from branch)
  * @param {boolean} [opts.beta=false] - Include prerelease (beta) tags
  */
-function getLatestVersion({ branch, beta = false } = {}) {
+function getLatestVersion({ branch, beta = false, currentVersion } = {}) {
   // When --branch is specified, read package.json from that branch
   if (branch) {
     try {
@@ -86,13 +86,14 @@ function getLatestVersion({ branch, beta = false } = {}) {
     }
   }
 
-  // Default: tag-based detection (unified with component upgrades)
+  // Default: select across tags within the installed major version.
   try {
-    const tagVersion = fetchLatestTag(REPO, { includePrerelease: beta });
+    const tagVersion = fetchLatestTag(REPO, { includePrerelease: beta, major: beta ? undefined : currentVersion.replace(/^v/, '').split('.')[0] });
     if (tagVersion) {
       return { success: true, version: tagVersion };
     }
-    return { success: false, error: 'No release tags found' };
+    if (beta) return { success: false, error: 'No release tags found' };
+    return { success: true, version: currentVersion };
   } catch (err) {
     return { success: false, error: `Cannot fetch latest version: ${sanitizeError(err.message)}` };
   }
@@ -116,7 +117,7 @@ export function checkForCoreUpdates({ branch, beta = false } = {}) {
     return { success: false, error: 'version_not_found', message: current.error };
   }
 
-  const latest = getLatestVersion({ branch, beta });
+  const latest = getLatestVersion({ branch, beta, currentVersion: current.version });
   if (!latest.success) {
     return { success: false, error: 'remote_version_failed', message: latest.error };
   }
@@ -171,12 +172,9 @@ export function downloadCoreToTemp(version, branch) {
 
   const result = downloadArchive(REPO, version, tempDir);
   if (!result.success) {
-    // Fallback: try downloading main branch (for pre-release versions without tags)
-    const branchResult = downloadBranch(REPO, 'main', tempDir);
-    if (!branchResult.success) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-      return { success: false, error: result.error };
-    }
+    // A selected release must not silently turn into a different main-branch version.
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    return { success: false, error: result.error };
   }
 
   return { success: true, tempDir };
