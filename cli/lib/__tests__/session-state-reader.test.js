@@ -82,10 +82,8 @@ test('F10 projection retains historical evidence and never rewrites input',()=>{
   put(file,'{broken');assert.deepEqual(readRuntimeHealth('claude'),{unreadable:true});
  }finally{if(old===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=old;f.clean();}
 });
-test('missing server returns absent identity; unexpected observe failure closes held connection',async()=>{
- let observed=0,closed=0;
- const absent=createSessionReader({open:async()=>{throw Object.assign(new Error(),{code:'TMUX_NO_SERVER'});},observe:async()=>{observed++;return identity;}});
- const value=await absent.readLiveIdentity(null);assert.equal(value.present,false);assert.equal(value.tmuxName,'zylos-group-origin');assert.equal(observed,0);
+test('unexpected observe failure closes held connection',async()=>{
+ let closed=0;
  const error=new Error('unexpected provider failure');
  const failing=createSessionReader({open:async()=>({close:async()=>{closed++;}}),observe:async()=>{throw error;}});
  await assert.rejects(failing.readLiveIdentity('lark:x'),e=>e===error);assert.equal(closed,1);

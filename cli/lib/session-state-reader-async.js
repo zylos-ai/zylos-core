@@ -14,12 +14,10 @@ const absent = group => ({ present: false, tmuxName: tmuxNameForGroup(group ?? '
 export function createSessionReader({ open = openTmuxConnection, observe = observeSessionTarget, env = process.env,
   now = Date.now, connectionOptions = {}, resolveConfig, listSessions = listGroupTmuxSessions } = {}) {
   async function withConnection(group, operation) {
-    let connection;
-    try { connection = await open(connectionOptions); }
-    catch (error) { if (error.code !== 'TMUX_NO_SERVER') throw error; }
-    const read = () => connection ? observe({ sessionGroup: group, connection }) : Promise.resolve(absent(group));
+    const connection = await open(connectionOptions);
+    const read = () => observe({ sessionGroup: group, connection });
     try { return await operation(read); }
-    finally { if (connection) await connection.close(); }
+    finally { await connection.close(); }
   }
   async function readLiveIdentity(group) { return withConnection(group, async read => publicIdentity(await read())); }
   async function readSessionState(group, { freshnessMs } = {}) {

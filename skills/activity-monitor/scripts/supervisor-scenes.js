@@ -61,8 +61,7 @@ export class SupervisorScenes {
       const scope = group === 'origin' && mode === 'single' ? null : group;
       let treePromise;
       const getTree = () => treePromise ??= this.readProcessTree();
-      try { connection = await this.open(this.connectionOptions); }
-      catch (error) { if (error.code === 'TMUX_NO_SERVER') return absent(group, this.env); throw error; }
+      connection = await this.open(this.connectionOptions);
       const target = await this.observeTarget({ sessionGroup: scope, connection, readReady: this.readReady, readProcessTree: getTree });
       if (!target.present) return absent(group, this.env);
       const process = await readTargetRuntime({ connection, paneId: target.paneId, rawF2: {}, readProcessTree: getTree });
@@ -114,8 +113,7 @@ export class SupervisorScenes {
     try {
       const mode = group === 'origin' ? (await this.readMode?.())?.mode : null;
       const scope = group === 'origin' && mode === 'single' ? null : group;
-      try { connection = await this.open(this.connectionOptions); }
-      catch (error) { if (error.code === 'TMUX_NO_SERVER') return absent(group, this.env); throw error; }
+      connection = await this.open(this.connectionOptions);
       const target = await this.observeTarget({ sessionGroup: scope, connection,
         readReady: this.readReady, readProcessTree: async () => [] });
       if (!target.present) return absent(group, this.env);

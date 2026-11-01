@@ -167,8 +167,7 @@ export function createDelivery(deps, configuration = {}) {
     try {
       if (stopped) gateCode = 'delivery_stopped';
       else {
-        try { connection = await open(options.tmux ?? {}); }
-        catch (cause) { if (cause.code === 'TMUX_NO_SERVER') throw failure('TARGET_GONE'); throw cause; }
+        connection = await open(options.tmux ?? {});
         target = await resolve({ sessionGroup: group, connection });
         initial = false;
         Object.assign(fields, { runId: target.runId, runtime: target.runtime });

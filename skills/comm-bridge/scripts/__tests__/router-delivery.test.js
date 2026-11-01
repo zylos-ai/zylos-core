@@ -252,12 +252,6 @@ test('require_idle retains running row during hold while a second lane settles',
   hold.resolve(); await pending; assert.equal(f.row(a.id).status, 'delivered');
 });
 
-test('explicit no server on opening is absent target and makes directed control stale', async t => {
-  const f = setup(t), row = f.control('x', { target_binding: '{}' });
-  f.deps.openTmuxConnection = async () => { throw error('TMUX_NO_SERVER'); };
-  await f.create().deliverControl(row); assert.equal(row.status, 'timeout');
-});
-
 // I2 R6: a successful body must settle even when final F3 cannot identify it.
 for (const reason of ['missing', 'run_mismatch', 'read_failed']) {
   test(`final F3 ${reason} settles delivered with NULL identity and no replay`, async t => {

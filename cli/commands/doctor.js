@@ -9,7 +9,7 @@ import { prepareUpstreams, withUpstreamSnapshot } from '../lib/upstreams.js';
  *          If not, show manual hints.
  */
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import https from 'node:https';
 import os from 'node:os';
@@ -197,17 +197,6 @@ function checkClaudeCli() {
     }).trim();
   } catch {}
   return { installed: true, version };
-}
-
-function checkClaudeAuth() {
-  try {
-    const result = spawnSync('claude', ['auth', 'status'], {
-      stdio: 'pipe', encoding: 'utf8', timeout: 30000,
-    });
-    return result.status === 0;
-  } catch {
-    return false;
-  }
 }
 
 function checkCodexCli() {
