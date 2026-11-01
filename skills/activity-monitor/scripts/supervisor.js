@@ -1,5 +1,6 @@
 import { loadCoreModule } from './core-modules.js';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { SupervisorLoop } from './supervisor-loop.js';
 import { SupervisorAdmission } from './supervisor-admission.js';
 import { ModeSwitchCoordinator } from './mode-switch.js';
@@ -14,7 +15,7 @@ import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
-const { supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
+const { assertSessionGroup, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
 
 export const AUTH_DEMAND_RETRY_MS = 60000;
 
@@ -92,13 +93,14 @@ export function createSupervisor(deps) {
     resolveLaunchConfig:async group=>db.resolveSessionLaunchConfig({sessionGroup:group,sessionMode:(await readMode()).mode}),
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
+  const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prompts,
-    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError},{now});
+    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError,
+    intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
   modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
     convert:deps.convertModeTransition ?? createModeSwitchConverter({db,zylosDir:deps.zylosDir}),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
-  const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({
     readConfiguration:async transition=>{
@@ -109,6 +111,7 @@ export function createSupervisor(deps) {
         throw error;
       }
     },
+    startupAlert:deps.alert,
     restore:async()=>{
       try{admission.restore();}catch(error){if(error.code!=='requests_unreadable')throw error;reportError(error,{phase:'requests'});}
       for(const runtime of ['claude','codex'])await health.restore(runtime);
@@ -147,7 +150,19 @@ export function createSupervisor(deps) {
         catch(error) { reportError(error,{phase:'pool-metrics'}); }
       }
       if(now()-lastMaintenance>=60000) {
-        for(const file of [supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),...current.map(s=>path.join(s.runDir,'events.jsonl'))]) {
+        const files=new Set([supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),...current.map(s=>path.join(s.runDir,'events.jsonl'))]);
+        try {
+          const entries=await fs.readdir(sessionGroupRunRoot(deps.env),{withFileTypes:true});
+          for(const entry of entries) {
+            if(!entry.isDirectory())continue;
+            try { assertSessionGroup(entry.name); }
+            catch { continue; }
+            files.add(path.join(sessionGroupRunRoot(deps.env),entry.name,'events.jsonl'));
+          }
+        } catch(error) {
+          if(error.code!=='ENOENT')reportError(error,{phase:'log-maintenance-discovery'});
+        }
+        for(const file of files) {
           try { rotateEventLog(file,{now:now()}); }
           catch(error) { reportError(error,{phase:'log-maintenance'}); }
         }

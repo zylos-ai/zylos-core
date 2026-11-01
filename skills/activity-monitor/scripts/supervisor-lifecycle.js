@@ -223,8 +223,11 @@ export class SupervisorLifecycle {
         });
         if (again.conversations !== 0 || again.controls !== 0) {
           if (singleAuth) return 'waiting_inflight';
-          if (fence.reason !== 'model_config' && !unfenced) await this.clear(fence, context);
-          if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
+          if (fence.reason !== 'model_config' && !unfenced) {
+            await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'inflight_after_idle' });
+            await this.clear(fence, context);
+            if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
+          }
           throw error('RECLAIM_INFLIGHT', 'Conversation appeared after drain fence');
         }
       }
@@ -246,6 +249,7 @@ export class SupervisorLifecycle {
     } else if (scene.present && !scene.runId) {
       return 'unknown_identity';
     }
+    await this.d.intentionalStop?.(group, fence.runId);
     if (!unfenced) await this.clear(fence, context);
     this.ttlPreparation.delete(group);
     for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
@@ -481,14 +485,14 @@ export class SupervisorLifecycle {
       try {
         const group = request.mode === 'single' ? '*' : 'origin';
         const targetGroup = request.mode === 'single' ? null : 'origin';
-        let target = this.scene(targetGroup, context);
+        await this.refreshAuthorities(context);
+        if (this.manualBlocked(request, context)) return;
+        let target = await this.observe(targetGroup, context);
         let fence = context.fences.find(item => item.sessionGroup === group);
+        let oldTargetGone = !target.present || target.runId !== request.expectedRunId;
         if (target.present && !target.runId) throw error('INVALID_OBSERVATION', 'Manual target run identity is unknown');
         // A replacement at the Origin name already proves the requested run gone.
         if (target.present && target.runId === request.expectedRunId) {
-          await this.refreshAuthorities(context);
-          if (this.manualBlocked(request, context)) return;
-          fence = context.fences.find(item => item.sessionGroup === group);
           if (!fence) {
             await this.d.db.setDrainFence(group, { reason: 'manual_restart', runId: request.expectedRunId });
             fence = await this.d.db.getDrainFence(group);
@@ -501,8 +505,12 @@ export class SupervisorLifecycle {
             try { await this.d.stop(target); }
             catch (cause) { if (cause.code !== 'RUNID_MISMATCH') throw cause; }
             this.stopped(target, context);
+            oldTargetGone = true;
+          } else {
+            oldTargetGone = true;
           }
         }
+        if (oldTargetGone) await this.d.intentionalStop?.(targetGroup, request.expectedRunId);
         const count = request.mode === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations('origin');
         if (count !== 0) return;
         await this.refreshAuthorities(context);

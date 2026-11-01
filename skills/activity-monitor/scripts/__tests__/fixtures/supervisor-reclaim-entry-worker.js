@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { startSupervisor } from '../../supervisor-main.js';
 import { SupervisorScenes } from '../../supervisor-scenes.js';
@@ -14,5 +15,8 @@ const service=await startSupervisor({env:process.env,db:{...db,getDb:()=>databas
  readMode:()=>({mode:'multi'}),readConfiguration:()=>({mode:'multi',runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',
  readSyncMarker:()=>({held:false,stale:false}),restoreTransition:async()=>{await barrier('after-fence');if(pause==='clear-fence')db.clearDrainFence('origin',{expectedReason:'upgrade',expectedRunId:'run-1'});},
  machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},sendAlert:()=>{throw new Error('No external send');},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
-process.send({ready:true,fence:db.getDrainFence('origin'),present:(await scenes.observeGroup('origin')).present});
+await service.supervisor.loop.tick();
+const events=path.join(root,'activity-monitor/supervisor-events.jsonl');
+const crashes=fs.existsSync(events)?fs.readFileSync(events,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row=>row.event==='crash_detected').length:0;
+process.send({ready:true,fence:db.getDrainFence('origin'),present:(await scenes.observeGroup('origin')).present,crashes});
 process.on('message',async command=>{if(command==='stop'){await service.stop();database.close();process.send({stopped:true});process.disconnect();}});

@@ -7,7 +7,15 @@ function fixture(overrides={}) {
  return {calls,timers,deps,loop:new SupervisorLoop(deps,{schedule:(fn,ms)=>{timers.push({fn,ms});return timers.length;},cancel:()=>{}})};
 }
 // supervisor-startup: configuration corruption cannot become single.
-test('bad F1 does not open admission or schedule',async()=>{const f=fixture({readConfiguration:async()=>{throw new Error('CONFIG_UNREADABLE');}});await f.loop.start();await f.loop.tick();assert.deepEqual(f.calls,['error:configuration']);assert.equal(f.timers.length,0);await f.loop.stop();});
+test('bad F1 alerts once and does not restore, open admission, or schedule',async()=>{
+ const f=fixture({readConfiguration:async()=>{throw Object.assign(new Error('bad config'),{code:'CONFIG_UNREADABLE'});},startupAlert:async event=>f.calls.push(`alert:${event.event}:${event.reason}`)});
+ await f.loop.start();await f.loop.start();await f.loop.tick();
+ assert.deepEqual(f.calls,['error:configuration','alert:startup_configuration_unreadable:CONFIG_UNREADABLE']);assert.equal(f.timers.length,0);await f.loop.stop();
+});
+test('startup alert failure is reported without scheduling recovery work',async()=>{
+ const f=fixture({readConfiguration:async()=>{throw new Error('bad config');},startupAlert:async()=>{throw new Error('alert failed');}});
+ await f.loop.start();await f.loop.tick();assert.deepEqual(f.calls,['error:configuration','error:startup-alert']);assert.equal(f.timers.length,0);await f.loop.stop();
+});
 // supervisor-loop: fixed stages and fresh capacity after reclaim.
 test('restore precedes admission and lifecycle shares one scene sample',async()=>{const f=fixture({listDrainFences:async()=>[{sessionGroup:'tg:one'}]});await f.loop.start();assert.deepEqual(f.calls,['restore','open','observe','manual','restarts','config','exits','probe:origin','probe:tg:one','reclaim','rotation','rotation','ttl','ttl','evict','sync','metrics']);assert.equal(f.timers[0].ms,1000);await f.loop.stop();});
 // one group failure does not starve another.

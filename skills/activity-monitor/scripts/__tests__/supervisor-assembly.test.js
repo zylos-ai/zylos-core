@@ -5,12 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
-function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'})}={}) {
+function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
  const calls=[],db={getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
- const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
 test('assembly: restore health before admission; no-launch empty round executes',async t=>{
@@ -42,6 +42,25 @@ test('assembly: unwritable diagnostic output cannot block completed authenticati
  assert.equal(supervisor.health.authRecoveries.has('claude'),false);
  assert.ok(calls.some(row=>row.phase==='pool-metrics'));
  assert.ok(calls.some(row=>row.phase==='log-maintenance'));
+});
+
+test('assembly: maintenance retains current and recent logs while pruning absent valid groups only',async t=>{
+ const {supervisor,root}=fixture(t);await supervisor.loop.deps.readConfiguration();
+ const groups=path.join(root,'activity-monitor','session-groups'),valid=path.join(groups,'telegram:absent'),invalid=path.join(groups,'void'),target=path.join(root,'symlink-target');
+ for(const dir of [valid,invalid,target])fs.mkdirSync(dir,{recursive:true});
+ const now=Date.now(),expired=1,recent=now-1000;
+ for(const dir of [valid,invalid,target]){
+  fs.writeFileSync(path.join(dir,'events.jsonl'),'current\n');
+  fs.writeFileSync(path.join(dir,`events.${expired}.jsonl`),'old\n');
+ }
+ fs.writeFileSync(path.join(valid,`events.${recent}.jsonl`),'recent\n');
+ fs.writeFileSync(path.join(groups,'telegram:file'),'not a directory');
+ fs.symlinkSync(target,path.join(groups,'telegram:link'));
+ await supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[]});
+ assert.equal(fs.existsSync(path.join(valid,`events.${expired}.jsonl`)),false);
+ assert.equal(fs.existsSync(path.join(valid,`events.${recent}.jsonl`)),true);assert.equal(fs.existsSync(path.join(valid,'events.jsonl')),true);
+ assert.equal(fs.existsSync(path.join(invalid,`events.${expired}.jsonl`)),true);assert.equal(fs.existsSync(path.join(target,`events.${expired}.jsonl`)),true);
+ assert.equal(fs.readFileSync(path.join(groups,'telegram:file'),'utf8'),'not a directory');
 });
 
 test('assembly: one failed probe poll cannot starve another runtime or auth recovery',async t=>{
@@ -242,7 +261,7 @@ test('open transition configuration failure does not emit automatic-migration sk
 
 test('unreadable startup configuration stops before transition sampling or migration diagnostics', async t => {
   const failure = Object.assign(new Error('unreadable startup configuration'), { code: 'EIO' });
-  const { supervisor, root, calls, db } = fixture(t, { readConfiguration: async () => { throw failure; } });
+  const alerts=[];const { supervisor, root, calls, db } = fixture(t, { readConfiguration: async () => { throw failure; },alert:async event=>alerts.push(event) });
   let transitionReads = 0;
   db.getModeTransition = () => { transitionReads++; return null; };
   await supervisor.loop.start();
@@ -250,7 +269,16 @@ test('unreadable startup configuration stops before transition sampling or migra
   assert.equal(supervisor.admission.open, false);
   assert.equal(transitionReads, 0);
   assert.equal(calls.filter(row => row.phase === 'configuration' && row.error === 'EIO').length, 1);
+  assert.deepEqual(alerts,[{event:'startup_configuration_unreadable',session_group:'*',reason:'EIO'}]);
+  await supervisor.loop.start();await supervisor.loop.tick();assert.equal(alerts.length,1);
   assert.equal(fs.existsSync(path.join(root, 'activity-monitor/supervisor-events.jsonl')), false);
+});
+
+test('assembly: startup alert failure is logged while admission and scheduling stay closed',async t=>{
+ const failure=Object.assign(new Error('bad config'),{code:'EIO'});
+ const {supervisor,calls}=fixture(t,{readConfiguration:async()=>{throw failure;},alert:async()=>{throw Object.assign(new Error('alert unavailable'),{code:'ALERT_DOWN'});}});
+ await supervisor.loop.start();await supervisor.loop.tick();
+ assert.equal(supervisor.admission.open,false);assert.equal(calls.filter(row=>row.phase==='startup-alert'&&row.error==='ALERT_DOWN').length,1);
 });
 
 test('configuration recovery during an open transition resets automatic-skip deduplication', async t => {

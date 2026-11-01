@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { startSupervisor } from '../../supervisor-main.js';
 import { SupervisorScenes } from '../../supervisor-scenes.js';
@@ -21,5 +22,7 @@ process.on('message',async command=>{try{
  if(command==='release')holding=false;
  if(command==='tick')await service.supervisor.loop.tick();
  if(command==='stop'){await service.stop();database.close();process.send({stopped:true});process.disconnect();return;}
- process.send({requests:requests.read(),fences:db.listDrainFences(),alerts});
+ const events=path.join(root,'activity-monitor/supervisor-events.jsonl');
+ const crashes=fs.existsSync(events)?fs.readFileSync(events,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row=>row.event==='crash_detected').length:0;
+ process.send({requests:requests.read(),fences:db.listDrainFences(),alerts,crashes});
 }catch(error){process.send({error:error.stack});}});

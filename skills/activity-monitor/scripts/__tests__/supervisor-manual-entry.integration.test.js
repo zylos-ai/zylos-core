@@ -32,7 +32,7 @@ async function scenario(t,mode,mutant=''){
  await second.command('release');const done=await second.command('tick');
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));assert.equal(f.tmux('show-environment','-t','=zylos-group-origin','ZYLOS_RUN_ID'),'ZYLOS_RUN_ID=replacement');
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-original'));assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));
- assert.deepEqual(done.requests,[]);assert.deepEqual(done.fences,[]);
+ assert.deepEqual(done.requests,[]);assert.deepEqual(done.fences,[]);assert.equal(done.crashes,0);
  const exited=once(second.child,'exit');await second.command('stop');assert.equal((await exited)[0],0);
 }
 for(const mode of ['single','multi'])test(`${mode} actual supervisor/client lost reply requery retains original target and preserves same-name replacement`,{timeout:20000},async t=>{await scenario(t,mode);});
@@ -48,7 +48,7 @@ for(const pause of ['before-remove','after-remove'])test(`actual manual supervis
  const events=path.join(f.root,'activity-monitor/supervisor-events.jsonl');
  const completions=()=>fs.existsSync(events)?fs.readFileSync(events,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(e=>e.event==='manual_restart_done'&&e.requestId===request.requestId).length:0;
  assert.equal(completions(),0);
- const second=await launch(t,f,'multi');await second.command('release');let observed=await second.command('tick');assert.deepEqual(observed.requests,[]);assert.deepEqual(observed.fences,[]);
+ const second=await launch(t,f,'multi');await second.command('release');let observed=await second.command('tick');assert.deepEqual(observed.requests,[]);assert.deepEqual(observed.fences,[]);assert.equal(observed.crashes,0);
  // No request is submitted after restart. A deleted F9 row without completion log
  // is unknown history, not permission to synthesize another accepted request.
  assert.equal(completions(),pause==='before-remove'?1:0);observed=await second.command('tick');assert.deepEqual(observed.requests,[]);assert.equal(completions(),pause==='before-remove'?1:0);

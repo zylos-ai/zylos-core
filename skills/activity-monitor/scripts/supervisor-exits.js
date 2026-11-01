@@ -8,6 +8,11 @@ export class SupervisorExits {
     Object.assign(this, { scenes, db, serialize, readMode, diagnostic, env, reportError, stat });
     this.previous = new Map();
   }
+  forget(group, runId) {
+    if (this.previous.get(group)?.runId !== runId) return false;
+    this.previous.delete(group);
+    return true;
+  }
   async report(scene) {
     const mode = (await this.readMode()).mode;
     let rotated = false;

@@ -19,7 +19,7 @@ async function scenario(t,pause,mutant=''){
  const f=readyTmuxTarget(t,{prefix:'reclaim-entry-',mode:'multi',runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
  const db=createStore(f.db,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'multi'}})});db.setDrainFence('origin',{reason:'upgrade',runId:'run-1'});
  const first=launch(t,f,pause);assert.deepEqual(await first.next(),{barrier:pause});await first.kill();assert.equal(db.getDrainFence('origin').runId,'run-1');
- const second=launch(t,f,mutant),result=await second.next();assert.equal(result.ready,true);assert.equal(result.fence,null);assert.equal(result.present,false);
+ const second=launch(t,f,mutant),result=await second.next();assert.equal(result.ready,true);assert.equal(result.fence,null);assert.equal(result.present,false);assert.equal(result.crashes,0);
  assert.equal(db.getDrainFence('origin'),null);assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));
  const exited=once(second.child,'exit');second.child.send('stop');assert.deepEqual(await second.next(),{stopped:true});assert.equal((await exited)[0],0);
 }
