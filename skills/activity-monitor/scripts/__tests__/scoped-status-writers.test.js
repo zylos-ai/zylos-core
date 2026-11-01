@@ -23,3 +23,21 @@ test('writer preserves native payload; rejects wrong run, unknown version and st
  value.zylos.runId='r';value.zylos.v=999;fs.writeFileSync(file,JSON.stringify(value));assert.equal(read().reason,'version_unknown');
  value.zylos.v=1;value.zylos.capturedAt=now-1001;fs.writeFileSync(file,JSON.stringify(value));assert.equal(read().reason,'stale');
 });
+test('grouped status publishes unavailable time only from an authoritative unavailable budget',t=>{
+ const f=fixture(t),file=path.join(f.runDir,'agent-status.json');
+ const write=health=>publishSessionStatus({statusFile:file,scene:f.identity,
+  activity:{sessionId:'s',state:'idle',lastActivityAt:1,tools:[]},health});
+ const unavailable=write({health:'down',reason:'probe_failed',scheduling:{unavailableSince:123}});
+ assert.equal(unavailable.health,'unavailable');assert.equal(unavailable.unavailable_since,123);
+ assert.equal(unavailable.unavailable_reason,'probe_failed');
+ for(const health of [
+  {health:'ok',scheduling:{unavailableSince:123}},
+  {health:'rate_limited',scheduling:{unavailableSince:123,cooldownUntil:456,rateLimitResetTime:'later'}},
+  {health:'down',scheduling:{unavailableSince:0}},
+  {health:'down',scheduling:{unavailableSince:1.5}},
+ ]) {
+  const value=write(health);assert.equal('unavailable_since' in value,false);
+ }
+ const limited=write({health:'rate_limited',scheduling:{unavailableSince:123,cooldownUntil:456,rateLimitResetTime:'later'}});
+ assert.equal(limited.cooldown_until,456);assert.equal(limited.rate_limit_reset,'later');
+});

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 import { SessionActivity } from './session-activity.js';
 import { durableJson } from './runtime-generation.js';
-import { publicHealth } from './status-writer.js';
+import { publicHealthFields } from './status-writer.js';
 const { legacyRunDir, zylosRoot } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget, readTargetRuntime, revalidateSessionTarget, readProcessTree } = await loadCoreModule('runtime/session-target.js');
@@ -53,10 +53,9 @@ export class SupervisorLegacyStatus {
       if(!sameForeground(foreground,this.foreground()))return;
       const payload={runId:null,sessionId:foreground.session_id,runtime:foreground.runtime,
         state:!activity.transcriptMtimeMs && !activity.events.length && !activity.tools.length?'unknown':activity.state,
-        health:publicHealth(health.health),idle_seconds:Math.max(0,Math.floor((now-activity.lastActivityAt)/1000)),
+        ...publicHealthFields(health),idle_seconds:Math.max(0,Math.floor((now-activity.lastActivityAt)/1000)),
         last_activity:activity.lastActivityAt,active_tools:activity.tools.length,last_api_activity:activity.lastActivityAt,
         active_tool_details:activity.tools,proc:{pid:foreground.claude_pid,alive:true,last_sample_at:now},updated_at:now};
-      if(health.health!=='ok' && health.reason)payload.unavailable_reason=health.reason;
       durableJson(path.join(this.directory,'agent-status.json'),payload);
       return payload;
     } catch(error) {
