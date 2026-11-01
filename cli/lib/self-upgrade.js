@@ -44,7 +44,7 @@ const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
 import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade } from './core-db-backup.js';
-import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
+import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, prepareTargetData, closeCompensation, protectedSuccess, maintenance, maintenanceFor, resolveProtectedNpmCli, runProtectedInstaller } from './upgrade-protection.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -697,33 +697,7 @@ export function step3_stopCoreServices(ctx, deps = {}) {
  * Since we install from a temp dir that gets cleaned up, the symlink breaks.
  * Instead: npm pack (creates a .tgz copy) → npm install -g <tgz> (copies files).
  */
-export function resolveProtectedNpmCli() {
-  for(const directory of String(process.env.PATH||'').split(path.delimiter)){
-    if(!path.isAbsolute(directory))continue;
-    try{const file=fs.realpathSync(path.join(directory,'npm')),st=fs.statSync(file);if(path.basename(file)==='npm-cli.js'&&st.isFile()){fs.accessSync(file,fs.constants.R_OK);return file;}}catch{}
-  }
-  throw Error('trusted npm-cli.js entry is unavailable');
-}
-export function runProtectedInstaller(ctx,{stage,npmCli,args,cwd,timeout=180000}) {
-  const maintenance = maintenanceFor(ctx);
-  cwd=fs.realpathSync(cwd);
-  const dir=ctx.transactionDir,j=maintenance.read(path.join(dir,'journal.json'));
-  maintenance.validateDescriptor(dir,j,maintenance.read(path.join(dir,'descriptor.json')));
-  // A crash before spawnSync returns leaves no reliable PID evidence. Recovery
-  // must remain blocked in that case; parent death never proves npm has exited.
-  maintenance.update(dir,j,{installerStarted:true,installerStage:stage,installerPid:null,installerExitConfirmed:false,installerExitUnconfirmed:false});
-  ctx.journal=j;
-  const result=spawnSync(process.execPath,[npmCli,...args],{cwd,env:{...process.env,ZYLOS_SKIP_POSTINSTALL:'1'},encoding:'utf8',stdio:['ignore','pipe','pipe'],detached:true,timeout,killSignal:'SIGKILL',maxBuffer:4*1024*1024});
-  const saved=maintenance.read(path.join(dir,'journal.json'));
-  maintenance.update(dir,saved,{installerPid:result.pid||null});
-  let verified;
-  try { verified=finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,saved,{terminate:true,kind:'installer'}); }
-  catch(error){verified={confirmed:false,error:error.message};}
-  maintenance.update(dir,saved,{installerExitConfirmed:verified.confirmed,installerExitUnconfirmed:!verified.confirmed});ctx.journal=saved;
-  if(!verified.confirmed)throw Error(verified.error||'installer process exit unconfirmed');
-  if(result.error||result.status!==0){const error=Error(result.error?.message||String(result.stderr||'').trim()||'npm '+stage+' exited '+result.status);error.stderr=String(result.stderr||'');throw error;}
-  return String(result.stdout||'');
-}
+export { resolveProtectedNpmCli, runProtectedInstaller } from './upgrade-protection.js';
 export function step4_npmInstallGlobal(ctx, deps = {}) {
   const startTime = Date.now();
   const execSyncFn = deps.execSync ?? execSync;
@@ -1576,7 +1550,18 @@ const POST_INSTALL_STEPS = [
 ];
 
 function backupOnlyResult(ctx, failed) {
-  if (!ctx.backupOnly) return ctx.preInstallProtection ? {automaticCompensation:true, automaticResume:process.platform !== 'darwin', databaseMode:ctx.databaseMode || 'migrate', dbSnapshotVerified:ctx.dbSnapshotVerified===true, databases:ctx.databases || ctx.databasePreflight?.databases || null,...(ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {})} : ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {};
+  if (!ctx.backupOnly) {
+    if (!ctx.preInstallProtection) return ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {};
+    const closed = ctx.targetOwned && maintenanceFor(ctx).classifyCutoff(ctx.journal) !== 'none';
+    return {
+      automaticCompensation:!closed,
+      automaticResume:!closed && process.platform !== 'darwin',
+      ...(ctx.targetOwned ? {compensationClosed:closed} : {}),
+      databaseMode:ctx.databaseMode || 'migrate', dbSnapshotVerified:ctx.dbSnapshotVerified === true,
+      databases:ctx.databases || ctx.databasePreflight?.databases || null,
+      ...(ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {}),
+    };
+  }
   return {
     backupOnly: true,
     ...(ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {}),
@@ -1672,6 +1657,7 @@ export function createFinalizeState(ctx) {
       dbBackupDir: ctx.dbBackupDir,
       dbManifest:ctx.dbManifest,
     } : {}),
+    ...(ctx.targetOwned ? {targetOwned:true, packageRoot:ctx.coreDir} : {}),
     tempDir: ctx.tempDir,
     backupDir: ctx.backupDir,
     servicesWereRunning: ctx.servicesWereRunning,
@@ -1691,9 +1677,9 @@ function writeFinalizeState(ctx) {
   return statePath;
 }
 
-function runInstalledFinalizer(ctx) {
+export function runInstalledFinalizer(ctx) {
   const maintenance = maintenanceFor(ctx);
-  const finalizeScript = resolveInstalledPackageScript('cli', 'lib', 'self-upgrade-finalize.js');
+  const finalizeScript = ctx.targetOwned ? path.join(ctx.coreDir, 'cli/lib/self-upgrade-finalize.js') : resolveInstalledPackageScript('cli', 'lib', 'self-upgrade-finalize.js');
   if (!finalizeScript) {
     throw new Error('newly installed self-upgrade finalizer not found');
   }
@@ -1761,6 +1747,8 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     newVersion: state.newVersion || state.to,
     mode: state.mode,
   });
+  ctx.targetOwned = state.targetOwned === true;
+  ctx.packageRoot = state.packageRoot;
   ctx.backupOnly = state.backupOnly === true;
   ctx.databaseMode = state.databaseMode === 'unchanged' ? 'unchanged' : 'migrate';
   ctx.protectionUnavailableReason = state.protectionUnavailableReason;
@@ -1770,7 +1758,15 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.preInstallProtection = state.schemaVersion===2 && state.preInstallProtection===true;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
   if(ctx.preInstallProtection){
-    try {ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');}
+    try {
+      ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);
+      if(!ctx.journal.installationIntent || ctx.journal.transactionId !== ctx.transactionId)throw Error('finalizer without own durable installation intent');
+      if (ctx.targetOwned) {
+        const actualRoot = fs.realpathSync(path.join(import.meta.dirname, '../..'));
+        const pkg = JSON.parse(fs.readFileSync(path.join(actualRoot, 'package.json'), 'utf8'));
+        if (!ctx.journal.targetOwned || actualRoot !== state.packageRoot || pkg.version !== ctx.journal.to || state.from !== ctx.journal.from || state.to !== ctx.journal.to) throw Error('installed target finalizer identity mismatch');
+      }
+    }
     catch(error){return {success:false,error:error.message,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};}
   }
   ctx.backupDir = state.backupDir || null;
@@ -1784,7 +1780,11 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
 
   for (const stepFn of steps) {
     let result;
-    try {if(ctx.preInstallProtection && stepFn===step11_startCoreServices)protectedDataReady(ctx);result=stepFn(ctx);}
+    try {
+      if (ctx.preInstallProtection && ctx.targetOwned && stepFn === step7_syncInstructions) { prepareTargetData(ctx); closeCompensation(ctx); }
+      if(ctx.preInstallProtection && stepFn===step11_startCoreServices)protectedDataReady(ctx);
+      result=stepFn(ctx);
+    }
     catch(error){const ordinal=POST_INSTALL_STEPS.indexOf(stepFn);result={step:ordinal>=0?ordinal+5:null,name:stepFn.name||'finalizer_step',status:'failed',error:error.message};}
     result.total = total;
     ctx.steps.push(result);
@@ -1800,6 +1800,10 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     return buildSelfUpgradeResult(ctx, failedStep, null, false);
   }
 
+  if (ctx.preInstallProtection && ctx.targetOwned) {
+    maintenance.verifyServices(ctx.journal);
+    prepareTargetData(ctx, {}, {ready: true});
+  }
   if(ctx.preInstallProtection)protectedSuccess(ctx);
   return buildSelfUpgradeResult(ctx, null);
 }

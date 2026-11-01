@@ -132,6 +132,8 @@ function isSourceCheckoutInstall(env, packageRoot) {
 }
 
 function main() {
+  if (process.env.ZYLOS_PROTECTED_INSTALL === '1') return;
+
   // CI: skip everything
   if (process.env.CI) return;
 

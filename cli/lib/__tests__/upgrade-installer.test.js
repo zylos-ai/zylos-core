@@ -88,3 +88,26 @@ test('protected installer canonicalizes a symlinked work directory before direct
   assert.equal(f.read().installerStarted,true);
   assert.equal(f.read().installerExitConfirmed,true);
 });
+
+
+test('protected installer passes the publication barrier only for target-owned installs', t => {
+  const f = fixture(t, `process.stdout.write(JSON.stringify({protectedInstall:process.env.ZYLOS_PROTECTED_INSTALL ?? null,skipPostinstall:process.env.ZYLOS_SKIP_POSTINSTALL}));`);
+  const inherited = process.env.ZYLOS_PROTECTED_INSTALL;
+  delete process.env.ZYLOS_PROTECTED_INSTALL;
+  try {
+    for (const targetOwned of [true, false]) {
+      f.ctx.targetOwned = targetOwned;
+      const seen = JSON.parse(runProtectedInstaller(f.ctx, {
+        stage:'install', npmCli:f.npmCli, args:[], cwd:f.root,
+      }));
+      assert.deepEqual(seen, {
+        protectedInstall:targetOwned ? '1' : null,
+        skipPostinstall:'1',
+      });
+      assert.equal(f.read().installerExitConfirmed, true);
+    }
+  } finally {
+    if (inherited === undefined) delete process.env.ZYLOS_PROTECTED_INSTALL;
+    else process.env.ZYLOS_PROTECTED_INSTALL = inherited;
+  }
+});
