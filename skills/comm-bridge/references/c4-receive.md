@@ -4,6 +4,10 @@ Receives messages from external channels and queues them for delivery to Claude.
 
 Messages are written to DB with `status='pending'`. The c4-dispatcher daemon handles serial delivery to Claude via tmux.
 
+## Core Version File
+
+`~/zylos/.claude/skills/comm-bridge/core-version` contains the installed Core version as plain text without a `v` prefix, followed by one newline; if the file is missing, treat Core as 0.9.3 or earlier.
+
 ## Usage
 
 ```bash

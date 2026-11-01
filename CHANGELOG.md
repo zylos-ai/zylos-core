@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Core version file**: `comm-bridge/core-version` exposes the installed Core version as plain text alongside the skill; components can treat a missing file as Core 0.9.3 or earlier.
+
 ### Changed
 - **Core upgrade version selection**: automatic self-upgrades and checks, including `--beta`, stay within the installed major version and do not advertise newer majors. Use `zylos upgrade --self --version 1.0.0` to explicitly select an exact `v1.0.0` release tag, including a different major or an explicit prerelease. `--version` refuses downgrades, skips an already installed version, and cannot be combined with `--branch` or `--beta`. `--check --version` only checks version constraints and tag existence; the target package's upgrade entry decides whether it accepts the installed starting version.
 - **Forward-compatible message intake**: `c4-receive` ignores unknown options and their following non-`--` value, reporting only the option name on stderr while preserving message delivery and JSON stdout for components that adopt newer CLI options first.

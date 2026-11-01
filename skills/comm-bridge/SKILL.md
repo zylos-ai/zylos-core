@@ -34,6 +34,8 @@ Lark        ───┘
 | `c4-db.js` | Database module and CLI for querying conversations and checkpoints | [c4-db](references/c4-db.md) |
 | `c4-checkpoint.js` | Create/query checkpoints (sync boundaries) | [c4-checkpoint](references/c4-checkpoint.md) |
 
+Components can identify the installed Core version from [core-version](references/c4-receive.md#core-version-file).
+
 ## Sending Messages
 
 ```bash

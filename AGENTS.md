@@ -45,10 +45,10 @@ module.exports = myFunction;
 
 When releasing a new version:
 
-1. **Update `package.json`** — bump `version` field to the new version number
+1. **Update `package.json` and `skills/comm-bridge/core-version`** — bump `version` and write the same version without a `v` prefix plus one newline to `core-version`
 2. **Update `package-lock.json`** — run `npm install` to sync the lock file with the new version
 3. **Update `CHANGELOG.md`** — add a new section following [Keep a Changelog](https://keepachangelog.com/) format with Added/Fixed/Changed/Removed subsections as applicable
-4. **Commit and push** — include all three files in the PR
+4. **Commit and push** — include `package.json`, `package-lock.json`, `skills/comm-bridge/core-version`, and `CHANGELOG.md` in the PR
 5. **Merge PR first** — all changes must be merged to `main` before tagging
 6. **Tag and release** — after merge, create a git tag (`vX.Y.Z`) on `main` and a GitHub release with release notes summarizing the changelog
 
