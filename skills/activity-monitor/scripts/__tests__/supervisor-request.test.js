@@ -20,6 +20,9 @@ test('CLI reports unknown persistence for all connected U results without resubm
   }
   const connect=await readyForConfigReclaim({env,send:async()=>({kind:'connect_failed',sent:false})});assert.deepEqual(connect.error.persisted,[]);
   const reject=await readyForConfigReclaim({env,send:async()=>({kind:'rejected',sent:true,reply:{reason:'not_ready'}})});assert.equal(reject.error.code,'not_ready');assert.deepEqual(reject.error.persisted,[]);
+  const unreadable=await readyForConfigReclaim({env,send:async()=>({kind:'rejected',sent:true,reply:{reason:'requests_unreadable'}})});
+  assert.equal(unreadable.error.code,'requests_unreadable');assert.deepEqual(unreadable.error.persisted,[]);
+  assert.match(unreadable.error.message,/completed handoff/);assert.match(unreadable.error.message,/repair/);assert.match(unreadable.error.message,/retry/);assert.match(unreadable.error.message,/do not exit/);
 });
 
 test('CLI errors retain one JSON envelope and exit 1', async () => {

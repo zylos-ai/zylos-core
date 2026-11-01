@@ -42,6 +42,7 @@ Out of scope:
 - F13 identity: M4 §3.3 “写失败”, especially line 790; DM §6.6.
 - Retention: M4 §3.3 lines 816–821 and §3.5 line 870.
 - Config reclaim: `implementation-interfaces.md` IB-41 and IB-43; M4 §2.11.1; M3 §4.1.
+- Merged Task A authority: `zylos-internal-docs/main` at `df6e2f964e1202e5aaa0378e7f976535cdc8501b` (PR #131).
 - Startup configuration failure: DM §5 lines 507–510 and the existing M4 system-alert transport in M4 §2.2.
 - Exit classification: M4 §2.2 lines 131–138 and §2.3 line 339.
 - Reclaim cancellation: M4 §2.3 lines 324–336 and §3.4 `reclaim_cancelled`.

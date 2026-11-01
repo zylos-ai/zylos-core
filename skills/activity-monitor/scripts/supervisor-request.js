@@ -12,8 +12,13 @@ export async function readyForConfigReclaim({ env = process.env, send = submit }
   catch { return { ok: false, error: { code: 'NO_SESSION_ENV', message: 'Invalid session group', persisted: [] } }; }
   const result = await send({ version: 1, type: 'ready_for_config_reclaim', requestId: `cfg-${randomUUID()}`, sessionGroup, expectedRunId });
   if (result.kind === 'accepted') return { ok: true, data: { result: result.reply.result, sessionGroup, expectedRunId } };
-  return { ok: false, error: { code: result.reply?.code ?? result.reply?.reason ?? result.kind,
-    message: result.sent && !result.reply ? 'Submission result is unknown; keep the handoff and do not exit' : 'Configuration reclaim was not accepted',
+  const code = result.reply?.code ?? result.reply?.reason ?? result.kind;
+  return { ok: false, error: { code,
+    message: result.sent && !result.reply
+      ? 'Submission result is unknown; keep the handoff and do not exit'
+      : code === 'requests_unreadable'
+        ? 'Keep the completed handoff and current run; repair the supervisor restart-request state, retry this request, and do not exit'
+        : 'Configuration reclaim was not accepted',
     persisted: result.sent && !result.reply ? null : [] } };
 }
 
