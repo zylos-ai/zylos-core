@@ -3,15 +3,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { test } from 'node:test';
+import { test, afterEach } from '@jest/globals';
+import { fileURLToPath } from 'node:url';
 
-const repo = path.resolve(import.meta.dirname, '..');
+const repo = fileURLToPath(new URL('..', import.meta.url));
+const current = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8')).version;
+const [major, minor, patch] = current.split('-')[0].split('.').map(Number);
+const next = `${major}.${minor}.${patch + 1}`;
+const otherMajor = `${major + 1}.0.0`;
+const cleanup = [];
+afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 const tagsUrl = 'https://api.github.com/repos/zylos-ai/zylos-core/tags?per_page=100';
 const tags = versions => JSON.stringify(versions.map(name => ({ name })));
 
-function fixture(t, versions) {
+function fixture(versions) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'core-select-')));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, 'bin');
   for (const dir of ['bin', 'home', 'zylos', 'pm2', 'tmp']) fs.mkdirSync(path.join(root, dir));
   const routesFile = path.join(root, 'routes.json');
@@ -77,24 +84,24 @@ if (args.includes('-o')) {
 // Boundary: real core resolver + GitHub transport. Run when tag selection,
 // pagination, prerelease handling or core defaults change; skip for unrelated code.
 for (const [name, versions, options, latest, hasUpdate] of [
-  ['same major', ['v0.9.4'], {}, '0.9.4', true],
-  ['mixed majors', ['v1.0.0', 'v0.9.4', 'v0.9.2'], {}, '0.9.4', true],
-  ['new major only', ['v1.0.0'], {}, '0.9.3', false],
-  ['already latest', ['v1.0.0', 'v0.9.3', 'v0.9.2'], {}, '0.9.3', false],
-  ['stable excludes prerelease', ['v0.9.4-beta.1', 'v0.9.3'], {}, '0.9.3', false],
-  ['explicit beta keeps unscoped prerelease selection', ['v1.0.0-beta.1', 'v0.9.4-beta.1', 'v0.9.3'], { beta: true }, '1.0.0-beta.1', true],
+  ['same major', [`v${next}`], {}, next, true],
+  ['mixed majors', [`v${otherMajor}`, `v${next}`, `v${current}`], {}, next, true],
+  ['new major only', [`v${otherMajor}`], {}, current, false],
+  ['already latest', [`v${otherMajor}`, `v${current}`], {}, current, false],
+  ['stable excludes prerelease', [`v${next}-beta.1`, `v${current}`], {}, current, false],
+  ['explicit beta keeps unscoped prerelease selection', [`v${otherMajor}-beta.1`, `v${next}-beta.1`, `v${current}`], { beta: true }, `${otherMajor}-beta.1`, true],
 ]) {
-  test(`core update check: ${name}`, t => {
-    const f = fixture(t, versions);
+  test(`core update check: ${name}`, () => {
+    const f = fixture(versions);
     const result = JSON.parse(f.run(`import {checkForCoreUpdates} from './cli/lib/self-upgrade.js'; console.log(JSON.stringify(checkForCoreUpdates(${JSON.stringify(options)})));`));
-    assert.deepEqual(result, { success: true, current: '0.9.3', latest, hasUpdate });
+    assert.deepEqual(result, { success: true, current, latest, hasUpdate });
   });
 }
 
 // Boundary: sync CLI and async doctor selection share the real tag helper.
 // Run for scoped tag/URL changes; skip for unrelated update execution changes.
-test('major-scoped sync and async look beyond the first tag page', t => {
-  const f = fixture(t, Array.from({ length: 100 }, (_, i) => `v2.0.${i}`));
+test('major-scoped sync and async look beyond the first tag page', () => {
+  const f = fixture(Array.from({ length: 100 }, (_, i) => `v2.0.${i}`));
   f.routes[`${tagsUrl}&page=2`] = { body: tags(['v1.9.3', 'v1.10.0', 'v0.9.4']) };
   const result = JSON.parse(f.run(`import {fetchLatestTag,fetchLatestTagAsync} from './cli/lib/github.js';
     console.log(JSON.stringify([fetchLatestTag('zylos-ai/zylos-core',{major:'0'}),await fetchLatestTagAsync('zylos-ai/zylos-core',{major:'1'}),fetchLatestTag('zylos-ai/zylos-core')]));`));
@@ -104,8 +111,8 @@ test('major-scoped sync and async look beyond the first tag page', t => {
 
 // Boundary: incomplete pagination must remain an error, not "up to date".
 // Run for tag pagination/error changes; skip for unrelated model defaults.
-test('core check reports an error when a later tag page cannot be fetched', t => {
-  const f = fixture(t, Array.from({ length: 100 }, (_, i) => `v1.0.${i}`));
+test('core check reports an error when a later tag page cannot be fetched', () => {
+  const f = fixture(Array.from({ length: 100 }, (_, i) => `v${major + 1}.0.${i}`));
   f.routes[`${tagsUrl}&page=2`] = { error: true };
   const result = JSON.parse(f.run(`import {checkForCoreUpdates} from './cli/lib/self-upgrade.js'; console.log(JSON.stringify(checkForCoreUpdates()));`));
   assert.equal(result.success, false);
@@ -114,8 +121,8 @@ test('core check reports an error when a later tag page cannot be fetched', t =>
 
 // Boundary: explicit beta keeps its no-release error contract. Run for core
 // resolution changes; skip for unrelated model/configuration changes.
-test('explicit beta still reports an error when no release tags exist', t => {
-  const f = fixture(t, []);
+test('explicit beta still reports an error when no release tags exist', () => {
+  const f = fixture([]);
   const result = JSON.parse(f.run(`import {checkForCoreUpdates} from './cli/lib/self-upgrade.js'; console.log(JSON.stringify(checkForCoreUpdates({beta:true})));`));
   assert.equal(result.success, false);
   assert.equal(result.error, 'remote_version_failed');
@@ -124,39 +131,39 @@ test('explicit beta still reports an error when no release tags exist', t => {
 
 // Boundary: explicit branch resolver bypasses the major restriction as before.
 // Run for core target resolution changes; skip for unrelated component code.
-test('explicit branch still reads and downloads a cross-major branch', t => {
-  const f = fixture(t, []);
-  f.routes['https://raw.githubusercontent.com/zylos-ai/zylos-core/next/package.json'] = { body: '{"version":"1.0.0"}' };
-  f.routes['https://github.com/zylos-ai/zylos-core/archive/refs/heads/next.tar.gz'] = { file: f.archive('1.0.0') };
+test('explicit branch still reads and downloads a cross-major branch', () => {
+  const f = fixture([]);
+  f.routes['https://raw.githubusercontent.com/zylos-ai/zylos-core/next/package.json'] = { body: JSON.stringify({ version: otherMajor }) };
+  f.routes['https://github.com/zylos-ai/zylos-core/archive/refs/heads/next.tar.gz'] = { file: f.archive(otherMajor) };
   f.run(null, ['upgrade', '--self', '--branch', 'next', '--yes', '--json']);
-  assert.equal(JSON.parse(fs.readFileSync(f.handoff)).version, '1.0.0');
+  assert.equal(JSON.parse(fs.readFileSync(f.handoff)).version, otherMajor);
   assert.ok(!f.requests().includes(tagsUrl));
 });
 
 // Boundary: real CLI check + default upgrade handoff; fixture entry only captures
 // the target, never installs. Run for core selection/CLI handoff changes; skip
 // when only service installation internals change.
-test('default CLI check and upgrade select the same same-major archive', t => {
-  const f = fixture(t, ['v1.0.0', 'v0.9.4']);
-  f.routes['https://github.com/zylos-ai/zylos-core/archive/refs/tags/v0.9.4.tar.gz'] = { file: f.archive('0.9.4') };
+test('default CLI check and upgrade select the same same-major archive', () => {
+  const f = fixture([`v${otherMajor}`, `v${next}`]);
+  f.routes[`https://github.com/zylos-ai/zylos-core/archive/refs/tags/v${next}.tar.gz`] = { file: f.archive(next) };
   const checked = JSON.parse(f.run(null, ['upgrade', '--self', '--check', '--json']));
-  assert.equal(checked.latest, '0.9.4');
+  assert.equal(checked.latest, next);
   assert.equal(checked.hasUpdate, true);
   f.run(null, ['upgrade', '--self', '--yes', '--json']);
   const captured = JSON.parse(fs.readFileSync(f.handoff));
-  assert.equal(captured.version, '0.9.4');
-  assert.equal(captured.handoff.fromVersion, '0.9.3');
-  assert.ok(!f.requests().some(url => url.includes('v1.0.0.tar.gz')));
+  assert.equal(captured.version, next);
+  assert.equal(captured.handoff.fromVersion, current);
+  assert.ok(!f.requests().some(url => url.includes(`v${otherMajor}.tar.gz`)));
 });
 
 // Boundary: real CLI no-update path. Run for target/check changes; skip when
 // only archive extraction or service installation changes.
-test('default CLI check and upgrade do not download a new major', t => {
-  const f = fixture(t, ['v1.0.0']);
+test('default CLI check and upgrade do not download a new major', () => {
+  const f = fixture([`v${otherMajor}`]);
   for (const flags of [['--check'], ['--yes']]) {
     const result = JSON.parse(f.run(null, ['upgrade', '--self', ...flags, '--json']));
     assert.equal(result.hasUpdate, false);
-    assert.equal(result.latest, '0.9.3');
+    assert.equal(result.latest, current);
   }
   assert.ok(f.requests().every(url => url === tagsUrl));
   assert.equal(fs.existsSync(f.handoff), false);
@@ -164,10 +171,10 @@ test('default CLI check and upgrade do not download a new major', t => {
 
 // Boundary: release-download error cannot silently switch to main. Run for
 // core download fallback changes; skip for unrelated update notifications.
-test('failed release download does not fall back to main', t => {
-  const f = fixture(t, []);
-  f.routes['https://github.com/zylos-ai/zylos-core/archive/refs/tags/v0.9.4.tar.gz'] = { error: true };
-  const result = JSON.parse(f.run(`import {downloadCoreToTemp} from './cli/lib/self-upgrade.js'; console.log(JSON.stringify(downloadCoreToTemp('0.9.4')));`));
+test('failed release download does not fall back to main', () => {
+  const f = fixture([]);
+  f.routes[`https://github.com/zylos-ai/zylos-core/archive/refs/tags/v${next}.tar.gz`] = { error: true };
+  const result = JSON.parse(f.run(`import {downloadCoreToTemp} from './cli/lib/self-upgrade.js'; console.log(JSON.stringify(downloadCoreToTemp('${next}')));`));
   assert.equal(result.success, false);
-  assert.ok(f.requests().every(url => url.endsWith('/v0.9.4.tar.gz')));
+  assert.ok(f.requests().every(url => url.endsWith(`/v${next}.tar.gz`)));
 });
