@@ -78,7 +78,9 @@ function parseArgs(args) {
         break;
       default:
         if (args[i].startsWith('--')) {
-          return { error: `Unknown option: ${args[i]}` };
+          console.error(`Ignored unknown option: ${args[i].split('=')[0]}`);
+          if (i + 1 < args.length && !args[i + 1].startsWith('--')) i++;
+          break;
         }
         return { error: `Unexpected argument: ${args[i]}` };
     }
