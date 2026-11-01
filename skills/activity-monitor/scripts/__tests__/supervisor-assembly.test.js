@@ -173,7 +173,13 @@ for(const source of ['health','exit'])test(`assembly: ${source} stop removes the
  let stops=0;scenes.stop=async()=>{stops++;};
  await supervisor.loop.deps.readConfiguration();
  const context={fences:[]};context.scenes=await supervisor.loop.deps.observe(context);
- if(source==='health')await supervisor.observer.stopScene(scene,'fixture-health-stop');
+ if(source==='health'){
+  await supervisor.loop.deps.observeExits([scene]);
+  await supervisor.observer.stopScene(scene,'fixture-health-stop');
+  await supervisor.loop.deps.observeExits([]);
+  const events=fs.readFileSync(path.join(root,'activity-monitor','supervisor-events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events.filter(row=>row.event==='crash_detected'&&row.runId==='r').length,1);
+ }
  else await supervisor.loop.deps.observeExits(context.scenes);
  assert.equal(stops,1);assert.equal(context.scenes[0].present,false);assert.equal(context.scenes[0].ready,false);
  await supervisor.loop.deps.writeMetricsAndMaintain(context);

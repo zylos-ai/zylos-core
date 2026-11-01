@@ -77,6 +77,14 @@ async function configReclaimEntry(t) {
   return {root,file,db,writes:()=>gateWrites};
 }
 
+/**
+ * Integration boundary: actual supervisor socket admission, restart-request file,
+ * config-reclaim fence writes, and the isolated C4 test database.
+ * Run when config-reclaim admission, F9 reads, reply validation, or retry behavior changes.
+ * Skip when changes cannot affect that boundary, such as status projection or comments.
+ * ISOLATION REQUIRED: run only through scripts/run-node-tests.js with fresh HOME,
+ * ZYLOS_DIR, PM2_HOME, a short TMPDIR, and the test database; never use live resources.
+ */
 test('actual config-reclaim entry isolates ordinary groups from corrupt restart state and keeps Origin retryable',async t=>{
   const f=await configReclaimEntry(t);
   const ordinary={version:1,type:'ready_for_config_reclaim',requestId:'ordinary-config',sessionGroup:'telegram:one',expectedRunId:'run-1'};
