@@ -18,24 +18,33 @@ function completeDownloadedPackage(root) {
   fs.writeFileSync(path.join(root, 'cli/lib/upgrade-entry.js'), '');
 }
 
+function expectedAdmissionMessage(version) {
+  return `Core ${version || '(unknown)'} cannot upgrade directly. Run zylos upgrade --self --branch release/0.9.3 to reach Core 0.9.3 first. Run zylos --version to verify Core 0.9.3, then rerun your original upgrade command.`;
+}
+
 test('source admission rejects old, malformed and pre-bridge prerelease versions', () => {
   for (const version of ['0.5.0', '0.8.3', '0.9.0', '0.9.1', '0.9.2', '0.9.3-beta.1', undefined, 'latest', '01.9.3']) {
-    assert.throws(() => assertSupportedUpgradeVersion(version), error =>
-      error.code === 'UPGRADE_SOURCE_TOO_OLD' && error.message.includes('zylos upgrade --self --branch release/0.9') && error.persisted.length === 0);
+    assert.throws(() => assertSupportedUpgradeVersion(version), {
+      code: 'UPGRADE_SOURCE_TOO_OLD', message: expectedAdmissionMessage(version), persisted: [],
+    });
   }
-  for (const version of ['0.9.3', '0.9.3+build.1', '0.9.4-beta.1', '0.10.0', '1.0.0-beta.1', '1.0.0']) {
+  for (const version of ['0.9.3', '0.9.3+build.1', '0.9.4', '0.9.5', '0.9.4-beta.1', '0.10.0', '1.0.0-beta.1', '1.0.0']) {
     assert.equal(assertSupportedUpgradeVersion(version), version);
   }
 });
 
 test('schema probe rejects old installed caller before schema or driver access', t => {
   const root = fixture(t), worker = path.join(root, 'cli/lib/core-db-backup-worker.js');
-  for (const version of ['0.9.1', '0.9.2']) {
+  for (const version of ['0.9.1', '0.9.2', '0.9.3-beta.1']) {
     fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version }));
-    assert.throws(() => rejectLegacySchemaProbe(['node', worker, JSON.stringify({ action: 'version-probe' })]), { code: 'UPGRADE_SOURCE_TOO_OLD' });
+    assert.throws(() => rejectLegacySchemaProbe(['node', worker, JSON.stringify({ action: 'version-probe' })]), {
+      code: 'UPGRADE_SOURCE_TOO_OLD', message: expectedAdmissionMessage(version), persisted: [],
+    });
   }
-  fs.writeFileSync(path.join(root, 'package.json'), '{"version":"0.9.3"}');
-  assert.doesNotThrow(() => rejectLegacySchemaProbe(['node', worker, '{"action":"version-probe"}']));
+  for (const version of ['0.9.3', '0.9.4']) {
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version }));
+    assert.doesNotThrow(() => rejectLegacySchemaProbe(['node', worker, '{"action":"version-probe"}']));
+  }
   assert.doesNotThrow(() => rejectLegacySchemaProbe(['node', '/unrelated/command.js']));
   assert.doesNotThrow(() => rejectLegacySchemaProbe(['node', worker, '{"action":"snapshot"}']));
 });
@@ -113,9 +122,12 @@ test('thin entry supplies the fallback code when recovery throws without one', a
   assert.deepEqual(output[0].persisted, []);
 });
 
+// Covers real preinstall error propagation without installation or service access.
+// Run when admission guidance or preinstall changes; otherwise it may be skipped.
+// The runner isolates HOME, ZYLOS_DIR, PM2_HOME and TMPDIR; no tmux or database is used.
 test('actual preinstall rejects legacy upgrades and allows fresh/new upgrades without target dependencies', t => {
   const root = fixture(t), script = path.resolve('scripts/preinstall.js');
-  const env = { ...process.env, HOME: root, PM2_HOME: path.join(root, '.pm2') };
+  const env = { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, '.pm2') };
   delete env.ZYLOS_SKIP_POSTINSTALL;
   delete env.ZYLOS_UPGRADE_FROM_VERSION;
   const run = extra => spawnSync(process.execPath, [script], { env: { ...env, ...extra }, encoding: 'utf8' });
@@ -124,14 +136,16 @@ test('actual preinstall rejects legacy upgrades and allows fresh/new upgrades wi
     const child=run({ZYLOS_SKIP_POSTINSTALL:value,ZYLOS_UPGRADE_FROM_VERSION:'0.9.2'});
     assert.equal(child.status,0,child.stderr);
   }
-  for (const version of [undefined, '0.5.0', '0.8.3', '0.9.0', '0.9.1', '0.9.2']) {
+  for (const version of [undefined, '0.5.0', '0.8.3', '0.9.0', '0.9.1', '0.9.2', '0.9.3-beta.1']) {
     const child = run({ ZYLOS_SKIP_POSTINSTALL: '1', ...(version ? { ZYLOS_UPGRADE_FROM_VERSION: version } : {}) });
     assert.equal(child.status, 1);
-    assert.match(child.stderr, /UPGRADE_SOURCE_TOO_OLD/);
-    assert.match(child.stderr, /release\/0\.9/);
-    assert.match(child.stderr, /Do not assume npm restored/);
+    assert.equal(child.stdout, '');
+    assert.equal(child.stderr.split('\n').find(line => line.startsWith('Error: ')),
+      `Error: ${expectedAdmissionMessage(version)} If an older upgrade has already stopped services (especially Core 0.9.0 backup-only mode), preserve its backup and verify the previous Core package is complete and usable before manually restarting the previously running services. Do not assume npm restored the previous package.`);
+    assert.equal(child.stderr.split('\n').find(line => line.includes("code: '"))?.trim(),
+      "code: 'UPGRADE_SOURCE_TOO_OLD',");
   }
-  for (const version of ['0.9.3', '1.0.0-beta.1', '1.0.0']) {
+  for (const version of ['0.9.3', '0.9.4', '1.0.0-beta.1', '1.0.0']) {
     assert.equal(run({ ZYLOS_SKIP_POSTINSTALL: '1', ZYLOS_UPGRADE_FROM_VERSION: version }).status, 0);
   }
   assert.deepEqual(fs.readdirSync(root), []);
