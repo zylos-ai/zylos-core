@@ -165,21 +165,22 @@ export function createDelivery(deps, configuration = {}) {
     const controller = { cancel: () => { draining = true; clearTimeout(timer); periodic.reset('stop'); } };
     active.add(controller);
     try {
-      if (stopped) return { delivered: false, blocked: true };
-      try { connection = await open(options.tmux ?? {}); }
-      catch (cause) { if (cause.code === 'TMUX_NO_SERVER') throw failure('TARGET_GONE'); throw cause; }
-      target = await resolve({ sessionGroup: group, connection });
-      initial = false;
-      Object.assign(fields, { runId: target.runId, runtime: target.runtime });
-      if (type === 'control' && row.target_binding != null) {
-        const binding = typeof row.target_binding === 'string' ? JSON.parse(row.target_binding) : row.target_binding;
-        if (binding.expectedRunId !== target.runId ||
-          ['serverGeneration', 'sessionId', 'paneId'].some(key => binding.tmuxTarget[key] !== target[key]) ||
-          (binding.expectedSessionId != null && binding.expectedSessionId !== target.runtimeSessionId)) throw failure('RUNID_MISMATCH');
-      }
-      if (!target.ready) { gateCode = 'wait_ready'; emit('wait_ready'); }
-      else if (!['claude', 'codex'].includes(target.runtime)) { gateCode = 'runtime_unknown'; emit('runtime_unknown'); try { deps.alert?.('runtime_unknown', fields); } catch {} }
+      if (stopped) gateCode = 'delivery_stopped';
       else {
+        try { connection = await open(options.tmux ?? {}); }
+        catch (cause) { if (cause.code === 'TMUX_NO_SERVER') throw failure('TARGET_GONE'); throw cause; }
+        target = await resolve({ sessionGroup: group, connection });
+        initial = false;
+        Object.assign(fields, { runId: target.runId, runtime: target.runtime });
+        if (type === 'control' && row.target_binding != null) {
+          const binding = typeof row.target_binding === 'string' ? JSON.parse(row.target_binding) : row.target_binding;
+          if (binding.expectedRunId !== target.runId ||
+            ['serverGeneration', 'sessionId', 'paneId'].some(key => binding.tmuxTarget[key] !== target[key]) ||
+            (binding.expectedSessionId != null && binding.expectedSessionId !== target.runtimeSessionId)) throw failure('RUNID_MISMATCH');
+        }
+        if (!target.ready) { gateCode = 'wait_ready'; emit('wait_ready'); }
+        else if (!['claude', 'codex'].includes(target.runtime)) { gateCode = 'runtime_unknown'; emit('runtime_unknown'); try { deps.alert?.('runtime_unknown', fields); } catch {} }
+        else {
         state = await readState();
         const item = { ...row, type };
         const bypass = isBypassState(item);
@@ -226,6 +227,7 @@ export function createDelivery(deps, configuration = {}) {
             result = type === 'conversation' ? 'delivered' : content.includes('---- ack via:') ? 'submitted' : 'ack';
             if (row.require_idle === 1) await idleSettlement();
           }
+        }
         }
       }
     } catch (cause) { error = cause; }

@@ -171,6 +171,40 @@ test('unverified conversation fails; live control accepted, dead control retried
   });
 });
 
+test('stop before delivery requeues the claimed row without tmux I/O', async t => {
+  for (const type of ['conversation', 'control']) await t.test(type, async t => {
+    const f = setup(t), row = type === 'conversation' ? f.message() : f.control();
+    const delivery = f.create();
+    await delivery.stop();
+    const result = await (type === 'conversation'
+      ? delivery.deliverConversation(row)
+      : delivery.deliverControl(row));
+    assert.equal(result.delivered, false);
+    assert.equal(result.blocked, true);
+    assert.equal(type === 'conversation' ? f.row(row.id).status : row.status, 'pending');
+    assert.equal(f.calls.some(call => ['resolve', 'paste', 'keys', 'capture', 'command'].includes(call[0])), false);
+    assert.ok(f.calls.some(call => call[0] === 'diagnostic' && call[1] === 'release' && call[2].code === 'delivery_stopped'));
+  });
+});
+
+test('stop after delivery crosses its entry waits for settlement instead of requeueing', async t => {
+  const f = setup(t), row = f.message(), opened = deferred(), releaseOpen = deferred();
+  f.deps.openTmuxConnection = async () => { opened.resolve(); await releaseOpen.promise; return f.connection; };
+  const delivery = f.create();
+  const pending = delivery.deliverConversation(row);
+  await opened.promise;
+  let stopped = false;
+  const stopping = delivery.stop().then(() => { stopped = true; });
+  await new Promise(setImmediate);
+  assert.equal(stopped, false);
+  assert.equal(f.row(row.id).status, 'running');
+  releaseOpen.resolve();
+  await Promise.all([pending, stopping]);
+  assert.equal(f.row(row.id).status, 'delivered');
+  assert.equal(f.calls.filter(call => call[0] === 'paste').length, 1);
+  assert.equal(f.calls.some(call => call[0] === 'requeue'), false);
+});
+
 test('a stalled paste does not block another lane', async t => {
   const f = setup(t), a = f.message(), b = f.message('other'); const gate = deferred();
   const original = f.adapter.sendText; let count = 0;
