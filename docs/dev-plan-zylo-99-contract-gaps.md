@@ -259,4 +259,3 @@ The tmux five-version matrix is not expected to apply because these changes neit
 - Existing runtime directories remain non-authoritative inventory; retention scanning must never be reused as a session-discovery mechanism.
 - No design decision remains open in this plan. If implementation reveals that the existing alert transport cannot be called before configuration is available, report the concrete call/target failure and propose the minimum contract amendment; do not invent a second alert channel.
 - Tests and product-visible names use functional names only; plan/contract identifiers may appear only in design documentation and review traceability.
-
