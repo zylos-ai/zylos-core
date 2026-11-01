@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Fixed upgrade bridge guidance**: keep the minimum upgrade source at stable 0.9.3 and direct older installations to `zylos upgrade --self --branch release/0.9.3`, then verify Core 0.9.3 with `zylos --version` and rerun the original upgrade command. Later sources, including 0.9.4 and 0.9.5, remain supported.
+
 ## [0.9.3] - 2026-10-30
 
 ### Changed

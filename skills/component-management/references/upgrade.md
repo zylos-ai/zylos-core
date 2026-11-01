@@ -148,8 +148,12 @@ An installed older updater runs preflight before the target release is installed
 It may reject extra tables or columns and cannot use the new release's rules.
 For supported source versions and recovery boundaries, see
 [Self-upgrade and recovery](https://github.com/zylos-ai/zylos-core/blob/main/docs/self-upgrade-recovery.md).
-Older installations first use `zylos upgrade --self --branch release/0.9`;
-retain complete backups and extension data when handling an old updater's rejection.
+Sources older than stable 0.9.3 first use
+`zylos upgrade --self --branch release/0.9.3` to reach the fixed 0.9.3 bridge,
+run `zylos --version` to verify Core 0.9.3, then rerun the original upgrade command.
+Stable 0.9.3 and later sources, including 0.9.4 and 0.9.5, are supported; 0.9.3
+prereleases are not. Retain complete backups and extension data when handling an
+old updater's rejection.
 
 ### Step 1: Check + Download to Temp
 

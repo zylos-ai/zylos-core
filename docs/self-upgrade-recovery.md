@@ -2,8 +2,11 @@
 
 `zylos upgrade --self` downloads the target package and hands installation to
 its upgrade entry. Supported sources start at 0.9.3; older installations use
-`zylos upgrade --self --branch release/0.9` first. An already current installation does not
-download or retry an upgrade.
+`zylos upgrade --self --branch release/0.9.3` to reach the fixed 0.9.3 bridge
+first. Run `zylos --version` to verify Core 0.9.3, then rerun the original upgrade
+command. Stable 0.9.3 and later sources, including 0.9.4 and 0.9.5, are supported;
+0.9.3 prereleases are not. An already current installation does not download or
+retry an upgrade.
 
 <a id="first-adoption"></a>
 
