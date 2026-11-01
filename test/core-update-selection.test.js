@@ -89,12 +89,13 @@ for (const [name, versions, options, latest, hasUpdate] of [
   ['new major only', [`v${otherMajor}`], {}, current, false],
   ['already latest', [`v${otherMajor}`, `v${current}`], {}, current, false],
   ['stable excludes prerelease', [`v${next}-beta.1`, `v${current}`], {}, current, false],
-  ['explicit beta keeps unscoped prerelease selection', [`v${otherMajor}-beta.1`, `v${next}-beta.1`, `v${current}`], { beta: true }, `${otherMajor}-beta.1`, true],
+  ['beta selects prereleases within the installed major', [`v${otherMajor}-beta.1`, `v${next}-beta.1`, `v${current}`], { beta: true }, `${next}-beta.1`, true],
 ]) {
   test(`core update check: ${name}`, () => {
     const f = fixture(versions);
     const result = JSON.parse(f.run(`import {checkForCoreUpdates} from './cli/lib/self-upgrade.js'; console.log(JSON.stringify(checkForCoreUpdates(${JSON.stringify(options)})));`));
     assert.deepEqual(result, { success: true, current, latest, hasUpdate });
+    if (options.beta) assert.notEqual(result.latest, `${otherMajor}-beta.1`);
   });
 }
 
