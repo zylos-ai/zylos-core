@@ -559,9 +559,12 @@ function needsBypassAcceptance() {
  * Pre-accept Claude Code terms and bypass permissions prompt.
  * Writes acceptance state to config files so Claude starts without manual confirmation.
  */
-function preAcceptClaudeTerms() {
+export function preAcceptClaudeTerms() {
   const homedir = os.homedir();
   let changed = false;
+
+  // $HOME may not exist yet (fresh containers, provisioning into a new home).
+  fs.mkdirSync(homedir, { recursive: true });
 
   // 1. Set hasCompletedOnboarding in ~/.claude.json
   const claudeJsonPath = path.join(homedir, '.claude.json');
