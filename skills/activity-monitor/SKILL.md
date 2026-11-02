@@ -23,6 +23,32 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
 8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync and new-session handoff at thresholds read from `config.json` (`new_session_threshold` for Claude, `codex_new_session_threshold` for Codex), each with a built-in runtime fallback if the key is unset
 
+## Multi-session Reclaim Configuration
+
+The supervisor reads these settings at startup from `.zylos/config.json` in
+the Zylos data directory, with valid environment values taking precedence:
+
+| Config key | Environment variable | Default |
+| --- | --- | --- |
+| `session_hot_ttl_seconds` | `ZYLOS_SESSION_HOT_TTL_SECONDS` | 1800 seconds |
+| `session_evict_min_idle_seconds` | `ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS` | 300 seconds |
+
+Values must be positive safe integers. An invalid environment value falls back
+to the config file; an invalid or missing config value falls back to the default.
+Restart the supervisor for changes to take effect.
+
+Both TTL and capacity eviction use the latest C4 message, runtime creation,
+same-run reclaim cancellation reset, or session activity (hooks/transcript).
+Missing or non-finite session activity is ignored. TTL waits for the configured
+interval after that latest activity. Once the same run is preparing for TTL
+reclaim, its own PRE_RECLAIM Sync activity does not restart or cancel that
+preparation; a new C4 message still cancels it.
+
+Capacity eviction skips even idle sessions whose latest activity is less than
+`session_evict_min_idle_seconds` ago. At the boundary they become eligible for
+the existing LRU selection; if all are too recent, new groups wait in the queue.
+This does not change the three-second busy/idle observation threshold.
+
 ## Status File Format
 
 ```json

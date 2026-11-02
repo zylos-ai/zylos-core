@@ -28,7 +28,7 @@ try {
   await service.supervisor.lifecycle.checkTtl(scene, context);
   const file = path.join(process.env.ZYLOS_DIR, '.zylos/config.json');
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-  fs.writeFileSync(file, JSON.stringify({ ...raw, session_mode: 'single', session_hot_ttl_seconds: 999,
+  fs.writeFileSync(file, JSON.stringify({ ...raw, session_mode: 'single', session_hot_ttl_seconds: 999, session_evict_min_idle_seconds: 999,
     new_session_threshold: 99, sync_min_interval_seconds: 999 }));
   const refreshed = await service.supervisor.loop.deps.readConfiguration();
   process.stdout.write(JSON.stringify({ configuration, refreshed, controls, fences: [...fences.values()] }));
