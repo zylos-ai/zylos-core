@@ -131,8 +131,11 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 <details>
 <summary>Manual install (if you already have Node.js >= 20)</summary>
 
+Choose the latest stable release from [Releases](https://github.com/zylos-ai/zylos-core/releases),
+excluding releases marked **Pre-release**. Replace `vX.Y.Z` below with that release's tag.
+
 ```bash
-npm install -g --install-links https://github.com/zylos-ai/zylos-core
+npm install -g --install-links 'https://github.com/zylos-ai/zylos-core#vX.Y.Z'
 zylos init
 ```
 
