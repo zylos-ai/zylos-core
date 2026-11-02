@@ -189,6 +189,126 @@ test('TTL excludes Origin and starting runs; TTL still must be expired at comple
   f.controls[0].status = 'done'; f.context.configuration.hotTtlSeconds = 3000;
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
 });
+// Session activity protects working idle gaps before preparation; completed
+// preparation ignores its own Sync activity. Run for TTL/activity changes;
+// unrelated manual restart or health-only changes may skip these cases.
+test('recent session activity prevents TTL preparation during an idle tool gap', async () => {
+  const f = fixture(); f.unsummarized = 1;
+  f.scenes[0].lastActivityAt = f.now - 4000;
+  f.scenes[0].idleSince = f.now - 4000;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 0); assert.equal(f.fences.size, 0);
+  assert.equal(f.lifecycle.ttlPreparation.size, 0);
+});
+test('old C4 and session activity still prepare and reclaim after TTL', async () => {
+  const f = fixture(); f.unsummarized = 1;
+  f.lastActivity = f.now - 1800001; f.scenes[0].lastActivityAt = f.lastActivity;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 1); assert.equal(f.controls[0].content, 'prepare');
+  assert.equal(f.fences.size, 0);
+  f.controls[0].status = 'done';
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.get('a')?.reason, 'ttl');
+});
+test('missing or non-finite session activity preserves existing TTL eligibility', async () => {
+  for (const value of [undefined, null, NaN, Infinity, -Infinity, '1999999', {}]) {
+    const f = fixture();
+    if (value !== undefined) f.scenes[0].lastActivityAt = value;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.fences.get('a')?.reason, 'ttl');
+    assert.equal(f.controls.length, 0);
+  }
+});
+test('pre-reclaim Sync activity retains preparation and reclaims the same idle run', async () => {
+  for (const offset of [0, 5000]) {
+    const f = fixture(); f.unsummarized = 1;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    const preparation = f.lifecycle.ttlPreparation.get('a');
+    f.now += 10000;
+    f.scenes[0].lastActivityAt = preparation.at + offset;
+    f.scenes[0].idleSince = f.now - 4000;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
+    assert.equal(f.controls.length, 1); assert.equal(f.fences.size, 0);
+    f.controls[0].status = 'done';
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.fences.get('a')?.reason, 'ttl');
+    assert.equal(f.fences.get('a')?.runId, 'run-a');
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+    assert.equal(f.controls.length, 1);
+  }
+});
+test('new C4 activity still cancels preparation after pre-reclaim Sync activity', async () => {
+  const f = fixture(); f.unsummarized = 1;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const preparation = f.lifecycle.ttlPreparation.get('a');
+  f.now += 10000; f.scenes[0].lastActivityAt = preparation.at + 5000;
+  f.lastActivity = preparation.at + 6000; f.controls[0].status = 'done';
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+  assert.equal(f.fences.size, 0);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 1);
+});
+// Capacity pressure must use the shared activity clock, not a momentary idle
+// sample. Run for eviction/config/activity changes; unrelated Sync changes may
+// skip. These fixtures call the real lifecycle without spawning a live adapter.
+test('capacity eviction skips a recent idle session and selects an older one', async () => {
+  const f = fixture(); f.context.configuration.capacity = 2;
+  f.scenes = [scene('recent', { lastActivityAt: f.now - 4000 }),
+    scene('older', { lastActivityAt: f.now - 300001 })];
+  f.pending = [{ sessionGroup: 'waiting' }];
+  const result = await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(result.selected, 1); assert.deepEqual([...f.fences.keys()], ['older']);
+  assert.equal(f.fences.get('older').reason, 'evict'); assert.equal(f.controls.length, 0);
+});
+test('capacity eviction leaves new groups queued when every idle session is recent', async () => {
+  const f = fixture(); f.context.configuration.capacity = 2;
+  f.scenes = [scene('a', { lastActivityAt: f.now - 4000 }), scene('b', { lastActivityAt: f.now - 5000 })];
+  f.pending = [{ sessionGroup: 'waiting' }];
+  const result = await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(result.need, 1); assert.equal(result.selected, 0);
+  assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 0); assert.equal(f.stops.length, 0);
+});
+test('capacity eviction still counts recent session activity during TTL preparation', async () => {
+  const f = fixture(); f.scenes[0].lastActivityAt = f.now - 4000;
+  f.lifecycle.ttlPreparation.set('a', { runId: 'run-a', at: f.now - 5000, controlId: 1 });
+  f.pending = [{ sessionGroup: 'waiting' }];
+  const result = await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(result.selected, 0); assert.equal(f.fences.size, 0);
+});
+test('capacity eviction honors the default and configured minimum idle boundary', async () => {
+  for (const seconds of [undefined, 10]) {
+    for (const offset of [-1, 0, 1]) {
+      const f = fixture();
+      if (seconds !== undefined) f.context.configuration.evictMinIdleSeconds = seconds;
+      f.scenes[0].lastActivityAt = f.now - ((seconds ?? 300) * 1000 + offset);
+      f.pending = [{ sessionGroup: 'waiting' }];
+      const result = await f.lifecycle.checkEviction(f.scenes, f.context);
+      assert.equal(result.selected, offset < 0 ? 0 : 1);
+      assert.equal(f.fences.size, offset < 0 ? 0 : 1);
+    }
+  }
+});
+test('all shared activity sources protect recent sessions from capacity eviction', async () => {
+  for (const source of ['c4', 'created', 'reset', 'session']) {
+    const f = fixture(), recent = f.now - 4000;
+    if (source === 'c4') f.lastActivity = recent;
+    if (source === 'created') f.scenes[0].createdAt = recent;
+    if (source === 'reset') f.lifecycle.ttlReset.set('a', { runId: 'run-a', at: recent });
+    if (source === 'session') f.scenes[0].lastActivityAt = recent;
+    f.pending = [{ sessionGroup: 'waiting' }];
+    const result = await f.lifecycle.checkEviction(f.scenes, f.context);
+    assert.equal(result.selected, 0); assert.equal(f.fences.size, 0);
+  }
+});
+test('capacity LRU includes session activity among otherwise eligible sessions', async () => {
+  const f = fixture(); f.context.configuration.capacity = 2;
+  f.scenes = [scene('a', { lastActivityAt: f.now - 400000 }), scene('b', { lastActivityAt: f.now - 500000 })];
+  f.pending = [{ sessionGroup: 'waiting' }];
+  const result = await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(result.selected, 1); assert.deepEqual([...f.fences.keys()], ['b']);
+});
 test('LRU uses current occupied startup capacity and excludes model_config from in-flight discount', async () => {
   const scenes = [scene('a'), scene('b', { ready: false }), scene('origin')];
   const pending = [{ sessionGroup: 'new' }, { sessionGroup: 'new' }, { sessionGroup: 'a' }];

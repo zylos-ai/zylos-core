@@ -259,11 +259,13 @@ export class SupervisorLifecycle {
     return 'done';
   }
 
-  async lastActivity(scene) {
+  async lastActivity(scene, sessionActivityBefore = Infinity) {
     if (!finite(scene.createdAt)) throw error('INVALID_OBSERVATION', 'Runtime creation time is unknown');
     const reset = this.ttlReset.get(scene.sessionGroup);
+    const sessionActivity = finite(scene.lastActivityAt) && scene.lastActivityAt < sessionActivityBefore
+      ? scene.lastActivityAt : 0;
     return Math.max(activityTime(await this.d.db.getLastActivity(scene.sessionGroup)), scene.createdAt,
-      reset?.runId === scene.runId ? reset.at : 0);
+      reset?.runId === scene.runId ? reset.at : 0, sessionActivity);
   }
 
   prompt(name, ...args) {
@@ -278,9 +280,12 @@ export class SupervisorLifecycle {
     const group = scene.sessionGroup;
     if (modeOf(context) !== 'multi' || !group || group === 'origin' || !await this.allowed(group, context)) return;
     if (!scene.present || !scene.ready) { this.ttlPreparation.delete(group); return; }
-    const now = this.now(), last = await this.lastActivity(scene);
-    const ttl = (context.configuration.hotTtlSeconds ?? 1800) * 1000;
     const preparation = this.ttlPreparation.get(group);
+    // Preparation starts only after TTL expiry. Its own Sync activity must not
+    // restart that clock; C4 messages and the other activity sources still can.
+    const now = this.now(), last = await this.lastActivity(scene,
+      preparation?.runId === scene.runId ? preparation.at : Infinity);
+    const ttl = (context.configuration.hotTtlSeconds ?? 1800) * 1000;
     if (preparation && (preparation.runId !== scene.runId || last > preparation.at)) {
       this.ttlPreparation.delete(group);
       return;
@@ -314,9 +319,12 @@ export class SupervisorLifecycle {
     const demand = evictionDemand(scenes, await this.d.db.listPendingSessionGroups(), fences, context.configuration.capacity);
     if (!demand.need) return demand;
     const candidates = [];
+    const now = this.now(), minIdle = (context.configuration.evictMinIdleSeconds ?? 300) * 1000;
     for (const scene of scenes) {
       if (!scene.present || !scene.ready || !scene.sessionGroup || scene.sessionGroup === 'origin' || scene.state !== 'idle' || fences.some(f => f.sessionGroup === scene.sessionGroup)) continue;
-      candidates.push({ ...scene, last: await this.lastActivity(scene) });
+      const last = await this.lastActivity(scene);
+      if (now - last < minIdle) continue;
+      candidates.push({ ...scene, last });
     }
     candidates.sort((a, b) => a.last - b.last || a.sessionGroup.localeCompare(b.sessionGroup));
     let selected = 0;
