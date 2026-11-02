@@ -10,7 +10,6 @@ import { observeSessionTarget } from './runtime/session-target.js';
 import { withMemoryLock } from '../../skills/zylos-memory/scripts/sync-lock.js';
 
 export const MIGRATION_ID = 'references-layout-v1';
-const SELF = fileURLToPath(import.meta.url);
 const VERSION = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url))).version;
 const error = (code, message, persisted = [], extra = {}) => Object.assign(new Error(message), { code, persisted, ...extra });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -311,4 +310,9 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] === SELF) await runCli();
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+
+if (isMainModule()) await runCli();

@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { bootstrapScope } from './bootstrap-scope.js';
 
 const execFileAsync = promisify(execFile);
@@ -170,7 +170,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch(() => {
     // Best-effort.
   });

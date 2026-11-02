@@ -8,7 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { fileURLToPath } from 'url';
+import { isMainModule } from './is-main-module.js';
 import { MEMORY_DIR, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 function ensureGitRepo() {
@@ -79,4 +79,4 @@ function main() {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

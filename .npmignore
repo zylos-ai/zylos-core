@@ -12,7 +12,7 @@
 /jest.config.js
 **/__tests__/
 **/*.test.js
-/skills/zylos-memory/scripts/tests/
+/skills/zylos-memory/scripts/__tests__/
 
 # Logs and databases
 *.log

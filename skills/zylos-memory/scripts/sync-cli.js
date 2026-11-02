@@ -1,12 +1,19 @@
 import fs from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { escapeText } from '../../comm-bridge/scripts/c4-query-format.js';
 
 export const exitCode = code => code === 'TOKEN_MISMATCH' ? 3 : ['LOCK_TIMEOUT', 'SYNC_BUSY'].includes(code) ? 2 : 1;
 export const memoryError = (code, message, extra = {}) => Object.assign(new Error(message), { code, exitCode: exitCode(code), ...extra });
 export const inputError = message => memoryError('INVALID_INPUT', message);
-export const isMain = url => process.argv[1] && pathToFileURL(process.argv[1]).href === url;
+export const isMain = isMainModule;
 export const readInput = () => fs.readFileSync(0, 'utf8');
+export function positiveInteger(value, name) {
+  if (typeof value !== 'string' || !/^[0-9]+$/.test(value) ||
+      !Number.isSafeInteger(Number(value)) || Number(value) <= 0) {
+    throw inputError(`Expected a positive integer for ${name}`);
+  }
+  return Number(value);
+}
 export function parseJson(text) {
   try { return JSON.parse(text); } catch { throw inputError('Expected JSON input'); }
 }

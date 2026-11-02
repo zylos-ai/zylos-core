@@ -26,9 +26,13 @@ test('CLI acquire checks the current isolated tmux identity', t => {
   assert.equal(freed.status, 0, freed.stderr);
 });
 
-// exact read shape, stale takeover and obsolete-token refusal.
-test('F7 lifecycle, independent origin marker, stale takeover and old release', async () => {
+// Integration boundary: real kernel locking and marker lifecycle in a temporary
+// group root; currentRunId is supplied, so no tmux server or DB is contacted.
+// Run for Sync guard/marker changes; skip for unrelated changes. The test removes
+// its root after all acquired locks and guarded actions have completed.
+test('Sync lifecycle, independent origin marker, stale takeover and old release', async t => {
   const env = fixture('origin');
+  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
   const scope = await memoryScope(env);
   assert.deepEqual(readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-1' }),
     { held: false, stale: false, runId: null, expiresAt: null, reason: 'missing' });
@@ -41,11 +45,11 @@ test('F7 lifecycle, independent origin marker, stale takeover and old release', 
   const originToken = await acquire({ kind: 'origin', env }, { currentRunId });
   assert.notEqual(token, originToken);
   let mutations = 0;
-  await guard({ kind: 'group', token, env }, () => { mutations++; }, { currentRunId });
+  await guard({ kind: 'group', token, env }, () => { mutations++; });
   const newer = { ...env, ZYLOS_RUN_ID: 'run-2' };
   assert.equal(readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-2' }).stale, true);
   const next = await acquire({ kind: 'group', env: newer }, { currentRunId });
-  await assert.rejects(guard({ kind: 'group', token, env }, () => { mutations++; }, { currentRunId }), { code: 'TOKEN_MISMATCH', exitCode: 3 });
+  await assert.rejects(guard({ kind: 'group', token, env }, () => { mutations++; }), { code: 'TOKEN_MISMATCH', exitCode: 3 });
   await release({ kind: 'group', token, env });
   assert.equal(JSON.parse(fs.readFileSync(path.join(scope.runDir, 'sync.lock'))).token, next);
   assert.equal(mutations, 1);
@@ -80,7 +84,7 @@ test('expiry during a guarded operation cannot admit a contender', async () => {
     await new Promise(resolve => setTimeout(resolve, 40));
     await assert.rejects(acquire({ kind: 'group', env, waitMs: 80 }, { currentRunId }), { code: 'LOCK_TIMEOUT' });
     assert.equal(JSON.parse(fs.readFileSync(file)).token, token);
-  }, { currentRunId });
+  });
   const next = await acquire({ kind: 'group', env }, { currentRunId });
   assert.notEqual(next, token);
 });

@@ -58,8 +58,12 @@ export function exportInstructionBaselines({
   return { outputPath, entries };
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isMain) {
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+
+if (isMainModule()) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const result = exportInstructionBaselines({ repoRoot });
   console.log(`wrote ${result.entries.length} distinct reachable instruction blobs to ${result.outputPath}`);

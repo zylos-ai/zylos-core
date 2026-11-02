@@ -10,11 +10,21 @@ function isWithin(parent, target) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+export function testRootPrefix(tmpdir = os.tmpdir(), platform = process.platform) {
+  const prefix = path.join(tmpdir, 'zylos-tests-');
+  // The Node runner sets TMPDIR to root/tmp; PM2 cleanup tests then allocate
+  // their own root and home beneath it. mkdtemp appends six characters.
+  const socket = path.join(`${prefix}XXXXXX`, 'tmp',
+    'zylos-pm2-cleanup-XXXXXX', 'home', '.pm2', 'rpc.sock');
+  return platform === 'darwin' && Buffer.byteLength(socket) >= 104
+    ? path.join('/tmp', 'zylos-tests-') : prefix;
+}
+
 // Called by the runners before loading tests or spawning test workers. Override
 // inherited live-instance paths; individual tests may set their own paths later.
 export function createTestEnvironment() {
   const realHome = fs.realpathSync(os.userInfo().homedir);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-tests-'));
+  const root = fs.mkdtempSync(testRootPrefix());
   const previous = { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME };
   let cleaned = false;
   let restoreChildGuard;

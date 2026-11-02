@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { guard, memoryScope, memoryError } from './sync-lock.js';
 import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry, inboxSegmentName as segment } from './state-format.js';
-import { inputError, isMain, options, parseJson, readInput, runCli } from './sync-cli.js';
+import { inputError, isMain, options, parseJson, positiveInteger, readInput, runCli } from './sync-cli.js';
 
 const warn = message => console.error(`Warning: ${message}`);
 const lines = text => (text.match(/[^\n]*(?:\n|$)/g) || []).filter(Boolean).map(raw => ({ raw, text: raw.replace(/\r?\n$/, '') }));
@@ -125,7 +125,7 @@ if (isMain(import.meta.url)) await runCli(async () => {
   if (command === 'cleanup') result = await cleanup(settings);
   if (command === 'rotate') result = await rotate(settings);
   if (command === 'list') result = await list();
-  if (command === 'checkpoint') result = await checkpoint({ ...settings, end: Number(parsed.positional[0]), noContent: !!parsed['no-content'], summary: parsed['no-content'] ? null : readInput() });
+  if (command === 'checkpoint') result = await checkpoint({ ...settings, end: positiveInteger(parsed.positional[0], 'checkpoint end'), noContent: !!parsed['no-content'], summary: parsed['no-content'] ? null : readInput() });
   if (command === 'commit') result = await commit({ ...settings, input: readInput() });
   if (result !== undefined) console.log(JSON.stringify(result));
 });

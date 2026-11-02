@@ -1,3 +1,4 @@
+import { isMainModule } from './is-main-module.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getDb, close, clearStatusNoticeCooldownReservation } from './c4-db.js';
@@ -127,7 +128,7 @@ export function drainFirstFailureNotices(options = {}) {
   groups.set(group,pending);return pending;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--send') {
+if (isMainModule(import.meta.url) && process.argv[2] === '--send') {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
   try {

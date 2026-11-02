@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { createMemoryEditor, serveMemoryTools } from '../memory-mcp-server.js';
-import { acquire, memoryScope } from '../sync-lock.js';
+import { acquire, memoryScope, withMemoryLock } from '../sync-lock.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-tool-'));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -166,4 +166,21 @@ test('local: actual stdio process exposes no authority when forwarded run env is
   assert.equal(frames.length, 2);
   assert.equal(frames[0].result.protocolVersion, '2024-11-05');
   assert.equal(JSON.parse(frames[1].result.content[0].text).code, 'SCOPE_UNBOUND');
+});
+
+// Integration boundary: real kernel-lock contention reaches the editor's error
+// result. Run for editor/guard/lock error changes; skip for unrelated changes.
+// All paths come from fixture(), under a temporary root; no tmux or DB is used,
+// and the enclosing file's after hook removes the root after releasing the lock.
+test('local: contended memory lock returns LOCK_TIMEOUT without changing the target', { timeout: 15000 }, async () => {
+  const f = await fixture('global');
+  assert.equal((await f.editor(create(f.token, 'identity.md', 'original'))).ok, true);
+  await withMemoryLock(f.scope.runDir, async () => {
+    const result = await f.editor({ op: 'edit', path: 'identity.md', expected: 'original',
+      replacement: 'changed', token: f.token });
+    assert.deepEqual(result, { ok: false, code: 'LOCK_TIMEOUT', message: 'Memory lock acquisition timed out' });
+    assert.equal(fs.readFileSync(path.join(f.dir, 'memory/identity.md'), 'utf8'), 'original');
+  });
+  assert.equal((await f.editor({ op: 'edit', path: 'identity.md', expected: 'original',
+    replacement: 'after release', token: f.token })).ok, true);
 });

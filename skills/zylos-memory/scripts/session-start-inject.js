@@ -7,7 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { isMainModule } from './is-main-module.js';
 import { MEMORY_DIR } from './shared.js';
 import { formatSection } from '../../comm-bridge/scripts/session-format.js';
 
@@ -86,7 +86,7 @@ async function runCli() {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   runCli().catch(() => {
     // Best-effort.
   });

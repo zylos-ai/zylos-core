@@ -5,7 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { isMainModule } from './is-main-module.js';
 import { MEMORY_DIR, BUDGETS, WARN_THRESHOLDS, walkFiles } from './shared.js';
 
 export function formatBytes(bytes) {
@@ -86,4 +86,4 @@ function main() {
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();
