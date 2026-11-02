@@ -706,6 +706,7 @@ function runClaudeFix(diagnosticJson) {
 
 export async function doctorCommand(args, upstreamSource) {
   const jsonMode = args.includes('--json');
+  const checkOnly = args.includes('--check');
 
   const coreVersion = getCurrentVersion();
 
@@ -859,7 +860,7 @@ export async function doctorCommand(args, upstreamSource) {
     process.exit(0);
   }
 
-  const claudeReady = isClaudeReady(diag);
+  const claudeReady = !checkOnly && isClaudeReady(diag);
 
   // Show issues — hide hints when Claude will auto-fix
   console.log(separator('Issues'));
@@ -908,7 +909,7 @@ export async function doctorCommand(args, upstreamSource) {
     process.exit(1);
   }
 
-  // Claude not available — bottom message based on why
+  // No auto-fix — bottom message based on network availability
   if (!diag.system.network.reachable) {
     console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {
