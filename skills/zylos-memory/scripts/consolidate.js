@@ -8,7 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { isMainModule } from './is-main-module.js';
 import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, WARN_THRESHOLDS, REFERENCE_FILES, walkFiles, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 export function parseSessionDate(fileName) {
@@ -144,4 +144,4 @@ function main() {
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

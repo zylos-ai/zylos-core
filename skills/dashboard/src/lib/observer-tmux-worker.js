@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readObserverGeometry } from './observer-size-monitor.js';
@@ -236,7 +236,12 @@ export async function runStartupWorker(root, { exec = command, probe = (active) 
   return { claimed: true, settled: true, outcome: receipt.outcome };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isMainModule() {
+  try { return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+
+if (isMainModule()) {
   runStartupWorker(path.resolve(process.argv[2] || '')).catch((error) => {
     process.stderr.write(`${error.code || 'startup_failed'}: ${error.message}\n`);
     process.exitCode = 1;

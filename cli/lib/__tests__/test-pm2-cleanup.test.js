@@ -11,6 +11,10 @@ const hasPm2 = (process.env.PATH || '').split(path.delimiter).some(directory => 
   catch { return false; }
 });
 
+// Integration boundary: a real PM2 daemon with HOME/ZYLOS_DIR inherited from the
+// isolated runner and PM2_HOME replaced before ping. Run for runner isolation or
+// cleanup changes; skip only when PM2 is unavailable or the change is unrelated.
+// createTestEnvironment cleanup/exit removes the owned daemon and directory.
 test('runner environment isolates inherited PM2_HOME and cleans on explicit cleanup and exit', { skip: !hasPm2 }, () => {
   const module = new URL('../../../scripts/test-environment.js', import.meta.url).href;
   for (const explicit of [true, false]) {
@@ -22,6 +26,7 @@ test('runner environment isolates inherited PM2_HOME and cleans on explicit clea
       const previous = process.env.PM2_HOME;
       const environment = createTestEnvironment();
       assert.equal(process.env.PM2_HOME, path.join(environment.root, 'home/.pm2'));
+      assert(Buffer.byteLength(path.join(process.env.PM2_HOME, 'rpc.sock')) < 104);
       execFileSync('pm2', ['ping'], { stdio: 'pipe', timeout: 10000 });
       console.log(environment.root);
       if (${explicit}) {
@@ -35,11 +40,15 @@ test('runner environment isolates inherited PM2_HOME and cleans on explicit clea
   }
 });
 
+// Integration boundary: real PM2 homes nested under the runner's short TMPDIR.
+// Run for temporary-root or PM2 cleanup changes; skip when PM2 is unavailable or
+// the change is unrelated. finally stops only these homes and removes the root.
 test('runner cleans real PM2 daemons from allocated and nested homes', { skip: !hasPm2 }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-pm2-cleanup-'));
   try {
     for (const directory of ['home/.pm2', 'nested/pm2']) {
       const home = path.join(root, directory);
+      assert(Buffer.byteLength(path.join(home, 'rpc.sock')) < 104);
       execFileSync('pm2', ['ping'], { env: { ...process.env, PM2_HOME: home }, stdio: 'pipe', timeout: 10000 });
       assert(listPm2Daemons().some(daemon => daemon.home === home));
     }
@@ -67,10 +76,14 @@ test('exit guard rejects a surviving daemon and never stops a sibling home', () 
   }
 });
 
+// Integration boundary: a real PM2 daemon whose private home is removed. Run
+// for cleanup/root changes; skip when PM2 is unavailable or unrelated. finally
+// uses the allocated root to stop the owned daemon and remove remaining files.
 test('runner cleans an owned daemon after its PM2 home was deleted', { skip: !hasPm2 }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-pm2-deleted-'));
   const home = path.join(root, 'pm2');
   try {
+    assert(Buffer.byteLength(path.join(home, 'rpc.sock')) < 104);
     execFileSync('pm2', ['ping'], { env: { ...process.env, PM2_HOME: home }, stdio: 'pipe', timeout: 10000 });
     fs.rmSync(home, { recursive: true, force: true });
     cleanupTestPm2(root);

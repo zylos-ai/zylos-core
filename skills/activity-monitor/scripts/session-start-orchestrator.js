@@ -17,7 +17,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { formatSection } from '../../comm-bridge/scripts/session-format.js';
 import {
   SIDE_EFFECT_NAMES,
@@ -533,7 +533,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     console.error(`[session-start-orchestrator] fatal: ${error?.stack || error?.message || error}`);
     process.exitCode = 0;

@@ -2,7 +2,7 @@
 import net from 'node:net';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { getClaudePid } from './claude-pid.js';
 import { readHealthQuota } from './health-quota.js';
 import { matchHealthNoticeText } from './health-notice-match.js';
@@ -46,7 +46,7 @@ export function wakeHealthMonitor({ zylosDir = runtimeRoot(), timeoutMs = 150 } 
   });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   let input = '', bytes = 0, oversized = false;
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => {

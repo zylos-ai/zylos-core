@@ -111,8 +111,7 @@ not find fake tokens or mock binaries in an installed zylos.
 - **Where tests go**: module tests in a `__tests__/` directory next to the code
   (e.g. `cli/lib/__tests__/`, `skills/<skill>/scripts/__tests__/`);
   cross-module and integration tests in the root `test/`. Do not invent other
-  directory names. (`skills/zylos-memory/scripts/tests/` is a legacy exception
-  pending rename to `__tests__/`.)
+  directory names.
 - **Name test files `*.test.js`**. Helpers and fixtures live inside the test
   directory, never beside runtime code.
 - **Runtime code never reads test paths.** Nothing outside a test directory

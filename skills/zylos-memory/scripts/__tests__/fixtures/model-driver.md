@@ -20,7 +20,7 @@ Driver emits:
 Run the offline transport/observer checks through the repository runner:
 
 ```sh
-node scripts/run-node-tests.js skills/zylos-memory/scripts/tests/model-workflow.integration.test.js
+node scripts/run-node-tests.js skills/zylos-memory/scripts/__tests__/model-workflow.integration.test.js
 ```
 
 To run live cases, supply a model-backed executable implementing the protocol above:
@@ -28,7 +28,7 @@ To run live cases, supply a model-backed executable implementing the protocol ab
 ```sh
 MODEL_WORKFLOW_DRIVER=/absolute/path/to/model-driver \
 MODEL_WORKFLOW_EVIDENCE_DIR=/absolute/path/to/evidence \
-node scripts/run-node-tests.js skills/zylos-memory/scripts/tests/model-workflow.integration.test.js
+node scripts/run-node-tests.js skills/zylos-memory/scripts/__tests__/model-workflow.integration.test.js
 ```
 
 The driver must forward the complete start prompt and tool schemas to a real model and relay its requests/results. It must not calculate expected IDs, read harness source or evidence snapshots, or implement the Sync procedure itself. Keep model access credentials in the external driver; fixture tool processes run with their isolated environment. Native agent bridges may orchestrate requests outside the fixture, while all memory reads/writes still pass through the declared tools.

@@ -7,7 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { isMainModule } from './is-main-module.js';
 import { SESSIONS_DIR, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 const CURRENT_FILE = path.join(SESSIONS_DIR, 'current.md');
@@ -56,4 +56,4 @@ function main() {
   // No current.md: migration is already complete; new logs use dated files.
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

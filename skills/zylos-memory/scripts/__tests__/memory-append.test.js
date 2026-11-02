@@ -42,7 +42,7 @@ test('invalid records do not write; partial write rolls back under', async () =>
 });
 
 
-// A P2-1 / DM F8: legacy and single writers of global memory share origin F8.
+// Legacy and single writers of global memory share the origin memory lock.
 test('legacy global append contends on the same origin memory lock as single Sync', async () => {
   const env = fixture();
   const single = await memoryScope(env);

@@ -4,6 +4,7 @@
  * Provides database operations for message logging and checkpoint management
  */
 
+import { isMainModule } from './is-main-module.js';
 import Database from 'better-sqlite3';
 import * as schema from './c4-schema.js';
 import { guardDatabase, assertCoreDatabaseAvailable } from './sqlite-schema.js';
@@ -475,7 +476,6 @@ export const getModeTransition = (options = {}) => store.getModeTransition(optio
 export const auditCheckpoints = () => store.auditCheckpoints();
 
 // CLI mode: import after the facade has initialized to avoid a module cycle.
-const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMainModule) {
+if (isMainModule(import.meta.url)) {
   import('./c4-public-cli.js').then(({ runCli }) => runCli('database', process.argv.slice(2)));
 }

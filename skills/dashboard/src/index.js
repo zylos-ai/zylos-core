@@ -8,7 +8,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { AuthGate, exchangeApiKeyForToken, generateApiKey, hashApiKey, migratePasswordIfNeeded, validateApiSession } from './lib/auth.js';
 import { browserBaseFromRequest } from './lib/browser-base.js';
 import { mutateConfig } from './lib/config-mutation.js';
@@ -1661,10 +1661,12 @@ export function createServer() {
   return server;
 }
 
-const isMain = (
-  (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) ||
-  (process.env.pm_exec_path && import.meta.url === pathToFileURL(process.env.pm_exec_path).href)
-);
+function isMainModule(entry) {
+  try { return !!entry && fs.realpathSync(entry) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+
+const isMain = isMainModule(process.argv[1]) || isMainModule(process.env.pm_exec_path);
 
 if (isMain && process.argv.includes('--smoke')) {
   await startupSequence();

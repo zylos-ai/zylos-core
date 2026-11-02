@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.js';
 import { bootstrapScope } from './bootstrap-scope.js';
 import { isSubsession, readBootstrapIdentity } from './bootstrap-identity.js';
 
@@ -62,6 +62,6 @@ function runCli() {
   });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   runCli();
 }
