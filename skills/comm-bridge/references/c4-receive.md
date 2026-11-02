@@ -21,7 +21,10 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 | `--priority <1-3>` | Priority level (default: 3) |
 | `--no-reply` | Mark the message as having no reply target; defaults channel to `system` |
 | `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles |
+| `--require-idle` | Legacy alias for `--block-queue-until-idle` |
 | `--json` | Output structured JSON instead of plain text |
+
+`scripts/c4-receive-options.json`, next to the actual `c4-receive.js`, is the argument list used by the receiver itself. Its format is `{ "options": { "--channel": { "takesValue": true }, "--no-reply": { "takesValue": false } } }`; all accepted names, including aliases, are listed. `takesValue` specifies whether the next word is consumed as a value, even when it begins with `--`. A missing, unreadable or malformed manifest is an installation error: the receiver exits with `INTERNAL_ERROR` before queuing a message.
 
 Unknown options are ignored with an `Ignored unknown option: --name` notice on stderr; the next word is also skipped when it does not start with `--`, and option values are never included in the notice.
 

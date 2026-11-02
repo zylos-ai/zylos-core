@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 
 const CLI_PATH = fileURLToPath(new URL('../c4-receive.js', import.meta.url));
 
-function cliOptions(args, env) {
+function cliOptions(args, env, cliPath = CLI_PATH) {
   const root = fs.realpathSync(env.ZYLOS_DIR);
   const dbPath = path.join(root, 'comm-bridge', 'c4.db');
   const amSocket = path.join(root, 'activity-monitor', 'am.sock');
@@ -24,13 +24,13 @@ function cliOptions(args, env) {
   assert.equal(fs.realpathSync(path.join(env.PATH, 'node')), fs.realpathSync(process.execPath));
   assert.equal(env.TMUX, `${path.join(env.TMUX_TMPDIR, 'private.sock')},0,0`);
   // Read back actual destinations and arguments before spawning the real CLI.
-  console.log('CLI isolation:', JSON.stringify({ command: process.execPath, args: [CLI_PATH, ...args], env, dbPath, amSocket }));
+  console.log('CLI isolation:', JSON.stringify({ command: process.execPath, args: [cliPath, ...args], env, dbPath, amSocket }));
   return { cwd: root, env, timeout: 15000, killSignal: 'SIGKILL' };
 }
 
-function cliRaw(args, env) {
-  const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
-    ...cliOptions(args, env),
+function cliRaw(args, env, cliPath = CLI_PATH) {
+  const result = spawnSync(process.execPath, [cliPath, ...args], {
+    ...cliOptions(args, env, cliPath),
     encoding: 'utf8',
   });
   assert.equal(result.error, undefined, String(result.error));
@@ -304,6 +304,110 @@ describe('c4-receive basic intake', () => {
       assert.equal(row.require_idle, 1);
     });
   });
+});
+
+describe('c4-receive option manifest', () => {
+  // Boundary: every declared option must have its real CLI effect, including
+  // value consumption, both idle aliases and output mode. Run for receiver or
+  // manifest changes; unrelated channel implementations may skip this group.
+  const samples = {
+    '--channel': { value: 'selected-channel', field: 'channel', expected: 'selected-channel' },
+    '--endpoint': { value: 'selected-endpoint', field: 'endpoint_id', expected: 'selected-endpoint' },
+    '--priority': { value: '2', field: 'priority', expected: 2 },
+    '--no-reply': { field: 'channel', expected: 'system' },
+    '--require-idle': { field: 'require_idle', expected: 1 },
+    '--block-queue-until-idle': { field: 'require_idle', expected: 1 },
+    '--json': {},
+    '--content': { value: '--literal-content', field: 'content', expected: '--literal-content' },
+  };
+  const manifest = JSON.parse(fs.readFileSync(new URL('../c4-receive-options.json', import.meta.url), 'utf8'));
+  for (const name of Object.keys(manifest.options)) {
+    it(`applies declared option ${name} through the real receiver`, () => {
+      withTmpDir(({ tmpDir, env }) => {
+        const sample = samples[name];
+        assert.ok(sample, `add an observable CLI assertion for ${name}`);
+        for (const channel of ['manifest-channel', 'selected-channel']) {
+          fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', channel), { recursive: true });
+        }
+        const args = [name];
+        if (Object.hasOwn(sample, 'value')) args.push(sample.value);
+        if (name !== '--channel' && name !== '--no-reply') args.push('--channel', 'manifest-channel');
+        if (name !== '--content') args.push('--content', 'manifest content');
+        const result = cliRaw(args, env);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stderr, '');
+        if (name === '--json') {
+          const output = parseJsonStdout(result.stdout);
+          assert.equal(output.ok, true);
+          assert.equal(output.action, 'queued');
+          assert.equal(typeof output.id, 'number');
+        } else {
+          assert.match(result.stdout, /^\[C4\] Message queued \(id=\d+\)\n$/);
+        }
+        const db = openDb(tmpDir);
+        try {
+          const rows = db.prepare('SELECT * FROM conversations').all();
+          assert.equal(rows.length, 1);
+          assert.equal(rows[0].status, 'pending');
+          if (sample.field) assert.equal(rows[0][sample.field], sample.expected);
+          if (name === '--no-reply') assert.equal(rows[0].endpoint_id, null);
+        } finally { db.close(); }
+      });
+    });
+  }
+
+  // Boundary: an incomplete installation must fail before opening a message
+  // database. Run for manifest loading/validation changes; unrelated routing
+  // changes may skip. Only fixture JSON changes; runtime JavaScript is copied
+  // unchanged and executed with the same private CLI isolation as other cases.
+  const invalidManifests = [
+    { name: 'missing', data: undefined },
+    { name: 'unreadable', data: '{}', unreadable: true },
+    { name: 'invalid JSON', data: '{' },
+    { name: 'null root', data: 'null' },
+    { name: 'missing options', data: '{}' },
+    { name: 'array options', data: '{"options":[]}' },
+    { name: 'option name without double dash', data: '{"options":{"content":{"takesValue":true}}}' },
+    { name: 'null option', data: '{"options":{"--content":null}}' },
+    { name: 'missing takesValue', data: '{"options":{"--content":{}}}' },
+    { name: 'non-boolean takesValue', data: '{"options":{"--content":{"takesValue":"true"}}}' },
+  ];
+  for (const fixture of invalidManifests) {
+    for (const json of [false, true]) {
+      it(`rejects ${fixture.name} manifest before database access (${json ? 'JSON' : 'plain'})`, () => {
+        withTmpDir(({ tmpDir, env }) => {
+          const skillDir = path.join(tmpDir, 'installation', 'comm-bridge');
+          const scriptsDir = path.join(skillDir, 'scripts');
+          fs.cpSync(path.dirname(CLI_PATH), scriptsDir, {
+            recursive: true,
+            filter: (source) => path.basename(source) !== '__tests__' && path.basename(source) !== 'c4-receive-options.json',
+          });
+          fs.symlinkSync(fileURLToPath(new URL('../../node_modules', import.meta.url)), path.join(skillDir, 'node_modules'), 'dir');
+          const manifestPath = path.join(scriptsDir, 'c4-receive-options.json');
+          if (fixture.data !== undefined) fs.writeFileSync(manifestPath, fixture.data);
+          if (fixture.unreadable) fs.chmodSync(manifestPath, 0o000);
+          try {
+            const result = cliRaw(['--no-reply', '--content', 'must not queue', ...(json ? ['--json'] : [])], env,
+              path.join(scriptsDir, 'c4-receive.js'));
+            assert.equal(result.status, 1);
+            if (json) {
+              const output = parseJsonStdout(result.stdout);
+              assert.equal(output.ok, false);
+              assert.equal(output.error.code, 'INTERNAL_ERROR');
+              assert.match(output.error.message, /failed to load c4-receive options:/);
+              assert.equal(result.stderr, '');
+            } else {
+              assert.equal(result.stdout, '');
+              assert.match(result.stderr, /Error: failed to load c4-receive options:/);
+            }
+            assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'c4.db')), false);
+          } finally {
+            if (fixture.unreadable) fs.chmodSync(manifestPath, 0o600);
+          }
+        });
+      });
+    }
+  }
 });
 
 describe('c4-receive unknown option compatibility', () => {
