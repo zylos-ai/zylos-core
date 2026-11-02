@@ -7,10 +7,10 @@ export const memoryError = (code, message, extra = {}) => Object.assign(new Erro
 export const inputError = message => memoryError('INVALID_INPUT', message);
 export const isMain = isMainModule;
 export const readInput = () => fs.readFileSync(0, 'utf8');
-export function positiveInteger(value, name) {
+export function nonnegativeInteger(value, name) {
   if (typeof value !== 'string' || !/^[0-9]+$/.test(value) ||
-      !Number.isSafeInteger(Number(value)) || Number(value) <= 0) {
-    throw inputError(`Expected a positive integer for ${name}`);
+      !Number.isSafeInteger(Number(value)) || Number(value) < 0) {
+    throw inputError(`Expected a nonnegative integer for ${name}`);
   }
   return Number(value);
 }

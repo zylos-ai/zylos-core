@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { guard } from './sync-lock.js';
-import { inputError, isMain, options, positiveInteger, runCli } from './sync-cli.js';
+import { inputError, isMain, options, nonnegativeInteger, runCli } from './sync-cli.js';
 
 export async function advance({ group, syncedId, checkpointId, ...settings }, deps = {}) {
   return guard({ ...settings, kind: 'origin' }, async () => {
@@ -11,5 +11,5 @@ export async function advance({ group, syncedId, checkpointId, ...settings }, de
 if (isMain(import.meta.url)) await runCli(async () => {
   const [command, ...args] = process.argv.slice(2), parsed = options(args, ['group', 'synced', 'checkpoint', 'token']);
   if (command !== 'advance' || parsed.positional.length || !['group', 'synced', 'checkpoint', 'token'].every(key => Object.hasOwn(parsed, key))) throw inputError('Invalid command or arguments');
-  await advance({ group: parsed.group, syncedId: positiveInteger(parsed.synced, 'synced'), checkpointId: positiveInteger(parsed.checkpoint, 'checkpoint'), token: parsed.token });
+  await advance({ group: parsed.group, syncedId: nonnegativeInteger(parsed.synced, 'synced'), checkpointId: nonnegativeInteger(parsed.checkpoint, 'checkpoint'), token: parsed.token });
 });

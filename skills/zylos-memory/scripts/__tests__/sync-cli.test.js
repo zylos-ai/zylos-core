@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { positiveInteger } from '../sync-cli.js';
+import { nonnegativeInteger } from '../sync-cli.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
@@ -44,12 +44,12 @@ test('CLI exits distinguish malformed input, ownership loss, lock timeout and su
   assert.equal(forbidden.status, 1); assert.match(forbidden.stderr, /^Error \[INVALID_INPUT\]:/);
 });
 
-test('positive integer parsing accepts decimal IDs and rejects coercible non-IDs', () => {
-  for (const value of ['1', '42', String(Number.MAX_SAFE_INTEGER)]) {
-    assert.equal(positiveInteger(value, 'id'), Number(value));
+test('nonnegative integer parsing accepts decimal IDs and rejects coercible non-IDs', () => {
+  for (const value of ['0', '1', '42', String(Number.MAX_SAFE_INTEGER)]) {
+    assert.equal(nonnegativeInteger(value, 'id'), Number(value));
   }
-  for (const value of ['', ' ', '0', '-1', '1.5', 'abc', '1e3', '0x10', '+1', ' 1', '1 ', '9007199254740992']) {
-    assert.throws(() => positiveInteger(value, 'id'), { code: 'INVALID_INPUT', exitCode: 1 });
+  for (const value of ['', ' ', '-1', '1.5', 'abc', '1e3', '0x10', '+1', ' 1', '1 ', '9007199254740992']) {
+    assert.throws(() => nonnegativeInteger(value, 'id'), { code: 'INVALID_INPUT', exitCode: 1 });
   }
 });
 
@@ -66,7 +66,7 @@ test('numeric CLI arguments reject invalid IDs before touching memory or databas
     ZYLOS_RUN_ID: 'input-test', ZYLOS_SESSION_GROUP: 'origin' };
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key], { recursive: true });
   const token = 'b'.repeat(32);
-  for (const value of ['', ' ', '0', '-1', '1.5', 'abc', '1e3', '0x10', '+1', ' 1', '1 ', '9007199254740992']) {
+  for (const value of ['', ' ', '-1', '1.5', 'abc', '1e3', '0x10', '+1', ' 1', '1 ', '9007199254740992']) {
     const calls = [
       ['sync-files', ['checkpoint', value, '--token', token]],
       ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', value, '--checkpoint', '1', '--token', token]],
@@ -80,11 +80,40 @@ test('numeric CLI arguments reject invalid IDs before touching memory or databas
   }
   assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), []);
   for (const [script, args] of [
+    ['sync-files', ['checkpoint', '0', '--token', token]],
     ['sync-files', ['checkpoint', '1', '--token', token]],
+    ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '0', '--checkpoint', '0', '--token', token]],
     ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '1', '--checkpoint', '1', '--token', token]],
   ]) {
     const result = run(script, args, env);
     assert.equal(result.status, 3, result.stderr);
     assert.match(result.stderr, /^Error \[TOKEN_MISMATCH\]:/);
   }
+});
+
+// Integration boundary: real CLI -> token guard -> temporary SQLite cursor
+// transaction for a group with raw input but no checkpoint. Run for numeric
+// parsing/cursor CLI changes; skip otherwise. readyTmuxTarget owns the private
+// tmux socket/database/root; HOME/ZYLOS_DIR/PM2_HOME/TMPDIR remain isolated.
+test('Origin cursor CLI advances raw coverage when the checkpoint cursor is zero', async t => {
+  const f = readyTmuxTarget(t, { prefix: 'origin-cursor-cli-', mode: 'multi', packageRoot: rootPath });
+  const env = { ...process.env, ...f.env, ZYLOS_RUN_ID: f.ready.runId, ZYLOS_SESSION_GROUP: 'origin',
+    PM2_HOME: path.join(f.root, 'pm2'), TMPDIR: path.join(f.root, 'tmp') };
+  for (const key of ['PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key]);
+  console.log(JSON.stringify({ boundary: 'zero checkpoint cursor', HOME: env.HOME,
+    ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR,
+    socket: f.socketPath, database: path.join(f.root, 'comm-bridge/c4.db') }));
+  const group = 'telegram:raw-only';
+  const id = Number(f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','system','raw input','delivered',?)").run(group).lastInsertRowid);
+  assert(id > 0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM checkpoints WHERE session_group=?').get(group).n, 0);
+  const token = await acquire({ env, kind: 'origin' }, { currentRunId: async () => env.ZYLOS_RUN_ID });
+  const result = run('origin-cursor', ['advance', '--group', group, '--synced', String(id), '--checkpoint', '0', '--token', token], env);
+  assert.equal(result.status, 0, result.stderr);
+  const cursor = f.db.prepare('SELECT synced_id,checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group);
+  assert.deepEqual(cursor, { synced_id: id, checkpoint_id: 0 });
+  const invalid = run('origin-cursor', ['advance', '--group', group, '--synced', String(id), '--checkpoint', '', '--token', token], env);
+  assert.equal(invalid.status, 1, invalid.stderr);
+  assert.match(invalid.stderr, /^Error \[INVALID_INPUT\]:/);
+  assert.deepEqual(f.db.prepare('SELECT synced_id,checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group), cursor);
 });
