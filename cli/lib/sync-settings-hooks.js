@@ -24,6 +24,7 @@ import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
 import { getZylosConfig, updateZylosConfig } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
+import { installCoreCodexHook } from './codex-hooks.js';
 import {
   SIDE_EFFECT_NAMES,
   buildChain,
@@ -415,6 +416,7 @@ export function syncCodexConfig({
   existsSync = fs.existsSync,
   readFileSync = fs.readFileSync,
   writeConfig = writeCodexConfig,
+  checkHooks = installCoreCodexHook,
   log = console.log,
 } = {}) {
   const state = shouldSyncCodexConfig({ cfg, homeDir, projectDir, existsSync });
@@ -438,14 +440,19 @@ export function syncCodexConfig({
     return { attempted: true, changed: false, fatal: cfg.runtime === 'codex', error };
   }
   const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
-  if (existingProject === desiredProject && existingGlobal === desiredGlobal) {
+  // .codex/hooks.json drifts independently of the TOML configs: a component
+  // shard declaration adds SessionStart commands without touching either
+  // config file. Compare the desired hook set with the file content itself.
+  const hooksCheck = checkHooks({ zylosDir: projectDir, dryRun: true });
+  if (existingProject === desiredProject && existingGlobal === desiredGlobal && !hooksCheck.changed) {
     return { attempted: true, changed: false, fatal: false };
   }
 
   if (dryRun) {
     if (existingProject !== desiredProject) log(`  ~ codex project config: ${state.projectConfigPath}`);
     if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${state.globalConfigPath}`);
-    return { attempted: true, changed: true, fatal: false };
+    if (hooksCheck.changed) log(`  ~ codex hooks: ${hooksCheck.path}`);
+    return { attempted: true, changed: true, hooksChanged: hooksCheck.changed, fatal: false };
   }
 
   if (!writeConfig(projectDir)) {
@@ -463,7 +470,8 @@ export function syncCodexConfig({
 
   if (existingProject !== desiredProject) log(`  ~ codex project config: ${state.projectConfigPath}`);
   if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${state.globalConfigPath}`);
-  return { attempted: true, changed: true, fatal: false };
+  if (hooksCheck.changed) log(`  ~ codex hooks: ${hooksCheck.path}`);
+  return { attempted: true, changed: true, hooksChanged: hooksCheck.changed, fatal: false };
 }
 
 /**
@@ -734,6 +742,12 @@ export function main(argv = process.argv.slice(2)) {
     installedSettings,
     modelBackfilled: modelSync.changed,
   });
+
+  // Codex loads .codex/hooks.json only at launch and enqueueRestartIfNeeded()
+  // restarts Claude only, so a running Codex session keeps its old hooks.
+  if (codexSync.hooksChanged) {
+    console.log('Codex hooks: updated; they take effect at the next Codex session start.');
+  }
 
   if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
