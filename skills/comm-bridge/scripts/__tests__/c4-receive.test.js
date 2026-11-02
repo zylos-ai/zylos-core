@@ -367,6 +367,7 @@ describe('c4-receive option manifest', () => {
     { name: 'null root', data: 'null' },
     { name: 'missing options', data: '{}' },
     { name: 'array options', data: '{"options":[]}' },
+    { name: 'option name without double dash', data: '{"options":{"content":{"takesValue":true}}}' },
     { name: 'null option', data: '{"options":{"--content":null}}' },
     { name: 'missing takesValue', data: '{"options":{"--content":{}}}' },
     { name: 'non-boolean takesValue', data: '{"options":{"--content":{"takesValue":"true"}}}' },
