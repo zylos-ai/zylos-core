@@ -41,7 +41,18 @@ function printUsage() {
   console.log('  3 = Normal (default)');
 }
 
-function parseArgs(args) {
+function readOptions() {
+  const manifest = JSON.parse(fs.readFileSync(new URL('./c4-receive-options.json', import.meta.url), 'utf8'));
+  const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!isObject(manifest) || !isObject(manifest.options) ||
+      Object.entries(manifest.options).some(([name, option]) =>
+        !name.startsWith('--') || !isObject(option) || typeof option.takesValue !== 'boolean')) {
+    throw new Error('Invalid c4-receive options manifest');
+  }
+  return manifest.options;
+}
+
+function parseArgs(args, options) {
   const result = {
     channel: null,
     endpoint: null,
@@ -53,15 +64,25 @@ function parseArgs(args) {
   };
 
   for (let i = 0; i < args.length; i++) {
-    switch (args[i]) {
+    const name = args[i];
+    if (!Object.hasOwn(options, name)) {
+      if (name.startsWith('--')) {
+        console.error(`Ignored unknown option: ${name.split('=')[0]}`);
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) i++;
+        continue;
+      }
+      return { error: `Unexpected argument: ${name}` };
+    }
+    const value = options[name].takesValue ? args[++i] : undefined;
+    switch (name) {
       case '--channel':
-        result.channel = args[++i];
+        result.channel = value;
         break;
       case '--endpoint':
-        result.endpoint = args[++i];
+        result.endpoint = value;
         break;
       case '--priority':
-        result.priority = parseInt(args[++i], 10);
+        result.priority = parseInt(value, 10);
         break;
       case '--no-reply':
         result.noReply = true;
@@ -74,15 +95,8 @@ function parseArgs(args) {
         result.json = true;
         break;
       case '--content':
-        result.content = args[++i];
+        result.content = value;
         break;
-      default:
-        if (args[i].startsWith('--')) {
-          console.error(`Ignored unknown option: ${args[i].split('=')[0]}`);
-          if (i + 1 < args.length && !args[i + 1].startsWith('--')) i++;
-          break;
-        }
-        return { error: `Unexpected argument: ${args[i]}` };
     }
   }
 
@@ -246,7 +260,14 @@ function statusNoticeReason(route) {
 }
 
 async function main() {
-  const parsed = parseArgs(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  let options;
+  try {
+    options = readOptions();
+  } catch (err) {
+    emitError(args.includes('--json'), 'INTERNAL_ERROR', `failed to load c4-receive options: ${err.message}`);
+  }
+  const parsed = parseArgs(args, options);
   if (parsed.error) {
     const asJson = process.argv.slice(2).includes('--json');
     emitError(asJson, 'INVALID_ARGS', parsed.error);
