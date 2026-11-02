@@ -10,12 +10,12 @@
   "dependencies": {
     "better-sqlite3": "^12.6.2",
     "dotenv": "^16.6.1",
-    "express": "^4.22.2",
-    "multer": "^2.4.0",
+    "express": "^4.22.3",
+    "multer": "^2.5.0",
     "ws": "^8.20.1"
   },
   "overrides": {
     "path-to-regexp": "0.1.13",
-    "qs": "^6.16.0"
+    "qs": "~6.16.2"
   }
 }
