@@ -13,7 +13,7 @@
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/GS2J39EGff)
 [![X](https://img.shields.io/badge/X-follow-000000?logo=x&logoColor=white)](https://x.com/ZylosAI)
 [![Website](https://img.shields.io/badge/website-zylos.ai-blue)](https://zylos.ai)
-[![Built by Coco](https://img.shields.io/badge/Built%20by-Coco-orange)](https://coco.xyz)
+[![Built by OpenMax](https://img.shields.io/badge/Built%20by-OpenMax-orange)](https://openmax.com)
 
 [中文](./README.zh-CN.md)
 
@@ -591,13 +591,13 @@ Node.js and nvm are not touched.
 
 ---
 
-## <img src="assets/coco-logo.png" width="28" align="center" /> Built by Coco
+## Built by OpenMax
 
-Zylos is the open-source core of [Coco](https://coco.xyz) — the AI employee platform.
+Zylos is the open-source core of [OpenMax](https://openmax.com/) — the Human × Agent Collaboration Platform.
 
-We built Zylos because we needed it ourselves: a reliable infrastructure to keep AI running 24/7 for real work. Everything in Zylos is battle-tested in production at Coco, serving teams that depend on AI employees every day.
+We built Zylos because we needed it ourselves: reliable infrastructure to keep AI agents running 24/7 on real work. Every component is battle-tested in production at OpenMax, serving teams that depend on their AI employees every day.
 
-Want a managed experience? [Coco](https://coco.xyz) gives you a ready-to-work AI employee — with persistent memory, multi-channel communication, and skill packages — deployed in 5 minutes.
+Want a managed experience? [OpenMax](https://openmax.com/) gives you a ready-to-work AI employee — persistent memory, multi-channel communication, and skill packages — deployed in 5 minutes.
 
 ## License
 
