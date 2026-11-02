@@ -21,9 +21,14 @@ Accepted work is written with `status='pending'`. Rejected work is recorded with
 | `--priority <1-3>` | Priority level (default: 3) |
 | `--no-reply` | Mark the message as having no reply target; defaults channel to `system` |
 | `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles |
+| `--require-idle` | Legacy alias for `--block-queue-until-idle` |
 | `--json` | Output structured JSON instead of plain text |
 | `--session-group <name>` | Component-local group name; validated before routing or database writes |
 | `--core-source scheduler` | Mark a scheduler-originated call; other values are rejected |
+
+`scripts/c4-receive-options.json`, next to the actual `c4-receive.js`, is the argument list used by the receiver itself. Its format is `{ "options": { "--channel": { "takesValue": true }, "--no-reply": { "takesValue": false } } }`; all accepted names, including aliases, are listed. `takesValue` specifies whether the next word is consumed as a value, even when it begins with `--`. A missing, unreadable or malformed manifest is an installation error: the receiver exits with `INTERNAL_ERROR` before queuing a message.
+
+Unknown options are ignored with an `Ignored unknown option: --name` notice on stderr; the next word is also skipped when it does not start with `--`, and option values are never included in the notice.
 
 ## Priority Levels
 

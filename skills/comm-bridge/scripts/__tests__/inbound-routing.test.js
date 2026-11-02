@@ -38,7 +38,7 @@ test('validates before route/; name/group errors emit one and ordinary argument 
   assert.equal(events, 5);
   await assert.rejects(receive(['--channel', 'chat', '--endpoint', '', '--content', 'text'], f.dependencies), { code: 'INVALID_ARGS' });
   assert.equal(events, 5);
-  for (const args of [input.slice(0, 4), [...input, '--priority', '1x'], [...input, '--group', 'chat'], [...input, '--core-source', 'fake']]) {
+  for (const args of [input.slice(0, 4), [...input, '--priority', '1x'], [...input, 'stray'], [...input, '--core-source', 'fake']]) {
     await assert.rejects(receive(args, f.dependencies), { code: 'INVALID_ARGS' });
   }
   assert.equal(events, 5); assert.equal(routed, 0);

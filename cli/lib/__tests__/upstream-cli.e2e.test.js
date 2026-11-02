@@ -9,6 +9,9 @@ import { codexAppServerFixtureSource } from '../../../test/helpers/codex-trust.j
 
 const cli = path.resolve(import.meta.dirname, '../../zylos.js');
 const coreRoot = path.resolve(import.meta.dirname, '../../..');
+const installedVersion = JSON.parse(fs.readFileSync(path.join(coreRoot, 'package.json'), 'utf8')).version;
+const [coreMajor, coreMinor, corePatch] = installedVersion.split('-')[0].split('.').map(Number);
+const coreTargetVersion = `${coreMajor}.${coreMinor}.${corePatch + 1}`;
 function makeProfile(host = 'mirror.example.test') {
   return { schemaVersion: 1, revision: host, providers: { github: {
     apiBase: `https://${host}/api/`, rawBase: `https://${host}/raw/`, downloadBase: `https://${host}/download/`,
@@ -60,6 +63,14 @@ else process.exit(1);
   fs.writeFileSync(path.join(packageRoot, 'payload.txt'), 'fixture payload\n');
   const tarball = path.join(root, 'fixture.tar.gz');
   execFileSync('tar', ['czf', tarball, '-C', root, 'package']);
+  // Core and components have separate release streams; keep the component's
+  // cross-major fixture while Core receives a newer release in its own major.
+  const corePackage = path.join(root, 'core-package');
+  fs.cpSync(packageRoot, corePackage, { recursive: true });
+  fs.writeFileSync(path.join(corePackage, 'package.json'), JSON.stringify({ name: 'zylos', version: coreTargetVersion, type: 'module' }));
+  fs.writeFileSync(path.join(corePackage, 'CHANGELOG.md'), `# Changelog\n\n## ${coreTargetVersion}\n\nFixture core change.\n`);
+  const coreTarball = path.join(root, 'core-fixture.tar.gz');
+  execFileSync('tar', ['czf', coreTarball, '-C', root, 'core-package']);
   fs.writeFileSync(path.join(bin, 'curl.cjs'), `
     const fs = require('node:fs');
     const args = process.argv.slice(2), url = new URL(args.at(-1));
@@ -77,11 +88,11 @@ else process.exit(1);
     if (url.pathname.includes('/contents/')) process.exit(22);
     const oi = args.indexOf('-o');
     if (oi >= 0 && (url.pathname.includes('/archive/') || url.pathname.includes('/tarball/'))) {
-      fs.copyFileSync(process.env.ROUTING_TARBALL, args[oi + 1]); process.exit(0);
+      fs.copyFileSync(url.pathname.includes('/zylos-ai/zylos-core/') ? process.env.ROUTING_CORE_TARBALL : process.env.ROUTING_TARBALL, args[oi + 1]); process.exit(0);
     }
     if (url.pathname.endsWith('/tags')) {
       if (process.env.MUTATE_PROFILE) fs.writeFileSync(process.env.MUTATE_PROFILE, process.env.NEXT_PROFILE);
-      process.stdout.write('[{"name":"v2.0.0"}]'); process.exit(0);
+      process.stdout.write(JSON.stringify([{ name: 'v' + (url.pathname.includes('/zylos-ai/zylos-core/') ? process.env.ROUTING_CORE_VERSION : '2.0.0') }])); process.exit(0);
     }
     if (url.pathname.endsWith('/registry.json')) {
       process.stdout.write(JSON.stringify({components:{'mirror-fixture':{repo:'example/zylos-mirror-fixture',description:'Remote-only registry fixture',type:'capability'}}})); process.exit(0);
@@ -94,12 +105,14 @@ else process.exit(1);
   // Never consult host authentication or start a real PM2 daemon in this test.
   fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'pm2'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o755 });
+  for (const name of ['npm', 'tmux', 'git']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 97\n', { mode: 0o755 });
   const env = {
     HOME: home, ZYLOS_DIR: zylosDir, PATH: `${bin}:${process.env.PATH}`,
     PM2_HOME: pm2Home, TMPDIR: tmpDir,
     ZYLOS_PACKAGE_ROOT: candidateRoot,
     GITHUB_TOKEN: 'fixture-token-never-forward-to-custom-hosts', GH_TOKEN: '',
     ZYLOS_GH_RETRY_DELAY_MS: '', ROUTING_LOG: log, ROUTING_TARBALL: tarball,
+    ROUTING_CORE_TARBALL: coreTarball, ROUTING_CORE_VERSION: coreTargetVersion,
     ROUTING_SKILL: path.join(packageRoot, 'SKILL.md'), ROUTING_PROFILE: profilePath,
   };
   const run = (args, extraEnv = {}) => spawnSync(process.execPath, [initialized ? path.join(candidateRoot, 'cli/zylos.js') : cli, ...args], {
@@ -117,6 +130,8 @@ else process.exit(1);
   return { root, zylosDir, candidateRoot, bin, configDir, profilePath, log, run, readLog, save, success, cleanup };
 }
 
+// Boundary: routing through registry, component cross-major updates and Core
+// same-major archives. Run for routing/target changes; skip for unrelated services.
 test('CLI saved routing covers remote registry, real add pipeline, component/self checks and upgrade', t => {
   const f = fixture(t);
   f.save({ type: 'local', path: f.profilePath });
@@ -124,8 +139,11 @@ test('CLI saved routing covers remote registry, real add pipeline, component/sel
   assert.match(f.success(f.run(['search', 'mirror-fixture'])).stdout, /Remote-only registry fixture/);
   const installed = JSON.parse(f.success(f.run(['add', 'example/zylos-mirror-fixture@1.0.0', '--json'])).stdout);
   assert.equal(installed.success, true);
-  f.success(f.run(['upgrade', 'mirror-fixture', '--check', '--json']));
-  f.success(f.run(['upgrade', '--self', '--check', '--json']));
+  const componentCheck = JSON.parse(f.success(f.run(['upgrade', 'mirror-fixture', '--check', '--json'])).stdout);
+  assert.equal(componentCheck.latest, '2.0.0');
+  const coreCheck = JSON.parse(f.success(f.run(['upgrade', '--self', '--check', '--json'])).stdout);
+  assert.equal(coreCheck.latest, coreTargetVersion);
+  assert.equal(coreCheck.hasUpdate, true);
   const upgraded = JSON.parse(f.success(f.run(['upgrade', 'mirror-fixture', '--yes', '--json'])).stdout);
   assert.equal(upgraded.success, true);
   assert.equal(fs.readFileSync(path.join(f.configDir, 'upstreams.json'), 'utf8'), sourceBefore);

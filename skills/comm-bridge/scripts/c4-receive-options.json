@@ -1,0 +1,14 @@
+{
+  "options": {
+    "--channel": { "takesValue": true },
+    "--endpoint": { "takesValue": true },
+    "--priority": { "takesValue": true },
+    "--no-reply": { "takesValue": false },
+    "--require-idle": { "takesValue": false },
+    "--block-queue-until-idle": { "takesValue": false },
+    "--json": { "takesValue": false },
+    "--content": { "takesValue": true },
+    "--session-group": { "takesValue": true },
+    "--core-source": { "takesValue": true }
+  }
+}

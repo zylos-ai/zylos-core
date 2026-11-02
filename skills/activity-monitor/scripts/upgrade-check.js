@@ -54,7 +54,7 @@ function compareSemver(a, b) {
   return 0;
 }
 
-function getLatestTag(repo) {
+function getLatestTag(repo, currentVersion) {
   let output;
   try {
     output = execFileSync('git', [
@@ -70,9 +70,10 @@ function getLatestTag(repo) {
     .filter(name => /^v?\d+\.\d+\.\d+/.test(name))
     .map(name => name.replace(/^v/, ''))
     .filter(version => !version.includes('-'))
+    .filter(version => currentVersion === undefined || version.split('.')[0] === currentVersion.replace(/^v/, '').split('.')[0])
     .filter((v, i, arr) => arr.indexOf(v) === i)  // deduplicate (annotated tags have ^{})
     .sort(compareSemver);
-  if (versions.length === 0) return { version: null, error: 'no semver tags' };
+  if (versions.length === 0) return { version: null, error: currentVersion === undefined ? 'no semver tags' : null };
   return { version: versions[0], error: null };
 }
 
@@ -98,7 +99,7 @@ export async function main({run=execFileSync,latestTag=getLatestTag,componentsFi
     const coreVersion = run('zylos', ['--version'], {
       encoding: 'utf8', stdio: 'pipe', timeout: 5000
     }).trim();
-    const result = latestTag('zylos-ai/zylos-core');
+    const result = latestTag('zylos-ai/zylos-core', coreVersion);
     if (result.error) {
       logger(`Upgrade check: failed to fetch zylos-core tag (${result.error})`);
       failures++;

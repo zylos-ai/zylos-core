@@ -424,7 +424,7 @@ export function githubUrl(action, repo, params = {}, selected = getUpstreamSnaps
   const ref = () => encodePath(params.ref, 'GitHub ref');
   let base = 'apiBase', relative;
   switch (action) {
-    case 'tags': relative = `repos/${encodedRepo}/tags?per_page=100`; break;
+    case 'tags': relative = `repos/${encodedRepo}/tags?per_page=100${params.page > 1 ? `&page=${params.page}` : ''}`; break;
     case 'contents': relative = `repos/${encodedRepo}/contents/${encodePath(params.path, 'GitHub file path')}?ref=${encodeURIComponent(safePath(params.ref, 'GitHub ref'))}`; break;
     case 'raw': base = 'rawBase'; relative = `${encodedRepo}/${ref()}/${encodePath(params.path, 'GitHub file path')}`; break;
     case 'archive':

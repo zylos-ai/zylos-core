@@ -171,6 +171,10 @@ Component Management:
   upgrade <name>      Upgrade a component (9-step pipeline)
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
+                      Default/--beta: stay within the installed major version
+                      --version <SemVer>  Exact release tag, including a new major
+                      Refuses downgrades; cannot combine with --branch/--beta
+                      --check --version <SemVer>  Check version/tag only; target entry decides source acceptance
   uninstall <name>    Remove a component (--purge, --force)
   uninstall --self    Uninstall zylos entirely (--force to skip prompts)
   remove <name>       Alias for uninstall
@@ -178,6 +182,7 @@ Component Management:
   search [keyword]    Search available components
 
 Other:
+  --version, -v       Print installed Core version (only as the first argument)
   help                Show this help
 
 Examples:
@@ -194,6 +199,7 @@ Examples:
   zylos upgrade telegram
   zylos upgrade --all
   zylos upgrade --self
+  zylos upgrade --self --version 1.0.0
   zylos info telegram
   zylos uninstall telegram --purge
   zylos uninstall --self

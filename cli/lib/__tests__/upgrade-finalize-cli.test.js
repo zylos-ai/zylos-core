@@ -76,6 +76,7 @@ test('thin CLI forwards downloaded executable output and exit status without ano
       let restartCalls = 0;
       mock.module(${JSON.stringify(new URL('../self-upgrade.js', import.meta.url).href)}, {namedExports: {
         checkForCoreUpdates: () => ({success:true,hasUpdate:true,current:'0.9.3',latest:'0.9.4'}),
+        checkCoreTargetVersion: () => { throw new Error('no explicit --version in this case'); },
         downloadCoreToTemp: () => ({success:true,tempDir:${JSON.stringify(root)}}),
         readChangelog: () => '', cleanupTemp() {}
       }});

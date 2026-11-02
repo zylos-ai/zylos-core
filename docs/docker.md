@@ -9,6 +9,9 @@ Zylos can be run inside a Docker container — useful for platforms like Synolog
 
 ## Quick Start
 
+The `latest` image tracks the highest stable release; `main` is a development
+image. To pin a release, use its explicit image version tag (for example, `:0.9.4`).
+
 ### Option A: Docker Run (simplest)
 
 ```bash

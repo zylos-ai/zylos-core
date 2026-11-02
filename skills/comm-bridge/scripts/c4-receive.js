@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import { isMainModule } from './is-main-module.js';
 import * as database from './c4-db.js';
 import { reserveStatusNotice, sendStatusNotice } from './status-notice.js';
@@ -7,7 +8,25 @@ import { validateGroupName, composeSessionGroup, dataError, isDataError } from '
 import { appendEntryEvent } from './c4-entry-events.js';
 import { queryRoute } from './c4-entry-route.js';
 
-export function parseReceiveArgs(args) {
+// Accepted option names and value consumption live in the adjacent manifest so
+// components can inspect the same argument list this receiver accepts.
+export function readReceiveOptions(manifestUrl = new URL('./c4-receive-options.json', import.meta.url)) {
+  const manifest = JSON.parse(fs.readFileSync(manifestUrl, 'utf8'));
+  const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!isObject(manifest) || !isObject(manifest.options) ||
+      Object.entries(manifest.options).some(([name, option]) =>
+        !name.startsWith('--') || !isObject(option) || typeof option.takesValue !== 'boolean')) {
+    throw new Error('Invalid c4-receive options manifest');
+  }
+  return manifest.options;
+}
+
+function loadReceiveOptions() {
+  try { return readReceiveOptions(); }
+  catch (error) { throw dataError('INTERNAL_ERROR', `failed to load c4-receive options: ${error.message}`, { persisted: [] }); }
+}
+
+export function parseReceiveArgs(args, { options = loadReceiveOptions(), diagnostic = console.error } = {}) {
   const result = { channel: null, endpoint: null, content: null, priority: 3,
     noReply: false, requireIdle: false, json: false };
   const values = { '--channel': 'channel', '--endpoint': 'endpoint', '--content': 'content',
@@ -15,11 +34,21 @@ export function parseReceiveArgs(args) {
   const flags = { '--no-reply': 'noReply', '--json': 'json', '--require-idle': 'requireIdle', '--block-queue-until-idle': 'requireIdle' };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (flags[arg]) result[flags[arg]] = true;
-    else if (values[arg]) {
+    if (!Object.hasOwn(options, arg)) {
+      // Forward compatibility: a component may adopt a newer option before
+      // this receiver knows it. Report only the name and keep the message.
+      if (arg.startsWith('--')) {
+        diagnostic(`Ignored unknown option: ${arg.split('=')[0]}`);
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) i++;
+        continue;
+      }
+      throw dataError('INVALID_ARGS', `Unexpected argument: ${arg}`);
+    }
+    if (options[arg].takesValue) {
       if (args[i + 1] === undefined) throw dataError('INVALID_ARGS', `Missing value for ${arg}`);
-      result[values[arg]] = args[++i];
-    } else throw dataError('INVALID_ARGS', `Unknown option: ${arg}`);
+      const value = args[++i];
+      if (values[arg]) result[values[arg]] = value;
+    } else if (flags[arg]) result[flags[arg]] = true;
   }
   if (!result.content) throw dataError('INVALID_ARGS', '--content is required');
   if (!result.channel && !result.noReply) throw dataError('INVALID_ARGS', '--channel is required unless --no-reply is set');
@@ -36,7 +65,7 @@ export async function receive(args, dependencies = {}) {
   const reserve = dependencies.reserveStatusNotice ?? reserveStatusNotice;
   const send = dependencies.sendStatusNotice ?? sendStatusNotice;
   const diagnostic = dependencies.diagnostic ?? console.error;
-  const input = parseReceiveArgs(args);
+  const input = parseReceiveArgs(args, { diagnostic });
   const { channel: rawChannel, endpoint, content, noReply, priority, requireIdle, groupName, coreSource } = input;
   if (endpoint !== null) {
     try { validateEndpoint(endpoint); }
