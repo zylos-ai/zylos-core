@@ -1,18 +1,25 @@
 # c4-fetch.js — Fetch Conversations
 
-Retrieves the last checkpoint summary and conversations within a specified id range. Used by Memory Sync to load conversation data for summarization.
+Retrieves the last checkpoint summary and conversations within a specified id range or from a point in time. Used by Memory Sync to load conversation data for summarization.
 
 ## Usage
 
 ```bash
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --begin <id> --end <id>
+~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --since <duration|datetime>
 ```
+
+`--since` accepts:
+- a relative duration in minutes, hours or days: `30m`, `6h`, `24h`, `1d`
+- a datetime: `2026-06-04`, `2026-06-04 12:00`, `2026-06-04 12:00:00`, optionally with `T` and a `Z` or `±HH:MM` offset (`2026-06-04T20:00+08:00`)
+
+A datetime without an offset is UTC, like the conversation timestamps in the output. Conversations at or after that time are returned.
 
 ## Output
 
 Outputs to stdout:
 1. Last checkpoint summary (if exists)
-2. Formatted conversations in the specified range (chronological order)
+2. Formatted conversations in the specified range (chronological order). With `--since`, the header shows the resolved UTC start time and the id range found, for use with `--begin`/`--end`.
 
 ## Example
 
@@ -29,4 +36,17 @@ hello
 
 [2025-01-15 10:01:00] OUT (telegram:8101553026):
 Hi there!
+```
+
+```bash
+~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --since 24h
+```
+
+Output:
+```
+[Last Checkpoint Summary] Synced conversations 1-9
+[Conversations] (since 2025-01-14 10:30:00 UTC, id 10 ~ 50)
+[2025-01-15 10:00:00] IN (telegram:8101553026):
+hello
+...
 ```
