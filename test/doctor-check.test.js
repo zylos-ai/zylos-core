@@ -4,15 +4,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import test from 'node:test';
+import { test, afterEach } from '@jest/globals';
 
 const child = fileURLToPath(new URL('./helpers/doctor-check-child.js', import.meta.url));
 const fakeCommand = fileURLToPath(new URL('./helpers/doctor-check-command.js', import.meta.url));
 const hints = ['Check: pm2 logs worker-a', 'Check: pm2 logs worker-b'];
+const cleanup = [];
+afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 
-function runDoctor(t, args, { state = 'fail', network = 'up' } = {}) {
+function runDoctor(args, { state = 'fail', network = 'up' } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-')));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
   const dirs = { HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'zylos'),
     PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp') };
@@ -44,7 +46,7 @@ function runDoctor(t, args, { state = 'fail', network = 'up' } = {}) {
   assert.ifError(result.error);
   assert.equal(result.signal, null, result.stderr);
   assert.match(result.stderr, /doctor isolation:/, result.stderr);
-  t.diagnostic(result.stderr.trim());
+  console.log(result.stderr.trim());
   const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   const claude = calls.filter(call => call.command === 'claude');
   const probes = claude.filter(call => call.args[0] === '-p' && call.args[1] === 'ping');
@@ -58,8 +60,8 @@ function runDoctor(t, args, { state = 'fail', network = 'up' } = {}) {
 
 // Boundary: ready Claude plus two unresolved services. Run for check gating/hint/exit
 // changes; skip when a change cannot affect doctor command flow or these outputs.
-test('check mode keeps issue hints and skips repair and rechecking', t => {
-  const result = runDoctor(t, ['--check']);
+test('check mode keeps issue hints and skips repair and rechecking', () => {
+  const result = runDoctor(['--check']);
   assert.equal(result.status, 1, result.stderr);
   for (const name of ['worker-a', 'worker-b']) assert.match(result.stdout, new RegExp(`${name} offline`));
   for (const hint of hints) assert.ok(result.stdout.includes(hint), result.stdout);
@@ -73,8 +75,8 @@ test('check mode keeps issue hints and skips repair and rechecking', t => {
 
 // Boundary: the identical unresolved fixture without check must repair and recheck.
 // Run alongside gate tests; skip only when doctor repair dispatch is unaffected.
-test('default mode still invokes repair and rechecks unresolved issues', t => {
-  const result = runDoctor(t, []);
+test('default mode still invokes repair and rechecks unresolved issues', () => {
+  const result = runDoctor([]);
   assert.equal(result.status, 1, result.stderr);
   assert.equal(result.repairs.length, 1);
   assert.match(result.repairs[0].args[1], /^You are a Zylos repair agent\./);
@@ -88,8 +90,8 @@ test('default mode still invokes repair and rechecks unresolved issues', t => {
 
 // Boundary: an all-pass diagnostic exits successfully without repair. Run for
 // doctor check gating/exit changes; skip changes outside doctor command flow.
-test('check mode exits successfully when all diagnostics pass', t => {
-  const result = runDoctor(t, ['--check'], { state: 'pass' });
+test('check mode exits successfully when all diagnostics pass', () => {
+  const result = runDoctor(['--check'], { state: 'pass' });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Everything is working\./);
   assert.equal(result.repairs.length, 0);
@@ -101,8 +103,8 @@ for (const args of [['--json'], ['--check', '--json']]) {
   for (const state of ['fail', 'pass']) {
     // Boundary: both JSON forms retain their pre-existing early exit and report.
     // Run for doctor flag/JSON/repair-flow changes; skip unrelated product changes.
-    test(`${args.join(' ')} preserves ${state} JSON diagnostics without repair`, t => {
-      const result = runDoctor(t, args, { state });
+    test(`${args.join(' ')} preserves ${state} JSON diagnostics without repair`, () => {
+      const result = runDoctor(args, { state });
       assert.equal(result.status, state === 'pass' ? 0 : 1, result.stderr);
       const json = JSON.parse(result.stdout);
       assert.equal(json.passed, state === 'pass');
@@ -116,8 +118,8 @@ for (const args of [['--json'], ['--check', '--json']]) {
 
 // Boundary: unavailable network keeps the existing manual network guidance.
 // Run for doctor check/hint/bottom-message changes; skip unrelated product changes.
-test('check mode keeps network failure guidance without repair', t => {
-  const result = runDoctor(t, ['--check'], { state: 'pass', network: 'down' });
+test('check mode keeps network failure guidance without repair', () => {
+  const result = runDoctor(['--check'], { state: 'pass', network: 'down' });
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stdout, /Cannot reach api\.anthropic\.com/);
   assert.match(result.stdout, /Check internet connection and firewall settings\./);
