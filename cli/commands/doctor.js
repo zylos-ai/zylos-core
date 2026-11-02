@@ -694,6 +694,7 @@ function runClaudeFix(diagnosticJson) {
 
 export async function doctorCommand(args, upstreamSource) {
   const jsonMode = args.includes('--json');
+  const checkOnly = args.includes('--check');
 
   const coreVersion = getCurrentVersion();
 
@@ -811,7 +812,8 @@ export async function doctorCommand(args, upstreamSource) {
       }
       const results = await withUpstreamSnapshot(prepared, () => concurrentMap(targets, async (target) => {
         try {
-          const latest = await fetchLatestTagAsync(target.repo);
+          const latest = await fetchLatestTagAsync(target.repo, target.name === 'zylos-core'
+            ? { major: target.current.replace(/^v/, '').split('.')[0] } : {});
           if (latest && compareSemverDesc(target.current, latest) > 0) {
             return { ...target, latest };
           }
@@ -846,7 +848,7 @@ export async function doctorCommand(args, upstreamSource) {
     process.exit(0);
   }
 
-  const claudeReady = isClaudeReady(diag);
+  const claudeReady = !checkOnly && isClaudeReady(diag);
 
   // Show issues — hide hints when Claude will auto-fix
   console.log(separator('Issues'));
@@ -895,7 +897,7 @@ export async function doctorCommand(args, upstreamSource) {
     process.exit(1);
   }
 
-  // Claude not available — bottom message based on why
+  // No auto-fix — bottom message based on network availability
   if (!diag.system.network.reachable) {
     console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {

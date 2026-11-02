@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Fixed upgrade bridge guidance**: keep the minimum upgrade source at stable 0.9.3 and direct older installations to `zylos upgrade --self --branch release/0.9.3`, then verify Core 0.9.3 with `zylos --version` and rerun the original upgrade command. Later sources, including 0.9.4 and 0.9.5, remain supported.
 
+## [0.9.4] - 2026-11-02
+
+### Upgrade prerequisite
+
+**The 0.9.4 target-owned upgrade requires Core 0.9.3 or later.** On an older
+instance, run `zylos upgrade --self --branch release/0.9.3` and then
+`zylos --version`; continue to the target release only after it reports 0.9.3.
+The bridge branch remains fixed on v0.9.3. Skip this bridge operation when
+already on 0.9.3. The old CLI must understand `--branch`; very old CLIs require
+operator handling and version verification. Target-side schema probing blocks
+0.9.1/0.9.2 direct jumps before service stop, but cannot promise an early block
+for every older worker that never executes target code before installation.
+
+### Changed
+- **Receiver option manifest**: `c4-receive` reads accepted argument names and value consumption from its adjacent `c4-receive-options.json`, allowing components to inspect the same argument list. (#944)
+- **Root Node test coverage**: the root Node test runner now includes the comm-bridge and scheduler test suites. (#942)
+- **Core upgrade version selection**: automatic self-upgrades and checks, including `--beta`, stay within the installed major version and do not advertise newer majors. Use `zylos upgrade --self --version 1.0.0` to explicitly select an exact `v1.0.0` release tag, including a different major or an explicit prerelease. `--version` refuses downgrades, skips an already installed version, and cannot be combined with `--branch` or `--beta`. `--check --version` only checks version constraints and tag existence; the target package's upgrade entry decides whether it accepts the installed starting version. (#937, #939)
+- **Forward-compatible message intake**: `c4-receive` ignores unknown options and their following non-`--` value, reporting only the option name on stderr while preserving message delivery and JSON stdout for components that adopt newer CLI options first. (#940)
+- **Codex default model**: use `gpt-6.1-sol` instead of `gpt-5.6-sol` when no project model is configured. Explicit model selections, providers and reasoning effort are preserved; projects already pinned to an older model are not migrated. (#937)
+- **Stable installation channels**: the README manual install now takes an explicit stable release tag (`#vX.Y.Z`) instead of installing development `main`. The Docker `latest` image tag moves only for the highest stable release; prerelease tags and patches to an older release line no longer move it, and `docs/docker.md` explains the `latest`, `main` and version tags. (#948)
+- **README**: the "Built by" badge and section now refer to OpenMax. (#949)
+
+### Added
+
+- **Target-owned upgrade execution and recovery:** the target package validates the 0.9.3-or-later handoff and runs the existing protected backup, stop, install, configuration, restart and verification steps. It preserves the original global package/bin links, core skill dependencies and three-database snapshots for compensation before shared configuration publication. Future upgrades remain owned by their respective target packages. (#938)
+- **Explicit compensation cutoff:** after data preparation and offline verification, the target durably closes compensation before shared settings are published. Later failures retain the target state and require documented operator forward repair; unconfirmed process exit, ambiguous ownership or damaged materials also retain maintenance. This does not promise rollback at every stage or automatic macOS crash takeover. See the [recovery guide](docs/self-upgrade-recovery.md#manual-forward-repair-after-the-cutoff) for verification, successful closure and queued runtime-restart handling. (#938)
+
+### Fixed
+- **`zylos doctor --check`**: now only diagnoses, as its help text says. It lists problems with their hints and exits 1 when any remain, without starting the automatic Claude repair step; the diagnostic authentication probe still runs. `--json` was already diagnosis-only and is unchanged. (#946)
+
 ## [0.9.3] - 2026-10-30
 
 ### Changed

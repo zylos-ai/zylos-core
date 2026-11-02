@@ -11,7 +11,7 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR, ZYLOS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveMergeBaseline } from './manifest.js';
-import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
+import { fetchRawFile, fetchLatestTag, fetchExactTag, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree } from './fs-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
@@ -48,16 +48,60 @@ export function getCurrentVersion() {
   }
 }
 
+// SemVer precedence for explicit targets: build metadata is ignored and numeric
+// identifiers are compared without coercing them to imprecise JS numbers.
+function parseTargetSemver(version) {
+  if (typeof version !== 'string') return null;
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version);
+  if (!match || match[0] !== version) return null;
+  return { core: match.slice(1, 4).map(BigInt), pre: match[4]?.split('.') };
+}
+
+function compareTargetSemver(target, current) {
+  for (let i = 0; i < 3; i++) {
+    if (target.core[i] !== current.core[i]) return target.core[i] > current.core[i] ? 1 : -1;
+  }
+  if (!target.pre || !current.pre) return target.pre ? -1 : current.pre ? 1 : 0;
+  for (let i = 0; i < Math.max(target.pre.length, current.pre.length); i++) {
+    const a = target.pre[i], b = current.pre[i];
+    if (a === b) continue;
+    if (a === undefined || b === undefined) return a === undefined ? -1 : 1;
+    const aNumeric = /^\d+$/.test(a), bNumeric = /^\d+$/.test(b);
+    if (aNumeric && bNumeric) return BigInt(a) > BigInt(b) ? 1 : -1;
+    if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
+    return a > b ? 1 : -1;
+  }
+  return 0;
+}
+
+/** Local explicit-target guard; safe to call before recovery or remote access. */
+export function checkCoreTargetVersion(version) {
+  const target = parseTargetSemver(version);
+  if (!target) {
+    return { success: false, error: 'invalid_version', message: 'Invalid --version: use a full SemVer without a v prefix, for example --version 1.0.0.' };
+  }
+  const current = getCurrentVersion();
+  const installed = current.success && parseTargetSemver(current.version);
+  if (!installed) {
+    return { success: false, error: 'version_not_found', message: current.error || 'Installed version is not valid SemVer.' };
+  }
+  const comparison = compareTargetSemver(target, installed);
+  if (comparison < 0) {
+    return { success: false, error: 'downgrade_refused', message: `Cannot downgrade zylos-core from ${current.version} to ${version}.` };
+  }
+  return { success: true, current: current.version, latest: version, hasUpdate: comparison > 0 };
+}
+
 /**
  * Get latest zylos-core version from GitHub.
- * Uses tag-based detection (unified with component upgrades).
+ * Uses tag-based detection within the installed major version.
  * Falls back to package.json on a branch when --branch is specified.
  *
  * @param {object} [opts]
  * @param {string} [opts.branch] - Branch to read from (reads package.json from branch)
  * @param {boolean} [opts.beta=false] - Include prerelease (beta) tags
  */
-function getLatestVersion({ branch, beta = false } = {}) {
+function getLatestVersion({ branch, beta = false, currentVersion } = {}) {
   // When --branch is specified, read package.json from that branch
   if (branch) {
     try {
@@ -69,13 +113,14 @@ function getLatestVersion({ branch, beta = false } = {}) {
     }
   }
 
-  // Default: tag-based detection (unified with component upgrades)
+  // Default: select across tags within the installed major version.
   try {
-    const tagVersion = fetchLatestTag(REPO, { includePrerelease: beta });
+    const tagVersion = fetchLatestTag(REPO, { includePrerelease: beta, major: currentVersion.replace(/^v/, '').split('.')[0] });
     if (tagVersion) {
       return { success: true, version: tagVersion };
     }
-    return { success: false, error: 'No release tags found' };
+    if (beta) return { success: false, error: 'No release tags found' };
+    return { success: true, version: currentVersion };
   } catch (err) {
     return { success: false, error: `Cannot fetch latest version: ${sanitizeError(err.message)}` };
   }
@@ -91,15 +136,31 @@ function getLatestVersion({ branch, beta = false } = {}) {
  * @param {object} [opts]
  * @param {string} [opts.branch] - Branch to compare against
  * @param {boolean} [opts.beta=false] - Include prerelease (beta) versions
+ * @param {string} [opts.version] - Explicit SemVer target with an exact v-prefixed tag
  * @returns {object} { success, hasUpdate, current, latest }
  */
-export function checkForCoreUpdates({ branch, beta = false } = {}) {
+export function checkForCoreUpdates({ branch, beta = false, version } = {}) {
+  if (version !== undefined) {
+    if (branch || beta) {
+      return { success: false, error: 'invalid_args', message: '--version cannot be combined with --branch or --beta.' };
+    }
+    const target = checkCoreTargetVersion(version);
+    if (!target.success || !target.hasUpdate) return target;
+    try {
+      if (!fetchExactTag(REPO, `v${version}`)) {
+        return { success: false, error: 'tag_not_found', message: `Release tag v${version} does not exist.` };
+      }
+    } catch (err) {
+      return { success: false, error: 'remote_version_failed', message: sanitizeError(err.message) };
+    }
+    return target;
+  }
   const current = getCurrentVersion();
   if (!current.success) {
     return { success: false, error: 'version_not_found', message: current.error };
   }
 
-  const latest = getLatestVersion({ branch, beta });
+  const latest = getLatestVersion({ branch, beta, currentVersion: current.version });
   if (!latest.success) {
     return { success: false, error: 'remote_version_failed', message: latest.error };
   }
@@ -154,12 +215,9 @@ export function downloadCoreToTemp(version, branch) {
 
   const result = downloadArchive(REPO, version, tempDir);
   if (!result.success) {
-    // Fallback: try downloading main branch (for pre-release versions without tags)
-    const branchResult = downloadBranch(REPO, 'main', tempDir);
-    if (!branchResult.success) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-      return { success: false, error: result.error };
-    }
+    // A selected release must not silently turn into a different main-branch version.
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    return { success: false, error: result.error };
   }
 
   return { success: true, tempDir };
