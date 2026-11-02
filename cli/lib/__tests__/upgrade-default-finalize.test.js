@@ -807,3 +807,90 @@ test('SIGKILL during the default initial finalizer resumes from durable publicat
   assert.equal(f.calls.filter(call => call === 'start').length, 1);
   assertDataPreserved(f);
 });
+
+// Integration boundary: initial finalizer -> SIGKILL before/after real session
+// rename -> default forward repair. Run for legacy rotation/finalizer/resume
+// changes; otherwise skip. The official runner isolates HOME/ZYLOS_DIR/PM2_HOME
+// and short TMPDIR; fixture owns temporary SQLite databases and cleanup, stubs
+// service start and rejects actual PM2 calls. No tmux connection is used.
+test('SIGKILL around legacy session rotation resumes with one archive', async t => {
+  for (const point of ['before rotation', 'after rename']) {
+    await t.test(point, async t => {
+      const f = fixture(t);
+      const memorySkill = path.join(f.root, '.claude/skills/zylos-memory');
+      fs.mkdirSync(path.join(memorySkill, 'scripts'), { recursive: true });
+      for (const name of ['rotate-session.js', 'shared.js', 'is-main-module.js']) {
+        fs.copyFileSync(path.join(packageRoot, 'skills/zylos-memory/scripts', name),
+          path.join(memorySkill, 'scripts', name));
+      }
+      fs.copyFileSync(path.join(packageRoot, 'skills/zylos-memory/package.json'),
+        path.join(memorySkill, 'package.json'));
+      fs.mkdirSync(path.join(memorySkill, 'node_modules'));
+      fs.symlinkSync(path.join(packageRoot, 'node_modules/dotenv'),
+        path.join(memorySkill, 'node_modules/dotenv'));
+      const date = '2025-01-15';
+      const current = Buffer.from(`# Session Log: ${date}\n\nUnique interrupted upgrade session: 旧会话\r\n`);
+      const existing = Buffer.from('Existing same-date archive must remain untouched\r\n');
+      const sessions = path.join(f.root, 'memory/sessions');
+      f.write('memory/sessions/current.md', current);
+      f.write(`memory/sessions/${date}.md`, existing);
+      const state = fs.readFileSync(path.join(f.root, 'memory/state.md'));
+      const env = { ...process.env, ZYLOS_DIR: f.root };
+      console.log(JSON.stringify({ boundary: 'legacy session rotation crash', point,
+        HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME,
+        TMPDIR: env.TMPDIR, database: path.join(f.root, 'comm-bridge/c4.db'),
+        sessions, rotateScript: path.join(memorySkill, 'scripts/rotate-session.js'),
+        tmux: 'not used', services: 'stubbed; PM2 shim rejects calls' }));
+      const script = `
+        import { execFileSync } from 'node:child_process';
+        import path from 'node:path';
+        import { runSelfUpgradeFinalize } from ${JSON.stringify(new URL('../self-upgrade.js', import.meta.url).href)};
+        import { prepareUpgradeRuntime } from ${JSON.stringify(new URL('../upgrade-runtime-preparation.js', import.meta.url).href)};
+        const state = JSON.parse(process.argv[2]);
+        const root = process.argv[3], home = process.argv[4], packageRoot = process.argv[5];
+        const point = process.argv[6];
+        await runSelfUpgradeFinalize(state, {
+          zylosDir: root,
+          syncSkills: () => ({step:5, status:'done'}),
+          installDependencies: () => ({step:6, status:'done'}),
+          prepareRuntimeClis: () => ({completed:['claude.cli','codex.cli'],failed:[]}),
+          prepareRuntime: ctx => prepareUpgradeRuntime(ctx, {packageRoot, homeDir:home, stopFailureSupported:false}),
+          dashboardOwner: {copyDashboardDb: () => ({ok:true})},
+          ensureMemoryMigration() {},
+          rotateSession() {
+            if (point === 'after rename') {
+              execFileSync(process.execPath, [path.join(root, '.claude/skills/zylos-memory/scripts/rotate-session.js')],
+                {encoding:'utf8', stdio:'pipe', env:{...process.env, ZYLOS_DIR:root}});
+            }
+            process.kill(process.pid, 'SIGKILL');
+          },
+          startServices() { throw Error('must not reach services before crash'); }
+        });
+        process.exitCode = 19;
+      `;
+      const child = spawnSync(process.execPath, ['--input-type=module', '-e', script,
+        packageRoot, JSON.stringify(f.state), f.root, f.home, packageRoot, point],
+        { encoding: 'utf8', env, timeout: 15000 });
+      assert.equal(child.signal, 'SIGKILL', child.stderr);
+      assert.equal(f.load().phase, 'compensation_closed');
+      if (point === 'before rotation') {
+        assert.deepEqual(fs.readdirSync(sessions).sort(), [`${date}.md`, 'current.md'].sort());
+        assert.deepEqual(fs.readFileSync(path.join(sessions, 'current.md')), current);
+      } else {
+        assert.deepEqual(fs.readdirSync(sessions).sort(), [`${date}-1.md`, `${date}.md`].sort());
+        assert.deepEqual(fs.readFileSync(path.join(sessions, `${date}-1.md`)), current);
+      }
+      assert.deepEqual(fs.readFileSync(path.join(sessions, `${date}.md`)), existing);
+      assert.deepEqual(fs.readFileSync(path.join(f.root, 'memory/state.md')), state);
+      const resumed = await f.resume();
+      assert.equal(resumed.success, true, JSON.stringify(resumed));
+      assert.equal(f.load().phase, 'upgrade_complete');
+      assert.deepEqual(fs.readdirSync(sessions).sort(), [`${date}-1.md`, `${date}.md`].sort());
+      assert.deepEqual(fs.readFileSync(path.join(sessions, `${date}-1.md`)), current);
+      assert.deepEqual(fs.readFileSync(path.join(sessions, `${date}.md`)), existing);
+      assert.deepEqual(fs.readFileSync(path.join(f.root, 'memory/state.md')), state);
+      assert.equal(f.calls.filter(call => call === 'start').length, 1);
+      assertDataPreserved(f);
+    });
+  }
+});
