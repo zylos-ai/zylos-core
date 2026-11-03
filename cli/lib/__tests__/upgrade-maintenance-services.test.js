@@ -73,24 +73,37 @@ for (const changed of ['missing','outside','changed','duplicate','saved-duplicat
   });
 }
 
-for (const source of ['throw Error("cannot load")','module.exports={}','module.exports={apps:[{name:""}]}','module.exports={apps:[{name:42}]}','module.exports={apps:[{name:"x"},{name:"x"}]}']) {
+for (const source of ['throw Error("cannot load")','module.exports={}']) {
   test(`invalid ecosystem fails before PM2 actions: ${source}`, t => {
     const f = fixture(t, {ecosystem:true});
     fs.writeFileSync(f.file,source);
     f.j.initialIdentity.ecosystemHash=m.hash(f.file);
-    assert.throws(() => m.start(f.j));
+    assert.throws(() => m.start(f.j), error => {
+      assert.match(error.message,/^failed to load ecosystem: (cannot load|invalid ecosystem apps)$/);
+      assert.doesNotMatch(error.message,/\[eval\]|\n\s+at |Node\.js/);
+      return true;
+    });
     assert.deepEqual(f.commands(),[]);
   });
 }
 
-test('unnamed ecosystem apps restart through verified saved PM2 records', t => {
+test('unnamed and nonstring ecosystem apps restart through verified saved PM2 records', t => {
   const f=fixture(t,{ecosystem:true});
-  fs.writeFileSync(f.file,`module.exports={apps:[{script:${JSON.stringify(f.j.originalServices[0].script)}}]};`);
+  fs.writeFileSync(f.file,`module.exports={apps:[{script:${JSON.stringify(f.j.originalServices[0].script)}},{name:42},null]};`);
   f.j.initialIdentity.ecosystemHash=m.hash(f.file);
   assert.deepEqual(m.ecosystemServiceNames(f.file),[]);
   m.start(f.j);
   assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env']]);
   assert.equal(f.readRecords()[0].pm2_env.status,'online');
+});
+
+test('ecosystem names accept duplicate and empty strings', t => {
+  const f=fixture(t,{ecosystem:true});
+  fs.writeFileSync(f.file,'module.exports={apps:[{name:"scheduler"},{name:"scheduler"},{name:""}]};');
+  f.j.initialIdentity.ecosystemHash=m.hash(f.file);
+  assert.deepEqual(m.ecosystemServiceNames(f.file),['scheduler','']);
+  m.start(f.j);
+  assert.deepEqual(f.commands(),[['startOrRestart',f.file,'--only','scheduler','--update-env']]);
 });
 
 test('ecosystem module loads in a fresh child without parent cache or stdout pollution', t => {

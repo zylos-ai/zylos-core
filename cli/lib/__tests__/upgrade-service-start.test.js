@@ -66,23 +66,33 @@ test('step11 reads protected service provenance from durable journal',t=>{
   assert.equal(f.readRecords()[0].pm2_env.status,'online');
 });
 
-for (const source of ['throw Error("cannot load")', 'module.exports={}', 'module.exports={apps:[{name:"x"},{name:"x"}]}']) {
+for (const source of ['throw Error("cannot load")', 'module.exports={}']) {
   test(`step11 rejects invalid ecosystem before starting any service: ${source}`, t => {
     const f=serviceFixture(t,{ecosystem:true});
     fs.writeFileSync(f.file,source);
     const result=step11_startCoreServices(context(f),{ecosystemPath:f.file,zylosDir:f.root});
     assert.equal(result.status,'failed');
     assert.match(result.error,/cannot load|invalid ecosystem/);
+    assert.match(result.error,/^failed to load ecosystem: /);
+    assert.doesNotMatch(result.error,/\[eval\]|\n\s+at |Node\.js/);
     assert.deepEqual(f.commands(),[]);
     assert.equal(f.readRecords()[0].pm2_env.status,'stopped');
   });
 }
 
-test('step11 treats an unnamed ecosystem app as an external saved service', t => {
+test('step11 treats unnamed and nonstring ecosystem apps as external saved services', t => {
   const f=serviceFixture(t,{ecosystem:true});
-  fs.writeFileSync(f.file,`module.exports={apps:[{script:${JSON.stringify(f.j.originalServices[0].script)}}]};`);
+  fs.writeFileSync(f.file,`module.exports={apps:[{script:${JSON.stringify(f.j.originalServices[0].script)}},{name:42},null]};`);
   const result=step11_startCoreServices(context(f),{ecosystemPath:f.file,zylosDir:f.root});
   assert.equal(result.status,'done',result.error);
   assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env'],['save']]);
   assert.equal(f.readRecords()[0].pm2_env.status,'online');
+});
+
+test('step11 accepts duplicate ecosystem names', t => {
+  const f=serviceFixture(t,{ecosystem:true});
+  fs.writeFileSync(f.file,'module.exports={apps:[{name:"scheduler"},{name:"scheduler"}]};');
+  const result=step11_startCoreServices(context(f),{ecosystemPath:f.file,zylosDir:f.root});
+  assert.equal(result.status,'done',result.error);
+  assert.deepEqual(f.commands(),[['start',f.file,'--only','scheduler','--update-env'],['save']]);
 });

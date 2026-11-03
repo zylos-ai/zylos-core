@@ -624,16 +624,24 @@ function stopBackupOnly(j) {
   }
 }
 function ecosystemServiceNames(ecosystem) {
-  const output = command(process.execPath, ['-e', `
+  try {
+    const output = command(process.execPath, ['-e', `
     const write = process.stdout.write.bind(process.stdout);
     process.stdout.write = process.stderr.write.bind(process.stderr);
-    const config = require(process.argv[1]);
-    if (!Array.isArray(config?.apps)) throw Error('invalid ecosystem apps');
-    const names = config.apps.map(app => app?.name).filter(name => name !== undefined);
-    if (names.some(name => typeof name !== 'string' || !name) || new Set(names).size !== names.length) throw Error('invalid ecosystem service names');
-    write(JSON.stringify(names));
-  `, path.resolve(ecosystem)]);
-  return JSON.parse(output);
+    try {
+      const config = require(process.argv[1]);
+      if (!Array.isArray(config?.apps)) throw Error('invalid ecosystem apps');
+      const names = config.apps.map(app => app?.name).filter(name => typeof name === 'string');
+      write(JSON.stringify([...new Set(names)]));
+    } catch (error) {
+      process.stderr.write(String(error.message));
+      process.exitCode = 1;
+    }
+    `, path.resolve(ecosystem)]);
+    return JSON.parse(output);
+  } catch (error) {
+    throw Error('failed to load ecosystem: ' + error.message);
+  }
 }
 function validateSavedServices(j, saved) {
   const current = services(j), names = new Set();
