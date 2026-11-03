@@ -123,6 +123,8 @@ function bootstrap(root, {
     prompt,
     ...(invalid ? {
       recovery_required: true,
+      code: automaticResumeAvailable() ? 'UPGRADE_RECOVERY_REQUIRED' : 'MANUAL_RECOVERY_REQUIRED',
+      next: 'zylos recovery status',
       error: d.diagnostics.join('; ').slice(0, 8192) || 'transaction attribution is not unique'
     } : {})
   };

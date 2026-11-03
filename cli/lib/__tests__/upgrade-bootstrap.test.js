@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {writeRecoveryDescriptor} from './helpers/upgrade-descriptor.js';
 import {resumeUpgradeForStartup} from '../runtime/upgrade-context.js';
+import {resumeUnfinishedUpgrade} from '../upgrade-bridge.js';
 import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {test} from 'node:test';
@@ -105,6 +106,33 @@ test('status and discovery do not depend on runtime capability or recovery modul
   assert.equal(f.api.runtimeCapability, undefined);
 });
 
+for (const platform of ['linux', 'darwin']) {
+  for (const defect of ['malformed', 'ambiguous']) {
+    test(`${defect} transactions preserve ${platform} recovery codes through bootstrap and bridge`, t => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', {...originalPlatform, value:platform});
+      try {
+        const f = fixture(t), dir = f.journal('one');
+        if (defect === 'malformed') fs.writeFileSync(path.join(dir, 'journal.json'), '{broken');
+        else f.journal('two');
+        const code = platform === 'linux' ? 'UPGRADE_RECOVERY_REQUIRED' : 'MANUAL_RECOVERY_REQUIRED';
+        for (const out of [f.api.bootstrap(f.root, {status:true}), f.api.bootstrap(f.root, {once:true}), resumeUpgradeForStartup(f.root)]) {
+          assert.equal(out.code, code);
+          assert.equal(out.next, 'zylos recovery status');
+          assert.equal(out.recovery_required, true);
+          assert.equal(out.automaticResume, false);
+        }
+        const result = resumeUnfinishedUpgrade(f.root);
+        assert.equal(result.failure.code, code);
+        assert.equal(result.failure.next, 'zylos recovery status');
+        assert.equal(result.failure.recovery_required, true);
+      } finally {
+        Object.defineProperty(process, 'platform', originalPlatform);
+      }
+    });
+  }
+}
+
 test('status preserves file diagnostics alongside its active marker and valid candidates', t => {
   const f = fixture(t), dir = f.journal();
   const broken = f.journal('broken');
@@ -117,6 +145,7 @@ test('status preserves file diagnostics alongside its active marker and valid ca
   assert.ok(out.diagnostics.every(value => typeof value === 'string'));
   assert.ok(out.diagnostics.includes('marker has no valid transaction'));
   assert.equal(out.recovery_required, true);
+  assert.equal(out.automaticResume, false);
 });
 
 test('live controller is observed without entering resume', {skip:process.platform==='darwin'}, t => {
