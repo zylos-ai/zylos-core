@@ -178,12 +178,12 @@ test('core restart starts ecosystem and saved custom services before strict veri
   assert.ok(!f.calls().some(args=>args[0]==='delete'));
 });
 
-for(const source of ['throw Error("broken config")',"throw 'bad config'",'module.exports={}'])test(`core restart refuses invalid ecosystem configuration ${source}`,t=>{
+for(const source of ['throw Error("broken config")',"throw 'bad config'",'throw null','module.exports={}'])test(`core restart refuses invalid ecosystem configuration ${source}`,t=>{
   const f=serviceRestartFixture(t);fs.writeFileSync(f.file,source);
   const result=step11_startCoreServices({journal:f.j,servicesWereRunning:['scheduler']},{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
   assert.equal(result.status,'failed');
   assert.match(result.error,/ecosystem.*load|load.*ecosystem/i);
-  assert.match(result.error,/^failed to load ecosystem: (broken config|bad config|invalid ecosystem apps)$/);
+  assert.match(result.error,/^failed to load ecosystem: (broken config|bad config|null|invalid ecosystem apps)$/);
   assert.doesNotMatch(result.error,/\[eval\]|\n\s+at |Node\.js v/);
   assert.deepEqual(f.calls(),[]);
 });

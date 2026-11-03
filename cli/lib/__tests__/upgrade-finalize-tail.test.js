@@ -64,7 +64,7 @@ function deps(calls, extras={}) {
     ...extras,
   };
 }
-for(const source of ['throw Error("broken config");',"throw 'bad config';"])test(`finalization persists a concise ecosystem loading error: ${source}`,async t=>{
+for(const source of ['throw Error("broken config");',"throw 'bad config';",'throw null;'])test(`finalization persists a concise ecosystem loading error: ${source}`,async t=>{
   const ctx=fixture(t),f=serviceRestartFixture(t),calls=[];
   ctx.maintenance={...maintenance,...ctx.maintenance};
   fs.writeFileSync(f.file,source);
@@ -75,7 +75,7 @@ for(const source of ['throw Error("broken config");',"throw 'bad config';"])test
   }));
   assert.equal(result.success,false);
   assert.match(ctx.journal.lastError,/ecosystem.*load|load.*ecosystem/i);
-  assert.match(ctx.journal.lastError,/^failed to load ecosystem: (broken config|bad config)$/);
+  assert.match(ctx.journal.lastError,/^failed to load ecosystem: (broken config|bad config|null)$/);
   assert.doesNotMatch(ctx.journal.lastError,/\[eval\]|\n\s+at |Node\.js v/);
   assert.deepEqual(f.calls(),[]);
 });

@@ -50,11 +50,11 @@ test('new-code ready verification allows intentional regenerated ecosystem bytes
   const f=serviceRestartFixture(t);f.j.phase='upgrade_complete';fs.appendFileSync(f.file,'// regenerated');
   m.start(f.j);assert.equal(f.calls()[0][0],'startOrRestart');
 });
-for(const source of ['throw Error("broken config")',"throw 'bad config'",'module.exports={}'])test(`ecosystem loading refuses invalid configuration ${source}`,t=>{
+for(const source of ['throw Error("broken config")',"throw 'bad config'",'throw null','module.exports={}'])test(`ecosystem loading refuses invalid configuration ${source}`,t=>{
   const f=serviceRestartFixture(t);fs.writeFileSync(f.file,source);f.j.initialIdentity.ecosystemHash=m.hash(f.file);
   assert.throws(()=>m.start(f.j),error=>{
     assert.match(error.message,/ecosystem.*load|load.*ecosystem/i);
-    assert.match(error.message,/^failed to load ecosystem: (broken config|bad config|invalid ecosystem apps)$/);
+    assert.match(error.message,/^failed to load ecosystem: (broken config|bad config|null|invalid ecosystem apps)$/);
     assert.doesNotMatch(error.message,/\[eval\]|\n\s+at |Node\.js v/);
     return true;
   });assert.deepEqual(f.calls(),[]);
