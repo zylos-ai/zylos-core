@@ -13,7 +13,9 @@ export async function runMetricMaintenance(store, {
   store.deleteMetricsByNameAndSource('usage_event', '%', 90, anchor);
   store.deleteMetricsByNameAndSource('ttft%', '%', 90, anchor);
   store.deleteMetricsByNameAndSource('turn_duration%', '%', 90, anchor);
-  store.deleteMetricsByNameAndSource('statusline_summary', '%', 30, anchor);
+  // The UI only shows the latest statusline row, and the metric resolver ignores
+  // rows older than 24h, so older history is never read. Keep one day.
+  store.deleteMetricsByNameAndSource('statusline_summary', '%', 1, anchor);
   store.deleteMetricsByNameAndSource('system_summary', '%', 14, anchor);
   store.deleteMetricsByNameAndSource('pm2_summary', '%', 7, anchor);
   store.deleteMetricsByNameAndSource('pm2_cpu', '%', 0, anchor);
@@ -22,7 +24,10 @@ export async function runMetricMaintenance(store, {
   store.deleteMetricsByNameAndSource('pm2_status', '%', 0, anchor);
   store.deleteMetricsByNameAndSource('pm2_uptime', '%', 0, anchor);
   store.deleteOtherLegacyMetricsOlderThan(90, anchor);
-  store.deleteEventsOlderThan(30, anchor);
+  // Events feed the live timeline (last 30 min), the state engine (events after
+  // the last snapshot) and project attribution of unattributed output tokens.
+  // Seven days covers those; older events were rarely read.
+  store.deleteEventsOlderThan(7, anchor);
   store.deleteSnapshotsOlderThan(7, anchor);
   store.deleteFactsOlderThan(365, anchor);
   store.walCheckpoint();

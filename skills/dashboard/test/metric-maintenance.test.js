@@ -174,3 +174,31 @@ test('shutdown abort stops reclamation between chunks', async (t) => {
   assert.equal(result.chunks, 1);
   assert.ok(store.spaceUsage().freePages > 0);
 });
+
+test('statusline_summary keeps one day while usage_event keeps 90 days', async (t) => {
+  const store = fixture(t);
+  const insert = store.db.prepare(`INSERT INTO metric_points
+    (timestamp, runtime, metric_name, metric_value, dimensions, source, confidence)
+    VALUES (?, 'claude', ?, 0, '{}', ?, 'actual')`);
+  insert.run('2026-06-07T12:00:00.000Z', 'statusline_summary', 'statusline');
+  insert.run('2026-06-06T23:00:00.000Z', 'statusline_summary', 'statusline');
+  insert.run('2026-06-06T23:00:00.000Z', 'usage_event', 'jsonl_usage');
+  await runMetricMaintenance(store, { now: monday });
+  const left = store.db.prepare(`SELECT metric_name, timestamp FROM metric_points ORDER BY metric_name, timestamp`).all();
+  assert.deepEqual(left.map(r => `${r.metric_name}@${r.timestamp}`), [
+    'statusline_summary@2026-06-07T12:00:00.000Z',
+    'usage_event@2026-06-06T23:00:00.000Z',
+  ]);
+});
+
+test('runtime_events keep 7 days', async (t) => {
+  const store = fixture(t);
+  const insert = store.db.prepare(`INSERT INTO runtime_events
+    (id, ingest_id, event_seq, timestamp, runtime, event_type, category)
+    VALUES (?, ?, ?, ?, 'claude', 'post_tool_use', 'tool')`);
+  insert.run('keep', 'keep', 1, '2026-06-01T12:00:00.000Z');
+  insert.run('drop', 'drop', 2, '2026-05-31T12:00:00.000Z');
+  await runMetricMaintenance(store, { now: monday });
+  const left = store.db.prepare('SELECT id FROM runtime_events ORDER BY id').all().map(r => r.id);
+  assert.deepEqual(left, ['keep']);
+});
