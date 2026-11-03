@@ -20,7 +20,7 @@ import {
 
 const DURATION_UNITS_MS = { m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000 };
 const DURATION_PATTERN = /^(\d+)([mhd])$/;
-const DATETIME_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:?\d{2})?)?$/;
+const DATETIME_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
 function usage() {
   console.error('Usage:\n  c4-fetch.js --unsummarized\n  c4-fetch.js --begin <id> --end <id>\n  c4-fetch.js --since <duration|datetime>');
@@ -37,16 +37,17 @@ function toDbTimestamp(date) {
 /**
  * Parse a --since value into a UTC timestamp string.
  * Accepts a relative duration (30m, 6h, 1d) or a datetime (YYYY-MM-DD,
- * YYYY-MM-DD HH:MM[:SS], optionally with T, Z or a ±HH:MM offset). A datetime
- * without an offset is UTC, like the timestamps c4-fetch prints.
+ * YYYY-MM-DD HH:MM[:SS[.sss]], optionally with T, Z or a ±HH:MM offset). A
+ * datetime without an offset is UTC, like the timestamps c4-fetch prints.
+ * Fractional seconds are dropped, as the timestamp column has none.
  * @returns {string|null} - timestamp, or null when the value is invalid
  */
 function parseSince(value) {
   const duration = DURATION_PATTERN.exec(value);
   if (duration) {
     const start = new Date(Date.now() - Number(duration[1]) * DURATION_UNITS_MS[duration[2]]);
-    // Durations reaching past the representable date range are invalid.
-    return Number.isNaN(start.getTime()) ? null : toDbTimestamp(start);
+    // Durations reaching before year 0000 do not fit the timestamp format.
+    return start.getUTCFullYear() >= 0 ? toDbTimestamp(start) : null;
   }
 
   const datetime = DATETIME_PATTERN.exec(value);
@@ -95,14 +96,25 @@ function outputConversations(beginId, endId) {
 
 function outputConversationsSince(since) {
   const conversations = getConversationsSince(since);
+  // Rows come in timestamp order; report the full id span for --begin/--end.
+  let minId = Infinity;
+  let maxId = -Infinity;
+  for (const { id } of conversations) {
+    minId = Math.min(minId, id);
+    maxId = Math.max(maxId, id);
+  }
   const label = conversations.length === 0
     ? `since ${since} UTC`
-    : `since ${since} UTC, id ${conversations[0].id} ~ ${conversations[conversations.length - 1].id}`;
+    : `since ${since} UTC, id ${minId} ~ ${maxId}`;
   printConversations(label, conversations);
 }
 
 function main() {
   const args = process.argv.slice(2);
+
+  if (args.includes('--since') && args.includes('--unsummarized')) {
+    usage();
+  }
 
   if (args.includes('--unsummarized')) {
     try {

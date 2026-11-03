@@ -101,6 +101,7 @@ When imported by other C4 scripts, `c4-db.js` exports:
 | `getRecentConversations(limit)` | Get recent conversations |
 | `getUnsummarizedRange()` | Get range/count of unsummarized conversations |
 | `getConversationsByRange(begin, end)` | Fetch conversations by id range |
+| `getConversationsSince(since)` | Fetch conversations at or after a UTC timestamp |
 | `createCheckpoint(endId, summary)` | Create a sync checkpoint |
 | `getLastCheckpoint()` | Get the most recent checkpoint |
 | `formatConversations(records)` | Format records into readable text |

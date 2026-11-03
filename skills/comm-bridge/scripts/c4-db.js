@@ -643,7 +643,7 @@ export function getConversationsByRange(beginId, endId) {
 export function getConversationsSince(since) {
   const db = getDb();
   return db.prepare(
-    'SELECT * FROM conversations WHERE timestamp >= ? ORDER BY id ASC'
+    'SELECT * FROM conversations WHERE timestamp >= ? ORDER BY timestamp ASC, id ASC'
   ).all(since);
 }
 

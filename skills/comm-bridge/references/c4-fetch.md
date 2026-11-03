@@ -11,9 +11,9 @@ Retrieves the last checkpoint summary and conversations within a specified id ra
 
 `--since` accepts:
 - a relative duration in minutes, hours or days: `30m`, `6h`, `24h`, `1d`
-- a datetime: `2026-06-04`, `2026-06-04 12:00`, `2026-06-04 12:00:00`, optionally with `T` and a `Z` or `±HH:MM` offset (`2026-06-04T20:00+08:00`)
+- a datetime: `2026-06-04`, `2026-06-04 12:00`, `2026-06-04 12:00:00`, optionally with `T`, milliseconds and a `Z` or `±HH:MM` offset (`2026-06-04T20:00+08:00`, `2026-06-04T12:00:00.000Z`)
 
-A datetime without an offset is UTC, like the conversation timestamps in the output. Conversations at or after that time are returned.
+A datetime without an offset is UTC, like the conversation timestamps in the output. Conversations at or after that time are returned. `--since` cannot be combined with `--begin`/`--end` or `--unsummarized`.
 
 ## Output
 

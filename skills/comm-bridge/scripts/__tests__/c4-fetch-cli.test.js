@@ -13,7 +13,8 @@ const CHECKPOINT_PATH = fileURLToPath(new URL('../c4-checkpoint.js', import.meta
 
 function cli(args, env = {}) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
-    env: { ...process.env, ...env },
+    // A non-UTC zone makes --since tests catch local-time conversions.
+    env: { ...process.env, TZ: 'Asia/Shanghai', ...env },
     encoding: 'utf8'
   });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
@@ -172,7 +173,7 @@ describe('c4-fetch --since', () => {
 
   it('treats a datetime without an offset as UTC and includes the boundary', () => {
     withMessages(['2026-01-01 08:00:00', '2026-01-02 12:00:00', '2026-01-03 09:30:00'], ({ env }) => {
-      for (const since of ['2026-01-02 12:00', '2026-01-02T12:00:00', '2026-01-02T12:00Z', '2026-01-02T20:00+08:00', '2026-01-02 07:00-0500']) {
+      for (const since of ['2026-01-02 12:00', '2026-01-02T12:00:00', '2026-01-02T12:00Z', '2026-01-02T20:00+08:00', '2026-01-02 07:00-0500', '2026-01-02T12:00:00.000Z']) {
         const { stdout, stderr, status } = cli(['--since', since], env);
         assert.equal(status, 0, stderr);
         assert.ok(stdout.includes('(since 2026-01-02 12:00:00 UTC, id 2 ~ 3)'), `${since}: ${stdout}`);
@@ -216,9 +217,10 @@ describe('c4-fetch --since', () => {
   it('rejects invalid values', () => {
     withTmpDir(({ env }) => {
       const invalid = [
-        [], ['yesterday'], ['24'], ['24x'], ['-1h'], ['1.5h'], ['99999999999d'],
+        [], ['yesterday'], ['24'], ['24x'], ['-1h'], ['1.5h'], ['1000000d'], ['99999999999d'],
         ['2026-02-30'], ['2026-1-2'], ['2026-01-02 24:00'], ['2026-01-02 12:60'],
-        ['2026-01-02T12:00+24:00'], ['2026-01-02+08:00'],
+        ['2026-01-02T12:00+24:00'], ['2026-01-02+08:00'], ['2026-01-02T12:00.000Z'],
+        ['2026-01-02T12:00:00.0000Z'],
       ];
       for (const value of invalid) {
         const { stderr, status } = cli(['--since', ...value], env);
@@ -228,11 +230,15 @@ describe('c4-fetch --since', () => {
     });
   });
 
-  it('cannot be combined with --begin/--end', () => {
+  it('cannot be combined with --begin/--end or --unsummarized', () => {
     withTmpDir(({ env }) => {
-      const { stderr, status } = cli(['--since', '1d', '--begin', '1', '--end', '2'], env);
-      assert.equal(status, 1);
-      assert.ok(stderr.includes('Usage'));
+      receive(['--channel', 'system', '--no-reply', '--content', 'msg1'], env);
+      for (const args of [['--begin', '1', '--end', '2'], ['--unsummarized']]) {
+        const { stdout, stderr, status } = cli(['--since', '1d', ...args], env);
+        assert.equal(status, 1, String(args));
+        assert.ok(stderr.includes('Usage'), String(args));
+        assert.ok(!stdout.includes('msg1'), String(args));
+      }
     });
   });
 });
