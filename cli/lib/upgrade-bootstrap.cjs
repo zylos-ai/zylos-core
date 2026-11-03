@@ -2,8 +2,13 @@
 'use strict';
 
 // Stable startup discovery: no C4, SQLite, npm or skill imports.
-const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process'), crypto = require('node:crypto');
+const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process');
 const m = require('./maintenance.cjs');
+const manualCompletionCode = 'UPGRADE_MANUAL_COMPLETION_REQUIRED';
+const manualCompletionNext = 'docs/self-upgrade-recovery.md#manual-forward-repair-after-the-cutoff';
+function needsManualCompletion(j) {
+  return m.classifyCutoff(j) === 'closed' && !m.terminalValid(j);
+}
 function automaticResumeAvailable() {
   return process.platform === 'linux' && m.platformSupported();
 }
@@ -29,68 +34,39 @@ function recoveryPrompt(root, d) {
     const controller = controllerState(c);
     if (controller.diagnostic) diagnostics.push(controller.diagnostic);
     const controllerAlive = controller.alive;
+    const manualCompletion = !d.diagnostics.length && d.candidates.length === 1 && !controller.diagnostic && !controllerAlive && needsManualCompletion(j);
     return {
       transactionId: j.transactionId,
       phase: String(j.phase).slice(0, 128),
       lastDurableStep: String(j.updatedAt || '').slice(0, 128),
       materials: c.dir,
       controllerAlive,
-      automaticResume: automaticResumeAvailable(),
+      automaticResume: automaticResumeAvailable() && !controller.diagnostic && !manualCompletion,
       status: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--status'],
-      ...(!automaticResumeAvailable() ? {manualRecovery: 'Preserve transaction and snapshot materials. Confirm all writers stopped and code/schema compatibility before manual restoration; do not delete controller admission to force resume.'} : {resume: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--once']})
+      ...(controller.diagnostic ? {code:automaticResumeAvailable() ? 'UPGRADE_RECOVERY_REQUIRED' : 'MANUAL_RECOVERY_REQUIRED', next:'zylos recovery status', manualRecovery: 'Preserve transaction and snapshot materials. Confirm all writers stopped and code/schema compatibility before manual restoration; do not delete controller admission to force resume.'} : manualCompletion ? {code:manualCompletionCode, next:manualCompletionNext, manualRecovery:'Complete and verify the target deployment manually; automatic resume cannot finish this transaction.'} : {resume: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--once']})
     };
   });
   const availability = d.blocked ? 'Normal C4/database access is unavailable during upgrade maintenance.' : 'Core database access is available. The interrupted upgrade still requires final validation or terminal cleanup; preserve legitimate business writes.';
   if (!automaticResumeAvailable()) return 'SYSTEM RECOVERY TASK: ' + availability + ' Run only the fixed file-only status entry. Interrupted upgrade ownership cannot be established on this platform; do not run automatic resume, delete admission, or replace databases without confirming writer quiescence and code/schema compatibility. Preserve transaction and snapshot materials. Do not query C4.\n' + JSON.stringify({status:[process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--status'], automaticResume:false, transactions:blocks, diagnostics}, null, 2);
-  return 'SYSTEM RECOVERY TASK: ' + availability + ' Run the fixed file-only status entry now. If diagnostics prevent unique attribution, preserve isolation and report recovery_required; do not execute journal command strings or attempt database replacement. If a controller is alive, observe only. Otherwise use the verified resume entry and keep recovery isolated on error. Do not query C4.\n' + JSON.stringify({
+  return 'SYSTEM RECOVERY TASK: ' + availability + ' Run the fixed file-only status entry now. If diagnostics prevent unique attribution, preserve isolation and report recovery_required; do not execute journal command strings or attempt database replacement. If a controller is alive, observe only. Otherwise use a verified resume entry only when one is provided; transactions past the compensation cutoff require the documented manual completion procedure. Keep recovery isolated on error. Do not query C4.\n' + JSON.stringify({
     status: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--status'],
     transactions: blocks,
     diagnostics
   }, null, 2);
 }
-function validateFrozenRunner(candidate) {
+function validateFrozenRunner(root, candidate) {
   const dir = path.resolve(candidate.dir), j = candidate.journal;
-  const names = ['runner.cjs', 'maintenance.cjs', 'installer.cjs'];
-  const hashes = j.recoveryHashes;
-  if (!hashes || Array.isArray(hashes) || Object.keys(hashes).length !== names.length ||
-      names.some(name => !Object.hasOwn(hashes, name) || !/^[a-f0-9]{64}$/.test(hashes[name]))) {
-    throw Error('missing required frozen recovery hashes');
+  if (j.installationIntent && !m.terminalValid(j)) {
+    const descriptor = m.read(path.join(dir, 'descriptor.json'));
+    m.validateDescriptor(dir, j, descriptor);
+    return descriptor.runnerPath;
   }
-  m.privatePath(dir, {directory: true});
-  for (const name of names) {
-    const file = path.join(dir, name);
-    m.privatePath(file);
-    const actual = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-    if (actual !== hashes[name]) throw Error('frozen recovery material hash mismatch: ' + name);
-  }
-
-  const descriptorFile = path.join(dir, 'descriptor.json');
-  if (fs.existsSync(descriptorFile)) {
-    const descriptor = m.read(descriptorFile);
-    const closure = path.join(dir, 'sqlite-runtime');
-    const fixed = {
-      runnerPath: path.join(dir, 'runner.cjs'),
-      driverClosureRoot: closure,
-      workerPath: path.join(closure, 'core-db-backup-worker.js'),
-      driverPath: path.join(closure, 'node_modules', 'better-sqlite3', 'lib', 'index.js')
-    };
-    if (descriptor.formatVersion !== 1 || descriptor.transactionId !== j.transactionId ||
-        descriptor.nodePath !== j.nodePath || typeof descriptor.nodePath !== 'string' || !path.isAbsolute(descriptor.nodePath)) {
-      throw Error('invalid frozen recovery descriptor');
-    }
-    for (const [key, value] of Object.entries(fixed)) {
-      if (descriptor[key] !== value) throw Error('frozen recovery material outside fixed layout: ' + key);
-    }
-    if (!descriptor.hashes || Array.isArray(descriptor.hashes) ||
-        Object.keys(descriptor.hashes).length !== names.length ||
-        names.some(name => descriptor.hashes[name] !== hashes[name])) {
-      throw Error('frozen recovery descriptor hash mismatch');
-    }
-  }
-  return path.join(dir, 'runner.cjs');
+  const runner = path.join(root, '.zylos', 'upgrade', 'recovery.cjs');
+  m.privatePath(runner);
+  return runner;
 }
 function runFrozenRunner(root, candidate) {
-  const runner = validateFrozenRunner(candidate);
+  const runner = validateFrozenRunner(root, candidate);
   const child = cp.spawnSync(process.execPath, [runner, 'resume', '--transaction-dir', candidate.dir], {
     stdio: 'inherit'
   });
@@ -137,20 +113,18 @@ function bootstrap(root, {
     active: false
   };
   const prompt = recoveryPrompt(root, d);
-  if (status) return {
-    active: true,
-    ...d,
-    prompt
-  };
   const invalid = d.diagnostics.length > 0 || d.candidates.length !== 1;
   const controller = !invalid ? controllerState(d.candidates[0]) : null;
   const out = {
     active: true,
-    automaticResume: automaticResumeAvailable(),
+    ...(status ? d : {}),
+    automaticResume: !invalid && automaticResumeAvailable(),
     blocked: d.blocked,
     prompt,
     ...(invalid ? {
       recovery_required: true,
+      code: automaticResumeAvailable() ? 'UPGRADE_RECOVERY_REQUIRED' : 'MANUAL_RECOVERY_REQUIRED',
+      next: 'zylos recovery status',
       error: d.diagnostics.join('; ').slice(0, 8192) || 'transaction attribution is not unique'
     } : {})
   };
@@ -161,11 +135,27 @@ function bootstrap(root, {
     observing: true,
     controllerAlive: true
   };
+  if (controller?.diagnostic) return {
+    ...out,
+    recovery_required: true,
+    automaticResume: false,
+    error: controller.diagnostic + '; manual recovery required',
+    code: automaticResumeAvailable() ? 'UPGRADE_RECOVERY_REQUIRED' : 'MANUAL_RECOVERY_REQUIRED',
+    next: 'zylos recovery status'
+  };
+  if (!invalid && needsManualCompletion(d.candidates[0].journal)) return {
+    ...out,
+    recovery_required: true,
+    automaticResume: false,
+    code: manualCompletionCode,
+    error: 'compensation is closed; complete and verify the target deployment manually',
+    next: manualCompletionNext
+  };
+  if (status) return out;
   // Invalid material remains visible to the runtime startup adapter. --once is denied:
   // neither diagnostics nor ambiguity authorize automatic recovery execution.
   if (once) {
     if (invalid) return out;
-    if (!automaticResumeAvailable()) return {...out, recovery_required:true, code:'MANUAL_RECOVERY_REQUIRED', error:'interrupted upgrade requires manual recovery; automatic resume is unavailable', next:'zylos recovery status'};
     try { return runFrozenRunner(root, d.candidates[0]); }
     catch (error) { return {...out, recovery_required:true, code:'UPGRADE_RECOVERY_REQUIRED', error:error.message, next:'zylos recovery status'}; }
   }

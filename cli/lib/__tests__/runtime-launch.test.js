@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import {writeRecoveryDescriptor} from './helpers/upgrade-descriptor.js';
 import { spawnSync as realSpawnSync } from 'node:child_process';
 import { parse } from 'smol-toml';
 import { deployManifestTemplate } from '../runtime/tmux-env.js';
@@ -170,18 +170,17 @@ function installStartupResume(root, {resumeFails=true} = {}) {
   const files = {
     'runner.cjs': "'use strict'; const fs=require('node:fs'),path=require('node:path'); const dir=process.argv.at(-1),j=JSON.parse(fs.readFileSync(path.join(dir,'journal.json'))); if(j.phase==='installing'&&j.installerStarted===true&&j.installerPid===null) process.exit(9); fs.rmSync(dir,{recursive:true});\n",
     'maintenance.cjs': fs.readFileSync(path.resolve(import.meta.dirname, '..', 'upgrade-maintenance.cjs')),
-    'installer.cjs': "'use strict';\n",
+    'finalizer.cjs': "'use strict';\n",
   };
-  const recoveryHashes = {};
   for (const [name, content] of Object.entries(files)) {
     fs.writeFileSync(path.join(transaction, name), content, {mode:0o600});
-    recoveryHashes[name] = crypto.createHash('sha256').update(content).digest('hex');
   }
+  writeRecoveryDescriptor(transaction);
   const digest = 'a'.repeat(64);
   fs.writeFileSync(path.join(transaction, 'journal.json'), JSON.stringify({
     formatVersion:1, transactionId:'tx', zylosDir:canonicalRoot, skillsDir:path.join(canonicalRoot, '.claude/skills'),
     nodePath:process.execPath, phase:'installing', installationIntent:true,
-    installerStarted:resumeFails, installerPid:null, installerExitConfirmed:false, recoveryHashes,
+    installerStarted:resumeFails, installerPid:null, installerExitConfirmed:false,
     dbBackupDir:path.join(canonicalRoot, '.backup/db/tx'), snapshotManifestHash:digest,
     coreManifest:[{name:'core', existedBefore:true, backedUp:true, originalHash:digest}], originalServices:[],
     initialIdentity:{nodePath:process.execPath, packageJson:path.join(canonicalRoot, 'package.json'), packageHash:digest,

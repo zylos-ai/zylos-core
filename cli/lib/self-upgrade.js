@@ -1364,14 +1364,36 @@ export function step11_startCoreServices(ctx, deps = {}) {
 
   const started = [];
   const failed = [];
+  const serviceMaintenance = maintenanceFor(ctx);
+  let ecosystemNames;
+  try {
+    ecosystemNames = new Set(ctx.preInstallProtection && fsApi.existsSync(ecosystemPath)
+      ? serviceMaintenance.ecosystemServiceNames(ecosystemPath)
+      : []);
+    const externalNames = ctx.preInstallProtection
+      ? ctx.servicesWereRunning.filter(name => !ecosystemNames.has(name)) : [];
+    if (externalNames.length) {
+      const savedJournal = serviceMaintenance.read(path.join(ctx.transactionDir, 'journal.json'));
+      const external = externalNames.map(name => {
+        const records = (savedJournal.originalServices || []).filter(service => service.name === name);
+        if (records.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
+        return records[0];
+      });
+      serviceMaintenance.validateSavedServices(savedJournal, external);
+    }
+  } catch (error) {
+    return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
+  }
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      restartFn(name, {
-        ecosystemPath,
-        stdio: 'pipe',
-        fallbackToPlainRestartOnError: true,
-      });
+      if (!ctx.preInstallProtection || ecosystemNames.has(name)) {
+        restartFn(name, {
+          ecosystemPath,
+          stdio: 'pipe',
+          fallbackToPlainRestartOnError: true,
+        });
+      } else serviceMaintenance.restartService(name);
       started.push(name);
     } catch {
       failed.push(name);

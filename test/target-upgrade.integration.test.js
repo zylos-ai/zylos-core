@@ -41,7 +41,7 @@ const suite = enabled ? describe : describe.skip;
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const helper = path.join(repo, 'test/helpers/run-installed-target-upgrade.mjs');
 const bridgeSha = '6655a3814f5efa0fe0675865721f06dee6b32202';
-let root, fixture, env, installedRoot, zylosDir, candidateDir, socket, pm2, canStop = false;
+let root, fixture, env, installedRoot, zylosDir, candidateDir, socket, pm2, customService, canStop = false;
 const usedRoots = new Set();
 const usedPorts = new Set();
 
@@ -65,9 +65,11 @@ function pm2List() {
   for (const item of list) {
     inside(item.pm2_env.pm_exec_path);
     inside(item.pm2_env.pm_cwd);
-    expect(item.name).toBe('web-console');
+    expect(['web-console', ...(customService ? [customService.name] : [])]).toContain(item.name);
+    if (item.name === customService?.name) expect(item.pm2_env.pm_exec_path).toBe(customService.script);
     expect(item.pm2_env.HOME).toBe(env.HOME);
     expect(item.pm2_env.ZYLOS_DIR).toBe(zylosDir);
+    expect(item.pm2_env.PM2_HOME).toBe(env.PM2_HOME);
     expect(String(item.pm2_env.WEB_CONSOLE_PORT)).toBe(String(fixture.webConsolePort));
     expect(item.pm2_env.WEB_CONSOLE_BIND).toBe('127.0.0.1');
   }
@@ -87,9 +89,39 @@ function toolLink(name, target) {
   if (!fs.existsSync(file)) fs.symlinkSync(target, file);
   expect(fs.realpathSync(file)).toBe(fs.realpathSync(target));
 }
+function ecosystemNames() {
+  const ecosystem = inside(path.join(zylosDir, 'pm2/ecosystem.config.cjs'));
+  const names = JSON.parse(run(fixture.nodePath, ['-e', `
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = process.stderr.write.bind(process.stderr);
+    const config = require(process.argv[1]);
+    if (!Array.isArray(config.apps)) throw Error('invalid fixture ecosystem');
+    write(JSON.stringify(config.apps.map(app => app.name)));
+  `, ecosystem]));
+  expect(Array.isArray(names)).toBe(true);
+  return names;
+}
+function startCustomService() {
+  const name = 'fixture-custom-service';
+  expect(ecosystemNames()).not.toContain(name);
+  expect(pm2List().some(item => item.name === name)).toBe(false);
+  const directory = inside(path.join(zylosDir, '.claude/skills'));
+  const serviceDir = path.join(directory, 'custom-upgrade-fixture');
+  fs.mkdirSync(serviceDir, {mode:0o700});
+  inside(serviceDir);
+  const script = path.join(serviceDir, 'service.cjs');
+  fs.writeFileSync(script, 'setInterval(() => {}, 1000);\n', {mode:0o600,flag:'wx'});
+  inside(script);
+  customService = {name, script};
+  run(pm2, ['start', script, '--name', name, '--interpreter', fixture.nodePath, '--cwd', root]);
+  const service = pm2List().find(item => item.name === name);
+  expect(service?.pm2_env.status).toBe('online');
+  expect(service?.pid).toBeGreaterThan(0);
+}
 
 function admitFixture(key) {
   canStop = false;
+  customService = null;
   const manifest = process.env.ZYLOS_TARGET_UPGRADE_FIXTURE;
   expect(path.isAbsolute(manifest || '')).toBe(true);
   const catalog = read(manifest);
@@ -176,10 +208,14 @@ suite('real target-owned global installation', () => {
   });
 
   // Coverage: installed 0.9.3 handoff, real npm replacement/finalizer, three
-  // owner DBs, custom data/config and original service/terminal preservation.
-  // Run for changes to these boundaries; skip absent reviewed disposable fixture.
+  // owner DBs, custom data/config and original service/terminal preservation,
+  // including a real skills service absent from the target ecosystem.
+  // Run for service restart/finalization changes; skip absent the explicit gate
+  // and reviewed disposable fixture. HOME/ZYLOS_DIR/PM2_HOME/TMPDIR, private
+  // tmux socket and all three owner databases must stay within that fixture.
   test('installs the candidate and retains owner data, configuration and original services', () => {
     admitFixture('success');
+    startCustomService();
     const before = nodeOperation({mode:'databases',seed:true});
     const settingsFile = path.join(zylosDir,'.claude/settings.json');
     const settings = read(settingsFile);
@@ -192,9 +228,17 @@ suite('real target-owned global installation', () => {
     expect(read(path.join(installedRoot,'package.json')).version).toBe('0.9.4');
     expect(nodeOperation({mode:'databases'})).toEqual(before);
     expect(read(settingsFile).targetUpgradeFixture).toEqual({preserve:true});
-    expect(pm2List().filter(item => item.pm2_env.status === 'online').map(item => item.name)).toEqual(['web-console']);
+    const processes = pm2List();
+    expect(processes.filter(item => item.pm2_env.status === 'online').map(item => item.name).sort())
+      .toEqual([customService.name, 'web-console'].sort());
+    const service = processes.find(item => item.name === customService.name);
+    expect(service.pm2_env.pm_exec_path).toBe(customService.script);
+    expect(service.pid).toBeGreaterThan(0);
+    expect(ecosystemNames()).not.toContain(customService.name);
     const journal = read(path.join(result.transactionDir,'journal.json'));
     expect(journal.targetOwned).toBe(true);
+    expect(journal.originalServices.filter(item => item.name === customService.name))
+      .toEqual([expect.objectContaining(customService)]);
     expect(journal.phase).toBe('upgrade_complete');
     expect(journal.cleanup.complete).toBe(true);
     expect(journal.cleanup.servicesRestored).toBe(true);

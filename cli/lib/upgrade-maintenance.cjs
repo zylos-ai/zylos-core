@@ -623,6 +623,39 @@ function stopBackupOnly(j) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
 }
+function ecosystemServiceNames(ecosystem) {
+  try {
+    const output = command(process.execPath, ['-e', `
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = process.stderr.write.bind(process.stderr);
+    try {
+      const config = require(process.argv[1]);
+      if (!Array.isArray(config?.apps)) throw Error('invalid ecosystem apps');
+      const names = config.apps.map(app => app?.name).filter(name => typeof name === 'string');
+      write(JSON.stringify([...new Set(names)]));
+    } catch (error) {
+      process.stderr.write(String(error?.message ?? error));
+      process.exitCode = 1;
+    }
+    `, path.resolve(ecosystem)]);
+    return JSON.parse(output);
+  } catch (error) {
+    throw Error('failed to load ecosystem: ' + error.message);
+  }
+}
+function validateSavedServices(j, saved) {
+  const current = services(j), names = new Set();
+  for (const service of saved) {
+    const matching = current.filter(item => item.name === service?.name);
+    if (!service?.name || names.has(service.name) || matching.length !== 1 || matching[0].script !== service.script) {
+      throw Error('original PM2 service record missing or changed: ' + service?.name);
+    }
+    names.add(service.name);
+  }
+}
+function restartService(name) {
+  command('pm2', ['restart', name, '--update-env']);
+}
 function start(j) {
   const original = j.originalServices || [];
   if (!original.length) return;
@@ -631,22 +664,21 @@ function start(j) {
   if (originalHash === null) {
     // PM2 already owns these saved records. Restart by verified name, never
     // execute script paths supplied by the journal or synthesize new records.
-    const current = services(j);
-    const names = new Set();
-    for (const saved of original) {
-      if (!saved?.name || names.has(saved.name) || !current.some(service => service.name === saved.name && service.script === saved.script)) {
-        throw Error('original PM2 service record missing or changed: ' + saved?.name);
-      }
-      names.add(saved.name);
-    }
-    for (const saved of original) command('pm2', ['restart', saved.name, '--update-env']);
+    validateSavedServices(j, original);
+    for (const saved of original) restartService(saved.name);
   } else {
     if (typeof originalHash !== 'string' || !/^[a-f0-9]{64}$/.test(originalHash)) throw Error('original ecosystem evidence missing');
     privatePath(ecosystem);
     // The new finalizer may intentionally regenerate the ecosystem. Abort and
     // restored deployments must use the byte-verified original configuration.
     if (!['new_data_ready', 'new_verifying', 'upgrade_complete'].includes(j.phase) && hash(ecosystem) !== originalHash) throw Error('original ecosystem identity changed');
-    for (const saved of original) command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env']);
+    const names = new Set(ecosystemServiceNames(ecosystem));
+    const external = original.filter(service => !names.has(service.name));
+    if (external.length) validateSavedServices(j, external);
+    for (const saved of original) {
+      if (names.has(saved.name)) command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env']);
+      else restartService(saved.name);
+    }
   }
 }
 function verifyServices(j) {
@@ -1027,6 +1059,9 @@ module.exports = {
   services,
   stop,
   stopBackupOnly,
+  ecosystemServiceNames,
+  validateSavedServices,
+  restartService,
   start,
   verifyServices,
   target,
