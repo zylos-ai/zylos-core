@@ -113,7 +113,7 @@ function startCustomService() {
   fs.writeFileSync(script, 'setInterval(() => {}, 1000);\n', {mode:0o600,flag:'wx'});
   inside(script);
   customService = {name, script};
-  run(pm2, ['start', script, '--name', name, '--interpreter', fixture.nodePath, '--cwd', root]);
+  run(pm2, ['start', script, '--name', name, '--interpreter', fixture.nodePath, '--cwd', serviceDir]);
   const service = pm2List().find(item => item.name === name);
   expect(service?.pm2_env.status).toBe('online');
   expect(service?.pid).toBeGreaterThan(0);
