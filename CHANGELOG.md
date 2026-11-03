@@ -5,6 +5,31 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-11-03
+
+### Upgrade prerequisite
+
+**The 0.9.5 target-owned upgrade requires Core 0.9.3 or later.** On an older
+instance, run `zylos upgrade --self --branch release/0.9.3` and then
+`zylos --version`; continue to the target release only after it reports 0.9.3.
+Skip this bridge operation when already on 0.9.3 or 0.9.4. No database schema
+migration is required for this release.
+
+### Added
+- **Time-based conversation fetch**: `c4-fetch --since <duration|datetime>` selects conversations from a relative window (`30m`, `6h`, `1d`) or an absolute UTC time (an explicit `Z`/`±HH:MM` offset is honored). Output matches `--begin/--end`, and the header shows the resolved start time and the id range found. No schema change. (#955)
+
+### Fixed
+- **Upgrade recovery of real protected transactions**: the recovery bootstrap now validates the descriptor that the protected install actually writes, including its runner, maintenance and finalizer files, instead of requiring hashes that production never recorded. Early and verified terminal transactions keep the existing stable recovery entry. (#957)
+- **Interrupted upgrades past the compensation cutoff**: status, startup and `bootstrap.cjs --once` agree on `UPGRADE_MANUAL_COMPLETION_REQUIRED` and point to the [manual forward repair guide](docs/self-upgrade-recovery.md#manual-forward-repair-after-the-cutoff). They offer no automatic resume command, and `--once` no longer runs the recovery controller or stops services an operator has already restored. The fixed status entry (`bootstrap.cjs --status`) now reports `recovery_required` and exits 1 for such transactions, ambiguous attribution, malformed discovery material and controller diagnostics. (#957)
+- **Custom PM2 services after upgrade**: skills services that are not in the target ecosystem file are restarted from their existing PM2 records after the saved name, script and skills-directory checks, instead of being silently left stopped. Records are never deleted or recreated, and an ecosystem file that fails to load stops the restart before any PM2 action. (#957)
+- **Codex hooks sync**: `sync-settings-hooks` also refreshes `.codex/hooks.json` when only the hook set has drifted (for example a component adding a SessionStart shard), and reports that the new hooks take effect at the next Codex session start. (#916)
+- **Installer without a terminal**: `install.sh` checks for a usable terminal by opening `/dev/tty` instead of testing that it exists, so installs over `ssh -T`, cloud-init, CI or cron skip the consent prompt and run `zylos init` non-interactively instead of aborting. (#917)
+- **`zylos init` with a missing home directory**: the home directory is created before Claude terms are pre-accepted, so init no longer fails with `ENOENT` in fresh containers or new homes. (#918)
+- **Web console dependencies**: multer 2.5.0, express 4.22.3 / body-parser 1.20.9 and qs 6.16.2 resolve the high-severity multer and body-parser and the medium-severity qs denial-of-service advisories. (#953)
+
+### Upgrade notice
+- The #957 recovery changes take effect with the bootstrap deployed by this package; they do not repair a bootstrap already deployed by an earlier release. Hosts that were manually recovered earlier need no further action.
+
 ## [0.9.4] - 2026-11-02
 
 ### Upgrade prerequisite
