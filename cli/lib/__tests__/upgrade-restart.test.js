@@ -2,10 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, test } from 'node:test';
+import {createRequire} from 'node:module';
+import {serviceRestartFixture} from './helpers/service-restart-fixture.js';
 
 const { rollback, step7_runPostUpgradeHook, step8_startService } = await import('../upgrade.js');
-const { step11_startCoreServices } = await import('../self-upgrade.js');
+const { step11_startCoreServices, step12_verifyServices, resumeUpgradeFinalization } = await import('../self-upgrade.js');
+const maintenance = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
+const {resumeFinalize} = await import('../upgrade-resume.js');
 
 function makeSkillDir(frontmatter) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-hook-'));
@@ -160,6 +164,73 @@ describe('step7_runPostUpgradeHook', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+});
+
+test('core restart starts ecosystem and saved custom services before strict verification', t => {
+  const f=serviceRestartFixture(t);f.custom();
+  const ctx={journal:f.j,servicesWereRunning:f.j.originalServices.map(service=>service.name)};
+  const result=step11_startCoreServices(ctx,{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
+  assert.equal(result.status,'done',JSON.stringify(result));
+  assert.equal(step12_verifyServices(ctx,{execSync:command=>command.startsWith('sleep')?'':JSON.stringify(f.records())}).status,'done');
+  assert.ok(f.calls().some(args=>args[0]==='start'&&args.includes('scheduler')));
+  assert.ok(f.calls().some(args=>JSON.stringify(args)===JSON.stringify(['restart','custom-service','--update-env'])));
+  assert.ok(f.records().every(record=>record.pm2_env.status==='online'));
+  assert.ok(!f.calls().some(args=>args[0]==='delete'));
+});
+
+for(const defect of ['missing','changed','outside','duplicate-saved','duplicate-record'])test(`core restart refuses ${defect} original custom identity before starting any service`, t=>{
+  const f=serviceRestartFixture(t);f.custom();
+  if(defect==='missing')f.records([f.record('scheduler')]);
+  if(defect==='changed')f.records([f.record('scheduler'),{...f.record('custom-service'),pm2_env:{status:'stopped',pm_exec_path:path.join(f.skillsDir,'changed.js')}}]);
+  if(defect==='outside')f.records([f.record('scheduler'),{...f.record('custom-service'),pm2_env:{status:'stopped',pm_exec_path:'/tmp/untrusted.js'}}]);
+  if(defect==='duplicate-saved')f.j.originalServices.push({...f.j.originalServices[1]});
+  if(defect==='duplicate-record')f.records([f.record('scheduler'),f.record('custom-service'),f.record('custom-service')]);
+  const result=step11_startCoreServices({journal:f.j,servicesWereRunning:f.j.originalServices.map(service=>service.name)},{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
+  assert.equal(result.status,'failed');assert.match(result.error,/original PM2 service record missing or changed/);
+  assert.deepEqual(f.calls(),defect==='duplicate-saved'?[]:[['jlist']]);
+});
+
+test('core custom restart failure preserves its original PM2 record without ecosystem retry',t=>{
+  const f=serviceRestartFixture(t,{names:[]});f.fail();
+  const result=step11_startCoreServices({journal:f.j,servicesWereRunning:['scheduler']},{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
+  assert.equal(result.status,'failed');
+  assert.deepEqual(f.calls(),[['jlist'],['restart','scheduler','--update-env']]);
+});
+
+test('resume-finalize runs real service restart and verification for an app absent from ecosystem',async t=>{
+  const f=serviceRestartFixture(t);f.custom();
+  const root=f.env.ZYLOS_DIR,id='upgrade-custom',dir=path.join(root,'.backup/self-upgrade',id),db=path.join(root,'.backup/db',id);
+  fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.mkdirSync(db,{recursive:true,mode:0o700});
+  const manifest={formatVersion:2,function:'core-self-upgrade-db',status:'complete',id,
+    databases:['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db','components/dashboard/dashboard.db'].map(source=>({source,status:'missing',file:null,bytes:0,sha256:null,userVersion:null,integrityCheck:null}))};
+  maintenance.durable(path.join(db,'manifest.json'),manifest);
+  const digest=maintenance.hash(path.join(db,'manifest.json'));
+  const journal={...f.j,transactionId:id,phase:'recovery_required',resumePhase:'compensation_closed',installationIntent:true,from:'old',to:'new',dbBackupDir:db,snapshotManifestHash:digest,
+    compensationCutoff:{formatVersion:1,closed:true,transactionId:id,snapshotManifestHash:digest,closedAt:new Date().toISOString(),writer:'finalizer'},postCutoff:{items:{hooks:{state:'done'}}}};
+  maintenance.durable(path.join(dir,'journal.json'),journal);
+  const read=()=>maintenance.read(path.join(dir,'journal.json'));
+  const m={...maintenance,discover:()=>({candidates:[{dir,journal:read()}],diagnostics:[]}),transaction:read,acquire:()=>()=>{},marker:()=>{}};
+  const result=await resumeFinalize(root,{}, {maintenance:m,quiesce:()=>{},finalize:ctx=>resumeUpgradeFinalization(ctx,{
+    publish:()=>({ok:true}),updateConfig:()=>{},ensureMemoryMigration:()=>{},verifyPublicationForServices:()=>{},
+    startServices:ctx=>step11_startCoreServices(ctx,{zylosDir:root,ecosystemPath:f.file}),
+    dashboardOwner:{verifyDashboard:()=>({state:'ready',errors:[]})},readModeStatus:()=>({ok:true,data:{sessionMode:'single',transition:null}}),
+    readMode:()=>({mode:'single'}),readTransition:()=>null,restart:()=>({ok:true,data:{result:'accepted'}}),audit:()=>[],
+    protectedSuccess:ctx=>m.update(dir,ctx.journal,{phase:'upgrade_complete'}),
+  })});
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(result.data.core.state,'done');
+  assert.ok(f.calls().some(args=>args[0]==='restart'&&args[1]==='custom-service'));
+  assert.ok(f.records().every(record=>record.pm2_env.status==='online'));
+  assert.equal(read().phase,'upgrade_complete');
+});
+
+test('core verification retains a saved custom service that remains stopped',t=>{
+  const f=serviceRestartFixture(t);f.custom();let polls=0;
+  const result=step12_verifyServices({servicesWereRunning:f.j.originalServices.map(service=>service.name)},{execSync:command=>{
+    if(command.startsWith('sleep')){if(++polls===2)throw Error('poll cancelled');return '';}
+    return JSON.stringify([f.record('scheduler','online'),f.record('custom-service')]);
+  }});
+  assert.equal(result.status,'failed');assert.equal(polls,2);
 });
 
 describe('step8_startService', () => {
@@ -326,18 +397,19 @@ describe('component upgrade rollback', () => {
 });
 
 describe('step11_startCoreServices', () => {
-  it('passes the core ecosystem path instead of null when no template is available yet', () => {
+  it('passes the core ecosystem path instead of null when no template is available yet', t => {
+    const f=serviceRestartFixture(t,{names:['activity-monitor']});
     const calls = [];
     const result = step11_startCoreServices({
       tempDir: null,
       servicesWereRunning: ['activity-monitor'],
     }, {
       fs: {
-        existsSync: () => false,
+        existsSync: () => true,
         mkdirSync: () => {},
         copyFileSync: () => {},
       },
-      ecosystemPath: '/tmp/core-ecosystem.config.cjs',
+      ecosystemPath: f.file,
       restartManagedProcess: (name, opts) => {
         calls.push({ name, opts });
       },
@@ -349,7 +421,7 @@ describe('step11_startCoreServices', () => {
     assert.deepStrictEqual(calls, [{
       name: 'activity-monitor',
       opts: {
-        ecosystemPath: '/tmp/core-ecosystem.config.cjs',
+        ecosystemPath: f.file,
         stdio: 'pipe',
         fallbackToPlainRestartOnError: false,
       },
@@ -368,7 +440,7 @@ describe('step11_startCoreServices', () => {
     const originalPath = process.env.PATH;
 
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
+    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [{name:"activity-monitor"}] };\n', 'utf8');
     fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "jlist" ]; then echo '[{"name":"activity-monitor","pm_id":3,"pm2_env":{"status":"online","ZYLOS_PACKAGE_ROOT":"${tmpDir}"}}]'; fi\n`, { mode: 0o755 });
 
     process.env.PATH = `${binDir}:${originalPath}`;
@@ -407,7 +479,7 @@ describe('step11_startCoreServices', () => {
     const originalPath = process.env.PATH;
 
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
+    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [{name:"activity-monitor"}] };\n', 'utf8');
     fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "jlist" ]; then echo '[{"name":"activity-monitor","pm_id":3,"pm2_env":{"status":"online"}}]'; fi\n`, { mode: 0o755 });
 
     process.env.PATH = `${binDir}:${originalPath}`;
@@ -435,18 +507,19 @@ describe('step11_startCoreServices', () => {
     }
   });
 
-  it('fails before saving when activity-monitor restarts without refreshed package-root env', () => {
+  it('fails before saving when activity-monitor restarts without refreshed package-root env', t => {
+    const f=serviceRestartFixture(t,{names:['activity-monitor']});
     const calls = [];
     const result = step11_startCoreServices({
       tempDir: null,
       servicesWereRunning: ['activity-monitor'],
     }, {
       fs: {
-        existsSync: () => false,
+        existsSync: () => true,
         mkdirSync: () => {},
         copyFileSync: () => {},
       },
-      ecosystemPath: '/tmp/core-ecosystem.config.cjs',
+      ecosystemPath: f.file,
       restartManagedProcess: (name, opts) => {
         calls.push({ name, opts });
       },

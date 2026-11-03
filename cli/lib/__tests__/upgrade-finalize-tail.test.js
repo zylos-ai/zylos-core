@@ -5,17 +5,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { completeUpgradeFinalization, readUpgradeModeStatus, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
+import {serviceRestartFixture} from './helpers/service-restart-fixture.js';
 
 const maintenance=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
 for(const observed of [true,false])test(`PM2 timeout is checked through jlist before reporting ${observed?'started':'failed'}`,t=>{
+  const f=serviceRestartFixture(t);
   const calls=[];
   const result=step11_startCoreServices({servicesWereRunning:['scheduler']},{
-    fs:{existsSync:()=>false},
+    ecosystemPath:f.file,
     execSync:(command,options)=>{
       calls.push(command);
       assert.equal(options.timeout,30000);
-      if(command.startsWith('pm2 restart'))throw Object.assign(Error('timed out'),{code:'ETIMEDOUT'});
+      if(command.startsWith('pm2 start'))throw Object.assign(Error('timed out'),{code:'ETIMEDOUT'});
       if(command.startsWith('pm2 jlist'))return JSON.stringify(observed?[{name:'scheduler',pm2_env:{status:'online'}}]:[]);
       return '';
     }
