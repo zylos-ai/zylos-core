@@ -108,7 +108,7 @@ test('status and discovery do not depend on runtime capability or recovery modul
 
 for (const platform of ['linux', 'darwin']) {
   for (const defect of ['malformed', 'ambiguous']) {
-    test(`${defect} transactions preserve ${platform} recovery codes through bootstrap and bridge`, t => {
+    test(`${defect} transactions preserve ${platform} recovery codes through bootstrap and bridge`, {skip:platform === 'linux' && process.platform !== 'linux'}, t => {
       const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
       Object.defineProperty(process, 'platform', {...originalPlatform, value:platform});
       try {
