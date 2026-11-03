@@ -72,6 +72,8 @@ test('malformed journals expose a fixed diagnostic cue and never resume', t => {
   const out = f.api.bootstrap(f.root);
   assert.equal(out.recovery_required, true);
   assert.equal(out.blocked, true);
+  assert.equal(out.automaticResume, false);
+  assert.equal(f.api.bootstrap(f.root, {status: true}).automaticResume, false);
   assert.match(out.prompt, /SYSTEM RECOVERY TASK/);
   assert.match(out.prompt, /--status/);
   assert.match(out.prompt, /Do not query C4/);
@@ -83,6 +85,8 @@ test('ambiguous transactions remain visible but cannot authorize recovery', t =>
   const out = f.api.bootstrap(f.root, {once: true});
   assert.equal(out.recovery_required, true);
   assert.match(out.error, /not unique/);
+  assert.equal(out.automaticResume, false);
+  assert.equal(f.api.bootstrap(f.root, {status: true}).automaticResume, false);
   assert.match(out.prompt, /one/); assert.match(out.prompt, /two/);
 });
 

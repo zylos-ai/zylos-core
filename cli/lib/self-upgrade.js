@@ -1368,7 +1368,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
   let ecosystemNames;
   try {
     ecosystemNames = new Set(ctx.preInstallProtection && fsApi.existsSync(ecosystemPath)
-      ? (deps.ecosystemServiceNames ?? serviceMaintenance.ecosystemServiceNames)(ecosystemPath)
+      ? serviceMaintenance.ecosystemServiceNames(ecosystemPath)
       : []);
     const externalNames = ctx.preInstallProtection
       ? ctx.servicesWereRunning.filter(name => !ecosystemNames.has(name)) : [];
@@ -1379,7 +1379,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
         if (records.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
         return records[0];
       });
-      (deps.validateSavedServices ?? serviceMaintenance.validateSavedServices)(savedJournal, external);
+      serviceMaintenance.validateSavedServices(savedJournal, external);
     }
   } catch (error) {
     return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
@@ -1393,7 +1393,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
           stdio: 'pipe',
           fallbackToPlainRestartOnError: true,
         });
-      } else (deps.restartService ?? serviceMaintenance.restartService)(name);
+      } else serviceMaintenance.restartService(name);
       started.push(name);
     } catch {
       failed.push(name);

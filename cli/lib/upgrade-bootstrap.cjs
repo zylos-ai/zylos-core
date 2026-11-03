@@ -118,7 +118,7 @@ function bootstrap(root, {
   const out = {
     active: true,
     ...(status ? d : {}),
-    automaticResume: automaticResumeAvailable(),
+    automaticResume: !invalid && automaticResumeAvailable(),
     blocked: d.blocked,
     prompt,
     ...(invalid ? {
@@ -154,7 +154,6 @@ function bootstrap(root, {
   // neither diagnostics nor ambiguity authorize automatic recovery execution.
   if (once) {
     if (invalid) return out;
-    if (!automaticResumeAvailable()) return {...out, recovery_required:true, code:'MANUAL_RECOVERY_REQUIRED', error:'interrupted upgrade requires manual recovery; automatic resume is unavailable', next:'zylos recovery status'};
     try { return runFrozenRunner(root, d.candidates[0]); }
     catch (error) { return {...out, recovery_required:true, code:'UPGRADE_RECOVERY_REQUIRED', error:error.message, next:'zylos recovery status'}; }
   }

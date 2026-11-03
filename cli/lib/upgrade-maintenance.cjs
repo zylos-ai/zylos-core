@@ -634,7 +634,7 @@ function ecosystemServiceNames(ecosystem) {
       const names = config.apps.map(app => app?.name).filter(name => typeof name === 'string');
       write(JSON.stringify([...new Set(names)]));
     } catch (error) {
-      process.stderr.write(String(error.message));
+      process.stderr.write(String(error?.message ?? error));
       process.exitCode = 1;
     }
     `, path.resolve(ecosystem)]);

@@ -73,13 +73,13 @@ for (const changed of ['missing','outside','changed','duplicate','saved-duplicat
   });
 }
 
-for (const source of ['throw Error("cannot load")','module.exports={}']) {
+for (const source of ['throw Error("cannot load")',"throw 'bad config'",'module.exports={}']) {
   test(`invalid ecosystem fails before PM2 actions: ${source}`, t => {
     const f = fixture(t, {ecosystem:true});
     fs.writeFileSync(f.file,source);
     f.j.initialIdentity.ecosystemHash=m.hash(f.file);
     assert.throws(() => m.start(f.j), error => {
-      assert.match(error.message,/^failed to load ecosystem: (cannot load|invalid ecosystem apps)$/);
+      assert.match(error.message,/^failed to load ecosystem: (cannot load|bad config|invalid ecosystem apps)$/);
       assert.doesNotMatch(error.message,/\[eval\]|\n\s+at |Node\.js/);
       return true;
     });

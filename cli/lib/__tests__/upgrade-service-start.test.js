@@ -66,13 +66,13 @@ test('step11 reads protected service provenance from durable journal',t=>{
   assert.equal(f.readRecords()[0].pm2_env.status,'online');
 });
 
-for (const source of ['throw Error("cannot load")', 'module.exports={}']) {
+for (const source of ['throw Error("cannot load")', "throw 'bad config'", 'module.exports={}']) {
   test(`step11 rejects invalid ecosystem before starting any service: ${source}`, t => {
     const f=serviceFixture(t,{ecosystem:true});
     fs.writeFileSync(f.file,source);
     const result=step11_startCoreServices(context(f),{ecosystemPath:f.file,zylosDir:f.root});
     assert.equal(result.status,'failed');
-    assert.match(result.error,/cannot load|invalid ecosystem/);
+    assert.match(result.error,/cannot load|bad config|invalid ecosystem/);
     assert.match(result.error,/^failed to load ecosystem: /);
     assert.doesNotMatch(result.error,/\[eval\]|\n\s+at |Node\.js/);
     assert.deepEqual(f.commands(),[]);
