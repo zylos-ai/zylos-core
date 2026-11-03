@@ -64,6 +64,21 @@ function deps(calls, extras={}) {
     ...extras,
   };
 }
+test('finalization persists a concise ecosystem loading error',async t=>{
+  const ctx=fixture(t),f=serviceRestartFixture(t),calls=[];
+  ctx.maintenance={...maintenance,...ctx.maintenance};
+  fs.writeFileSync(f.file,'throw Error("broken config");');
+  ctx.servicesWereRunning=['scheduler'];
+  ctx.journal.originalServices=f.j.originalServices;
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{
+    startServices:coreCtx=>step11_startCoreServices(coreCtx,{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file}),
+  }));
+  assert.equal(result.success,false);
+  assert.match(ctx.journal.lastError,/ecosystem.*load|load.*ecosystem/i);
+  assert.match(ctx.journal.lastError,/broken config/);
+  assert.doesNotMatch(ctx.journal.lastError,/\[eval\]|\n\s+at |Node\.js v/);
+  assert.deepEqual(f.calls(),[]);
+});
 for(const failing of [false,true]) test(`finalization retains optional runtime warnings on ${failing?'failure':'success'}`,async t=>{
   const ctx=fixture(t),calls=[];
   ctx.runtimeWarnings=[{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'}];

@@ -178,6 +178,37 @@ test('core restart starts ecosystem and saved custom services before strict veri
   assert.ok(!f.calls().some(args=>args[0]==='delete'));
 });
 
+for(const source of ['throw Error("broken config")','module.exports={}'])test(`core restart refuses invalid ecosystem configuration ${source}`,t=>{
+  const f=serviceRestartFixture(t);fs.writeFileSync(f.file,source);
+  const result=step11_startCoreServices({journal:f.j,servicesWereRunning:['scheduler']},{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
+  assert.equal(result.status,'failed');
+  assert.match(result.error,/ecosystem.*load|load.*ecosystem/i);
+  assert.match(result.error,/broken config|invalid ecosystem/);
+  assert.doesNotMatch(result.error,/\[eval\]|\n\s+at |Node\.js v/);
+  assert.deepEqual(f.calls(),[]);
+});
+
+test('core restart without an ecosystem uses verified saved PM2 records',t=>{
+  const f=serviceRestartFixture(t,{ecosystem:false});f.custom();
+  const result=step11_startCoreServices({journal:f.j,servicesWereRunning:f.j.originalServices.map(service=>service.name)},{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
+  assert.equal(result.status,'done',JSON.stringify(result));
+  assert.deepEqual(f.calls(),[['jlist'],['restart','scheduler','--update-env'],['restart','custom-service','--update-env'],['save']]);
+  assert.ok(f.records().every(record=>record.pm2_env.status==='online'));
+  assert.equal(fs.existsSync(f.file),false);
+});
+
+for(const defect of ['missing','changed','outside','duplicate-saved','duplicate-record'])test(`core restart without an ecosystem refuses ${defect} saved PM2 identity`,t=>{
+  const f=serviceRestartFixture(t,{ecosystem:false});
+  if(defect==='missing')f.records([]);
+  if(defect==='changed')f.records([{...f.record('scheduler'),pm2_env:{status:'stopped',pm_exec_path:path.join(f.skillsDir,'changed.js')}}]);
+  if(defect==='outside')f.records([{...f.record('scheduler'),pm2_env:{status:'stopped',pm_exec_path:'/tmp/untrusted.js'}}]);
+  if(defect==='duplicate-saved')f.j.originalServices.push({...f.j.originalServices[0]});
+  if(defect==='duplicate-record')f.records([f.record('scheduler'),f.record('scheduler')]);
+  const result=step11_startCoreServices({journal:f.j,servicesWereRunning:['scheduler']},{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
+  assert.equal(result.status,'failed');assert.match(result.error,/original PM2 service record missing or changed/);
+  assert.deepEqual(f.calls(),defect==='duplicate-saved'?[]:[['jlist']]);
+});
+
 for(const defect of ['missing','changed','outside','duplicate-saved','duplicate-record'])test(`core restart refuses ${defect} original custom identity before starting any service`, t=>{
   const f=serviceRestartFixture(t);f.custom();
   if(defect==='missing')f.records([f.record('scheduler')]);

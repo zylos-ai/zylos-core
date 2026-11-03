@@ -12,6 +12,10 @@ const runTest = pm2 ? test : test.skip;
 // maintenance.start, with an app absent from the ecosystem. Run when these
 // restart boundaries change; skip without an explicitly supplied PM2 binary.
 // This does not install npm packages or prove an entire upgrade distribution.
+// Run only in isolation: never touch live resources. Isolate HOME, ZYLOS_DIR,
+// PM2_HOME and a short TMPDIR; use a private tmux socket and test databases.
+// Read back actual arguments, environment and targets before launching, then
+// clean only the owned PM2 daemon, socket and fixture resources.
 runTest('restores a real custom PM2 application absent from the ecosystem', () => {
   expect(path.isAbsolute(pm2)).toBe(true);
   expect(fs.statSync(fs.realpathSync(pm2)).isFile()).toBe(true);

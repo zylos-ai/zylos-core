@@ -50,9 +50,26 @@ test('new-code ready verification allows intentional regenerated ecosystem bytes
   const f=serviceRestartFixture(t);f.j.phase='upgrade_complete';fs.appendFileSync(f.file,'// regenerated');
   m.start(f.j);assert.equal(f.calls()[0][0],'startOrRestart');
 });
-for(const source of ['throw Error("broken config")','module.exports={}','module.exports={apps:[{}]}'])test(`ecosystem loading refuses invalid configuration ${source}`,t=>{
+for(const source of ['throw Error("broken config")','module.exports={}'])test(`ecosystem loading refuses invalid configuration ${source}`,t=>{
   const f=serviceRestartFixture(t);fs.writeFileSync(f.file,source);f.j.initialIdentity.ecosystemHash=m.hash(f.file);
-  assert.throws(()=>m.start(f.j),/broken config|invalid ecosystem/);assert.deepEqual(f.calls(),[]);
+  assert.throws(()=>m.start(f.j),error=>{
+    assert.match(error.message,/ecosystem.*load|load.*ecosystem/i);
+    assert.match(error.message,/broken config|invalid ecosystem/);
+    assert.doesNotMatch(error.message,/\[eval\]|\n\s+at |Node\.js v/);
+    return true;
+  });assert.deepEqual(f.calls(),[]);
+});
+test('ecosystem names allow duplicates and ignore unnamed or nonstring entries',t=>{
+  const f=serviceRestartFixture(t);
+  fs.writeFileSync(f.file,'module.exports={apps:[{name:"scheduler"},{name:"scheduler"},{},{name:12},null]};');
+  assert.deepEqual(m.ecosystemServiceNames(f.file),['scheduler']);
+});
+test('unnamed and nonstring ecosystem entries preserve external saved-record restarts',t=>{
+  const f=serviceRestartFixture(t);
+  fs.writeFileSync(f.file,'module.exports={apps:[{script:"service.js"},{name:12},null]};');
+  f.j.initialIdentity.ecosystemHash=m.hash(f.file);
+  m.start(f.j);
+  assert.deepEqual(f.calls(),[['jlist'],['restart','scheduler','--update-env']]);
 });
 test('ecosystem loading observes changed exports without polluting the parent require cache',t=>{
   const f=serviceRestartFixture(t);assert.deepEqual(m.ecosystemServiceNames(f.file),['scheduler']);
