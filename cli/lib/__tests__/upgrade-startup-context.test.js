@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import {writeRecoveryDescriptor} from './helpers/upgrade-descriptor.js';
 import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt} from '../runtime/upgrade-context.js';
@@ -22,18 +22,17 @@ function startupResumeFixture(t,{resumeFails=true,liveController=false}={}) {
  const files={
   'runner.cjs':`'use strict'; const fs=require('node:fs'),path=require('node:path'); const dir=process.argv.at(-1),j=JSON.parse(fs.readFileSync(path.join(dir,'journal.json'))); fs.writeFileSync(${JSON.stringify(executed)},'yes'); if(j.phase==='installing'&&j.installerStarted===true&&j.installerPid===null) process.exit(9); fs.rmSync(dir,{recursive:true});\n`,
   'maintenance.cjs':fs.readFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs')),
-  'installer.cjs':"'use strict';\n",
+  'finalizer.cjs':"'use strict';\n",
  };
- const recoveryHashes={};
  for(const [name,content] of Object.entries(files)) {
   fs.writeFileSync(path.join(dir,name),content,{mode:0o600});
-  recoveryHashes[name]=crypto.createHash('sha256').update(content).digest('hex');
  }
+ writeRecoveryDescriptor(dir);
  const digest='a'.repeat(64);
  fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify({
   formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir:path.join(root,'.claude/skills'),
   nodePath:process.execPath,phase:liveController?'new_data_ready':'installing',installationIntent:true,
-  installerStarted:resumeFails,installerPid:null,installerExitConfirmed:false,recoveryHashes,
+  installerStarted:resumeFails,installerPid:null,installerExitConfirmed:false,
   dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:digest,
   coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
   initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:digest,

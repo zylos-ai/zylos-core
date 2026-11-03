@@ -631,7 +631,7 @@ export function step2_preUpgradeHook(ctx) {
  * Find PM2 services running from SKILLS_DIR by matching exec paths.
  * This catches ALL zylos-managed services regardless of SKILL.md declarations.
  *
- * @returns {{ name: string, status: string }[]} PM2 processes whose scripts are under SKILLS_DIR
+ * @returns {{ name: string, status: string, script: string }[]} PM2 processes whose scripts are under SKILLS_DIR
  */
 function getSkillsServices(deps = {}) {
   const execSyncFn = deps.execSync ?? execSync;
@@ -645,7 +645,7 @@ function getSkillsServices(deps = {}) {
         const execPath = proc.pm2_env?.pm_exec_path || '';
         return execPath.startsWith(resolved + '/');
       })
-      .map(proc => ({ name: proc.name, status: proc.pm2_env?.status }));
+      .map(proc => ({ name: proc.name, status: proc.pm2_env?.status, script: proc.pm2_env.pm_exec_path }));
   } catch {
     return [];
   }
@@ -667,6 +667,7 @@ export function step3_stopCoreServices(ctx, deps = {}) {
   // Find all PM2 services running from skills directory
   const services = getServices();
   const onlineServices = services.filter(s => s.status === 'online');
+  ctx.originalServices = onlineServices.map(service => ({...service}));
 
   if (services.length === 0) {
     return { step: 3, name: 'stop_core_services', status: 'skipped', message: 'no services found', duration: Date.now() - startTime };
@@ -1364,14 +1365,37 @@ export function step11_startCoreServices(ctx, deps = {}) {
 
   const started = [];
   const failed = [];
+  const serviceMaintenance = maintenanceFor(ctx);
+  let ecosystemNames;
+  try {
+    ecosystemNames = new Set(fsApi.existsSync(ecosystemPath)
+      ? (deps.ecosystemServiceNames ?? serviceMaintenance.ecosystemServiceNames)(ecosystemPath)
+      : []);
+    const externalNames = ctx.servicesWereRunning.filter(name => !ecosystemNames.has(name));
+    if (externalNames.length) {
+      const savedJournal = ctx.preInstallProtection
+        ? serviceMaintenance.read(path.join(ctx.transactionDir, 'journal.json'))
+        : {originalServices:ctx.originalServices, skillsDir:ctx.backupOnlySkillsDir || deps.skillsDir || SKILLS_DIR};
+      const external = externalNames.map(name => {
+        const records = (savedJournal.originalServices || []).filter(service => service.name === name);
+        if (records.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
+        return records[0];
+      });
+      (deps.validateSavedServices ?? serviceMaintenance.validateSavedServices)(savedJournal, external);
+    }
+  } catch (error) {
+    return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
+  }
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      restartFn(name, {
-        ecosystemPath,
-        stdio: 'pipe',
-        fallbackToPlainRestartOnError: true,
-      });
+      if (ecosystemNames.has(name)) {
+        restartFn(name, {
+          ecosystemPath,
+          stdio: 'pipe',
+          fallbackToPlainRestartOnError: true,
+        });
+      } else (deps.restartService ?? serviceMaintenance.restartService)(name);
       started.push(name);
     } catch {
       failed.push(name);
@@ -1661,6 +1685,7 @@ export function createFinalizeState(ctx) {
     tempDir: ctx.tempDir,
     backupDir: ctx.backupDir,
     servicesWereRunning: ctx.servicesWereRunning,
+    ...(!ctx.preInstallProtection && Array.isArray(ctx.originalServices) ? {originalServices:ctx.originalServices} : {}),
     from: ctx.from,
     to: ctx.to,
     newVersion: ctx.newVersion,
@@ -1771,6 +1796,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   }
   ctx.backupDir = state.backupDir || null;
   ctx.servicesWereRunning = Array.isArray(state.servicesWereRunning) ? [...state.servicesWereRunning] : [];
+  ctx.originalServices = Array.isArray(state.originalServices) ? state.originalServices.map(service => ({...service})) : [];
   ctx.from = state.from || null;
   ctx.to = state.to || state.newVersion || null;
 

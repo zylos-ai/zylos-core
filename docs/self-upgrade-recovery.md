@@ -73,6 +73,15 @@ the bridge.
 
 ## Manual forward repair after the cutoff
 
+The fixed bootstrap reports `UPGRADE_MANUAL_COMPLETION_REQUIRED` for an
+interrupted transaction past this cutoff and directs the operator here.
+Its status and startup prompts offer no automatic resume command for that
+transaction. Running `bootstrap.cjs --root <deployment> --once` returns the
+same manual-completion result without running the recovery controller or
+stopping services that an operator has already restored. This behavior takes
+effect with the new package's deployed bootstrap; it does not patch an older
+bootstrap already installed on a machine.
+
 This is an operator/local-agent procedure in an exclusive maintenance window,
 not a new `recovery` command. Run it from a separate operator shell or local
 repair process that survives a runtime restart. Keep the dispatcher and automatic

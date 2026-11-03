@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import crypto from 'node:crypto';
+import {writeRecoveryDescriptor} from './helpers/upgrade-descriptor.js';
+import {resumeUpgradeForStartup} from '../runtime/upgrade-context.js';
 import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {test} from 'node:test';
@@ -53,17 +54,15 @@ function installFrozenRunner(dir, source) {
   const files = {
     'runner.cjs': source,
     'maintenance.cjs': "'use strict';\n",
-    'installer.cjs': "'use strict';\n",
+    'finalizer.cjs': "'use strict';\n",
   };
-  const hashes = {};
   for (const [name, content] of Object.entries(files)) {
     fs.writeFileSync(path.join(dir, name), content, {mode:0o600});
-    hashes[name] = crypto.createHash('sha256').update(content).digest('hex');
   }
   const journalFile = path.join(dir, 'journal.json');
   const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'));
-  fs.writeFileSync(journalFile, JSON.stringify({...journal, nodePath:process.execPath, recoveryHashes:hashes}), {mode:0o600});
-  return hashes;
+  fs.writeFileSync(journalFile, JSON.stringify({...journal, installationIntent:true, nodePath:process.execPath, initialIdentity:{...journal.initialIdentity,nodePath:process.execPath}}), {mode:0o600});
+  return writeRecoveryDescriptor(dir).hashes;
 }
 
 
@@ -163,7 +162,7 @@ test('changed frozen recovery material is rejected before runner execution', {sk
   assert.equal(fs.existsSync(executed), false);
 });
 
-test('an existing descriptor must name the fixed layout and the same recovery hashes', {skip:process.platform==='darwin'}, t => {
+test('an existing descriptor must name the fixed layout and the required recovery hashes', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
   const hashes = installFrozenRunner(dir, '');
   fs.writeFileSync(path.join(dir, 'descriptor.json'), JSON.stringify({
@@ -177,6 +176,87 @@ test('an existing descriptor must name the fixed layout and the same recovery ha
   const out = f.api.bootstrap(f.root, {once:true});
   assert.equal(out.recovery_required, true);
   assert.match(out.error, /fixed layout/);
+});
+
+test('installation requires its descriptor and never falls back to the stable runner', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal();
+  installFrozenRunner(dir, 'process.exit(0);');
+  fs.unlinkSync(path.join(dir, 'descriptor.json'));
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.error, /descriptor\.json/);
+});
+
+test('an early transaction uses the stable recovery entry without a descriptor', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = f.journal('tx', {installationIntent:false});
+  fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), `
+    const fs=require('node:fs'),path=require('node:path');
+    const dir=process.argv.at(-1),root=path.resolve(dir,'../../..');
+    fs.rmSync(path.join(root,'.zylos/upgrade/active.json'));
+    fs.rmSync(dir,{recursive:true});
+  `, {mode:0o600});
+  assert.deepEqual(f.api.bootstrap(f.root, {once:true}), {active:false,resumed:true});
+  assert.equal(fs.existsSync(dir), false);
+});
+
+function closedJournal(f) {
+  return readyJournal(f, 'recovery_required', {
+    from:'0.9.3', to:'0.9.4', targetOwned:true,
+    compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',from:'0.9.3',to:'0.9.4',snapshotManifestHash:'a'.repeat(64)},
+  });
+}
+
+test('closed compensation consistently requires manual completion in status, once and startup', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = closedJournal(f);
+  const before = fs.readFileSync(path.join(dir, 'journal.json'), 'utf8');
+  for (const out of [f.api.bootstrap(f.root, {status:true}), f.api.bootstrap(f.root, {once:true}), resumeUpgradeForStartup(f.root)]) {
+    assert.equal(out.code, 'UPGRADE_MANUAL_COMPLETION_REQUIRED');
+    assert.equal(out.automaticResume, false);
+    assert.equal(out.recovery_required, true);
+    assert.equal(out.next, 'docs/self-upgrade-recovery.md#manual-forward-repair-after-the-cutoff');
+    const prompt = JSON.parse(out.prompt.slice(out.prompt.indexOf('\n') + 1));
+    assert.equal(prompt.transactions[0].resume, undefined);
+    assert.equal(prompt.transactions[0].automaticResume, false);
+    assert.equal(prompt.transactions[0].code, out.code);
+  }
+  assert.equal(fs.readFileSync(path.join(dir, 'journal.json'), 'utf8'), before);
+});
+
+test('a closed transaction with a live controller is observed before manual classification', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = closedJournal(f);
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  m.durable(path.join(dir, 'controller.json'), m.identity());
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.observing, true);
+  assert.equal(out.controllerAlive, true);
+  assert.equal(out.code, undefined);
+});
+
+test('controller diagnostics prevent manual classification and automatic execution', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = closedJournal(f);
+  fs.writeFileSync(path.join(dir, 'controller.json'), '{broken', {mode:0o600});
+  for (const options of [{status:true}, {once:true}, {}]) {
+    const out = f.api.bootstrap(f.root, options);
+    assert.equal(out.recovery_required, true);
+    assert.equal(out.automaticResume, false);
+    assert.equal(out.code, undefined);
+    assert.match(out.error, /controller identity unavailable/);
+  }
+});
+
+test('untrusted cutoff and ambiguous attribution cannot execute recovery', {skip:process.platform==='darwin'}, t => {
+  const f = fixture(t), dir = closedJournal(f);
+  const file = path.join(dir, 'journal.json'), journal = JSON.parse(fs.readFileSync(file));
+  journal.compensationCutoff.closed = false;
+  fs.writeFileSync(file, JSON.stringify(journal), {mode:0o600});
+  let out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.error, /untrusted compensation cutoff/);
+  f.journal('another');
+  out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, undefined);
+  assert.match(out.error, /not unique/);
 });
 
 test('stale or invalid controller material leaves an isolated recovery cue', t => {
