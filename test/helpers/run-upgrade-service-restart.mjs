@@ -31,8 +31,12 @@ const ecosystem = path.join(zylosDir, 'pm2/ecosystem.config.cjs');
 fs.mkdirSync(path.dirname(ecosystem), {recursive:true});
 fs.writeFileSync(ecosystem, 'module.exports={apps:[]};\n', {mode:0o600});
 const saved = {name:'fixture-custom-service', script};
-const context = originalServices => ({servicesWereRunning:[saved.name], originalServices,
-  backupOnlySkillsDir:skillsDir});
+const transactionDir = path.join(zylosDir, '.backup/self-upgrade/service-test');
+fs.mkdirSync(transactionDir, {recursive:true, mode:0o700});
+const context = originalServices => {
+  m.durable(path.join(transactionDir, 'journal.json'), {zylosDir, skillsDir, originalServices});
+  return {servicesWereRunning:[saved.name], preInstallProtection:true, transactionDir};
+};
 const stepDeps = {zylosDir, ecosystemPath:ecosystem, skillsDir};
 {
   pm2('start', script, '--name', saved.name, '--cwd', root);

@@ -238,7 +238,6 @@ export function prepareBackupOnlyInstall(ctx, deps = {}) {
   const j = {zylosDir, skillsDir, initialIdentity: {ecosystemHash: null}};
   const services = (deps.services ?? maintenance.services)(j);
   j.originalServices = services.filter(s => s.status === 'online');
-  ctx.originalServices = j.originalServices.map(service => ({...service}));
   ctx.servicesWereRunning = j.originalServices.map(s => s.name);
   try {
     ctx.preInstallServicesRestored = false;

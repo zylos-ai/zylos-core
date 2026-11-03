@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import {step11_startCoreServices, step3_stopCoreServices, createFinalizeState, runSelfUpgradeFinalize} from '../self-upgrade.js';
-import {prepareBackupOnlyInstall} from '../upgrade-protection.js';
+import {step11_startCoreServices} from '../self-upgrade.js';
 import {serviceFixture} from './helpers/upgrade-service-fixture.js';
 const m = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
 function context(f) {
+  const dir = path.join(f.root, 'transaction');
+  fs.mkdirSync(dir, {recursive:true, mode:0o700});
+  m.durable(path.join(dir, 'journal.json'), f.j);
   return {tempDir:null,servicesWereRunning:f.j.originalServices.map(service=>service.name),
-    originalServices:f.j.originalServices,backupOnlySkillsDir:f.j.skillsDir};
+    preInstallProtection:true,transactionDir:dir};
 }
 
 test('step11 restarts an ecosystem service and a verified external record', t => {
@@ -25,13 +27,15 @@ test('step11 restarts an ecosystem service and a verified external record', t =>
 });
 
 for(const defect of ['missing','changed','outside','duplicate','saved-duplicate','no-saved-record']) test(`step11 refuses ${defect} external provenance before starting`, t=>{
-  const f=serviceFixture(t,{ecosystem:true,names:[]}),ctx=context(f),record=f.readRecords()[0];
+  const f=serviceFixture(t,{ecosystem:true,names:[]}),record=f.readRecords()[0];
   if(defect==='missing') f.records([]);
   if(defect==='changed'){record.pm2_env.pm_exec_path=path.join(f.j.skillsDir,'changed.js');f.records([record]);}
   if(defect==='outside'){record.pm2_env.pm_exec_path='/tmp/untrusted.js';f.records([record]);}
   if(defect==='duplicate') f.records([record,record]);
-  if(defect==='saved-duplicate') ctx.originalServices.push({...ctx.originalServices[0]});
-  if(defect==='no-saved-record') ctx.originalServices=[];
+  const ctx=context(f);
+  if(defect==='saved-duplicate') f.j.originalServices.push({...f.j.originalServices[0]});
+  if(defect==='no-saved-record') f.j.originalServices=[];
+  m.durable(path.join(ctx.transactionDir, 'journal.json'), f.j);
   const result=step11_startCoreServices(ctx,{ecosystemPath:f.file,zylosDir:f.root});
   assert.equal(result.status,'failed');
   assert.match(result.error,/original PM2 service record missing or changed/);
@@ -56,39 +60,29 @@ test('step11 without ecosystem restarts the original record with updated environ
 
 test('step11 reads protected service provenance from durable journal',t=>{
   const f=serviceFixture(t,{ecosystem:true,names:[]});
-  const dir=path.join(f.root,'transaction');fs.mkdirSync(dir);
-  m.durable(path.join(dir,'journal.json'),f.j);
-  const ctx={...context(f),preInstallProtection:true,transactionDir:dir,journal:f.j,originalServices:[]};
+  const ctx={...context(f),journal:{originalServices:[]},originalServices:[]};
   const result=step11_startCoreServices(ctx,{ecosystemPath:f.file,zylosDir:f.root});
   assert.equal(result.status,'done',result.error);
   assert.equal(f.readRecords()[0].pm2_env.status,'online');
 });
 
-test('nonprotected stop captures script provenance and finalize state retains it',()=>{
-  const saved={name:'custom',status:'online',script:'/isolated/skills/custom/service.js'};
-  const ctx={servicesWereRunning:[],servicesStopped:[]};
-  const result=step3_stopCoreServices(ctx,{getSkillsServices:()=>[saved],stopService:()=>{}});
-  assert.equal(result.status,'done');
-  assert.deepEqual(ctx.originalServices,[saved]);
-  assert.notEqual(ctx.originalServices[0],saved);
-  assert.deepEqual(createFinalizeState(ctx).originalServices,[saved]);
-});
-
-test('backup-only service stop preserves script provenance without a transaction journal', t=>{
-  const f=serviceFixture(t,{ecosystem:true,names:[]});
-  const ctx={backupOnlyRoot:f.root,backupOnlySkillsDir:f.j.skillsDir};
-  prepareBackupOnlyInstall(ctx,{
-    probeSnapshotSync:()=>{},services:()=>[{...f.j.originalServices[0],status:'online'}],
-    stop:()=>{},snapshot:()=>({dbBackupDir:path.join(f.root,'snapshot'),manifest:{databases:[]}}),verifySnapshot:()=>{},
+for (const source of ['throw Error("cannot load")', 'module.exports={}', 'module.exports={apps:[{name:"x"},{name:"x"}]}']) {
+  test(`step11 rejects invalid ecosystem before starting any service: ${source}`, t => {
+    const f=serviceFixture(t,{ecosystem:true});
+    fs.writeFileSync(f.file,source);
+    const result=step11_startCoreServices(context(f),{ecosystemPath:f.file,zylosDir:f.root});
+    assert.equal(result.status,'failed');
+    assert.match(result.error,/cannot load|invalid ecosystem/);
+    assert.deepEqual(f.commands(),[]);
+    assert.equal(f.readRecords()[0].pm2_env.status,'stopped');
   });
-  assert.deepEqual(ctx.servicesWereRunning,['scheduler']);
-  assert.equal(ctx.originalServices[0].script,f.j.originalServices[0].script);
-  assert.equal(ctx.transactionDir,undefined);
-  const state=createFinalizeState(ctx);
-  const result=runSelfUpgradeFinalize(state,{steps:[restored=>{
-    assert.deepEqual(restored.originalServices,ctx.originalServices);
-    assert.notEqual(restored.originalServices[0],ctx.originalServices[0]);
-    return {step:11,name:'start_core_services',status:'done'};
-  }]});
-  assert.equal(result.success,true);
+}
+
+test('step11 treats an unnamed ecosystem app as an external saved service', t => {
+  const f=serviceFixture(t,{ecosystem:true});
+  fs.writeFileSync(f.file,`module.exports={apps:[{script:${JSON.stringify(f.j.originalServices[0].script)}}]};`);
+  const result=step11_startCoreServices(context(f),{ecosystemPath:f.file,zylosDir:f.root});
+  assert.equal(result.status,'done',result.error);
+  assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env'],['save']]);
+  assert.equal(f.readRecords()[0].pm2_env.status,'online');
 });

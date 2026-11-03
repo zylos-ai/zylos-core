@@ -34,16 +34,16 @@ function recoveryPrompt(root, d) {
     const controller = controllerState(c);
     if (controller.diagnostic) diagnostics.push(controller.diagnostic);
     const controllerAlive = controller.alive;
-    const manualCompletion = needsManualCompletion(j);
+    const manualCompletion = !d.diagnostics.length && d.candidates.length === 1 && !controller.diagnostic && !controllerAlive && needsManualCompletion(j);
     return {
       transactionId: j.transactionId,
       phase: String(j.phase).slice(0, 128),
       lastDurableStep: String(j.updatedAt || '').slice(0, 128),
       materials: c.dir,
       controllerAlive,
-      automaticResume: automaticResumeAvailable() && !manualCompletion,
+      automaticResume: automaticResumeAvailable() && !controller.diagnostic && !manualCompletion,
       status: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--status'],
-      ...(manualCompletion ? {code:manualCompletionCode, next:manualCompletionNext, manualRecovery:'Complete and verify the target deployment manually; automatic resume cannot finish this transaction.'} : !automaticResumeAvailable() ? {manualRecovery: 'Preserve transaction and snapshot materials. Confirm all writers stopped and code/schema compatibility before manual restoration; do not delete controller admission to force resume.'} : {resume: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--once']})
+      ...(controller.diagnostic ? {code:automaticResumeAvailable() ? 'UPGRADE_RECOVERY_REQUIRED' : 'MANUAL_RECOVERY_REQUIRED', next:'zylos recovery status', manualRecovery: 'Preserve transaction and snapshot materials. Confirm all writers stopped and code/schema compatibility before manual restoration; do not delete controller admission to force resume.'} : manualCompletion ? {code:manualCompletionCode, next:manualCompletionNext, manualRecovery:'Complete and verify the target deployment manually; automatic resume cannot finish this transaction.'} : {resume: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--once']})
     };
   });
   const availability = d.blocked ? 'Normal C4/database access is unavailable during upgrade maintenance.' : 'Core database access is available. The interrupted upgrade still requires final validation or terminal cleanup; preserve legitimate business writes.';
@@ -138,7 +138,8 @@ function bootstrap(root, {
     recovery_required: true,
     automaticResume: false,
     error: controller.diagnostic + '; manual recovery required',
-    ...(!automaticResumeAvailable() ? {code:'MANUAL_RECOVERY_REQUIRED', next:'zylos recovery status'} : {})
+    code: automaticResumeAvailable() ? 'UPGRADE_RECOVERY_REQUIRED' : 'MANUAL_RECOVERY_REQUIRED',
+    next: 'zylos recovery status'
   };
   if (!invalid && needsManualCompletion(d.candidates[0].journal)) return {
     ...out,
@@ -147,13 +148,6 @@ function bootstrap(root, {
     code: manualCompletionCode,
     error: 'compensation is closed; complete and verify the target deployment manually',
     next: manualCompletionNext
-  };
-  if (!invalid && m.classifyCutoff(d.candidates[0].journal) === 'untrusted') return {
-    ...out,
-    recovery_required: true,
-    code: 'UPGRADE_RECOVERY_REQUIRED',
-    error: 'untrusted compensation cutoff; manual recovery required',
-    next: 'zylos recovery status'
   };
   if (status) return out;
   // Invalid material remains visible to the runtime startup adapter. --once is denied:

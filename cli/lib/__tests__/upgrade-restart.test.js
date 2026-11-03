@@ -327,19 +327,18 @@ describe('component upgrade rollback', () => {
 });
 
 describe('step11_startCoreServices', () => {
-  it('passes the existing core ecosystem path when no template is available', () => {
+  it('passes the core ecosystem path instead of null when no template is available yet', () => {
     const calls = [];
     const result = step11_startCoreServices({
       tempDir: null,
       servicesWereRunning: ['activity-monitor'],
     }, {
       fs: {
-        existsSync: () => true,
+        existsSync: () => false,
         mkdirSync: () => {},
         copyFileSync: () => {},
       },
       ecosystemPath: '/tmp/core-ecosystem.config.cjs',
-      ecosystemServiceNames: () => ['activity-monitor'],
       restartManagedProcess: (name, opts) => {
         calls.push({ name, opts });
       },
@@ -370,7 +369,7 @@ describe('step11_startCoreServices', () => {
     const originalPath = process.env.PATH;
 
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [{name:"activity-monitor"}] };\n', 'utf8');
+    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
     fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "jlist" ]; then echo '[{"name":"activity-monitor","pm_id":3,"pm2_env":{"status":"online","ZYLOS_PACKAGE_ROOT":"${tmpDir}"}}]'; fi\n`, { mode: 0o755 });
 
     process.env.PATH = `${binDir}:${originalPath}`;
@@ -409,7 +408,7 @@ describe('step11_startCoreServices', () => {
     const originalPath = process.env.PATH;
 
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [{name:"activity-monitor"}] };\n', 'utf8');
+    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
     fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "jlist" ]; then echo '[{"name":"activity-monitor","pm_id":3,"pm2_env":{"status":"online"}}]'; fi\n`, { mode: 0o755 });
 
     process.env.PATH = `${binDir}:${originalPath}`;
@@ -444,12 +443,11 @@ describe('step11_startCoreServices', () => {
       servicesWereRunning: ['activity-monitor'],
     }, {
       fs: {
-        existsSync: () => true,
+        existsSync: () => false,
         mkdirSync: () => {},
         copyFileSync: () => {},
       },
       ecosystemPath: '/tmp/core-ecosystem.config.cjs',
-      ecosystemServiceNames: () => ['activity-monitor'],
       restartManagedProcess: (name, opts) => {
         calls.push({ name, opts });
       },

@@ -30,7 +30,8 @@ export function resumeUnfinishedUpgrade(zylosDir, {
 
 function recoveryRefusal(context) {
   const manual = context.automaticResume === false || context.code === 'MANUAL_RECOVERY_REQUIRED';
-  const code = context.code === 'UPGRADE_MANUAL_COMPLETION_REQUIRED' ? context.code : manual ? 'MANUAL_RECOVERY_REQUIRED' : 'UPGRADE_RECOVERY_REQUIRED';
+  const code = ['UPGRADE_MANUAL_COMPLETION_REQUIRED', 'UPGRADE_RECOVERY_REQUIRED', 'MANUAL_RECOVERY_REQUIRED'].includes(context.code)
+    ? context.code : manual ? 'MANUAL_RECOVERY_REQUIRED' : 'UPGRADE_RECOVERY_REQUIRED';
   const next = context.next || 'zylos recovery status';
   return {
     success: false,

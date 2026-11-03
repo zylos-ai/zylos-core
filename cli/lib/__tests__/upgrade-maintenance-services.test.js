@@ -73,7 +73,7 @@ for (const changed of ['missing','outside','changed','duplicate','saved-duplicat
   });
 }
 
-for (const source of ['throw Error("cannot load")','module.exports={}','module.exports={apps:[{}]}','module.exports={apps:[{name:"x"},{name:"x"}]}']) {
+for (const source of ['throw Error("cannot load")','module.exports={}','module.exports={apps:[{name:""}]}','module.exports={apps:[{name:42}]}','module.exports={apps:[{name:"x"},{name:"x"}]}']) {
   test(`invalid ecosystem fails before PM2 actions: ${source}`, t => {
     const f = fixture(t, {ecosystem:true});
     fs.writeFileSync(f.file,source);
@@ -82,6 +82,16 @@ for (const source of ['throw Error("cannot load")','module.exports={}','module.e
     assert.deepEqual(f.commands(),[]);
   });
 }
+
+test('unnamed ecosystem apps restart through verified saved PM2 records', t => {
+  const f=fixture(t,{ecosystem:true});
+  fs.writeFileSync(f.file,`module.exports={apps:[{script:${JSON.stringify(f.j.originalServices[0].script)}}]};`);
+  f.j.initialIdentity.ecosystemHash=m.hash(f.file);
+  assert.deepEqual(m.ecosystemServiceNames(f.file),[]);
+  m.start(f.j);
+  assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env']]);
+  assert.equal(f.readRecords()[0].pm2_env.status,'online');
+});
 
 test('ecosystem module loads in a fresh child without parent cache or stdout pollution', t => {
   const f = fixture(t,{ecosystem:true});

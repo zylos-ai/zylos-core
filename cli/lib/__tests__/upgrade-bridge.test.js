@@ -55,6 +55,18 @@ test('manual target completion code and documentation survive upgrade admission 
   assert.equal(out.failure.recovery_required, true);
 });
 
+for (const code of ['UPGRADE_RECOVERY_REQUIRED', 'MANUAL_RECOVERY_REQUIRED']) {
+  test(`controller diagnostic preserves explicit ${code} on upgrade refusal`, () => {
+    const next='zylos recovery status';
+    const out=resumeUnfinishedUpgrade('/unused',{discover:()=>({active:true,recovery_required:true,automaticResume:false,
+      code,next,error:'controller identity unavailable'})});
+    assert.equal(out.success,false);
+    assert.equal(out.failure.code,code);
+    assert.equal(out.failure.next,next);
+    assert.equal(out.failure.recovery_required,true);
+  });
+}
+
 test('downloaded package validation requires package.json and upgrade-entry.js files', t => {
   const f = fixture(t);
   assert.match(validateDownloadedCore(f.tempDir).error, /upgrade-entry\.js/);

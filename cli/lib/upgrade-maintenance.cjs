@@ -629,13 +629,11 @@ function ecosystemServiceNames(ecosystem) {
     process.stdout.write = process.stderr.write.bind(process.stderr);
     const config = require(process.argv[1]);
     if (!Array.isArray(config?.apps)) throw Error('invalid ecosystem apps');
-    const names = config.apps.map(app => app?.name);
+    const names = config.apps.map(app => app?.name).filter(name => name !== undefined);
     if (names.some(name => typeof name !== 'string' || !name) || new Set(names).size !== names.length) throw Error('invalid ecosystem service names');
     write(JSON.stringify(names));
   `, path.resolve(ecosystem)]);
-  const names = JSON.parse(output);
-  if (!Array.isArray(names) || names.some(name => typeof name !== 'string' || !name) || new Set(names).size !== names.length) throw Error('invalid ecosystem service names');
-  return names;
+  return JSON.parse(output);
 }
 function validateSavedServices(j, saved) {
   const current = services(j), names = new Set();
