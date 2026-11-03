@@ -397,6 +397,7 @@ export function syncCodexConfig({
   homeDir = os.homedir(),
   readFileSync = fs.readFileSync,
   writeConfig = writeCodexConfig,
+  checkHooks = installCoreCodexHook,
   onWrite,
   log = console.log,
 } = {}) {
@@ -419,14 +420,19 @@ export function syncCodexConfig({
     return { attempted: true, changed: false, fatal: true, error };
   }
   const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
-  if (existingProject === desiredProject && existingGlobal === desiredGlobal) {
+  // .codex/hooks.json drifts independently of the TOML configs: a component
+  // shard declaration adds SessionStart commands without touching either
+  // config file. Compare the desired hook set with the file content itself.
+  const hooksCheck = checkHooks({ zylosDir: projectDir, dryRun: true });
+  if (existingProject === desiredProject && existingGlobal === desiredGlobal && !hooksCheck.changed) {
     return { attempted: true, changed: false, fatal: false };
   }
 
   if (dryRun) {
     if (existingProject !== desiredProject) log(`  ~ codex project config: ${projectConfigPath}`);
     if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${globalConfigPath}`);
-    return { attempted: true, changed: true, fatal: false };
+    if (hooksCheck.changed) log(`  ~ codex hooks: ${hooksCheck.path}`);
+    return { attempted: true, changed: true, hooksChanged: hooksCheck.changed, fatal: false };
   }
 
   if (!writeConfig(projectDir, { onWrite })) {
@@ -440,7 +446,8 @@ export function syncCodexConfig({
 
   if (existingProject !== desiredProject) log(`  ~ codex project config: ${projectConfigPath}`);
   if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${globalConfigPath}`);
-  return { attempted: true, changed: true, fatal: false };
+  if (hooksCheck.changed) log(`  ~ codex hooks: ${hooksCheck.path}`);
+  return { attempted: true, changed: true, hooksChanged: hooksCheck.changed, fatal: false };
 }
 
 /**
@@ -759,7 +766,15 @@ export function syncRuntimeHooks({
   }
 
   // Hook membership can change independently of either TOML file.
-  const codexHooks = dryRun ? { changed: false } : installCoreCodexHook({ zylosDir });
+  // syncCodexConfig may already have refreshed hooks.json together with the
+  // TOML files; count that as a hooks refresh too.
+  const installedHooks = dryRun ? { changed: false } : installCoreCodexHook({ zylosDir });
+  const codexHooks = { ...installedHooks, changed: installedHooks.changed || (!dryRun && Boolean(codexSync.hooksChanged)) };
+  // Codex loads .codex/hooks.json only at launch and enqueueRestartIfNeeded()
+  // restarts Claude only, so a running Codex session keeps its old hooks.
+  if (codexHooks.changed) {
+    console.log('Codex hooks: updated; they take effect at the next Codex session start.');
+  }
   const result = { claude: { added, updated, removed }, codex: codexHooks, stopFailureSupported };
 
   if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed) {

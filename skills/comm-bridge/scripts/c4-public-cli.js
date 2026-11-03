@@ -30,6 +30,44 @@ function options(args, values = [], flags = []) {
   }
   return { ...result, positional };
 }
+const DURATION_UNITS_MS = { m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000 };
+const DURATION_PATTERN = /^(\d+)([mhd])$/;
+const DATETIME_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+// Format a Date as UTC 'YYYY-MM-DD HH:MM:SS', the format of the timestamp column.
+const toDbTimestamp = date => date.toISOString().slice(0, 19).replace('T', ' ');
+/**
+ * Parse a --since value into a UTC timestamp string.
+ * Accepts a relative duration (30m, 6h, 1d) or a datetime (YYYY-MM-DD,
+ * YYYY-MM-DD HH:MM[:SS[.sss]], optionally with T, Z or a ±HH:MM offset). A
+ * datetime without an offset is UTC, like the timestamps c4-fetch prints.
+ * Fractional seconds are dropped, as the timestamp column has none.
+ * @returns {string|null} - timestamp, or null when the value is invalid
+ */
+export function parseSince(value) {
+  const duration = DURATION_PATTERN.exec(value);
+  if (duration) {
+    const start = new Date(Date.now() - Number(duration[1]) * DURATION_UNITS_MS[duration[2]]);
+    // Durations reaching before year 0000 do not fit the timestamp format.
+    return start.getUTCFullYear() >= 0 ? toDbTimestamp(start) : null;
+  }
+  const datetime = DATETIME_PATTERN.exec(value);
+  if (!datetime) return null;
+  const [, year, month, day, hour = '00', minute = '00', second = '00', offset = 'Z'] = datetime;
+  const local = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+  const utcMs = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
+  // Date.UTC rolls over out-of-range fields (Feb 30 -> Mar 2); reject those.
+  if (Number.isNaN(utcMs) || new Date(utcMs).toISOString().slice(0, 19) !== local) return null;
+  let offsetMs = 0;
+  if (offset !== 'Z') {
+    const sign = offset[0] === '-' ? -1 : 1;
+    const digits = offset.slice(1).replace(':', '');
+    const offsetHours = Number(digits.slice(0, 2));
+    const offsetMinutes = Number(digits.slice(2));
+    if (offsetHours > 23 || offsetMinutes > 59) return null;
+    offsetMs = sign * (offsetHours * 60 + offsetMinutes) * 60 * 1000;
+  }
+  return toDbTimestamp(new Date(utcMs - offsetMs));
+}
 const noPositionals = o => { if (o.positional.length) invalid('Unexpected positional arguments'); };
 const group = (o, global = false) => o.group === undefined ? '*' : requireGroup(o.group, { global });
 const json = data => JSON.stringify({ ok: true, data }) + '\n';
@@ -124,8 +162,8 @@ export function checkpointCli(args) {
 }
 export function fetchCli(args) {
   if (!args.length) invalid('Usage: c4-fetch.js requires a query');
-  if (args.length === 1 && ['--help','-h'].includes(args[0])) return 'c4-fetch.js --unsummarized [--group G] [--up-to ID] [--limit N] | --begin ID --end ID | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID) | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
-  const modes = ['unsummarized','checkpoints','origin-sync','absorbed'];
+  if (args.length === 1 && ['--help','-h'].includes(args[0])) return 'c4-fetch.js --unsummarized [--group G] [--up-to ID] [--limit N] | --begin ID --end ID | --since DURATION|DATETIME | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID) | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
+  const modes = ['unsummarized','since','checkpoints','origin-sync','absorbed'];
   const selected = modes.filter(key => args.includes('--' + key));
   if (selected.length > 1) invalid('Fetch modes are mutually exclusive');
   const mode = selected[0] ?? 'range';
@@ -134,6 +172,7 @@ export function fetchCli(args) {
     checkpoints: [['group','after'], ['checkpoints','json']],
     'origin-sync': [['group','after','limit'], ['origin-sync','summaries-only','raw-only','json']],
     absorbed: [['run-id','group','scope-after','after','limit','id','field','out'], ['absorbed','summary','json']],
+    since: [['since'], ['json']],
     range: [['begin','end'], ['json']],
   };
   const o = options(args, ...allowed[mode]); noPositionals(o);
@@ -163,6 +202,18 @@ export function fetchCli(args) {
     }
     const rows = query.originRaw({ group: o.group, after: number(o.after, 'after'), limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1) });
     return o.json ? json(rows) : conversations(rows) + '\n';
+  }
+  if (mode === 'since') {
+    const since = parseSince(o.since);
+    if (since === null) invalid('since must be a duration (30m, 6h, 1d) or a datetime (YYYY-MM-DD[ HH:MM[:SS]][Z|±HH:MM])');
+    const checkpoint = db.getLatestContentCheckpoint('*');
+    const rows = db.getConversationsSince(since);
+    if (o.json) return json({ checkpoint, since, rows });
+    // Rows come in timestamp order; report the full id span for --begin/--end.
+    let minId = Infinity, maxId = -Infinity;
+    for (const { id } of rows) { minId = Math.min(minId, id); maxId = Math.max(maxId, id); }
+    const label = rows.length ? `since ${since} UTC, id ${minId} ~ ${maxId}` : `since ${since} UTC`;
+    return `${checkpoint?.summary ? '[Last Checkpoint Summary] ' + checkpoint.summary + '\n\n' : ''}[Conversations] (${label})\n${conversations(rows) || 'No conversations in this range.\n'}`;
   }
   const begin = number(o.begin, 'begin'), end = number(o.end, 'end');
   if (begin > end) invalid('begin must not exceed end');

@@ -98,6 +98,11 @@ ok()    { printf "${GREEN}[zylos]${NC} %s\n" "$*"; }
 warn()  { printf "${YELLOW}[zylos]${NC} %s\n" "$*"; }
 fail()  { printf "${RED}[zylos]${NC} %s\n" "$*" >&2; exit 1; }
 
+# True when /dev/tty can be opened. The device node exists even without a
+# controlling terminal (ssh -T, cron, CI), but opening it then fails, so
+# probe by opening instead of testing for existence.
+_has_tty() { { : < /dev/tty; } 2>/dev/null; }
+
 # ── Resolve install ref ───────────────────────────────────────
 if [ -z "$BRANCH" ]; then
   # No --branch specified: resolve latest release tag (stable version).
@@ -353,7 +358,7 @@ fi
 
 # ── Security Consent ─────────────────────────────────────────
 # Show security notice before installing anything. Skip in non-interactive
-# mode (-y) or when stdin is not a terminal (piped without /dev/tty).
+# mode (-y) or when no terminal is available (piped without a usable /dev/tty).
 _has_yes_flag() {
   for arg in "${INIT_ARGS[@]+"${INIT_ARGS[@]}"}"; do
     case "$arg" in -y|--yes|-yq|-qy|-yqh|-qyh|-hyq|-hqy|-yhq|-qhy) return 0 ;; esac
@@ -361,7 +366,7 @@ _has_yes_flag() {
   return 1
 }
 
-if ! _has_yes_flag && [ -t 0 -o -e /dev/tty ]; then
+if ! _has_yes_flag && { [ -t 0 ] || _has_tty; }; then
   echo ""
   printf '%b' "${YELLOW}${BOLD}"
   echo "  ◆ Security Notice"
@@ -391,7 +396,7 @@ if ! _has_yes_flag && [ -t 0 -o -e /dev/tty ]; then
   printf '%b' "${BOLD}"
   printf "  I understand and want to continue [Y/n]: "
   printf '%b' "${NC}"
-  if [ -e /dev/tty ]; then
+  if _has_tty; then
     read -r answer < /dev/tty
   else
     read -r answer
@@ -488,7 +493,7 @@ else
   info "Running zylos init..."
   echo ""
   local init_exit=0
-  if [ -e /dev/tty ]; then
+  if _has_tty; then
     zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} < /dev/tty || init_exit=$?
   else
     zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} || init_exit=$?
