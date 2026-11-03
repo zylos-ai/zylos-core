@@ -607,16 +607,34 @@ export function step11_startCoreServices(ctx, deps = {}) {
 
   const started = [];
   const failed = [];
+  let ecosystemNames, external;
+  try {
+    ecosystemNames = new Set(fsApi.existsSync(ecosystemPath) ? maintenance.ecosystemServiceNames(ecosystemPath) : []);
+    const saved = ctx.journal?.originalServices;
+    external = ctx.servicesWereRunning.filter(name => !ecosystemNames.has(name)).map(name => {
+      const records = saved?.filter(service => service.name === name);
+      if (records?.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
+      return records[0];
+    });
+    if (external.length) maintenance.validateSavedServices(ctx.journal, external);
+  } catch (error) {
+    return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
+  }
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      restartFn(name, {
+      if (!ecosystemNames.has(name)) maintenance.restartService(name);
+      else restartFn(name, {
         ecosystemPath,
         stdio: 'pipe',
         fallbackToPlainRestartOnError: false,
       });
       started.push(name);
     } catch {
+      if (!ecosystemNames.has(name)) {
+        failed.push(name);
+        continue;
+      }
       // A timed-out PM2 command may have committed its start before it died.
       try {
         const processes=JSON.parse(exec('pm2 jlist 2>/dev/null',{encoding:'utf8',stdio:'pipe'}));

@@ -5,17 +5,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { completeUpgradeFinalization, readUpgradeModeStatus, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
+import {serviceRestartFixture} from './helpers/service-restart-fixture.js';
 
 const maintenance=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
 for(const observed of [true,false])test(`PM2 timeout is checked through jlist before reporting ${observed?'started':'failed'}`,t=>{
+  const f=serviceRestartFixture(t);
   const calls=[];
   const result=step11_startCoreServices({servicesWereRunning:['scheduler']},{
-    fs:{existsSync:()=>false},
+    ecosystemPath:f.file,
     execSync:(command,options)=>{
       calls.push(command);
       assert.equal(options.timeout,30000);
-      if(command.startsWith('pm2 restart'))throw Object.assign(Error('timed out'),{code:'ETIMEDOUT'});
+      if(command.startsWith('pm2 start'))throw Object.assign(Error('timed out'),{code:'ETIMEDOUT'});
       if(command.startsWith('pm2 jlist'))return JSON.stringify(observed?[{name:'scheduler',pm2_env:{status:'online'}}]:[]);
       return '';
     }
@@ -62,6 +64,21 @@ function deps(calls, extras={}) {
     ...extras,
   };
 }
+for(const source of ['throw Error("broken config");',"throw 'bad config';",'throw null;'])test(`finalization persists a concise ecosystem loading error: ${source}`,async t=>{
+  const ctx=fixture(t),f=serviceRestartFixture(t),calls=[];
+  ctx.maintenance={...maintenance,...ctx.maintenance};
+  fs.writeFileSync(f.file,source);
+  ctx.servicesWereRunning=['scheduler'];
+  ctx.journal.originalServices=f.j.originalServices;
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{
+    startServices:coreCtx=>step11_startCoreServices(coreCtx,{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file}),
+  }));
+  assert.equal(result.success,false);
+  assert.match(ctx.journal.lastError,/ecosystem.*load|load.*ecosystem/i);
+  assert.match(ctx.journal.lastError,/^failed to load ecosystem: (broken config|bad config|null)$/);
+  assert.doesNotMatch(ctx.journal.lastError,/\[eval\]|\n\s+at |Node\.js v/);
+  assert.deepEqual(f.calls(),[]);
+});
 for(const failing of [false,true]) test(`finalization retains optional runtime warnings on ${failing?'failure':'success'}`,async t=>{
   const ctx=fixture(t),calls=[];
   ctx.runtimeWarnings=[{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'}];

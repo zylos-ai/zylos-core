@@ -16,7 +16,7 @@ function fixture(t) {
   const destination = path.join(root, 'pm2/ecosystem.config.cjs');
   fs.mkdirSync(path.dirname(template), { recursive: true });
   fs.mkdirSync(transactionDir);
-  fs.writeFileSync(template, 'module.exports = { apps: [] };\n');
+  fs.writeFileSync(template, 'module.exports = { apps: [{name:"scheduler"}] };\n');
   maintenance.durable(path.join(transactionDir, 'journal.json'), { initialIdentity: { ecosystemHash: null } });
   const ctx = { tempDir: path.join(root, 'package'), transactionDir, upgradeProtected: true, servicesWereRunning: ['scheduler'] };
   const calls = [];
@@ -94,7 +94,7 @@ for (const defect of ['symlink', 'directory', 'unrelated-destination']) test(`in
   assert.match(result.error, /staging changed/);
   assert.equal(fs.lstatSync(f.staging).ino, before.ino);
   assert.deepEqual(f.calls, []);
-  assert.deepEqual(fs.readFileSync(f.template), Buffer.from('module.exports = { apps: [] };\n'));
+  assert.deepEqual(fs.readFileSync(f.template), Buffer.from('module.exports = { apps: [{name:"scheduler"}] };\n'));
   if (defect === 'unrelated-destination') {
     assert.equal(fs.readFileSync(f.staging, 'utf8'), '// incomplete staging');
     assert.equal(fs.readFileSync(f.destination, 'utf8'), '// unrelated destination');
