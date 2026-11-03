@@ -11,8 +11,10 @@ import { afterEach, describe, expect, test } from '@jest/globals';
  * recording stub in a private bin directory: curl, git, tmux, node, npm,
  * zylos, sudo and the package managers. PATH holds only that directory plus
  * links to the few system utilities the script needs, so nothing is installed
- * and nothing reaches the network. HOME, NVM_DIR and TMPDIR live in a fresh
- * fixture that afterEach removes; never point this test at a live instance.
+ * and nothing reaches the network. The installer's environment is built from
+ * scratch rather than inherited from the test runner, and HOME, NVM_DIR and
+ * TMPDIR live in a fresh fixture that afterEach removes; never point this test
+ * at a live instance.
  *
  * Run when the consent prompt, the /dev/tty probe or the zylos init hand-off in
  * scripts/install.sh changes. Skip for changes that do not touch the
@@ -212,6 +214,19 @@ suite('scripts/install.sh terminal handling', () => {
   ptyTest('in a terminal, answering y runs zylos init --skip-consent on the terminal', async () => {
     const context = makeFixture();
     const result = await runInPty(context, 'y');
+
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(0);
+    expect(result.output).toContain('Security Notice');
+    expect(result.output).not.toContain('Installation cancelled');
+    expect(readCalls(context.calls)).toEqual(fullInstallCalls('zylos init --skip-consent', 'stdin=tty'));
+  }, TEST_TIMEOUT_MS);
+
+  // Boundary: `curl ... | bash` in an interactive terminal, user presses Enter.
+  // The prompt defaults to Y, so an empty answer must install exactly like y.
+  ptyTest('in a terminal, pressing Enter accepts the default like answering y', async () => {
+    const context = makeFixture();
+    const result = await runInPty(context, '');
 
     expect(result.signal).toBeNull();
     expect(result.status).toBe(0);
