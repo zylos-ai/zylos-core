@@ -30,7 +30,7 @@ Lark        ───┘
 | `c4-control.js` | System control plane (heartbeat, maintenance) | [c4-control](references/c4-control.md) |
 | `c4-dispatcher.js` | PM2 daemon: polls pending queue, delivers to tmux | — |
 | `c4-session-init.js` | Hook (session start): context + Memory Sync trigger | [hooks](references/hooks.md) |
-| `c4-fetch.js` | Fetch conversations by id range | [c4-fetch](references/c4-fetch.md) |
+| `c4-fetch.js` | Fetch conversations by id range or time | [c4-fetch](references/c4-fetch.md) |
 | `c4-db.js` | Database module and CLI for querying conversations and checkpoints | [c4-db](references/c4-db.md) |
 | `c4-checkpoint.js` | Create/query checkpoints (sync boundaries) | [c4-checkpoint](references/c4-checkpoint.md) |
 

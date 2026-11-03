@@ -636,6 +636,18 @@ export function getConversationsByRange(beginId, endId) {
 }
 
 /**
+ * Get conversations recorded at or after a point in time
+ * @param {string} since - UTC time as 'YYYY-MM-DD HH:MM:SS', the format of the timestamp column
+ * @returns {array} - conversation records in chronological order
+ */
+export function getConversationsSince(since) {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM conversations WHERE timestamp >= ? ORDER BY timestamp ASC, id ASC'
+  ).all(since);
+}
+
+/**
  * Get recent conversations (for debugging/testing)
  * @param {number} limit - max records to return
  * @returns {array} - latest N conversation records in chronological order
