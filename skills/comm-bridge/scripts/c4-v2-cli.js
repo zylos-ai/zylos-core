@@ -54,6 +54,7 @@ export function createQueryHandlers(store) {
       return row;
     },
     groups(options = {}) { return store.queries.listGroups(options); },
+    groupQueues() { return store.listGroupQueues(); },
     unsummarizedRange({ group } = {}) {
       return groupScope(group) === '*' ? store.getGlobalUnsummarizedRange() : store.getUnsummarizedRange(group);
     },

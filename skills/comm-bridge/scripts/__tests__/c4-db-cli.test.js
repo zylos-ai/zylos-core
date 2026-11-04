@@ -80,3 +80,49 @@ describe('void channel migration (#689)', () => {
     });
   });
 });
+
+describe('group query CLI', () => {
+  it('returns queue and filtered group envelopes through the actual CLI', () => {
+    withTmpDir(({ env }) => {
+      const inserted = dbCli(['insert', 'in', 'system', 'null', 'hello', '--json'], env);
+      assert.equal(inserted.status, 0, inserted.stderr);
+      const queues = dbCli(['group-queues', '--json'], env);
+      assert.equal(queues.status, 0, queues.stderr);
+      const summary = JSON.parse(queues.stdout);
+      assert.equal(summary.ok, true);
+      assert.equal(summary.data.groups[0].sessionGroup, 'origin');
+      assert.equal(summary.data.groups[0].pending.count, 1);
+      assert.equal(summary.data.globalFence, null);
+      const text = dbCli(['group-queues'], env);
+      assert.equal(text.status, 0); assert.deepEqual(JSON.parse(text.stdout), summary.data);
+      const active = dbCli(['groups', '--active-since', '0', '--json'], env);
+      assert.equal(active.status, 0, active.stderr);
+      assert.equal(JSON.parse(active.stdout).data.groups.length, 1);
+      assert.equal(JSON.parse(active.stdout).data.hasOlder, false);
+      const search = dbCli(['groups', '--key-match', 'ORIG', '--json'], env);
+      assert.equal(search.status, 0); assert.equal(JSON.parse(search.stdout).data[0].sessionGroup, 'origin');
+      assert.match(dbCli(['--help'], env).stdout, /group-queues/);
+      assert.match(dbCli(['--help'], env).stdout, /active-since/);
+    });
+  });
+  it('rejects positional, unknown, missing, duplicate, invalid and conflicting options', () => {
+    withTmpDir(({ env }) => {
+      for (const args of [
+        ['group-queues', 'extra'], ['group-queues', '--bogus'],
+        ['groups', '--match', 'a', '--active-since', '1'],
+        ['groups', '--key-match', 'a', '--active-since', '1'],
+        ['groups', '--match', 'a', '--key-match', 'b'],
+        ['groups', '--key-match', '  '], ['groups', '--active-since', '-1'],
+        ['groups', '--active-since', 'x'], ['groups', '--active-since', '1.5'],
+        ['groups', '--active-since', '9007199254740992'], ['groups', '--active-since'],
+        ['groups', '--active-since', '0', '--active-since', '1'], ['groups', '--limit', '0'],
+        ['groups', 'extra'], ['groups', '--bogus'],
+      ]) {
+        const result = dbCli([...args, '--json'], env);
+        assert.equal(result.status, 1, JSON.stringify({ args, ...result }));
+        assert.equal(JSON.parse(result.stdout).ok, false);
+        assert.equal(JSON.parse(result.stdout).error.code, 'INVALID_ARGS');
+      }
+    });
+  });
+});

@@ -1,6 +1,6 @@
 import { dataError, requireGroup } from './c4-session-group.js';
 import { MAX_RETRIES } from './c4-config.js';
-export function deliveryFunctions({ read, write, get, all, run, seconds }) {
+export function deliveryFunctions({ read, write, snapshot, get, all, run, seconds }) {
   const unfenced = "NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group=conversations.session_group OR session_group='*')";
   function groups(values) {
     if (values === undefined) return { sql: '', args: [] };
@@ -36,6 +36,28 @@ export function deliveryFunctions({ read, write, get, all, run, seconds }) {
         result[key].ids.push(row.id); result[key].count++;
       }
       return result;
+    }),
+    listGroupQueues: () => snapshot(c => {
+      const groups = new Map();
+      const entry = sessionGroup => {
+        if (!groups.has(sessionGroup)) groups.set(sessionGroup, { sessionGroup, pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 }, fence: null });
+        return groups.get(sessionGroup);
+      };
+      for (const row of all(c, "SELECT session_group,status,priority,id,timestamp FROM conversations WHERE direction='in' AND status IN ('pending','running') AND session_group<>''")) {
+        const group = entry(row.session_group);
+        if (row.status === 'running') { group.running.count++; continue; }
+        const pending = group.pending;
+        pending.count++;
+        const timestamp = Date.parse(row.timestamp.includes('T') ? row.timestamp : row.timestamp.replace(' ', 'T') + 'Z');
+        pending.oldestAt = pending.oldestAt === null ? timestamp : Math.min(pending.oldestAt, timestamp);
+        if (!pending.head || row.priority < pending.head.priority || (row.priority === pending.head.priority && row.id < pending.head.id)) pending.head = { id: row.id, priority: row.priority };
+      }
+      let globalFence = null;
+      for (const fence of all(c, 'SELECT session_group AS sessionGroup,reason,run_id AS runId,created_at AS createdAt FROM drain_fences')) {
+        if (fence.sessionGroup === '*') globalFence = fence;
+        else entry(fence.sessionGroup).fence = fence;
+      }
+      return { groups: [...groups.values()].sort((a, b) => Buffer.compare(Buffer.from(a.sessionGroup), Buffer.from(b.sessionGroup))), globalFence };
     }),
     listPendingSessionGroups: () => read(c => all(c, `WITH pending AS (SELECT session_group,id,priority,ROW_NUMBER() OVER(PARTITION BY session_group ORDER BY priority,id) AS rn,COUNT(*) OVER(PARTITION BY session_group) AS count FROM conversations WHERE direction='in' AND status='pending' AND session_group<>'' AND ${unfenced}) SELECT session_group AS sessionGroup,id AS headId,priority AS headPriority,count FROM pending WHERE rn=1 ORDER BY priority,id`)),
     countRunningConversations: group => { requireGroup(group); return read(c => get(c, "SELECT count(*) AS n FROM conversations WHERE session_group=? AND direction='in' AND status='running'", group).n); },

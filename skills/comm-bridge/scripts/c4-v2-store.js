@@ -142,19 +142,51 @@ export function createStore(database, dependencies = {}) {
   const transitions = transitionFunctions({ ...context, ...progress });
   Object.assign(api, deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
   api.buildTargetBinding = createTargetBindingBuilder({ ...context, baseline: config.baseline, resolveTarget: dependencies.resolveTarget });
-  function listGroups({ match, limit } = {}) {
+  function listGroups({ match, limit, activeSince, keyMatch } = {}) {
     if (match !== undefined && typeof match !== 'string') throw dataError('INVALID_ARGS', 'match must be a string');
+    if (keyMatch !== undefined && (typeof keyMatch !== 'string' || !keyMatch.trim())) throw dataError('INVALID_ARGS', 'keyMatch must be a nonempty string');
+    if (activeSince !== undefined && (!Number.isSafeInteger(activeSince) || activeSince < 0)) throw dataError('INVALID_ARGS', 'activeSince must be nonnegative integer milliseconds');
+    if ([match, activeSince, keyMatch].filter(value => value !== undefined).length > 1) throw dataError('INVALID_ARGS', 'Group filters are mutually exclusive');
     if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) throw dataError('INVALID_ARGS', 'limit must be positive');
     return snapshot(c => {
-      const result = [];
-      for (const head of all(c, 'SELECT h.session_group,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id ORDER BY h.head_id DESC')) {
+      const millis = value => Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
+      function row(head) {
         const preview = get(c, "SELECT timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
         const text = preview ? [...preview.content].slice(0, 80).join('') : null;
-        if (match !== undefined && !head.session_group.toLowerCase().includes(match.toLowerCase()) && !(text ?? '').toLowerCase().includes(match.toLowerCase())) continue;
+        if (match !== undefined && !head.session_group.toLowerCase().includes(match.toLowerCase()) && !(text ?? '').toLowerCase().includes(match.toLowerCase())) return null;
         const parsed = parseSessionGroup(head.session_group);
         const componentName = parsed && parsed.namespace !== 'origin' ? get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', parsed.namespace)?.component_name ?? null : null;
-        const millis = value => Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
-        result.push({ sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text } : null });
+        return { sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text } : null };
+      }
+      const headsSql = 'SELECT h.session_group,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id ORDER BY h.head_id DESC';
+      if (activeSince !== undefined) {
+        const cursor = c.prepare(headsSql).iterate();
+        const groups = [];
+        let hasOlder = false;
+        try {
+          for (const head of cursor) {
+            if (millis(head.timestamp) < activeSince || groups.length === limit) { hasOlder = true; break; }
+            groups.push(row(head));
+          }
+        } finally { cursor.return(); }
+        return { groups, hasOlder };
+      }
+      if (keyMatch !== undefined) {
+        const needle = keyMatch.toLowerCase();
+        const heads = [];
+        for (const { session_group } of all(c, 'SELECT session_group FROM group_heads')) {
+          if (!session_group.toLowerCase().includes(needle)) continue;
+          const head = get(c, 'SELECT h.head_id,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id WHERE h.session_group=?', session_group);
+          if (head) heads.push({ ...head, session_group });
+        }
+        heads.sort((a, b) => b.head_id - a.head_id);
+        return heads.slice(0, limit).map(row);
+      }
+      const result = [];
+      for (const head of all(c, headsSql)) {
+        const group = row(head);
+        if (!group) continue;
+        result.push(group);
         if (result.length === limit) break;
       }
       return result;

@@ -54,6 +54,7 @@ export function migrateToV2(db) {
     CREATE INDEX idx_conv_loadable_id ON conversations(id)
       WHERE (direction = 'in' AND status = 'delivered') OR direction = 'out';
     CREATE INDEX idx_ckpt_group_id ON checkpoints(session_group, id);
+    CREATE INDEX idx_group_heads_head ON group_heads(head_id);
     CREATE UNIQUE INDEX idx_mode_transitions_open
       ON mode_transitions((0)) WHERE phase <> 'complete';
   `);

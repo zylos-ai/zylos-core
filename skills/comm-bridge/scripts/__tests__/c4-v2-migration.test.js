@@ -23,6 +23,7 @@ function changedOwner(migrate) {
 function assertMigrated(db, before) {
   assert.equal(db.pragma('user_version', { simple: true }), 2);
   assert.deepEqual(oldRows(db), before);
+  assertIndexes(db);
   assert.ok(db.prepare('SELECT session_group,session_id FROM conversations').all()
     .every(row => row.session_group === '' && row.session_id === null));
   assert.ok(db.prepare('SELECT session_group,no_content FROM checkpoints').all()
@@ -50,6 +51,7 @@ test('empty database executes 0→1→2 with initial checkpoint', t => {
     [from, { ...step, migrate(connection, options) { calls.push([Number(from), step.to]); step.migrate(connection, options); } }])) };
   guardDatabase(db, counted);
   assert.deepEqual(calls, [[0, 1], [1, 2]]);
+  assertIndexes(db);
   const check = () => {
     assert.equal(db.pragma('user_version', { simple: true }), 2);
     assert.deepEqual(db.prepare('SELECT summary,session_group,no_content FROM checkpoints').all(),
@@ -64,6 +66,7 @@ const indexSql = {
   idx_conv_group_status: 'CREATE INDEX idx_conv_group_status ON conversations(session_group, direction, status)',
   idx_conv_channel_endpoint: 'CREATE INDEX idx_conv_channel_endpoint ON conversations(channel, endpoint_id, id)',
   idx_conv_loadable_id: "CREATE INDEX idx_conv_loadable_id ON conversations(id) WHERE (direction = 'in' AND status = 'delivered') OR direction = 'out'",
+  idx_group_heads_head: 'CREATE INDEX idx_group_heads_head ON group_heads(head_id)',
   idx_ckpt_group_id: 'CREATE INDEX idx_ckpt_group_id ON checkpoints(session_group, id)',
   idx_mode_transitions_open: "CREATE UNIQUE INDEX idx_mode_transitions_open ON mode_transitions((0)) WHERE phase <> 'complete'",
 };
@@ -77,7 +80,7 @@ function assertIndexes(db) {
 function transition(db, run, source = 'single', target = 'multi', phase = 'gating') {
   return db.prepare('INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES(?,?,?,?,1,1)').run(run, source, target, phase);
 }
-test('six exact indexes, binary keys, namespace and transition/config constraints', t => {
+test('seven exact indexes, binary keys, namespace and transition/config constraints', t => {
   const db = database(t); guardDatabase(db, owner); assertIndexes(db);
   const ns = db.prepare('INSERT INTO channel_namespaces VALUES(?,?)');
   for (const name of ['a', 'a'.repeat(32), 'foo-2_x']) ns.run(name, `component:${name}`);

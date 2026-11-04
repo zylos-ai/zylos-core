@@ -124,9 +124,13 @@ export function databaseCli(args) {
     const o = options(rest, ['group'], ['json']); noPositionals(o);
     return display(query.unsummarizedRange({ group: o.group }), o);
   }
+  if (command === 'group-queues') {
+    const o = options(rest, [], ['json']); noPositionals(o);
+    return display(query.groupQueues(), o);
+  }
   if (command === 'groups') {
-    const o = options(rest, ['match', 'limit'], ['json']); noPositionals(o);
-    return display(query.groups({ match: o.match, limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1) }), o);
+    const o = options(rest, ['match', 'limit', 'active-since', 'key-match'], ['json']); noPositionals(o);
+    return display(query.groups({ match: o.match, activeSince: o['active-since'] === undefined ? undefined : number(o['active-since'], 'active-since'), keyMatch: o['key-match'], limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1) }), o);
   }
   if (command === 'origin-sync' && rest[0] === 'backlog') {
     const o = options(rest.slice(1), [], ['json']); noPositionals(o); return display(query.originBacklog(), o);
@@ -142,7 +146,7 @@ export function databaseCli(args) {
   }
   if (command === 'checkpoints') { const o = options(rest, [], ['json']); noPositionals(o); return display(db.getCheckpoints(), o); }
   if (command === 'init') { const o = options(rest); noPositionals(o); db.getDb(); return 'Database initialized\n'; }
-  if (!command || ['--help','-h'].includes(command)) return 'c4-db.js: init | insert <in|out> <channel> <endpoint> <content> [--session-group G] | checkpoint <end> (--summary TEXT|--no-content) | unsummarized [--group G] | groups | origin-sync backlog | mode-transition show | rejection --id ID [--json] | recent | checkpoints\n';
+  if (!command || ['--help','-h'].includes(command)) return 'c4-db.js: init | insert <in|out> <channel> <endpoint> <content> [--session-group G] | checkpoint <end> (--summary TEXT|--no-content) | unsummarized [--group G] | groups [--match TEXT|--active-since MS|--key-match TEXT] [--limit N] | group-queues [--json] | origin-sync backlog | mode-transition show | rejection --id ID [--json] | recent | checkpoints\n';
   invalid(`Unknown command ${command}`);
 }
 export function checkpointCli(args) {
