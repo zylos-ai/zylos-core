@@ -132,3 +132,32 @@ test('removing a failed group clears its continuous-write failure episode', asyn
   f.now += 120000; await f.service.advance(f.context); assert.equal(f.service.failures.has('write:test:a'), false);
   await f.write(); await f.service.advance(f.context); assert.equal(f.alerts.length, 0);
 });
+
+
+test('short-run alert fires on the fifth run and not before', async t => {
+  const f = await fixture(t);
+  for (let i = 1; i <= 4; i++) { await f.write('test:a', 'r' + i); await f.service.advance(f.context); }
+  await Promise.resolve(); assert.equal(f.alerts.length, 0);
+  await f.write('test:a', 'r5'); await f.service.advance(f.context);
+  await Promise.resolve(); assert.equal(f.alerts.length, 1);
+});
+
+test('a persistent failure alerts again only after thirty minutes', async t => {
+  const f = await fixture(t); await f.write();
+  f.db.listRunEndings = () => { throw Object.assign(new Error('read'), { code: 'DB_BUSY' }); };
+  await f.service.advance(f.context); f.now += 60000; await f.service.advance(f.context);
+  await Promise.resolve(); assert.equal(f.alerts.length, 1);
+  f.now += 1799999; await f.service.advance(f.context); await Promise.resolve(); assert.equal(f.alerts.length, 1);
+  f.now += 1; await f.service.advance(f.context); await Promise.resolve(); assert.equal(f.alerts.length, 2);
+});
+
+test('an unreadable run root alerts after sixty seconds and an absent one is not a failure', async t => {
+  const f = await fixture(t);
+  f.service.readdir = async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); };
+  await f.service.advance(f.context); assert.equal(f.alerts.length, 0);
+  f.now += 60000; await f.service.advance(f.context); await Promise.resolve(); assert.equal(f.alerts.length, 1);
+  f.service.readdir = async () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); };
+  const errors = f.errors.length;
+  await f.service.advance(f.context); assert.equal(f.service.failures.size, 0); assert.equal(f.errors.length, errors);
+  f.now += 3600000; await f.service.advance(f.context); await Promise.resolve(); assert.equal(f.alerts.length, 1);
+});

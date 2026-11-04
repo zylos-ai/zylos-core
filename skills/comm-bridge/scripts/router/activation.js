@@ -176,11 +176,12 @@ export function createActivationManager(context) {
       if (deps.db.listPendingContinuations().find(row => row.sessionGroup === group)?.controlId !== candidate.controlId) return;
       for (const row of deps.db.expirePendingControls({ sessionGroup: group, keepContinuation: true })) diagnostic('control_expired', { session_group: group, control_id: row.id });
       activation.launchStarted = true;
-      context.continuationRestarts.started(group);
-      diagnostic('activate_continuation', { session_group: group, runId, runtime: launchConfig.runtime, control_id: candidate.controlId });
-      if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
-      try { await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode }); }
-      catch (error) { activation.launchError = error; }
+      try {
+        context.continuationRestarts.started(group);
+        diagnostic('activate_continuation', { session_group: group, runId, runtime: launchConfig.runtime, control_id: candidate.controlId });
+        if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
+        await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode });
+      } catch (error) { activation.launchError = error; }
       activation.launchSettled = true;
       await advance(group);
     } catch (error) {
