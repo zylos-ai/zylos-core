@@ -116,6 +116,44 @@ export function submit(request, { deadlineAt, replyMaxMs = 10000, connectRetryEv
   });
 }
 
+/** A best-effort hint: acknowledgment confirms receipt, never recovery or admission. */
+export function notifyAuthCompleted(runtime, {
+  socketPath = path.join(ZYLOS_DIR, 'activity-monitor', 'am.sock'), timeoutMs = 5000,
+  connect = options => net.createConnection(options), now = Date.now,
+} = {}) {
+  return new Promise(resolve => {
+    let socket, timer, settled = false, buffer = '';
+    const requestId = `auth-${process.pid}-${now()}`;
+    const finish = notified => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); socket?.destroy(); resolve(notified);
+    };
+    try {
+      timer = setTimeout(() => finish(false), timeoutMs);
+      socket = connect({ path: socketPath });
+      const decoder = new StringDecoder('utf8');
+      socket.once('connect', () => {
+        if (settled) return;
+        try { socket.write(JSON.stringify({ version: 1, type: 'auth_completed', requestId, runtime }) + '\n', error => { if (error) finish(false); }); }
+        catch { finish(false); }
+      });
+      socket.on('data', chunk => {
+        if (settled) return;
+        buffer += decoder.write(chunk);
+        const end = buffer.indexOf('\n');
+        if (end < 0) return;
+        try {
+          const reply = JSON.parse(buffer.slice(0, end));
+          finish(reply?.version === 1 && reply.type === 'ack' && reply.requestId === requestId);
+        } catch { finish(false); }
+      });
+      socket.once('error', () => finish(false));
+      socket.once('end', () => finish(false));
+      socket.once('close', () => finish(false));
+    } catch { finish(false); }
+  });
+}
+
 export async function lookupRestartRequest(requestId, { deadlineAt, now = Date.now, readRequests, readCompleted } = {}) {
   if (now() >= deadlineAt) return 'deadline_exceeded';
   if (!readRequests) {

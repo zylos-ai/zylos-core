@@ -5,10 +5,39 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { submit, validateReply, lookupRestartRequest, lookupModeSwitch } from '../am-sock-client.js';
+import { submit, validateReply, lookupRestartRequest, lookupModeSwitch, notifyAuthCompleted } from '../am-sock-client.js';
 
 const request = { version: 1, type: 'restart_all', requestId: 'test-1', reason: 'upgrade' };
 const reply = { version: 1, type: 'restart_all', requestId: 'test-1', ok: true, result: 'accepted', runCount: 2 };
+test('authentication notification accepts only a matching acknowledgment and never retries', async () => {
+  for (const outcome of ['ack', 'fragmented', 'wrong_id', 'wrong_version', 'admission', 'invalid', 'error', 'close', 'throw', 'connect_error', 'timeout', 'write_error']) {
+    let connections = 0, destroyed = 0;
+    const socket = new EventEmitter();
+    socket.destroy = () => { destroyed++; };
+    socket.write = (line, callback) => {
+      const input = JSON.parse(line);
+      assert.deepEqual(input, { version: 1, type: 'auth_completed', requestId: `auth-${process.pid}-123`, runtime: 'codex' });
+      callback(outcome === 'write_error' ? new Error('write failed') : null);
+      queueMicrotask(() => {
+        if (outcome === 'error') return socket.emit('error', new Error('absent'));
+        if (outcome === 'close') return socket.emit('close');
+        if (['timeout', 'write_error'].includes(outcome)) return;
+        const reply = { version: outcome === 'wrong_version' ? 2 : 1, type: outcome === 'admission' ? 'auth_completed' : 'ack',
+          requestId: outcome === 'wrong_id' ? 'other' : input.requestId };
+        const bytes = outcome === 'invalid' ? 'bad\n' : JSON.stringify(reply) + '\n';
+        if (outcome === 'fragmented') socket.emit('data', Buffer.from(bytes.slice(0, 5)));
+        socket.emit('data', Buffer.from(outcome === 'fragmented' ? bytes.slice(5) : bytes));
+      });
+    };
+    const actual = await notifyAuthCompleted('codex', { now: () => 123, timeoutMs: 10, connect: () => {
+      connections++; if (outcome === 'throw') throw new Error('connect');
+      queueMicrotask(() => outcome === 'connect_error' ? socket.emit('error', new Error('absent')) : socket.emit('connect')); return socket;
+    } });
+    assert.equal(actual, ['ack', 'fragmented'].includes(outcome));
+    assert.equal(connections, 1); assert.equal(destroyed, outcome === 'throw' ? 0 : 1);
+  }
+  assert.throws(() => submit({ type: 'auth_completed' }), TypeError);
+});
 async function withServer(handler, fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-sock-'));
   const socketPath = path.join(root, 'am.sock'); const sockets = new Set();

@@ -1,6 +1,7 @@
 import { spawn as spawnChild } from 'node:child_process';
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { commandExists } from '../lib/shell-utils.js';
+import { notifyAuthCompleted } from '../lib/am-sock-client.js';
 
 export function runNativeAuth(runtime, args) {
   return new Promise(resolve => {
@@ -17,7 +18,8 @@ export function runNativeAuth(runtime, args) {
   });
 }
 
-export async function executeAuth(args, { exists = commandExists, adapter = getSessionAdapter, spawn = runNativeAuth } = {}) {
+export async function executeAuth(args, { exists = commandExists, adapter = getSessionAdapter, spawn = runNativeAuth,
+  notifyRecovery = notifyAuthCompleted } = {}) {
   const runtime = args[0];
   const deviceCode = args.includes('--device-code');
   const invalid = args.slice(1).some(arg => !['--json', '--device-code'].includes(arg)) ||
@@ -35,14 +37,19 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
     catch { checked = { status: 'uncertain' }; }
     if (checked.status !== 'success') return { ok: false, error: { code: checked.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED',
       message: 'Authentication was not confirmed', persisted: null, configChanged: false } };
-    return { ok: true, data: { runtime, authStatus: 'success' } };
+    let recoveryNotified = false;
+    try { recoveryNotified = await notifyRecovery(runtime) === true; } catch {}
+    return { ok: true, data: { runtime, authStatus: 'success', recoveryNotified } };
   } catch (error) { return { ok: false, error: { code: 'AUTH_FAILED', message: error.message, persisted: null, configChanged: false } }; }
 }
 
-export async function authCommand(args) {
-  const result = await executeAuth(args);
+export async function authCommand(args, dependencies) {
+  const result = await executeAuth(args, dependencies);
   if (args.includes('--json')) console.log(JSON.stringify(result));
-  else if (result.ok) console.log(`OK: ${result.data.runtime} authenticated`);
+  else if (result.ok) {
+    console.log(`OK: ${result.data.runtime} authenticated`);
+    if (!result.data.recoveryNotified) console.log('Recovery will resume on the next message or when the cooldown expires.');
+  }
   else console.error(`Error [${result.error.code}]: ${result.error.message}`);
   if (!result.ok) process.exitCode = 1;
   return result;
