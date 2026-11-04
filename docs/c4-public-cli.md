@@ -24,7 +24,8 @@ Other independent commands:
 - `c4-control.js expire --id ID` expires only a pending/running control.
 - `c4-db.js namespace get|ensure COMPONENT`; `namespace register COMPONENT NAMESPACE`
 - `c4-db.js session-group COMPONENT [--session-group LOCAL_GROUP]`
-- `c4-db.js groups [--match TEXT] [--limit N] [--json]`
+- `c4-db.js groups [--match TEXT | --active-since MS | --key-match TEXT] [--limit N] [--json]`
+- `c4-db.js group-queues [--json]`
 - `c4-db.js mode-transition show [--run-id UUID] [--json]`
 - `c4-db.js origin-sync backlog [--json]`
 - `c4-fetch.js --begin ID --end ID [--json]` preserves the requested historical range.
@@ -33,6 +34,18 @@ Other independent commands:
 - `c4-fetch.js --origin-sync --group GROUP --raw-only --after COVERAGE [--limit N] [--json]`
 - `c4-fetch.js --origin-sync --group GROUP [--limit N] [--json]` reads both parts in one snapshot.
 - `c4-fetch.js --absorbed --run-id UUID [--summary [--scope-after GROUP] | --id ID [--field text|endpoint] [--out FILE] | --after ID] [--limit N] [--json]`
+
+`groups` filters are mutually exclusive. `--match` also searches message previews.
+`--key-match` matches group keys only and is meant for occasional searches.
+`--active-since` takes Unix milliseconds, stops at the first older group, and returns
+`{groups, hasOlder}`; the other forms return an array.
+
+`group-queues` is a read-only snapshot of the groups that have pending or running
+inbound messages or a drain fence. It returns `{groups, globalFence}`, and each group has
+`{sessionGroup, pending: {count, oldestAt, head}, running: {count}, fence}`. A group
+missing from a successful result has nothing pending, nothing running and no fence. If
+the command fails, treat every group's queue as unknown, not as empty. `globalFence` is
+the `*` fence or `null`.
 
 Absorbed queries paginate by count: pages default to 20 records (maximum 100),
 and summaries default to 50 scopes (maximum 200). Pages preview the first 300
