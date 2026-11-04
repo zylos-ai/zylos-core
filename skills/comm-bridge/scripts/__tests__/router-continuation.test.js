@@ -296,3 +296,32 @@ test('origin restarts with pending continuation and delivers startup prompt firs
   assert.equal(calls(f, 'conversation').length, 0);
   assert.equal(calls(f, 'submit').length, 0);
 });
+
+
+test('prelaunch diagnostic and logging failures converge and later inbound can be delivered', async t => {
+  const f = routerFixture(t); f.put('origin'); const id = continuation(f);
+  await initialize(f);
+  let diagnosticFailures = 0, logFailures = 0, failedActivation;
+  f.deps.diagnostic = (event, fields) => {
+    f.events.push({ event, ...fields });
+    if (event === 'activate_continuation' && diagnosticFailures === 0) {
+      diagnosticFailures++;
+      failedActivation = f.router.state.activations.get('a');
+      throw Error('diagnostic unavailable');
+    }
+  };
+  f.deps.log = () => {
+    if (logFailures === 0) { logFailures++; throw Error('log unavailable'); }
+  };
+  await readyToStart(f);
+  assert.equal(diagnosticFailures, 1); assert.equal(logFailures, 1);
+  assert.equal(failedActivation.launchSettled, true);
+  assert.equal(f.router.state.activations.size, 0);
+  assert.equal(calls(f, 'launch').length, 0);
+  assert.equal(f.db.getControlById(id).status, 'pending');
+  const message = f.add('a'); await f.rounds(5);
+  assert.equal(calls(f, 'launch').length, 1);
+  assert.equal(f.row(message.id).status, 'delivered');
+  assert.equal(f.db.getControlById(id).status, 'done');
+  assert.equal(f.router.state.activations.size, 0);
+});
