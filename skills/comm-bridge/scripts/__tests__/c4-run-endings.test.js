@@ -19,11 +19,12 @@ for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_s
     const { store } = result;
     const before = db.prepare('SELECT count(*) AS n FROM conversations').get().n;
     const ending = store.recordRunEnd('test:group', { runId: 'run1', reason });
-    const needed = ['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason);
+    const needed = ['upgrade', 'auth', 'model_config', 'manual_restart', 'unexpected'].includes(reason);
     assert.equal(ending.recorded, true);
     assert.equal(clockCalls, 1, 'record and instruction use the same transaction clock sample');
     assert.deepEqual(store.listRunEndings(), [{ sessionGroup: 'test:group', runId: 'run1', reason, endedAt: clock, continuationControlId: ending.continuationControlId }]);
     if (needed) {
+      assert.notEqual(ending.continuationControlId, null);
       const row = control(db, ending.continuationControlId);
       assert.equal(row.raw_content, instruction); assert.equal(row.content, instruction);
       assert.equal(row.session_group, 'test:group'); assert.equal(row.target_binding, null);
@@ -39,6 +40,15 @@ for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_s
     assert.equal(store.getGlobalUnsummarizedRange().count, 0, 'continuation does not enter conversation memory input');
   });
 }
+
+test('manual restart of Origin records the ending without creating a continuation', t => {
+  const { db, store } = fixture(t, { now: () => clock * 1000 });
+  const ending = store.recordRunEnd('origin', { runId: 'manual-origin', reason: 'manual_restart' });
+  assert.equal(ending.recorded, true);
+  assert.equal(ending.continuationControlId, null);
+  assert.equal(store.listRunEndings()[0].reason, 'manual_restart');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
+});
 
 test('repeated endings preserve records and controls while still clearing a matching fence', t => {
   let now = clock;
