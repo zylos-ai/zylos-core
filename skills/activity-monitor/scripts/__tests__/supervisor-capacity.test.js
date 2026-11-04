@@ -4,16 +4,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startSupervisor } from '../supervisor-main.js';
+import * as poolReader from '../../../../cli/lib/session-pool-config.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(t, { mode = 'multi', readMemory } = {}) {
+async function fixture(t, { mode = 'multi', fixed = 7, readMemory } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'capacity-entry-'));
-  let config = { session_mode: mode, runtime: 'claude', session_pool_size: 7 }, time = 1000000;
+  let config = { session_mode: mode, runtime: 'claude', session_pool_size: fixed }, time = 1000000;
   const env = { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, 'pm2'), ZYLOS_SESSION_POOL_SIZE: '' };
   fs.mkdirSync(path.join(root, '.zylos'));
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify(config));
   assert.notEqual(root, process.env.ZYLOS_DIR);
   let reads = 0, observations = 0;
+  const logs = [];
   const memory = readMemory ?? (async () => ({ source: 'host', limitBytes: 8 * 1024 ** 3, usedBytes: 2 * 1024 ** 3 }));
   const service = await startSupervisor({ env, now: () => time,
     readMode: () => ({ mode: config.session_mode, keyPresent: true }), readConfig: () => config,
@@ -25,11 +27,11 @@ async function fixture(t, { mode = 'multi', readMemory } = {}) {
       readIdentity: async () => ({ present: false }), observeGroup: async () => ({ present: false }),
       listRuns: async () => [], readRun: async () => null },
     legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
-    sendAlert: () => { throw new Error('External sends are forbidden in this fixture'); }, log: () => {},
+    sendAlert: () => { throw new Error('External sends are forbidden in this fixture'); }, log: event => logs.push(event),
     loopOptions: { schedule: () => 1, cancel: () => {} } });
   t.after(async () => { await service.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const round = async () => { await service.supervisor.loop.tick(); await flush(); };
-  return { root, service, round, reads: () => reads, observations: () => observations,
+  return { root, service, round, logs, reads: () => reads, observations: () => observations,
     setMode: value => { config = { ...config, session_mode: value }; },
     setFixed: value => { config = { ...config, session_pool_size: value }; },
     advance: ms => { time += ms; },
@@ -54,7 +56,11 @@ test('entry publishes fixed capacity and uses it in metrics without resampling e
   assert.ok(metrics.some(row => row.v === 1 && row.k === 4 && row.kSource === 'fixed'));
 });
 
-// Same isolated entry boundary; run for mode gating or capacity scheduling.
+// Integration boundary: actual entry mode gate and capacity file absence.
+// Run for mode gating/capacity scheduling; skip unrelated lifecycle changes.
+// Fresh HOME/ZYLOS_DIR/PM2_HOME and runner short TMPDIR; private am.sock,
+// injected scenes/database adapter/memory, no tmux, live database or network.
+// Service/socket are stopped before removing only this fixture's files.
 test('single mode never reads memory or writes capacity files', async t => {
   const f = await fixture(t, { mode: 'single' }); await f.round();
   assert.equal(f.reads(), 0);
@@ -63,20 +69,74 @@ test('single mode never reads memory or writes capacity files', async t => {
   }
 });
 
-// Same isolated entry boundary; run for async command or mode-switch changes.
-// The held read stands for the bounded macOS command, not a real subprocess.
-test('pending memory read does not block later rounds and single cutover suppresses late publication', async t => {
-  let release;
+// Integration boundary: actual entry startup/rounds and pending memory work.
+// Run for async memory commands or mode cutover; skip unrelated lifecycle changes.
+// Fresh HOME/ZYLOS_DIR/PM2_HOME and runner short TMPDIR; private am.sock,
+// injected scenes/database adapter/memory, no tmux, live database or network.
+// Release held reads and stop the service/socket before fixture cleanup.
+test('pending memory read does not block later rounds and single cutover suppresses late publication', { timeout: 2000 }, async t => {
+  let release, started = false;
   const held = new Promise(resolve => { release = resolve; });
-  t.after(() => release(null));
-  const f = await fixture(t, { readMemory: () => held });
-  const before = f.observations();
-  await f.round(); await f.round();
-  assert.equal(f.reads(), 1);
-  assert.ok(f.observations() >= before + 2);
-  f.setMode('single'); await f.round();
-  release({ source: 'host', limitBytes: 8 * 1024 ** 3, usedBytes: 2 * 1024 ** 3 });
-  await flush(); await flush();
-  assert.equal(fs.existsSync(path.join(f.root, 'activity-monitor', 'pool-capacity.json')), false);
-  assert.equal(fs.existsSync(path.join(f.root, 'activity-monitor', 'pool-memory-samples.jsonl')), false);
+  const creating = fixture(t, { readMemory: () => { started = true; return held; } });
+  let ready = false;
+  creating.then(() => { ready = true; });
+  try {
+    for (let i = 0; i < 100 && !ready; i++) await flush();
+    assert.equal(started, true);
+    assert.equal(ready, true, 'entry startup must settle while the memory read is pending');
+    const f = await creating, before = f.observations();
+    for (let i = 0; i < 2; i++) {
+      let settled = false;
+      const round = f.round().then(() => { settled = true; });
+      for (let spin = 0; spin < 100 && !settled; spin++) await flush();
+      assert.equal(settled, true, 'lifecycle round must settle before the memory read');
+      await round;
+    }
+    assert.equal(f.reads(), 1);
+    assert.ok(f.observations() >= before + 2);
+    f.setMode('single'); await f.round();
+    release({ source: 'host', limitBytes: 8 * 1024 ** 3, usedBytes: 2 * 1024 ** 3 });
+    await flush(); await flush();
+    assert.equal(fs.existsSync(path.join(f.root, 'activity-monitor', 'pool-capacity.json')), false);
+    assert.equal(fs.existsSync(path.join(f.root, 'activity-monitor', 'pool-memory-samples.jsonl')), false);
+  } finally {
+    release(null);
+    await creating;
+  }
 });
+
+for (const fixed of [false, true]) {
+  // Integration boundary: actual entry/controller/atomic rename/shared reader,
+  // including stale last-successful publication and current fixed precedence.
+  // Run for publication, freshness or baseline wiring; skip unrelated lifecycle.
+  // Fresh HOME/ZYLOS_DIR/PM2_HOME and runner short TMPDIR; private am.sock,
+  // injected scenes/database adapter/memory, no tmux, live database or network.
+  // Only the platform/total-memory input to the real baseline is substituted.
+  // Stop service/socket before cleaning the fixture, including failed temp writes.
+  test(`entry expires its last successful publication after write failures (${fixed ? 'fixed' : 'automatic'})`, async t => {
+    t.mock.module(new URL('../../../../cli/lib/session-pool-config.js', import.meta.url).href, {
+      namedExports: { ...poolReader, resolveSessionPoolBaseline: options =>
+        poolReader.resolveSessionPoolBaseline({ ...options, platform: 'darwin', totalMemoryBytes: 4 * 1024 ** 3 }) },
+    });
+    const f = await fixture(t, { fixed: fixed ? 6 : null,
+      readMemory: async () => ({ source: 'host', limitBytes: 4 * 1024 ** 3, usedBytes: 1300 * 1024 ** 2 }) });
+    await flush();
+    if (!fixed) {
+      assert.equal(f.record().k, 2);
+      for (let i = 0; i < 12; i++) { f.advance(10000); await f.round(); }
+    }
+    const published = f.record();
+    assert.equal(published.k, fixed ? 6 : 3);
+    assert.equal(f.service.supervisor.loop.configuration.capacity, published.k);
+    const file = path.join(f.root, 'activity-monitor', 'pool-capacity.json');
+    fs.renameSync(file, file + '.saved');
+    fs.mkdirSync(file); // Actual atomic rename fails against this private directory.
+    if (fixed) f.setFixed(4);
+    f.advance(61000); await f.round();
+    assert.ok(f.logs.some(event => event.event === 'capacity_publish_failed'));
+    assert.equal(f.service.supervisor.loop.configuration.capacity, fixed ? 4 : 2);
+    assert.equal(f.service.supervisor.loop.configuration.capacitySource, fixed ? 'fixed' : 'fallback');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file + '.saved', 'utf8')), published);
+    assert.equal(fs.statSync(file).isDirectory(), true);
+  });
+}

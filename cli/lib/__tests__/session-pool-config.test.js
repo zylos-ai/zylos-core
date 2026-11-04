@@ -199,7 +199,8 @@ test('macOS usage parses both page sizes and swap units without Linux inputs', a
 
 test('macOS missing fields, bad values and command failures make the reading unavailable', async () => {
   for (const options of [
-    { vm: 'no page size\n' },
+    // All page counters remain valid; only the header's page size is missing.
+    { vm: 'Mach Virtual Memory Statistics:\nAnonymous pages: 400000.\nPages purgeable: 20000.\nPages wired down: 150000.\nPages occupied by compressor: 50000.\n' },
     { vm: 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nAnonymous pages: 1.\nPages purgeable: 0.\nPages occupied by compressor: 1.\n' },
     { sysctl: '17179869184\n' }, { sysctl: '0\nused = 0.00M\n' }, { failure: error('EXIT_1') },
     { vm: 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nAnonymous pages: 0.\nPages purgeable: 1.\nPages wired down: 0.\nPages occupied by compressor: 0.\n', swap: '0.00M' },
@@ -207,11 +208,20 @@ test('macOS missing fields, bad values and command failures make the reading una
   assert.equal(await readMemoryInputs({ platform: 'freebsd' }), null);
 });
 
-test('macOS command deadline bounds a never-returning command without blocking other work', async () => {
-  let killed = 0, progressed = false;
-  const reading = readMemoryInputs({ platform: 'darwin', execFile() { return { kill() { killed++; } }; } });
+test('macOS command deadline bounds a never-returning command without blocking other work', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let killed = 0, progressed = false, settled = false;
+  const reading = readMemoryInputs({ platform: 'darwin', execFile() { return { kill() { killed++; } }; } })
+    .then(value => { settled = true; return value; });
   await new Promise(resolve => setImmediate(() => { progressed = true; resolve(); }));
   assert.equal(progressed, true);
+  t.mock.timers.tick(1999);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.equal(killed, 0);
+  t.mock.timers.tick(1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, true, 'The memory read must settle at the two-second command deadline');
   assert.equal(await reading, null);
   assert.ok(killed >= 1);
 });
@@ -267,8 +277,11 @@ test('file records and fixed configuration are cached by mtime and refreshed aft
 test('unlimited legacy cgroups use the host without reading usage', async () => {
   const fixture = v1();
   fixture.fs.files.set('/sys/fs/cgroup/memory/docker/x/memory.limit_in_bytes', '9223372036854771712');
-  fixture.fs.files.delete('/sys/fs/cgroup/memory/docker/x/memory.usage_in_bytes');
+  // Keep valid usage/stat files: a wrong unlimited threshold must select cgroup
+  // usage instead of coincidentally reaching the host through a missing file.
+  assert.equal(fixture.fs.files.get('/sys/fs/cgroup/memory/docker/x/memory.usage_in_bytes'),String(1500 * MiB));
   assert.deepEqual(await readMemoryInputs(fixture), { source: 'host', limitBytes: 122 * GiB, usedBytes: 22 * GiB });
+  assert.ok(fixture.fs.reads.every(file => !file.endsWith('/memory.usage_in_bytes') && !file.endsWith('/memory.stat')));
   assert.equal(resolveSessionPoolBaseline(fixture).k, 120);
 });
 

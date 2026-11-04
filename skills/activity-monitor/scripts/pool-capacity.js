@@ -166,11 +166,11 @@ export class PoolCapacity {
       this.history = [];
       return Math.min(kRaw, baseline.k);
     }
-    this.history = this.history.filter(row => row.at > now - RISE_WINDOW);
-    this.history.push({ at: now, k: kRaw });
+    this.history.push(kRaw);
+    this.history = this.history.slice(-12);
     if (kRaw < this.currentK) return kRaw;
     if (now - this.startedAt >= RISE_WINDOW && this.history.length >= 12
-      && this.history.every(row => row.k > this.currentK)) return Math.min(...this.history.map(row => row.k));
+      && this.history.every(k => k > this.currentK)) return Math.min(...this.history);
     return this.currentK;
   }
 

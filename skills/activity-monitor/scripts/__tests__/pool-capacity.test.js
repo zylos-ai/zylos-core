@@ -83,6 +83,8 @@ test('formula keeps Origin reservation even when absent and has no CPU ceiling',
   assert.equal(result.kRaw, 174);
   result = calculateMemoryCapacity({ limitBytes: 4 * GiB, usedBytes: 3900 * MiB }, 0, model);
   assert.equal(result.kMemory, -2); assert.equal(result.kRaw, 1); assert.equal(result.reason, 'floor');
+  result = calculateMemoryCapacity({ limitBytes: 4 * GiB, usedBytes: 3000 * MiB }, 0, model);
+  assert.equal(result.kMemory, 0); assert.equal(result.kRaw, 1); assert.equal(result.reason, 'floor');
 });
 
 test('formula takes lower model or current bound and floors negative headroom', () => {
@@ -120,6 +122,42 @@ test('repeated successful calculations publish fresh complete records every ten 
   assert.equal(next.computedAt - first.computedAt, 10000);
   assert.equal(next.memory.oomKills, 0);
   assert.equal(Object.hasOwn(next, 'cap'), false);
+});
+
+test('capacity rises after twelve calculations at a slower than ten-second cadence', async t => {
+  const f = fixture(t);
+  assert.equal((await f.capacity.tick({ mode: 'multi', now: 0 })).k, 2);
+  for (let calculation = 1; calculation <= 12; calculation++) {
+    const record = await f.capacity.tick({ mode: 'multi', now: calculation * 10950 });
+    assert.equal(record.kRaw, 3);
+    assert.equal(record.k, calculation < 12 ? 2 : 3);
+  }
+});
+
+test('one-second loops plus work time still permit capacity to rise', async t => {
+  const f = fixture(t);
+  let calculations = 0;
+  for (let round = 0; round <= 120; round++) {
+    const record = await f.capacity.tick({ mode: 'multi', now: round * (1000 + 95) });
+    if (!record) continue;
+    calculations++;
+    assert.equal(record.k, calculations < 13 ? 2 : 3);
+  }
+  assert.equal(calculations, 13);
+  assert.equal(f.capacity.lastPublished.k, 3);
+  assert.equal(f.capacity.lastPublished.computedAt, 131400);
+});
+
+test('capacity rises to the smallest recent calculation rather than the latest', async t => {
+  const f = fixture(t);
+  await f.capacity.tick({ mode: 'multi', now: 0 });
+  for (let now = 10000; now < 120000; now += 10000) {
+    assert.equal((await f.capacity.tick({ mode: 'multi', now })).kRaw, 3);
+  }
+  f.memory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 800 * MiB });
+  const record = await f.capacity.tick({ mode: 'multi', now: 120000 });
+  assert.equal(record.kRaw, 4);
+  assert.equal(record.k, 3);
 });
 
 test('samples require stable counts, no starting sessions, no transition and readable inputs', async t => {
@@ -198,15 +236,25 @@ test('single mode performs no reads or writes and reentry uses initial bound', a
   assert.equal((await f.capacity.tick({ mode: 'multi', now: 150000 })).k, 2);
 });
 
-test('in-flight reads do not overlap and cannot publish after switching to single', async t => {
+test('in-flight reads do not overlap and cannot publish after switching to single', { timeout: 2000 }, async t => {
   let finish, reads = 0;
-  const f = fixture(t, { readMemory: () => { reads++; return new Promise(resolve => { finish = resolve; }); } });
+  const held = new Promise(resolve => { finish = resolve; });
+  const f = fixture(t, { readMemory: () => { reads++; return held; } });
   const pending = f.capacity.tick({ mode: 'multi', now: 0 });
   await Promise.resolve();
-  assert.equal(await f.capacity.tick({ mode: 'multi', now: 10000 }), null);
-  assert.equal(reads, 1);
-  await f.capacity.tick({ mode: 'single', now: 11000 });
-  finish({ source: 'host', limitBytes: 4 * GiB, usedBytes: 1300 * MiB });
+  let secondSettled = false;
+  const second = f.capacity.tick({ mode: 'multi', now: 10000 }).then(result => {
+    secondSettled = true; assert.equal(result, null);
+  });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 1);
+    assert.equal(secondSettled, true);
+    await f.capacity.tick({ mode: 'single', now: 11000 });
+  } finally {
+    finish({ source: 'host', limitBytes: 4 * GiB, usedBytes: 1300 * MiB });
+    await Promise.allSettled([pending, second]);
+  }
   assert.equal(await pending, null);
   assert.equal(fs.existsSync(f.capacity.file), false);
 });
