@@ -78,7 +78,7 @@ test('default loader follows Core mode for single and multi observations rather 
   fs.mkdirSync(path.join(pkg, 'cli/lib'), { recursive: true });
   fs.writeFileSync(path.join(pkg, 'package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(pkg, 'cli/lib/config.js'), 'export const state={mode:"single"};export function readSessionMode(){return state;}');
-  fs.writeFileSync(path.join(pkg, 'cli/lib/session-state-reader.js'), `export const calls=[],accountCalls=[];export const state={runtime:'claude'};export async function readSessionState(group, options){calls.push({group,options});return {identity:{present:true,runtime:state.runtime},usage:{valid:false,reason:'missing'}};}export async function readAccountUsage(runtime){accountCalls.push(runtime);return {sample:runtime};}`);
+  fs.writeFileSync(path.join(pkg, 'cli/lib/session-state-reader.js'), `export const calls=[],accountCalls=[];export const state={runtime:'claude',targetRuntime:'codex'};export function resolveTargetRuntime(){return state.targetRuntime;}export async function readSessionState(group, options){calls.push({group,options});return {identity:{present:true,runtime:state.runtime},usage:{valid:false,reason:'missing'}};}export async function readAccountUsage(runtime){accountCalls.push(runtime);return {sample:runtime};}`);
   const prior = process.env.ZYLOS_PACKAGE_ROOT;
   process.env.ZYLOS_PACKAGE_ROOT = pkg;
   t.after(() => { if (prior === undefined) delete process.env.ZYLOS_PACKAGE_ROOT; else process.env.ZYLOS_PACKAGE_ROOT = prior; });
@@ -88,7 +88,7 @@ test('default loader follows Core mode for single and multi observations rather 
   await collector.collect();
   assert.deepEqual(collector.getAccountUsage(), { runtime: 'claude', value: { sample: 'claude' } });
   config.state.mode = 'multi';
-  reader.state.runtime = 'codex';
+  reader.state.runtime = 'unknown';
   await collector.collect();
   assert.deepEqual(reader.accountCalls, ['claude', 'codex']);
   assert.deepEqual(collector.getAccountUsage(), { runtime: 'codex', value: { sample: 'codex' } });
@@ -168,7 +168,7 @@ for (const failure of [false, true]) test(`Core package resolution ${failure ? '
   fs.mkdirSync(lib, { recursive: true });
   fs.writeFileSync(path.join(f.root, 'core', 'package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(lib, 'config.js'), 'export function readSessionMode(){return {mode:"multi"}}');
-  fs.writeFileSync(path.join(lib, 'session-state-reader.js'), `export async function readSessionState(){return {identity:{runtime:'claude'},usage:{valid:false,reason:'missing'}}} export async function readAccountUsage(){return {five_hour:{used_percentage:42}}}`);
+  fs.writeFileSync(path.join(lib, 'session-state-reader.js'), `export function resolveTargetRuntime(){return 'claude';} export async function readSessionState(){return {identity:{runtime:'claude'},usage:{valid:false,reason:'missing'}}} export async function readAccountUsage(){return {five_hour:{used_percentage:42}}}`);
   let calls = 0, unavailable = failure;
   t.mock.module('../../comm-bridge/scripts/core-config-loader.js', { namedExports: {
     resolveCoreConfigModule() { calls++; if (unavailable) throw new Error('unavailable'); return path.join(lib, 'config.js'); }
@@ -239,4 +239,30 @@ test('unchanged sample values remain distinct across runtime, run and session id
   ]);
   assert.equal((await collector.collect()).written, 0);
   await collector.stop();
+});
+
+test('sleeping Origin retains target Codex account samples from another ready group', async t => {
+  const f = fixture(t);
+  const otherDir = path.join(f.root, 'activity-monitor/session-groups/other');
+  fs.mkdirSync(otherDir, { recursive: true });
+  const rollout = path.join(f.root, 'other-rollout.jsonl');
+  fs.writeFileSync(rollout, JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 40 }, model_context_window: 200 }, rate_limits: { primary: { window_minutes: 300, used_percent: 23 }, secondary: { window_minutes: 10080, used_percent: 41 } } } }) + '\n');
+  fs.writeFileSync(path.join(otherDir, 'events.jsonl'), JSON.stringify({ v: 1, ts: Date.now(), event: 'session_start', runtime: 'codex', session_group: 'other', run_id: 'run-other', session_id: 'session-other', transcript_path: rollout }) + '\n');
+  let ready = true;
+  const reader = createSessionReader({ env: { ZYLOS_DIR: f.root },
+    open: async () => ({ close: async () => {} }),
+    observe: async ({ sessionGroup }) => sessionGroup === 'origin' ? { present: false, ready: false, runtime: 'unknown' }
+      : { ...f.identity, runtime: 'codex', ready, runId: 'run-other', sessionId: 'session-other' },
+    listSessions: async () => [{ sessionGroup: 'other' }],
+  });
+  const collector = new StatuslineCollector({ insertMetric: () => assert.fail('absent Origin has no session sample'), upsertSourceHealth() {} }, {}, {
+    read: async () => ({ ...await reader.readSessionState('origin', { freshnessMs: 5000 }), accountUsage: { runtime: 'codex', value: await reader.readAccountUsage('codex') } }),
+  });
+  await collector.collect();
+  assert.equal(collector.getAccountUsage().runtime, 'codex');
+  assert.equal(collector.getAccountUsage().value.fiveHour.usedPercentage, 23);
+  assert.equal(collector.getAccountUsage().value.sevenDay.usedPercentage, 41);
+  ready = false;
+  await collector.collect();
+  assert.deepEqual(collector.getAccountUsage(), { runtime: 'codex', value: null });
 });

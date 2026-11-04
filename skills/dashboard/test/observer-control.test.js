@@ -130,3 +130,26 @@ test('concurrent close releases ownership retained after socket publication fail
   const next = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
   await next.acquire(); await next.close();
 });
+
+// Covers refusal before any Observer generation or wake side effect. Run when
+// Origin target admission changes; unrelated containment changes may skip it.
+test('sleeping Origin refuses an Observer lease without starting or waking a session', async () => {
+  const { ObserverManager } = await import('../src/lib/observer-manager.js');
+  const { ObserverService } = await import('../src/lib/observer-service.js');
+  let starts = 0;
+  const coordinator = {
+    reconcileStartup: async () => ({ state: 'installed', desired: { enabled: true } }),
+    firstLease: async () => { starts++; assert.fail('sleeping Origin must not start Observer containment'); },
+  };
+  const containment = { reconcilePersisted: async () => [], active: null };
+  const context = { kind: 'api', principalId: 'owner', scope: 'admin' };
+  const authGate = { enabled: true, resolveAuthContext: () => context, revalidateAuthContext: value => value };
+  const manager = new ObserverManager({ coordinator, containment, authGate, runtime: 'codex',
+    resolveOrigin: async () => { throw Object.assign(new Error('Origin sleeps'), { code: 'target_unavailable' }); } });
+  const service = new ObserverService({ coordinator, containment, manager, authGate });
+  let status, body;
+  const res = { writeHead: value => { status = value; }, end: value => { body = JSON.parse(value); } };
+  const handled = await service.handle({ method: 'POST', headers: {}, _authContext: context }, res, new URL('http://isolated.test/api/observer/leases'));
+  assert.equal(handled, true); assert.equal(status, 409); assert.equal(body.error, 'agent_session_unavailable');
+  assert.equal(starts, 0); assert.equal(manager.leases.size, 0); assert.equal(containment.active, null);
+});

@@ -25,6 +25,9 @@ import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
 import { resolveCliSession } from '../lib/cli-session.js';
+import { collectStatus } from '../lib/status-view.js';
+import { resolveTargetRuntime } from '../lib/session-state-reader.js';
+import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
 import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
 
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
@@ -286,9 +289,17 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
     ? checkPm2Services()
     : { running: false, total: 0, online: 0, activityMonitor: false, procs: [] };
   const session = tmux.installed ? checkTmuxSession(selected.live.tmuxName) : false;
+  const sessionMode = selected.sessionGroup == null ? 'single' : 'multi';
+  let origin = null, targetRuntime = null, originNeed = null;
+  if (sessionMode === 'multi' && selected.sessionGroup === 'origin' && !session) {
+    const status = await collectStatus();
+    originNeed = status.originNeed;
+    try { targetRuntime = await resolveTargetRuntime('origin'); } catch { /* Unknown target leaves health undecided. */ }
+    origin = describeOrigin({ ...status, targetRuntime, nowSec: Math.floor(status.readAt / 1000) });
+  }
 
   return {
-    runtime, display, apiHost,
+    runtime, display, apiHost, sessionMode, sessionGroup: selected.sessionGroup ?? null, origin, targetRuntime, originNeed,
     system: { tmux, pm2, network: net },
     ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
     services: { ...services, session },
@@ -348,6 +359,19 @@ export function buildDiagnosticJson(diag, coreVersion) {
     }
   }
 
+  if (diag.origin?.failure) {
+    const descriptions = {
+      wake_overdue: { id: 'origin_wake_overdue',
+        label: 'Origin has pending work but has not started for over 5 minutes',
+        hint: 'Check router startup diagnostics: ~/zylos/comm-bridge/router-events.jsonl (start_always, activate_failed, wait_health)' },
+      auth_wait: { id: 'origin_auth_wait',
+        label: `Origin is waiting for ${diag.targetRuntime === 'codex' ? 'Codex' : 'Claude'} authentication`,
+        hint: diag.targetRuntime === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate' },
+      need_unreadable: { id: 'origin_status_unavailable', label: 'Origin wake status unavailable', hint: 'Run: zylos status --json' },
+    };
+    if (descriptions[diag.origin.state]) issues.push(descriptions[diag.origin.state]);
+  }
+
   return {
     version: coreVersion.success ? coreVersion.version : null,
     timestamp: new Date().toISOString(),
@@ -374,9 +398,9 @@ export function buildDiagnosticJson(diag, coreVersion) {
       },
       services: {
         passed: diag.services.running && diag.services.total > 0 &&
-          diag.services.procs.every(p => p.pm2_env?.status === 'online'),
+          diag.services.procs.every(p => p.pm2_env?.status === 'online') && !diag.origin?.failure,
         procs: diag.services.procs.map(p => ({ name: p.name, status: p.pm2_env?.status || 'unknown' })),
-        session: { active: diag.services.session },
+        session: { active: diag.services.session, origin: diag.origin?.state ?? null },
       },
     },
     issues,
@@ -485,6 +509,11 @@ function displayServiceGroup(diag, jsonGroup) {
 
   if (session) {
     checks.push(`${diag.display} session: ${green('active')}`);
+  } else if (diag.origin) {
+    const color = diag.origin.failure ? red : yellow;
+    checks.push(color(formatOriginDescription(diag.origin, diag.targetRuntime, diag.originNeed)));
+  } else if (diag.sessionMode === 'multi') {
+    checks.push(dim('session: not running (starts on the next message for this group)'));
   } else if (activityMonitor) {
     checks.push(yellow(`${diag.display} session: starting...`));
   } else {
@@ -838,8 +867,9 @@ export async function doctorCommand(args, upstreamSource) {
   // ── Phase 6: Handle issues ────────────────────────────────────
 
   if (diagnostic.passed) {
-    const sessionStarting = diag.services.activityMonitor && !diag.services.session;
+    const sessionStarting = diag.sessionMode !== 'multi' && diag.services.activityMonitor && !diag.services.session;
     console.log(`\n${green('✓ Everything is working.')}`);
+    if (diag.origin) console.log(`\n  ${dim(formatOriginDescription(diag.origin, diag.targetRuntime, diag.originNeed))}`);
     if (sessionStarting) {
       console.log(`\n  ${dim('Claude session is starting — run')} ${bold('zylos attach')} ${dim('in a moment to connect.')}`);
     }
@@ -848,14 +878,15 @@ export async function doctorCommand(args, upstreamSource) {
     process.exit(0);
   }
 
-  const claudeReady = !checkOnly && isClaudeReady(diag);
+  const fixable = diagnostic.issues.filter(issue => !issue.id.startsWith('origin_'));
+  const claudeReady = !checkOnly && isClaudeReady(diag) && fixable.length > 0;
 
   // Show issues — hide hints when Claude will auto-fix
   console.log(separator('Issues'));
   for (let i = 0; i < diagnostic.issues.length; i++) {
     const issue = diagnostic.issues[i];
     console.log(`\n  ${bold(`[${i + 1}]`)} ${issue.label}`);
-    if (!claudeReady && issue.hint) console.log(`      ${dim(issue.hint)}`);
+    if ((!claudeReady || issue.id.startsWith('origin_')) && issue.hint) console.log(`      ${dim(issue.hint)}`);
   }
 
   // Layer 2: attempt auto-fix via Claude
@@ -863,7 +894,7 @@ export async function doctorCommand(args, upstreamSource) {
     console.log('');
     logToFile('layer2: starting claude auto-fix');
 
-    const fixResult = await runClaudeFix(diagnostic);
+    const fixResult = await runClaudeFix({ ...diagnostic, issues: fixable });
 
     // Show error if fix failed
     if (!fixResult.ok && fixResult.error) {
@@ -876,8 +907,9 @@ export async function doctorCommand(args, upstreamSource) {
     const reverify = buildDiagnosticJson(rediag, coreVersion);
 
     if (reverify.passed) {
-      const sessionStarting = rediag.services.activityMonitor && !rediag.services.session;
+      const sessionStarting = rediag.sessionMode !== 'multi' && rediag.services.activityMonitor && !rediag.services.session;
       console.log(`\n${green('✓ All issues fixed — everything is working. Enjoy your Zylos!')}`);
+      if (rediag.origin) console.log(`\n  ${dim(formatOriginDescription(rediag.origin, rediag.targetRuntime, rediag.originNeed))}`);
       if (sessionStarting) {
         console.log(`\n  ${dim('Claude session is starting — run')} ${bold('zylos attach')} ${dim('in a moment to connect.')}`);
       }

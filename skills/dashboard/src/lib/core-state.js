@@ -23,9 +23,9 @@ function businessSource(projected, observation, accountUsage) {
     rateLimit7dPct: accountUsage?.seven_day?.used_percentage ?? accountUsage?.sevenDay?.usedPercentage ?? null,
   });
 }
-export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitizer(process.env.ZYLOS_DIR || process.cwd())) {
+export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitizer(process.env.ZYLOS_DIR || process.cwd()), facts = null, view = null) {
   const { identity, status, usage } = observation;
-  const state = !identity.present ? 'OFFLINE' : status.reason === 'starting' ? 'STARTING' : !status.valid ? 'UNKNOWN' : String(status.value.state || 'unknown').toUpperCase();
+  let state = !identity.present ? 'OFFLINE' : status.reason === 'starting' ? 'STARTING' : !status.valid ? 'UNKNOWN' : String(status.value.state || 'unknown').toUpperCase();
   const tools = status.valid && Array.isArray(status.value.active_tool_details) ? status.value.active_tool_details.map(tool => ({
     tool_use_id: tool.id,
     tool_name: tool.name,
@@ -33,9 +33,16 @@ export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitiz
     started_at: Number.isFinite(tool.startedAt) ? new Date(tool.startedAt).toISOString() : null,
   })) : [];
   const targetValid = identity.present && status.reason !== 'identity_changed';
+  let reason = status.reason;
+  if (view !== null) {
+    if (facts?.transitionOpen) state = 'SWITCHING';
+    else if (facts?.fenced) state = 'RECLAIMING';
+    else if (['sleeping', 'waking', 'wake_overdue', 'auth_wait', 'rate_wait'].includes(view.state)) state = view.state.toUpperCase();
+    else if (view.state === 'need_unreadable') { state = 'UNKNOWN'; reason = 'origin_need_unreadable'; }
+  }
   return { running_tools: tools, active_subagents: [], subagent_tools: [], last_message: null, last_prompt: null, updated_at: new Date().toISOString(), source: {}, state, sessionGroup, runId: targetValid ? identity.runId : null, sessionId: targetValid ? identity.sessionId : null,
     runtime: identity.runtime, ready: targetValid && identity.ready === true,
-    sampledAt: status.sampledAt, reason: status.reason,
+    sampledAt: status.sampledAt, reason,
     confidence: status.valid ? 'HIGH' : 'LOW',
     evidence: status.valid ? ['core-session-reader'] : [],
     missing_evidence: status.valid ? [] : [status.reason || 'unknown'],
@@ -45,6 +52,7 @@ export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitiz
 export class CoreState {
   constructor({ onChange = () => {}, zylosDir = process.env.ZYLOS_DIR || process.cwd() } = {}) {
     this.onChange = onChange;
+    this.zylosDir = zylosDir;
     this.sanitizer = new Sanitizer(zylosDir);
     this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: 'not_sampled', ready: false, runId: null, sessionId: null };
     this.observation = null;
@@ -75,8 +83,21 @@ export class CoreState {
       }));
       this.costKey = observation.status.reason === 'identity_changed' || observation.identity.runtime === 'unknown' ? null : JSON.stringify(identities.sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
       } catch { this.costKey = null; }
-      const accountUsage = await reader.readAccountUsage(observation.identity.runtime).catch(() => null);
-      const projected = projectOrigin(group, observation, this.sanitizer);
+      let targetRuntime = observation.identity.runtime, facts = null, view = null;
+      if (mode === 'multi') {
+        try { targetRuntime = await reader.resolveTargetRuntime('origin'); } catch { targetRuntime = null; }
+        let health = null;
+        try { health = targetRuntime ? await reader.readRuntimeHealth(targetRuntime) : null; } catch { /* Unreadable health is not an authentication block. */ }
+        if (!observation.identity.present || health?.health === 'auth_failed') {
+          const { readOriginFacts, describeOrigin } = await loadCoreModule('origin-presence.js');
+          const nowSec = Math.floor(Date.now() / 1000);
+          facts = await readOriginFacts({ zylosDir: this.zylosDir, nowSec });
+          view = describeOrigin({ view: 'multi', origin: { presence: !observation.identity.present ? 'not_running' : observation.identity.ready ? 'running' : 'starting' },
+            originNeed: facts.originNeed, runtimeHealth: { [targetRuntime]: health }, targetRuntime, nowSec });
+        }
+      }
+      const accountUsage = ['claude', 'codex'].includes(targetRuntime) ? await reader.readAccountUsage(targetRuntime).catch(() => null) : null;
+      const projected = projectOrigin(group, observation, this.sanitizer, facts, view);
       const source = businessSource(projected, observation, accountUsage);
       this.observation = observation;
       this.accountUsage = accountUsage;

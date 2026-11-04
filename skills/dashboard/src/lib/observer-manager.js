@@ -133,7 +133,7 @@ export class ObserverManager {
     let origin = null;
     if (this.resolveOrigin) {
       try { origin = await this.resolveOrigin(); } catch {}
-      if (!origin?.runId) throw new ObserverManagerError('target_mismatch', 'Current Origin run is unavailable');
+      if (!origin?.runId) throw new ObserverManagerError('agent_session_unavailable', 'Current Origin run is unavailable');
     }
     if (target !== this.target) throw new ObserverManagerError('target_mismatch', 'Observer target is not this producer');
     if (this._shuttingDown || this._lifecycleTransitions > 0) {

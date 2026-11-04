@@ -22,6 +22,10 @@ if (command === 'which') {
   else if (args[0] === '-p' && args[1].startsWith('You are a Zylos repair agent.')) {
     console.log('Isolated repair control: fixture intentionally remains unchanged.');
   } else process.exit(2);
+} else if (command === 'codex') {
+  if (args[0] === '--version') console.log('codex-cli 1.0.0');
+  else if (args.join(' ') === 'login status') console.error('Logged in using ChatGPT');
+  else process.exit(2);
 } else if (command === 'pm2') {
   if (args[0] === '--version') console.log('6.0.0');
   else if (args[0] === 'jlist') console.log(JSON.stringify([
@@ -37,7 +41,15 @@ if (command === 'which') {
     // No runtime session exists in this fixture: answer as a real tmux with no server.
     process.stderr.write(`no server running on ${process.env.DOCTOR_TEST_TMUX_SOCKET}\n`);
     process.exit(1);
-  } else if (args[0] !== 'has-session') process.exit(2);
+  } else if (args[0] === 'has-session') {
+    if (process.env.DOCTOR_TEST_MODE === 'multi') {
+      if (process.env.DOCTOR_TEST_ORIGIN === 'need_unreadable') {
+        const db = path.join(process.env.ZYLOS_DIR, 'comm-bridge', 'c4.db');
+        if (fs.existsSync(db)) fs.renameSync(db, `${db}.unreadable`);
+      }
+      process.exit(1);
+    }
+  } else process.exit(2);
 } else if (command === 'curl') {
   console.log(args.includes('-w') ? '200' : '[]');
 } else process.exit(2);
