@@ -444,8 +444,8 @@ test('real scheduler daemon dispatches a re-enabled task to its saved private C4
   let output = '', spawnError;
   f.daemon = spawn(process.execPath, [fileURLToPath(new URL('../daemon.js', import.meta.url))],
     { env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
-  f.daemon.stdout.on('data', chunk => { output += chunk; });
-  f.daemon.stderr.on('data', chunk => { output += chunk; });
+  f.daemon.stdout.on('data', chunk => { output = (output + chunk).slice(-16384); });
+  f.daemon.stderr.on('data', chunk => { output = (output + chunk).slice(-16384); });
   f.daemon.on('error', error => { spawnError = error; });
   const deadline = performance.now() + 145000;
   let inbound;
@@ -453,7 +453,7 @@ test('real scheduler daemon dispatches a re-enabled task to its saved private C4
     assert.equal(spawnError, undefined);
     assert.equal(f.daemon.exitCode, null, output);
     const after = f.read(id);
-    inbound = f.c4db.prepare("SELECT * FROM conversations WHERE direction='in' AND instr(content,?)>0 ORDER BY id")
+    inbound = f.c4db.prepare("SELECT * FROM conversations WHERE direction='in' AND instr(content,?)>0 ORDER BY id LIMIT 2")
       .all(updated.task.prompt);
     if (after.history.length === 3 && inbound.length === 1) break;
     assert.ok(after.history.length <= 3, output);

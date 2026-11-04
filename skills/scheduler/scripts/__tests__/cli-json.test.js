@@ -174,6 +174,60 @@ test('past rescheduling rejects without writes and non-schedule edits preserve f
   assert.deepEqual(f.history(task.id), history);
 });
 
+test('rescheduling other one-time states preserves their status and error', t => {
+  const f = fixture(t);
+  const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+  for (const status of ['pending', 'paused', 'running', 'completed']) {
+    const task = f.add(`retain ${status}`);
+    f.db.prepare('UPDATE tasks SET status=?,last_error=? WHERE id=?').run(status, `retained ${status}`, task.id);
+    const result = f.success(['update', task.id, '--at', future]);
+    assert.equal(result.reenabled, false);
+    assert.equal(result.task.status, status);
+    assert.equal(result.task.last_error, `retained ${status}`);
+    assert.deepEqual(result.task, f.row(task.id));
+  }
+});
+
+test('empty cron never creates or reschedules tasks and empty names remain unchanged', t => {
+  const f = fixture(t);
+  const count = () => f.db.prepare('SELECT count(*) AS n FROM tasks').get().n;
+  const beforeAdd = count();
+  f.fail(['add', 'empty cron', '--cron', ''], 'INVALID_ARGS', /Error: Must specify timing/);
+  assert.equal(count(), beforeAdd);
+  const pending = f.add('pending empty cron');
+  const failed = f.failed('failed empty cron', 'dispatch');
+  for (const task of [pending, failed]) {
+    const before = f.row(task.id), history = f.history(task.id);
+    f.fail(['update', task.id, '--cron', ''], 'NO_UPDATES', /Error: No updates provided/);
+    assert.deepEqual(f.row(task.id), before);
+    assert.deepEqual(f.history(task.id), history);
+  }
+  const beforeName = f.row(pending.id);
+  f.fail(['update', pending.id, '--name', ''], 'NO_UPDATES', /Error: No updates provided/);
+  assert.deepEqual(f.row(pending.id), beforeName);
+  const changed = f.success(['update', pending.id, '--name', '', '--priority', '2']);
+  assert.equal(changed.task.name, beforeName.name);
+  assert.equal(changed.updatedFields.includes('name'), false);
+  assert.equal(changed.task.priority, 2);
+});
+
+test('legacy option values retain dash text, integer prefixes and permissive parsing', t => {
+  const f = fixture(t);
+  const added = f.success(['add', 'legacy values', '--in', '2 hours', '--name', '--x',
+    '--priority', '2abc', '--miss-threshold', '60s']).task;
+  assert.equal(added.name, '--x'); assert.equal(added.priority, 2); assert.equal(added.miss_threshold, 60);
+  const updated = f.success(['update', added.id, '--prompt', '--x', '--name', '--x',
+    '--priority', '1abc', '--miss-threshold', '90s']).task;
+  assert.equal(updated.prompt, '--x'); assert.equal(updated.name, '--x');
+  assert.equal(updated.priority, 1); assert.equal(updated.miss_threshold, 90);
+  const list = f.run(['list', '--unknown']);
+  assert.equal(list.status, 0, list.stderr); assert.equal(list.stderr, '');
+  assert.match(list.stdout, /Tasks \(TZ:/);
+  const help = f.run(['add', '--help']);
+  assert.equal(help.status, 1); assert.match(help.stderr, /^Error: Prompt is required/);
+  assert.match(help.stdout, /Usage: cli.js add/);
+});
+
 test('session target clearing preserves reply address and rejects conflicting target flags without writes', t => {
   const f = fixture(t);
   const task = f.add('routing task');
@@ -200,6 +254,12 @@ test('session target clearing preserves reply address and rejects conflicting ta
   assert.equal(clearReply.reply_endpoint, null);
   assert.equal(clearReply.session_component, resetTarget.session_component);
   assert.equal(clearReply.session_group_name, resetTarget.session_group_name);
+  f.success(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'dm-1001']);
+  const clearBoth = f.success(['update', task.id, '--clear-session-group', '--clear-reply']).task;
+  for (const column of ['session_component', 'session_group_name', 'reply_channel', 'reply_endpoint']) {
+    assert.equal(clearBoth[column], null);
+    assert.equal(f.row(task.id)[column], null);
+  }
   f.fail(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'bad group'], 'SESSION_GROUP_INVALID');
 });
 
@@ -207,6 +267,7 @@ test('write validation failures have stable codes and nonzero exits in JSON and 
   const f = fixture(t);
   const task = f.add('validation task');
   const cases = [
+    [['unknown-command'], 'INVALID_ARGS', /^Unknown command: unknown-command/],
     [['add', 'missing schedule'], 'INVALID_ARGS', /Error: Must specify timing/],
     [['add', '--in', '2 hours'], 'INVALID_ARGS', /Error: Prompt is required/],
     [['add', 'invalid priority', '--in', '2 hours', '--priority', '9'], 'INVALID_ARGS', /Error: Priority must be 1-3/],
@@ -249,13 +310,14 @@ test('history JSON is bounded, ordered deterministically and excludes prompt tex
   assert.deepEqual(empty, { rows: [], ambiguousPrefix: [] });
   const insert = f.db.prepare('INSERT INTO task_history(task_id,executed_at,completed_at,status,duration_ms,error) VALUES(?,?,?,?,?,?)');
   for (let i = 0; i < 25; i++) insert.run(task.id, 100 + Math.floor(i / 2), 200 + i, 'success', i * 1000, i === 2 ? 'retained error' : null);
+  insert.run(other.id, 500, 501, 'failed', 1000, 'other task history');
   const expected = f.db.prepare(`SELECT h.id,h.task_id,t.name,h.executed_at,h.completed_at,h.status,h.duration_ms,h.error
     FROM task_history h JOIN tasks t ON t.id=h.task_id ORDER BY h.executed_at DESC,h.id DESC`).all();
   const result = f.success(['history']);
   assert.deepEqual(result.rows, expected.slice(0, 20));
   assert.deepEqual(result.ambiguousPrefix, []);
   const all = f.success(['history', task.id, '--limit', '1000']);
-  assert.deepEqual(all.rows, expected);
+  assert.deepEqual(all.rows, expected.filter(row => row.task_id === task.id));
   assert.equal(all.rows.length, 25);
   assert.ok(all.rows.every(row => !Object.hasOwn(row, 'prompt')));
   const ambiguous = f.success(['history', 'task-', '--limit', '1000']);

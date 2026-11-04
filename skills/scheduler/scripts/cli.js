@@ -137,9 +137,6 @@ function parseArgs(args) {
       } else {
         // Regular flag with value
         const value = args[i + 1];
-        if (value === undefined || value.startsWith('--')) {
-          reject('INVALID_ARGS', `--${key} must have a value`);
-        }
         result.options[key] = value;
         i += 2;
       }
@@ -211,27 +208,27 @@ function cmdAdd(args, options) {
   let type, nextRunAt, cronExpression, intervalSeconds;
 
   // Determine task type from options
-  if (Object.hasOwn(options, 'in')) {
+  if (options.in) {
     type = 'one-time';
     const seconds = parseDuration(options.in);
     if (!seconds) {
       reject('INVALID_ARGS', `Invalid duration "${options.in}"`);
     }
     nextRunAt = now() + seconds;
-  } else if (Object.hasOwn(options, 'at')) {
+  } else if (options.at) {
     type = 'one-time';
     nextRunAt = parseTime(options.at);
     if (!nextRunAt) {
       reject('INVALID_ARGS', `Could not parse time "${options.at}"`);
     }
-  } else if (Object.hasOwn(options, 'cron')) {
+  } else if (options.cron) {
     type = 'recurring';
     cronExpression = options.cron;
     if (!isValidCron(cronExpression)) {
       reject('INVALID_ARGS', `Invalid cron expression "${cronExpression}"`);
     }
     nextRunAt = getNextRun(cronExpression);
-  } else if (Object.hasOwn(options, 'every')) {
+  } else if (options.every) {
     type = 'interval';
     intervalSeconds = parseDuration(options.every);
     if (!intervalSeconds) {
@@ -243,7 +240,7 @@ function cmdAdd(args, options) {
     reject('INVALID_ARGS', 'Must specify timing (--in, --at, --cron, or --every)');
   }
 
-  const priority = Object.hasOwn(options, 'priority') ? Number(options.priority) : 3;
+  const priority = options.priority ? parseInt(options.priority, 10) : 3;
   if (!Number.isInteger(priority) || priority < 1 || priority > 3) {
     reject('INVALID_ARGS', 'Priority must be 1-3 (1=urgent, 2=high, 3=normal)');
   }
@@ -257,10 +254,10 @@ function cmdAdd(args, options) {
   const replyEndpoint = options['reply-endpoint'] || null;
 
   // Parse miss-threshold
-  const missThreshold = Object.hasOwn(options, 'miss-threshold')
-    ? Number(options['miss-threshold'])
+  const missThreshold = options['miss-threshold']
+    ? parseInt(options['miss-threshold'], 10)
     : 300;  // Default 5 minutes
-  if (!Number.isInteger(missThreshold) || missThreshold < 0 || options['miss-threshold']?.trim() === '') {
+  if (!Number.isInteger(missThreshold) || missThreshold < 0) {
     reject('INVALID_ARGS', 'miss-threshold must be a positive integer');
   }
 
@@ -566,21 +563,20 @@ function cmdUpdate(taskId, options) {
   const updatedFields = [];
 
   // Update name
-  if (Object.hasOwn(options, 'name')) {
+  if (options.name) {
     updates.name = options.name;
     updatedFields.push('name');
   }
 
   // Update prompt
-  if (Object.hasOwn(options, 'prompt')) {
-    if (!options.prompt) reject('INVALID_ARGS', 'Prompt is required');
+  if (options.prompt) {
     updates.prompt = options.prompt;
     updatedFields.push('prompt');
   }
 
   // Update priority
-  if (Object.hasOwn(options, 'priority')) {
-    const priority = Number(options.priority);
+  if (options.priority) {
+    const priority = parseInt(options.priority, 10);
     if (!Number.isInteger(priority) || priority < 1 || priority > 3) {
       reject('INVALID_ARGS', 'Priority must be 1-3');
     }
@@ -608,9 +604,9 @@ function cmdUpdate(taskId, options) {
   updatedFields.push(...Object.keys(replyUpdates));
 
   // Update miss_threshold
-  if (Object.hasOwn(options, 'miss-threshold')) {
-    const threshold = Number(options['miss-threshold']);
-    if (!Number.isInteger(threshold) || threshold < 0 || options['miss-threshold'].trim() === '') {
+  if (options['miss-threshold']) {
+    const threshold = parseInt(options['miss-threshold'], 10);
+    if (!Number.isInteger(threshold) || threshold < 0) {
       reject('INVALID_ARGS', 'miss-threshold must be a positive integer');
     }
     updates.miss_threshold = threshold;
@@ -619,7 +615,7 @@ function cmdUpdate(taskId, options) {
 
   // Update schedule (type and next_run_at)
   let scheduleUpdated = false;
-  if (Object.hasOwn(options, 'in')) {
+  if (options.in) {
     const seconds = parseDuration(options.in);
     if (!seconds) {
       reject('INVALID_ARGS', `Invalid duration "${options.in}"`);
@@ -629,7 +625,7 @@ function cmdUpdate(taskId, options) {
     updates.interval_seconds = null;
     updates.next_run_at = now() + seconds;
     scheduleUpdated = true;
-  } else if (Object.hasOwn(options, 'at')) {
+  } else if (options.at) {
     const nextRunAt = parseTime(options.at);
     if (!nextRunAt) {
       reject('INVALID_ARGS', `Could not parse time "${options.at}"`);
@@ -639,7 +635,7 @@ function cmdUpdate(taskId, options) {
     updates.interval_seconds = null;
     updates.next_run_at = nextRunAt;
     scheduleUpdated = true;
-  } else if (Object.hasOwn(options, 'cron')) {
+  } else if (options.cron) {
     const cronExpression = options.cron;
     if (!isValidCron(cronExpression)) {
       reject('INVALID_ARGS', `Invalid cron expression "${cronExpression}"`);
@@ -649,7 +645,7 @@ function cmdUpdate(taskId, options) {
     updates.interval_seconds = null;
     updates.next_run_at = getNextRun(cronExpression);
     scheduleUpdated = true;
-  } else if (Object.hasOwn(options, 'every')) {
+  } else if (options.every) {
     const intervalSeconds = parseDuration(options.every);
     if (!intervalSeconds) {
       reject('INVALID_ARGS', `Invalid interval "${options.every}"`);
