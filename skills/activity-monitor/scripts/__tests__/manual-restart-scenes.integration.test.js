@@ -246,7 +246,7 @@ test('actual supervisor manual restart targets ordinary group while Origin and a
 });
 
 
-async function healthGuardFixture(t) {
+async function healthGuardFixture(t, mode = 'multi') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'group-health-'));
   const env = { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, 'pm2'),
     TMPDIR: path.join(root, 'tmp'), TMUX_TMPDIR: root };
@@ -255,11 +255,12 @@ async function healthGuardFixture(t) {
   fs.mkdirSync(path.join(root, 'activity-monitor'));
   const sqlite = new Database(':memory:');
   guardDatabase(sqlite, schema);
-  const config = { mode: 'multi', runtime: 'claude', capacity: 4 };
-  const store = createStore(sqlite, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi', runtime: 'claude' } }) });
+  const config = { mode, runtime: 'claude', capacity: 4 };
+  const store = createStore(sqlite, { readConfig: () => ({ state: 'ok', config: { session_mode: mode, runtime: 'claude' } }) });
   const requestStore = new RestartRequestStore({ file: path.join(root, 'activity-monitor/restart-requests.json') });
   const stopped = [], controls = [];
-  const scenes = new Map(['fixture:a', 'fixture:b', 'origin'].map((sessionGroup, i) => {
+  const groups = mode === 'single' ? ['origin'] : ['fixture:a', 'fixture:b', 'origin'];
+  const scenes = new Map(groups.map((sessionGroup, i) => {
     const runDir = groupRunDir(sessionGroup, env);
     fs.mkdirSync(runDir, { recursive: true });
     return [sessionGroup, { sessionGroup, runtime: 'claude', runId: `run-${i}`, sessionId: `session-${i}`,
@@ -273,7 +274,7 @@ async function healthGuardFixture(t) {
       bindTarget: async scene => ({ sessionGroup: scene.sessionGroup, expectedRunId: scene.runId }),
       stop: async scene => { stopped.push(scene.sessionGroup); Object.assign(scenes.get(scene.sessionGroup), { present: false, ready: false, processRunning: false }); },
       listRuns: async () => [], readRun: async group => ({ ...scenes.get(group) }) },
-    requestStore, readMode: () => ({ mode: 'multi' }), readConfiguration: () => config,
+    requestStore, readMode: () => ({ mode }), readConfiguration: () => config,
     resolveTargetRuntime: () => 'claude', readSyncMarker: () => ({ held: false, stale: false }),
     prompts: {}, checkAuth: async () => ({ status: 'success' }),
     loopOptions: { schedule: () => assert.fail('fixture must not start a background loop'), cancel() {} }, log() {},
@@ -360,4 +361,49 @@ test('auth recovery skips the pending manual group and reclaims Origin', { timeo
   assert.equal(f.scenes.get('fixture:a').present, true);
   assert.equal(f.store.getDrainFence('origin'), null);
   assert.equal(f.requestStore.read()[0].sessionGroup, 'fixture:a');
+});
+
+
+for (const mode of ['multi', 'single']) {
+  // Boundary: real health guards interpret omitted multi targets and single
+  // intent as Origin. Run for manual target/default/mode guard changes; skip
+  // unrelated lifecycle changes. Fresh runner HOME/ZYLOS_DIR/PM2_HOME/short
+  // TMPDIR, private F9 and in-memory SQLite; no tmux, services, network or
+  // children. No loop starts; fixture closes supervisor/DB before root cleanup.
+  test(`health guard preserves Origin with an ungrouped ${mode} manual intent`, { timeout: 2000 }, async t => {
+    const f = await healthGuardFixture(t, mode);
+    const origin = f.scenes.get('origin');
+    const request = { requestId: 'pending-origin', reason: 'manual_restart', acceptedAt: 1,
+      runIds: [origin.runId], mode, expectedRunId: origin.runId };
+    f.requestStore.write([request]);
+    assert.equal(Object.hasOwn(f.requestStore.read()[0], 'sessionGroup'), false);
+    assert.equal(await f.supervisor.observer.stop(origin), false);
+    assert.equal((await f.supervisor.observer.interrupt(origin, 'Escape')).ok, false);
+    assert.equal(f.stopped.length, 0); assert.equal(f.controls.length, 0);
+    assert.equal(f.scenes.get('origin').present, true);
+    assert.deepEqual(f.requestStore.read(), [request]);
+  });
+}
+
+// Boundary: real maintenance preserves a single manual intent while auth
+// recovery is active. Run for auth/manual mode guards; skip unrelated lifecycle
+// work. Fresh runner HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, private F9/health files
+// and in-memory SQLite; no tmux, services, network, children or background loop.
+// Fixture stops supervisor and closes DB before removing only its own root.
+test('auth recovery preserves the running single manual target', { timeout: 2000 }, async t => {
+  const f = await healthGuardFixture(t, 'single');
+  const origin = f.scenes.get('origin');
+  const request = { requestId: 'pending-single', reason: 'manual_restart', acceptedAt: 1,
+    runIds: [origin.runId], mode: 'single', expectedRunId: origin.runId };
+  f.requestStore.write([request]);
+  const healthStore = f.supervisor.health.store('claude'), state = healthStore.read();
+  state.health = 'auth_failed'; state.reason = 'authentication_failed'; healthStore.write(state);
+  assert.equal(await f.supervisor.health.beginAuthRecovery('claude', { status: 'success' }, [origin]), true);
+  assert.equal(f.supervisor.health.authRecoveries.has('claude'), true);
+  await f.supervisor.loop.deps.writeMetricsAndMaintain({ configuration: f.config, scenes: f.snapshot(), fences: [] });
+  assert.equal(f.stopped.length, 0); assert.equal(f.controls.length, 0);
+  assert.equal(f.scenes.get('origin').present, true);
+  assert.equal(f.scenes.get('origin').processRunning, true);
+  assert.equal(f.scenes.get('origin').runId, origin.runId);
+  assert.deepEqual(f.requestStore.read(), [request]);
 });
