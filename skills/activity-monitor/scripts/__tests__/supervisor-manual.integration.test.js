@@ -62,7 +62,8 @@ for (const mode of ['single', 'multi']) for (const pause of ['after-intent', 'af
 
 
 // Boundary: actual lifecycle, F9, SQLite fences and private tmux stop only the
-// explicit group. Run for manual-target or inflight-gate changes; skip unrelated
+// explicit group and diagnose matching versus mismatched persisted intent.
+// Run for manual-target, orphan diagnostics or inflight-gate changes; skip unrelated
 // lifecycle work. Fresh HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, private -S socket,
 // fixture C4 database, no live processes/network; fixture cleanup closes all.
 test('ordinary manual lifecycle stops only its target and retains intent until its own inflight clears', { timeout: 20000 }, async t => {
@@ -103,6 +104,22 @@ test('ordinary manual lifecycle stops only its target and retains intent until i
   assert.equal((await scenes.observeGroup(other)).runId, 'run-b');
   assert.deepEqual(db.getDrainFence(group), { sessionGroup: group, reason: 'manual_restart', runId: 'run-a', createdAt: db.getDrainFence(group).createdAt });
   assert.equal(store.read().length, 1);
+  // Diagnose the actual persisted group fence against the actual F9 row.
+  const accepted = store.read();
+  const diagnose = () => lifecycle.checkManualFences({ ...context,
+    restartRequests: store.read(), fences: db.listDrainFences() });
+  await diagnose();
+  assert.equal(events.filter(event => event.event === 'manual_restart_orphan_fence').length, 0);
+  // A different pinned run is still an orphan, even for the correct group.
+  store.write(accepted.map(row => ({ ...row, expectedRunId: 'different-run', runIds: ['different-run'] })));
+  await diagnose();
+  const orphan = events.filter(event => event.event === 'manual_restart_orphan_fence');
+  assert.equal(orphan.length, 1);
+  assert.equal(orphan[0].session_group, group);
+  assert.equal(orphan[0].run_id, 'run-a');
+  store.write(accepted);
+  await diagnose();
+  assert.equal(events.filter(event => event.event === 'manual_restart_orphan_fence').length, 1);
   assert.equal(lifecycle.allowed(group, context), false);
   f.db.prepare("UPDATE conversations SET status='delivered' WHERE session_group=?").run(group);
   await lifecycle.advanceManual(context);

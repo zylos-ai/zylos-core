@@ -17,7 +17,7 @@ import { readRuntimeHealth } from '../../../../../cli/lib/session-state-reader.j
 import { readReadyIdentity } from '../../../../../cli/lib/runtime/session-target.js';
 import { getSessionAdapter } from '../../../../../cli/lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../../../../../cli/lib/session-group-paths.js';
-const Database = createRequire(import.meta.url)('better-sqlite3');
+const Database = createRequire(new URL('../../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [role, root, tmuxSocket, binary, initialClock] = process.argv.slice(2);
 let clock = Number(initialClock), fault = '', service, router;
 const held = [];
@@ -115,7 +115,8 @@ process.on('message', async message => {
       const row = db.insertConversation('in', arg.group, 'fixture', 'incoming');
       sqlite.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(clock / 1000, row.id); result = row;
     } else if (op === 'fence') result = db.setDrainFence(arg.group, { reason: 'upgrade', runId: 'fixture' });
-    else if (op === 'unfence') result = db.clearDrainFence(arg.group);
+    else if (op === 'fence-state') result = db.getDrainFence(arg.group);
+    else if (op === 'unfence') result = db.clearDrainFence(arg.group, { expectedReason: arg.expectedReason, expectedRunId: arg.expectedRunId });
     else if (op === 'stop') { await router?.stop(); await service?.stop(); sqlite.close(); process.send({ id, result: true }); process.disconnect(); return; }
     else throw new Error(`unknown op ${op}`);
     process.send({ id, result });

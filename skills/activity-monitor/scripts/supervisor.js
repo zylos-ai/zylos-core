@@ -56,7 +56,11 @@ export function createSupervisor(deps) {
   const manualPending=(group='origin')=>admission.readRequests().some(row=>row.reason==='manual_restart' &&
     (row.mode==='single' ? group===null || group==='origin' : (row.sessionGroup ?? 'origin')===group));
   const guardedAction=(scene,action)=>admission.serialize(async()=>{
-    if(stopping || await db.getModeTransition() || manualPending(scene.sessionGroup))return false;
+    if(stopping || await db.getModeTransition())return false;
+    try { if(manualPending(scene.sessionGroup))return false; }
+    catch(error) {
+      if(error.code!=='requests_unreadable' || scene.sessionGroup==='origin' || scene.sessionGroup===null)throw error;
+    }
     const current=await scenes.readIdentity(scene.sessionGroup);
     if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime)return false;
     await action(current);return true;

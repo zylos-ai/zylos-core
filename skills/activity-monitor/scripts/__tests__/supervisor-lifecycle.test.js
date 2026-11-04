@@ -383,6 +383,17 @@ test('failed F9 deletion preserves restart and does not emit completion', async 
   f.deps.requests.remove = () => { throw new Error('disk full'); };
   await assert.rejects(f.lifecycle.advanceRestarts(f.context)); assert.equal(f.requests.length, 1); assert.equal(f.events.length, 0);
 });
+test('single manual intent blocks both scene aliases before any fence exists', () => {
+  const f = fixture(); f.context.configuration.mode = 'single';
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual-single', mode: 'single', expectedRunId: 'run-origin' }];
+  assert.equal(f.fences.size, 0);
+  assert.equal(f.lifecycle.allowed('origin', f.context), false);
+  assert.equal(f.lifecycle.allowed(null, f.context), false);
+  f.requests = [];
+  assert.equal(f.lifecycle.allowed('origin', f.context), true);
+  assert.equal(f.lifecycle.allowed(null, f.context), true);
+});
+
 // run identity, crash windows, no idle/control-ack wait, no replacement retarget.
 test('manual stops requested Origin run immediately then waits only real conversation drain', async () => {
   const f = fixture(); f.scenes = [scene('origin', { state: 'busy' })];

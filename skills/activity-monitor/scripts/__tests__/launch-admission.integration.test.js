@@ -11,6 +11,14 @@ test('transient registered run preserves attempt budget between supervisor scans
 });
 test('two pending groups share one registered attempt',{timeout:30000},async t=>{const f=await fixture(t);await f.add('a');await f.add('b');await f.attempt();assert.equal(responses(f).filter(x=>x.response.result==='registered').length,1);assert.equal(launches(f).length,1);assert.equal(launches(f)[0].input.runId,responses(f)[0].request.runId);registeredBeforeLaunch(f)});
 test('absent supervisor socket prevents restricted ordinary launch',{timeout:30000},async t=>{const f=await fixture(t);await f.m4.call('stop');assert.equal(fs.existsSync(path.join(f.root,'activity-monitor/am.sock')),false);await f.add();await f.attempt();assert.equal(launches(f).length,0);assert.equal(f.trace('m1','request').length,1)});
+// Integration boundary: real Router/Supervisor grant persistence across transport,
+// process and fence interruptions; the fence case requires an actual manual fence.
+// Run the fence case when manual-fence validation/cleanup or launch admission changes;
+// skip the other interruption cases when those boundaries are unchanged.
+// Isolation: runner HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR; fixture SQLite, am.sock
+// and a private tmux -S socket. Runtime executables are fixtures, no live services
+// or network. The test's timeout/after hook kills workers and private tmux before
+// removing its root; all polling loops and per-child requests have finite bounds.
 for(const scenario of ['4a','4a-invalid','4a-no-reply','4b','4d','5','6','7','8','9'])test(''+scenario+' persisted grant survives transport/process/fence interruption',{timeout:30000},async t=>{
  const f=await fixture(t);await f.m4.call('fault',{value:scenario==='4a-no-reply'?'no-reply':scenario==='4a-invalid'?'invalid':scenario==='9'||scenario==='6'?'':'hold'});
  if(scenario==='6')await f.m1.call('fault',{value:'pause-grant'});
@@ -26,7 +34,15 @@ for(const scenario of ['4a','4a-invalid','4a-no-reply','4b','4d','5','6','7','8'
  if(['5','8'].includes(scenario)){if(scenario==='8')await f.m4.kill();f.m4=await f.start('m4');await f.m1.call('fence',{group:'origin'})}
  else await f.m4.call('release');
  if(['6','7'].includes(scenario)){if(scenario==='7')await f.m1.kill();f.m1=await f.start('m1');await f.warm()}
- if(scenario==='9'){await f.m1.call('fault',{value:''});await f.m1.call('unfence',{group:'chat'})}
+ if(scenario==='9'){
+  const grant=responses(f)[0].request;
+  const fence=await f.m1.call('fence-state',{group:'chat'});
+  assert.ok(fence,'the interrupted grant must actually persist its manual restart fence');
+  assert.equal(fence.reason,'manual_restart');assert.equal(fence.runId,grant.runId);
+  await f.m1.call('fault',{value:''});
+  await f.m1.call('unfence',{group:'chat',expectedReason:'manual_restart',expectedRunId:grant.runId});
+  assert.equal(await f.m1.call('fence-state',{group:'chat'}),null);
+ }
  await f.m4.call('fault',{value:''});
  if(scenario==='4d'){await delay(50);assert.equal(launches(f).length,0)}
  if(scenario==='4b'){await f.time(f.clock+60000);await f.launched();assert.equal(count(await f.health()),2);assert.ok(responses(f).at(-1).clock-responses(f)[0].clock>=60000);registeredBeforeLaunch(f)}

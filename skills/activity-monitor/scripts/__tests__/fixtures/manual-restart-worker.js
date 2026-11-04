@@ -39,16 +39,6 @@ const db = { ...store, getDb: () => database,
   clearDrainFence(...args) { const result = store.clearDrainFence(...args); barrier('after-clear'); return result; },
 };
 if (variant === 'early-clear') { db.countRunningConversations = () => 0; db.countGlobalRunningConversations = () => 0; }
-if (variant === 'retarget') {
-  const original = SupervisorLifecycle.prototype.advanceManual;
-  SupervisorLifecycle.prototype.advanceManual = async function(context) {
-    for (const request of context.restartRequests.filter(row => row.reason === 'manual_restart')) {
-      const scene = this.scene(request.mode === 'single' ? null : 'origin', context);
-      if (scene.present) request.expectedRunId = scene.runId;
-    }
-    return original.call(this, context);
-  };
-}
 if (variant === 'waiting') {
   db.countRunningConversations = group => {
     const count = store.countRunningConversations(group);
