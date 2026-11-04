@@ -12,18 +12,20 @@ import { resolveSavedSessionGroup, updatedReplyTarget } from './saved-session-gr
 
 let db;
 
-function reject(code, message, extra = {}) {
-  throw Object.assign(new Error(message), { code, extra, text: `Error: ${message}` });
+function reject(code, message, extra = {}, textExitCode = 0) {
+  throw Object.assign(new Error(message), { code, extra, textExitCode, text: `Error: ${message}` });
 }
 
 function fail(error) {
   const code = error.code?.startsWith('SQLITE_') ? 'DB_WRITE_FAILED' : error.code ?? 'INTERNAL_ERROR';
   if (process.argv.includes('--json')) {
     console.log(JSON.stringify({ ok: false, error: { code, message: error.message, ...error.extra } }));
+    process.exitCode = 1;
   } else {
     console.error(error.text ?? `Error: ${code}: ${error.message}`);
+    // Converted validation returns keep their original text-mode exit status.
+    process.exitCode = error.textExitCode ?? 1;
   }
-  process.exitCode = 1;
 }
 
 function success(data) {
@@ -88,7 +90,7 @@ Update Options (same as Add, plus):
   --clear-session-group   Route to Origin, keeping reply configuration
 
 Write Options (add/update/remove/pause/resume/done):
-  --json                  Single-line success/error envelope; errors exit 1
+  --json                  Single-line success/error envelope; JSON errors exit 1
 
 History Options:
   --json                  Rows without prompt, plus ambiguousPrefix task IDs
@@ -436,7 +438,7 @@ function cmdResume(taskId, options) {
 
 function cmdHistory(taskId, options) {
   const limit = Object.hasOwn(options, 'limit') ? Number(options.limit) : 20;
-  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) reject('INVALID_ARGS', 'limit must be an integer from 1 to 1000');
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) reject('INVALID_ARGS', 'limit must be an integer from 1 to 1000', {}, 1);
   let query = `
     SELECT h.id, h.task_id, t.name, h.executed_at, h.completed_at, h.status, h.duration_ms, h.error
     FROM task_history h
@@ -594,7 +596,7 @@ function cmdUpdate(taskId, options) {
   }
 
   if (options['clear-session-group'] && ['reply-channel', 'reply-endpoint', 'reply-session-group'].some(key => Object.hasOwn(options, key))) {
-    reject('INVALID_ARGS', '--clear-session-group cannot be combined with reply target options');
+    reject('INVALID_ARGS', '--clear-session-group cannot be combined with reply target options', {}, 1);
   }
   const replyUpdates = options['clear-session-group']
     ? { session_component: null, session_group_name: null,
@@ -671,7 +673,7 @@ function cmdUpdate(taskId, options) {
   const reenabled = task.status === 'failed' && task.type === 'one-time' && scheduleUpdated;
   if (reenabled) {
     if (updates.next_run_at <= now()) {
-      reject('RESCHEDULE_NOT_FUTURE', 'Rescheduled time must be in the future', { nextRunAt: updates.next_run_at });
+      reject('RESCHEDULE_NOT_FUTURE', 'Rescheduled time must be in the future', { nextRunAt: updates.next_run_at }, 1);
     }
     updates.status = 'pending';
     updates.failed_at = null;
@@ -760,7 +762,7 @@ function main() {
     default:
       if (command) {
         if (!options.json) console.log(HELP);
-        throw Object.assign(new Error(`Unknown command: ${command}`), { code: 'INVALID_ARGS', text: `Unknown command: ${command}` });
+        throw Object.assign(new Error(`Unknown command: ${command}`), { code: 'INVALID_ARGS', textExitCode: 0, text: `Unknown command: ${command}` });
       }
       console.log(HELP);
   }

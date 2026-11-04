@@ -180,7 +180,7 @@ describe('cli add', () => {
   it('reports error without timing option', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cliRaw(['add', 'no timing'], env);
-      assert.equal(status, 1);
+      assert.equal(status, 0);
       assert.ok(stderr.includes('Error') || stderr.includes('Must specify'));
     });
   });
@@ -188,7 +188,7 @@ describe('cli add', () => {
   it('reports error without prompt', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cliRaw(['add', '--cron', '0 9 * * *'], env);
-      assert.equal(status, 1);
+      assert.equal(status, 0);
       assert.ok(stderr.includes('Error') || stderr.includes('Prompt'));
     });
   });
@@ -330,7 +330,7 @@ describe('cli done', () => {
   it('reports error for non-existent task', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cliRaw(['done', 'nonexistent-id'], env);
-      assert.equal(status, 1);
+      assert.equal(status, 0);
       assert.ok(stderr.includes('not found'));
     });
   });
@@ -376,7 +376,7 @@ describe('cli remove', () => {
   it('reports error for non-existent task', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cliRaw(['remove', 'nonexistent-id'], env);
-      assert.equal(status, 1);
+      assert.equal(status, 0);
       assert.ok(stderr.includes('not found'));
     });
   });
@@ -484,7 +484,7 @@ describe('cli update', () => {
       try {
         const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
         const { stderr, status } = cliRaw(['update', task.id], env);
-        assert.equal(status, 1);
+        assert.equal(status, 0);
         assert.ok(stderr.includes('No updates'));
       } finally {
         db.close();

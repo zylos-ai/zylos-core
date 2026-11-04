@@ -56,7 +56,7 @@ function fixture(t) {
     return result.value.data;
   };
   const add = (name, options = []) => success(['add', name, '--in', '2 hours', ...options]).task;
-  const fail = (args, code, text) => {
+  const fail = (args, code, text, textExitCode = 0) => {
     const result = json(args);
     assert.equal(result.status, 1, result.stderr);
     assert.equal(result.stderr, '');
@@ -66,7 +66,7 @@ function fixture(t) {
     assert.equal('data' in result.value, false);
     if (text) {
       const human = run(args);
-      assert.equal(human.status, 1);
+      assert.equal(human.status, textExitCode);
       assert.match(human.stderr, text);
       assert.doesNotMatch(human.stdout, /"ok":/);
     }
@@ -158,7 +158,7 @@ test('past rescheduling rejects without writes and non-schedule edits preserve f
   const history = f.history(task.id);
   const before = JSON.stringify(f.row(task.id));
   const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const error = f.fail(['update', task.id, '--at', past], 'RESCHEDULE_NOT_FUTURE', /Error:/);
+  const error = f.fail(['update', task.id, '--at', past], 'RESCHEDULE_NOT_FUTURE', /Error:/, 1);
   assert.ok(error.nextRunAt < Math.floor(Date.now() / 1000));
   assert.equal(JSON.stringify(f.row(task.id)), before);
   assert.deepEqual(f.history(task.id), history);
@@ -224,7 +224,7 @@ test('legacy option values retain dash text, integer prefixes and permissive par
   assert.equal(list.status, 0, list.stderr); assert.equal(list.stderr, '');
   assert.match(list.stdout, /Tasks \(TZ:/);
   const help = f.run(['add', '--help']);
-  assert.equal(help.status, 1); assert.match(help.stderr, /^Error: Prompt is required/);
+  assert.equal(help.status, 0); assert.match(help.stderr, /^Error: Prompt is required/);
   assert.match(help.stdout, /Usage: cli.js add/);
 });
 
@@ -240,7 +240,7 @@ test('session target clearing preserves reply address and rejects conflicting ta
     ['--reply-channel', 'telegram'], ['--reply-endpoint', '1001'], ['--reply-session-group', 'dm-1001'],
   ]) {
     const before = JSON.stringify(f.row(task.id));
-    f.fail(['update', task.id, '--clear-session-group', ...flags], 'INVALID_ARGS', /Error:/);
+    f.fail(['update', task.id, '--clear-session-group', ...flags], 'INVALID_ARGS', /Error:/, 1);
     assert.equal(JSON.stringify(f.row(task.id)), before);
   }
   const cleared = f.success(['update', task.id, '--clear-session-group']).task;
@@ -260,10 +260,10 @@ test('session target clearing preserves reply address and rejects conflicting ta
     assert.equal(clearBoth[column], null);
     assert.equal(f.row(task.id)[column], null);
   }
-  f.fail(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'bad group'], 'SESSION_GROUP_INVALID');
+  f.fail(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'bad group'], 'SESSION_GROUP_INVALID', /Error: SESSION_GROUP_INVALID:/, 1);
 });
 
-test('write validation failures have stable codes and nonzero exits in JSON and legacy text', t => {
+test('write validation failures use JSON errors and preserve legacy text exits', t => {
   const f = fixture(t);
   const task = f.add('validation task');
   const cases = [
@@ -287,6 +287,7 @@ test('write validation failures have stable codes and nonzero exits in JSON and 
     [['done', 'absent'], 'TASK_NOT_FOUND', /Error: Task not found: absent/],
   ];
   for (const [args, code, text] of cases) f.fail(args, code, text);
+  assert.match(f.run(['unknown-command']).stdout, /Usage:/);
   for (const command of ['update', 'remove', 'done', 'pause', 'resume']) f.fail([command], 'INVALID_ARGS', /Error: Task ID is required/);
   for (const command of ['pause', 'resume']) f.fail([command, 'absent'], 'TASK_NOT_FOUND', /Error: (?:Pending|Paused) task not found: absent/);
   f.db.prepare('UPDATE tasks SET status=? WHERE id=?').run('running', task.id);
@@ -300,6 +301,21 @@ test('write validation failures have stable codes and nonzero exits in JSON and 
     const error = f.fail(args, 'TASK_AMBIGUOUS', /Error: Ambiguous task ID prefix 'task-'/);
     assert.deepEqual(error.matches.sort(), [task.id, other.id].sort());
   }
+});
+
+test('pausing an already paused task preserves text compatibility and reports a JSON error', t => {
+  const f = fixture(t);
+  const task = f.add('already paused');
+  f.success(['pause', task.id]);
+  const before = f.row(task.id), history = f.history(task.id);
+  const text = f.run(['pause', task.id]);
+  assert.equal(text.status, 0);
+  assert.equal(text.stdout, '');
+  assert.equal(text.stderr, `Error: Pending task not found: ${task.id}\n`);
+  const error = f.fail(['pause', task.id], 'TASK_WRONG_STATUS');
+  assert.equal(error.status, 'paused');
+  assert.deepEqual(f.row(task.id), before);
+  assert.deepEqual(f.history(task.id), history);
 });
 
 test('history JSON is bounded, ordered deterministically and excludes prompt text', t => {
@@ -323,7 +339,7 @@ test('history JSON is bounded, ordered deterministically and excludes prompt tex
   const ambiguous = f.success(['history', 'task-', '--limit', '1000']);
   assert.deepEqual(ambiguous.ambiguousPrefix.sort(), [task.id, other.id].sort());
   assert.deepEqual(ambiguous.rows, expected);
-  for (const limit of ['0', '1001', '1.5', 'nonsense']) f.fail(['history', '--limit', limit], 'INVALID_ARGS', /Error:/);
+  for (const limit of ['0', '1001', '1.5', 'nonsense']) f.fail(['history', '--limit', limit], 'INVALID_ARGS', /Error:/, 1);
   const text = f.run(['history', task.id, '--limit', '1']);
   assert.equal(text.status, 0, text.stderr);
   assert.equal(text.stdout.split('\n').filter(line => /\| success\s*\|/.test(line)).length, 1);
@@ -333,7 +349,7 @@ test('timezone and SQLite write failures use the structured error envelope', t =
   const f = fixture(t);
   const task = f.add('write failure task');
   fs.writeFileSync(path.join(f.zylos, '.env'), 'TZ=Not/A_Timezone\n');
-  f.fail(['update', task.id, '--name', 'x'], 'INVALID_TZ', /Error \[INVALID_TZ\]:/);
+  f.fail(['update', task.id, '--name', 'x'], 'INVALID_TZ', /Error \[INVALID_TZ\]:/, 1);
   fs.writeFileSync(path.join(f.zylos, '.env'), 'TZ=UTC\n');
   f.db.pragma('wal_checkpoint(TRUNCATE)');
   f.db.close();
@@ -345,6 +361,10 @@ test('timezone and SQLite write failures use the structured error envelope', t =
     assert.equal(result.value.ok, false);
     assert.equal(result.value.error.code, 'DB_WRITE_FAILED');
     assert.equal('data' in result.value, false);
+    const text = f.run(['update', task.id, '--name', 'x']);
+    assert.equal(text.status, 1);
+    assert.equal(text.stdout, '');
+    assert.match(text.stderr, /^Error: DB_WRITE_FAILED:/);
   } finally {
     fs.chmodSync(path.dirname(f.dbPath), 0o700);
     fs.chmodSync(f.dbPath, 0o600);
