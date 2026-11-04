@@ -22,6 +22,7 @@ async function scenario(t, Observation) {
     sendAlert: () => { actions.push('alert'); }, signalProcess: () => { actions.push('signal'); } });
   const scenes = new Observation(base, { guard, open: async () => ({ close() {} }), readGeneration: () => '123:5' });
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     listPendingSessionGroups: () => pending, getControlById: () => null,
     insertControl: () => { actions.push('control'); }, setDrainFence: () => { actions.push('fence'); },
     resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };

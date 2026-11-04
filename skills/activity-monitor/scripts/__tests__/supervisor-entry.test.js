@@ -196,6 +196,7 @@ test('actual Sock rejects requests throughout paused restoration, then admits af
   const held = new Promise(resolve => { release = resolve; });
   const restoring = new Promise(resolve => { entered = resolve; });
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     listPendingSessionGroups: () => [], getControlById: () => null,
     resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };
   const scenes = { observe: async () => { observations++; return []; },

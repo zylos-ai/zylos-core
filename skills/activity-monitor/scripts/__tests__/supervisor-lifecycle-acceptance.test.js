@@ -8,6 +8,7 @@ import { SupervisorScenes } from '../supervisor-scenes.js';
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
+import { PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
 
 function localFixture(t, Class = SupervisorLifecycle, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-acceptance-'));
@@ -25,6 +26,7 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
     ...options.db };
   f.deps = { db: f.db, bindTarget: scene => ({ expectedRunId: scene.runId, tmuxTarget: { serverGeneration: 'private-server', sessionId: '$1', paneId: '%1' } }), observeGroup: () => f.scene, observe: () => [f.scene],
     requests: { read: () => [] }, diagnostic: e => f.events.push(e),
+    groupRunDir: () => f.root,
     readSyncMarker: args => { f.markerCalls.push(args); return f.marker; },
     prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
       ROTATION_PROMPT: 'rotate', CONFIG_RECLAIM_PROMPT: 'config' },
@@ -70,10 +72,8 @@ test('repeated Sync content leaves one pending row and supersedes the previous o
 });
 
 
-// Frozen outputs are the boundary. Raw marker contents are only used
-// by the deliberately wrong existence-only consumer; no second production
-// marker parser is introduced and no real provider claim is made.
-async function markerScenario(t, Class, existenceOnly = false) {
+// The consumer uses the memory provider's frozen marker result.
+async function markerScenario(t, Class) {
   const cases = [
     ['valid', { held: true, stale: false, runId: 'old-run', expiresAt: 1792000060000, reason: 'held' }, false],
     ['expired', { held: true, stale: true, runId: 'old-run', expiresAt: 1791999999999, reason: 'expired' }, true],
@@ -82,9 +82,7 @@ async function markerScenario(t, Class, existenceOnly = false) {
   ];
   for (const [name, marker, idle] of cases) {
     const f = localFixture(t, Class);
-    f.scene.sessionGroup = 'telegram:a'; f.marker = marker;
-    const file = path.join(f.root, 'sync.lock'); fs.writeFileSync(file, name === 'corrupt' ? '{broken' : JSON.stringify(marker));
-    if (existenceOnly) f.deps.readSyncMarker = args => { f.markerCalls.push(args); return { ...marker, held: fs.existsSync(file), stale: false }; };
+    f.scene.sessionGroup = 'telegram:a'; f.marker = marker; f.backlog = { total: 0, groups: [] };
     assert.equal(await f.lifecycle.idle(f.scene, f.context), idle, `marker ${name} blocked idle incorrectly`);
     assert.deepEqual(f.markerCalls, [{ runDir: f.root, kind: 'group', currentRunId: 'old-run' }]);
     await f.lifecycle.checkSync([f.scene], f.context);
@@ -93,10 +91,6 @@ async function markerScenario(t, Class, existenceOnly = false) {
 }
 test('consumer accepts expired/wrong-run/corrupt marker results and blocks only valid ownership', async t => {
   await markerScenario(t, SupervisorLifecycle);
-});
-test('oracle: detects checking marker existence instead of its reader result', async t => {
-  await assert.rejects(markerScenario(t, SupervisorLifecycle, true),
-    error => error.code === 'ERR_ASSERTION' && error.message.includes('marker expired blocked idle incorrectly'));
 });
 
 async function configScenario(t, Class) {
@@ -123,6 +117,8 @@ async function configScenario(t, Class) {
   assert.deepEqual((await scenes.observeGroup('origin')).launchConfig, old.launchConfig);
   assert.equal(store.getDrainFence('origin'), null);
 }
+// Boundary: real tmux and a private C4 fixture for launch-snapshot changes.
+// Run when configuration reclamation changes; Sync/TTL/manual-only changes may skip.
 test('real running snapshot stays old after / changes and produces reclaim control', { timeout: 15000 }, async t => {
   await configScenario(t, SupervisorLifecycle);
 });
@@ -141,7 +137,12 @@ async function syncScopeScenario(t, Class) {
     assert.ok(f.controls.every(c => c.sessionGroup === (mode === 'single' ? null : 'origin') && c.priority === 2 && c.appendAckSuffix === false));
     const count = f.controls.length;
     f.scene = { ...f.scene, present: false }; f.now += 600000;
-    await f.lifecycle.checkSync([f.scene], f.context); assert.equal(f.controls.length, count);
+    await f.lifecycle.checkSync([f.scene], f.context);
+    assert.equal(f.controls.length, count + (mode === 'multi' ? 1 : 0));
+    if (mode === 'multi') {
+      assert.equal(f.controls.at(-1).content, 'origin sync');
+      assert.deepEqual(f.markerCalls.at(-1), { runDir: f.root, kind: 'origin', currentRunId: null });
+    }
   }
 }
 test('Sync reads all three marker scopes and failed writes do not mark a scope sent', async t => {
@@ -169,4 +170,53 @@ async function rotationScenario(t, Class) {
 }
 test('rotation scope, exact cooldown boundary, run/session identity and failed write retry', async t => {
   await rotationScenario(t, SupervisorLifecycle);
+});
+
+// Boundary: real C4 controls and Origin demand with fake scene/marker readers.
+// Run for absent-Origin Sync production; unrelated runtime health changes may skip.
+test('absent Origin Sync creates one real unbound demand and preserves deduplication', async t => {
+  const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
+  f.scene.present = false; f.scene.ready = false;
+  f.db.getOriginSyncBacklog = () => f.backlog;
+  await f.lifecycle.checkSync([f.scene], f.context);
+  const row = sql.db.prepare('SELECT * FROM control_queue').get();
+  assert.equal(row.session_group, 'origin'); assert.equal(row.target_binding, null);
+  assert.equal(sql.store.getOriginNeed().controls.count, 1);
+  assert.deepEqual(f.markerCalls, [{ runDir: f.root, kind: 'origin', currentRunId: null }]);
+  f.now += 60000; await f.lifecycle.checkSync([f.scene], f.context);
+  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 1);
+  f.now += 600000; await f.lifecycle.checkSync([f.scene], f.context);
+  assert.deepEqual(sql.db.prepare('SELECT status FROM control_queue ORDER BY id').pluck().all(), ['superseded', 'pending']);
+  assert.equal(sql.store.getOriginNeed().controls.count, 1);
+});
+
+// Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.
+// Run for Origin TTL preparation/reclaim changes; unrelated machine tasks may skip.
+test('Origin TTL persists both bound preparations and reclaims only after both terminate', async t => {
+  const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
+  f.scene.createdAt = f.now - 2_000_000;
+  f.db.getLastActivity = () => null;
+  f.db.getControlById = id => sql.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
+  f.db.getUnsummarizedRange = () => ({ count: 1, firstAt: f.now - 2_000_000 });
+  f.db.getOriginSyncBacklog = () => ({ total: 1, groups: [{ count: 1, pendingCheckpoints: 0 }] });
+  f.deps.prompts = { PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT };
+  let stops = 0; f.deps.stop = () => { stops++; f.scene = { ...f.scene, present: false, ready: false }; };
+  await f.lifecycle.checkTtl(f.scene, f.context);
+  const rows = sql.db.prepare('SELECT * FROM control_queue ORDER BY id').all();
+  assert.deepEqual(rows.map(row => row.raw_content), [PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT]);
+  for (const row of rows) {
+    assert.equal(row.session_group, 'origin'); assert.equal(row.require_idle, 1); assert.ok(row.content.includes(' ---- ack via:'));
+    assert.equal(JSON.parse(row.target_binding).expectedRunId, 'old-run'); assert.ok(Number.isInteger(row.ack_deadline_at));
+  }
+  assert.equal(sql.store.getOriginNeed().controls.count, 0);
+  await f.lifecycle.checkTtl(f.scene, f.context); assert.equal(sql.store.getDrainFence('origin'), null);
+  sql.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(rows[0].id);
+  await f.lifecycle.checkTtl(f.scene, f.context); assert.equal(sql.store.getDrainFence('origin'), null);
+  sql.db.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(rows[1].id);
+  await f.lifecycle.checkTtl(f.scene, f.context);
+  const fence = sql.store.getDrainFence('origin'); assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'old-run');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+  assert.equal(stops, 1); assert.equal(sql.store.getDrainFence('origin'), null);
+  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 2);
+  assert.equal(sql.store.getOriginNeed().controls.count, 0);
 });

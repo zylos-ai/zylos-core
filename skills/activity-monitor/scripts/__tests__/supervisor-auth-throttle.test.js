@@ -11,6 +11,7 @@ function fixture(t, checkAuth, create = createSupervisor) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const state = { now: 1000000, runtime: 'claude' };
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     listPendingSessionGroups: () => [{ sessionGroup: 'chat:pending' }], getControlById: () => null };
   const scenes = { observe: async () => [], readIdentity(group) { return this.observeGroup(group); }, observeGroup: async () => ({ present: false }), listRuns: async () => [] };
   const supervisor = create({ db, scenes, now: () => state.now, env: { ZYLOS_DIR: root }, zylosDir: root,

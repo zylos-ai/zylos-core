@@ -7,6 +7,7 @@ const scene = { sessionGroup: 'a', present: true, ready: true, runId: 'run-a', s
   runtime: 'claude', processRunning: true, state: 'idle', idleSince: 0, createdAt: 0, usagePercent: 50,
   runDir: path.join(process.env.ZYLOS_DIR, 'activity-monitor/session-groups/a') };
 const db = { getModeTransition: () => null, listDrainFences: () => [...fences.values()],
+  getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
   getDrainFence: group => fences.get(group) ?? null,
   setDrainFence: (group, value) => fences.set(group, { sessionGroup: group, ...value }),
   listPendingSessionGroups: () => [], getControlById: () => null,

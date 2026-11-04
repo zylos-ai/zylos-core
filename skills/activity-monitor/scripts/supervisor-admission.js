@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { validLaunchConfigSnapshot as validSnapshot } from './launch-config-shape.js';
 const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
 import { RestartRequestStore, validRequestId } from './restart-request-store.js';
+import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 
 const nonempty = value => typeof value === 'string' && value.length > 0;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -109,8 +110,14 @@ export class SupervisorAdmission {
     const mode = (await this.readMode()).mode ?? 'single';
     const run = await this.readRun(mode === 'multi' ? 'origin' : null);
     // null means both the process and tmux absence were positively observed.
-    if (!request.expectedRunId) return run === null ? { ok: true, result: 'already_stopped' } : rejected('target_required');
-    if (run === null) return { ok: true, result: 'already_stopped' };
+    if (!request.expectedRunId && run !== null) return rejected('target_required');
+    if (run === null) {
+      if (mode === 'multi') {
+        try { await this.db.insertControl(MANUAL_WAKE_PROMPT, { sessionGroup: 'origin', priority: 2, appendAckSuffix: false }); }
+        catch { return rejected('wake_failed'); }
+      }
+      return { ok: true, result: 'already_stopped' };
+    }
     if (nonempty(run?.runId) && run.runId !== request.expectedRunId) return { ok: false, result: 'stale_target', currentRunId: run.runId };
     if (!nonempty(run?.runId)) return rejected('identity_unavailable');
     if (!run.ready) return rejected('not_ready');

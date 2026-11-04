@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { validLaunchConfigSnapshot as validLaunchConfig } from './launch-config-shape.js';
+import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
@@ -180,7 +181,8 @@ export class SupervisorLifecycle {
   }
 
   async beginReclaim(scene, reason, context) {
-    if (['ttl', 'evict'].includes(reason) && (scene.sessionGroup === 'origin' || scene.sessionGroup === null)) return false;
+    if (reason === 'evict' && (scene.sessionGroup === 'origin' || scene.sessionGroup === null)) return false;
+    if (reason === 'ttl' && scene.sessionGroup === null) return false;
     if (!scene.present || !scene.ready || !scene.runId || scene.sessionGroup === null) return false;
     if (!await this.allowed(scene.sessionGroup, context)) return false;
     const fresh = await this.observe(scene.sessionGroup, context);
@@ -286,7 +288,7 @@ export class SupervisorLifecycle {
   async checkTtl(scene, context) {
     if (scene.observationError) throw scene.observationError;
     const group = scene.sessionGroup;
-    if (modeOf(context) !== 'multi' || !group || group === 'origin' || !await this.allowed(group, context)) return;
+    if (modeOf(context) !== 'multi' || !group || !await this.allowed(group, context)) return;
     if (!scene.present || !scene.ready) { this.ttlPreparation.delete(group); return; }
     const preparation = this.ttlPreparation.get(group);
     // Preparation starts only after TTL expiry. Its own Sync activity must not
@@ -300,23 +302,36 @@ export class SupervisorLifecycle {
     }
     if (now - last < ttl) return;
     if (preparation) {
-      const control = await this.d.db.getControlById(preparation.controlId);
-      if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
+      for (const id of preparation.controlIds) {
+        const control = await this.d.db.getControlById(id);
+        if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
+      }
       this.ttlPreparation.delete(group);
+      if (preparation.partial) return;
       if (await this.idle(scene, context)) await this.beginReclaim(scene, 'ttl', context);
       return;
     }
     const range = await this.d.db.getUnsummarizedRange(group);
-    if (range.count > 0) {
-      if (!await this.beforeWrite(group, context, scene)) return;
+    if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
+    const todo = [];
+    if (range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
+    if (group === 'origin') {
+      const backlog = await this.d.db.getOriginSyncBacklog();
+      if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
+    }
+    const controlIds = [];
+    let partial = false;
+    for (const prompt of todo) {
+      if (!await this.beforeWrite(group, context, scene)) { partial = controlIds.length > 0; break; }
       const targetBinding = await this.bindCurrentRun(scene);
-      if (!targetBinding) return;
-      const control = await this.d.db.insertControl(this.prompt('PRE_RECLAIM_SYNC_PROMPT'), {
+      if (!targetBinding) { partial = controlIds.length > 0; break; }
+      const control = await this.d.db.insertControl(this.prompt(prompt), {
         sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000),
       });
-      this.ttlPreparation.set(group, { controlId: control.id, runId: scene.runId, at: now });
-    } else if (range.count === 0) await this.beginReclaim(scene, 'ttl', context);
-    else throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
+      controlIds.push(control.id);
+    }
+    if (controlIds.length) this.ttlPreparation.set(group, { controlIds, runId: scene.runId, at: now, partial });
+    else if (!todo.length) await this.beginReclaim(scene, 'ttl', context);
   }
 
   async checkEviction(scenes, context) {
@@ -397,16 +412,18 @@ export class SupervisorLifecycle {
       const kind = single ? 'global' : 'group';
       const range = single ? await this.d.db.getGlobalUnsummarizedRange() : await this.d.db.getUnsummarizedRange(scene.sessionGroup);
       await this.syncScope(scene, kind, { count: range.count, firstAt: range.firstAt, nonempty: range.count > 0 }, context);
-      if (!single && scene.sessionGroup === 'origin') {
-        const backlog = await this.d.db.getOriginSyncBacklog();
-        const times = backlog.groups.flatMap(g => [g.firstAt, g.firstCheckpointAt]).filter(v => v !== null && v !== undefined).map(activityTime);
-        const rawTimes = backlog.groups.map(g => g.firstAt).filter(v => v !== null && v !== undefined).map(activityTime);
-        await this.syncScope(scene, 'origin', { count: backlog.total,
-          firstAt: times.length ? Math.min(...times) : null,
-          alertFirstAt: rawTimes.length ? Math.min(...rawTimes) : null,
-          nonempty: backlog.total > 0 || backlog.groups.some(g => g.pendingCheckpoints > 0) }, context);
-      }
     });
+    if (modeOf(context) === 'multi' && this.allowed('origin', context)) {
+      const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
+      const backlog = await this.d.db.getOriginSyncBacklog();
+      const times = backlog.groups.flatMap(g => [g.firstAt, g.firstCheckpointAt]).filter(v => v !== null && v !== undefined).map(activityTime);
+      const rawTimes = backlog.groups.map(g => g.firstAt).filter(v => v !== null && v !== undefined).map(activityTime);
+      await this.syncScope({ sessionGroup: 'origin', runDir: this.d.groupRunDir('origin'), runId: origin?.runId ?? null }, 'origin', {
+        count: backlog.total, firstAt: times.length ? Math.min(...times) : null,
+        alertFirstAt: rawTimes.length ? Math.min(...rawTimes) : null,
+        nonempty: backlog.total > 0 || backlog.groups.some(g => g.pendingCheckpoints > 0),
+      }, context);
+    }
   }
 
   async syncScope(scene, kind, range, context) {
@@ -434,7 +451,7 @@ export class SupervisorLifecycle {
     const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
     if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
     if (marker.held && !marker.stale) return;
-    if (!await this.beforeWrite(modeOf(context) === 'single' ? null : scene.sessionGroup, context, scene)) return;
+    if (!await this.beforeWrite(modeOf(context) === 'single' ? null : scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
       sessionGroup: modeOf(context) === 'single' ? null : scene.sessionGroup, priority: 2, appendAckSuffix: false,
     });
@@ -536,6 +553,9 @@ export class SupervisorLifecycle {
         await this.refreshAuthorities(context);
         if (this.manualBlocked(request, context)) return;
         fence = context.fences.find(item => item.sessionGroup === group);
+        if (request.mode === 'multi') await this.d.db.insertControl(MANUAL_WAKE_PROMPT, {
+          sessionGroup: 'origin', priority: 2, appendAckSuffix: false,
+        });
         if (fence) await this.clear(fence, context);
         this.d.requests.remove(request.requestId);
         context.restartRequests = context.restartRequests.filter(item => item.requestId !== request.requestId);

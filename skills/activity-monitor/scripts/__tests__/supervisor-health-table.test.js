@@ -22,6 +22,7 @@ function fixture(t, create = createSupervisor) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'health-table-')); let now = 1792000000000;
   const state = { current: [], controls: [], pending: [{ sessionGroup: 'telegram:a', retry_count: 2 }], matches: {}, stops: [] };
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     listPendingSessionGroups: () => state.pending,
     insertControl: (content, options) => { state.controls.push({ id: state.controls.length + 1, content, ...options, status: 'pending' }); return state.controls.length; },
     getControlById: id => state.controls[id - 1],

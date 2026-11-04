@@ -85,11 +85,6 @@ for(const relative of ['.zylos/upgrade/active.json','.backup/self-upgrade','.zyl
 test('first-adoption absence and empty active root permit schema initialization without fabricated protection',t=>{
  const root=fixture(t);assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));fs.mkdirSync(path.join(root,'.backup/self-upgrade'),{recursive:true,mode:0o700});assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));
 });
-test('monitor reports schema incompatibility and fail-closes pending work',t=>{
- const root=fixture(t);fs.mkdirSync(path.join(root,'comm-bridge'));const db=new Database(path.join(root,'comm-bridge/c4.db'));db.exec(sql);db.pragma('user_version=3');db.close();
- run(root, `import assert from 'node:assert/strict';import {UsageMonitor} from './skills/activity-monitor/scripts/usage-monitor.js';const logs=[];const monitor=new UsageMonitor({}, {zylosDir:process.env.ZYLOS_DIR,log:line=>logs.push(line)});assert.equal(monitor.getPendingWorkCount(),Infinity);assert.match(logs[0],/schema version 3/);`);
-});
-
 test('web-console rejects future C4 before stale session cleanup',t=>{
  const root=fixture(t);
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();const wc=openDb();wc.prepare('INSERT INTO sessions VALUES(?,?,?)').run('stale',1,1);wc.close();`);

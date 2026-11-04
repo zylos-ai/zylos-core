@@ -36,9 +36,9 @@ async function produce(t, mode, mutation) {
   const f = fixture(t, mode, mutation); const now = new Date(2026, 9, 25, 5).getTime();
   const tasks = new SupervisorMachineTasks({ zylosDir: f.root, now: () => now, readMode: () => ({ mode }),
     readConfig: () => ({ daily_upgrade_enabled: true, health_check_enabled: true, usage_monitor_enabled: false, usage_alert_enabled: false }),
-    readOriginState: () => ({ runtime: 'claude', present: true, ready: true, state: 'idle' }), readHealth: () => ({ health: 'ok' }), enqueue: f.enqueue,
+    resolveTargetRuntime: () => 'claude', readHealth: () => ({ health: 'ok' }), enqueue: f.enqueue,
     execute: () => { throw new Error('No maintenance child expected'); } });
-  await tasks.tick(); await tasks.stop();
+  await tasks.tick({}); await tasks.stop();
   await upgradeCheck(t, f);
   const usage = new UsageMonitor({ runtimeId: 'codex' }, { zylosDir: f.root, usageAlertStateFile: path.join(f.root, 'alert.json'),
     readMode: () => ({ mode }), alertEnabled: true, warnThreshold: 80, highThreshold: 90, criticalThreshold: 95, notifyCooldownSec: 14400,
