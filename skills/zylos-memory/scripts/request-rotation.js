@@ -53,10 +53,13 @@ export async function requestRotation({ reason = 'identity' } = {}, dependencies
   return { enqueued, skipped };
 }
 
+export function printRotationResult({ enqueued, skipped }, write = console.log) {
+  write(`OK: enqueued ${enqueued.length} rotation controls`);
+  for (const { sessionGroup, code } of skipped) write(`SKIPPED: ${sessionGroup} ${code}`);
+}
+
 if (isMain(import.meta.url)) await runCli(async () => {
   const parsed = options(process.argv.slice(2), ['reason']);
   if (parsed.positional.length || parsed.reason !== 'identity') throw failure('INVALID_INPUT', 'Usage: request-rotation.js --reason identity');
-  const { enqueued, skipped } = await requestRotation({ reason: parsed.reason });
-  console.log(`OK: enqueued ${enqueued.length} rotation controls`);
-  for (const { sessionGroup, code } of skipped) console.log(`SKIPPED: ${sessionGroup} ${code}`);
+  printRotationResult(await requestRotation({ reason: parsed.reason }));
 });

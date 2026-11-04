@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requestRotation } from '../request-rotation.js';
+import { requestRotation, printRotationResult } from '../request-rotation.js';
 import { IDENTITY_ROTATION_PROMPT, GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT, PRE_RECLAIM_SYNC_PROMPT, SYNC_BACKLOG_ALERT } from '../sync-prompts.js';
 function bindingFor(sessionGroup) {
   return JSON.stringify({ expectedRunId: `run-${sessionGroup}`, tmuxTarget: { serverGeneration: 'server', sessionId: '$1', paneId: '%2' } });
@@ -172,4 +172,20 @@ test('an identity control left after its Origin exits does not create new Origin
   assert.equal(row.status, 'pending');
   assert.equal(JSON.parse(row.target_binding).expectedRunId, 'observed-run');
   assert.deepEqual(store.getOriginNeed(Math.floor(Date.now() / 1000)).controls, { count: 0, oldestAt: null });
+});
+
+
+test('rotation CLI output reports each skipped group after the enqueue count', async () => {
+  const { d } = fixture('multi', ['origin', 'telegram:one', 'lark:two']);
+  d.readLiveIdentity = sessionGroup => ({ present: sessionGroup === 'telegram:one', runId: `run-${sessionGroup}` });
+  const lines = [];
+  printRotationResult(await requestRotation({}, d), line => lines.push(line));
+  assert.deepEqual(lines, [
+    'OK: enqueued 1 rotation controls',
+    'SKIPPED: origin TARGET_NOT_RUNNING',
+    'SKIPPED: lark:two TARGET_NOT_RUNNING',
+  ]);
+  lines.length = 0;
+  printRotationResult({ enqueued: [], skipped: [] }, line => lines.push(line));
+  assert.deepEqual(lines, ['OK: enqueued 0 rotation controls']);
 });
