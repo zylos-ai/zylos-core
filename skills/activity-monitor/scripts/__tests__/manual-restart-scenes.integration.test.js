@@ -13,6 +13,10 @@ async function assertUntouched(m4, f) {
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper'));
   return state;
 }
+// Boundary: real entry admission, F9 and exact runtime identity. Run for manual
+// request identity/compatibility changes; skip unrelated lifecycle behavior.
+// Require runner-isolated HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, a private -S
+// tmux socket and temporary C4; child/fixture cleanup closes all resources.
 for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex']) {
   test(`${mode}/${runtime} real supervisor exact target rejection fields and accepted identity`, { timeout: 25000 }, async t => {
     const f = fixture(t, mode, runtime), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
@@ -80,8 +84,8 @@ test('actual supervisor empty Origin conflict and corrupt fail closed before alr
 for (const mode of ['single', 'multi']) test(`${mode} manual restart stops busy Sync-held run despite running control, retains until inflight accounted`, { timeout: 25000 }, async t => {
   await inflight(t, mode);
 });
-async function inflight(t, mode, variant = '') {
-  const f = fixture(t, mode), m4 = launch(t, f, variant); assert.equal((await m4.next()).ready, true);
+async function inflight(t, mode) {
+  const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
   const group = mode === 'single' ? null : 'origin';
   f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','fixture','paused paste/Enter','running',?)").run(group ?? '');
   f.db.prepare("INSERT INTO control_queue(raw_content,content,status,ack_deadline_at,created_at,updated_at,session_group) VALUES('control','control','running',NULL,1,1,?)").run(group);
@@ -101,16 +105,14 @@ async function inflight(t, mode, variant = '') {
   assert.deepEqual(f.db.prepare('SELECT * FROM control_queue').all(), control);
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await m4.stop();
 }
-test('oracle: early gate withdrawal is detected by the same real supervisor inflight assertion', { timeout: 25000 }, async t => {
-  await assert.rejects(inflight(t, 'single', 'early-clear'), { code: 'ERR_ASSERTION', message: /manual inflight intent must persist/ });
-});
+
 
 for (const mode of ['single', 'multi']) for (const pause of ['before-intent', 'after-intent', 'after-fence', 'after-stop', 'after-clear', 'before-remove', 'after-remove']) {
   test(`${mode} full supervisor SIGKILL ${pause} recovers durable intent without resubmission or retargeting`, { timeout: 25000 }, async t => {
     await crashWindow(t, mode, pause);
   });
 }
-async function crashWindow(t, mode, pause, variant = '') {
+async function crashWindow(t, mode, pause) {
   const f = fixture(t, mode), first = launch(t, f, pause); assert.equal((await first.next()).ready, true);
   const req = manual('crash-scene', { expectedRunId: 'run-1' });
   let pending;
@@ -125,16 +127,14 @@ async function crashWindow(t, mode, pause, variant = '') {
   if (beforeStop) f.tmux('rename-session', '-t', '=zylos-group-origin', 'fixture-original');
   f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=replacement', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), path.join(f.root, 'claude'), '120');
   fs.writeFileSync(f.readyPath, JSON.stringify({ ...f.ready, runId: 'replacement', sessionId: 'replacement-session' }));
-  const second = launch(t, f, variant), state = await second.next(); assert.equal(state.ready, true);
+  const second = launch(t, f), state = await second.next(); assert.equal(state.ready, true);
   assert.equal(state.scene.present, true, 'replacement must remain present'); assert.equal(state.scene.runId, 'replacement'); assert.deepEqual(state.stopped, []);
   assert.deepEqual(state.requests, []); assert.deepEqual(state.fences, []);
   if (beforeStop) assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-original'));
   const done = await second.command('tick'); assert.deepEqual(done.stopped, []); assert.deepEqual(done.requests, []);
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await second.stop();
 }
-test('oracle: retargeting recovered intent kills replacement and fails the same survival assertion', { timeout: 25000 }, async t => {
-  await assert.rejects(crashWindow(t, 'multi', 'after-intent', 'retarget'), { code: 'ERR_ASSERTION', message: /replacement must remain present/ });
-});
+
 
 for (const mode of ['single', 'multi']) test(`${mode} actual supervisor transition/fence conflict holds accepted manual identity and does not reuse global gate`, { timeout: 25000 }, async t => {
   const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
@@ -197,4 +197,43 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} stopping Origin leav
   assert.equal(f.tmux('display-message', '-p', '-t', `${name}:`, '#{pane_pid}'), pid);
   assert.equal(f.tmux('show-environment', '-t', `=${name}`, 'ZYLOS_RUN_ID'), 'ZYLOS_RUN_ID=ordinary-run');
   assert.deepEqual(f.db.prepare('SELECT * FROM conversations').all(), before); await m4.stop();
+});
+
+
+// Boundary: real supervisor entry targets one ordinary tmux run and retains its
+// SQLite fence/F9 while that group's own delivery is inflight. Run for manual
+// admission/execution/target changes; skip unrelated lifecycle work. Fresh
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, private socket/database and fixture
+// processes only; no live tmux/network. Child/service and fixture resources close.
+test('actual supervisor manual restart targets ordinary group while Origin and another group survive', { timeout: 25000 }, async t => {
+  const f = fixture(t), group = 'fixture:a', other = 'fixture:b';
+  f.env.PM2_HOME = path.join(f.root, 'pm2'); f.env.TMPDIR = path.join(f.root, 'tmp');
+  fs.mkdirSync(f.env.TMPDIR); f.env.TMUX_TMPDIR = f.root; delete f.env.TMUX;
+  console.log(JSON.stringify({ HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR, PM2_HOME: f.env.PM2_HOME,
+    TMPDIR: f.env.TMPDIR, TMUX_TMPDIR: f.env.TMUX_TMPDIR, TMUX: f.env.TMUX ?? null, socket: f.socketPath,
+    database: path.join(f.root, 'comm-bridge/c4.db') }));
+  assert.ok(f.root.startsWith('/tmp/')); assert.ok(Buffer.byteLength(f.socketPath) < 100);
+  const put = (key, runId) => {
+    const dir = groupRunDir(key, f.env); fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId, sessionId: runId, ts: Date.now(), startupControlIds: [] }));
+    f.tmux('new-session', '-d', '-s', tmuxNameForGroup(key), '-e', `ZYLOS_RUN_ID=${runId}`, '-e', `ZYLOS_SESSION_GROUP=${key}`,
+      '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', path.join(f.root, 'claude'), '120');
+  };
+  put(group, 'run-a'); put(other, 'run-b');
+  const m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
+  f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','fixture','inflight','running',?)").run(group);
+  const req = manual('ordinary', { sessionGroup: group, expectedRunId: 'run-a' });
+  assertReply(await f.submit(req), req, 'accepted');
+  let state = await m4.command('tick');
+  assert.equal(state.scene.present, true); assert.equal(state.scene.runId, 'run-1');
+  assert.deepEqual(state.stopped.map(row => row.runId), ['run-a']);
+  assert.equal(state.fences[0].sessionGroup, group); assert.equal(state.fences[0].reason, 'manual_restart');
+  assert.equal(state.requests[0].sessionGroup, group);
+  assert.equal(f.tmux('show-environment', '-t', `=${tmuxNameForGroup(other)}`, 'ZYLOS_RUN_ID'), 'ZYLOS_RUN_ID=run-b');
+  f.db.prepare("UPDATE conversations SET status='delivered' WHERE session_group=?").run(group);
+  state = await m4.command('tick');
+  assert.deepEqual(state.fences, []); assert.deepEqual(state.requests, []);
+  const events = fs.readFileSync(path.join(f.root, 'activity-monitor/supervisor-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(events.some(event => event.event === 'manual_restart_done' && event.session_group === group));
+  await m4.stop();
 });

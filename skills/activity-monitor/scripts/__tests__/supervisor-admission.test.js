@@ -94,22 +94,22 @@ test('config rechecks complete snapshot and current input; same run fence is ide
   f.state.expected=f.state.run.launchConfig; assert.equal((await f.admission.handle(config())).result,'already_accepted');
   f.state.run.runId='new'; assert.equal((await f.admission.handle(config())).reason,'run_changed');
 });
-test('config reclaim skips unreadable restart requests for ordinary groups and fails closed for origin', async t => {
+test('config reclaim tolerates unreadable restart requests for ordinary groups and fails closed for origin', async t => {
   const f=fixture(t); let reads=0, preflights=0;
   const read=f.store.read.bind(f.store); f.store.read=()=>{reads++;return read();};
   f.admission.preflightReclaim=async()=>{preflights++;};
   fs.writeFileSync(f.file,'{unreadable-original');
   assert.equal((await f.admission.handle(config())).result,'accepted');
-  assert.equal(reads,0); assert.equal(preflights,1);
+  assert.equal(reads,1); assert.equal(preflights,1);
   assert.equal(fs.readFileSync(f.file,'utf8'),'{unreadable-original');
   f.state.fences.clear();
   const origin=config({sessionGroup:'origin'});
   assert.deepEqual(await f.admission.handle(origin),{version:1,type:'ready_for_config_reclaim',requestId:'config',ok:false,result:'rejected',reason:'requests_unreadable'});
-  assert.equal(reads,1); assert.equal(preflights,1); assert.equal(f.state.fences.size,0);
+  assert.equal(reads,2); assert.equal(preflights,1); assert.equal(f.state.fences.size,0);
   assert.equal(fs.readFileSync(f.file,'utf8'),'{unreadable-original');
   f.store.write([]);
   assert.equal((await f.admission.handle(origin)).result,'accepted');
-  assert.equal(reads,2); assert.equal(preflights,2);
+  assert.equal(reads,3); assert.equal(preflights,2);
   assert.deepEqual(f.state.fences.get('origin'),{reason:'model_config',runId:'r1'});
   f.state.fences.clear(); f.admission.preflightReclaim=async()=>{throw Object.assign(new Error('unrelated dependency'),{code:'requests_unreadable'});};
   await assert.rejects(f.admission.handle(config()),{code:'requests_unreadable'});
@@ -163,7 +163,7 @@ test('config admission refuses malformed snapshots and fails closed on invalid e
   assert.equal((await f.admission.handle(config())).result, 'accepted');
 });
 
-test('P2 config reclaim missing or failed dependency cannot fence a receiving group', async t => {
+test('config reclaim missing or failed dependency cannot fence a receiving group', async t => {
  const f=fixture(t);
  for (const preflight of [undefined, async()=>{throw Object.assign(new Error('Sync unavailable'),{code:'DEPENDENCY_UNAVAILABLE'});}]) {
   f.admission.preflightReclaim=preflight;
@@ -175,7 +175,7 @@ test('P2 config reclaim missing or failed dependency cannot fence a receiving gr
  assert.equal((await f.admission.handle(config())).result,'accepted');assert.equal(calls,1);
 });
 
-// B4 / session identity is an admission check; the durable execution target is the run.
+// Session identity is an admission check; the durable execution target is the run.
 test('manual admission checks optional sessionId once without requiring a tmux descriptor', async t => {
   const f = fixture(t); f.state.run.sessionId='session-1';
   assert.equal((await f.admission.handle(manual({expectedSessionId:'old-session'}))).reason,'identity_unavailable');
@@ -189,4 +189,98 @@ test('manual admission checks optional sessionId once without requiring a tmux d
   assert.equal((await f.admission.handle(manual({expectedSessionId:'session-2'}))).result,'already_accepted');
   assert.equal(validateRestartRequests([{...row,expectedSessionId:'session-1'}]),false);
   assert.equal(validateRestartRequests([{...row,tmuxTarget:{serverGeneration:'123:4',sessionId:'$1',paneId:'%1'}}]),false);
+});
+
+
+test('manual admission targets only the requested group and keeps one instance-wide request', async t => {
+  const f = fixture(t), observed = [];
+  f.admission.readRun = group => { observed.push(group); return f.state.run; };
+  f.state.fences.set('origin', { reason: 'ttl', runId: 'origin-run' });
+  const request = manual({ sessionGroup: 'telegram:a' });
+  assert.equal((await f.admission.handle(request)).result, 'accepted');
+  assert.deepEqual(observed, ['telegram:a']);
+  assert.deepEqual(f.store.read(), [{ requestId: 'manual', reason: 'manual_restart', acceptedAt: 1792000000123,
+    runIds: ['r1'], mode: 'multi', expectedRunId: 'r1', sessionGroup: 'telegram:a' }]);
+  assert.equal((await f.admission.handle(manual({ requestId: 'another', sessionGroup: 'telegram:b' }))).reason, 'manual_restart_pending');
+  assert.equal((await f.admission.handle(manual({ sessionGroup: 'telegram:b' }))).reason, 'request_conflict');
+  assert.equal((await f.admission.handle(request)).result, 'already_accepted');
+});
+
+test('explicit manual group reports stale, absent and fenced targets without changing intent', async t => {
+  const f = fixture(t), request = manual({ sessionGroup: 'telegram:a' });
+  f.state.run.runId = 'replacement';
+  assert.deepEqual(await f.admission.handle(request), { version: 1, type: 'manual_restart', requestId: 'manual',
+    ok: false, result: 'stale_target', currentRunId: 'replacement' });
+  f.state.run = null;
+  assert.equal((await f.admission.handle(request)).result, 'already_stopped');
+  assert.deepEqual(f.store.read(), []); assert.equal(f.state.fences.size, 0);
+  f.state.fences.set('telegram:a', { reason: 'ttl', runId: 'r1' });
+  assert.equal((await f.admission.handle(request)).reason, 'fence_conflict');
+  assert.deepEqual(f.store.read(), []);
+});
+
+test('manual group validation distinguishes single mode from invalid group syntax', async t => {
+  const f = fixture(t); f.state.mode = 'single';
+  assert.equal((await f.admission.handle(manual({ sessionGroup: 'telegram:a' }))).reason, 'not_multi');
+  for (const sessionGroup of ['bad key', '', '*', null, undefined]) {
+    assert.equal((await f.admission.handle(manual({ sessionGroup }))).code, 'invalid_request');
+  }
+  assert.deepEqual(f.store.read(), []);
+});
+
+// Frozen pre-change manual implementation is a compatibility fixture. It is
+// statically defined, never read or reevaluated from product source at runtime.
+async function legacyManual(request, rows) {
+  const nonempty = value => typeof value === 'string' && value.length > 0;
+  const rejected = reason => ({ ok: false, result: 'rejected', reason });
+  const existing = rows.find(row => row.requestId === request.requestId);
+  if (existing) return existing.reason === 'manual_restart' && existing.expectedRunId === request.expectedRunId
+    ? { ok: true, result: 'already_accepted' } : rejected('request_conflict');
+  if (await this.db.getModeTransition()) return rejected('transition_open');
+  if (rows.some(row => row.reason === 'upgrade')) return rejected('restart_all_pending');
+  if (await this.db.getDrainFence('origin') || await this.db.getDrainFence('*')) return rejected('fence_conflict');
+  if (rows.some(row => row.reason === 'manual_restart')) return rejected('manual_restart_pending');
+  const mode = (await this.readMode()).mode ?? 'single';
+  const run = await this.readRun(mode === 'multi' ? 'origin' : null);
+  if (!request.expectedRunId) return run === null ? { ok: true, result: 'already_stopped' } : rejected('target_required');
+  if (run === null) return { ok: true, result: 'already_stopped' };
+  if (nonempty(run?.runId) && run.runId !== request.expectedRunId) return { ok: false, result: 'stale_target', currentRunId: run.runId };
+  if (!nonempty(run?.runId)) return rejected('identity_unavailable');
+  if (!run.ready) return rejected('not_ready');
+  if (request.expectedSessionId !== undefined && request.expectedSessionId !== run.sessionId) return rejected('identity_unavailable');
+  const row = { requestId: request.requestId, reason: 'manual_restart', acceptedAt: this.now(), runIds: [run.runId], mode, expectedRunId: run.runId };
+  this.store.write([...rows, row]);
+  return { ok: true, result: 'accepted' };
+}
+
+test('manual rows accept an optional multi group while retaining old field and byte shape', async t => {
+  for (const mode of ['single', 'multi']) {
+    const f = fixture(t), previous = fixture(t);
+    f.state.mode = previous.state.mode = mode;
+    previous.admission.manual = legacyManual;
+    const request = manual({ requestId: mode });
+    assert.deepEqual(await f.admission.handle(request), await previous.admission.handle(request));
+    const [row] = f.store.read();
+    assert.deepEqual(f.store.read(), previous.store.read());
+    assert.equal(fs.readFileSync(f.file, 'utf8'), fs.readFileSync(previous.file, 'utf8'));
+    assert.equal(Object.hasOwn(row, 'sessionGroup'), false);
+    assert.equal(validateRestartRequests([{ ...row, sessionGroup: 'telegram:a' }]), mode === 'multi');
+    assert.equal(validateRestartRequests([{ ...row, sessionGroup: 'bad key' }]), false);
+  }
+});
+
+test('manual intent and configuration reclaim exclude only their common target group', async t => {
+  const f = fixture(t);
+  const group = 'telegram:a';
+  assert.equal((await f.admission.handle(manual({ sessionGroup: group }))).result, 'accepted');
+  assert.equal((await f.admission.handle(config({ sessionGroup: group }))).reason, 'manual_restart_pending');
+  assert.equal(f.state.fences.has(group), false);
+  assert.equal((await f.admission.handle(config({ sessionGroup: 'origin' }))).result, 'accepted');
+  assert.equal((await f.admission.handle(config({ sessionGroup: 'telegram:b' }))).result, 'accepted');
+  f.store.write([]); f.state.fences.clear();
+  assert.equal((await f.admission.handle(manual())).result, 'accepted');
+  assert.equal((await f.admission.handle(config({ sessionGroup: 'origin' }))).reason, 'manual_restart_pending');
+  assert.equal((await f.admission.handle(config({ sessionGroup: group }))).result, 'accepted');
+  f.store.write([]);
+  assert.equal((await f.admission.handle(manual({ sessionGroup: group }))).reason, 'fence_conflict');
 });

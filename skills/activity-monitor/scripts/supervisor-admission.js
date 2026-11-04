@@ -12,7 +12,8 @@ export function validSupervisorRequest(request) {
   switch (request.type) {
     case 'restart_all': return request.reason === 'upgrade';
     case 'manual_restart': return (!Object.hasOwn(request, 'expectedRunId') || nonempty(request.expectedRunId))
-      && (!Object.hasOwn(request, 'expectedSessionId') || typeof request.expectedSessionId === 'string');
+      && (!Object.hasOwn(request, 'expectedSessionId') || typeof request.expectedSessionId === 'string')
+      && (!Object.hasOwn(request, 'sessionGroup') || validGroup(request.sessionGroup));
     case 'ready_for_config_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId);
     case 'mode_switch': return ['single', 'multi'].includes(request.target);
     case 'start_attempt': return true; // The runtime owner validates its complete request in the runtime queue.
@@ -55,10 +56,10 @@ export class SupervisorAdmission {
         }
         if (request.type === 'ready_for_config_reclaim') {
           let rows = [];
-          if (request.sessionGroup === 'origin') {
-            try { rows = this.store.read(); }
-            catch (error) {
-              if (error.code !== 'requests_unreadable') throw error;
+          try { rows = this.store.read(); }
+          catch (error) {
+            if (error.code !== 'requests_unreadable') throw error;
+            if (request.sessionGroup === 'origin') {
               return reply({ ok: false, result: 'rejected', reason: error.code });
             }
           }
@@ -101,13 +102,16 @@ export class SupervisorAdmission {
     const existing = rows.find(row => row.requestId === request.requestId);
     if (existing) return existing.reason === 'manual_restart'
         && existing.expectedRunId === request.expectedRunId
+        && (existing.mode === 'single' ? null : existing.sessionGroup ?? 'origin') === (request.sessionGroup ?? (existing.mode === 'single' ? null : 'origin'))
       ? { ok: true, result: 'already_accepted' } : rejected('request_conflict');
     if (await this.db.getModeTransition()) return rejected('transition_open');
     if (rows.some(row => row.reason === 'upgrade')) return rejected('restart_all_pending');
-    if (await this.db.getDrainFence('origin') || await this.db.getDrainFence('*')) return rejected('fence_conflict');
-    if (rows.some(row => row.reason === 'manual_restart')) return rejected('manual_restart_pending');
     const mode = (await this.readMode()).mode ?? 'single';
-    const run = await this.readRun(mode === 'multi' ? 'origin' : null);
+    if (mode === 'single' && Object.hasOwn(request, 'sessionGroup')) return rejected('not_multi');
+    const group = mode === 'multi' ? request.sessionGroup ?? 'origin' : null;
+    if (await this.db.getDrainFence(group ?? 'origin') || await this.db.getDrainFence('*')) return rejected('fence_conflict');
+    if (rows.some(row => row.reason === 'manual_restart')) return rejected('manual_restart_pending');
+    const run = await this.readRun(group);
     // null means both the process and tmux absence were positively observed.
     if (!request.expectedRunId) return run === null ? { ok: true, result: 'already_stopped' } : rejected('target_required');
     if (run === null) return { ok: true, result: 'already_stopped' };
@@ -117,6 +121,7 @@ export class SupervisorAdmission {
     if (request.expectedSessionId !== undefined && request.expectedSessionId !== run.sessionId) return rejected('identity_unavailable');
     const row = { requestId: request.requestId, reason: 'manual_restart', acceptedAt: this.now(), runIds: [run.runId],
       mode, expectedRunId: run.runId };
+    if (Object.hasOwn(request, 'sessionGroup')) row.sessionGroup = group;
     this.store.write([...rows, row]);
     return { ok: true, result: 'accepted' };
   }
@@ -130,7 +135,8 @@ export class SupervisorAdmission {
     if (!validSnapshot(run.launchConfig)) return reject('snapshot_unavailable');
     const fence = await this.db.getDrainFence(request.sessionGroup);
     if (fence && ((fence.reason !== 'model_config') || (fence.runId !== request.expectedRunId))) return reject('other_fence');
-    if (request.sessionGroup === 'origin' && rows.some(row => row.reason === 'manual_restart')) return reject('manual_restart_pending');
+    if (rows.some(row => row.reason === 'manual_restart' &&
+      (row.mode === 'single' ? null : row.sessionGroup ?? 'origin') === request.sessionGroup)) return reject('manual_restart_pending');
     if (fence) return { ok: true, result: 'already_accepted' };
     const expected = await this.resolveLaunchConfig(request.sessionGroup);
     if (!validSnapshot(expected)) throw Object.assign(new Error('Expected launch configuration is invalid'), { code: 'CONFIG_UNREADABLE' });

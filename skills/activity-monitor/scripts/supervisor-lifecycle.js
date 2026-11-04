@@ -8,6 +8,8 @@ const error = (code, message) => Object.assign(new Error(message), { code });
 const modeOf = context => context.configuration.mode;
 const targetOf = group => group === null ? { machine: true } : { sessionGroup: group };
 const finite = value => Number.isFinite(value);
+const manualGroup = request => request.mode === 'single' ? '*' : request.sessionGroup ?? 'origin';
+const manualTarget = request => request.mode === 'single' ? null : request.sessionGroup ?? 'origin';
 
 // Database timestamps are UTC. Runtime observation timestamps are milliseconds.
 export function activityTime(value) {
@@ -94,7 +96,8 @@ export class SupervisorLifecycle {
   allowed(group, context) {
     if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return false;
     if (group !== null && context.fences.some(fence => fence.sessionGroup === group)) return false;
-    return !((group === 'origin' || group === null) && context.restartRequests.some(request => request.reason === 'manual_restart'));
+    return !context.restartRequests.some(request => request.reason === 'manual_restart' &&
+      (manualTarget(request) === group || request.mode === 'single' && group === 'origin'));
   }
 
   async refreshAuthorities(context) {
@@ -453,7 +456,7 @@ export class SupervisorLifecycle {
   }
 
   manualBlocked(request, context) {
-    const group = request.mode === 'single' ? '*' : 'origin';
+    const group = manualGroup(request);
     const fence = context.fences.find(item => item.sessionGroup === group);
     return context.restartRequestsError || modeOf(context) !== request.mode || context.transition ||
       request.mode === 'multi' && context.fences.some(item => item.sessionGroup === '*') ||
@@ -465,7 +468,7 @@ export class SupervisorLifecycle {
     const requests = context.restartRequests.filter(request => request.reason === 'manual_restart');
     const activeWarnings = new Set(), allowed = [];
     for (const fence of context.fences.filter(item => item.reason === 'manual_restart')) {
-      if (!requests.some(request => (request.mode === 'single' ? '*' : 'origin') === fence.sessionGroup && request.expectedRunId === fence.runId)) {
+      if (!requests.some(request => manualGroup(request) === fence.sessionGroup && request.expectedRunId === fence.runId)) {
         const key = JSON.stringify(['manual', 'orphan', fence.sessionGroup, fence.runId]);
         activeWarnings.add(key);
         await this.alertOnce(key, { event: 'manual_restart_orphan_fence', session_group: fence.sessionGroup, run_id: fence.runId, reason: 'intent_missing' });
@@ -491,15 +494,15 @@ export class SupervisorLifecycle {
     const requests = context.manualRequests ?? await this.checkManualFences(context);
     await this.each(requests, async request => {
       try {
-        const group = request.mode === 'single' ? '*' : 'origin';
-        const targetGroup = request.mode === 'single' ? null : 'origin';
+        const group = manualGroup(request);
+        const targetGroup = manualTarget(request);
         await this.refreshAuthorities(context);
         if (this.manualBlocked(request, context)) return;
         let target = await this.observe(targetGroup, context);
         let fence = context.fences.find(item => item.sessionGroup === group);
         let oldTargetGone = !target.present || target.runId !== request.expectedRunId;
         if (target.present && !target.runId) throw error('INVALID_OBSERVATION', 'Manual target run identity is unknown');
-        // A replacement at the Origin name already proves the requested run gone.
+        // A replacement at the target name already proves the requested run gone.
         if (target.present && target.runId === request.expectedRunId) {
           if (!fence) {
             await this.d.db.setDrainFence(group, { reason: 'manual_restart', runId: request.expectedRunId });
@@ -519,7 +522,7 @@ export class SupervisorLifecycle {
           }
         }
         if (oldTargetGone) await this.d.intentionalStop?.(targetGroup, request.expectedRunId);
-        const count = request.mode === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations('origin');
+        const count = request.mode === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(targetGroup);
         if (count !== 0) return;
         await this.refreshAuthorities(context);
         if (this.manualBlocked(request, context)) return;

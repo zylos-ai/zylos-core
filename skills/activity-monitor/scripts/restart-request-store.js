@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { durableJson, runtimeRoot } from './runtime-generation.js';
+import { loadCoreModule } from './core-modules.js';
+const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
 
 export const validRequestId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 const nonempty = value => typeof value === 'string' && value.length > 0;
@@ -18,6 +20,11 @@ export function validateRestartRequests(rows) {
       if (++manual > 1 || !['single', 'multi'].includes(row.mode) || !nonempty(row.expectedRunId)
           || row.runIds.length !== 1 || row.runIds[0] !== row.expectedRunId) return false;
       fields = [...fields, 'mode', 'expectedRunId'];
+      if (Object.hasOwn(row, 'sessionGroup')) {
+        if (row.mode !== 'multi') return false;
+        try { assertSessionGroup(row.sessionGroup); } catch { return false; }
+        fields.push('sessionGroup');
+      }
     } else if (row.reason !== 'upgrade') return false;
     if (Object.keys(row).some(key => !fields.includes(key))) return false;
   }

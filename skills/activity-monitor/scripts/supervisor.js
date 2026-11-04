@@ -53,9 +53,10 @@ export function createSupervisor(deps) {
   const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,readMode:async()=>(await readMode()).mode,
     resolveTargetRuntime:deps.resolveTargetRuntime,listScenes,probeInFlight:runtime=>observer.probeInFlight(runtime),
     readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,log});
-  const manualPending=()=>admission.readRequests().some(row=>row.reason==='manual_restart');
+  const manualPending=(group='origin')=>admission.readRequests().some(row=>row.reason==='manual_restart' &&
+    (row.mode==='single' ? group===null || group==='origin' : (row.sessionGroup ?? 'origin')===group));
   const guardedAction=(scene,action)=>admission.serialize(async()=>{
-    if(stopping || await db.getModeTransition() || (scene.sessionGroup==='origin' && manualPending()))return false;
+    if(stopping || await db.getModeTransition() || manualPending(scene.sessionGroup))return false;
     const current=await scenes.readIdentity(scene.sessionGroup);
     if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime)return false;
     await action(current);return true;
@@ -182,7 +183,8 @@ export function createSupervisor(deps) {
           if(fresh.transition)return;
           fresh.scenes=await scenes.observe({configuration:fresh.configuration});
           for(const target of targets) {
-            if((target.sessionGroup==='origin' || target.sessionGroup===null) && fresh.restartRequests.some(row=>row.reason==='manual_restart'))continue;
+            if(fresh.restartRequests.some(row=>row.reason==='manual_restart' &&
+              (row.mode==='single' ? target.sessionGroup===null || target.sessionGroup==='origin' : (row.sessionGroup ?? 'origin')===target.sessionGroup)))continue;
             const observed=fresh.scenes.find(scene=>scene.sessionGroup===target.sessionGroup || (scene.sessionGroup==='origin' && target.sessionGroup===null));
             if(!observed?.present || observed.runId!==target.runId || !observed.ready)continue;
             if(fresh.configuration.mode==='single')await lifecycle.advanceReclaim({sessionGroup:null,reason:'auth',runId:target.runId},fresh,{unfenced:true,singleAuth:true});

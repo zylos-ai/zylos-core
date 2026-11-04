@@ -59,6 +59,8 @@ test('validates all five reply branches and mandatory relationships', () => {
     ['ready_for_config_reclaim', { ok: false, result: 'rejected', reason: 'bad' }, false],
     ['manual_restart', { ok: false, result: 'stale_target', currentRunId: 'r2' }, true],
     ['manual_restart', { ok: false, result: 'stale_target' }, false],
+    ['manual_restart', { ok: false, result: 'rejected', reason: 'not_multi' }, true],
+    ['manual_restart', { ok: false, result: 'rejected', reason: 'unknown_reason' }, false],
     ['mode_switch', { ok: false, code: 'transition_open', runId: 't1', target: 'multi' }, true],
     ['mode_switch', { ok: false, code: 'transition_open', target: 'multi' }, false],
     ['mode_switch', { ok: true, result: 'accepted', runId: 't1' }, true],
@@ -79,6 +81,23 @@ test('validates all five reply branches and mandatory relationships', () => {
 test('first line wins; EOF after accepted is not uncertain', async () => {
   await withServer(socket => socket.once('data', () => socket.end(`${JSON.stringify(reply)}\ninvalid\n`)), async socketPath => {
     assert.deepEqual(await submit(request, { socketPath }), { kind: 'accepted', reply, sent: true });
+  });
+});
+
+// Boundary: real socket transport preserves an explicit group and classifies
+// the single-mode refusal. Run for manual request/reply changes; skip unrelated
+// lifecycle work. The Node runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR;
+// withServer uses a private socket and cleans it, with no tmux/database/network.
+test('manual restart sends the requested group and accepts a mode refusal', async () => {
+  const input = { version: 1, type: 'manual_restart', requestId: 'group-restart',
+    sessionGroup: 'telegram:group-a', expectedRunId: 'run-a' };
+  const refusal = { version: 1, type: input.type, requestId: input.requestId,
+    ok: false, result: 'rejected', reason: 'not_multi' };
+  await withServer(socket => socket.once('data', bytes => {
+    assert.deepEqual(JSON.parse(bytes.toString('utf8')), input);
+    socket.end(JSON.stringify(refusal) + '\n');
+  }), async socketPath => {
+    assert.deepEqual(await submit(input, { socketPath }), { kind: 'rejected', reply: refusal, sent: true });
   });
 });
 test('malformed complete reply is invalid_reply, including positive-control bad relationship', async () => {

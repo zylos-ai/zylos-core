@@ -53,7 +53,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     setDrainFence: (group, { reason = null, runId = null } = {}) => write(c => {
       const hasRun = typeof runId === 'string' && runId.length > 0;
       const normal = ['ttl','evict','upgrade','auth','mode_switch','model_config'];
-      const valid = group === '*' ? (reason === null && runId === null) || (reason === 'manual_restart' && hasRun) : !!parseSessionGroup(group) && hasRun && (group === 'origin' ? [...normal.filter(x => !['ttl','evict'].includes(x)), 'manual_restart'].includes(reason) : normal.includes(reason));
+      const valid = group === '*' ? (reason === null && runId === null) || (reason === 'manual_restart' && hasRun) : !!parseSessionGroup(group) && hasRun && (group === 'origin' ? [...normal.filter(x => !['ttl','evict'].includes(x)), 'manual_restart'] : [...normal, 'manual_restart']).includes(reason);
       if (!valid) throw dataError('FENCE_INVALID', 'Invalid fence scope, reason or run');
       run(c, 'INSERT INTO drain_fences(session_group,reason,run_id,created_at) VALUES(?,?,?,?) ON CONFLICT(session_group) DO NOTHING', group, reason, runId, seconds());
     }),
