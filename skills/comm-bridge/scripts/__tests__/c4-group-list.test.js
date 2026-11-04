@@ -14,6 +14,7 @@ function fixture(t) {
   db.transaction(() => { for (let i = 0; i < 1000; i++) seed('old:' + i, '2026-01-01 00:00:00'); })();
   seed('lark:oc_77', '2026-01-01 01:00:00', 'old match');
   seed('lark:OC_88', '2026-01-02 01:00:00', 'newer match');
+  seed('lark:oc_99', '2026-01-03 01:00:00', 'newest match');
   seed('lark:recent1', '2026-01-30 00:00:00', 'preview only');
   seed('lark:recent2', '2026-01-30T01:00:00Z', '🙂'.repeat(90));
   seed('origin', '2026-01-30 02:00:00');
@@ -40,9 +41,9 @@ test('activity cutoff returns recent groups, boundary and exact remaining flag',
 test('key search is case insensitive and ordered by latest head without matching preview text', t => {
   const { store } = fixture(t);
   const rows = store.queries.listGroups({ keyMatch: 'oc_' });
-  assert.deepEqual(rows.map(row => row.sessionGroup), ['lark:OC_88', 'lark:oc_77']);
+  assert.deepEqual(rows.map(row => row.sessionGroup), ['lark:oc_99', 'lark:OC_88', 'lark:oc_77']);
   assert.deepEqual(store.queries.listGroups({ keyMatch: 'OC_' }), rows);
-  assert.deepEqual(store.queries.listGroups({ keyMatch: 'oc_', limit: 1 }), rows.slice(0, 1));
+  assert.deepEqual(store.queries.listGroups({ keyMatch: 'oc_', limit: 1 }).map(row => row.sessionGroup), ['lark:oc_99']);
   assert.deepEqual(store.queries.listGroups({ keyMatch: 'preview only' }), []);
   assert.equal(store.queries.listGroups({ match: 'preview only' }).length, 1);
   assert.equal(rows[0].componentName, 'feishu');

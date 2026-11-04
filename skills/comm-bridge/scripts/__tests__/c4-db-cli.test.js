@@ -114,6 +114,7 @@ describe('group query CLI', () => {
         ['groups', '--match', 'a', '--key-match', 'b'],
         ['groups', '--key-match', '  '], ['groups', '--active-since', '-1'],
         ['groups', '--active-since', 'x'], ['groups', '--active-since', '1.5'],
+        ['groups', '--active-since', '1e3'],
         ['groups', '--active-since', '9007199254740992'], ['groups', '--active-since'],
         ['groups', '--active-since', '0', '--active-since', '1'], ['groups', '--limit', '0'],
         ['groups', 'extra'], ['groups', '--bogus'],

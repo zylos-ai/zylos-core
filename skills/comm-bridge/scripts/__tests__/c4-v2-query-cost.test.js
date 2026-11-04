@@ -157,6 +157,7 @@ test('queue and group readers bound history work and use indexed access paths', 
   assertHeadIndex(active.plans);
   const search = inspect(() => store.queries.listGroups({ keyMatch: 'old:', limit: 2 }));
   assert.equal(search.result.length, 2); assert.equal(previews(search.plans).length, 2);
+  assert.deepEqual(search.result.map(row => row.sessionGroup), ['old:999', 'old:998']);
   assert.ok(search.plans.find(plan => plan.sql === 'SELECT session_group FROM group_heads').details.some(detail => /USING COVERING INDEX/.test(detail)));
   const queues = inspect(() => store.listGroupQueues());
   assert.equal(queues.result.groups.length, 4);
