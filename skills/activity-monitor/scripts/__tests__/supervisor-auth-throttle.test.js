@@ -12,7 +12,7 @@ function fixture(t, checkAuth, create = createSupervisor, mode = 'multi') {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const state = { now: 1000000, runtime: 'claude' };
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
-    listPendingSessionGroups: () => [{ sessionGroup: 'chat:pending' }], getControlById: () => null };
+    listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups: () => [{ sessionGroup: 'chat:pending' }], getControlById: () => null };
   const scenes = { observe: async () => [], readIdentity(group) { return this.observeGroup(group); }, observeGroup: async () => ({ present: false }), listRuns: async () => [] };
   const supervisor = create({ db, scenes, now: () => state.now, env: { ZYLOS_DIR: root }, zylosDir: root,
     readMode: () => ({ mode }), readConfiguration: () => ({ mode, runtime: 'claude' }),
@@ -24,7 +24,7 @@ function fixture(t, checkAuth, create = createSupervisor, mode = 'multi') {
     const store = supervisor.health.store(runtime), health = store.read();
     health.health = 'auth_failed'; health.reason = 'authentication_failed'; store.write(health);
   }
-  return { state, supervisor, start: () => supervisor.loop.deps.readConfiguration(),
+  return { state, supervisor, db, start: () => supervisor.loop.deps.readConfiguration(),
     tick: () => supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[]}),
     route: () => supervisor.router.route({ version: 1, type: 'route', requestId: 'incoming', noReply: false, receivedAt: state.now }) };
 }
@@ -132,4 +132,15 @@ test('incoming routing joins pending auth flight; distinct runtimes stay indepen
   await f.tick(); assert.equal(calls.length, 2);
   assert.equal((await f.route()).decision, 'auth_rejected');
   assert.deepEqual(calls, ['claude', 'codex', 'claude']);
+});
+
+test('continuation-only groups drive authentication demand without changing inbound waiting metrics', async t => {
+  let calls = 0;
+  const f = fixture(t, () => { calls++; return { status: 'uncertain' }; });
+  f.db.listPendingSessionGroups = () => [];
+  f.db.listPendingContinuations = () => [{ sessionGroup: 'chat:continuation', controlId: 1, createdAt: 1, endedAt: 1 }];
+  await f.start(); await f.tick();
+  assert.equal(calls, 1);
+  const metrics = fs.readFileSync(path.join(f.supervisor.health.zylosDir, 'activity-monitor/pool-metrics.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
+  assert.equal(metrics.waiting, 0);
 });

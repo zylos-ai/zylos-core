@@ -101,7 +101,7 @@ export function createActivationManager(context) {
       if (resident) { state.resident.failures++; state.resident.absentSince = null; state.resident.readySince = null; }
       try {
         if (!resident) {
-          for (const row of deps.db.expirePendingControls({ sessionGroup: group })) {
+          for (const row of deps.db.expirePendingControls({ sessionGroup: group, keepContinuation: true })) {
             diagnostic('control_expired', { session_group: group, control_id: row.id });
           }
         }
@@ -130,19 +130,88 @@ export function createActivationManager(context) {
     }
   }
 
+  async function beginContinuation(group, candidate) {
+    if (state.activations.has(group) || group === null || group === 'origin') return;
+    let requestRuntime, token, activation;
+    let opportunity = false;
+    try {
+      if (deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) { context.deferOpportunity(group); return; }
+      if (!context.continuationRestarts.canStart(group)) { context.deferOpportunity(group); return; }
+      const launchConfig = deps.db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: state.mode });
+      const health = deps.readRuntimeHealth(launchConfig.runtime);
+      if (!health.missing && !health.unreadable && health.health === 'auth_failed') { wait(group, 'auth_blocked'); context.deferOpportunity(group); return; }
+      const live = await deps.readLiveIdentity(group);
+      state.live.set(group, live);
+      if (live.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) return;
+      if (deps.db.getNextPending({ sessionGroups: [group] })) return;
+      const current = deps.db.listPendingContinuations().find(row => row.sessionGroup === group);
+      if (!current || current.controlId !== candidate.controlId) return;
+      opportunity = context.acquireOpportunity(group, { id: current.controlId, continuation: true });
+      if (!opportunity) return;
+      const runId = uuid();
+      activation = { group, runId, launchConfig, startedAt: now(), message: null,
+        resident: false, continuation: true, launchStarted: false, launchSettled: false, launchError: null };
+      state.activations.set(group, activation);
+      context.releaseOpportunity(group); opportunity = false;
+      if (!health.missing && !health.unreadable && restricted.has(health.health) && !hasRuntime(launchConfig.runtime)) {
+        requestRuntime = launchConfig.runtime;
+        if (requests.has(requestRuntime) || uncertain.get(requestRuntime) === state.round) return;
+        token = {}; requests.set(requestRuntime, token);
+        const request = { version: 1, type: 'start_attempt', requestId: requestId(), runtime: requestRuntime, sessionGroup: group, runId };
+        let result;
+        try { result = await deps.submit(request); }
+        catch { result = { kind: 'no_reply', sent: true }; }
+        if (!['accepted','rejected','connect_failed','deadline_exceeded','no_reply','invalid_reply','timeout'].includes(result?.kind)) result = { kind: 'invalid_reply', sent: true };
+        if (['accepted','rejected'].includes(result?.kind) &&
+            (!validStartAttemptReply(result.reply, request) || (result.kind === 'accepted') !== result.reply.ok)) result = { kind: 'invalid_reply', sent: true };
+        if (result?.kind !== 'accepted') {
+          if (['no_reply', 'invalid_reply', 'timeout'].includes(result?.kind) || (result?.kind === 'deadline_exceeded' && result.sent)) uncertain.set(requestRuntime, state.round);
+          wait(group, result?.kind === 'invalid_reply' ? 'start_attempt_protocol_error' : result?.reply?.code ?? result?.kind ?? 'start_attempt_protocol_error');
+          return;
+        }
+      }
+      const latest = await deps.readLiveIdentity(group);
+      state.live.set(group, latest);
+      if (latest.present || context.availableCapacity(group) <= 0 || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null || deps.db.getNextPending({ sessionGroups: [group] })) return;
+      if (deps.db.listPendingContinuations().find(row => row.sessionGroup === group)?.controlId !== candidate.controlId) return;
+      for (const row of deps.db.expirePendingControls({ sessionGroup: group, keepContinuation: true })) diagnostic('control_expired', { session_group: group, control_id: row.id });
+      activation.launchStarted = true;
+      context.continuationRestarts.started(group);
+      diagnostic('activate_continuation', { session_group: group, runId, runtime: launchConfig.runtime, control_id: candidate.controlId });
+      if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
+      try { await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode }); }
+      catch (error) { activation.launchError = error; }
+      activation.launchSettled = true;
+      await advance(group);
+    } catch (error) {
+      diagnostic('activate_failed', { session_group: group, reason: error.code ?? error.message });
+      if (activation?.launchStarted) { activation.launchError = error; activation.launchSettled = true; }
+    } finally {
+      if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
+      if (opportunity) context.releaseOpportunity(group);
+      if (activation && !activation.launchStarted && state.activations.get(group) === activation) {
+        state.activations.delete(group); context.releaseOpportunity(group);
+      }
+    }
+  }
+
   async function advance(group) {
     const activation = state.activations.get(group);
     if (!activation || !activation.launchSettled) return;
     if (activation.launchError?.code === 'NAME_CONFLICT') {
       if (activation.message) deps.db.requeueConversation(activation.message.id);
       state.activations.delete(group);
+      if (activation.continuation) context.continuationRestarts.failed(group, activation.runId);
       return;
     }
     try {
       // One fresh observation after launch settles, including at the timeout boundary.
       const live = await deps.readLiveIdentity(group);
       state.live.set(group, live);
-      if (live.present && live.runId === activation.runId && live.ready) return;
+      if (live.present && live.runId === activation.runId && live.ready) {
+        if (activation.continuation) context.continuationRestarts.ready(group);
+        return;
+      }
       if (!activation.launchError && now() - activation.startedAt < options.readyTimeoutMs) return;
       await deps.getSessionAdapter(activation.launchConfig.runtime).stop({
         tmuxName: context.tmuxName(group), expectedRunId: activation.runId,
@@ -159,10 +228,11 @@ export function createActivationManager(context) {
     state.activations.delete(group);
     state.live.delete(group); // Observation must be refreshed, never fabricate READY.
     if (activation.resident) state.resident.absentSince = now();
+    if (activation.continuation) context.continuationRestarts.failed(group, activation.runId);
     diagnostic(activation.launchError ? 'activate_failed' : 'activate_timeout', {
       session_group: group, runId: activation.runId, conversation_id: activation.message?.id ?? null,
       reason: activation.launchError?.code ?? 'ready_timeout',
     });
   }
-  return { begin, advance, requests, uncertain };
+  return { begin, beginContinuation, advance, requests, uncertain };
 }
