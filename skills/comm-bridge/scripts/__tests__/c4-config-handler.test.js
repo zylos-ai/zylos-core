@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { fixture as storeFixture } from './c4-v2-test-helpers.js';
-import { createConfigHandler, classifyConfigRunning, parseConfigArgs } from '../c4-config-handler.js';
+import { createConfigHandler, classifyConfigRunning, parseConfigArgs, listOverrides } from '../c4-config-handler.js';
 
 function fixture(t, overrides = {}) {
   const { db, store } = storeFixture(t);
@@ -140,5 +141,58 @@ test('current model exposes resolved input and all four running statuses at hand
     assert.equal(data.sessionMode, 'multi');
     assert.deepEqual(data.resolved, resolved);
     assert.equal(data.running.status, expected);
+  }
+});
+
+test('override list preserves all runtime/model pairs in binary order and matches per-group reads', async t => {
+  const { store, db, filename } = storeFixture(t, {
+    readConfig: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
+  }, true);
+  for (const groupName of ['b', 'A', 'empty']) store.insertConversation('in', 'chat', 'e', 'hello', { groupName });
+  store.setSessionRuntimeConfig({ sessionGroup: 'chat:b', runtime: 'claude' });
+  store.setSessionRuntimeConfig({ sessionGroup: 'chat:A', runtime: 'codex' });
+  for (const [sessionGroup, runtime, model, effort] of [
+    ['chat:b', 'codex', 'codex-b', 'high'], ['chat:b', 'claude', 'claude-b', 'low'], ['chat:A', 'codex', 'codex-a', 'medium'],
+  ]) store.setSessionModelConfig({ sessionGroup, runtime, model, effort });
+  db.pragma('wal_checkpoint(TRUNCATE)');
+  const before = fs.readFileSync(filename);
+  const observer = new db.constructor(filename);
+  t.after(() => observer.close());
+  const version = observer.pragma('data_version', { simple: true });
+  const data = listOverrides({ store });
+  assert.deepEqual(data, {
+    baseline: { runtime: 'codex', sessionMode: 'multi' },
+    runtime: [{ sessionGroup: 'chat:A', runtime: 'codex' }, { sessionGroup: 'chat:b', runtime: 'claude' }],
+    model: [
+      { sessionGroup: 'chat:A', runtime: 'codex', model: 'codex-a', effort: 'medium' },
+      { sessionGroup: 'chat:b', runtime: 'claude', model: 'claude-b', effort: 'low' },
+      { sessionGroup: 'chat:b', runtime: 'codex', model: 'codex-b', effort: 'high' },
+    ],
+  });
+  const handler = createConfigHandler({ store, readSessionMode: () => 'multi', observeRunning: () => ({ hasProcess: false }) });
+  for (const sessionGroup of ['chat:A', 'chat:b', 'chat:empty']) {
+    const runtime = data.runtime.find(row => row.sessionGroup === sessionGroup)?.runtime ?? data.baseline.runtime;
+    const result = await handler('runtime', { action: 'get', sessionGroup });
+    assert.equal(result.data.resolved.runtime, runtime);
+    for (const rt of ['claude', 'codex']) {
+      const model = await handler('model', { action: 'get', sessionGroup, runtime: rt });
+      const row = data.model.find(row => row.sessionGroup === sessionGroup && row.runtime === rt);
+      assert.deepEqual(model.data.desired, row ? { runtime: rt, mode: 'override', model: row.model, effort: row.effort } : { runtime: rt, mode: 'default' });
+    }
+  }
+  assert.equal(observer.pragma('data_version', { simple: true }), version);
+  assert.deepEqual(fs.readFileSync(filename), before);
+});
+
+test('empty override lists keep baseline defaults and reject unreadable configuration', t => {
+  const { store, dependencies } = storeFixture(t);
+  dependencies.readConfig = () => ({ state: 'missing' });
+  assert.deepEqual(listOverrides({ store }), { baseline: { runtime: 'claude', sessionMode: 'single' }, runtime: [], model: [] });
+  for (const readConfig of [
+    () => ({ state: 'unreadable' }), () => { throw new Error('bad JSON'); },
+    () => ({ state: 'ok', config: { runtime: 'unknown' } }),
+  ]) {
+    dependencies.readConfig = readConfig;
+    assert.throws(() => listOverrides({ store }), { code: 'CONFIG_UNREADABLE' });
   }
 });

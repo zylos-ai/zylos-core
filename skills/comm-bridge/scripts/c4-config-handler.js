@@ -109,6 +109,12 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
   };
 }
 
+export function listOverrides({ store }) {
+  const base = store.readBaseline();
+  return { baseline: { runtime: base.runtime, sessionMode: base.sessionMode },
+    runtime: store.listGroupRuntimeOverrides(), model: store.listGroupModelOverrides() };
+}
+
 export async function runConfigCli(kind, argv, io = process) {
   const json = argv.includes('--json');
   try {

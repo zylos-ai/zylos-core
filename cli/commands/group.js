@@ -1,7 +1,26 @@
 export async function groupCommand(args, { run, io = process } = {}) {
   const [kind, ...flags] = args;
+  if (kind === 'overrides') {
+    const json = flags.includes('--json');
+    try {
+      if (flags.some(flag => flag !== '--json') || flags.length > 1) {
+        throw Object.assign(new Error('Usage: zylos group overrides [--json]'), { code: 'INVALID_ARGUMENT' });
+      }
+      const { listOverrides } = await import('../../skills/comm-bridge/scripts/c4-config-handler.js');
+      const store = await import('../../skills/comm-bridge/scripts/c4-db.js');
+      const data = listOverrides({ store });
+      io.stdout.write(json ? `${JSON.stringify({ ok: true, data })}\n` : `OK: ${JSON.stringify(data)}\n`);
+      process.exitCode = 0;
+      return 0;
+    } catch (error) {
+      const result = { ok: false, error: { code: error.code ?? 'INTERNAL_ERROR', message: error.message } };
+      (json ? io.stdout : io.stderr).write(json ? `${JSON.stringify(result)}\n` : `Error [${result.error.code}]: ${error.message}\n`);
+      process.exitCode = 1;
+      return 1;
+    }
+  }
   if (!['runtime', 'model'].includes(kind)) {
-    const result = { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Usage: zylos group <runtime|model> <get|set|reset> [options]', persisted: [] } };
+    const result = { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--json]', persisted: [] } };
     if (args.includes('--json')) console.log(JSON.stringify(result));
     else console.error(`Error [${result.error.code}]: ${result.error.message}`);
     process.exitCode = 1;

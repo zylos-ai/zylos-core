@@ -75,6 +75,8 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
       return snapshot(c => modelValue(c, sessionGroup, runtimeValue(c, sessionGroup).runtime ?? base.runtime));
     },
     listGroupRuntimeOverrides: () => snapshot(c => all(c, 'SELECT session_group AS sessionGroup,runtime FROM group_runtime_overrides ORDER BY session_group COLLATE BINARY')),
+    listGroupModelOverrides: () => snapshot(c => all(c, 'SELECT session_group AS sessionGroup,runtime,model,effort FROM group_model_overrides ORDER BY session_group COLLATE BINARY,runtime')),
+    readBaseline: baseline,
   };
   return { api, baseline };
 }
