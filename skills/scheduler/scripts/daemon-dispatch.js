@@ -57,10 +57,12 @@ export function dispatchTask(db, candidate, dependencies = {}) {
     const timestamp = now();
     if (result.category === 'C' || result.category === 'U') {
       db.prepare('UPDATE tasks SET last_error=? WHERE id=?').run(result.code, task.id);
+      db.prepare("UPDATE task_history SET error=? WHERE id=? AND status='started'")
+        .run(result.code, historyId);
       return;
     }
-    db.prepare("UPDATE task_history SET status='failed',completed_at=?,error=? WHERE id=? AND status='started'")
-      .run(timestamp, result.code, historyId);
+    db.prepare("UPDATE task_history SET status='failed',completed_at=?,error=?,duration_ms=(?-executed_at)*1000 WHERE id=? AND status='started'")
+      .run(timestamp, result.code, timestamp, historyId);
     if (result.category === 'T') {
       db.prepare("UPDATE tasks SET status='pending',last_error=?,updated_at=? WHERE id=?")
         .run(result.code, timestamp, task.id);

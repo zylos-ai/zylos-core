@@ -80,9 +80,10 @@ export function handleStaleRunningTasks(db) {
       if (!changed.changes) return;
       console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) timed out after ${TASK_TIMEOUT}s`);
       db.prepare(`
-        UPDATE task_history SET status = 'timeout', completed_at = ?
+        UPDATE task_history SET status = 'timeout', completed_at = ?,
+          error = COALESCE(error, 'TASK_TIMEOUT'), duration_ms = (? - executed_at) * 1000
         WHERE task_id = ? AND status = 'started'
-      `).run(currentTime, task.id);
+      `).run(currentTime, currentTime, task.id);
     }).immediate();
   }
 }

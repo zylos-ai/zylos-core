@@ -27,6 +27,57 @@ function fixture(t, overrides={}) {
 const base={getRecentConversations:()=>[],getConversationsByRange:()=>[]};
 function receive(mode, options={}) {return (message,route)=>sendViaC4(message,route,{receivePath:receiveFixture,execute(cmd,args,settings){return execFileSync(cmd,args,{...settings,...options,env:{...process.env,...options.env,RECEIVE_FIXTURE_MODE:mode}});}});}
 
+for (const category of ['T', 'R']) test(`failed dispatch records elapsed time and reason: ${category}`, t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
+  const { db, task, read } = fixture(t);
+  const result = dispatchTask(db, task, { ...base, sendViaC4() {
+    t.mock.timers.tick(7000);
+    return { category, code: 'DB_BUSY' };
+  } });
+  const row = read().history.find(entry => entry.id === result.historyId);
+  assert.equal(row.status, 'failed');
+  assert.equal(row.error, 'DB_BUSY');
+  assert.equal(row.completed_at - row.executed_at, 7);
+  assert.equal(row.duration_ms, (row.completed_at - row.executed_at) * 1000);
+});
+
+for (const [category, code] of [['U', 'RECEIVE_RESULT_UNKNOWN'], ['C', 'UNHEALTHY_NOTIFY_FAILED']])
+test(`uncertain dispatch records reason without completing history: ${category}`, t => {
+  const { db, task, read } = fixture(t);
+  db.prepare("INSERT INTO task_history(task_id,executed_at,status,error,duration_ms) VALUES(?,1,'failed','OLDER_FAILURE',3000)").run(task.id);
+  const previous = read().history[0];
+  const result = dispatchTask(db, task, { ...base,
+    sendViaC4: () => ({ category, code }),
+    getConversationsByRange() { throw new Error('read unavailable'); }
+  });
+  const row = read();
+  const history = row.history.find(entry => entry.id === result.historyId);
+  assert.equal(history.status, 'started');
+  assert.equal(history.error, code);
+  assert.equal(history.duration_ms, null);
+  assert.equal(history.completed_at, null);
+  assert.equal(row.task.status, 'running');
+  assert.equal(row.task.last_error, code);
+  assert.deepEqual(row.history[0], previous);
+});
+
+test('unknown dispatch retains its reason and records elapsed time on timeout', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
+  const { db, task, read } = fixture(t);
+  const result = dispatchTask(db, task, { ...base,
+    sendViaC4: () => ({ category: 'U' }),
+    getConversationsByRange() { throw new Error('read unavailable'); }
+  });
+  t.mock.timers.tick((TASK_TIMEOUT + 1) * 1000);
+  handleStaleRunningTasks(db);
+  const row = read().history.find(entry => entry.id === result.historyId);
+  assert.equal(row.status, 'timeout');
+  assert.equal(row.error, 'RECEIVE_RESULT_UNKNOWN');
+  assert.equal(row.completed_at - row.executed_at, TASK_TIMEOUT + 1);
+  assert.equal(row.duration_ms, (row.completed_at - row.executed_at) * 1000);
+  assert.equal(read().task.last_error, 'Task timed out');
+});
+
 for(const mode of ['success','UNHEALTHY_NOTIFY_FAILED','UNHEALTHY_NOTIFY_UNCERTAIN'])
  test(`committed ${mode} remains running and does not resend`,t=>{
   const {db,task,read}=fixture(t,{reply_channel:'telegram',reply_endpoint:'target'});let sends=0;

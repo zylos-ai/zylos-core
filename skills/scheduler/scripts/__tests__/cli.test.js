@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import Database from 'better-sqlite3';
+import { dispatchTask } from '../daemon-dispatch.js';
 
 const CLI_PATH = fileURLToPath(new URL('../cli.js', import.meta.url));
 
@@ -267,6 +268,39 @@ describe('cli list', () => {
 });
 
 describe('cli done', () => {
+  it('preserves an unknown dispatch reason when completing history', (t) => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'complete uncertain dispatch', '--in', '30 minutes'], env);
+      const db = new Database(dbPath);
+      try {
+        const task = db.prepare('SELECT * FROM tasks LIMIT 1').get();
+        t.mock.timers.enable({ apis: ['Date'], now: Date.now() - 7000 });
+        let result;
+        try {
+          result = dispatchTask(db, task, {
+            getRecentConversations: () => [],
+            sendViaC4: () => ({ category: 'U' }),
+            getConversationsByRange() { throw new Error('read unavailable'); }
+          });
+        } finally {
+          t.mock.timers.reset();
+        }
+        assert.equal(result.category, 'U');
+        cli(['done', task.id], env);
+        const history = db.prepare('SELECT * FROM task_history WHERE id=?').get(result.historyId);
+        assert.equal(history.status, 'success');
+        assert.equal(history.error, 'RECEIVE_RESULT_UNKNOWN');
+        assert.ok(history.duration_ms >= 7000);
+        assert.equal(history.duration_ms, (history.completed_at - history.executed_at) * 1000);
+        const updated = db.prepare('SELECT status,last_error FROM tasks WHERE id=?').get(task.id);
+        assert.equal(updated.status, 'completed');
+        assert.equal(updated.last_error, 'RECEIVE_RESULT_UNKNOWN');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   it('completes a task and updates history', () => {
     withTmpDir(({ dbPath, env }) => {
       cli(['add', 'complete me', '--cron', '0 9 * * *'], env);

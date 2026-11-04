@@ -211,7 +211,8 @@ describe('processCompletedTasks', () => {
 // ---- handleStaleRunningTasks ----
 
 describe('handleStaleRunningTasks', () => {
-  it('marks stale one-time task as failed', async () => {
+  it('marks stale one-time task as failed', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
     await withDb((db) => {
       const staleTime = now() - TASK_TIMEOUT - 60;
       insertTask(db, { type: 'one-time', cron_expression: null, status: 'running', updated_at: staleTime });
@@ -227,8 +228,11 @@ describe('handleStaleRunningTasks', () => {
       assert.equal(updated.status, 'failed');
       assert.equal(updated.last_error, 'Task timed out');
 
-      const history = db.prepare('SELECT status FROM task_history WHERE task_id = ?').get(task.id);
+      const history = db.prepare('SELECT * FROM task_history WHERE task_id = ?').get(task.id);
       assert.equal(history.status, 'timeout');
+      assert.equal(history.error, 'TASK_TIMEOUT');
+      assert.equal(history.completed_at - history.executed_at, TASK_TIMEOUT + 60);
+      assert.equal(history.duration_ms, (history.completed_at - history.executed_at) * 1000);
     });
   });
 
