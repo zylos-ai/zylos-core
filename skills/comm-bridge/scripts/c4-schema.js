@@ -96,6 +96,13 @@ export const COLUMN_DEFINITIONS = {
     session_group: { type: 'TEXT', pk: true },
     runtime: { type: 'TEXT', pk: false }
   },
+  run_endings: {
+    session_group: { type: 'TEXT', pk: true },
+    run_id: { type: 'TEXT', pk: false },
+    reason: { type: 'TEXT', pk: false },
+    ended_at: { type: 'INTEGER', pk: false },
+    continuation_control_id: { type: 'INTEGER', pk: false }
+  },
   group_model_overrides: {
     session_group: { type: 'TEXT', pk: true },
     runtime: { type: 'TEXT', pk: true },
@@ -130,7 +137,7 @@ export const MIGRATIONS = Object.freeze({
       addTables: Object.fromEntries(
         [
           'channel_namespaces', 'group_heads', 'origin_sync_cursors', 'drain_fences',
-          'mode_transitions', 'group_runtime_overrides', 'group_model_overrides',
+          'mode_transitions', 'group_runtime_overrides', 'group_model_overrides', 'run_endings',
         ]
           .map(table => [table, COLUMN_DEFINITIONS[table]]),
       ),
