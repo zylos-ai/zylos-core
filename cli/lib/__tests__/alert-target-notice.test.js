@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { alertTargetNotice } from '../alert-target-notice.js';
+import { alertTargetNotice, formatAlertTargetNotice } from '../alert-target-notice.js';
 import { showStatus } from '../../commands/service.js';
 
 test('alert target notices distinguish missing, explicit console, invalid, missing sender and ready', t => {
@@ -11,18 +11,20 @@ test('alert target notices distinguish missing, explicit console, invalid, missi
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'telegram', 'scripts'), { recursive: true });
   fs.writeFileSync(path.join(root, 'telegram', 'scripts', 'send.js'), '');
-  for (const [config, kind, text] of [
-    [{}, 'warning', /未设置：系统告警只发到 Web Console/],
-    [{ alert_target: 'web-console:console' }, 'plain', /主人选了只发 Web Console/],
-    [{ alert_target: 'invalid' }, 'warning', /值不合法/],
-    [{ alert_target: 'lark:oc_x' }, 'warning', /渠道 lark 的 scripts\/send.js 不存在/],
-    [{ alert_target: 'telegram:8101553026|msg:9216' }, 'ready', /^telegram:8101553026\|msg:9216$/],
+  const missingLine = 'Alert target: not set; system alerts go only to Web Console. The agent will ask the owner in the next private chat, or run: zylos config set alert_target <channel>:<endpoint>';
+  for (const [result, kind, line] of [
+    [{ state: 'ok', config: {} }, 'warning', missingLine],
+    [{ state: 'missing' }, 'warning', missingLine],
+    [{ state: 'ok', config: { alert_target: 'web-console:console' } }, 'plain', 'Alert target: web-console:console (the owner chose Web Console only). To change: zylos config set alert_target <channel>:<endpoint>'],
+    [{ state: 'ok', config: { alert_target: 'invalid' } }, 'warning', 'Alert target: invalid value (expected channel:endpoint, both non-empty, without newline or NUL); system alerts fall back to Web Console.'],
+    [{ state: 'ok', config: { alert_target: 'lark:oc_x' } }, 'warning', 'Alert target: skills/lark/scripts/send.js not found; system alerts fall back to Web Console.'],
+    [{ state: 'error' }, 'warning', 'Alert target: instance config unreadable; cannot confirm the alert target. Fix the config first; do not overwrite it.'],
+    [{ state: 'ok', config: { alert_target: 'telegram:8101553026|msg:9216' } }, 'ready', 'Alert target: telegram:8101553026|msg:9216'],
   ]) {
-    const notice = alertTargetNotice({ read: () => ({ state: 'ok', config }), skillsDir: root });
-    assert.equal(notice.kind, kind); assert.match(notice.text, text);
+    const notice = alertTargetNotice({ read: () => result, skillsDir: root });
+    assert.equal(notice.kind, kind);
+    assert.equal(formatAlertTargetNotice(notice), line);
   }
-  assert.match(alertTargetNotice({ read: () => ({ state: 'missing' }) }).text, /未设置/);
-  assert.match(alertTargetNotice({ read: () => ({ state: 'error' }) }).text, /配置无法读取/);
 });
 
 test('status text adds only actionable or console notices and JSON preserves the original projection', async () => {

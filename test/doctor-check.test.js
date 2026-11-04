@@ -68,16 +68,16 @@ function runDoctor(args, { state = 'fail', network = 'up', alertTarget, sender =
 // private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and fake tmux on a private socket;
 // no C4 database or live services; runDoctor verifies paths and removes fixtures.
 for (const [alertTarget, sender, message] of [
-  [undefined, false, /Alert target: 未设置：系统告警只发到 Web Console/],
-  ['web-console:console', false, /Alert target: 主人选了只发 Web Console/],
-  ['invalid', false, /Alert target: 值不合法/],
-  ['telegram:room', false, /Alert target: 渠道 telegram 的 scripts\/send.js 不存在/],
-  ['telegram:room', true, /Alert target: telegram:room/],
+  [undefined, false, 'Alert target: not set; system alerts go only to Web Console. The agent will ask the owner in the next private chat, or run: zylos config set alert_target <channel>:<endpoint>'],
+  ['web-console:console', false, 'Alert target: web-console:console (the owner chose Web Console only). To change: zylos config set alert_target <channel>:<endpoint>'],
+  ['invalid', false, 'Alert target: invalid value (expected channel:endpoint, both non-empty, without newline or NUL); system alerts fall back to Web Console.'],
+  ['telegram:room', false, 'Alert target: skills/telegram/scripts/send.js not found; system alerts fall back to Web Console.'],
+  ['telegram:room', true, 'Alert target: telegram:room'],
 ]) {
   test(`alert destination ${alertTarget ?? 'missing'} sender=${sender} is a notice without diagnostic failure`, () => {
     const text = runDoctor(['--check'], { state: 'pass', alertTarget, sender });
     assert.equal(text.status, 0, text.stderr);
-    assert.match(text.stdout, message);
+    assert.deepEqual(text.stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line.startsWith('Alert target:')), [message]);
     assert.match(text.stdout, /Everything is working/);
     const json = runDoctor(['--check', '--json'], { state: 'pass', alertTarget, sender });
     assert.equal(json.status, 0, json.stderr);
