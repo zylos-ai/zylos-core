@@ -12,7 +12,7 @@ const hints = ['Check: pm2 logs worker-a', 'Check: pm2 logs worker-b'];
 const cleanup = [];
 afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 
-function runDoctor(args, { state = 'fail', network = 'up' } = {}) {
+function runDoctor(args, { state = 'fail', network = 'up', alertTarget, sender = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-')));
   cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
@@ -33,7 +33,12 @@ function runDoctor(args, { state = 'fail', network = 'up' } = {}) {
   fs.mkdirSync(path.join(dirs.ZYLOS_DIR, '.zylos'));
   fs.mkdirSync(path.join(dirs.ZYLOS_DIR, '.claude', 'skills'), { recursive: true });
   fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'components.json'), '{}');
-  fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'config.json'), '{"runtime":"claude"}');
+  fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', ...(alertTarget === undefined ? {} : { alert_target: alertTarget }) }));
+  if (sender) {
+    const directory = path.join(dirs.ZYLOS_DIR, '.claude', 'skills', 'telegram', 'scripts');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'send.js'), '');
+  }
   const env = { ...dirs, PATH: bin, CLAUDE_BIN: path.join(bin, 'claude'),
     DOCTOR_TEST_ROOT: root, DOCTOR_TEST_STATE: state, DOCTOR_TEST_NETWORK: network,
     DOCTOR_TEST_TMUX_SOCKET: path.join(dirs.TMPDIR, 'tmux.sock'), NO_COLOR: '1',
@@ -56,6 +61,32 @@ function runDoctor(args, { state = 'fail', network = 'up' } = {}) {
   assert.ok(calls.filter(call => call.command === 'tmux').every(call =>
     call.socket === env.DOCTOR_TEST_TMUX_SOCKET));
   return { ...result, calls, probes, repairs, versions };
+}
+
+// Boundary: alert destination is informational in real doctor text/JSON flow.
+// Run for alert notice changes; skip for unrelated doctor repair behavior. Uses
+// private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and fake tmux on a private socket;
+// no C4 database or live services; runDoctor verifies paths and removes fixtures.
+for (const [alertTarget, sender, message] of [
+  [undefined, false, /Alert target: 未设置：系统告警只发到 Web Console/],
+  ['web-console:console', false, /Alert target: 主人选了只发 Web Console/],
+  ['invalid', false, /Alert target: 值不合法/],
+  ['telegram:room', false, /Alert target: 渠道 telegram 的 scripts\/send.js 不存在/],
+  ['telegram:room', true, /Alert target: telegram:room/],
+]) {
+  test(`alert destination ${alertTarget ?? 'missing'} sender=${sender} is a notice without diagnostic failure`, () => {
+    const text = runDoctor(['--check'], { state: 'pass', alertTarget, sender });
+    assert.equal(text.status, 0, text.stderr);
+    assert.match(text.stdout, message);
+    assert.match(text.stdout, /Everything is working/);
+    const json = runDoctor(['--check', '--json'], { state: 'pass', alertTarget, sender });
+    assert.equal(json.status, 0, json.stderr);
+    const result = JSON.parse(json.stdout);
+    assert.equal(result.passed, true);
+    assert.equal(result.groups.services.passed, true);
+    assert.deepEqual(result.issues, []);
+    assert.equal('alertTarget' in result, false);
+  });
 }
 
 // Boundary: ready Claude plus two unresolved services. Run for check gating/hint/exit

@@ -26,6 +26,7 @@ import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
 import { resolveCliSession } from '../lib/cli-session.js';
 import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
+import { alertTargetNotice, formatAlertTargetNotice } from '../lib/alert-target-notice.js';
 
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
@@ -756,6 +757,7 @@ export async function doctorCommand(args, upstreamSource) {
   displaySystemGroup(diag, diagnostic.groups.system);
   displayAiGroup(diag, diagnostic.groups.ai_service);
   displayServiceGroup(diag, diagnostic.groups.services);
+  console.log(`  ${formatAlertTargetNotice(alertTargetNotice())}`);
 
   // ── Phase 4: Channels ─────────────────────────────────────────
 

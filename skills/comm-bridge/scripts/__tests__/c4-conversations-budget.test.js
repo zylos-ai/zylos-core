@@ -59,6 +59,10 @@ function receive(content, env) {
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-conv-budget-'));
   const env = { ZYLOS_DIR: tmpDir };
+  // Keep the mandatory status instructions short so these cases isolate
+  // conversation-tail packing, including their deliberately small budgets.
+  fs.mkdirSync(path.join(tmpDir, '.zylos'));
+  fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ alert_target: 'web-console:console' }));
   try {
     return fn({ tmpDir, env });
   } finally {
@@ -133,7 +137,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
     });
   });
 
-  it('M09: drops a single oversized message without creating a spill file', () => {
+  it('drops a single oversized message without creating a spill file', () => {
     withTmpDir(({ tmpDir, env }) => {
       receive(`${marker(1)} ${'x'.repeat(3000)}`, env);
 
@@ -148,7 +152,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
     });
   });
 
-  it('M09: also drops a single sub-threshold message when it exceeds the budget', () => {
+  it('also drops a single sub-threshold message when it exceeds the budget', () => {
     withTmpDir(({ env }) => {
       receive(`${marker(1)} ${'x'.repeat(700)}`, env);
 

@@ -9,6 +9,7 @@
 
 import { readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
 import { switchProtocol, isCaddyAvailable } from '../lib/caddy.js';
+import { parseServerAlertTarget } from '../../skills/activity-monitor/scripts/supervisor-server-observation.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
 /** Keys that trigger side effects when changed */
@@ -81,6 +82,11 @@ async function setConfig(key, value) {
     const reserved = new Error('session_mode is managed by the session cutover workflow');
     reserved.code = 'CONFIG_KEY_RESERVED';
     throw reserved;
+  }
+  if (key === 'alert_target' && !parseServerAlertTarget(value)) {
+    const invalid = new Error('alert_target must be channel:endpoint with non-empty parts and no newline or NUL');
+    invalid.code = 'CONFIG_VALUE_INVALID';
+    throw invalid;
   }
   // Validate allowed values
   if (ALLOWED_VALUES[key] && !ALLOWED_VALUES[key].includes(value)) {
