@@ -50,7 +50,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       if (recorded) {
         const current = seconds();
         const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
-        if (!open && ['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason)) {
+        if (!open && (['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason) || (reason === 'manual_restart' && sessionGroup !== 'origin'))) {
           continuationControlId = insert(c, continuationContent, { sessionGroup, priority: 2, appendAckSuffix: false }, current).id;
         } else {
           continuationControlId = get(c, "SELECT id FROM control_queue WHERE id=? AND status='pending'", continuationControlId)?.id ?? null;
