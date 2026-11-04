@@ -33,8 +33,10 @@ function fixture(t) {
     if (db?.open) db.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const run = args => {
-    const result = spawnSync(process.execPath, [cliPath, ...args], { env, encoding: 'utf8', timeout: 15000 });
+  const run = (args, merged = false) => {
+    const command = merged ? 'sh' : process.execPath;
+    const commandArgs = merged ? ['-c', 'exec "$@" 2>&1', 'scheduler-cli', process.execPath, cliPath, ...args] : [cliPath, ...args];
+    const result = spawnSync(command, commandArgs, { env, encoding: 'utf8', timeout: 15000 });
     assert.equal(result.error, undefined);
     return result;
   };
@@ -300,6 +302,43 @@ test('write validation failures use JSON errors and preserve legacy text exits',
     const args = command === 'update' ? [command, 'task-', '--name', 'x'] : [command, 'task-'];
     const error = f.fail(args, 'TASK_AMBIGUOUS', /Error: Ambiguous task ID prefix 'task-'/);
     assert.deepEqual(error.matches.sort(), [task.id, other.id].sort());
+  }
+});
+
+test('text errors precede their help hints in merged output', t => {
+  const f = fixture(t);
+  const task = f.add('merged output');
+  for (const [args, error, hint] of [
+    [['add'], 'Error: Prompt is required', 'Usage: cli.js add'],
+    [['add', 'p'], 'Error: Must specify timing (--in, --at, --cron, or --every)', 'Usage:'],
+    [['update', task.id], 'Error: No updates provided', 'Use --help to see available options'],
+    [['bogus'], 'Unknown command: bogus', 'Usage:'],
+  ]) {
+    const result = f.run(args, true);
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    assert.ok(result.stdout.startsWith(error + '\n'), result.stdout);
+    assert.ok(result.stdout.indexOf(hint) > result.stdout.indexOf(error), result.stdout);
+  }
+});
+
+test('JSON errors remain a single envelope when the flag is consumed as an option value', t => {
+  const f = fixture(t);
+  const task = f.add('consumed JSON flag');
+  for (const [args, code] of [
+    [['--json'], 'INVALID_ARGS'],
+    [['add', 'p', '--name', '--json'], 'INVALID_ARGS'],
+    [['add', '--help', '--json'], 'INVALID_ARGS'],
+    [['update', task.id, '--help', '--json'], 'NO_UPDATES'],
+  ]) {
+    const result = f.run(args);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout.trim().split('\n').length, 1, result.stdout);
+    const value = JSON.parse(result.stdout);
+    assert.equal(value.ok, false);
+    assert.equal(value.error.code, code);
+    assert.deepEqual(Object.keys(value).sort(), ['error', 'ok']);
   }
 });
 

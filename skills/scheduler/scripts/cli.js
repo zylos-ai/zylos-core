@@ -12,8 +12,8 @@ import { resolveSavedSessionGroup, updatedReplyTarget } from './saved-session-gr
 
 let db;
 
-function reject(code, message, extra = {}, textExitCode = 0) {
-  throw Object.assign(new Error(message), { code, extra, textExitCode, text: `Error: ${message}` });
+function reject(code, message, extra = {}, textExitCode = 0, textHint) {
+  throw Object.assign(new Error(message), { code, extra, textExitCode, textHint, text: `Error: ${message}` });
 }
 
 function fail(error) {
@@ -23,6 +23,7 @@ function fail(error) {
     process.exitCode = 1;
   } else {
     console.error(error.text ?? `Error: ${code}: ${error.message}`);
+    if (error.textHint) console.log(error.textHint);
     // Converted validation returns keep their original text-mode exit status.
     process.exitCode = error.textExitCode ?? 1;
   }
@@ -203,8 +204,7 @@ function cmdAdd(args, options) {
   const prompt = args.join(' ');
 
   if (!prompt) {
-    if (!options.json) console.log('Usage: cli.js add "<prompt>" [options]');
-    reject('INVALID_ARGS', 'Prompt is required');
+    reject('INVALID_ARGS', 'Prompt is required', {}, 0, 'Usage: cli.js add "<prompt>" [options]');
   }
 
   let type, nextRunAt, cronExpression, intervalSeconds;
@@ -238,8 +238,7 @@ function cmdAdd(args, options) {
     }
     nextRunAt = now() + intervalSeconds;
   } else {
-    if (!options.json) console.log(HELP);
-    reject('INVALID_ARGS', 'Must specify timing (--in, --at, --cron, or --every)');
+    reject('INVALID_ARGS', 'Must specify timing (--in, --at, --cron, or --every)', {}, 0, HELP);
   }
 
   const priority = options.priority ? parseInt(options.priority, 10) : 3;
@@ -666,8 +665,7 @@ function cmdUpdate(taskId, options) {
 
   // Check if any updates were provided
   if (Object.keys(updates).length === 0) {
-    if (!options.json) console.log('Use --help to see available options');
-    reject('NO_UPDATES', 'No updates provided');
+    reject('NO_UPDATES', 'No updates provided', {}, 0, 'Use --help to see available options');
   }
 
   const reenabled = task.status === 'failed' && task.type === 'one-time' && scheduleUpdated;
@@ -761,8 +759,7 @@ function main() {
       break;
     default:
       if (command) {
-        if (!options.json) console.log(HELP);
-        throw Object.assign(new Error(`Unknown command: ${command}`), { code: 'INVALID_ARGS', textExitCode: 0, text: `Unknown command: ${command}` });
+        throw Object.assign(new Error(`Unknown command: ${command}`), { code: 'INVALID_ARGS', textExitCode: 0, textHint: HELP, text: `Unknown command: ${command}` });
       }
       console.log(HELP);
   }
