@@ -15,4 +15,3 @@ export async function openReadStore(zylosDir) {
     return { store: createStore(connection, { readConfig: () => readConfigStrict(path.join(zylosDir, '.zylos', 'config.json')) }), close: () => connection.close() };
   } catch (error) { connection.close(); throw error; }
 }
-
