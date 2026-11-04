@@ -275,6 +275,14 @@ export class SupervisorLifecycle {
     return text;
   }
 
+  async bindCurrentRun(scene) {
+    try { return await this.d.bindTarget(scene); }
+    catch (cause) {
+      if (cause.code?.startsWith('TARGET_')) return null;
+      throw cause;
+    }
+  }
+
   async checkTtl(scene, context) {
     if (scene.observationError) throw scene.observationError;
     const group = scene.sessionGroup;
@@ -301,8 +309,10 @@ export class SupervisorLifecycle {
     const range = await this.d.db.getUnsummarizedRange(group);
     if (range.count > 0) {
       if (!await this.beforeWrite(group, context, scene)) return;
+      const targetBinding = await this.bindCurrentRun(scene);
+      if (!targetBinding) return;
       const control = await this.d.db.insertControl(this.prompt('PRE_RECLAIM_SYNC_PROMPT'), {
-        sessionGroup: group, requireIdle: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000),
+        sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000),
       });
       this.ttlPreparation.set(group, { controlId: control.id, runId: scene.runId, at: now });
     } else if (range.count === 0) await this.beginReclaim(scene, 'ttl', context);
@@ -344,7 +354,9 @@ export class SupervisorLifecycle {
     const key = JSON.stringify([scene.runId, scene.sessionId]), now = this.now();
     if (this.rotationSent.has(key) && now - this.rotationSent.get(key) < this.rotationCooldownMs) return;
     if (!await this.beforeWrite(scene.sessionGroup, context, scene)) return;
-    await this.d.db.insertControl(this.prompt('ROTATION_PROMPT', scene), { sessionGroup: modeOf(context) === 'single' ? null : scene.sessionGroup, bypassState: true, appendAckSuffix: false });
+    const targetBinding = await this.bindCurrentRun(scene);
+    if (!targetBinding) return;
+    await this.d.db.insertControl(this.prompt('ROTATION_PROMPT', scene), { targetBinding, sessionGroup: modeOf(context) === 'single' ? null : scene.sessionGroup, bypassState: true, appendAckSuffix: false });
     this.rotationSent.set(key, now);
   }
 
