@@ -16,7 +16,11 @@ const record = (event, fields = {}) => fs.appendFileSync(file('events.jsonl'), J
 function barrier(name) {
   if (phase !== 'crash' || boundary !== name) return;
   fs.writeFileSync(file('barrier.json'), JSON.stringify({ name, pid: process.pid }));
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  // A lost parent must not leave a crash-boundary worker alive indefinitely.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10_000);
+  process.stderr.write(`crash boundary ${name} timed out\n`);
+  database.close();
+  process.exit(2);
 }
 function ready(scene) {
   const prompt = store.insertControl('startup prompt', { sessionGroup: 'a', priority: 2, appendAckSuffix: false });

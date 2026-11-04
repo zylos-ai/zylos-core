@@ -17,6 +17,7 @@ function fixture(t, create = createSupervisor) {
   const db = {
     getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
     listPendingSessionGroups: () => pending,
+    listPendingContinuations: () => [],
     resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
     insertControl: (content, options) => {
       controls.push({ id: controls.length + 1, content, ...options, status: 'pending' });

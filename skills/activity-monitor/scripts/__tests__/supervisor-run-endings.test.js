@@ -107,9 +107,13 @@ test('five short unexpected runs alert and long or intentional runs reset the co
   const f = await fixture(t);
   for (let i = 1; i <= 6; i++) { await f.write('test:a', 'r' + i); await f.service.advance(f.context); }
   await Promise.resolve(); assert.equal(f.alerts.length, 1); assert.equal(f.records.length, 6);
-  await f.write('test:a', 'long', f.now - 600000); await f.service.advance(f.context);
+  assert.equal(f.service.shortRuns.get('test:a'), 6);
+  await f.db.recordRunEnd('test:a', { runId: 'intent', reason: 'upgrade' });
+  await f.write('test:a', 'intent'); await f.service.advance(f.context);
   assert.equal(f.service.shortRuns.has('test:a'), false);
-  f.rows.set('test:a', { sessionGroup: 'test:a', runId: 'intent', reason: 'upgrade' }); await f.write('test:a', 'intent'); await f.service.advance(f.context);
+  for (let i = 7; i <= 8; i++) { await f.write('test:a', 'r' + i); await f.service.advance(f.context); }
+  assert.equal(f.service.shortRuns.get('test:a'), 2);
+  await f.write('test:a', 'long', f.now - 600000); await f.service.advance(f.context);
   assert.equal(f.service.shortRuns.has('test:a'), false);
 });
 

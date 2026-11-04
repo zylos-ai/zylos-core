@@ -185,7 +185,6 @@ export function createActivationManager(context) {
       await advance(group);
     } catch (error) {
       diagnostic('activate_failed', { session_group: group, reason: error.code ?? error.message });
-      if (activation?.launchStarted) { activation.launchError = error; activation.launchSettled = true; }
     } finally {
       if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
       if (opportunity) context.releaseOpportunity(group);
