@@ -4,10 +4,11 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { syncBuiltinESMExports } from 'node:module';
 import * as schema from '../schema.js';
+import * as c4Schema from '../../../comm-bridge/scripts/c4-schema.js';
 import * as c4 from '../../../comm-bridge/scripts/c4-db.js';
 import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { dispatchTask, executionMarker } from '../daemon-dispatch.js';
@@ -328,4 +329,147 @@ test('dispatch, duplicate claim and missed window remain observable in logs',t=>
  assert.ok(logs.some(line=>line.includes(`Dispatching task ${task.id}`)));
  assert.ok(logs.some(line=>line.includes(`Task ${task.id} already claimed/modified, skipping`)));
  assert.ok(logs.some(line=>line.includes(`Task ${task.id}`)&&line.includes('missed execution window')));
+});
+
+function scheduledFileFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'resched-'));
+  const home = path.join(root, 'home'), zylos = path.join(home, 'zylos');
+  const tmp = path.join(root, 'tmp'), pm2 = path.join(home, '.pm2');
+  for (const directory of [tmp, pm2, path.join(zylos, 'scheduler'), path.join(zylos, 'comm-bridge'),
+    path.join(zylos, '.zylos'), path.join(zylos, '.claude/skills/telegram')]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  fs.writeFileSync(path.join(zylos, '.env'), 'TZ=UTC\n');
+  fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'multi' }));
+  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2, TMPDIR: tmp, TMUX_TMPDIR: tmp, TZ: 'UTC' };
+  for (const key of ['TMUX', 'ZYLOS_SESSION_GROUP', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID']) delete env[key];
+  const database = path.join(zylos, 'scheduler/scheduler.db');
+  const messages = path.join(zylos, 'comm-bridge/c4.db');
+  for (const target of [home, zylos, pm2, tmp, database, messages]) assert.ok(target.startsWith(root + path.sep));
+  assert.ok(Buffer.byteLength(path.join(tmp, `tmux-${process.getuid?.() ?? 0}`, 'default')) < 104);
+  console.log(JSON.stringify({ schedulerFixture: root, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2,
+    TMPDIR: tmp, TMUX_TMPDIR: tmp, database, messages, tmuxSocket: path.join(tmp, `tmux-${process.getuid?.() ?? 0}`, 'default') }));
+  const db = new Database(database); guardDatabase(db, schema); db.pragma('journal_mode=WAL');
+  const c4db = new Database(messages); guardDatabase(c4db, c4Schema); c4db.pragma('journal_mode=WAL');
+  const f = { root, env, db, c4db, daemon: null };
+  t.after(async () => {
+    try {
+      if (f.daemon?.pid && f.daemon.exitCode === null && f.daemon.signalCode === null) {
+        await new Promise(resolve => {
+          const timer = setTimeout(() => f.daemon.kill('SIGKILL'), 8000);
+          f.daemon.once('exit', () => { clearTimeout(timer); resolve(); });
+          f.daemon.kill('SIGTERM');
+        });
+      }
+    } finally {
+      db.close(); c4db.close();
+      fs.rmSync(root, { recursive: true, force: true });
+      assert.equal(fs.existsSync(root), false);
+    }
+  });
+  f.cli = args => {
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('../cli.js', import.meta.url)), ...args, '--json'],
+      { env, encoding: 'utf8', timeout: 15000 });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const lines = result.stdout.trim().split('\n'); assert.equal(lines.length, 1, result.stdout);
+    const value = JSON.parse(lines[0]); assert.equal(value.ok, true);
+    return value.data;
+  };
+  f.read = id => ({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(id),
+    history: db.prepare('SELECT * FROM task_history WHERE task_id=? ORDER BY id').all(id) });
+  f.failed = (id, origin) => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    db.prepare(`INSERT INTO tasks(id,name,prompt,type,next_run_at,status,last_error,failed_at,
+      session_component,session_group_name,reply_channel,reply_endpoint,created_at,updated_at)
+      VALUES(?,?,?,'one-time',?,'failed',?,?,'telegram','dm-1001','telegram','1001',?,?)`)
+      .run(id, id, `private rescheduled prompt ${id}`, timestamp - 600,
+        origin === 'window' ? 'Missed execution window' : 'INVALID_ARGS',
+        origin === 'window' ? null : timestamp - 500, timestamp - 1000, timestamp - 500);
+    const history = db.prepare(`INSERT INTO task_history(task_id,executed_at,completed_at,status,duration_ms,error)
+      VALUES(?,?,?,'failed',?,?)`);
+    history.run(id, timestamp - 900, timestamp - 898, 2000, 'OLDER_FAILURE');
+    history.run(id, timestamp - 700, timestamp - 697, 3000, 'LAST_FAILURE');
+  };
+  return f;
+}
+
+// Covers actual CLI re-enabling through the dispatch selector and history claim.
+// Run for schedule/status/routing changes; unrelated display-only changes may skip.
+// All child paths and databases are private; no tmux or PM2 process is launched.
+for (const origin of ['window', 'dispatch']) test(`rescheduled ${origin} failure dispatches once while untouched failed tasks stay excluded`, t => {
+  const f = scheduledFileFixture(t);
+  const id = `task-rescheduled-${origin}`, control = `task-failed-${origin}`;
+  f.failed(id, origin); f.failed(control, origin);
+  const history = f.read(id).history, untouched = f.read(control);
+  const routed = f.cli(['update', id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'dm-1001']);
+  assert.equal(routed.task.session_component, 'telegram'); assert.equal(routed.task.session_group_name, 'dm-1001');
+  const cleared = f.cli(['update', id, '--clear-session-group']);
+  assert.equal(cleared.task.session_component, null); assert.equal(cleared.task.session_group_name, null);
+  assert.equal(cleared.task.reply_channel, 'telegram'); assert.equal(cleared.task.reply_endpoint, '1001');
+  const updated = f.cli(['update', id, '--in', '2 minutes']);
+  assert.equal(updated.reenabled, true); assert.equal(updated.task.status, 'pending');
+  assert.equal(updated.task.failed_at, null); assert.equal(updated.task.last_error, null);
+  assert.deepEqual(f.read(id).history, history);
+  const sends = [];
+  const dependencies = { ...base, sendViaC4(message, route) { sends.push({ message, route }); return { category: 'success' }; } };
+  runSchedulerIteration(f.db, dependencies); assert.equal(sends.length, 0);
+  t.mock.timers.enable({ apis: ['Date'], now: updated.task.next_run_at * 1000 });
+  runSchedulerIteration(f.db, dependencies);
+  assert.equal(sends.length, 1); assert.ok(sends[0].message.includes(updated.task.prompt));
+  assert.equal(sends[0].route.sessionComponent, null); assert.equal(sends[0].route.sessionGroupName, null);
+  assert.equal(sends[0].route.replyChannel, 'telegram'); assert.equal(sends[0].route.replyEndpoint, '1001');
+  const after = f.read(id); assert.equal(after.task.status, 'running');
+  assert.deepEqual(after.history.slice(0, 2), history);
+  assert.equal(after.history.length, 3); assert.equal(after.history[2].status, 'started');
+  assert.equal(after.history[2].executed_at, updated.task.next_run_at);
+  assert.deepEqual(f.read(control), untouched);
+  runSchedulerIteration(f.db, dependencies); assert.equal(sends.length, 1);
+});
+
+// Covers real daemon -> real receiver -> private C4 persistence after re-enabling.
+// Run with ZYLOS_RUN_SCHEDULER_DISPATCH_INTEGRATION=1 for schedule/dispatch/receive changes;
+// default skip defers the two-minute process integration to the isolated reviewer run.
+// Private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/tmux socket/DB paths are logged above;
+// no live AM socket, runtime, reply sender or PM2 process is used, and the child/root are cleaned.
+test('real scheduler daemon dispatches a re-enabled task to its saved private C4 group', {
+  skip: process.env.ZYLOS_RUN_SCHEDULER_DISPATCH_INTEGRATION !== '1', timeout: 155000,
+}, async t => {
+  const f = scheduledFileFixture(t);
+  const id = 'task-daemon-rescheduled', control = 'task-daemon-failed';
+  f.failed(id, 'dispatch'); f.failed(control, 'window');
+  const previous = f.read(id).history, untouched = f.read(control);
+  const updated = f.cli(['update', id, '--in', '2 minutes']);
+  assert.equal(updated.reenabled, true); assert.equal(updated.task.status, 'pending');
+  assert.deepEqual(f.read(id).history, previous);
+  let output = '', spawnError;
+  f.daemon = spawn(process.execPath, [fileURLToPath(new URL('../daemon.js', import.meta.url))],
+    { env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  f.daemon.stdout.on('data', chunk => { output += chunk; });
+  f.daemon.stderr.on('data', chunk => { output += chunk; });
+  f.daemon.on('error', error => { spawnError = error; });
+  const deadline = performance.now() + 145000;
+  let inbound;
+  while (performance.now() < deadline) {
+    assert.equal(spawnError, undefined);
+    assert.equal(f.daemon.exitCode, null, output);
+    const after = f.read(id);
+    inbound = f.c4db.prepare("SELECT * FROM conversations WHERE direction='in' AND instr(content,?)>0 ORDER BY id")
+      .all(updated.task.prompt);
+    if (after.history.length === 3 && inbound.length === 1) break;
+    assert.ok(after.history.length <= 3, output);
+    assert.ok(inbound.length <= 1, output);
+    if (Math.floor(Date.now() / 1000) < updated.task.next_run_at) {
+      assert.equal(after.history.length, 2); assert.equal(inbound.length, 0);
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  const after = f.read(id);
+  assert.equal(after.history.length, 3, output); assert.deepEqual(after.history.slice(0, 2), previous);
+  assert.equal(after.history[2].status, 'started', output);
+  assert.ok(after.history[2].executed_at >= updated.task.next_run_at);
+  assert.equal(inbound.length, 1, output); assert.equal(inbound[0].direction, 'in');
+  assert.equal(inbound[0].session_group, 'telegram:dm-1001'); assert.equal(inbound[0].channel, 'telegram');
+  assert.equal(inbound[0].status, 'pending');
+  assert.ok(inbound[0].content.startsWith(executionMarker(id, after.history[2].id) + '\n'));
+  assert.deepEqual(f.read(control), untouched);
 });

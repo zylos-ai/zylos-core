@@ -30,9 +30,18 @@ function cliRaw(args, env = {}) {
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-cli-'));
-  const dbPath = path.join(tmpDir, 'scheduler', 'scheduler.db');
-  const env = { ZYLOS_DIR: tmpDir, TZ: 'UTC', ZYLOS_SESSION_GROUP: 'origin' };
-  for (const name of ['telegram', 'multica']) fs.mkdirSync(path.join(tmpDir, '.claude/skills', name), { recursive: true });
+  const home = path.join(tmpDir, 'home');
+  const zylos = path.join(home, 'zylos');
+  const shortTmp = path.join(tmpDir, 'tmp');
+  const dbPath = path.join(zylos, 'scheduler', 'scheduler.db');
+  const env = { HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(home, '.pm2'), TMPDIR: shortTmp,
+    TMUX_TMPDIR: shortTmp, TZ: 'UTC', ZYLOS_SESSION_GROUP: 'origin' };
+  fs.mkdirSync(shortTmp, { recursive: true });
+  for (const name of ['telegram', 'multica']) fs.mkdirSync(path.join(zylos, '.claude/skills', name), { recursive: true });
+  // Covers the real CLI entry and text behavior; run for scheduler CLI changes, skip unrelated UI work.
+  // No tmux or PM2 is called; all child environment paths and the database are private and removed below.
+  for (const target of [env.HOME, env.ZYLOS_DIR, env.PM2_HOME, env.TMPDIR, dbPath]) assert.ok(target.startsWith(tmpDir + path.sep));
+  console.log(JSON.stringify({ schedulerCliFixture: tmpDir, ...env, database: dbPath }));
   try {
     return fn({ tmpDir, dbPath, env });
   } finally {
@@ -170,14 +179,16 @@ describe('cli add', () => {
 
   it('reports error without timing option', () => {
     withTmpDir(({ env }) => {
-      const { stderr } = cliRaw(['add', 'no timing'], env);
+      const { stderr, status } = cliRaw(['add', 'no timing'], env);
+      assert.equal(status, 1);
       assert.ok(stderr.includes('Error') || stderr.includes('Must specify'));
     });
   });
 
   it('reports error without prompt', () => {
     withTmpDir(({ env }) => {
-      const { stderr } = cliRaw(['add', '--cron', '0 9 * * *'], env);
+      const { stderr, status } = cliRaw(['add', '--cron', '0 9 * * *'], env);
+      assert.equal(status, 1);
       assert.ok(stderr.includes('Error') || stderr.includes('Prompt'));
     });
   });
@@ -318,7 +329,8 @@ describe('cli done', () => {
 
   it('reports error for non-existent task', () => {
     withTmpDir(({ env }) => {
-      const { stderr } = cliRaw(['done', 'nonexistent-id'], env);
+      const { stderr, status } = cliRaw(['done', 'nonexistent-id'], env);
+      assert.equal(status, 1);
       assert.ok(stderr.includes('not found'));
     });
   });
@@ -363,7 +375,8 @@ describe('cli remove', () => {
 
   it('reports error for non-existent task', () => {
     withTmpDir(({ env }) => {
-      const { stderr } = cliRaw(['remove', 'nonexistent-id'], env);
+      const { stderr, status } = cliRaw(['remove', 'nonexistent-id'], env);
+      assert.equal(status, 1);
       assert.ok(stderr.includes('not found'));
     });
   });
@@ -470,7 +483,8 @@ describe('cli update', () => {
       const db = new Database(dbPath);
       try {
         const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
-        const { stderr } = cliRaw(['update', task.id], env);
+        const { stderr, status } = cliRaw(['update', task.id], env);
+        assert.equal(status, 1);
         assert.ok(stderr.includes('No updates'));
       } finally {
         db.close();

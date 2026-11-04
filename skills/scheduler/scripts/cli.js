@@ -10,7 +10,25 @@ import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-ut
 import { loadTimezone } from './tz.js';
 import { resolveSavedSessionGroup, updatedReplyTarget } from './saved-session-group.js';
 
-const db = getDb();
+let db;
+
+function reject(code, message, extra = {}) {
+  throw Object.assign(new Error(message), { code, extra, text: `Error: ${message}` });
+}
+
+function fail(error) {
+  const code = error.code?.startsWith('SQLITE_') ? 'DB_WRITE_FAILED' : error.code ?? 'INTERNAL_ERROR';
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify({ ok: false, error: { code, message: error.message, ...error.extra } }));
+  } else {
+    console.error(error.text ?? `Error: ${code}: ${error.message}`);
+  }
+  process.exitCode = 1;
+}
+
+function success(data) {
+  console.log(JSON.stringify({ ok: true, data }));
+}
 
 /** Escape special LIKE pattern characters in user input */
 function escapeLike(str) {
@@ -19,7 +37,8 @@ function escapeLike(str) {
 
 const ALLOWED_UPDATE_COLUMNS = new Set([
   'name', 'prompt', 'priority', 'require_idle', 'reply_channel', 'reply_endpoint', 'session_component', 'session_group_name',
-  'miss_threshold', 'type', 'cron_expression', 'interval_seconds', 'next_run_at', 'timezone', 'updated_at'
+  'miss_threshold', 'type', 'cron_expression', 'interval_seconds', 'next_run_at', 'timezone', 'updated_at',
+  'status', 'failed_at', 'last_error'
 ]);
 
 const HELP = `
@@ -66,6 +85,14 @@ Update Options (same as Add, plus):
                           Disable block-queue-until-idle behavior
                           Legacy alias: --no-require-idle
   --clear-reply           Clear reply configuration
+  --clear-session-group   Route to Origin, keeping reply configuration
+
+Write Options (add/update/remove/pause/resume/done):
+  --json                  Single-line success/error envelope; errors exit 1
+
+History Options:
+  --json                  Rows without prompt, plus ambiguousPrefix task IDs
+  --limit <1-1000>        Maximum history rows (default=20)
 
 Examples:
   ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Say hello" --in "30 minutes"
@@ -92,6 +119,7 @@ function parseArgs(args) {
     'require-idle',
     'no-require-idle',
     'clear-reply',
+    'clear-session-group',
     'json'
   ]);
 
@@ -109,6 +137,9 @@ function parseArgs(args) {
       } else {
         // Regular flag with value
         const value = args[i + 1];
+        if (value === undefined || value.startsWith('--')) {
+          reject('INVALID_ARGS', `--${key} must have a value`);
+        }
         result.options[key] = value;
         i += 2;
       }
@@ -173,55 +204,48 @@ function cmdAdd(args, options) {
   const prompt = args.join(' ');
 
   if (!prompt) {
-    console.error('Error: Prompt is required');
-    console.log('Usage: cli.js add "<prompt>" [options]');
-    return;
+    if (!options.json) console.log('Usage: cli.js add "<prompt>" [options]');
+    reject('INVALID_ARGS', 'Prompt is required');
   }
 
   let type, nextRunAt, cronExpression, intervalSeconds;
 
   // Determine task type from options
-  if (options.in) {
+  if (Object.hasOwn(options, 'in')) {
     type = 'one-time';
     const seconds = parseDuration(options.in);
     if (!seconds) {
-      console.error(`Error: Invalid duration "${options.in}"`);
-      return;
+      reject('INVALID_ARGS', `Invalid duration "${options.in}"`);
     }
     nextRunAt = now() + seconds;
-  } else if (options.at) {
+  } else if (Object.hasOwn(options, 'at')) {
     type = 'one-time';
     nextRunAt = parseTime(options.at);
     if (!nextRunAt) {
-      console.error(`Error: Could not parse time "${options.at}"`);
-      return;
+      reject('INVALID_ARGS', `Could not parse time "${options.at}"`);
     }
-  } else if (options.cron) {
+  } else if (Object.hasOwn(options, 'cron')) {
     type = 'recurring';
     cronExpression = options.cron;
     if (!isValidCron(cronExpression)) {
-      console.error(`Error: Invalid cron expression "${cronExpression}"`);
-      return;
+      reject('INVALID_ARGS', `Invalid cron expression "${cronExpression}"`);
     }
     nextRunAt = getNextRun(cronExpression);
-  } else if (options.every) {
+  } else if (Object.hasOwn(options, 'every')) {
     type = 'interval';
     intervalSeconds = parseDuration(options.every);
     if (!intervalSeconds) {
-      console.error(`Error: Invalid interval "${options.every}"`);
-      return;
+      reject('INVALID_ARGS', `Invalid interval "${options.every}"`);
     }
     nextRunAt = now() + intervalSeconds;
   } else {
-    console.error('Error: Must specify timing (--in, --at, --cron, or --every)');
-    console.log(HELP);
-    return;
+    if (!options.json) console.log(HELP);
+    reject('INVALID_ARGS', 'Must specify timing (--in, --at, --cron, or --every)');
   }
 
-  const priority = options.priority ? parseInt(options.priority, 10) : 3;
+  const priority = Object.hasOwn(options, 'priority') ? Number(options.priority) : 3;
   if (!Number.isInteger(priority) || priority < 1 || priority > 3) {
-    console.error('Error: Priority must be 1-3 (1=urgent, 2=high, 3=normal)');
-    return;
+    reject('INVALID_ARGS', 'Priority must be 1-3 (1=urgent, 2=high, 3=normal)');
   }
 
   // Parse block-queue-until-idle flag (legacy alias: require-idle)
@@ -233,12 +257,11 @@ function cmdAdd(args, options) {
   const replyEndpoint = options['reply-endpoint'] || null;
 
   // Parse miss-threshold
-  const missThreshold = options['miss-threshold']
-    ? parseInt(options['miss-threshold'], 10)
+  const missThreshold = Object.hasOwn(options, 'miss-threshold')
+    ? Number(options['miss-threshold'])
     : 300;  // Default 5 minutes
-  if (!Number.isInteger(missThreshold) || missThreshold < 0) {
-    console.error('Error: miss-threshold must be a positive integer');
-    return;
+  if (!Number.isInteger(missThreshold) || missThreshold < 0 || options['miss-threshold']?.trim() === '') {
+    reject('INVALID_ARGS', 'miss-threshold must be a positive integer');
   }
 
   const taskId = generateId();
@@ -273,6 +296,7 @@ function cmdAdd(args, options) {
     getDefaultTimezone()
   );
 
+  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId) });
   console.log(`\nTask created: ${taskId}`);
   console.log(`  Type: ${type}`);
   console.log(`  Priority: ${priority}`);
@@ -284,10 +308,9 @@ function cmdAdd(args, options) {
   console.log();
 }
 
-function cmdRemove(taskId) {
+function cmdRemove(taskId, options) {
   if (!taskId) {
-    console.error('Error: Task ID is required');
-    return;
+    reject('INVALID_ARGS', 'Task ID is required');
   }
 
   // Support partial ID match
@@ -296,25 +319,21 @@ function cmdRemove(taskId) {
   `).all(escapeLike(taskId) + '%');
 
   if (tasks.length === 0) {
-    console.error(`Error: Task not found: ${taskId}`);
-    return;
+    reject('TASK_NOT_FOUND', `Task not found: ${taskId}`);
   }
 
   if (tasks.length > 1) {
-    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple tasks:`);
-    tasks.forEach(t => console.error(`  - ${t.id}`));
-    console.error('Please provide a more specific prefix.');
-    return;
+    reject('TASK_AMBIGUOUS', `Ambiguous task ID prefix '${taskId}' matches multiple tasks:\n${tasks.map(t => `  - ${t.id}`).join('\n')}\nPlease provide a more specific prefix.`, { matches: tasks.map(t => t.id) });
   }
 
   db.prepare('DELETE FROM tasks WHERE id = ?').run(tasks[0].id);
+  if (options.json) return success({ id: tasks[0].id });
   console.log(`Removed task: ${tasks[0].id}`);
 }
 
-function cmdDone(taskId) {
+function cmdDone(taskId, options) {
   if (!taskId) {
-    console.error('Error: Task ID is required');
-    return;
+    reject('INVALID_ARGS', 'Task ID is required');
   }
 
   // Support partial ID match
@@ -323,15 +342,11 @@ function cmdDone(taskId) {
   `).all(escapeLike(taskId) + '%');
 
   if (tasks.length === 0) {
-    console.error(`Error: Task not found: ${taskId}`);
-    return;
+    reject('TASK_NOT_FOUND', `Task not found: ${taskId}`);
   }
 
   if (tasks.length > 1) {
-    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple tasks:`);
-    tasks.forEach(t => console.error(`  - ${t.id}`));
-    console.error('Please provide a more specific prefix.');
-    return;
+    reject('TASK_AMBIGUOUS', `Ambiguous task ID prefix '${taskId}' matches multiple tasks:\n${tasks.map(t => `  - ${t.id}`).join('\n')}\nPlease provide a more specific prefix.`, { matches: tasks.map(t => t.id) });
   }
 
   const task = tasks[0];
@@ -361,6 +376,7 @@ function cmdDone(taskId) {
     `).run(currentTime, durationMs, historyEntry.id);
   }
 
+  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id) });
   console.log(`Completed task: ${task.id}`);
 
   // If recurring/interval, scheduler will handle next run
@@ -369,10 +385,9 @@ function cmdDone(taskId) {
   }
 }
 
-function cmdPause(taskId) {
+function cmdPause(taskId, options) {
   if (!taskId) {
-    console.error('Error: Task ID is required');
-    return;
+    reject('INVALID_ARGS', 'Task ID is required');
   }
 
   const tasks = db.prepare(`
@@ -380,28 +395,25 @@ function cmdPause(taskId) {
   `).all(escapeLike(taskId) + '%');
 
   if (tasks.length === 0) {
-    console.error(`Error: Pending task not found: ${taskId}`);
-    return;
+    const task = db.prepare("SELECT * FROM tasks WHERE id LIKE ? ESCAPE '!'").get(escapeLike(taskId) + '%');
+    reject(task ? 'TASK_WRONG_STATUS' : 'TASK_NOT_FOUND', `Pending task not found: ${taskId}`, task ? { status: task.status } : {});
   }
 
   if (tasks.length > 1) {
-    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple pending tasks:`);
-    tasks.forEach(t => console.error(`  - ${t.id}`));
-    console.error('Please provide a more specific prefix.');
-    return;
+    reject('TASK_AMBIGUOUS', `Ambiguous task ID prefix '${taskId}' matches multiple pending tasks:\n${tasks.map(t => `  - ${t.id}`).join('\n')}\nPlease provide a more specific prefix.`, { matches: tasks.map(t => t.id) });
   }
 
   db.prepare(`
     UPDATE tasks SET status = 'paused', updated_at = ? WHERE id = ?
   `).run(now(), tasks[0].id);
 
+  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(tasks[0].id) });
   console.log(`Paused task: ${tasks[0].id}`);
 }
 
-function cmdResume(taskId) {
+function cmdResume(taskId, options) {
   if (!taskId) {
-    console.error('Error: Task ID is required');
-    return;
+    reject('INVALID_ARGS', 'Task ID is required');
   }
 
   const tasks = db.prepare(`
@@ -409,27 +421,27 @@ function cmdResume(taskId) {
   `).all(escapeLike(taskId) + '%');
 
   if (tasks.length === 0) {
-    console.error(`Error: Paused task not found: ${taskId}`);
-    return;
+    const task = db.prepare("SELECT * FROM tasks WHERE id LIKE ? ESCAPE '!'").get(escapeLike(taskId) + '%');
+    reject(task ? 'TASK_WRONG_STATUS' : 'TASK_NOT_FOUND', `Paused task not found: ${taskId}`, task ? { status: task.status } : {});
   }
 
   if (tasks.length > 1) {
-    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple paused tasks:`);
-    tasks.forEach(t => console.error(`  - ${t.id}`));
-    console.error('Please provide a more specific prefix.');
-    return;
+    reject('TASK_AMBIGUOUS', `Ambiguous task ID prefix '${taskId}' matches multiple paused tasks:\n${tasks.map(t => `  - ${t.id}`).join('\n')}\nPlease provide a more specific prefix.`, { matches: tasks.map(t => t.id) });
   }
 
   db.prepare(`
     UPDATE tasks SET status = 'pending', updated_at = ? WHERE id = ?
   `).run(now(), tasks[0].id);
 
+  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(tasks[0].id) });
   console.log(`Resumed task: ${tasks[0].id}`);
 }
 
-function cmdHistory(taskId) {
+function cmdHistory(taskId, options) {
+  const limit = Object.hasOwn(options, 'limit') ? Number(options.limit) : 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) reject('INVALID_ARGS', 'limit must be an integer from 1 to 1000');
   let query = `
-    SELECT h.*, t.name, t.prompt
+    SELECT h.id, h.task_id, t.name, h.executed_at, h.completed_at, h.status, h.duration_ms, h.error
     FROM task_history h
     JOIN tasks t ON h.task_id = t.id
   `;
@@ -440,6 +452,7 @@ function cmdHistory(taskId) {
     params.push(escapeLike(taskId) + '%');
   }
 
+  let ambiguousPrefix = [];
   // Check for ambiguous task prefix before querying history
   if (taskId) {
     const matchingTasks = db.prepare(`
@@ -447,15 +460,20 @@ function cmdHistory(taskId) {
     `).all(escapeLike(taskId) + '%');
 
     if (matchingTasks.length > 1) {
-      console.log(`\n  ⚠ Warning: Prefix '${taskId}' matches ${matchingTasks.length} tasks:`);
-      matchingTasks.forEach(t => console.log(`    - ${t.id}`));
-      console.log();
+      ambiguousPrefix = matchingTasks.map(task => task.id);
+      if (!options.json) {
+        console.log(`\n  ⚠ Warning: Prefix '${taskId}' matches ${matchingTasks.length} tasks:`);
+        matchingTasks.forEach(t => console.log(`    - ${t.id}`));
+        console.log();
+      }
     }
   }
 
-  query += ' ORDER BY h.executed_at DESC LIMIT 20';
+  query += ' ORDER BY h.executed_at DESC, h.id DESC LIMIT ?';
+  params.push(limit);
 
   const history = db.prepare(query).all(...params);
+  if (options.json) return success({ rows: history, ambiguousPrefix });
 
   if (history.length === 0) {
     console.log('No execution history.');
@@ -527,8 +545,7 @@ function cmdRunning() {
 
 function cmdUpdate(taskId, options) {
   if (!taskId) {
-    console.error('Error: Task ID is required');
-    return;
+    reject('INVALID_ARGS', 'Task ID is required');
   }
 
   // Support partial ID match
@@ -537,15 +554,11 @@ function cmdUpdate(taskId, options) {
   `).all(escapeLike(taskId) + '%');
 
   if (tasks.length === 0) {
-    console.error(`Error: Task not found: ${taskId}`);
-    return;
+    reject('TASK_NOT_FOUND', `Task not found: ${taskId}`);
   }
 
   if (tasks.length > 1) {
-    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple tasks:`);
-    tasks.forEach(t => console.error(`  - ${t.id}`));
-    console.error('Please provide a more specific prefix.');
-    return;
+    reject('TASK_AMBIGUOUS', `Ambiguous task ID prefix '${taskId}' matches multiple tasks:\n${tasks.map(t => `  - ${t.id}`).join('\n')}\nPlease provide a more specific prefix.`, { matches: tasks.map(t => t.id) });
   }
 
   const task = tasks[0];
@@ -553,23 +566,23 @@ function cmdUpdate(taskId, options) {
   const updatedFields = [];
 
   // Update name
-  if (options.name) {
+  if (Object.hasOwn(options, 'name')) {
     updates.name = options.name;
     updatedFields.push('name');
   }
 
   // Update prompt
-  if (options.prompt) {
+  if (Object.hasOwn(options, 'prompt')) {
+    if (!options.prompt) reject('INVALID_ARGS', 'Prompt is required');
     updates.prompt = options.prompt;
     updatedFields.push('prompt');
   }
 
   // Update priority
-  if (options.priority) {
-    const priority = parseInt(options.priority, 10);
+  if (Object.hasOwn(options, 'priority')) {
+    const priority = Number(options.priority);
     if (!Number.isInteger(priority) || priority < 1 || priority > 3) {
-      console.error('Error: Priority must be 1-3');
-      return;
+      reject('INVALID_ARGS', 'Priority must be 1-3');
     }
     updates.priority = priority;
     updatedFields.push('priority');
@@ -584,16 +597,21 @@ function cmdUpdate(taskId, options) {
     updatedFields.push('require_idle');
   }
 
-  const replyUpdates = updatedReplyTarget(task, options);
+  if (options['clear-session-group'] && ['reply-channel', 'reply-endpoint', 'reply-session-group'].some(key => Object.hasOwn(options, key))) {
+    reject('INVALID_ARGS', '--clear-session-group cannot be combined with reply target options');
+  }
+  const replyUpdates = options['clear-session-group']
+    ? { session_component: null, session_group_name: null,
+      ...(options['clear-reply'] ? updatedReplyTarget(task, options) : {}) }
+    : updatedReplyTarget(task, options);
   Object.assign(updates, replyUpdates);
   updatedFields.push(...Object.keys(replyUpdates));
 
   // Update miss_threshold
-  if (options['miss-threshold']) {
-    const threshold = parseInt(options['miss-threshold'], 10);
-    if (!Number.isInteger(threshold) || threshold < 0) {
-      console.error('Error: miss-threshold must be a positive integer');
-      return;
+  if (Object.hasOwn(options, 'miss-threshold')) {
+    const threshold = Number(options['miss-threshold']);
+    if (!Number.isInteger(threshold) || threshold < 0 || options['miss-threshold'].trim() === '') {
+      reject('INVALID_ARGS', 'miss-threshold must be a positive integer');
     }
     updates.miss_threshold = threshold;
     updatedFields.push('miss_threshold');
@@ -601,44 +619,40 @@ function cmdUpdate(taskId, options) {
 
   // Update schedule (type and next_run_at)
   let scheduleUpdated = false;
-  if (options.in) {
+  if (Object.hasOwn(options, 'in')) {
     const seconds = parseDuration(options.in);
     if (!seconds) {
-      console.error(`Error: Invalid duration "${options.in}"`);
-      return;
+      reject('INVALID_ARGS', `Invalid duration "${options.in}"`);
     }
     updates.type = 'one-time';
     updates.cron_expression = null;
     updates.interval_seconds = null;
     updates.next_run_at = now() + seconds;
     scheduleUpdated = true;
-  } else if (options.at) {
+  } else if (Object.hasOwn(options, 'at')) {
     const nextRunAt = parseTime(options.at);
     if (!nextRunAt) {
-      console.error(`Error: Could not parse time "${options.at}"`);
-      return;
+      reject('INVALID_ARGS', `Could not parse time "${options.at}"`);
     }
     updates.type = 'one-time';
     updates.cron_expression = null;
     updates.interval_seconds = null;
     updates.next_run_at = nextRunAt;
     scheduleUpdated = true;
-  } else if (options.cron) {
+  } else if (Object.hasOwn(options, 'cron')) {
     const cronExpression = options.cron;
     if (!isValidCron(cronExpression)) {
-      console.error(`Error: Invalid cron expression "${cronExpression}"`);
-      return;
+      reject('INVALID_ARGS', `Invalid cron expression "${cronExpression}"`);
     }
     updates.type = 'recurring';
     updates.cron_expression = cronExpression;
     updates.interval_seconds = null;
     updates.next_run_at = getNextRun(cronExpression);
     scheduleUpdated = true;
-  } else if (options.every) {
+  } else if (Object.hasOwn(options, 'every')) {
     const intervalSeconds = parseDuration(options.every);
     if (!intervalSeconds) {
-      console.error(`Error: Invalid interval "${options.every}"`);
-      return;
+      reject('INVALID_ARGS', `Invalid interval "${options.every}"`);
     }
     updates.type = 'interval';
     updates.cron_expression = null;
@@ -654,17 +668,25 @@ function cmdUpdate(taskId, options) {
 
   // Check if any updates were provided
   if (Object.keys(updates).length === 0) {
-    console.error('Error: No updates provided');
-    console.log('Use --help to see available options');
-    return;
+    if (!options.json) console.log('Use --help to see available options');
+    reject('NO_UPDATES', 'No updates provided');
+  }
+
+  const reenabled = task.status === 'failed' && task.type === 'one-time' && scheduleUpdated;
+  if (reenabled) {
+    if (updates.next_run_at <= now()) {
+      reject('RESCHEDULE_NOT_FUTURE', 'Rescheduled time must be in the future', { nextRunAt: updates.next_run_at });
+    }
+    updates.status = 'pending';
+    updates.failed_at = null;
+    updates.last_error = null;
   }
 
   // Build UPDATE query (validate column names against whitelist)
   updates.updated_at = now();
   for (const key of Object.keys(updates)) {
     if (!ALLOWED_UPDATE_COLUMNS.has(key)) {
-      console.error(`Error: Invalid update field: ${key}`);
-      return;
+      reject('INTERNAL_ERROR', `Invalid update field: ${key}`);
     }
   }
   const setClauses = Object.keys(updates).map(key => `${key} = ?`).join(', ');
@@ -674,6 +696,7 @@ function cmdUpdate(taskId, options) {
     UPDATE tasks SET ${setClauses} WHERE id = ?
   `).run(...values, task.id);
 
+  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id), updatedFields, reenabled });
   console.log(`\nTask updated: ${task.id}`);
   console.log(`  Updated fields: ${updatedFields.join(', ')}`);
 
@@ -681,6 +704,7 @@ function cmdUpdate(taskId, options) {
     console.log(`  Type: ${updates.type}`);
     console.log(`  Next run: ${formatTime(updates.next_run_at)} (${getRelativeTime(updates.next_run_at)})`);
   }
+  if (reenabled) console.log('  Re-enabled: pending');
   console.log();
 }
 
@@ -691,11 +715,12 @@ function main() {
     process.env.TZ = loadTimezone();
   } catch (error) {
     const code = error.code || 'UNKNOWN_TZ_ERROR';
-    console.error(`Error [${code}]: ${error.message}`);
-    process.exit(1);
+    fail(Object.assign(error, { code, text: `Error [${code}]: ${error.message}` }));
+    return;
   }
 
   const { command, args, options } = parseArgs(process.argv.slice(2));
+  db = getDb();
 
   switch (command) {
     case 'list':
@@ -710,20 +735,20 @@ function main() {
     case 'remove':
     case 'rm':
     case 'delete':
-      cmdRemove(args[0]);
+      cmdRemove(args[0], options);
       break;
     case 'done':
     case 'complete':
-      cmdDone(args[0]);
+      cmdDone(args[0], options);
       break;
     case 'pause':
-      cmdPause(args[0]);
+      cmdPause(args[0], options);
       break;
     case 'resume':
-      cmdResume(args[0]);
+      cmdResume(args[0], options);
       break;
     case 'history':
-      cmdHistory(args[0]);
+      cmdHistory(args[0], options);
       break;
     case 'next':
       cmdNext();
@@ -738,7 +763,8 @@ function main() {
       break;
     default:
       if (command) {
-        console.error(`Unknown command: ${command}`);
+        if (!options.json) console.log(HELP);
+        throw Object.assign(new Error(`Unknown command: ${command}`), { code: 'INVALID_ARGS', text: `Unknown command: ${command}` });
       }
       console.log(HELP);
   }
@@ -746,7 +772,5 @@ function main() {
 
 try { main(); }
 catch (error) {
-  const code = error.code?.startsWith('SQLITE_') ? 'DB_WRITE_FAILED' : error.code ?? 'INTERNAL_ERROR';
-  console.error(`Error: ${code}: ${error.message}`);
-  process.exitCode = 1;
+  fail(error);
 }
