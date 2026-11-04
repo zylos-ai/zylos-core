@@ -226,3 +226,26 @@ test('missing C4 database reports unavailable wake data without creating a file'
   assert.equal(result.databaseCreated, false);
   assert.equal(result.repairs.length, 0);
 });
+
+// Boundary: the session can become unobservable after the initial CLI target
+// read. Run for Origin text fallback changes; skip unrelated doctor changes.
+// All commands and observation failures stay inside the existing isolated fixture.
+test('unknown Origin presence keeps a session line without rendering null', () => {
+  const result = runDoctor(['--check'], { mode: 'multi', state: 'pass', origin: 'unknown_presence' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /session: not running \(starts on the next message for this group\)/);
+  assert.match(result.stdout, /Everything is working/);
+  assert.doesNotMatch(result.stdout, /^\s*null\s*$/m);
+  assert.equal(result.repairs.length, 0);
+});
+
+// Boundary: a successful independent service repair reaches the second success
+// summary with the same unknown Origin observation. Run for repair-summary text;
+// skip when neither Origin formatting nor the repair path changes.
+test('successful service repair does not render an unknown Origin as null', () => {
+  const result = runDoctor([], { mode: 'multi', state: 'repair_once', origin: 'unknown_presence' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.repairs.length, 1);
+  assert.match(result.stdout, /All issues fixed/);
+  assert.doesNotMatch(result.stdout, /^\s*null\s*$/m);
+});

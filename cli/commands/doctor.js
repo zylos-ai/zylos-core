@@ -507,11 +507,12 @@ function displayServiceGroup(diag, jsonGroup) {
     }
   }
 
+  const originMessage = diag.origin && formatOriginDescription(diag.origin, diag.targetRuntime, diag.originNeed);
   if (session) {
     checks.push(`${diag.display} session: ${green('active')}`);
-  } else if (diag.origin) {
+  } else if (originMessage) {
     const color = diag.origin.failure ? red : yellow;
-    checks.push(color(formatOriginDescription(diag.origin, diag.targetRuntime, diag.originNeed)));
+    checks.push(color(originMessage));
   } else if (diag.sessionMode === 'multi') {
     checks.push(dim('session: not running (starts on the next message for this group)'));
   } else if (activityMonitor) {
@@ -869,7 +870,8 @@ export async function doctorCommand(args, upstreamSource) {
   if (diagnostic.passed) {
     const sessionStarting = diag.sessionMode !== 'multi' && diag.services.activityMonitor && !diag.services.session;
     console.log(`\n${green('✓ Everything is working.')}`);
-    if (diag.origin) console.log(`\n  ${dim(formatOriginDescription(diag.origin, diag.targetRuntime, diag.originNeed))}`);
+    const originMessage = diag.origin && formatOriginDescription(diag.origin, diag.targetRuntime, diag.originNeed);
+    if (originMessage) console.log(`\n  ${dim(originMessage)}`);
     if (sessionStarting) {
       console.log(`\n  ${dim('Claude session is starting — run')} ${bold('zylos attach')} ${dim('in a moment to connect.')}`);
     }
@@ -909,7 +911,8 @@ export async function doctorCommand(args, upstreamSource) {
     if (reverify.passed) {
       const sessionStarting = rediag.sessionMode !== 'multi' && rediag.services.activityMonitor && !rediag.services.session;
       console.log(`\n${green('✓ All issues fixed — everything is working. Enjoy your Zylos!')}`);
-      if (rediag.origin) console.log(`\n  ${dim(formatOriginDescription(rediag.origin, rediag.targetRuntime, rediag.originNeed))}`);
+      const originMessage = rediag.origin && formatOriginDescription(rediag.origin, rediag.targetRuntime, rediag.originNeed);
+      if (originMessage) console.log(`\n  ${dim(originMessage)}`);
       if (sessionStarting) {
         console.log(`\n  ${dim('Claude session is starting — run')} ${bold('zylos attach')} ${dim('in a moment to connect.')}`);
       }
