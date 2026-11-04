@@ -25,6 +25,10 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 | `list` / `next` / `running` / `history` | Query tasks | `references/query.md` |
 | `done` / `remove` / `pause` / `resume` | Task lifecycle | `references/lifecycle.md` |
 
+Write commands (`add`, `update`, `done`, `remove`, `pause`, `resume`) and `history` accept `--json`. Use it whenever you need to know the outcome: without it, some validation errors still exit 0.
+
+To re-enable a failed one-time task or route a task to Origin, use `update`; see `references/update.md`.
+
 ## Timezone
 
 Resolves TZ: `~/zylos/.env` > `process.env.TZ` > `UTC`. Times are parsed and displayed in configured timezone. DB stores UTC. See `references/config.md` for details.

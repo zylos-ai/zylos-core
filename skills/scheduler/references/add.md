@@ -27,6 +27,7 @@ Creates a new scheduled task. Exactly one timing option is required.
 | `--name "<name>"` | Task display name | Truncated prompt |
 | `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles | off |
 | `--miss-threshold <seconds>` | Skip if overdue by more than this | 300 |
+| `--json` | Print a single-line result: `{"ok":true,"data":{"task":{...}}}`, or `{"ok":false,"error":{"code":"...","message":"..."}}` with exit 1. Use it whenever you need to know the outcome: without it, some validation errors still exit 0 | off |
 | `--reply-channel "<source>"` | Reply channel (e.g., "telegram", "lark") | none |
 | `--reply-endpoint "<endpoint>"` | Reply endpoint (e.g., user ID) | none |
 | `--reply-session-group "<L>"` | Group-local name; requires explicit `--reply-channel` | component overall group |

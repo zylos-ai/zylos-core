@@ -2,6 +2,10 @@
 
 All commands support partial task ID matching.
 
+All commands accept `--json`. Success prints `{"ok":true,"data":{"task":{...}}}` (`remove` prints `{"ok":true,"data":{"id":"..."}}`). Every failure prints `{"ok":false,"error":{"code":"...","message":"..."}}` and exits 1. Without `--json`, some failures still exit 0, so use `--json` whenever you need to know the outcome.
+
+`pause` on a task that is not pending and `resume` on a task that is not paused fail with `TASK_WRONG_STATUS`; `error.status` gives the current status.
+
 ## done
 
 `cli.js done <task-id>`
@@ -31,4 +35,5 @@ cli.js done task-abc
 cli.js remove task-abc
 cli.js pause task-abc
 cli.js resume task-abc
+cli.js pause task-abc --json
 ```

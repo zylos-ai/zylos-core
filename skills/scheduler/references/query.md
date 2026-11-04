@@ -23,9 +23,12 @@ Shows tasks currently in `running` status. Useful to check before session compac
 
 ## history
 
-`cli.js history [task-id]`
+`cli.js history [task-id] [--limit <1-1000>] [--json]`
 
-Shows the 20 most recent execution history entries. Optionally filter by task ID (supports partial match).
+Shows the most recent execution history entries, 20 by default. Optionally filter by task ID (supports partial match).
+
+- `--limit` — maximum number of rows. A value outside 1–1000 is rejected.
+- `--json` — prints `{"ok":true,"data":{"rows":[...],"ambiguousPrefix":[...]}}`. Rows do not include the task prompt. `ambiguousPrefix` lists the matching task IDs when a partial ID matches more than one task; otherwise it is empty.
 
 ```bash
 cli.js list
@@ -35,4 +38,5 @@ cli.js next
 cli.js running
 cli.js history
 cli.js history task-abc
+cli.js history task-abc --json --limit 100
 ```

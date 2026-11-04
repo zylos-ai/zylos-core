@@ -19,9 +19,27 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 | `--reply-endpoint "<endpoint>"` | Update reply endpoint |
 | `--reply-session-group "<L>"` | Target group-local name; requires explicit `--reply-channel` |
 | `--clear-reply` | Clear reply configuration |
+| `--clear-session-group` | Route the task to Origin and keep the reply configuration; cannot be combined with `--reply-channel`, `--reply-endpoint` or `--reply-session-group` |
 | `--miss-threshold <seconds>` | Update miss threshold |
+| `--json` | Print a single-line result; see [JSON results](#json-results) |
 
 When the schedule is changed, the timezone column is automatically synced to the current configured TZ.
+
+## Re-enable a failed one-time task
+
+Give a failed one-time task a new time (`--in`, `--at`, `--cron` or `--every`) that is in the future. The task returns to `pending`, its failure details are cleared, and the daemon dispatches it at the new time. A time that is not in the future is rejected with `RESCHEDULE_NOT_FUTURE` and nothing is written. An update without a new time leaves the task `failed`.
+
+## Route a task to Origin
+
+`--clear-session-group` empties the saved execution group, so the next run goes to Origin. Replies still go to the saved reply target. To also stop replies, add `--clear-reply`.
+
+## JSON results
+
+With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[...],"reenabled":false}}`. Every failure prints `{"ok":false,"error":{"code":"...","message":"..."}}` and exits 1.
+
+Use `--json` whenever you need to know the outcome. Without it, some validation errors still exit 0, so the exit code alone does not prove the update was applied.
+
+Error codes: `INVALID_ARGS`, `TASK_NOT_FOUND`, `TASK_AMBIGUOUS` (`matches` lists the task IDs), `NO_UPDATES`, `RESCHEDULE_NOT_FUTURE`, `SESSION_GROUP_INVALID`, `DB_WRITE_FAILED`, `INTERNAL_ERROR`, and the timezone errors.
 
 ## Examples
 
@@ -43,6 +61,15 @@ cli.js update task-abc --clear-reply
 
 # Switch from cron to interval
 cli.js update task-abc --every "2 hours"
+
+# Re-enable a failed one-time task
+cli.js update task-abc --in "30 minutes" --json
+
+# Route to Origin and keep replies
+cli.js update task-abc --clear-session-group
+
+# Route to Origin and stop replies
+cli.js update task-abc --clear-session-group --clear-reply
 ```
 
 ## Saved execution group
