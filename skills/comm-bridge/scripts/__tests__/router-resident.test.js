@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { routerFixture } from './helpers/router-fixture.js';
 import { createSinglePreparation, createLegacyMigration, runningMaintenance } from '../router/resident.js';
 
 test('single preparation waits at most 300 seconds, then cleanup and instruction generation in order', async () => {
@@ -40,4 +41,60 @@ test('unknown legacy runtime never guesses adapter; failed stop remains pending'
     readLegacyStatus:async()=>({state:'busy'}),sendExit:async()=>assert.fail('busy'),getSessionAdapter:()=>({stop:async()=>{stopCount++;throw Error('unconfirmed');}}) });
   const entries=await migration.findLegacySessions(); now=300001; await migration.advanceLegacy(entries); assert.equal(stopCount,0);
   runtime='claude';await migration.advanceLegacy(entries); assert.equal(stopCount,1);assert.equal(entries[0].stopped,false);
+});
+
+
+for (const health of ['ok', 'auth_failed']) {
+  test(`single resident starts without queued work even when health is ${health}`, async t => {
+    const f = routerFixture(t, { mode: 'single' });
+    f.health.set('claude', { health });
+    f.deps.readRuntimeHealth = () => assert.fail('single resident startup does not read runtime health');
+    const router = f.create(); await router.initialize(); await f.rounds(2);
+    f.advance(4999); await f.rounds(2);
+    assert.equal(f.calls.filter(row => row[0] === 'launch').length, 0);
+    f.advance(1); await f.rounds(2);
+    assert.equal(f.calls.filter(row => row[0] === 'launch').length, 1);
+    assert.equal(f.calls.find(row => row[0] === 'launch')[1].sessionGroup, null);
+    assert.equal(f.calls.filter(row => row[0] === 'submit').length, 0);
+  });
+}
+
+test('failed Origin launches retain the five ten twenty forty sixty second backoff', async t => {
+  const f = routerFixture(t);
+  f.db.insertControl('Needed work', { sessionGroup: 'origin', appendAckSuffix: false });
+  f.deps.getSessionAdapter = () => ({
+    launch: async input => { f.calls.push(['launch', input]); throw new Error('launch failed'); },
+    stop: async input => { f.calls.push(['stop', input]); },
+  });
+  const router = f.create(); await router.initialize(); await f.rounds(2);
+  for (const [index, delay] of [5000, 10000, 20000, 40000, 60000].entries()) {
+    f.advance(delay - 1); await f.rounds(2);
+    assert.equal(f.calls.filter(row => row[0] === 'launch').length, index);
+    f.advance(1); await f.rounds(2);
+    assert.equal(f.calls.filter(row => row[0] === 'launch').length, index + 1);
+    assert.equal(router.state.resident.failures, index + 1);
+  }
+});
+
+test('a stable ready Origin clears failure backoff before an hour asleep and a fresh demand', async t => {
+  const f = routerFixture(t);
+  f.db.insertControl('Initial work', { sessionGroup: 'origin', appendAckSuffix: false });
+  const adapter = f.deps.getSessionAdapter;
+  let failuresLeft = 2;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    if (failuresLeft-- > 0) { f.calls.push(['launch', input]); throw new Error('launch failed'); }
+    return adapter(runtime).launch(input);
+  } });
+  const router = f.create(); await router.initialize(); await f.rounds(2);
+  for (const delay of [5000, 10000, 20000]) { f.advance(delay); await f.rounds(3); }
+  assert.equal(router.state.resident.failures, 3);
+  f.advance(60000); await f.rounds(2);
+  assert.equal(router.state.resident.failures, 0);
+  f.scene.delete('origin'); f.current.delete('origin'); await f.rounds(2);
+  const count = f.calls.filter(row => row[0] === 'launch').length;
+  f.advance(3600000); await f.rounds(3);
+  assert.equal(f.calls.filter(row => row[0] === 'launch').length, count);
+  f.db.insertControl('Fresh demand', { sessionGroup: 'origin', appendAckSuffix: false });
+  await f.rounds(1);
+  assert.equal(f.calls.filter(row => row[0] === 'launch').length, count + 1);
 });

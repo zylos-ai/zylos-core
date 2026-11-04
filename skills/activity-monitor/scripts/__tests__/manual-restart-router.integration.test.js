@@ -10,6 +10,10 @@ import { fixture, launch, manual, assertReply } from './fixtures/manual-restart-
 import { tmuxNameForGroup, groupRunDir } from '../../../../cli/lib/session-group-paths.js';
 const worker = fileURLToPath(new URL('./fixtures/manual-restart-router-worker.js', import.meta.url));
 async function m1(t, f, scenario) {
+  assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep));
+  assert.equal(path.dirname(f.socketPath), f.root);
+  assert.ok(process.env.PM2_HOME?.startsWith('/tmp/') || process.env.PM2_HOME?.startsWith('/private/tmp/'));
+  t.diagnostic(JSON.stringify({ HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, tmuxSocket: f.socketPath, database: path.join(f.root, 'comm-bridge/c4.db') }));
   const child = fork(worker, [f.root, f.socketPath, f.binary, f.mode, scenario], { env: { ...process.env, ...f.env }, silent: true });
   let sequence = 0, stderr = '', readyResolve, readyReject, barrierResolve;
   const pending = new Map(), barriers = [];
@@ -63,6 +67,9 @@ test('detects early supervisor removal of the manual fence', { timeout: 30000 },
   await assert.rejects(realInflight(t, 'multi', 'early-clear'), { code: 'ERR_ASSERTION', message: /real in-flight dispatcher must retain manual D8/ });
 });
 
+// Covers replacement failure after manual intent completes, including demanded multi Origin.
+// Run for resident demand/admission changes; skip for unrelated message routing. Requires
+// private HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private tmux -S/socket and DB; fixture cleans up.
 for (const mode of ['single', 'multi']) test(`${mode} real dispatcher replacement startup failure cannot restore completed manual intent or gate`, { timeout: 30000 }, async t => {
   const f = fixture(t, mode); let ordinary;
   if (mode === 'multi') {
@@ -74,6 +81,7 @@ for (const mode of ['single', 'multi']) test(`${mode} real dispatcher replacemen
   const m4 = launch(t, f); assert.equal((await m4.next()).ready, true); const router = await m1(t, f, 'launch-failure');
   const req = manual('restart-then-fail', { expectedRunId: 'run-1' }); assertReply(await f.submit(req), req, 'accepted');
   const stopped = await m4.command('tick'); assert.equal(stopped.scene.present, false); assert.deepEqual(stopped.requests, []); assert.deepEqual(stopped.fences, []);
+  if (mode === 'multi') f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','system','replacement work','pending','origin')").run();
   await until(async () => { await router.call('tick'); await router.call('drain'); return (await router.call('state')).resident.failures > 0; }, () => JSON.stringify(trace(f)));
   const attempts = trace(f).filter(row => row.kind === 'launch'); assert.ok(attempts.length > 0);
   assert.ok(attempts.every(row => row.input.sessionGroup === (mode === 'single' ? null : 'origin')));
