@@ -23,7 +23,7 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
     getOriginSyncBacklog: () => f.backlog,
     insertControl: (content, opts) => { f.controls.push({ content, ...opts }); return { id: f.controls.length }; },
     ...options.db };
-  f.deps = { db: f.db, observeGroup: () => f.scene, observe: () => [f.scene],
+  f.deps = { db: f.db, bindTarget: scene => ({ expectedRunId: scene.runId, tmuxTarget: { serverGeneration: 'private-server', sessionId: '$1', paneId: '%1' } }), observeGroup: () => f.scene, observe: () => [f.scene],
     requests: { read: () => [] }, diagnostic: e => f.events.push(e),
     readSyncMarker: args => { f.markerCalls.push(args); return f.marker; },
     prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',

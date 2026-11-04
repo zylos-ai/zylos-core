@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SupervisorLifecycle, evictionDemand } from '../supervisor-lifecycle.js';
+import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
+import { createDelivery } from '../../../comm-bridge/scripts/router/delivery.js';
 
 const scene = (sessionGroup = 'a', extra = {}) => ({ sessionGroup, present: true, ready: true,
   runId: `run-${sessionGroup}`, runtime: 'claude', sessionId: 'session-1', createdAt: 0,
@@ -691,4 +693,91 @@ test('LRU selects the oldest activity among multiple eligible idle groups regard
     assert.equal(f.fences.get('oldest').runId, 'run-oldest');
     assert.deepEqual(f.stops, []);
   }
+});
+
+
+test('rotation binds ordinary, Origin and single prompts to the observed run', async () => {
+  for (const [mode, group] of [['multi', 'a'], ['multi', 'origin'], ['single', null]]) {
+    const f = fixture();
+    f.context.configuration.mode = mode;
+    f.scenes = [scene(group, { usagePercent: 90 })];
+    await f.lifecycle.checkRotation(f.scenes[0], f.context);
+    assert.equal(f.controls.length, 1);
+    assert.equal(f.controls[0].sessionGroup, group);
+    assert.equal(f.controls[0].targetBinding.expectedRunId, f.scenes[0].runId);
+  }
+});
+
+test('rejected runtime bindings leave rotation and TTL retryable on the next round', async () => {
+  for (const method of ['checkRotation', 'checkTtl']) {
+    const f = fixture(), reported = [];
+    f.unsummarized = 2; f.scenes[0].usagePercent = 90;
+    f.deps.reportError = cause => reported.push(cause.code);
+    f.deps.bindTarget = () => { throw Object.assign(new Error('not ready'), { code: 'TARGET_NOT_READY' }); };
+    await f.lifecycle.each(f.scenes, s => f.lifecycle[method](s, f.context));
+    assert.equal(f.controls.length, 0);
+    assert.equal(f.lifecycle.rotationSent.size, 0);
+    assert.equal(f.lifecycle.ttlPreparation.size, 0);
+    assert.deepEqual(reported, []);
+    f.deps.bindTarget = s => ({ expectedRunId: s.runId });
+    await f.lifecycle.each(f.scenes, s => f.lifecycle[method](s, f.context));
+    assert.equal(f.controls.length, 1);
+    assert.equal(f.controls[0].targetBinding.expectedRunId, f.scenes[0].runId);
+  }
+});
+
+test('binding infrastructure errors reach the lifecycle error reporter without enqueueing', async () => {
+  for (const method of ['checkRotation', 'checkTtl']) {
+    const f = fixture(), reported = [];
+    f.unsummarized = 2; f.scenes[0].usagePercent = 90;
+    f.deps.reportError = cause => reported.push(cause.code);
+    f.deps.bindTarget = () => { throw Object.assign(new Error('tmux unavailable'), { code: 'TMUX_UNAVAILABLE' }); };
+    await f.lifecycle.each(f.scenes, s => f.lifecycle[method](s, f.context));
+    assert.equal(f.controls.length, 0);
+    assert.deepEqual(reported, ['TMUX_UNAVAILABLE']);
+    assert.equal(f.lifecycle.rotationSent.size, 0);
+    assert.equal(f.lifecycle.ttlPreparation.size, 0);
+  }
+});
+
+// Boundary: real lifecycle producer, C4 persistence and delivery identity guard;
+// tmux is stubbed. Run for rotation/TTL binding changes; unrelated machine tasks may skip.
+test('persisted lifecycle prompts reject replacement runs and never count as Origin demand', async t => {
+  for (const producer of ['ttl', 'rotation']) await t.test(producer, async t => {
+    const c4 = c4Fixture(t), f = fixture();
+    const group = producer === 'ttl' ? 'a' : 'origin';
+    f.scenes = [scene(group, { usagePercent: 90 })]; f.unsummarized = 2;
+    const tmuxTarget = { serverGeneration: '1:1', sessionId: '$1', paneId: '%1' };
+    f.deps.bindTarget = s => ({ expectedRunId: s.runId, tmuxTarget });
+    f.db.insertControl = (...args) => c4.store.insertControl(...args);
+    f.db.getControlById = id => c4.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
+    await f.lifecycle[producer === 'ttl' ? 'checkTtl' : 'checkRotation'](f.scenes[0], f.context);
+    const row = c4.db.prepare('SELECT * FROM control_queue').get();
+    assert.equal(JSON.parse(row.target_binding).expectedRunId, f.scenes[0].runId);
+    assert.equal(c4.store.getOriginNeed().controls.count, 0);
+    assert.equal(c4.store.claimControl(row.id), true);
+    let sends = 0;
+    const delivery = createDelivery({
+      db: c4.store, getSessionMode: () => 'multi',
+      openTmuxConnection: async () => ({ close() {} }),
+      resolveSessionTarget: async () => ({ ...tmuxTarget, ready: true, runtime: 'claude', runId: 'replacement' }),
+      getSessionAdapter: () => ({ sendText: () => { sends++; } }),
+    }, { periodicEnabled: false });
+    await delivery.deliverControl(row); await delivery.stop();
+    assert.equal(sends, 0);
+    const ended = f.db.getControlById(row.id);
+    assert.equal(ended.status, 'timeout'); assert.equal(ended.last_error, 'STALE_TARGET');
+    if (producer === 'ttl') {
+      f.scenes[0] = scene(group, { runId: 'replacement', createdAt: f.now });
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      assert.equal(f.lifecycle.ttlPreparation.size, 0);
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      assert.equal(c4.db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 1);
+      assert.equal(f.fences.size, 0);
+      f.now += 1_800_001;
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      assert.equal(c4.db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 2);
+      assert.equal(f.lifecycle.ttlPreparation.get(group).runId, 'replacement');
+    }
+  });
 });
