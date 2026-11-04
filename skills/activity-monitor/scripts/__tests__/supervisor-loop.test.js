@@ -145,7 +145,7 @@ test('every loop step exception reports its phase and schedules the next round',
  for(const [method,phase] of Object.entries({
   getModeTransition:'round',readConfiguration:'round',listDrainFences:'round',readRestartRequests:'restart-requests',
   observe:'round',checkManualFences:'manual-fences',advanceManual:'advanceManual',advanceRestarts:'advanceRestarts',
-  reconcileConfiguration:'reconcileConfiguration',observeExits:'round',probeAndPublish:'observe',advanceReclaim:'reclaim',
+  reconcileConfiguration:'reconcileConfiguration',observeExits:'round',probeAndPublish:'observe',updateCapacity:'capacity',advanceReclaim:'reclaim',
   checkRotation:'rotation',checkTtl:'ttl',checkEviction:'eviction',checkSync:'sync',writeMetricsAndMaintain:'round',afterRound:'after-round',
  })) await t.test(method,async()=>{
   const f=fixture({listDrainFences:async()=>[{sessionGroup:'origin'},{sessionGroup:'tg:one'}]});

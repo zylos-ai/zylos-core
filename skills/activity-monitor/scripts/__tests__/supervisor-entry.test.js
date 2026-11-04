@@ -9,7 +9,7 @@ import { once, EventEmitter } from 'node:events';
 import { main as monitorMain } from '../monitor.js';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { resolveSessionPoolSize } from '../../../../cli/lib/session-pool-config.js';
+import { resolveSessionPoolBaseline } from '../../../../cli/lib/session-pool-config.js';
 import { startSupervisor } from '../supervisor-main.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
@@ -163,7 +163,10 @@ test('C4 canonical PM2 wrapper invokes the monitor entry even when imported indi
  assert.equal(starts,1);
 });
 
-// : use the actual entry's missing module, without capacity injection.
+// Boundary: actual entry defers eviction when the Core reader is absent.
+// Run for reader loading or capacity fallback changes; skip unrelated lifecycle work.
+// Use isolated HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR via the Node runner,
+// a private am.sock, fixture scenes/database and no live tmux or network.
 test('missing reader logs once across six rounds and defers eviction without config-error spam',{timeout:15000},async t=>{
  const root=prepare(t),w=launch(t,root,{packageRoot:withoutPoolReader(root)});await w.next();
  w.child.send('rounds');const result=await w.next();
@@ -175,7 +178,10 @@ test('missing reader logs once across six rounds and defers eviction without con
  await stop(w);
 });
 
-// integration regression: actual entry loads the available Core reader.
+// Boundary: actual entry loads the Core baseline and publishes fixed capacity.
+// Run for Core reader exports or capacity wiring changes; skip unrelated lifecycle work.
+// Use isolated HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR via the Node runner,
+// a private am.sock, fixture scenes/database and no live tmux or network.
 test('present reader supplies real capacity without a missing-dependency notice',{timeout:15000},async t=>{
  const config={session_mode:'multi',runtime:'claude',session_pool_size:7};
  const root=prepare(t,config);
@@ -185,7 +191,7 @@ test('present reader supplies real capacity without a missing-dependency notice'
  w.child.send('rounds');const result=await w.next();
  const env={...process.env,HOME:root,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:repository};
  assert.equal(result.configuration.capacityUnavailable,false);
- assert.equal(result.configuration.capacity,resolveSessionPoolSize({env,config}));
+ assert.equal(result.configuration.capacity,resolveSessionPoolBaseline({env,config}).k);
  assert.equal(result.logs.filter(row=>row?.dependency==='Session pool configuration reader').length,0);
  await stop(w);
 });

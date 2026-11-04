@@ -121,6 +121,7 @@ export function createSupervisor(deps) {
     advanceTransition:()=>modeSwitch.advance(),
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},
     observeExits:current=>exits.advance(current),
+    updateCapacity:context=>deps.updateCapacity?.(context),
     afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),
     probeAndPublish:async(scene,context)=>{
       if(!scene.ready || scene.processRunning!==true || !scene.runId || !scene.sessionId)return;
@@ -144,7 +145,8 @@ export function createSupervisor(deps) {
       const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups,fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
       for(const runtime of demand.keys())observer.driveDemand(runtime);
       const metrics={ready:current.filter(s=>s.sessionGroup!=='origin' && s.ready).length,starting:current.filter(s=>s.sessionGroup!=='origin' && !s.ready).length,
-        reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length};
+        reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length,
+        k:configuration.capacity ?? null,kSource:configuration.capacitySource ?? null};
       if(JSON.stringify(metrics)!==lastMetrics) {
         try { appendEvent(poolMetricsPath(deps.env),{v:1,ts:now(),...metrics});lastMetrics=JSON.stringify(metrics); }
         catch(error) { reportError(error,{phase:'pool-metrics'}); }

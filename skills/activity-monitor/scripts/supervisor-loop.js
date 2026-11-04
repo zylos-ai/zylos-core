@@ -111,6 +111,8 @@ export class SupervisorLoop {
     // These workers may acquire lifecycle serialization for their own mutations.
     await d.observeExits?.(context.scenes);
     await this.each(context.scenes, scene => d.probeAndPublish(scene, context), 'observe');
+    try { await d.updateCapacity?.(context); }
+    catch (error) { await d.reportError(error, { phase: 'capacity' }); }
     await d.lifecycleSerial(async () => {
       // Automatic legacy migration can open a transition after the initial read.
       const transitionOpen = Boolean(transition || context.transition);

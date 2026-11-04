@@ -12,7 +12,7 @@ const hints = ['Check: pm2 logs worker-a', 'Check: pm2 logs worker-b'];
 const cleanup = [];
 afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 
-function runDoctor(args, { state = 'fail', network = 'up', alertTarget, sender = false } = {}) {
+function runDoctor(args, { state = 'fail', network = 'up', alertTarget, sender = false, sessionMode, capacity } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-')));
   cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
@@ -33,7 +33,11 @@ function runDoctor(args, { state = 'fail', network = 'up', alertTarget, sender =
   fs.mkdirSync(path.join(dirs.ZYLOS_DIR, '.zylos'));
   fs.mkdirSync(path.join(dirs.ZYLOS_DIR, '.claude', 'skills'), { recursive: true });
   fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'components.json'), '{}');
-  fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', ...(alertTarget === undefined ? {} : { alert_target: alertTarget }) }));
+  fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', ...(alertTarget === undefined ? {} : { alert_target: alertTarget }), ...(sessionMode ? { session_mode: sessionMode } : {}) }));
+  if (capacity !== undefined) {
+    fs.mkdirSync(path.join(dirs.ZYLOS_DIR, 'activity-monitor'), { recursive: true });
+    fs.writeFileSync(path.join(dirs.ZYLOS_DIR, 'activity-monitor', 'pool-capacity.json'), JSON.stringify(capacity));
+  }
   if (sender) {
     const directory = path.join(dirs.ZYLOS_DIR, '.claude', 'skills', 'telegram', 'scripts');
     fs.mkdirSync(directory, { recursive: true });
@@ -61,6 +65,37 @@ function runDoctor(args, { state = 'fail', network = 'up', alertTarget, sender =
   assert.ok(calls.filter(call => call.command === 'tmux').every(call =>
     call.socket === env.DOCTOR_TEST_TMUX_SOCKET));
   return { ...result, calls, probes, repairs, versions };
+}
+
+// Boundary: real doctor text uses the shared capacity reader, without adding a
+// failed check. Run for capacity notice or reader changes; skip unrelated repair
+// changes. runDoctor verifies private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR,
+// fake tmux socket and blocked network; no database or live services are used.
+for (const scenario of ['fresh floor', 'stale floor', 'future floor', 'missing', 'invalid', 'memory', 'single']) {
+  test(`capacity notice ${scenario} is informational`, () => {
+    const record = { v: 1, k: 1, reason: 'floor', source: 'auto', computedAt: Date.now() };
+    if (scenario === 'stale floor') record.computedAt -= 61000;
+    if (scenario === 'future floor') record.computedAt += 60000;
+    if (scenario === 'invalid') record.v = 2;
+    if (scenario === 'memory') record.reason = 'memory';
+    const options = { state: 'pass', sessionMode: scenario === 'single' ? 'single' : 'multi',
+      capacity: scenario === 'missing' ? undefined : record };
+    const text = runDoctor(['--check'], options);
+    assert.equal(text.status, 0, text.stderr);
+    const notice = 'Memory fits only the system assistant; running at most 1 conversation at a time';
+    const lines = text.stdout.split(/\r?\n/).map(line => line.trim());
+    assert.deepEqual(lines.filter(line => line.startsWith('Memory fits')), scenario === 'fresh floor' ? [notice] : []);
+    if (scenario === 'fresh floor') {
+      const line = lines.indexOf(notice);
+      assert.ok(lines[line - 1].startsWith('Alert target:'));
+    }
+    const json = runDoctor(['--check', '--json'], options);
+    assert.equal(json.status, 0, json.stderr);
+    const result = JSON.parse(json.stdout);
+    assert.equal(result.passed, true);
+    assert.equal(result.groups.services.passed, true);
+    assert.deepEqual(result.issues, []);
+  });
 }
 
 // Boundary: alert destination is informational in real doctor text/JSON flow.
