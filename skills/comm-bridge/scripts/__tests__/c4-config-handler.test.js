@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { fixture as storeFixture } from './c4-v2-test-helpers.js';
+import path from 'node:path';
+import { fixture as storeFixture, startHeldWriter } from './c4-v2-test-helpers.js';
 import { createConfigHandler, classifyConfigRunning, parseConfigArgs, listOverrides } from '../c4-config-handler.js';
 
 function fixture(t, overrides = {}) {
@@ -148,29 +149,30 @@ test('override list preserves all runtime/model pairs in binary order and matche
   const { store, db, filename } = storeFixture(t, {
     readConfig: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
   }, true);
-  for (const groupName of ['b', 'A', 'empty']) store.insertConversation('in', 'chat', 'e', 'hello', { groupName });
-  store.setSessionRuntimeConfig({ sessionGroup: 'chat:b', runtime: 'claude' });
-  store.setSessionRuntimeConfig({ sessionGroup: 'chat:A', runtime: 'codex' });
+  for (const groupName of ['a', 'B', 'empty']) store.insertConversation('in', 'chat', 'e', 'hello', { groupName });
+  store.setSessionRuntimeConfig({ sessionGroup: 'chat:a', runtime: 'claude' });
+  store.setSessionRuntimeConfig({ sessionGroup: 'chat:B', runtime: 'codex' });
   for (const [sessionGroup, runtime, model, effort] of [
-    ['chat:b', 'codex', 'codex-b', 'high'], ['chat:b', 'claude', 'claude-b', 'low'], ['chat:A', 'codex', 'codex-a', 'medium'],
+    ['chat:a', 'codex', 'codex-a', 'high'], ['chat:a', 'claude', 'claude-a', 'low'], ['chat:B', 'codex', 'codex-B', 'medium'],
   ]) store.setSessionModelConfig({ sessionGroup, runtime, model, effort });
   db.pragma('wal_checkpoint(TRUNCATE)');
-  const before = fs.readFileSync(filename);
+  const dbBytes = () => Buffer.concat([fs.readFileSync(filename), fs.readFileSync(`${filename}-wal`)]);
+  const before = dbBytes();
   const observer = new db.constructor(filename);
   t.after(() => observer.close());
   const version = observer.pragma('data_version', { simple: true });
   const data = listOverrides({ store });
   assert.deepEqual(data, {
     baseline: { runtime: 'codex', sessionMode: 'multi' },
-    runtime: [{ sessionGroup: 'chat:A', runtime: 'codex' }, { sessionGroup: 'chat:b', runtime: 'claude' }],
+    runtime: [{ sessionGroup: 'chat:B', runtime: 'codex' }, { sessionGroup: 'chat:a', runtime: 'claude' }],
     model: [
-      { sessionGroup: 'chat:A', runtime: 'codex', model: 'codex-a', effort: 'medium' },
-      { sessionGroup: 'chat:b', runtime: 'claude', model: 'claude-b', effort: 'low' },
-      { sessionGroup: 'chat:b', runtime: 'codex', model: 'codex-b', effort: 'high' },
+      { sessionGroup: 'chat:B', runtime: 'codex', model: 'codex-B', effort: 'medium' },
+      { sessionGroup: 'chat:a', runtime: 'claude', model: 'claude-a', effort: 'low' },
+      { sessionGroup: 'chat:a', runtime: 'codex', model: 'codex-a', effort: 'high' },
     ],
   });
   const handler = createConfigHandler({ store, readSessionMode: () => 'multi', observeRunning: () => ({ hasProcess: false }) });
-  for (const sessionGroup of ['chat:A', 'chat:b', 'chat:empty']) {
+  for (const sessionGroup of ['chat:B', 'chat:a', 'chat:empty']) {
     const runtime = data.runtime.find(row => row.sessionGroup === sessionGroup)?.runtime ?? data.baseline.runtime;
     const result = await handler('runtime', { action: 'get', sessionGroup });
     assert.equal(result.data.resolved.runtime, runtime);
@@ -181,7 +183,35 @@ test('override list preserves all runtime/model pairs in binary order and matche
     }
   }
   assert.equal(observer.pragma('data_version', { simple: true }), version);
-  assert.deepEqual(fs.readFileSync(filename), before);
+  assert.ok(dbBytes().equals(before), 'database or WAL bytes changed');
+});
+
+// Isolated private DB/HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR only; no live resources.
+// Covers snapshot reads under a writer; run for override/read-transaction changes, skip unrelated UI.
+test('override snapshot reads committed rows while another writer holds its transaction', { timeout: 10000 }, async t => {
+  const { store, db, filename } = storeFixture(t, {}, true);
+  const paths = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR'].map(key => [key, process.env[key]]));
+  assert.ok(filename.startsWith(paths.TMPDIR + path.sep));
+  assert.ok(paths.PM2_HOME.startsWith(paths.HOME + path.sep));
+  console.log(JSON.stringify({ overridesWriter: filename, ...paths }));
+  db.pragma('busy_timeout=100');
+  const writer = startHeldWriter(filename,
+    "INSERT INTO group_model_overrides(session_group,runtime,model,effort) VALUES ('chat:pending','codex','held-model','high')");
+  const timer = setTimeout(() => writer.child.kill('SIGKILL'), 5000);
+  try {
+    const [state] = await writer.held;
+    assert.equal(state.journal, 'wal'); assert.equal(state.inTransaction, true);
+    assert.deepEqual(listOverrides({ store }).model, []);
+    writer.child.send('commit');
+    const [code, signal] = await writer.exited;
+    assert.equal(code, 0, writer.stderr()); assert.equal(signal, null);
+    assert.deepEqual(listOverrides({ store }).model,
+      [{ sessionGroup: 'chat:pending', runtime: 'codex', model: 'held-model', effort: 'high' }]);
+  } finally {
+    clearTimeout(timer);
+    if (writer.child.exitCode === null && writer.child.signalCode === null) writer.child.kill('SIGKILL');
+    await writer.exited;
+  }
 });
 
 test('empty override lists keep baseline defaults and reject unreadable configuration', t => {

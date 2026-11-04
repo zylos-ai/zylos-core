@@ -2,10 +2,13 @@ export async function groupCommand(args, { run, io = process } = {}) {
   const [kind, ...flags] = args;
   if (kind === 'overrides') {
     const json = flags.includes('--json');
+    if (flags.some(flag => flag !== '--json') || flags.length > 1) {
+      const result = { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Usage: zylos group overrides [--json]', persisted: [] } };
+      (json ? io.stdout : io.stderr).write(json ? `${JSON.stringify(result)}\n` : `Error [${result.error.code}]: ${result.error.message}\n`);
+      process.exitCode = 1;
+      return 1;
+    }
     try {
-      if (flags.some(flag => flag !== '--json') || flags.length > 1) {
-        throw Object.assign(new Error('Usage: zylos group overrides [--json]'), { code: 'INVALID_ARGUMENT' });
-      }
       const { listOverrides } = await import('../../skills/comm-bridge/scripts/c4-config-handler.js');
       const store = await import('../../skills/comm-bridge/scripts/c4-db.js');
       const data = listOverrides({ store });

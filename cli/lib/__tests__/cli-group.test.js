@@ -64,18 +64,27 @@ function overridesFixture(t) {
   const config = path.join(zylos, '.zylos/config.json');
   fs.writeFileSync(config, JSON.stringify({ runtime: 'codex', session_mode: 'single' }));
   const database = path.join(zylos, 'comm-bridge/c4.db');
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'bin'), calls = path.join(root, 'runtime-calls');
+  fs.mkdirSync(bin);
+  for (const command of ['tmux', 'pm2']) fs.writeFileSync(path.join(bin, command),
+    '#!/bin/sh\nprintf "%s\\n" "$0" >> "$OVERRIDES_RUNTIME_CALLS"\nexit 1\n', { mode: 0o755 });
+  t.after(() => {
+    try { assert.equal(fs.existsSync(calls), false, 'must not invoke tmux or PM2'); }
+    finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
   const { store, db } = storeFixture(t, {}, database);
   db.pragma('journal_mode=WAL');
-  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2, TMPDIR: tmp, TMUX_TMPDIR: tmp };
+  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2, TMPDIR: tmp, TMUX_TMPDIR: tmp,
+    PATH: `${bin}${path.delimiter}${process.env.PATH}`, OVERRIDES_RUNTIME_CALLS: calls };
   for (const name of ['TMUX', 'ZYLOS_SESSION_GROUP', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID']) delete env[name];
   // Covers real CLI/import/DB output; run for override/store/CLI changes, skip for unrelated UI changes.
-  // No tmux or PM2 calls: list never observes a runtime, and per-group get uses single mode.
+  // Isolated environments only; never touch live resources: private HOME/ZYLOS_DIR/PM2_HOME,
+  // short TMPDIR/TMUX_TMPDIR and database; recording tmux/PM2 stubs reject runtime calls.
   for (const target of [env.HOME, env.ZYLOS_DIR, env.PM2_HOME, env.TMPDIR, database]) assert.ok(target.startsWith(root + path.sep));
   console.log(JSON.stringify({ overridesFixture: root, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2, TMPDIR: tmp, database }));
-  const run = args => spawnSync(process.execPath, [new URL('../../zylos.js', import.meta.url).pathname, 'group', ...args], { env, encoding: 'utf8', timeout: 15000 });
-  const json = args => {
-    const result = run([...args, '--json']);
+  const run = (args, extraEnv = {}) => spawnSync(process.execPath, [new URL('../../zylos.js', import.meta.url).pathname, 'group', ...args], { env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 15000 });
+  const json = (args, extraEnv) => {
+    const result = run([...args, '--json'], extraEnv);
     assert.equal(result.stdout.trim().split('\n').length, 1, result.stdout);
     return { ...result, value: JSON.parse(result.stdout) };
   };
@@ -84,13 +93,14 @@ function overridesFixture(t) {
 
 test('real group overrides CLI lists stored pairs, agrees with get and reads without writes', t => {
   const f = overridesFixture(t);
-  for (const groupName of ['b', 'A', 'empty']) f.store.insertConversation('in', 'chat', 'e', 'hello', { groupName });
-  for (const [sessionGroup, runtime] of [['chat:b', 'claude'], ['chat:A', 'codex']]) f.store.setSessionRuntimeConfig({ sessionGroup, runtime });
+  for (const groupName of ['a', 'B', 'empty']) f.store.insertConversation('in', 'chat', 'e', 'hello', { groupName });
+  for (const [sessionGroup, runtime] of [['chat:a', 'claude'], ['chat:B', 'codex']]) f.store.setSessionRuntimeConfig({ sessionGroup, runtime });
   for (const [sessionGroup, runtime, model, effort] of [
-    ['chat:b', 'codex', 'codex-b', 'high'], ['chat:b', 'claude', 'claude-b', 'low'], ['chat:A', 'codex', 'codex-a', 'medium'],
+    ['chat:a', 'codex', 'codex-a', 'high'], ['chat:a', 'claude', 'claude-a', 'low'], ['chat:B', 'codex', 'codex-B', 'medium'],
   ]) f.store.setSessionModelConfig({ sessionGroup, runtime, model, effort });
   f.db.pragma('wal_checkpoint(TRUNCATE)');
-  const before = fs.readFileSync(f.database);
+  const dbBytes = () => Buffer.concat([fs.readFileSync(f.database), fs.readFileSync(`${f.database}-wal`)]);
+  const before = dbBytes();
   const observer = new f.db.constructor(f.database);
   t.after(() => observer.close());
   const version = observer.pragma('data_version', { simple: true });
@@ -98,18 +108,18 @@ test('real group overrides CLI lists stored pairs, agrees with get and reads wit
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
   assert.deepEqual(result.value, { ok: true, data: {
     baseline: { runtime: 'codex', sessionMode: 'single' },
-    runtime: [{ sessionGroup: 'chat:A', runtime: 'codex' }, { sessionGroup: 'chat:b', runtime: 'claude' }],
+    runtime: [{ sessionGroup: 'chat:B', runtime: 'codex' }, { sessionGroup: 'chat:a', runtime: 'claude' }],
     model: [
-      { sessionGroup: 'chat:A', runtime: 'codex', model: 'codex-a', effort: 'medium' },
-      { sessionGroup: 'chat:b', runtime: 'claude', model: 'claude-b', effort: 'low' },
-      { sessionGroup: 'chat:b', runtime: 'codex', model: 'codex-b', effort: 'high' },
+      { sessionGroup: 'chat:B', runtime: 'codex', model: 'codex-B', effort: 'medium' },
+      { sessionGroup: 'chat:a', runtime: 'claude', model: 'claude-a', effort: 'low' },
+      { sessionGroup: 'chat:a', runtime: 'codex', model: 'codex-a', effort: 'high' },
     ],
   } });
   assert.equal('running' in result.value.data, false);
   const text = f.run(['overrides']);
   assert.equal(text.status, 0, text.stderr); assert.equal(text.stderr, '');
   assert.equal(text.stdout, `OK: ${JSON.stringify(result.value.data)}\n`);
-  for (const sessionGroup of ['chat:A', 'chat:b', 'chat:empty']) {
+  for (const sessionGroup of ['chat:B', 'chat:a', 'chat:empty']) {
     const runtime = f.json(['runtime', 'get', '--group', sessionGroup]);
     assert.equal(runtime.status, 0, runtime.stderr);
     const row = result.value.data.runtime.find(row => row.sessionGroup === sessionGroup);
@@ -123,7 +133,7 @@ test('real group overrides CLI lists stored pairs, agrees with get and reads wit
     }
   }
   assert.equal(observer.pragma('data_version', { simple: true }), version);
-  assert.deepEqual(fs.readFileSync(f.database), before);
+  assert.ok(dbBytes().equals(before), 'database or WAL bytes changed');
 });
 
 test('real override CLI handles empty stores, invalid arguments and unreadable config/database', t => {
@@ -135,14 +145,25 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
     const result = f.json(['overrides', ...flags]);
     assert.equal(result.status, 1); assert.equal(result.value.ok, false);
     assert.equal(result.value.error.code, 'INVALID_ARGUMENT'); assert.equal('data' in result.value, false);
+    assert.deepEqual(result.value.error.persisted, []);
+  }
+  for (const flags of [['--bogus'], ['extra'], ['--group', 'x']]) {
+    const result = f.run(['overrides', ...flags]);
+    assert.equal(result.status, 1); assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^Error \[INVALID_ARGUMENT\]:/);
   }
   const old = f.json(['foo']);
   assert.equal(old.status, 1);
   assert.deepEqual(old.value, { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--json]', persisted: [] } });
+  const internal = f.json(['overrides'], { ZYLOS_PACKAGE_ROOT: path.join(f.root, 'missing-package') });
+  assert.equal(internal.status, 1); assert.equal(internal.value.ok, false);
+  assert.equal(internal.value.error.code, 'INTERNAL_ERROR');
+  assert.deepEqual(Object.keys(internal.value.error).sort(), ['code', 'message']);
   fs.writeFileSync(f.config, '{bad JSON');
   const badConfig = f.json(['overrides']);
   assert.equal(badConfig.status, 1); assert.equal(badConfig.value.ok, false);
   assert.equal(badConfig.value.error.code, 'CONFIG_UNREADABLE'); assert.equal('data' in badConfig.value, false);
+  assert.deepEqual(Object.keys(badConfig.value.error).sort(), ['code', 'message']);
   const text = f.run(['overrides']);
   assert.equal(text.status, 1); assert.equal(text.stdout, ''); assert.match(text.stderr, /^Error \[CONFIG_UNREADABLE\]:/);
   fs.writeFileSync(f.config, JSON.stringify({ runtime: 'codex', session_mode: 'single' }));
