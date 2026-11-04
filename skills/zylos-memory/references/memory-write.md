@@ -7,8 +7,10 @@ without racing a Memory Sync that has already read it:
 node scripts/memory-write.js --path reference/preferences.md --sha256 EXPECTED_SHA256 < new-content
 ```
 
-Paths are relative to `memory/`. Absolute paths, `.`/`..` components, symlinks,
-non-files and missing files are rejected. The expected lowercase hex SHA-256
+Paths are relative to `memory/`. The memory root is resolved with realpath and
+must name a directory; the root itself may be a symlink. Absolute paths,
+`.`/`..` components, symlinks below the resolved root, non-files and missing files
+are rejected. The expected lowercase hex SHA-256
 digest is computed over the original raw bytes. Stdin supplies the new bytes;
 callers retain responsibility for any text-type or size policy.
 

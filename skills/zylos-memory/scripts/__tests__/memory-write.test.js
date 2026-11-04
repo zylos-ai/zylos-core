@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { writeMemory } from '../memory-write.js';
+import { MemoryBrowser } from '../../../dashboard/src/lib/memory-browser.js';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const liveRun = async () => 'live-run';
@@ -94,11 +95,27 @@ test('invalid paths and non-files are rejected before any runtime observation', 
   assert.equal(fs.existsSync(path.join(f.env.ZYLOS_DIR, 'activity-monitor')), false);
 });
 
-test('a symlinked memory root is refused', async t => {
+test('a symlinked memory root saves through its resolved directory', async t => {
   const f = fixture(t);
   const renamed = path.join(f.root, 'renamed-memory');
   fs.renameSync(f.memory, renamed);
   fs.symlinkSync(renamed, f.memory);
+  const browser = new MemoryBrowser({ zylosDir: f.env.ZYLOS_DIR });
+  assert.equal((await browser.resolvePath('identity.md', { requireFile: true })).real, path.join(renamed, 'identity.md'));
+  assert.equal((await browser.file('identity.md')).sha256, f.settings.sha256);
+  const result = await writeMemory(f.settings, { currentRunId: liveRun });
+  assert.equal(result.sha256, digest('updated\n'));
+  assert.equal(fs.readFileSync(path.join(renamed, 'identity.md'), 'utf8'), 'updated\n');
+  assert.equal(fs.lstatSync(f.memory).isSymbolicLink(), true);
+  assert.equal(fs.statSync(path.join(renamed, 'identity.md')).mode & 0o777, 0o640);
+  assert.equal((await browser.file('identity.md')).sha256, result.sha256);
+});
+
+test('a memory root that is not a directory is refused', async t => {
+  const f = fixture(t);
+  fs.unlinkSync(f.file);
+  fs.rmdirSync(f.memory);
+  fs.writeFileSync(f.memory, 'not a directory');
   await assert.rejects(writeMemory(f.settings), { code: 'INVALID_MEMORY_PATH' });
 });
 

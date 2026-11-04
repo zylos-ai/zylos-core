@@ -8,7 +8,7 @@ import { withMemoryLock, readCurrentRunId, readSyncMarker } from './sync-lock.js
 import { memoryError, options, exitCode, isMain } from './sync-cli.js';
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-const invalidPath = () => memoryError('INVALID_MEMORY_PATH', 'Expected an existing regular file under memory without symlinks');
+const invalidPath = () => memoryError('INVALID_MEMORY_PATH', 'Expected an existing regular file without symlinks below the resolved memory directory');
 
 function relativePath(value) {
   if (typeof value !== 'string' || value.includes('\0') || value.includes('\\')) throw invalidPath();
@@ -20,10 +20,8 @@ function relativePath(value) {
 
 function resolveFile(root, rel, io) {
   try {
-    const memory = path.join(root, 'memory');
-    const rootStat = io.lstatSync(memory);
-    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw invalidPath();
-    const realRoot = io.realpathSync(memory);
+    const realRoot = io.realpathSync(path.join(root, 'memory'));
+    if (!io.lstatSync(realRoot).isDirectory()) throw invalidPath();
     let candidate = realRoot;
     for (const part of rel.split('/')) {
       candidate = path.join(candidate, part);
