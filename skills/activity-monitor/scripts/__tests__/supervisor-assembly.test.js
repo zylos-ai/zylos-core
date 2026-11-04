@@ -337,3 +337,44 @@ test('configuration recovery during an open transition resets automatic-skip ded
   await supervisor.loop.tick(); await supervisor.loop.tick();
   assert.deepEqual(events().map(row => [row.session_group, row.reason]), [['*', 'EIO'], ['*', 'EIO']]);
 });
+
+// Real assembly boundary: run for supervisor reconciliation or lifecycle wiring
+// changes. Private current-session files and injected scene I/O avoid live runtimes.
+test('assembled round records an absent persisted run exactly once', async t => {
+ const {supervisor,db,root,calls}=fixture(t);
+ const group='telegram:assembled',runId='persisted-run';
+ const directory=path.join(root,'activity-monitor','session-groups',group);
+ fs.mkdirSync(directory,{recursive:true});
+ fs.writeFileSync(path.join(directory,'current-session.json'),JSON.stringify({runId,ts:Date.now()-1000}));
+ const records=[];
+ db.recordRunEnd=(sessionGroup,options)=>{records.push({sessionGroup,...options});return {recorded:true};};
+ await supervisor.loop.start();
+ assert.deepEqual(records,[{sessionGroup:group,runId,reason:'unexpected'}]);
+ assert.equal(calls.some(row=>row.phase==='run-ending-reconciliation' || row.phase==='round'),false);
+});
+
+test('assembled round clears an upgrade fence without recording a replacement run', async t => {
+ const {supervisor,db,root,scenes,calls}=fixture(t);
+ const group='telegram:replacement',runId='replacement-run';
+ const directory=path.join(root,'activity-monitor','session-groups',group);
+ fs.mkdirSync(directory,{recursive:true});
+ fs.writeFileSync(path.join(directory,'current-session.json'),JSON.stringify({runId,ts:Date.now()-1000}));
+ let fence={sessionGroup:group,reason:'upgrade',runId:'old-run'};
+ const records=[],cleared=[];
+ // Keep the replacement in startup: it has an authoritative new identity while
+ // unrelated ready-only health/status and idle checks remain outside this case.
+ const replacement={sessionGroup:group,runId,runtime:'claude',runDir:directory,present:true,ready:false,processRunning:true};
+ scenes.observe=async()=>[replacement];
+ scenes.observeGroup=async()=>replacement;
+ db.listDrainFences=()=>fence?[fence]:[];
+ supervisor.loop.deps.listDrainFences=db.listDrainFences;
+ db.getDrainFence=sessionGroup=>sessionGroup===group?fence:null;
+ db.clearDrainFence=(sessionGroup,expected)=>{cleared.push({sessionGroup,...expected});fence=null;};
+ db.recordRunEnd=(sessionGroup,options)=>{records.push({sessionGroup,...options});return {recorded:true};};
+ db.countRunningConversations=()=>0;
+ db.countNonTerminalControls=()=>({running:0});
+ await supervisor.loop.start();
+ assert.deepEqual(cleared,[{sessionGroup:group,expectedReason:'upgrade',expectedRunId:'old-run'}]);
+ assert.equal(fence,null);assert.equal(records.length,0);
+ assert.equal(calls.some(row=>['reclaim','run-ending-reconciliation','round'].includes(row.phase)),false);
+});

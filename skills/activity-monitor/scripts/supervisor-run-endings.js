@@ -52,54 +52,59 @@ export class SupervisorRunEndings {
   reset(group) { this.shortRuns.delete(group); }
 
   async advance(context) {
-    if (context.configuration.mode !== 'multi' || context.transition || context.fences.some(row => row.sessionGroup === '*')) return;
-    let records, lastDone, entries, fences;
+    const failuresThisRound = new Set();
     try {
-      if (await this.db.getModeTransition()) return;
-      fences = await this.db.listDrainFences();
-      if (fences.some(row => row.sessionGroup === '*')) return;
-      records = new Map((await this.db.listRunEndings()).map(row => [row.sessionGroup, row]));
-      lastDone = await this.db.getLastCompletedModeTransition();
-      this.failures.delete('read');
-    } catch (cause) {
-      for (const key of this.failures.keys()) if (key.startsWith('write:')) this.failures.delete(key);
-      this.failure('read', cause); return;
-    }
-    try { entries = await this.readdir(sessionGroupRunRoot(this.env), { withFileTypes: true }); }
-    catch (cause) {
-      if (cause.code !== 'ENOENT') this.failure('directories', cause);
-      for (const key of this.failures.keys()) if (key.startsWith('write:')) this.failures.delete(key);
-      return;
-    }
-    this.failures.delete('directories');
-    const groups = new Set(entries.filter(entry => entry.isDirectory()).map(entry => entry.name));
-    for (const key of this.failures.keys()) if (key.startsWith('write:') && !groups.has(key.slice(6))) this.failures.delete(key);
-    const multiSince = lastDone?.target_mode === 'multi' ? lastDone.updated_at * 1000 : null;
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const group = entry.name;
-      try { assertSessionGroup(group); } catch { continue; }
-      if (records.get(group)?.reason !== 'unexpected') this.reset(group);
-      const scene = context.scenes.find(row => row.sessionGroup === group);
-      if (!this.isObservable(group) || scene?.observationError || (scene !== undefined && scene.present !== false) || fences.some(row => row.sessionGroup === group)) { this.failures.delete(`write:${group}`); continue; }
-      const current = await this.currentSession(group);
-      if (!current || multiSince !== null && current.ts < multiSince || records.get(group)?.runId === current.runId) { this.failures.delete(`write:${group}`); continue; }
-      let fresh;
-      try { fresh = await this.readIdentity(group); }
-      catch { this.failures.delete(`write:${group}`); continue; }
-      if (!fresh || fresh.observationError || fresh.present !== false) { this.failures.delete(`write:${group}`); continue; }
+      if (context.configuration.mode !== 'multi') return;
+      let records, lastDone, entries, fences;
       try {
-        const result = await this.db.recordRunEnd(group, { runId: current.runId, reason: 'unexpected' });
-        this.failures.delete(`write:${group}`);
-        if (!result.recorded) continue;
-        const duration = Math.floor(this.now() / 1000) * 1000 - current.ts;
-        if (duration >= 600000) this.reset(group);
-        else {
-          const count = (this.shortRuns.get(group) ?? 0) + 1;
-          this.shortRuns.set(group, count);
-          if (count >= 5) this.notify(`short:${group}`, { event: 'repeated_unexpected_run_end', session_group: group, reason: 'five_short_runs' });
+        if (await this.db.getModeTransition()) return;
+        fences = await this.db.listDrainFences();
+        if (fences.some(row => row.sessionGroup === '*')) return;
+        records = new Map((await this.db.listRunEndings()).map(row => [row.sessionGroup, row]));
+        lastDone = await this.db.getLastCompletedModeTransition();
+      } catch (cause) {
+        failuresThisRound.add('read');
+        this.failure('read', cause); return;
+      }
+      try { entries = await this.readdir(sessionGroupRunRoot(this.env), { withFileTypes: true }); }
+      catch (cause) {
+        if (cause.code !== 'ENOENT') {
+          failuresThisRound.add('directories');
+          this.failure('directories', cause);
         }
-      } catch (cause) { this.failure(`write:${group}`, cause, group); }
+        return;
+      }
+      const multiSince = lastDone?.target_mode === 'multi' ? lastDone.updated_at * 1000 : null;
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const group = entry.name;
+        try { assertSessionGroup(group); } catch { continue; }
+        if (records.get(group)?.reason !== 'unexpected') this.reset(group);
+        const scene = context.scenes.find(row => row.sessionGroup === group);
+        if (!this.isObservable(group) || (scene !== undefined && scene.present !== false) || fences.some(row => row.sessionGroup === group)) continue;
+        const current = await this.currentSession(group);
+        if (!current || multiSince !== null && current.ts < multiSince || records.get(group)?.runId === current.runId) continue;
+        let fresh;
+        try { fresh = await this.readIdentity(group); }
+        catch { continue; }
+        if (!fresh || fresh.present !== false) continue;
+        try {
+          const result = await this.db.recordRunEnd(group, { runId: current.runId, reason: 'unexpected' });
+          if (!result.recorded) continue;
+          const duration = Math.floor(this.now() / 1000) * 1000 - current.ts;
+          if (duration >= 600000) this.reset(group);
+          else {
+            const count = (this.shortRuns.get(group) ?? 0) + 1;
+            this.shortRuns.set(group, count);
+            if (count >= 5) this.notify(`short:${group}`, { event: 'repeated_unexpected_run_end', session_group: group, reason: 'five_short_runs' });
+          }
+        } catch (cause) {
+          failuresThisRound.add(`write:${group}`);
+          this.failure(`write:${group}`, cause, group);
+        }
+      }
+    } finally {
+      for (const key of this.failures.keys()) if (!failuresThisRound.has(key)) this.failures.delete(key);
     }
   }
 }

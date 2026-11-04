@@ -37,6 +37,7 @@ if (variant === 'clear-manual') {
 const db = { ...store, getDb: () => database,
   setDrainFence(...args) { const result = store.setDrainFence(...args); barrier('after-fence'); return result; },
   clearDrainFence(...args) { const result = store.clearDrainFence(...args); barrier('after-clear'); return result; },
+  recordRunEnd(...args) { const result = store.recordRunEnd(...args); barrier('after-clear'); return result; },
 };
 if (variant === 'early-clear') { db.countRunningConversations = () => 0; db.countGlobalRunningConversations = () => 0; }
 if (variant === 'retarget') {

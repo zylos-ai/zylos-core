@@ -205,8 +205,8 @@ test('a faster continuation preflight cannot overtake an eligible inbound candid
   f.deps.readLiveIdentity = async group => { if (group === 'c') await hold.promise; return read(group); };
   f.health.set('claude', { health: 'ok' }); f.advance(5000);
   f.router.tick(); await flush(); await flush();
-  assert.equal(calls(f, 'launch').length, 0);
-  hold.resolve(); await f.router.idle(); await f.rounds(5);
+  try { assert.equal(calls(f, 'launch').length, 0); } finally { hold.resolve(); }
+  await f.router.idle(); await f.rounds(5);
   assert.deepEqual(calls(f, 'launch').map(row => row[1].sessionGroup), ['c']);
   assert.equal(f.row(message.id).status, 'delivered');
 });
@@ -243,4 +243,56 @@ test('continuation ready timeout releases confirmed absent launch and keeps its 
   assert.equal(f.db.getControlById(id).status, 'pending');
   assert.equal(calls(f, 'stop').length, 1);
   assert.ok(f.events.some(event => event.event === 'activate_timeout' && event.session_group === 'a'));
+});
+
+
+test('transient observation failure after continuation launch does not stop the new run', async t => {
+  const f = routerFixture(t); f.put('origin'); const id = continuation(f);
+  const read = f.deps.readLiveIdentity;
+  const adapter = f.deps.getSessionAdapter;
+  let failNextRead = false;
+  let failures = 0;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    f.calls.push(['launch', input]);
+    f.put(input.sessionGroup, { runId: input.runId, ready: false });
+    failNextRead = true;
+  } });
+  f.deps.readLiveIdentity = async group => {
+    if (group === 'a' && failNextRead) {
+      failNextRead = false; failures++;
+      throw Object.assign(Error('temporary tmux read failure'), { code: 'TMUX_UNAVAILABLE' });
+    }
+    return read(group);
+  };
+  await initialize(f); await readyToStart(f);
+  assert.equal(failures, 1);
+  assert.equal(calls(f, 'launch').length, 1);
+  assert.equal(calls(f, 'stop').length, 0);
+  assert.equal(f.router.state.activations.size, 1);
+  assert.equal(f.db.getControlById(id).status, 'pending');
+  const runId = f.scene.get('a').runId;
+  f.put('a', { runId, ready: true }); await f.rounds(4);
+  assert.equal(calls(f, 'stop').length, 0);
+  assert.equal(f.db.getControlById(id).status, 'done');
+  assert.equal(calls(f, 'control').filter(row => row[1] === id).length, 1);
+});
+
+test('origin restarts with pending continuation and delivers startup prompt first', async t => {
+  const f = routerFixture(t);
+  const id = continuation(f, 'origin');
+  const adapter = f.deps.getSessionAdapter;
+  let prompt;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    f.calls.push(['launch', input]);
+    f.put(input.sessionGroup, { runId: input.runId });
+    prompt = f.db.insertControl('origin startup prompt', { sessionGroup: 'origin', priority: 2, appendAckSuffix: false });
+    f.current.get('origin').startupControlIds = [prompt.id];
+  } });
+  await initialize(f); await readyToStart(f);
+  assert.equal(calls(f, 'launch').length, 1);
+  assert.equal(calls(f, 'launch')[0][1].sessionGroup, 'origin');
+  assert.deepEqual(calls(f, 'control').map(row => row[1]), [prompt.id, id]);
+  assert.equal(f.db.getControlById(id).status, 'done');
+  assert.equal(calls(f, 'conversation').length, 0);
+  assert.equal(calls(f, 'submit').length, 0);
 });

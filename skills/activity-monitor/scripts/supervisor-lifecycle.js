@@ -194,7 +194,6 @@ export class SupervisorLifecycle {
       await this.d.db.recordRunEnd(fence.sessionGroup, { runId: fence.runId, reason: fence.reason,
         clearFence: fence.reason === 'manual_restart' ? { expectedReason: fence.reason, expectedRunId: fence.runId } : true });
       this.runEndFailures.delete(key);
-      this.d.onRunEnd?.(fence.sessionGroup);
       context.fences = context.fences.filter(item => item.sessionGroup !== fence.sessionGroup);
     } catch (cause) {
       if (cause.code === 'FENCE_MISMATCH') { this.runEndFailures.delete(key); throw cause; }
