@@ -75,6 +75,10 @@ thread editing does not share Sync's lock, so do not claim all writers are
 mutually protected. Cross-group requests are sent through the normal internal
 channel; do not write another group's files.
 
+External file editors can use the [locked memory writer](references/memory-write.md)
+to save an existing file with a content hash and refuse an active Sync. This
+does not replace the restricted Sync tool or authorize additional Sync writes.
+
 ## Content and formats
 
 Keep only current focus, active work, pending items, and commitments in state.
