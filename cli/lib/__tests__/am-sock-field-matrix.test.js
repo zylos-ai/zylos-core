@@ -16,7 +16,7 @@ const good = {
   manual_restart: [
     ...['accepted', 'already_accepted', 'already_stopped'].map(result => ({ ok: true, result })),
     { ok: false, result: 'stale_target', currentRunId: 'new-run' },
-    ...['target_required', 'transition_open', 'restart_all_pending', 'fence_conflict', 'manual_restart_pending', 'identity_unavailable', 'not_ready', 'requests_unreadable', 'request_conflict'].map(reason => ({ ok: false, result: 'rejected', reason })),
+    ...['target_required', 'transition_open', 'restart_all_pending', 'fence_conflict', 'manual_restart_pending', 'identity_unavailable', 'not_ready', 'requests_unreadable', 'request_conflict', 'wake_failed'].map(reason => ({ ok: false, result: 'rejected', reason })),
   ],
   mode_switch: [
     { ok: true, result: 'noop' }, { ok: true, result: 'accepted', runId: 'switch-run' },
