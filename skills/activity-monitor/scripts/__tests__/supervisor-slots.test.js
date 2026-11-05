@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { SupervisorRunEndings } from '../supervisor-run-endings.js';
+import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/router-fixture.js';
 import { SupervisorLifecycle, evictionDemand } from '../supervisor-lifecycle.js';
 
 // Integration boundary: real Store, reconciliation, lifecycle completion and slot
@@ -37,14 +38,14 @@ test('orphan startup occupancy survives until the readiness deadline without a s
   await f.service.advance(f.context); assert.equal(f.rows().length, 1);
   assert.equal(f.store.takeSlot('test:group', { runId: 'next', k: 4 }).reason, 'own_running');
   f.now++; await f.service.advance(f.context); assert.equal(f.rows().length, 0);
-  assert.equal(f.store.listRunEndings().length, 0);
+  assert.equal(f.store.listRunEndings(['test:group']).length, 0);
   assert.equal(f.store.takeSlot('test:group', { runId: 'next', k: 4 }).taken, true);
 });
 
 test('reconciliation records before pruning so a crashed run retains its occupancy', async t => {
   const f = await fixture(t); f.take(); await f.write(); f.now += 31000;
   await f.service.advance(f.context);
-  assert.equal(f.store.listRunEndings()[0].reason, 'unexpected');
+  assert.equal(f.store.listRunEndings(['test:group'])[0].reason, 'unexpected');
   assert.equal(f.rows()[0].state, 'held');
   assert.equal(f.rows()[0].heldUntil, Math.floor(f.now / 1000) + 120);
 });
@@ -56,21 +57,22 @@ test('held occupancy remains at 119 seconds and is physically pruned at 120 seco
   assert.equal(f.db.prepare('SELECT count(*) n FROM slot_occupancy').get().n, 0);
 });
 
-test('unreadable ending records do not strand an old running occupancy', async t => {
+test('unreadable ending records preserve an old running occupancy for sixty seconds', async t => {
   const f = await fixture(t); f.take(); await f.write();
   f.service.db = { ...f.store, listRunEndings() { throw new Error('record read failed'); } };
-  f.now += 29999; await f.service.advance(f.context); assert.equal(f.rows().length, 1);
-  f.now++; await f.service.advance(f.context); assert.equal(f.rows().length, 0);
-  assert.ok(f.errors.length > 0); assert.equal(f.store.listRunEndings().length, 0);
+  f.now += 31000; await f.service.advance(f.context); assert.equal(f.rows().length, 1);
+  f.now += 59000; await f.service.advance(f.context); assert.equal(f.rows().length, 1);
+  f.now += 1000; await f.service.advance(f.context); assert.equal(f.rows().length, 0);
+  assert.ok(f.errors.length > 0); assert.equal(f.store.listRunEndings(['test:group']).length, 0);
   assert.equal(f.store.takeSlot('test:group', { runId: 'inbound', k: 4 }).taken, true);
 });
 
-test('a failed ending write loses retention while later reconciliation can still recover', async t => {
+test('a failed ending write preserves retention so later reconciliation can recover', async t => {
   const f = await fixture(t); f.take(); await f.write(); f.now += 31000;
   f.service.db = { ...f.store, recordRunEnd() { throw new Error('record write failed'); } };
-  await f.service.advance(f.context); assert.equal(f.rows().length, 0);
+  await f.service.advance(f.context); assert.equal(f.rows().length, 1);
   f.service.db = f.store; await f.service.advance(f.context);
-  assert.equal(f.store.listRunEndings()[0].reason, 'unexpected'); assert.equal(f.rows().length, 0);
+  assert.equal(f.store.listRunEndings(['test:group'])[0].reason, 'unexpected'); assert.equal(f.rows()[0].state, 'held');
   assert.equal(f.store.listPendingContinuations().length, 1);
 });
 
@@ -171,8 +173,11 @@ for (const recovery of ['record recovers', 'record remains unavailable', 'sessio
     if (recovery === 'record remains unavailable') f.service.db = failing;
     await f.service.advance(f.context);
     if (recovery === 'record recovers') {
-      assert.equal(f.rows()[0].state, 'held'); assert.equal(f.store.listRunEndings()[0].reason, 'unexpected');
+      assert.equal(f.rows()[0].state, 'held'); assert.equal(f.store.listRunEndings(['test:group'])[0].reason, 'unexpected');
     } else {
+      if (recovery === 'record remains unavailable') {
+        assert.equal(f.rows().length, 1); f.now += 60000; await f.service.advance(f.context);
+      }
       assert.equal(f.rows().length, 0);
       assert.equal(f.store.takeSlot('test:group', { runId: 'inbound', k: 4 }).taken, true);
     }
@@ -186,7 +191,7 @@ test('unreadable fences protect a reclaiming running row during cleanup', async 
   f.service.db={...f.store,listDrainFences(){throw new Error('fences unavailable');}};
   await f.service.advance(f.context);
   assert.equal(f.rows().length,1); assert.equal(f.rows()[0].state,'running');
-  assert.equal(f.store.listRunEndings().length,0);
+  assert.equal(f.store.listRunEndings(['test:group']).length,0);
   assert.ok(f.errors.some(error=>error.message==='fences unavailable'));
 });
 
@@ -195,8 +200,44 @@ test('a run seen by the round snapshot keeps occupancy until a later round recor
   f.context.scenes=[{sessionGroup:'test:group',runId:'old',present:true}];
   await f.service.advance(f.context);
   assert.equal(f.rows().length,1); assert.equal(f.rows()[0].state,'running');
-  assert.equal(f.store.listRunEndings().length,0);
+  assert.equal(f.store.listRunEndings(['test:group']).length,0);
   f.context.scenes=[]; await f.service.advance(f.context);
   assert.equal(f.rows()[0].state,'held');
-  assert.equal(f.store.listRunEndings()[0].reason,'unexpected');
+  assert.equal(f.store.listRunEndings(['test:group'])[0].reason,'unexpected');
+});
+
+
+// Integration boundary: real Lifecycle → Router adoption → RunEndings and C4
+// transactions; run for replacement-reclaim/adoption/reconciliation wiring, skip
+// unrelated UI. Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR;
+// scene and adapter I/O are injected, with memory SQLite and an owned file root.
+// No tmux/runtime/network/process is created; teardown stops Router and closes
+// its database, and removes the private session-file directory.
+test('a replacement run clears the old reclaim fence, is adopted, and records its own ending once', async t => {
+  const f = routerFixture(t, { poolSize: 1 });
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'replacement-ending-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  f.db.takeSlot('test:a', { runId: 'old', k: 1 });
+  f.db.setDrainFence('test:a', { reason: 'upgrade', runId: 'old' });
+  const replacement = { ...f.put('test:a', { runId: 'new', ready: true }), sessionGroup: 'test:a' };
+  const lifecycle = new SupervisorLifecycle({ db: f.db, readCurrentSession: group => f.current.get(group) }, { now: f.now });
+  const context = { configuration: { mode: 'multi' }, scenes: [replacement], fences: f.db.listDrainFences() };
+  assert.equal(await lifecycle.advanceReclaim(f.db.getDrainFence('test:a'), context), 'done');
+  assert.equal(f.db.getDrainFence('test:a'), null);
+  assert.equal(f.db.listRunEndings(['test:a']).length, 0);
+  assert.equal(f.db.listPendingContinuations().length, 0);
+  assert.equal(f.db.listSlotOccupancy()[0].runId, 'old');
+  f.put('origin', { runtime: 'codex' }); await f.create().initialize(); await f.rounds(3);
+  assert.equal(f.db.listSlotOccupancy()[0].runId, 'new');
+  const file = path.join(root, 'activity-monitor/session-groups/test:a/current-session.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify({ runId: 'new', ts: f.now() - 1000 }));
+  f.scene.delete('test:a');
+  const endings = new SupervisorRunEndings({ db: f.db, env: { ZYLOS_DIR: root }, now: f.now,
+    readIdentity: group => f.deps.readLiveIdentity(group) });
+  const endedContext = { configuration: { mode: 'multi' }, scenes: [{ sessionGroup: 'origin', present: true }], fences: [] };
+  await endings.advance(endedContext); await endings.advance(endedContext);
+  assert.deepEqual(f.db.listRunEndings(['test:a']).map(row => [row.runId, row.reason]), [['new', 'unexpected']]);
+  assert.equal(f.db.listPendingContinuations().length, 1);
+  assert.equal(f.db.listSlotOccupancy()[0].state, 'held');
 });

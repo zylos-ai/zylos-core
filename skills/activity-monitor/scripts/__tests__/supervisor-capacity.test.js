@@ -21,7 +21,7 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory } = {}) {
     readMode: () => ({ mode: config.session_mode, keyPresent: true }), readConfig: () => config,
     readMemoryInputs: () => { reads++; return memory(); },
     db: { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
-      listPendingSessionGroups: () => [], listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:0}),listPendingContinuations: () => [], listRunEndings: () => [],
+      listPendingSessionGroups: () => [], listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations: () => [], listRunEndings: () => [],
       getLastCompletedModeTransition: () => null, getControlById: () => null,
       resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) },
     scenes: { observe: async () => { observations++; return []; },

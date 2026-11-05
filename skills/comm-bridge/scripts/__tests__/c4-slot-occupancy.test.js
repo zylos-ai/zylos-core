@@ -44,6 +44,79 @@ test('held takeover keeps one row even above capacity and release restores the e
   assert.equal(rows(db).length, 2);
 });
 
+test('adoption inserts above capacity using the transaction clock and preserves existing rows', t => {
+  let db, now = start, clockCalls = 0;
+  const trace = [];
+  const f = fixture(t, { now: () => {
+    assert.equal(db.inTransaction, true); clockCalls++; return now * 1000 + 999;
+  } }, false, { verbose: sql => trace.push(sql) });
+  db = f.db;
+  take(f.store, 'test:full', 'first', 1);
+  const before = rows(db)[0];
+  now += 10; trace.length = 0; clockCalls = 0;
+  assert.deepEqual(f.store.adoptSlot('test:late', { runId: 'late' }), { adopted: true });
+  assert.equal(clockCalls, 1);
+  assert.ok(trace.includes('BEGIN IMMEDIATE'));
+  assert.deepEqual(rows(db), [before, { session_group: 'test:late', run_id: 'late', state: 'running', held_until: null, created_at: now }]);
+  assert.deepEqual(take(f.store, 'test:waiting', 'waiting', 1), { taken: false, reason: 'full' });
+});
+
+test('adopting an existing running identity does not refresh its creation time or write occupancy', t => {
+  let now = start;
+  const trace = [];
+  const { db, store } = fixture(t, { now: () => now * 1000 }, false, { verbose: sql => trace.push(sql) });
+  take(store); const before = rows(db);
+  now += 100; trace.length = 0;
+  assert.deepEqual(store.adoptSlot('test:a', { runId: 'first' }), { adopted: false, reason: 'already' });
+  assert.deepEqual(rows(db), before);
+  assert.equal(trace.filter(sql => /^(INSERT|UPDATE|DELETE)\b/.test(sql)).length, 0);
+});
+
+for (const state of ['running', 'held', 'expired held']) {
+  test(`adoption replaces a different ${state} identity without changing the row count`, t => {
+    let now = start;
+    const { db, store } = fixture(t, { now: () => now * 1000 });
+    take(store);
+    if (state !== 'running') store.recordRunEnd('test:a', { runId: 'first', reason: 'upgrade' });
+    now += state === 'expired held' ? 121 : 10;
+    if (state === 'expired held') assert.equal(store.listSlotOccupancy().length, 0);
+    assert.deepEqual(store.adoptSlot('test:a', { runId: 'late' }), { adopted: true });
+    assert.deepEqual(rows(db), [{ session_group: 'test:a', run_id: 'late', state: 'running', held_until: null, created_at: now }]);
+    assert.equal(store.listRunEndings(['test:a']).length, state === 'running' ? 0 : 1);
+  });
+}
+
+for (const reason of ['upgrade', 'ttl']) {
+  test(`adoption rejects a recorded ${reason} ending without restoring its running occupancy`, t => {
+    let now = start;
+    const { db, store } = fixture(t, { now: () => now * 1000 });
+    take(store); store.recordRunEnd('test:a', { runId: 'first', reason });
+    const before = snapshot(db); now += 10;
+    assert.deepEqual(store.adoptSlot('test:a', { runId: 'first' }), { adopted: false, reason: 'ended' });
+    assert.deepEqual(snapshot(db), before);
+    // Even a stale running row cannot override the authoritative ending record.
+    if (reason === 'upgrade') {
+      db.prepare("UPDATE slot_occupancy SET state='running',held_until=NULL WHERE session_group=?").run('test:a');
+      const stale = snapshot(db);
+      assert.deepEqual(store.adoptSlot('test:a', { runId: 'first' }), { adopted: false, reason: 'ended' });
+      assert.deepEqual(snapshot(db), stale);
+    }
+  });
+}
+
+test('adoption rejects invalid identities, caller timestamps and single mode without changes', t => {
+  const { db, store } = fixture(t, { now: () => start * 1000 });
+  take(store); const before = snapshot(db);
+  for (const group of [null, '', '*', 'origin']) assert.throws(() => store.adoptSlot(group, { runId: 'late' }));
+  for (const options of [undefined, null, [], {}, { runId: '' }, { runId: ' ' }, { runId: 'late', now: 1 }, { runId: 'late', createdAt: 1 }, { runId: 'late', k: 2 }]) {
+    assert.throws(() => store.adoptSlot('test:a', options));
+    assert.deepEqual(snapshot(db), before);
+  }
+  const single = createStore(db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }) });
+  assert.throws(() => single.adoptSlot('test:a', { runId: 'late' }), { code: 'INVALID_ARGS' });
+  assert.deepEqual(snapshot(db), before);
+});
+
 test('release with a prior reservation cannot rewrite a run that has already ended', t => {
   let now = start;
   const { store } = fixture(t, { now: () => now * 1000 });
@@ -117,11 +190,11 @@ test('take and prune expire reservations at 120 seconds but keep them at 119 sec
     now += 119;
     assert.equal(store.listSlotOccupancy().length, 1);
     if (method === 'take') assert.deepEqual(take(store, 'test:b', 'second', 1), { taken: false, reason: 'full' });
-    else assert.deepEqual(store.pruneSlots({ orphans: [], minAgeSeconds: 30 }), { deletedHeld: 0, deletedOrphans: 0 });
+    else assert.deepEqual(store.pruneSlots({ orphans: [], minAgeSeconds: 30 }), { deletedHeld: 0, deletedOrphans: [] });
     now++;
     assert.equal(store.listSlotOccupancy().length, 0, 'reader excludes exact-expiry held rows');
     if (method === 'take') assert.deepEqual(take(store, 'test:b', 'second', 1), { taken: true, prior: null });
-    else assert.deepEqual(store.pruneSlots({ orphans: [], minAgeSeconds: 30 }), { deletedHeld: 1, deletedOrphans: 0 });
+    else assert.deepEqual(store.pruneSlots({ orphans: [], minAgeSeconds: 30 }), { deletedHeld: 1, deletedOrphans: [] });
     assert.equal(rows(db).some(row => row.session_group === 'test:a'), false);
   }
 });
@@ -133,13 +206,13 @@ test('pruning checks current run, running state and creation age inside its tran
   store.recordRunEnd('test:held', { runId: 'held', reason: 'auth' });
   const orphan = (sessionGroup, runId) => ({ sessionGroup, runId });
   now += 29;
-  assert.deepEqual(store.pruneSlots({ orphans: [orphan('test:old', 'old')], minAgeSeconds: 30 }), { deletedHeld: 0, deletedOrphans: 0 });
+  assert.deepEqual(store.pruneSlots({ orphans: [orphan('test:old', 'old')], minAgeSeconds: 30 }), { deletedHeld: 0, deletedOrphans: [] });
   now++;
   store.releaseSlot('test:young', { runId: 'young', prior: null }); take(store, 'test:young', 'young-new', 4);
-  assert.deepEqual(store.pruneSlots({ orphans: [orphan('test:old', 'old'), orphan('test:young', 'young'), orphan('test:held', 'held')], minAgeSeconds: 30 }), { deletedHeld: 0, deletedOrphans: 1 });
+  assert.deepEqual(store.pruneSlots({ orphans: [orphan('test:old', 'old'), orphan('test:young', 'young'), orphan('test:held', 'held'), orphan('test:old', 'old'), orphan('test:absent', 'absent')], minAgeSeconds: 30 }), { deletedHeld: 0, deletedOrphans: [orphan('test:old', 'old')] });
   const heldPrior = take(store, 'test:held', 'replacement', 4).prior;
   assert.equal(heldPrior.state, 'held');
-  assert.deepEqual(store.pruneSlots({ orphans: [orphan('test:held', 'held')], minAgeSeconds: 0 }), { deletedHeld: 0, deletedOrphans: 0 });
+  assert.deepEqual(store.pruneSlots({ orphans: [orphan('test:held', 'held')], minAgeSeconds: 0 }), { deletedHeld: 0, deletedOrphans: [] });
   assert.deepEqual(store.listSlotOccupancy().map(row => row.runId), ['replacement', 'young-new']);
 });
 
@@ -217,5 +290,5 @@ test('schema two missing occupancy is rejected without changing schema or existi
 
 test('public database facade exposes slot primitives', async () => {
   const facade = await import('../c4-db.js');
-  for (const name of ['takeSlot', 'releaseSlot', 'listSlotOccupancy', 'pruneSlots']) assert.equal(typeof facade[name], 'function');
+  for (const name of ['takeSlot', 'releaseSlot', 'adoptSlot', 'listSlotOccupancy', 'pruneSlots']) assert.equal(typeof facade[name], 'function');
 });

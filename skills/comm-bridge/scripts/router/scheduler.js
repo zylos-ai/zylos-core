@@ -31,7 +31,7 @@ export function createRouter(dependencies, configuration = {}) {
   const observations = new Map();
   const opportunities = new Set();
   const attemptedRound = new Map();
-  let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
+  let sceneTask = null, roundWork = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
   let lastCleanup = -Infinity, lastDiagnostics = -Infinity, lastMismatch = -Infinity;
   const diagnostic = (event, fields = {}) => {
     try { Promise.resolve(deps.diagnostic?.(event, fields)).catch(error => deps.log?.(`Router diagnostic: ${error.message}`)); }
@@ -147,6 +147,47 @@ export function createRouter(dependencies, configuration = {}) {
     if (!state.lanes.has(group)) state.lanes.set(group, createLane(context, group));
     return state.lanes.get(group);
   }
+  function adoptReadySlots() {
+    if (!state.sceneObservable) return;
+    for (const group of state.listed) {
+      if (group === null || group === 'origin') continue;
+      const live = state.live.get(group);
+      if (!live?.present || !live.ready || !live.runId) continue;
+      const own = state.slots.get(group);
+      if (own?.state === 'running' && own.runId === live.runId) continue;
+      try {
+        const result = deps.db.adoptSlot(group, { runId: live.runId });
+        if (result.adopted || result.reason === 'already') {
+          state.slots.set(group, { sessionGroup: group, runId: live.runId, state: 'running', heldUntil: null });
+        }
+      } catch (error) {
+        diagnostic('slot_adoption_failed', { session_group: group, runId: live.runId, reason: error.code ?? error.message });
+      }
+    }
+  }
+  function scheduleLanes() {
+    if (state.stopped) return;
+    if (state.mode === 'multi') {
+      context.refreshSlots();
+      adoptReadySlots();
+    }
+    const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
+    const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
+    state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
+    const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
+      ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
+    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || a.controlId-b.controlId).map(row => row.sessionGroup), ...wanted];
+    for (const group of new Set(ordered)) {
+      if (!state.live.has(group)) observe(group);
+      const active = state.activations.get(group);
+      if (active && !active.launchSettled && now() - active.startedAt >= options.readyTimeoutMs && !active.warned) {
+        active.warned = true; diagnostic('stop_unconfirmed', { session_group: group, runId: active.runId, reason: 'launch_pending' });
+        deps.alert?.('launch_pending', { sessionGroup: group, runId: active.runId });
+      }
+      const work = lane(group).kick(); if (work) track(work);
+    }
+    for (const [group, current] of state.lanes) if (!wanted.has(group) && !current.working) { current.stop(); state.lanes.delete(group); state.live.delete(group); }
+  }
   function tick() {
     if (!state.ready || state.inert || state.stopped) return;
     state.round++;
@@ -170,24 +211,15 @@ export function createRouter(dependencies, configuration = {}) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
-    if (state.mode === 'multi') context.refreshSlots();
-    const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
-    const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
-    state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
-    const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
-      ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
-    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || a.controlId-b.controlId).map(row => row.sessionGroup), ...wanted];
-    for (const group of new Set(ordered)) {
-      if (!state.live.has(group)) observe(group);
-      const active = state.activations.get(group);
-      if (active && !active.launchSettled && now() - active.startedAt >= options.readyTimeoutMs && !active.warned) {
-        active.warned = true; diagnostic('stop_unconfirmed', { session_group: group, runId: active.runId, reason: 'launch_pending' });
-        deps.alert?.('launch_pending', { sessionGroup: group, runId: active.runId });
-      }
-      const work = lane(group).kick(); if (work) track(work);
-    }
-    for (const [group, current] of state.lanes) if (!wanted.has(group) && !current.working) { current.stop(); state.lanes.delete(group); state.live.delete(group); }
+    if (state.mode === 'single') { scheduleLanes(); return; }
+    // A ready late arrival must be counted before this round grants capacity.
+    if (!roundWork) roundWork = track(Promise.resolve(sceneTask).then(async () => {
+      await Promise.all([...observations.values()]);
+      scheduleLanes();
+    }).catch(error => diagnostic('scheduler_error', { reason: error.code ?? error.message }))
+      .finally(() => { roundWork = null; }));
   }
+
   function initialize() { initialization ??= initializeRouter(context); return initialization; }
   async function start() {
     await initialize();

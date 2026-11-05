@@ -467,6 +467,7 @@ export const advanceOriginSyncCursor = (...args) => store.advanceOriginSyncCurso
 export const getOriginSyncBacklog = (...args) => store.getOriginSyncBacklog(...args);
 export const takeSlot = (...args) => store.takeSlot(...args);
 export const releaseSlot = (...args) => store.releaseSlot(...args);
+export const adoptSlot = (...args) => store.adoptSlot(...args);
 export const listSlotOccupancy = (...args) => store.listSlotOccupancy(...args);
 export const pruneSlots = (...args) => store.pruneSlots(...args);
 export const recordRunEnd = (...args) => store.recordRunEnd(...args);
