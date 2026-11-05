@@ -448,7 +448,8 @@ export const setSessionRuntimeConfig = (...args) => store.setSessionRuntimeConfi
 export const resetSessionRuntimeConfig = (...args) => store.resetSessionRuntimeConfig(...args);
 export const resolveSessionLaunchConfig = (...args) => store.resolveSessionLaunchConfig(...args);
 export const listGroupRuntimeOverrides = (...args) => store.listGroupRuntimeOverrides(...args);
-export const listGroupModelOverrides = (...args) => store.listGroupModelOverrides(...args);
+export const listOverridesForGroups = (...args) => store.listOverridesForGroups(...args);
+export const listRuntimeOverridesPage = (...args) => store.listRuntimeOverridesPage(...args);
 export const readBaseline = (...args) => store.readBaseline(...args);
 export const legacyBaselineEnd = (...args) => store.legacyBaselineEnd(...args);
 export const getCoverageEnd = (...args) => store.getCoverageEnd(...args);

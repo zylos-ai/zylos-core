@@ -75,7 +75,24 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
       return snapshot(c => modelValue(c, sessionGroup, runtimeValue(c, sessionGroup).runtime ?? base.runtime));
     },
     listGroupRuntimeOverrides: () => snapshot(c => all(c, 'SELECT session_group AS sessionGroup,runtime FROM group_runtime_overrides ORDER BY session_group COLLATE BINARY')),
-    listGroupModelOverrides: () => snapshot(c => all(c, 'SELECT session_group AS sessionGroup,runtime,model,effort FROM group_model_overrides ORDER BY session_group COLLATE BINARY,runtime')),
+    listOverridesForGroups: groups => {
+      groups.forEach(group => requireGroup(group));
+      return snapshot(c => {
+        const placeholders = groups.map(() => '?').join(',');
+        return {
+          runtime: all(c, `SELECT session_group AS sessionGroup,runtime FROM group_runtime_overrides WHERE session_group IN (${placeholders}) ORDER BY session_group COLLATE BINARY`, ...groups),
+          model: all(c, `SELECT session_group AS sessionGroup,runtime,model,effort FROM group_model_overrides WHERE session_group IN (${placeholders}) ORDER BY session_group COLLATE BINARY,runtime`, ...groups),
+        };
+      });
+    },
+    listRuntimeOverridesPage: ({ match, limit = 100, after } = {}) => snapshot(c => {
+      const total = get(c, 'SELECT COUNT(*) AS total FROM group_runtime_overrides').total;
+      const conditions = [], values = [];
+      if (after !== undefined) { conditions.push('session_group > ? COLLATE BINARY'); values.push(after); }
+      if (match !== undefined) { conditions.push('instr(lower(session_group), lower(?)) > 0'); values.push(match); }
+      const rows = all(c, `SELECT session_group AS sessionGroup,runtime FROM group_runtime_overrides${conditions.length ? ` WHERE ${conditions.join(' AND ')}` : ''} ORDER BY session_group COLLATE BINARY LIMIT ?`, ...values, limit + 1);
+      return { total, rows: rows.slice(0, limit), nextAfter: rows.length > limit ? rows[limit - 1].sessionGroup : null };
+    }),
     readBaseline: baseline,
   };
   return { api, baseline };

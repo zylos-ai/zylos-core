@@ -109,10 +109,12 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
   };
 }
 
-export function listOverrides({ store }) {
+export function listOverrides({ store, groups, match, limit, after }) {
   const base = store.readBaseline();
-  return { baseline: { runtime: base.runtime, sessionMode: base.sessionMode },
-    runtime: store.listGroupRuntimeOverrides(), model: store.listGroupModelOverrides() };
+  const baseline = { runtime: base.runtime, sessionMode: base.sessionMode };
+  if (groups?.length) return { baseline, ...store.listOverridesForGroups(groups) };
+  const page = store.listRuntimeOverridesPage({ match, limit, after });
+  return { baseline, runtimeTotal: page.total, runtime: page.rows, nextAfter: page.nextAfter };
 }
 
 export async function runConfigCli(kind, argv, io = process) {
