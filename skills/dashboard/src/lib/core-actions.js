@@ -71,7 +71,11 @@ export async function handleCoreAction(action, body, config) {
     const deadlineAt = Date.now() + 10000;
     const request = { version: 1, type: 'manual_restart', requestId, ...(target.runId ? { expectedRunId: target.runId } : {}), ...(target.sessionId ? { expectedSessionId: target.sessionId } : {}) };
     const result = await submit(request, { deadlineAt });
-    if (result.kind === 'accepted' || result.kind === 'rejected') return { ok: result.kind === 'accepted', requestId, submission: result.kind, ...result.reply, message: `Restart ${result.reply.result || result.reply.code || result.reply.reason}; old-run completion and new Origin readiness are separate.` };
+    if (result.kind === 'accepted' || result.kind === 'rejected') {
+      const messageKey = mode === 'multi' && result.reply.result === 'already_stopped' ? 'result.restart_wake_requested'
+        : mode === 'multi' && result.kind === 'rejected' && result.reply.reason === 'wake_failed' ? 'result.restart_wake_failed' : null;
+      return { ok: result.kind === 'accepted', requestId, submission: result.kind, ...result.reply, ...(messageKey ? { messageKey } : {}), message: `Restart ${result.reply.result || result.reply.code || result.reply.reason}; old-run completion and new Origin readiness are separate.` };
+    }
     const notSubmitted = result.kind === 'connect_failed' || (result.kind === 'deadline_exceeded' && !result.sent);
     let completion = 'unknown';
     if (!notSubmitted) { try { completion = await lookupRestartRequest(requestId, { deadlineAt }); } catch {} }

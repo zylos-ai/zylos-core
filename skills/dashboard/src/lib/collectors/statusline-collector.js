@@ -19,11 +19,13 @@ function loadCoreModules() {
   return coreModules;
 }
 async function readCoreUsage() {
-  const [{ readSessionMode }, { readSessionState, readAccountUsage }] = await loadCoreModules();
-  const observation = await readSessionState(readSessionMode().mode === 'multi' ? 'origin' : null, { freshnessMs: 5000 });
-  const runtime = observation.identity.runtime;
+  const [{ readSessionMode }, { readSessionState, readAccountUsage, resolveTargetRuntime }] = await loadCoreModules();
+  const mode = readSessionMode().mode;
+  const observation = await readSessionState(mode === 'multi' ? 'origin' : null, { freshnessMs: 5000 });
+  let runtime = observation.identity.runtime;
+  if (mode === 'multi') { try { runtime = await resolveTargetRuntime('origin'); } catch { runtime = null; } }
   let accountUsage = null;
-  if (runtime !== 'unknown') {
+  if (['claude', 'codex'].includes(runtime)) {
     try { accountUsage = { runtime, value: await readAccountUsage(runtime) }; }
     catch { /* Missing account evidence never falls back to Origin's sample. */ }
   }

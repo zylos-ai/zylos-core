@@ -1,3 +1,5 @@
+import { collectStatus } from '../lib/status-view.js';
+import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
 /**
  * Attach to the active runtime's tmux session with a detach hint.
  */
@@ -8,14 +10,25 @@ import { resolveCliSession } from '../lib/cli-session.js';
 import { tmuxSessionTarget } from '../lib/session-group-paths.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../lib/runtime/tmux-protocol.js';
 
-export async function attachCommand({ resolve = resolveCliSession, exec = execFileSync } = {}) {
-  const { live, runtime } = await resolve();
+export async function attachCommand({ resolve = resolveCliSession, exec = execFileSync, collect = collectStatus } = {}) {
+  const { sessionGroup, live, runtime } = await resolve();
   const SESSION = tmuxSessionTarget(live.tmuxName);
   const RUNTIME_LABEL = runtime;
   // Check if tmux session exists
   try {
     exec('tmux', [C.hasSession, '-t', SESSION], { stdio: 'pipe' });
   } catch {
+    if (sessionGroup !== null && sessionGroup !== undefined) {
+      if (sessionGroup === 'origin') {
+        const data = await collect();
+        const description = describeOrigin({ ...data, targetRuntime: runtime, nowSec: Math.floor(data.readAt / 1000) });
+        console.error(formatOriginDescription(description, runtime, data.originNeed) ?? `Origin session: ${description.state}.`);
+      } else {
+        console.error(`No active session for ${sessionGroup}. Group sessions start when a message for the group arrives.`);
+      }
+      process.exit(1);
+      return;
+    }
     // No tmux session — check why and give appropriate advice
     let pm2Running = false;
     try {
