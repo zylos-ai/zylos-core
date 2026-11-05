@@ -1,3 +1,8 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createSessionReader } from '../../../../cli/lib/session-state-reader-async.js';
+import { observeSessionTarget } from '../../../../cli/lib/runtime/session-target.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
@@ -7,12 +12,12 @@ const calls = (f, kind) => f.calls.filter(row => row[0] === kind);
 function continuation(f, group = 'a', runId = 'old-run') {
   const row = f.add(group);
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
-  return f.db.recordRunEnd(group, { runId, reason: 'unexpected' }).continuationControlId;
+  f.db.recordRunEnd(group, { runId, reason: 'unexpected' }); return group;
 }
 async function initialize(f) { await f.create().initialize(); await f.rounds(2); }
 async function readyToStart(f) { f.advance(5000); await f.rounds(5); }
 
-test('continuation-only group starts after preflight and receives startup before continuation', async t => {
+test('continuation-only group starts after preflight and receives only startup text', async t => {
   const f = routerFixture(t); f.put('origin');
   const id = continuation(f);
   const old = f.db.insertControl('old-run command', { sessionGroup: 'a', appendAckSuffix: false });
@@ -29,16 +34,16 @@ test('continuation-only group starts after preflight and receives startup before
   await readyToStart(f);
   assert.equal(calls(f, 'launch').length, 1);
   assert.equal(f.db.getControlById(old.id).last_error, 'SESSION_ENDED');
-  assert.deepEqual(calls(f, 'control').map(row => row[1]), [prompt.id, id]);
-  assert.equal(f.db.getControlById(id).status, 'done');
+  assert.deepEqual(calls(f, 'control').map(row => row[1]), [prompt.id]);
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
   assert.equal(calls(f, 'conversation').length, 0);
 });
 
-test('inbound activation keeps continuation and delivers it before the triggering message', async t => {
+test('inbound activation clears its marker before the triggering message', async t => {
   const f = routerFixture(t); f.put('origin'); const id = continuation(f);
   const message = f.add('a');
   await initialize(f); await f.rounds(5);
-  assert.deepEqual(f.calls.filter(row => ['control','conversation'].includes(row[0])).map(row => row.slice(0, 2)), [['control', id], ['conversation', message.id]]);
+  assert.deepEqual(f.calls.filter(row => ['control','conversation'].includes(row[0])).map(row => row.slice(0, 2)), [['conversation', message.id]]);
   assert.equal(calls(f, 'launch').length, 1);
 });
 
@@ -74,7 +79,7 @@ for (const health of ['rate_limited', 'unavailable', 'recovering', 'down']) {
 }
 
 for (const reply of ['not_restricted','attempt_backoff','probe_inflight','invalid_request','connect_failed','invalid_reply']) {
-  test(`continuation admission ${reply} releases unsuccessful reservations without losing the control`, async t => {
+  test(`continuation admission ${reply} releases unsuccessful reservations without losing the marker`, async t => {
     const f = routerFixture(t, { poolSize: 1 }); f.put('origin', { runtime: 'codex' }); const id = continuation(f);
     f.health.set('claude', { health: 'down' });
     f.deps.submit = async request => {
@@ -88,7 +93,7 @@ for (const reply of ['not_restricted','attempt_backoff','probe_inflight','invali
     assert.equal(calls(f, 'launch').length, accepted ? 1 : 0);
     assert.equal(f.router.state.activations.size, 0);
     assert.equal(f.router.availableCapacity(), accepted ? 0 : 1);
-    assert.equal(f.db.getControlById(id).status, accepted ? 'done' : 'pending');
+    assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), accepted ? 'done' : 'pending');
   });
 }
 
@@ -113,7 +118,7 @@ for (const order of ['older', 'newer']) {
   });
 }
 
-test('continuation-only candidates order by ending time and then control id', async t => {
+test('continuation-only candidates order by ending time and then session group', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
   continuation(f, 'a'); f.advance(1000); continuation(f, 'b');
   f.sqlite.prepare("UPDATE run_endings SET ended_at=ended_at-10 WHERE session_group='b'").run();
@@ -146,12 +151,12 @@ test('failed launches retain continuation and alert after five, then readiness c
   for (const delay of [5000,10000,20000,40000,60000,60000]) { f.advance(delay); await f.rounds(3); }
   assert.equal(calls(f, 'launch').length, 6);
   assert.equal(calls(f, 'alert').filter(row => row[1] === 'continuation_start_failed').length, 1);
-  assert.equal(f.db.getControlById(id).status, 'pending'); assert.equal(f.router.availableCapacity(), 2);
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'pending'); assert.equal(f.router.availableCapacity(), 2);
   f.deps.getSessionAdapter = original; f.advance(60000); await f.rounds(5);
-  assert.equal(f.db.getControlById(id).status, 'done');
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
 });
 
-test('restart before launch and after launch preserves and delivers a pending continuation once', async t => {
+test('restart before launch and after launch preserves and clears a pending marker once', async t => {
   for (const launched of [false, true]) await t.test(String(launched), async t => {
     const f = routerFixture(t); f.put('origin'); const id = continuation(f);
     const original = f.deps.getSessionAdapter;
@@ -162,8 +167,8 @@ test('restart before launch and after launch preserves and delivers a pending co
     if (launched) f.put('a', { runId: f.scene.get('a').runId, ready: true });
     f.deps.getSessionAdapter = original;
     await initialize(f); await readyToStart(f);
-    assert.equal(calls(f, 'control').filter(row => row[1] === id).length, 1);
-    assert.equal(f.db.getControlById(id).status, 'done');
+    assert.equal(calls(f, 'control').filter(row => row[1] === id).length, 0);
+    assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
     assert.equal(calls(f, 'launch').length, 1);
   });
 });
@@ -212,7 +217,7 @@ test('a faster continuation preflight cannot overtake an eligible inbound candid
   assert.equal(f.row(message.id).status, 'delivered');
 });
 
-for (const changed of ['fence','scene','capacity','control','inbound']) {
+for (const changed of ['fence','scene','capacity','marker','inbound']) {
   test(`continuation admission rechecks ${changed} after an asynchronous reply`, async t => {
     const f = routerFixture(t, { poolSize: 1 }); f.put('origin', { runtime: 'codex' }); const id = continuation(f);
     f.health.set('claude', { health: 'down' });
@@ -223,17 +228,17 @@ for (const changed of ['fence','scene','capacity','control','inbound']) {
     if (changed === 'fence') f.db.setDrainFence('a', { reason: 'ttl', runId: 'old-run' });
     if (changed === 'scene') f.put('a');
     if (changed === 'capacity') assert.deepEqual(f.db.takeSlot('occupied', {runId:'competitor', k:1}), {taken:false, reason:'full'});
-    if (changed === 'control') f.sqlite.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(id);
+    if (changed === 'marker') f.db.clearContinuation('a', { runId: 'another-run' });
     if (changed === 'inbound') f.add('a');
     hold.resolve({ kind: 'accepted', reply: { ...request, ok: true, result: 'not_restricted' } });
     await f.router.idle();
     assert.equal(calls(f, 'launch').length, changed === 'capacity' ? 1 : 0);
     assert.equal(f.router.state.activations.size, changed === 'capacity' ? 1 : 0);
-    assert.equal(f.db.getControlById(id).status, changed === 'control' ? 'done' : 'pending');
+    assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), changed === 'marker' ? 'done' : 'pending');
   });
 }
 
-test('continuation ready timeout releases confirmed absent launch and keeps its control', async t => {
+test('continuation ready timeout releases confirmed absent launch and keeps its marker', async t => {
   const f = routerFixture(t, { readyTimeoutMs: 1000 }); f.put('origin'); const id = continuation(f);
   const original = f.deps.getSessionAdapter;
   f.deps.getSessionAdapter = runtime => ({ ...original(runtime), launch: async input => { f.calls.push(['launch', input]); f.put('a', { runId: input.runId, ready: false }); } });
@@ -241,7 +246,7 @@ test('continuation ready timeout releases confirmed absent launch and keeps its 
   assert.equal(f.router.state.activations.size, 1);
   f.advance(1000); await f.rounds(2);
   assert.equal(f.router.state.activations.size, 0); assert.equal(f.router.availableCapacity(), 2);
-  assert.equal(f.db.getControlById(id).status, 'pending');
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'pending');
   assert.equal(calls(f, 'stop').length, 1);
   assert.ok(f.events.some(event => event.event === 'activate_timeout' && event.session_group === 'a'));
 });
@@ -270,15 +275,15 @@ test('transient observation failure after continuation launch does not stop the 
   assert.equal(calls(f, 'launch').length, 1);
   assert.equal(calls(f, 'stop').length, 0);
   assert.equal(f.router.state.activations.size, 1);
-  assert.equal(f.db.getControlById(id).status, 'pending');
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'pending');
   const runId = f.scene.get('a').runId;
   f.put('a', { runId, ready: true }); await f.rounds(4);
   assert.equal(calls(f, 'stop').length, 0);
-  assert.equal(f.db.getControlById(id).status, 'done');
-  assert.equal(calls(f, 'control').filter(row => row[1] === id).length, 1);
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
+  assert.equal(calls(f, 'control').filter(row => row[1] === id).length, 0);
 });
 
-test('origin restarts with pending continuation and delivers startup prompt first', async t => {
+test('origin restarts with pending continuation and delivers only the startup prompt', async t => {
   const f = routerFixture(t);
   const id = continuation(f, 'origin');
   const adapter = f.deps.getSessionAdapter;
@@ -292,8 +297,8 @@ test('origin restarts with pending continuation and delivers startup prompt firs
   await initialize(f); await readyToStart(f);
   assert.equal(calls(f, 'launch').length, 1);
   assert.equal(calls(f, 'launch')[0][1].sessionGroup, 'origin');
-  assert.deepEqual(calls(f, 'control').map(row => row[1]), [prompt.id, id]);
-  assert.equal(f.db.getControlById(id).status, 'done');
+  assert.deepEqual(calls(f, 'control').map(row => row[1]), [prompt.id]);
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
   assert.equal(calls(f, 'conversation').length, 0);
   assert.equal(calls(f, 'submit').length, 0);
 });
@@ -319,10 +324,133 @@ test('prelaunch diagnostic and logging failures converge and later inbound can b
   assert.equal(failedActivation.launchSettled, true);
   assert.equal(f.router.state.activations.size, 0);
   assert.equal(calls(f, 'launch').length, 0);
-  assert.equal(f.db.getControlById(id).status, 'pending');
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'pending');
   const message = f.add('a'); await f.rounds(5);
   assert.equal(calls(f, 'launch').length, 1);
   assert.equal(f.row(message.id).status, 'delivered');
-  assert.equal(f.db.getControlById(id).status, 'done');
+  assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
   assert.equal(f.router.state.activations.size, 0);
+});
+
+// Real Router/store, injected scene/clock/transport: run for marker timing or
+// readiness changes. No runtime, network, tmux or PM2 is invoked. Official runner
+// isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixtures close SQLite and stop Router.
+for (const group of ['a', 'origin']) {
+  test(`ready ${group} clears its marker before a blocked or missing startup prompt`, async t => {
+    const f = routerFixture(t); if (group !== 'origin') f.put('origin');
+    continuation(f, group); f.put(group, { runId: 'new-run', ready: false, createdAt: f.now()/1000 + 100 });
+    await initialize(f);
+    assert.equal(f.db.listRunEndings([group])[0].continuationPending, 1);
+    f.put(group, { runId: 'new-run', ready: true });
+    const prompt = f.db.insertControl('startup', { sessionGroup: group, appendAckSuffix: false });
+    f.current.get(group).startupControlIds = [prompt.id];
+    f.deps.deliverControl = async () => ({ blocked: true });
+    await f.rounds(2);
+    assert.equal(f.db.listRunEndings([group])[0].continuationPending, 0);
+    assert.equal(f.events.filter(e => e.event === 'continuation_cleared' && e.runId === 'new-run').length, 1);
+    assert.equal(f.db.getControlById(prompt.id).status, 'running');
+    assert.equal(calls(f, 'launch').length, 0);
+  });
+}
+
+test('clearing a marker retries after an error without blocking inbound delivery', async t => {
+  const f = routerFixture(t); f.put('origin'); continuation(f); f.put('a', { runId: 'new' });
+  const message = f.add('a'), clear = f.db.clearContinuation;
+  let attempts = 0;
+  f.db.clearContinuation = (...args) => { if (++attempts === 1) throw Error('busy'); return clear(...args); };
+  await initialize(f); await f.rounds(3);
+  assert.equal(f.row(message.id).status, 'delivered');
+  assert.ok(attempts >= 2); assert.equal(f.db.listPendingContinuations().length, 0);
+  assert.ok(f.events.some(e => e.event === 'continuation_clear_failed'));
+  assert.equal(calls(f, 'control').length, 0);
+});
+
+test('ready scene matching the ended run retains its marker', async t => {
+  const f = routerFixture(t); f.put('origin'); continuation(f); f.put('a', { runId: 'old-run' });
+  await initialize(f); await f.rounds(3);
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
+  assert.equal(f.events.filter(e => e.event === 'continuation_cleared').length, 0);
+  assert.equal(calls(f, 'launch').length, 0);
+});
+
+
+test('inbound continuation clears before startup and trigger without adding a control row', async t => {
+  const f = routerFixture(t); f.put('origin'); continuation(f);
+  const message = f.add('a'), sequence = [], clear = f.db.clearContinuation;
+  f.db.clearContinuation = (...args) => { const result = clear(...args); if (result.cleared) sequence.push('clear'); return result; };
+  const adapter = f.deps.getSessionAdapter;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    f.calls.push(['launch', input]); f.put('a', { runId: input.runId });
+    const prompt = f.db.insertControl('startup prompt', { sessionGroup: 'a', appendAckSuffix: false });
+    f.current.get('a').startupControlIds = [prompt.id];
+  } });
+  const control = f.deps.deliverControl, conversation = f.deps.deliverConversation;
+  f.deps.deliverControl = async (...args) => { sequence.push('startup'); return control(...args); };
+  f.deps.deliverConversation = async (...args) => { sequence.push('trigger'); return conversation(...args); };
+  await initialize(f); await f.rounds(5);
+  assert.deepEqual(sequence, ['clear', 'startup', 'trigger']);
+  assert.equal(f.row(message.id).status, 'delivered');
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM control_queue').get().n, 1);
+});
+
+test('a ready marker clears with empty startup ids and a later TTL ending stays dormant', async t => {
+  const f = routerFixture(t); f.put('origin'); continuation(f); f.put('a', { runId: 'new-run' });
+  await initialize(f);
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 0);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM control_queue').get().n, 0);
+  f.scene.delete('a'); f.db.recordRunEnd('a', { runId: 'new-run', reason: 'ttl' });
+  f.advance(60000); await f.rounds(5);
+  assert.equal(calls(f, 'launch').length, 0);
+  const incoming = f.add('a'); await f.rounds(5);
+  assert.equal(calls(f, 'launch').length, 1); assert.equal(f.row(incoming.id).status, 'delivered');
+});
+
+test('equal ending timestamps order continuation candidates by session group', async t => {
+  const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
+  continuation(f, 'b'); continuation(f, 'a');
+  await initialize(f); await readyToStart(f);
+  assert.deepEqual(calls(f, 'launch').map(x => x[1].sessionGroup), ['a']);
+});
+
+
+// Boundary: production identity reader and target readiness parser read private
+// F3 files; only tmux protocol I/O is fake. Run for marker readiness changes;
+// skip unrelated runtime launch. No tmux/process/network command is executed.
+test('real identity reader retains a marker for stale F3 and clears after current F3 publication', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marker-ready-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'current-session.json');
+  const f = routerFixture(t); f.put('origin'); continuation(f);
+  f.put('a', { runId: 'new-run', ready: false, createdAt: f.now()/1000 });
+  const readyFile = runId => ({ runId, sessionId: 'new-session', ts: f.now(), startupControlIds: [] });
+  await fs.writeFile(file, JSON.stringify(readyFile('old-run')));
+  let opened = 0, closed = 0;
+  const reader = createSessionReader({
+    open: async () => { opened++; return { bindTarget() {}, close() { closed++; }, command: async args => {
+      if (args[0] === 'show-environment') return String.raw`ZYLOS_RUN_ID="new-run"; export ZYLOS_RUN_ID;
+ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
+      assert.equal(args[0], 'display-message');
+      return `100:200\t$1\t%1\t${f.now()/1000}`;
+    } }; },
+    observe: options => observeSessionTarget({ ...options,
+      readReady: async () => JSON.parse(await fs.readFile(file, 'utf8')) }),
+  });
+  const original = f.deps.readLiveIdentity;
+  f.deps.readLiveIdentity = group => group === 'a' ? reader.readLiveIdentity(group) : original(group);
+  assert.equal((await reader.readLiveIdentity('a')).ready, false);
+  await initialize(f);
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
+  await fs.writeFile(file + '.next', JSON.stringify(readyFile('new-run')));
+  await fs.rename(file + '.next', file);
+  assert.equal((await reader.readLiveIdentity('a')).ready, true);
+  f.health.set('claude', { health: 'auth_failed' });
+  await f.rounds(2);
+  assert.equal(f.router.state.live.get('a').ready, true);
+  f.router.tick(); await f.router.idle();
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 0);
+  assert.equal(calls(f, 'control').length, 0);
+  assert.equal(calls(f, 'launch').length, 0);
+  assert.equal(f.events.filter(e => e.event === 'continuation_cleared').length, 1);
+  await f.router.stop();
+  assert.equal(opened, closed);
 });

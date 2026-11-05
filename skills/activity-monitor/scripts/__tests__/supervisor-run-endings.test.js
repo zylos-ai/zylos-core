@@ -12,7 +12,8 @@ test('first reconciliation after restart records each missing run exactly once w
   const f = await runEndingFixture(t); await f.add(); await f.write('origin'); f.context.scenes = [];
   f.now += 31000; await f.step();
   assert.deepEqual(f.records().map(row => row.sessionGroup), ['origin', 'test:a']);
-  assert.ok(f.records().every(row => row.reason === 'unexpected'));
+  assert.ok(f.records().every(row => row.reason === 'unexpected' && row.continuationPending === 1));
+  assert.equal(f.db.prepare('SELECT count(*) n FROM control_queue').get().n, 0);
   const writes = f.db.prepare('SELECT total_changes() n').get().n;
   const reads = f.fileReads.length, fresh = f.identityReads.length;
   for (let i = 0; i < 3; i++) await f.step();

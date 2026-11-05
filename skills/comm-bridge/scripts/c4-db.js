@@ -473,6 +473,8 @@ export const pruneSlots = (...args) => store.pruneSlots(...args);
 export const recordRunEnd = (...args) => store.recordRunEnd(...args);
 export const listRunEndings = (...args) => store.listRunEndings(...args);
 export const listPendingContinuations = (...args) => store.listPendingContinuations(...args);
+export const clearContinuation = (...args) => store.clearContinuation(...args);
+export const clearAllContinuations = (...args) => store.clearAllContinuations(...args);
 export const insertControl = (...args) => store.insertControl(...args);
 export const getNextPendingControl = (...args) => store.getNextPendingControl(...args);
 export const claimControl = (...args) => store.claimControl(...args);

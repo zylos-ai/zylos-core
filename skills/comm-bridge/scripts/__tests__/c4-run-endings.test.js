@@ -7,92 +7,84 @@ import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
 import { seedV1, oldRows, snapshot } from './helpers/c4-v2-fixtures.js';
 
-const instruction = 'Your previous session in this group ended before its work was confirmed finished (context rotation, crash, upgrade, configuration change, or authentication recovery). Read the handoff file in full, check the actual state of each unfinished item, and continue the work. If nothing is unfinished, do nothing and stay idle.';
 const clock = 1800000000;
 const control = (db, id) => db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
 
+// Integration boundary: real store and private in-memory SQLite, injected clock.
+// Run for ending records, pending markers or their schema; skip unrelated runtime
+// activation. The official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short
+// TMPDIR. Fixtures close their own DB; no runtime/tmux/PM2/network is contacted.
 for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
-  test(`run ending ${reason} records the matching continuation policy`, t => {
+  test(`run ending ${reason} records its pending marker without adding a control`, t => {
     let clockCalls = 0, db;
     const result = fixture(t, { now: () => { assert.equal(db.inTransaction, true); clockCalls++; return clock * 1000 + 999; } });
     db = result.db;
     const { store } = result;
     const before = db.prepare('SELECT count(*) AS n FROM conversations').get().n;
+    const controlsBefore = db.prepare('SELECT count(*) AS n FROM control_queue').get().n;
     const ending = store.recordRunEnd('test:group', { runId: 'run1', reason });
     const needed = ['upgrade', 'auth', 'model_config', 'manual_restart', 'unexpected'].includes(reason);
-    assert.equal(ending.recorded, true);
-    assert.equal(clockCalls, 1, 'record and instruction use the same transaction clock sample');
-    assert.deepEqual(store.listRunEndings(['test:group']), [{ sessionGroup: 'test:group', runId: 'run1', reason, endedAt: clock, continuationControlId: ending.continuationControlId }]);
-    if (needed) {
-      assert.notEqual(ending.continuationControlId, null);
-      const row = control(db, ending.continuationControlId);
-      assert.equal(row.raw_content, instruction); assert.equal(row.content, instruction);
-      assert.equal(row.session_group, 'test:group'); assert.equal(row.target_binding, null);
-      assert.equal(row.priority, 2); assert.equal(row.require_idle, 0); assert.equal(row.bypass_state, 0);
-      assert.equal(row.ack_deadline_at, null); assert.equal(row.available_at, null);
-      assert.equal(row.created_at, clock); assert.equal(row.updated_at, clock);
-      assert.deepEqual(store.listPendingContinuations(), [{ sessionGroup: 'test:group', controlId: row.id, createdAt: clock, endedAt: clock }]);
-    } else {
-      assert.equal(ending.continuationControlId, null);
-      assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
-    }
+    assert.deepEqual(ending, { recorded: true });
+    assert.equal(clockCalls, 1, 'the ending timestamp is sampled inside its transaction');
+    assert.deepEqual(store.listRunEndings(['test:group']), [{ sessionGroup: 'test:group', runId: 'run1', reason, endedAt: clock, continuationPending: Number(needed) }]);
+    assert.deepEqual(store.listPendingContinuations(), needed ? [{ sessionGroup: 'test:group', endedAt: clock }] : []);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, controlsBefore);
     assert.equal(db.prepare('SELECT count(*) AS n FROM conversations').get().n, before);
-    assert.equal(store.getGlobalUnsummarizedRange().count, 0, 'continuation does not enter conversation memory input');
+    assert.equal(store.getGlobalUnsummarizedRange().count, 0);
   });
 }
 
-test('manual restart of Origin records the ending without creating a continuation', t => {
+test('Origin ending reasons have the same marker policy except manual restart', t => {
   const { db, store } = fixture(t, { now: () => clock * 1000 });
-  const ending = store.recordRunEnd('origin', { runId: 'manual-origin', reason: 'manual_restart' });
-  assert.equal(ending.recorded, true);
-  assert.equal(ending.continuationControlId, null);
-  assert.equal(store.listRunEndings(['origin'])[0].reason, 'manual_restart');
-  assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
+    assert.deepEqual(store.recordRunEnd('origin', { runId: reason, reason }), { recorded: true });
+    const needed = ['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason);
+    assert.equal(store.listRunEndings(['origin'])[0].continuationPending, Number(needed));
+    assert.deepEqual(store.listPendingContinuations(), [], 'Origin is not a normal continuation candidate');
+    assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
+  }
 });
 
-test('repeated endings preserve records and controls while still clearing a matching fence', t => {
+test('repeated endings preserve records and markers while clearing a matching fence', t => {
   let now = clock;
   const { db, store } = fixture(t, { now: () => now * 1000 });
-  const original = store.recordRunEnd('origin', { runId: 'run1', reason: 'upgrade' });
+  store.recordRunEnd('origin', { runId: 'run1', reason: 'upgrade' });
   const before = snapshot(db);
   now++;
-  assert.deepEqual(store.recordRunEnd('origin', { runId: 'run1', reason: 'upgrade' }), { ...original, recorded: false });
+  assert.deepEqual(store.recordRunEnd('origin', { runId: 'run1', reason: 'ttl' }), { recorded: false });
   assert.deepEqual(snapshot(db), before);
   store.setDrainFence('origin', { reason: 'manual_restart', runId: 'run1' });
-  assert.deepEqual(store.recordRunEnd('origin', { runId: 'run1', reason: 'manual_restart', clearFence: { expectedReason: 'manual_restart', expectedRunId: 'run1' } }), { ...original, recorded: false });
+  assert.deepEqual(store.recordRunEnd('origin', { runId: 'run1', reason: 'manual_restart', clearFence: { expectedReason: 'manual_restart', expectedRunId: 'run1' } }), { recorded: false });
   assert.equal(store.getDrainFence('origin'), null);
-  assert.equal(store.listRunEndings(['origin'])[0].endedAt, clock);
-  assert.equal(store.listRunEndings(['origin'])[0].reason, 'upgrade');
-  assert.deepEqual(store.listPendingContinuations(), [], 'Origin continuation is handled by its existing need reader');
+  assert.deepEqual(store.listRunEndings(['origin']), [{ sessionGroup: 'origin', runId: 'run1', reason: 'upgrade', endedAt: clock, continuationPending: 1 }]);
 });
 
-test('new endings supersede pending duplicate instructions but retain delivered controls', t => {
+test('a new ending replaces the only pending marker without changing existing controls', t => {
   const { db, store } = fixture(t, { now: () => clock * 1000 });
-  const one = store.recordRunEnd('a', { runId: 'one', reason: 'unexpected' });
-  const two = store.recordRunEnd('a', { runId: 'two', reason: 'auth' });
-  assert.equal(control(db, one.continuationControlId).status, 'superseded');
-  assert.equal(control(db, two.continuationControlId).status, 'pending');
-  db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(two.continuationControlId);
-  const three = store.recordRunEnd('a', { runId: 'three', reason: 'model_config' });
-  assert.equal(control(db, two.continuationControlId).status, 'done');
-  assert.equal(control(db, three.continuationControlId).status, 'pending');
-  assert.equal(store.listRunEndings(['a'])[0].continuationControlId, three.continuationControlId);
+  const old = store.insertControl('existing operation', { sessionGroup: 'a', appendAckSuffix: false });
+  for (const [runId, reason] of [['one', 'unexpected'], ['two', 'auth'], ['three', 'model_config']]) {
+    assert.deepEqual(store.recordRunEnd('a', { runId, reason }), { recorded: true });
+    assert.deepEqual(store.listRunEndings(['a']), [{ sessionGroup: 'a', runId, reason, endedAt: clock, continuationPending: 1 }]);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 1);
+    assert.equal(control(db, old.id).status, 'pending');
+  }
 });
 
-test('non-continuing endings retain only a still-pending instruction and update queue time', t => {
-  let now = clock;
-  const { db, store } = fixture(t, { now: () => now * 1000 });
-  const first = store.recordRunEnd('a', { runId: 'first', reason: 'unexpected' });
-  now += 20;
-  assert.deepEqual(store.recordRunEnd('a', { runId: 'second', reason: 'ttl' }), { recorded: true, continuationControlId: first.continuationControlId });
-  assert.deepEqual(store.listPendingContinuations(), [{ sessionGroup: 'a', controlId: first.continuationControlId, createdAt: clock, endedAt: now }]);
-  db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(first.continuationControlId);
-  now++;
-  assert.deepEqual(store.recordRunEnd('a', { runId: 'third', reason: 'evict' }), { recorded: true, continuationControlId: null });
-  assert.deepEqual(store.listPendingContinuations(), []);
-});
+for (const reason of ['ttl', 'evict', 'mode_switch']) {
+  test(`a new ${reason} ending does not inherit an older pending marker`, t => {
+    let now = clock;
+    const { db, store } = fixture(t, { now: () => now * 1000 });
+    store.recordRunEnd('a', { runId: 'first', reason: 'unexpected' });
+    assert.equal(store.listRunEndings(['a'])[0].continuationPending, 1);
+    now += 20;
+    assert.deepEqual(store.recordRunEnd('a', { runId: 'second', reason }), { recorded: true });
+    assert.deepEqual(store.listPendingContinuations(), []);
+    assert.deepEqual(store.listRunEndings(['a']), [{ sessionGroup: 'a', runId: 'second', reason, endedAt: now, continuationPending: 0 }]);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
+  });
+}
 
-test('fence mismatch and a failure after enqueue roll back record, control and fence together', t => {
+test('fence mismatch and record write failure roll back the transaction', t => {
   const { db, store } = fixture(t, { now: () => clock * 1000 });
   store.setDrainFence('origin', { reason: 'manual_restart', runId: 'old' });
   const before = snapshot(db);
@@ -104,7 +96,7 @@ test('fence mismatch and a failure after enqueue roll back record, control and f
   assert.deepEqual(snapshot(db), before);
   const failing = createStore(new Proxy(db, { get(target, key) {
     if (key === 'prepare') return sql => {
-      if (sql.startsWith('INSERT INTO run_endings')) throw new Error('injected record write failure after control enqueue');
+      if (sql.startsWith('INSERT INTO run_endings')) throw new Error('injected record write failure');
       return target.prepare(sql);
     };
     return typeof target[key] === 'function' ? target[key].bind(target) : target[key];
@@ -116,7 +108,7 @@ test('fence mismatch and a failure after enqueue roll back record, control and f
 test('normal and conditional clearing use their existing fence semantics', t => {
   const { store } = fixture(t);
   store.setDrainFence('a', { reason: 'ttl', runId: 'old' });
-  assert.deepEqual(store.recordRunEnd('a', { runId: 'old', reason: 'ttl', clearFence: true }), { recorded: true, continuationControlId: null });
+  assert.deepEqual(store.recordRunEnd('a', { runId: 'old', reason: 'ttl', clearFence: true }), { recorded: true });
   assert.equal(store.getDrainFence('a'), null);
   store.setDrainFence('b', { reason: 'auth', runId: 'old' });
   assert.throws(() => store.recordRunEnd('b', { runId: 'old', reason: 'auth', clearFence: { expectedReason: 'upgrade', expectedRunId: 'old' } }), { code: 'FENCE_MISMATCH' });
@@ -137,57 +129,91 @@ test('invalid identities, reasons, options and single mode are rejected without 
   assert.deepEqual(snapshot(db), before);
 });
 
-test('mode transition completion records are permitted while new continuations are suppressed', t => {
+test('mode transition endings write zero markers and still clear their fences', t => {
   const { db, store } = fixture(t, { now: () => clock * 1000 });
-  const existing = store.recordRunEnd('a', { runId: 'first', reason: 'unexpected' });
+  store.recordRunEnd('a', { runId: 'first', reason: 'unexpected' });
   db.exec("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES('transition','multi','single','gating',1,1)");
   store.setDrainFence('a', { reason: 'upgrade', runId: 'second' });
-  const recorded = store.recordRunEnd('a', { runId: 'second', reason: 'upgrade', clearFence: true });
-  assert.equal(recorded.recorded, true);
-  assert.equal(recorded.continuationControlId, existing.continuationControlId);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 1);
+  assert.deepEqual(store.recordRunEnd('a', { runId: 'second', reason: 'upgrade', clearFence: true }), { recorded: true });
   assert.equal(store.getDrainFence('a'), null);
-  assert.deepEqual(store.recordRunEnd('b', { runId: 'b1', reason: 'auth' }), { recorded: true, continuationControlId: null });
-  assert.equal(store.listRunEndings(['a', 'b']).length, 2);
+  assert.deepEqual(store.recordRunEnd('b', { runId: 'b1', reason: 'auth' }), { recorded: true });
+  assert.deepEqual(store.listRunEndings(['a', 'b']).map(row => row.continuationPending), [0, 0]);
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
+    store.recordRunEnd('all-reasons', { runId: reason, reason });
+    assert.equal(store.listRunEndings(['all-reasons'])[0].continuationPending, 0);
+  }
+  assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
 });
 
-test('pending continuation query filters terminal and deleted controls and sorts by control creation', t => {
+test('pending marker query excludes Origin and cleared rows and orders ending time then group', t => {
   let now = clock;
   const { db, store } = fixture(t, { now: () => now * 1000 });
-  const entries = [];
-  for (const group of ['z', 'a', 'b', 'done', 'timeout', 'superseded', 'deleted', 'origin']) {
-    entries.push([group, store.recordRunEnd(group, { runId: group, reason: 'unexpected' }).continuationControlId]);
+  for (const group of ['z', 'b', 'a', 'clear', 'origin']) {
+    store.recordRunEnd(group, { runId: group, reason: 'unexpected' });
     if (group === 'z') now--;
   }
-  for (const [group, id] of entries) {
-    if (['done', 'timeout', 'superseded'].includes(group)) db.prepare('UPDATE control_queue SET status=? WHERE id=?').run(group, id);
-    if (group === 'deleted') db.prepare('DELETE FROM control_queue WHERE id=?').run(id);
-  }
+  store.clearContinuation('clear', { runId: 'replacement' });
   const before = snapshot(db);
-  assert.deepEqual(store.listPendingContinuations().map(row => row.sessionGroup), ['a', 'b', 'z']);
-  assert.deepEqual(Object.keys(store.listPendingContinuations()[0]), ['sessionGroup', 'controlId', 'createdAt', 'endedAt']);
-  assert.deepEqual(store.listRunEndings(entries.map(([group]) => group)).map(row => row.sessionGroup), ['a', 'b', 'deleted', 'done', 'origin', 'superseded', 'timeout', 'z']);
+  assert.deepEqual(store.listPendingContinuations(), [{ sessionGroup: 'a', endedAt: now }, { sessionGroup: 'b', endedAt: now }, { sessionGroup: 'z', endedAt: clock }]);
+  assert.deepEqual(Object.keys(store.listPendingContinuations()[0]), ['sessionGroup', 'endedAt']);
   assert.deepEqual(snapshot(db), before);
 });
 
-test('activation expiration preserves only its current continuation within the update statement', t => {
+test('control expiration leaves pending markers unchanged and has no continuation exemption', t => {
+  const { db, store } = fixture(t, { now: () => clock * 1000 });
+  store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
+  store.recordRunEnd('b', { runId: 'b1', reason: 'unexpected' });
+  const a = store.insertControl('old operation', { sessionGroup: 'a', appendAckSuffix: false });
+  const b = store.insertControl('other operation', { sessionGroup: 'b', appendAckSuffix: false });
+  assert.deepEqual(store.expirePendingControls({ sessionGroup: 'a' }).map(row => row.id), [a.id]);
+  assert.equal(control(db, a.id).status, 'timeout');
+  assert.equal(control(db, b.id).status, 'pending');
+  store.expirePendingControls({ allSessionGroups: true });
+  assert.equal(control(db, b.id).status, 'timeout');
+  assert.deepEqual(store.listPendingContinuations().map(row => row.sessionGroup), ['a', 'b']);
+});
+
+test('ready identity clears only an older pending marker using one update', t => {
   const trace = [];
   const { db, store } = fixture(t, { now: () => clock * 1000 }, false, { verbose: sql => trace.push(sql) });
-  const a = store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
-  const b = store.recordRunEnd('b', { runId: 'b1', reason: 'unexpected' });
-  const other = store.insertControl('old operation', { sessionGroup: 'a', appendAckSuffix: false });
+  store.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
+  const before = snapshot(db);
+  assert.deepEqual(store.clearContinuation('a', { runId: 'old' }), { cleared: false });
+  assert.deepEqual(snapshot(db), before);
   trace.length = 0;
-  const expired = store.expirePendingControls({ sessionGroup: 'a', keepContinuation: true });
-  assert.deepEqual(expired.map(row => row.id), [other.id]);
-  assert.equal(trace.filter(sql => /^SELECT\b/.test(sql)).length, 0, 'no read-before-write of continuation identity');
-  assert.match(trace.find(sql => /^UPDATE/.test(sql)), /NOT EXISTS\(SELECT 1 FROM run_endings/);
-  assert.equal(control(db, a.continuationControlId).status, 'pending');
-  assert.equal(control(db, b.continuationControlId).status, 'pending');
-  store.expirePendingControls({ sessionGroup: 'absent', keepContinuation: true });
-  store.expirePendingControls({ allSessionGroups: true });
-  assert.equal(control(db, a.continuationControlId).status, 'timeout');
-  assert.equal(control(db, b.continuationControlId).status, 'timeout');
+  assert.deepEqual(store.clearContinuation('a', { runId: 'new' }), { cleared: true });
+  assert.equal(trace.filter(sql => /^UPDATE run_endings/.test(sql)).length, 1);
+  assert.equal(trace.filter(sql => /^SELECT.*FROM run_endings/.test(sql)).length, 0);
+  assert.deepEqual(store.listRunEndings(['a']), [{ sessionGroup: 'a', runId: 'old', reason: 'unexpected', endedAt: clock, continuationPending: 0 }]);
+  assert.deepEqual(store.clearContinuation('a', { runId: 'newer' }), { cleared: false });
+  assert.deepEqual(store.clearContinuation('absent', { runId: 'new' }), { cleared: false });
+  const cleared = snapshot(db);
+  assert.deepEqual(store.recordRunEnd('a', { runId: 'old', reason: 'unexpected' }), { recorded: false });
+  assert.deepEqual(snapshot(db), cleared, 'an idempotent ending cannot recreate a cleared marker');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
+});
+
+test('marker clearing rejects invalid identities and single mode without writes', t => {
+  const { db, store } = fixture(t);
+  store.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
+  const before = snapshot(db);
+  for (const group of [null, '', '*']) assert.throws(() => store.clearContinuation(group, { runId: 'new' }), { code: 'SESSION_GROUP_INVALID' });
+  for (const options of [null, {}, { runId: '' }, { runId: ' ' }, { runId: 'new', extra: true }]) assert.throws(() => store.clearContinuation('a', options), { code: 'INVALID_ARGS' });
+  const single = createStore(db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }) });
+  assert.throws(() => single.clearContinuation('a', { runId: 'new' }), { code: 'INVALID_ARGS' });
+  assert.deepEqual(snapshot(db), before);
+});
+
+test('cutover clearing removes all markers including Origin without changing records or controls', t => {
+  const { db, store } = fixture(t, { now: () => clock * 1000 });
+  for (const group of ['a', 'b', 'origin']) store.recordRunEnd(group, { runId: group, reason: 'unexpected' });
+  store.recordRunEnd('idle', { runId: 'idle', reason: 'ttl' });
+  const controls = db.prepare('SELECT * FROM control_queue').all();
+  assert.deepEqual(store.clearAllContinuations(), { cleared: 3 });
+  assert.deepEqual(store.clearAllContinuations(), { cleared: 0 });
   assert.deepEqual(store.listPendingContinuations(), []);
+  assert.deepEqual(store.listRunEndings(['a', 'b', 'origin', 'idle']).map(row => row.continuationPending), [0, 0, 0, 0]);
+  assert.deepEqual(db.prepare('SELECT * FROM control_queue').all(), controls);
 });
 
 test('run-ending reads use one scoped query and exclude unrelated historical groups', t => {
@@ -199,7 +225,7 @@ test('run-ending reads use one scoped query and exclude unrelated historical gro
   assert.deepEqual(result.map(row => row.sessionGroup), ['a', 'b']);
   assert.equal(trace.length, 1);
   assert.match(trace[0], /^SELECT .* FROM run_endings WHERE session_group IN \(/);
-  assert.deepEqual(Object.keys(result[0]), ['sessionGroup', 'runId', 'reason', 'endedAt', 'continuationControlId']);
+  assert.deepEqual(Object.keys(result[0]), ['sessionGroup', 'runId', 'reason', 'endedAt', 'continuationPending']);
   assert.deepEqual(store.listRunEndings(['origin']).map(row => row.runId), ['run-origin']);
   assert.deepEqual(store.listRunEndings(['absent']), []);
   assert.deepEqual(snapshot(db), before);
@@ -228,7 +254,7 @@ test('run-ending migration preserves v1 rows and creates empty ending and occupa
   assert.deepEqual(db.prepare('SELECT * FROM run_endings').all(), []);
   assert.deepEqual(db.prepare('SELECT * FROM slot_occupancy').all(), []);
   const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='run_endings'").get().sql.replace(/\s+/g, ' ');
-  assert.equal(ddl, "CREATE TABLE run_endings ( session_group TEXT PRIMARY KEY NOT NULL CHECK (session_group <> '' AND session_group <> '*'), run_id TEXT NOT NULL CHECK (run_id <> ''), reason TEXT NOT NULL CHECK (reason IN ('ttl','evict','upgrade','auth','model_config','mode_switch','manual_restart','unexpected')), ended_at INTEGER NOT NULL, continuation_control_id INTEGER )");
+  assert.equal(ddl, "CREATE TABLE run_endings ( session_group TEXT PRIMARY KEY NOT NULL CHECK (session_group <> '' AND session_group <> '*'), run_id TEXT NOT NULL CHECK (run_id <> ''), reason TEXT NOT NULL CHECK (reason IN ('ttl','evict','upgrade','auth','model_config','mode_switch','manual_restart','unexpected')), ended_at INTEGER NOT NULL, continuation_pending INTEGER NOT NULL DEFAULT 0 CHECK (continuation_pending IN (0,1)) )");
 });
 
 test('schema two missing the run-ending table is rejected without recreating it or changing rows', t => {
@@ -242,5 +268,23 @@ test('schema two missing the run-ending table is rejected without recreating it 
 
 test('public database facade exposes run-ending primitives', async () => {
   const facade = await import('../c4-db.js');
-  for (const name of ['recordRunEnd', 'listRunEndings', 'listPendingContinuations']) assert.equal(typeof facade[name], 'function');
+  for (const name of ['recordRunEnd', 'listRunEndings', 'listPendingContinuations', 'clearContinuation', 'clearAllContinuations']) assert.equal(typeof facade[name], 'function');
+});
+
+test('schema two with the retired continuation column is rejected without mutation', t => {
+  const { db, store } = fixture(t);
+  store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
+  db.exec('ALTER TABLE run_endings RENAME COLUMN continuation_pending TO continuation_control_id');
+  const before = snapshot(db);
+  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 2, missing run_endings\.continuation_pending/);
+  assert.deepEqual(snapshot(db), before);
+  assert.equal(db.pragma('user_version', { simple: true }), 2);
+});
+
+test('new run-ending marker defaults to zero and rejects non-boolean storage values', t => {
+  const { db } = fixture(t);
+  db.prepare("INSERT INTO run_endings(session_group,run_id,reason,ended_at) VALUES('default','run','ttl',1)").run();
+  assert.equal(db.prepare("SELECT continuation_pending FROM run_endings WHERE session_group='default'").get().continuation_pending, 0);
+  for (const marker of [null, -1, 2]) assert.throws(() => db.prepare("UPDATE run_endings SET continuation_pending=? WHERE session_group='default'").run(marker), /constraint/i);
+  assert.equal(db.prepare("SELECT continuation_pending FROM run_endings WHERE session_group='default'").get().continuation_pending, 0);
 });

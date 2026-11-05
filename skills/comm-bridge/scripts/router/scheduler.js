@@ -62,8 +62,8 @@ export function createRouter(dependencies, configuration = {}) {
     const candidates = [
       ...inbound.map(row => ({ ...row, candidateId: row.headId, continuation: false })),
       ...deps.db.listPendingContinuations().filter(row => !inboundGroups.has(row.sessionGroup))
-        .sort((a, b) => a.endedAt - b.endedAt || a.controlId - b.controlId)
-        .map(row => ({ ...row, candidateId: row.controlId, continuation: true })),
+        .sort((a, b) => a.endedAt - b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0))
+        .map(row => ({ ...row, candidateId: row.sessionGroup, continuation: true })),
     ];
     const eligible = candidates.filter(row => row.sessionGroup !== 'origin' && !state.slots.has(row.sessionGroup) &&
       !state.live.get(row.sessionGroup)?.present && !state.activations.has(row.sessionGroup) && !opportunities.has(row.sessionGroup) &&
@@ -197,7 +197,7 @@ export function createRouter(dependencies, configuration = {}) {
     state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
     const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
       ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
-    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || a.controlId-b.controlId).map(row => row.sessionGroup), ...wanted];
+    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
     for (const group of new Set(ordered)) {
       if (!state.live.has(group)) observe(group);
       const active = state.activations.get(group);

@@ -231,7 +231,7 @@ test('cleanup reports only the failed row actually deleted after another row is 
   assert.equal(f.failures().some(event => event.session_group === 'test:a'), false, 'do not report obsolete occupancy as retained');
 });
 
-test('Origin read failures notify without a slot and recover into one continuation', async t => {
+test('Origin read failures notify without a slot and recover into one restart marker', async t => {
   const f = await runEndingFixture(t); await f.write('origin'); f.context.scenes = [];
   f.service.db = { ...f.store, listRunEndings() { throw fail('read'); } };
   await f.step(); await f.step(59000); assert.equal(f.failures().length, 0);
@@ -240,7 +240,8 @@ test('Origin read failures notify without a slot and recover into one continuati
   await f.step(1799999); assert.equal(f.failures().length, 1);
   await f.step(1); assert.equal(f.failures().length, 2);
   f.service.db = f.store; await f.step(); assert.equal(f.records('origin')[0].reason, 'unexpected');
-  assert.equal(f.db.prepare("SELECT count(*) n FROM control_queue WHERE session_group='origin' AND status='pending'").get().n, 1);
+  assert.equal(f.records('origin')[0].continuationPending, 1);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM control_queue WHERE session_group='origin'").get().n, 0);
 });
 
 for (const failedRead of ['listDrainFences', 'listSlotOccupancy']) {

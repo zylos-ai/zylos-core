@@ -40,7 +40,7 @@ export function migrateToV2(db) {
       run_id TEXT NOT NULL CHECK (run_id <> ''),
       reason TEXT NOT NULL CHECK (reason IN ('ttl','evict','upgrade','auth','model_config','mode_switch','manual_restart','unexpected')),
       ended_at INTEGER NOT NULL,
-      continuation_control_id INTEGER
+      continuation_pending INTEGER NOT NULL DEFAULT 0 CHECK (continuation_pending IN (0,1))
     );
     CREATE TABLE slot_occupancy (
       session_group TEXT PRIMARY KEY NOT NULL

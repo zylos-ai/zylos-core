@@ -22,7 +22,7 @@ function fixture(Class = SupervisorLifecycle) {
     listDrainFences: () => [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })),
     setDrainFence: (g, value) => { if (!f.fences.has(g)) f.fences.set(g, { sessionGroup: g, ...value }); },
     clearDrainFence: g => f.fences.delete(g),
-    recordRunEnd: (g, options) => { f.endings ??= []; f.endings.push({ sessionGroup: g, ...options }); f.fences.delete(g); return { recorded: true, continuationControlId: null }; },
+    recordRunEnd: (g, options) => { f.endings ??= []; f.endings.push({ sessionGroup: g, ...options }); f.fences.delete(g); return { recorded: true }; },
     countRunningConversations: () => f.conversations,
     countGlobalRunningConversations: () => f.conversations,
     countNonTerminalControls: () => ({ running: f.runningControls, runningWithoutDeadline: f.withoutDeadline }),
@@ -761,7 +761,7 @@ test('manual completion records conditionally and fence mismatch never enters fa
 
 test('continuation-only demand does not cause pool eviction', async () => {
   const f = fixture(); f.pending = [];
-  f.db.listPendingContinuations = () => [{ sessionGroup: 'waiting', endedAt: 1, controlId: 1 }];
+  f.db.listPendingContinuations = () => [{ sessionGroup: 'waiting', endedAt: 1 }];
   const result = await f.lifecycle.checkEviction(f.scenes, f.context);
   assert.equal(result.waiting, 0); assert.equal(result.need, 0); assert.equal(f.fences.size, 0);
 });

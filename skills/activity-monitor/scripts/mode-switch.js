@@ -136,6 +136,7 @@ export class ModeSwitchCoordinator {
       if (!await this.onlyGlobal(row)) return null;
       await this.db.expirePendingControls({ machine: true });
       await this.db.expirePendingControls({ allSessionGroups: true });
+      await this.db.clearAllContinuations();
       await this.unblock(row);
       await this.db.setModeTransitionPhase(row.run_id, 'cutover');
       this.event('transition_cutover', row, { phase: 'cutover', reason: null });

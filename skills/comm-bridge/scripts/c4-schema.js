@@ -101,7 +101,7 @@ export const COLUMN_DEFINITIONS = {
     run_id: { type: 'TEXT', pk: false },
     reason: { type: 'TEXT', pk: false },
     ended_at: { type: 'INTEGER', pk: false },
-    continuation_control_id: { type: 'INTEGER', pk: false }
+    continuation_pending: { type: 'INTEGER', pk: false }
   },
   slot_occupancy: {
     session_group: { type: 'TEXT', pk: true },

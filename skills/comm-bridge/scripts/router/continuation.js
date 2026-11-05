@@ -1,4 +1,4 @@
-/** Restart pacing belongs to the Router process; continuation controls stay in C4. */
+/** Restart pacing belongs to the Router process; pending restart markers stay in the run-ending records. */
 export function createContinuationRestarts({ now, deps, diagnostic }) {
   const groups = new Map();
   function entry(group) {

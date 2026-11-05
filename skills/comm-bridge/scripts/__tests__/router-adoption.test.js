@@ -253,20 +253,20 @@ test('a rowless ready run ending before adoption has no record continuation or n
   assert.equal(f.calls.filter(row => row[0] === 'alert' || row[0] === 'reconciliation-alert').length, 0);
 });
 
-test('a late run after held rollback receives the retained continuation only once', async t => {
+test('a late run after held rollback clears the retained marker only once', async t => {
   const f = routerFixture(t);
   f.db.takeSlot('a', { runId: 'retained-run', k: 1 });
-  const ended = f.db.recordRunEnd('a', { runId: 'retained-run', reason: 'upgrade' });
+  f.db.recordRunEnd('a', { runId: 'retained-run', reason: 'upgrade' });
   const { prior } = f.db.takeSlot('a', { runId: 'failed-launch', k: 1 });
   assert.equal(f.db.releaseSlot('a', { runId: 'failed-launch', prior }).released, true);
   ready(f, 'a', 'late-run');
   await start(f, 3);
   assert.equal(f.db.listSlotOccupancy()[0].runId, 'late-run');
   assert.equal(f.db.listSlotOccupancy()[0].state, 'running');
-  assert.equal(f.db.getControlById(ended.continuationControlId).status, 'done');
-  assert.equal(f.calls.filter(row => row[0] === 'control' && row[1] === ended.continuationControlId).length, 1);
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 0);
+  assert.equal(f.events.filter(row => row.event === 'continuation_cleared' && row.session_group === 'a').length, 1);
   await f.rounds(3);
-  assert.equal(f.calls.filter(row => row[0] === 'control' && row[1] === ended.continuationControlId).length, 1);
+  assert.equal(f.events.filter(row => row.event === 'continuation_cleared' && row.session_group === 'a').length, 1);
   assert.equal(f.db.listPendingContinuations().length, 0);
   assert.equal(f.calls.filter(row => row[0] === 'launch').length, 0);
 });

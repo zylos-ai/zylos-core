@@ -32,7 +32,7 @@ for (const boundary of ['before-launch', 'before-ready']) {
     const f = fixture(t, { now: () => now }, true), directory = path.dirname(f.filename);
     const seed = f.store.insertConversation('in', 'a', 'endpoint', 'finished seed');
     f.db.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(seed.id);
-    const id = f.store.recordRunEnd('a', { runId: 'old-run', reason: 'unexpected' }).continuationControlId;
+    f.store.recordRunEnd('a', { runId: 'old-run', reason: 'unexpected' });
     const origin = { present: true, ready: true, tmuxName: tmuxNameForGroup('origin'), runtime: 'claude',
       runId: 'origin-run', sessionId: 'origin-session', createdAt: now / 1000,
       current: { runId: 'origin-run', sessionId: 'origin-session', startupControlIds: [] } };
@@ -50,7 +50,7 @@ for (const boundary of ['before-launch', 'before-ready']) {
         assert.equal(crashed.child.signalCode, null, crashed.stderr()); await delay(5);
       } })());
       assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'barrier.json'), 'utf8')), { name: boundary, pid: crashed.child.pid });
-      assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(id).status, 'pending');
+      assert.equal(f.store.listRunEndings(['a'])[0].continuationPending, 1);
       const occupied = f.store.listSlotOccupancy();
       assert.equal(occupied.length,1); assert.equal(occupied[0].sessionGroup,'a'); assert.equal(occupied[0].state,'running');
       assert.equal(crashed.child.kill('SIGKILL'), true); assert.deepEqual(await crashed.exited, [null, 'SIGKILL']);
@@ -63,10 +63,10 @@ for (const boundary of ['before-launch', 'before-ready']) {
       assert.equal(events.filter(row=>row.event==='orphan-pruned').length,boundary==='before-launch'?1:0);
       assert.equal(f.store.listSlotOccupancy().length,1);
       assert.equal(events.some(row => ['duplicate-launch', 'unexpected-stop'].includes(row.event)), false);
-      assert.equal(events.filter(row => row.event === 'control' && row.id === id).length, 1);
-      assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(id).status, 'done');
+      assert.equal(events.filter(row => row.event === 'continuation_cleared').length, 1);
+      assert.equal(f.store.listRunEndings(['a'])[0].continuationPending, 0);
       const prompt = events.find(row => row.event === 'ready').promptId;
-      assert.ok(events.findIndex(row => row.event === 'control' && row.id === prompt) < events.findIndex(row => row.event === 'control' && row.id === id));
+      assert.deepEqual(events.filter(row => row.event === 'control').map(row => row.id), [prompt]);
       const scene = JSON.parse(fs.readFileSync(path.join(directory, 'scene.json'), 'utf8'));
       if (before.a) assert.equal(scene.a.runId, before.a.runId);
     } finally {

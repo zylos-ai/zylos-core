@@ -107,7 +107,7 @@ export function createActivationManager(context) {
       if (resident) { state.resident.failures++; state.resident.absentSince = null; state.resident.readySince = null; }
       try {
         if (!resident) {
-          for (const row of deps.db.expirePendingControls({ sessionGroup: group, keepContinuation: true })) {
+          for (const row of deps.db.expirePendingControls({ sessionGroup: group })) {
             diagnostic('control_expired', { session_group: group, control_id: row.id });
           }
         }
@@ -155,8 +155,8 @@ export function createActivationManager(context) {
       if (live.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) return;
       if (deps.db.getNextPending({ sessionGroups: [group] })) return;
       const current = deps.db.listPendingContinuations().find(row => row.sessionGroup === group);
-      if (!current || current.controlId !== candidate.controlId) return;
-      opportunity = context.acquireOpportunity(group, { id: current.controlId, continuation: true });
+      if (!current) return;
+      opportunity = context.acquireOpportunity(group, { id: group, continuation: true });
       if (!opportunity) return;
       runId = uuid();
       slot = deps.db.takeSlot(group, { runId, k: options.poolSize });
@@ -187,12 +187,12 @@ export function createActivationManager(context) {
       const latest = await deps.readLiveIdentity(group);
       state.live.set(group, latest);
       if (latest.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null || deps.db.getNextPending({ sessionGroups: [group] })) return;
-      if (deps.db.listPendingContinuations().find(row => row.sessionGroup === group)?.controlId !== candidate.controlId) return;
-      for (const row of deps.db.expirePendingControls({ sessionGroup: group, keepContinuation: true })) diagnostic('control_expired', { session_group: group, control_id: row.id });
+      if (!deps.db.listPendingContinuations().some(row => row.sessionGroup === group)) return;
+      for (const row of deps.db.expirePendingControls({ sessionGroup: group })) diagnostic('control_expired', { session_group: group, control_id: row.id });
       activation.launchStarted = true;
       try {
         context.continuationRestarts.started(group);
-        diagnostic('activate_continuation', { session_group: group, runId, runtime: launchConfig.runtime, control_id: candidate.controlId });
+        diagnostic('activate_continuation', { session_group: group, runId, runtime: launchConfig.runtime });
         if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
         await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode });
       } catch (error) { activation.launchError = error; }

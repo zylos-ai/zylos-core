@@ -10,8 +10,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     if (value.allSessionGroups === true) return { sql: 'session_group IS NOT NULL', args: [] };
     requireGroup(value.sessionGroup); return { sql: 'session_group=?', args: [value.sessionGroup] };
   }
-  const continuationContent = 'Your previous session in this group ended before its work was confirmed finished (context rotation, crash, upgrade, configuration change, or authentication recovery). Read the handoff file in full, check the actual state of each unfinished item, and continue the work. If nothing is unfinished, do nothing and stay idle.';
-  const endingColumns = 'session_group AS sessionGroup,run_id AS runId,reason,ended_at AS endedAt,continuation_control_id AS continuationControlId';
+  const endingColumns = 'session_group AS sessionGroup,run_id AS runId,reason,ended_at AS endedAt,continuation_pending AS continuationPending';
   const slotColumns = 'session_group AS sessionGroup,run_id AS runId,state,held_until AS heldUntil,created_at AS createdAt';
   function slotGroup(group) {
     requireGroup(group);
@@ -26,7 +25,8 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
   function multiSlots() {
     if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Pool slots require multi mode');
   }
-  function insert(c, content, { sessionGroup = null, targetBinding = null, priority = 3, requireIdle = false, bypassState = false, ackDeadlineAt = null, availableAt = null, appendAckSuffix = true } = {}, current = seconds()) {
+  function insert(c, content, { sessionGroup = null, targetBinding = null, priority = 3, requireIdle = false, bypassState = false, ackDeadlineAt = null, availableAt = null, appendAckSuffix = true } = {}) {
+    const current = seconds();
     const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
     if (sessionGroup === null) {
       let config; try { config = baseline(); } catch (cause) { throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required when configuration cannot be read', { cause }); }
@@ -60,21 +60,16 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Run endings require multi mode');
       const previous = get(c, 'SELECT * FROM run_endings WHERE session_group=?', sessionGroup);
       const recorded = previous?.run_id !== runId;
-      let continuationControlId = previous?.continuation_control_id ?? null;
       if (recorded) {
         const current = seconds();
         const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
-        if (!open && (['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason) || (reason === 'manual_restart' && sessionGroup !== 'origin'))) {
-          continuationControlId = insert(c, continuationContent, { sessionGroup, priority: 2, appendAckSuffix: false }, current).id;
-        } else {
-          continuationControlId = get(c, "SELECT id FROM control_queue WHERE id=? AND status='pending'", continuationControlId)?.id ?? null;
-        }
-        run(c, 'INSERT INTO run_endings(session_group,run_id,reason,ended_at,continuation_control_id) VALUES(?,?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET run_id=excluded.run_id,reason=excluded.reason,ended_at=excluded.ended_at,continuation_control_id=excluded.continuation_control_id', sessionGroup, runId, reason, current, continuationControlId);
+        const continuationPending = !open && (['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason) || (reason === 'manual_restart' && sessionGroup !== 'origin')) ? 1 : 0;
+        run(c, 'INSERT INTO run_endings(session_group,run_id,reason,ended_at,continuation_pending) VALUES(?,?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET run_id=excluded.run_id,reason=excluded.reason,ended_at=excluded.ended_at,continuation_pending=excluded.continuation_pending', sessionGroup, runId, reason, current, continuationPending);
         if (['ttl', 'evict'].includes(reason)) run(c, 'DELETE FROM slot_occupancy WHERE session_group=? AND run_id=?', sessionGroup, runId);
         else run(c, "UPDATE slot_occupancy SET state='held',held_until=? WHERE session_group=? AND run_id=? AND state='running'", current + 120, sessionGroup, runId);
       }
       if (clearFence) clear(c, sessionGroup, clearFence === true ? {} : clearFence, clearFence !== true);
-      return { recorded, continuationControlId };
+      return { recorded };
     }),
     takeSlot: (sessionGroup, options) => write(c => {
       slotGroup(sessionGroup); slotOptions(options, ['runId', 'k']);
@@ -133,7 +128,14 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       for (const group of sessionGroups) requireGroup(group);
       return read(c => all(c, `SELECT ${endingColumns} FROM run_endings WHERE session_group IN (${sessionGroups.map(() => '?').join(',')}) ORDER BY session_group COLLATE BINARY`, ...sessionGroups));
     },
-    listPendingContinuations: () => read(c => all(c, "SELECT e.session_group AS sessionGroup,c.id AS controlId,c.created_at AS createdAt,e.ended_at AS endedAt FROM run_endings e JOIN control_queue c ON c.id=e.continuation_control_id WHERE c.status='pending' AND e.session_group<>'origin' ORDER BY c.created_at,c.id")),
+    listPendingContinuations: () => read(c => all(c, "SELECT session_group AS sessionGroup,ended_at AS endedAt FROM run_endings WHERE continuation_pending=1 AND session_group<>'origin' ORDER BY ended_at,session_group COLLATE BINARY")),
+    clearContinuation: (sessionGroup, options) => write(c => {
+      requireGroup(sessionGroup); slotOptions(options, ['runId']);
+      const { runId } = options; slotRun(runId);
+      if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Continuations require multi mode');
+      return { cleared: run(c, 'UPDATE run_endings SET continuation_pending=0 WHERE session_group=? AND continuation_pending=1 AND run_id<>?', sessionGroup, runId).changes > 0 };
+    }),
+    clearAllContinuations: () => write(c => ({ cleared: run(c, 'UPDATE run_endings SET continuation_pending=0 WHERE continuation_pending=1').changes })),
     getNextPendingControl: (current = seconds(), { sessionGroups } = {}) => {
       let sql = 'session_group IS NULL', args = [];
       if (sessionGroups !== undefined) {
@@ -145,11 +147,8 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     },
     claimControl: id => write(c => run(c, `UPDATE control_queue SET status='running',updated_at=? WHERE id=? AND status='pending' AND ${unfenced}`, seconds(), id).changes > 0),
     expirePendingControls: value => {
-      const { keepContinuation = false, ...scope } = value ?? {};
-      const t = target(scope);
-      if (typeof keepContinuation !== 'boolean' || (keepContinuation && scope.sessionGroup === undefined)) throw dataError('INVALID_ARGS', 'keepContinuation requires a session group');
-      const keep = keepContinuation ? ' AND NOT EXISTS(SELECT 1 FROM run_endings e WHERE e.session_group=? AND e.continuation_control_id=control_queue.id)' : '';
-      return write(c => all(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE status='pending' AND ${t.sql}${keep} RETURNING id,session_group,raw_content`, seconds(), ...t.args, ...(keepContinuation ? [scope.sessionGroup] : [])));
+      const t = target(value);
+      return write(c => all(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE status='pending' AND ${t.sql} RETURNING id,session_group,raw_content`, seconds(), ...t.args));
     },
     expireStaleRunningControls: (value, { deliveredBefore }) => {
       if (!Number.isSafeInteger(deliveredBefore)) throw dataError('INVALID_ARGS', 'deliveredBefore must be integer Unix seconds');

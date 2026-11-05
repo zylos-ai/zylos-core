@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ModeSwitchCoordinator } from '../mode-switch.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { DispatcherRestartConfirmation } from '../dispatcher-restart-confirmation.js';
+import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 
 const error = code => Object.assign(new Error(code), { code });
 function fixture(overrides = {}) {
@@ -19,6 +20,7 @@ function fixture(overrides = {}) {
     countGlobalRunningConversations: () => 0,
     absorbForTransition: () => { calls.push('absorb'); row = { ...row, phase: 'converting', cutoff: 10, absorbed_ids: [] }; return { cutoff: 10, absorbedIds: [] }; },
     expirePendingControls: target => calls.push(Object.keys(target)[0]),
+    clearAllContinuations: () => { calls.push('clearContinuations'); return { cleared: 0 }; },
   };
   const deps = { db, readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }), readRequests: () => requests,
     legacyPresent: () => legacy, observe: () => sourceScenes, lifecycle: { advanceReclaim: async () => {} },
@@ -74,7 +76,44 @@ test('stages only move forward and conversion never repeats after cutover', asyn
   await owner.advance(); assert.equal(f.row.phase, 'converting'); assert.equal(f.fences[0].sessionGroup, '*');
   await owner.advance(); assert.equal(f.row.phase, 'cutover');
   await owner.advance(); assert.equal(f.row.phase, 'complete'); assert.deepEqual(f.fences, []);
-  assert.deepEqual(f.calls, ['begin', 'absorb', 'convert', 'machine', 'allSessionGroups', 'cutover', 'writeMode', 'complete']);
+  assert.deepEqual(f.calls, ['begin', 'absorb', 'convert', 'machine', 'allSessionGroups', 'clearContinuations', 'cutover', 'writeMode', 'complete']);
+});
+
+// Integration boundary: real mode coordinator and memory SQLite only. Run for
+// cutover marker cleanup changes; skip unrelated process/runtime conversion.
+// The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; scene,
+// conversion, restart and clock are injected, with no tmux/network/PM2/notify.
+// Store teardown closes its private database; this case starts no background work.
+test('mode cutover clears every pending restart marker before changing mode and does not restore them', async t => {
+  let mode = 'multi';
+  const clock = 1800000000000;
+  const { store } = storeFixture(t, { now: () => clock,
+    readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
+  for (const group of ['origin', 'telegram:a']) {
+    store.recordRunEnd(group, { runId: `ended-${group}`, reason: 'unexpected' });
+  }
+  const originalPhase = store.setModeTransitionPhase;
+  let cutovers = 0;
+  store.setModeTransitionPhase = (runId, phase, ...options) => {
+    if (phase === 'cutover') {
+      cutovers++;
+      assert.deepEqual(store.listRunEndings(['origin', 'telegram:a']).map(row => row.continuationPending), [0, 0]);
+    }
+    return originalPhase(runId, phase, ...options);
+  };
+  const owner = new ModeSwitchCoordinator({ db: store, now: () => clock,
+    readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }),
+    readRequests: () => [], legacyPresent: () => false, observe: () => [],
+    lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
+    writeMode: target => { mode = target; }, restart: { advance: async () => ({ confirmed: true }) } });
+  for (const target of ['single', 'multi']) {
+    assert.equal((await owner.handle({ ...request, target })).result, 'accepted');
+    for (let i = 0; i < 3; i++) await owner.advance();
+    assert.equal(mode, target);
+    assert.equal(store.getModeTransition(), null);
+  }
+  assert.equal(cutovers, 2);
+  assert.deepEqual(store.listPendingContinuations(), []);
 });
 
 for (const phase of ['gating', 'converting', 'cutover']) test(`recovery preserves ${phase} state and rejects conflicting`, async () => {
