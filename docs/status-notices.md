@@ -217,9 +217,12 @@ Missing/expired/invalid reset values select `quota_exhausted` instead.
 The `capacity` context has four IDs: `memory_reclaim` (an idle conversation was
 closed because memory was almost full), `oom_kill` (the system stopped a program
 because memory ran out), `inputs_unreadable` (automatic-mode memory readings have
-been unavailable for 60 seconds), and `publish_failed` (the capacity publication has failed for
-60 seconds). Fixed mode does not send `inputs_unreadable`; after switching back
-to automatic mode, its 60-second timer starts with the first failed reading.
+been unavailable for 60 seconds), and `publish_failed` (automatic-mode capacity
+publication has failed for 60 seconds). Fixed mode sends neither
+`inputs_unreadable` nor `publish_failed`, and does not count their failure
+durations. After switching back to automatic mode, each 60-second timer starts
+with its first failed reading or publication. Publication failures still produce
+diagnostics in fixed mode; cgroup v2 OOM notifications remain enabled.
 These are complete notices without inbound or first-failure suffixes.
 Only `memory_reclaim` supports `{idleMinutes}`: the Supervisor supplies the eviction
 idle threshold in minutes, rounding down and using at least 1. An override for

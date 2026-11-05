@@ -225,3 +225,35 @@ test('fixed unreadable inputs stay silent and automatic mode starts a new sixty-
   await f.tick(50000); await f.tick(9000); assert.equal(f.notices.length, 0);
   await f.tick(1000); assert.equal(f.notices.join(','), 'inputs_unreadable');
 });
+
+// Integration boundary: real fixed controller publication failure -> diagnostic
+// and notice consumer. Run for fixed publication failure semantics; skip other
+// changes. Fresh isolated HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR;
+// fixture files/in-memory DB only, no tmux/PM2/network. Cleanup after the case.
+test('fixed publication failures stay silent after sixty seconds but retain diagnostics', async () => {
+  const f = fixture({ publish: () => { throw Object.assign(new Error('private publication failure'), { code: 'EACCES' }); } });
+  f.setFixed(true);
+  await f.tick(0); await f.tick(60000);
+  assert.equal(f.notices.length, 0);
+  assert.equal(f.capacity.publishFailedSince, null);
+  assert.equal(f.events.filter(row => row.event === 'capacity_publish_failed').length, 2);
+});
+
+// Integration boundary: real controller's fixed-to-automatic publication timer
+// reset and automatic notice consumer. Run for publication mode/timer changes;
+// skip unrelated work. Runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/
+// TMUX_TMPDIR; private fixture files/in-memory DB, no tmux/PM2/network. Finite
+// calculations only, fixture cleanup registered before first calculation.
+test('fixed-to-automatic publication failures start a fresh sixty-second duration', async () => {
+  const f = fixture({ publish: () => { throw Object.assign(new Error('private publication failure'), { code: 'EACCES' }); } });
+  f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 1000 * MiB });
+  f.setFixed(true);
+  await f.tick(0); await f.tick(60000);
+  assert.equal(f.capacity.publishFailedSince, null);
+  f.setFixed(false); await f.tick(10000);
+  assert.equal(f.capacity.publishFailedSince, f.time());
+  await f.tick(50000); await f.tick(9000); assert.equal(f.notices.length, 0);
+  await f.tick(1000); assert.equal(f.notices.join(','), 'publish_failed');
+  await f.tick(1790000); assert.equal(f.notices.length, 1);
+  await f.tick(10000); assert.equal(f.notices.join(','), 'publish_failed,publish_failed');
+});
