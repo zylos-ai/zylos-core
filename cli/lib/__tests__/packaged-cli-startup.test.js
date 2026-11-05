@@ -127,7 +127,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
         readRuntimeHealth: () => ({ health: 'unavailable' }),
         diagnostics: { diagnostic: (event, fields) => events.push({ event, ...fields }), maintain() {} },
         log() {},
-      }, { poolSize: 2 });
+      }, { poolSize: () => 2 });
       try {
         await dispatcher.initialize();
         for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }

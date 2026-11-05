@@ -61,6 +61,7 @@ const fresh = now => ({ v: 1, k: 3, source: 'auto', computedAt: now });
 for (const [name, record, expected] of [
   ['fresh', fresh, 3],
   ['old', now => ({ ...fresh(now), computedAt: now - 61000 }), 2],
+  ['old below baseline', now => ({ ...fresh(now), k: 1, computedAt: now - 61000 }), 1],
   ['future', now => ({ ...fresh(now), computedAt: now + 6000 }), 2],
   ['missing', undefined, 2],
   ['unsupported version', now => ({ ...fresh(now), v: 2 }), 2],
@@ -74,8 +75,8 @@ for (const [name, record, expected] of [
     assert.equal(f.taken.find(row => row.group === 'new')?.k, expected);
     assert.ok(f.calls.some(row => row[0] === 'launch' && row[1].sessionGroup === 'new'));
     const m4record = typeof record === 'function' ? record(f.now()) : null;
-    assert.ok(expected <= f.m4(m4record));
-    if (name === 'fresh') assert.equal(expected, f.m4(m4record));
+    if (name === 'fresh' || name.startsWith('old')) assert.equal(expected, f.m4(m4record));
+    else assert.ok(expected <= f.m4(m4record));
   });
 }
 
@@ -84,9 +85,9 @@ for (const [name, record] of [
   ['invalid', '{'],
 ]) for (const explicit of [undefined, '3']) {
   test(`dispatcher uses ${explicit ? 'environment' : 'file'} fixed capacity when publication is ${name}`, async t => {
-    const f = await fixture(t, { fixed: 2, explicit, record });
+    const f = await fixture(t, { fixed: 1, explicit, record });
     f.add('new'); await f.rounds();
-    assert.equal(f.taken.find(row => row.group === 'new')?.k, explicit ? 3 : 2);
+    assert.equal(f.taken.find(row => row.group === 'new')?.k, explicit ? 3 : 1);
   });
 }
 
@@ -123,13 +124,10 @@ test('stopped publisher preserves delivery and admits below fallback while queui
   assert.equal(f.row(queued.id).status, 'delivered');
 });
 
-test('failed publication ages to the same fallback as the supervisor last successful record', async t => {
+test('expired publication and supervisor record use the same fallback', async t => {
   const f = await fixture(t, { record: fresh });
   const published = fresh(f.now());
   assert.equal(f.router.availableCapacity(), f.m4(published));
-  // A failed atomic rename leaves the last complete file intact.
-  const replacement = f.file + '.blocked'; fs.mkdirSync(replacement);
-  assert.throws(() => fs.renameSync(replacement, f.file));
   f.advance(61000); f.add('new'); await f.rounds();
   const k = f.taken.find(row => row.group === 'new')?.k;
   assert.equal(k, 2); assert.equal(k, f.m4(published));

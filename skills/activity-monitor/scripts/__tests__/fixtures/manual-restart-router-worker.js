@@ -42,7 +42,7 @@ const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode, 
   prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   handleExpired: async () => {}, formatConversation: row => row.content,
   diagnostic: (event, fields) => trace('diagnostic', { event, ...fields }), diagnostics: { maintain() {} }, log: message => trace('log', { message }),
-}, { tmux, poolSize: 4, readyTimeoutMs: 100, delivery: { periodicEnabled: false, verifyWaitMs: 1, verifyAttempts: 1, captureEnabled: false } });
+}, { tmux, poolSize: () => 4, readyTimeoutMs: 100, delivery: { periodicEnabled: false, verifyWaitMs: 1, verifyAttempts: 1, captureEnabled: false } });
 await router.initialize(); await router.idle();
 process.on('message', async message => {
   const { id, op } = message;
