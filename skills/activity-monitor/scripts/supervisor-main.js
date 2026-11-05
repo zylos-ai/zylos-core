@@ -87,7 +87,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   });
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
   const alert=event=>{
-    const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`].filter(Boolean).join(' ');
+    const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,event.message].filter(Boolean).join(' ');
     const message=event.event==='repeated_unexpected_run_end'
       ? messageForStatus({context:'repeated_failure',noticeCode:'ended_unexpectedly',group:event.sessionGroup ?? event.session_group,count:event.count},configuration?.statusNotices ?? {})
       : `Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim();

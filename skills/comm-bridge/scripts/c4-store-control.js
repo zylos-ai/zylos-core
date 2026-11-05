@@ -104,6 +104,15 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       }
       return { released: run(c, "DELETE FROM slot_occupancy WHERE session_group=? AND run_id=? AND state='running'", sessionGroup, runId).changes > 0 };
     }),
+    adoptSlot: (sessionGroup, options) => write(c => {
+      slotGroup(sessionGroup); slotOptions(options, ['runId']);
+      const { runId } = options; slotRun(runId); multiSlots();
+      if (get(c, 'SELECT run_id FROM run_endings WHERE session_group=?', sessionGroup)?.run_id === runId) return { adopted: false, reason: 'ended' };
+      const prior = get(c, 'SELECT run_id,state FROM slot_occupancy WHERE session_group=?', sessionGroup);
+      if (prior?.run_id === runId && prior.state === 'running') return { adopted: false, reason: 'already' };
+      run(c, "INSERT INTO slot_occupancy(session_group,run_id,state,held_until,created_at) VALUES(?,?,'running',NULL,?) ON CONFLICT(session_group) DO UPDATE SET run_id=excluded.run_id,state='running',held_until=NULL,created_at=excluded.created_at", sessionGroup, runId, seconds());
+      return { adopted: true };
+    }),
     listSlotOccupancy: () => read(c => all(c, `SELECT ${slotColumns} FROM slot_occupancy WHERE state='running' OR held_until>? ORDER BY session_group COLLATE BINARY`, seconds())),
     pruneSlots: options => write(c => {
       slotOptions(options, ['orphans', 'minAgeSeconds']);
@@ -113,11 +122,17 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       multiSlots();
       const current = seconds();
       const deletedHeld = run(c, "DELETE FROM slot_occupancy WHERE state='held' AND held_until<=?", current).changes;
-      let deletedOrphans = 0;
-      for (const { sessionGroup, runId } of orphans) deletedOrphans += run(c, "DELETE FROM slot_occupancy WHERE session_group=? AND run_id=? AND state='running' AND created_at<=?", sessionGroup, runId, current - minAgeSeconds).changes;
+      const deletedOrphans = [];
+      for (const { sessionGroup, runId } of orphans) {
+        if (run(c, "DELETE FROM slot_occupancy WHERE session_group=? AND run_id=? AND state='running' AND created_at<=?", sessionGroup, runId, current - minAgeSeconds).changes) deletedOrphans.push({ sessionGroup, runId });
+      }
       return { deletedHeld, deletedOrphans };
     }),
-    listRunEndings: () => read(c => all(c, `SELECT ${endingColumns} FROM run_endings ORDER BY session_group COLLATE BINARY`)),
+    listRunEndings: sessionGroups => {
+      if (!Array.isArray(sessionGroups) || sessionGroups.length === 0) throw dataError('INVALID_ARGS', 'sessionGroups must be a nonempty array');
+      for (const group of sessionGroups) requireGroup(group);
+      return read(c => all(c, `SELECT ${endingColumns} FROM run_endings WHERE session_group IN (${sessionGroups.map(() => '?').join(',')}) ORDER BY session_group COLLATE BINARY`, ...sessionGroups));
+    },
     listPendingContinuations: () => read(c => all(c, "SELECT e.session_group AS sessionGroup,c.id AS controlId,c.created_at AS createdAt,e.ended_at AS endedAt FROM run_endings e JOIN control_queue c ON c.id=e.continuation_control_id WHERE c.status='pending' AND e.session_group<>'origin' ORDER BY c.created_at,c.id")),
     getNextPendingControl: (current = seconds(), { sessionGroups } = {}) => {
       let sql = 'session_group IS NULL', args = [];

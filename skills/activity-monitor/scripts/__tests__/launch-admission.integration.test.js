@@ -76,7 +76,7 @@ test('⑮ restart before probe conservatively counts once per lost association',
  const f=await fixture(t);await f.add();let live=await f.launched();
  for(let cycle=0;cycle<2;cycle++){
   const before=count(await f.health());await f.m4.kill();f.m4=await f.start('m4');await f.m1.call('fence',{group:'origin'});await f.time(f.clock+1000);await f.m4.call('probe',{group:'chat'});const state=await f.health();assert.equal(count(state),before+1);
-  await f.killRun();await f.m1.call('settleSlot',{group:'chat',how:'orphan'});await f.round();await f.add();await f.attempt();assert.equal(responses(f).at(-1).response.code,'attempt_backoff');assert.equal(count(await f.health()),before+1);
+  await f.killRun();await f.round();await f.m1.call('settleSlot',{group:'chat',how:'orphan'});await f.round();await f.add();await f.attempt();assert.equal(responses(f).at(-1).response.code,'attempt_backoff');assert.equal(count(await f.health()),before+1);
   if(cycle===0){await f.time(f.clock+300000);live=await f.launched();assert.equal(count(await f.health()),before+2)}
  }
 });

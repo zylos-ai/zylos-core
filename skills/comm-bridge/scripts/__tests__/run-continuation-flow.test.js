@@ -21,6 +21,7 @@ test('a restarted supervisor resumes an absent group through the persistent cont
   const message = f.add('team');
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(message.id);
   const group = message.session_group;
+  f.db.takeSlot(group, { runId: 'old-run', k: 2 });
   const directory = groupRunDir(group, env);
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(path.join(directory, 'current-session.json'), JSON.stringify({ runId: 'old-run', sessionId: 'old-session', ts: f.now() - 10000 }));
@@ -29,7 +30,7 @@ test('a restarted supervisor resumes an absent group through the persistent cont
     readIdentity: f.deps.readLiveIdentity, diagnostic: () => {}, reportError: error => { throw error; } });
   // A new instance has no earlier scene sample or in-memory exit history.
   await supervisor().advance(context);
-  const record = f.db.listRunEndings()[0];
+  const record = f.db.listRunEndings(['team', 'gated-upgrade'])[0];
   assert.equal(record.runId, 'old-run'); assert.equal(record.reason, 'unexpected');
   assert.equal(f.db.listPendingContinuations().length, 1);
   assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM conversations').get().n, 1);
@@ -51,8 +52,8 @@ test('a restarted supervisor resumes an absent group through the persistent cont
   await supervisor().advance(context);
   f.advance(120000); await f.rounds(4);
   assert.equal(launches().length, 1);
-  assert.equal(f.db.listRunEndings()[0].reason, 'ttl');
-  assert.equal(f.db.listRunEndings()[0].continuationControlId, null);
+  assert.equal(f.db.listRunEndings(['team', 'gated-upgrade'])[0].reason, 'ttl');
+  assert.equal(f.db.listRunEndings(['team', 'gated-upgrade'])[0].continuationControlId, null);
 });
 
 // Cutover contract: the existing coordinator must expire persistent continuation
@@ -72,7 +73,7 @@ test('mode cutover expires pending continuation through the normal coordinator',
   assert.equal(f.db.getModeTransition().phase, 'cutover');
   assert.equal(f.db.getControlById(ended.continuationControlId).status, 'timeout');
   assert.deepEqual(f.db.listPendingContinuations(), []);
-  assert.equal(f.db.listRunEndings()[0].continuationControlId, ended.continuationControlId);
+  assert.equal(f.db.listRunEndings(['team', 'gated-upgrade'])[0].continuationControlId, ended.continuationControlId);
 });
 
 
@@ -108,7 +109,7 @@ test('upgrade reclaim finishes during gating without creating a continuation bef
   await coordinator.advance();
   assert.deepEqual(stops, [runId]);
   assert.equal(f.db.getDrainFence(group), null);
-  assert.deepEqual(f.db.listRunEndings().map(row => ({ sessionGroup: row.sessionGroup, runId: row.runId,
+  assert.deepEqual(f.db.listRunEndings(['team', 'gated-upgrade']).map(row => ({ sessionGroup: row.sessionGroup, runId: row.runId,
     reason: row.reason, continuationControlId: row.continuationControlId })),
   [{ sessionGroup: group, runId, reason: 'upgrade', continuationControlId: null }]);
   assert.equal(groupControls(), 0);

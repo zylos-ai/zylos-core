@@ -27,19 +27,19 @@ async function fixture(t, statusNotices) {
   t.diagnostic(JSON.stringify({ repeatedFailureFixture: root, paths: Object.fromEntries(
     ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR'].map(key => [key, env[key]])), socket }));
   let time = 2_000_000, sequence = 0, service;
-  const rows = new Map(), records = [], sends = [], logs = [];
+  const rows = new Map(), slots = new Map(), records = [], sends = [], logs = [];
   const config = { session_mode: 'multi', runtime: 'claude', session_pool_size: 2,
     alert_target: 'telegram:fixture-owner', statusNotices };
   const db = {
     getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
     getLastActivity: () => 0, getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
-    listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: 0 }),
+    listSlotOccupancy: () => [...slots.values()], pruneSlots: () => ({ deletedHeld: [], deletedOrphans: [] }),
     listPendingSessionGroups: () => [], listPendingContinuations: () => [],
-    listRunEndings: () => [...rows.values()], getLastCompletedModeTransition: () => null,
+    listRunEndings: groups => [...rows.values()].filter(row => groups.includes(row.sessionGroup)), getLastCompletedModeTransition: () => null,
     getControlById: () => null, resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
     recordRunEnd: (group, value) => {
       const row = { sessionGroup: group, ...value, endedAt: Math.floor(time / 1000) };
-      rows.set(group, row); records.push(row); return { recorded: true };
+      rows.set(group, row); slots.delete(group); records.push(row); return { recorded: true };
     },
   };
   t.after(async () => {
@@ -61,7 +61,9 @@ async function fixture(t, statusNotices) {
     const directory = path.join(zylos, 'activity-monitor', 'session-groups', group);
     fs.mkdirSync(directory, { recursive: true });
     const file = path.join(directory, 'current-session.json'), temporary = file + '.new';
-    fs.writeFileSync(temporary, JSON.stringify({ runId: `run-${++sequence}`, ts: time - duration }));
+    const runId = `run-${++sequence}`;
+    slots.set(group, { sessionGroup: group, runId, state: 'running' });
+    fs.writeFileSync(temporary, JSON.stringify({ runId, ts: time - duration }));
     fs.renameSync(temporary, file);
     await round();
   }
@@ -143,4 +145,8 @@ test('other supervisor alerts retain their existing diagnostic wording', async t
     requestId: 'request-1', reason: 'fixture_reason', count: 9 });
   assert.equal(f.sends.length, 1);
   assert.equal(f.sends[0].message, 'Supervisor: fixture_attention (test:a). requestId=request-1 reason=fixture_reason');
+  await f.service.supervisor.lifecycle.d.alert({ event: 'run_ending_reconciliation_failed', session_group: 'test:a',
+    reason: 'READ_FAILED', message: 'Occupancy row remains.' });
+  assert.equal(f.sends.length, 2);
+  assert.equal(f.sends[1].message, 'Supervisor: run_ending_reconciliation_failed (test:a). reason=READ_FAILED Occupancy row remains.');
 });

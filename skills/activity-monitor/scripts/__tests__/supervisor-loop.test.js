@@ -179,3 +179,25 @@ test('ending reconciliation follows exit cleanup and precedes publication and re
   assert.ok(f.calls.indexOf('endings') < f.calls.indexOf('reclaim'));
   await f.loop.stop();
 });
+
+test('the post-migration transition reread reports reconciliation failure before ending the round',async t=>{
+ let reads=0,migrations=0;const failure=new Error('transition reread failed'),reported=[];
+ const f=fixture({readConfiguration:async()=>({mode:'multi',legacy:true}),
+  getModeTransition:async()=>{if(++reads===2)throw failure;return null;},
+  advanceAutomaticMigration:async()=>{migrations++;},reconciliationReadFailed:async error=>reported.push(error)});
+ t.after(()=>f.loop.stop());
+ await f.loop.start();
+ assert.equal(reads,2);assert.equal(migrations,1);assert.deepEqual(reported,[failure]);
+ assert.ok(f.calls.includes('error:round'));assert.equal(f.calls.includes('exits'),false);
+ assert.equal(f.timers.length,1);
+});
+
+test('single-mode authority failures skip the reconciliation failure callback',async t=>{
+ const reported=[];const f=fixture({readConfiguration:async()=>({mode:'single'}),
+  getModeTransition:async()=>{throw new Error('single authority unavailable');},
+  reconciliationReadFailed:async error=>reported.push(error)});
+ t.after(()=>f.loop.stop());
+ await f.loop.start();await f.loop.tick();
+ assert.deepEqual(reported,[]);assert.equal(f.timers.length,2);
+ assert.equal(f.calls.filter(item=>item==='error:round').length,2);
+});
