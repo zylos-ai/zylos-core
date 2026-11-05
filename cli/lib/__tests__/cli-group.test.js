@@ -135,9 +135,9 @@ test('real group overrides CLI selects stored pairs, agrees with get and reads w
       assert.equal(model.value.data.running, null);
     }
   }
-  const page = f.json(['overrides', '--limit', '1']);
+  const page = f.json(['overrides']);
   assert.equal(page.status, 0, page.stderr); assert.equal(page.value.data.runtimeTotal, 3);
-  assert.equal(page.value.data.runtime.length, 1); assert.equal(page.value.data.nextAfter, 'chat:B');
+  assert.equal(page.value.data.runtime.length, 3); assert.equal(page.value.data.nextAfter, null);
   assert.equal('model' in page.value.data, false);
   assert.equal(observer.pragma('data_version', { simple: true }), version);
   assert.ok(dbBytes().equals(before), 'database or WAL bytes changed');
@@ -147,17 +147,16 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
   const f = overridesFixture(t);
   const empty = f.json(['overrides']);
   assert.equal(empty.status, 0, empty.stderr);
-  assert.deepEqual(empty.value, { ok: true, data: { baseline: { runtime: 'codex', sessionMode: 'single' }, runtimeTotal: 0, runtime: [], nextAfter: null } });
+  assert.deepEqual(empty.value, { ok: true, data: { runtimeTotal: 0, runtime: [], nextAfter: null } });
   const selectedEmpty = f.json(['overrides', '--group', 'chat:missing']);
   assert.equal(selectedEmpty.status, 0, selectedEmpty.stderr);
   assert.deepEqual(selectedEmpty.value.data, { baseline: { runtime: 'codex', sessionMode: 'single' }, runtime: [], model: [] });
   for (const flags of [
     ['--group', 'bad key'], ['extra'], ['--bogus'], ['--json', '--json'],
-    ['--group'], ['--match'], ['--limit'], ['--after'],
-    ['--group', 'chat:a', '--limit', '1'], ['--group', 'chat:a', '--match', 'a'], ['--group', 'chat:a', '--after', 'a'],
-    ['--limit', '0'], ['--limit', '501'], ['--limit', 'x'], ['--limit', '1.5'], ['--limit', '-1'],
-    ['--match', '  '], ['--match', 'x'.repeat(65)], ['--after', ''],
-    ['--limit', '1', '--limit', '2'], ['--match', 'a', '--match', 'b'], ['--after', 'a', '--after', 'b'],
+    ['--group'], ['--match'], ['--after'], ['--limit', '5'],
+    ['--group', 'chat:a', '--match', 'a'], ['--group', 'chat:a', '--after', 'a'],
+    ['--match', '  '], ['--match', 'x'.repeat(65)], ['--after', ''], ['--after', '  '],
+    ['--match', 'a', '--match', 'b'], ['--after', 'a', '--after', 'b'],
     Array.from({ length: 501 }, (_, i) => ['--group', `chat:g${i}`]).flat(),
   ]) {
     const result = f.json(['overrides', ...flags]);
@@ -165,7 +164,7 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
     assert.equal(result.value.error.code, 'INVALID_ARGUMENT'); assert.equal('data' in result.value, false);
     assert.deepEqual(result.value.error.persisted, []);
   }
-  for (const flags of [['--bogus'], ['extra'], ['--group', 'bad key'], ['--group', 'chat:a', '--limit', '1']]) {
+  for (const flags of [['--bogus'], ['extra'], ['--group', 'bad key'], ['--limit', '5']]) {
     const result = f.run(['overrides', ...flags]);
     assert.equal(result.status, 1); assert.equal(result.stdout, '');
     assert.match(result.stderr, /^Error \[INVALID_ARGUMENT\]:/);
@@ -174,7 +173,7 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
   assert.equal(old.status, 1);
   assert.equal(old.value.ok, false); assert.equal(old.value.error.code, 'INVALID_ARGUMENT');
   assert.deepEqual(old.value.error.persisted, []);
-  assert.equal(old.value.error.message, 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--limit <n>] [--after <group>]');
+  assert.equal(old.value.error.message, 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>]');
   const maxGroups = f.json(['overrides', ...Array.from({ length: 500 }, (_, i) => ['--group', `chat:g${i}`]).flat()]);
   assert.equal(maxGroups.status, 0, maxGroups.stderr);
   assert.deepEqual(maxGroups.value.data.runtime, []); assert.deepEqual(maxGroups.value.data.model, []);
@@ -186,11 +185,18 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
   assert.equal(internal.value.error.code, 'INTERNAL_ERROR');
   assert.deepEqual(Object.keys(internal.value.error).sort(), ['code', 'message']);
   fs.writeFileSync(f.config, '{bad JSON');
-  const badConfig = f.json(['overrides']);
+  f.db.prepare('INSERT INTO group_runtime_overrides(session_group,runtime) VALUES (?,?)').run('chat:kept', 'codex');
+  const withoutBaseline = f.json(['overrides']);
+  assert.equal(withoutBaseline.status, 0, withoutBaseline.stderr);
+  assert.deepEqual(withoutBaseline.value, { ok: true, data: {
+    runtimeTotal: 1, runtime: [{ sessionGroup: 'chat:kept', runtime: 'codex' }], nextAfter: null,
+  } });
+  assert.equal('baseline' in withoutBaseline.value.data, false);
+  const badConfig = f.json(['overrides', '--group', 'chat:kept']);
   assert.equal(badConfig.status, 1); assert.equal(badConfig.value.ok, false);
   assert.equal(badConfig.value.error.code, 'CONFIG_UNREADABLE'); assert.equal('data' in badConfig.value, false);
   assert.deepEqual(Object.keys(badConfig.value.error).sort(), ['code', 'message']);
-  const text = f.run(['overrides']);
+  const text = f.run(['overrides', '--group', 'chat:kept']);
   assert.equal(text.status, 1); assert.equal(text.stdout, ''); assert.match(text.stderr, /^Error \[CONFIG_UNREADABLE\]:/);
   fs.writeFileSync(f.config, JSON.stringify({ runtime: 'codex', session_mode: 'single' }));
   f.db.close();
@@ -232,8 +238,6 @@ test('real override CLI paginates runtime rows and searches without changing the
   assert.equal(first.value.data.runtime.length, 100); assert.equal(second.value.data.runtime.length, 25);
   assert.equal(second.value.data.nextAfter, null);
   assert.equal(new Set([...first.value.data.runtime, ...second.value.data.runtime].map(row => row.sessionGroup)).size, 125);
-  const maximum = f.json(['overrides', '--limit', '500']);
-  assert.equal(maximum.status, 0, maximum.stderr); assert.equal(maximum.value.data.runtime.length, 250);
   f.db.prepare('DELETE FROM group_runtime_overrides WHERE session_group>=?').run(expected[100].session_group);
   const exact = f.json(['overrides']);
   assert.equal(exact.status, 0, exact.stderr); assert.equal(exact.value.data.runtime.length, 100);
@@ -263,11 +267,11 @@ test('real override CLI accepts trailing JSON flags and valid search and cursor 
   const insert = f.db.prepare('INSERT INTO group_runtime_overrides(session_group,runtime) VALUES (?,?)');
   for (const group of ['chat:other', 'chat:--json', `chat:${'x'.repeat(64)}`]) insert.run(group, 'codex');
   for (const [args, expected] of [
-    [['overrides', '--limit', '1', '--json'], 'chat:--json'],
+    [['overrides', '--match', 'other', '--json'], 'chat:other'],
     [['overrides', '--group', 'chat:other', '--json'], 'chat:other'],
     [['overrides', '--match', '--json', '--json'], 'chat:--json'],
     [['overrides', '--match', 'x'.repeat(64), '--json'], `chat:${'x'.repeat(64)}`],
-    [['overrides', '--after', '   ', '--limit', '1', '--json'], 'chat:--json'],
+    [['overrides', '--after', 'chat:other', '--json'], `chat:${'x'.repeat(64)}`],
   ]) {
     const result = f.run(args);
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
@@ -298,24 +302,28 @@ test('real override CLI searches literal underscores and pages case-sensitive gr
     for (const item of row.value.data.runtime) assert.ok(item.sessionGroup.toLowerCase().includes('oc_'));
   }
   assert.equal(keys.includes('lark:ocX1'), false);
-  const exact = f.json(['overrides', '--match', 'OC_', '--limit', '101']);
-  assert.equal(exact.status, 0, exact.stderr); assert.equal(exact.value.data.runtime.length, 101);
+  f.db.prepare('DELETE FROM group_runtime_overrides WHERE session_group=?').run(second.value.data.runtime[0].sessionGroup);
+  const exact = f.json(['overrides', '--match', 'OC_']);
+  assert.equal(exact.status, 0, exact.stderr); assert.equal(exact.value.data.runtime.length, 100);
   assert.equal(exact.value.data.nextAfter, null);
   const dashed = f.json(['overrides', '--match', '--b']);
   assert.equal(dashed.status, 0, dashed.stderr);
   assert.deepEqual(dashed.value.data.runtime, [{ sessionGroup: 'chat:--b', runtime: 'claude' }]);
   const jsonText = f.run(['overrides', '--match', '--json']);
   assert.equal(jsonText.status, 0, jsonText.stderr); assert.match(jsonText.stdout, /^OK: /);
-  const dashedCursor = f.json(['overrides', '--after', '--b', '--limit', '1']);
+  const dashedCursor = f.json(['overrides', '--after', '--b']);
   assert.equal(dashedCursor.status, 0, dashedCursor.stderr);
   f.db.prepare('DELETE FROM group_runtime_overrides').run();
-  for (const group of ['chat:A', 'chat:a', 'chat:B']) insert.run(group, 'codex');
-  let after;
-  for (const group of ['chat:A', 'chat:B', 'chat:a']) {
-    const page = f.json(['overrides', '--limit', '1', ...(after ? ['--after', after] : [])]);
-    assert.equal(page.status, 0, page.stderr);
-    assert.equal(page.value.data.runtime.length, 1); assert.equal(page.value.data.runtime[0].sessionGroup, group);
-    assert.equal(page.value.data.nextAfter, group === 'chat:a' ? null : group);
-    after = page.value.data.nextAfter;
-  }
+  for (let i = 0; i < 99; i++) insert.run(`chat:A${String(i).padStart(2, '0')}`, 'codex');
+  for (const group of ['chat:B', 'chat:a']) insert.run(group, 'codex');
+  const sorted = f.json(['overrides']);
+  assert.equal(sorted.status, 0, sorted.stderr);
+  assert.equal(sorted.value.data.runtime.length, 100);
+  for (let i = 0; i < 99; i++) assert.equal(sorted.value.data.runtime[i].sessionGroup, `chat:A${String(i).padStart(2, '0')}`);
+  assert.equal(sorted.value.data.runtime[99].sessionGroup, 'chat:B');
+  assert.equal(sorted.value.data.nextAfter, 'chat:B');
+  const last = f.json(['overrides', '--after', sorted.value.data.nextAfter]);
+  assert.equal(last.status, 0, last.stderr);
+  assert.deepEqual(last.value.data.runtime, [{ sessionGroup: 'chat:a', runtime: 'codex' }]);
+  assert.equal(last.value.data.nextAfter, null);
 });

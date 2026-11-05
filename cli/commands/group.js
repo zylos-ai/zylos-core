@@ -1,6 +1,6 @@
 import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-group.js';
 
-const usage = 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--limit <n>] [--after <group>]';
+const usage = 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>]';
 
 export async function groupCommand(args, { run, io = process } = {}) {
   const [kind, ...flags] = args;
@@ -11,7 +11,7 @@ export async function groupCommand(args, { run, io = process } = {}) {
     for (let i = 0; i < flags.length; i++) {
       const flag = flags[i];
       if (flag === '--json') { if (json) invalid = true; json = true; continue; }
-      if (!['--group', '--match', '--limit', '--after'].includes(flag)) { invalid = true; continue; }
+      if (!['--group', '--match', '--after'].includes(flag)) { invalid = true; continue; }
       const value = flags[++i];
       if (value === undefined) { invalid = true; break; }
       if (flag === '--group') groups.push(value);
@@ -20,12 +20,11 @@ export async function groupCommand(args, { run, io = process } = {}) {
     }
     if (groups.length > 500 || groups.some(group => !parseSessionGroup(group)) ||
         (groups.length && Object.keys(options).length)) invalid = true;
-    if (options.limit !== undefined && (!/^[0-9]+$/.test(options.limit) || Number(options.limit) < 1 || Number(options.limit) > 500)) invalid = true;
     if (options.match !== undefined) {
       options.match = options.match.trim();
       if (!options.match || options.match.length > 64) invalid = true;
     }
-    if (options.after === '') invalid = true;
+    if (options.after !== undefined && !options.after.trim()) invalid = true;
     if (invalid) {
       const result = { ok: false, error: { code: 'INVALID_ARGUMENT', message: usage, persisted: [] } };
       (json ? io.stdout : io.stderr).write(json ? `${JSON.stringify(result)}\n` : `Error [${result.error.code}]: ${result.error.message}\n`);
@@ -35,7 +34,7 @@ export async function groupCommand(args, { run, io = process } = {}) {
     try {
       const { listOverrides } = await import('../../skills/comm-bridge/scripts/c4-config-handler.js');
       const store = await import('../../skills/comm-bridge/scripts/c4-db.js');
-      const data = listOverrides({ store, groups, ...options, limit: options.limit === undefined ? 100 : Number(options.limit) });
+      const data = listOverrides({ store, groups, ...options });
       io.stdout.write(json ? `${JSON.stringify({ ok: true, data })}\n` : `OK: ${JSON.stringify(data)}\n`);
       process.exitCode = 0;
       return 0;

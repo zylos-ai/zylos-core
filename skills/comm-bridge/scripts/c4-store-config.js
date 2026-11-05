@@ -1,5 +1,7 @@
 import { dataError, requireGroup } from './c4-session-group.js';
 
+const PAGE = 100;
+
 export function configFunctions({ read, write, snapshot, get, all, run, knownGroup, dependencies }) {
   function runtime(value) {
     if (typeof value !== 'string' || !value) throw dataError('INVALID_ARGS', 'runtime is required');
@@ -85,13 +87,13 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
         };
       });
     },
-    listRuntimeOverridesPage: ({ match, limit, after }) => snapshot(c => {
+    listRuntimeOverridesPage: ({ match, after }) => snapshot(c => {
       const total = get(c, 'SELECT COUNT(*) AS total FROM group_runtime_overrides').total;
       const conditions = [], values = [];
       if (after !== undefined) { conditions.push('session_group > ? COLLATE BINARY'); values.push(after); }
       if (match !== undefined) { conditions.push('instr(lower(session_group), lower(?)) > 0'); values.push(match); }
-      const rows = all(c, `SELECT session_group AS sessionGroup,runtime FROM group_runtime_overrides${conditions.length ? ` WHERE ${conditions.join(' AND ')}` : ''} ORDER BY session_group COLLATE BINARY LIMIT ?`, ...values, limit + 1);
-      return { total, rows: rows.slice(0, limit), nextAfter: rows.length > limit ? rows[limit - 1].sessionGroup : null };
+      const rows = all(c, `SELECT session_group AS sessionGroup,runtime FROM group_runtime_overrides${conditions.length ? ` WHERE ${conditions.join(' AND ')}` : ''} ORDER BY session_group COLLATE BINARY LIMIT ?`, ...values, PAGE + 1);
+      return { total, rows: rows.slice(0, PAGE), nextAfter: rows.length > PAGE ? rows[PAGE - 1].sessionGroup : null };
     }),
     readBaseline: baseline,
   };

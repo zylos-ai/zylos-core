@@ -174,9 +174,9 @@ test('requested override groups preserve runtime/model pairs in binary order and
     ],
   });
   assert.equal('running' in data, false);
-  const page = listOverrides({ store, limit: 1 });
-  assert.equal(page.runtimeTotal, 3); assert.equal(page.runtime.length, 1);
-  assert.equal(page.nextAfter, 'chat:B'); assert.equal('model' in page, false);
+  const page = listOverrides({ store });
+  assert.equal(page.runtimeTotal, 3); assert.equal(page.runtime.length, 3);
+  assert.equal(page.nextAfter, null); assert.equal('model' in page, false);
   const handler = createConfigHandler({ store, readSessionMode: () => 'multi', observeRunning: () => ({ hasProcess: false }) });
   for (const sessionGroup of ['chat:B', 'chat:a', 'chat:empty']) {
     const runtime = data.runtime.find(row => row.sessionGroup === sessionGroup)?.runtime ?? data.baseline.runtime;
@@ -221,18 +221,22 @@ test('override snapshot reads committed rows while another writer holds its tran
   }
 });
 
-test('empty override lists keep baseline defaults and reject unreadable configuration', t => {
+test('only selected override groups read baseline configuration', t => {
   const { store, dependencies } = storeFixture(t);
   dependencies.readConfig = () => ({ state: 'missing' });
-  assert.deepEqual(listOverrides({ store }), { baseline: { runtime: 'claude', sessionMode: 'single' }, runtimeTotal: 0, runtime: [], nextAfter: null });
+  assert.deepEqual(listOverrides({ store }), { runtimeTotal: 0, runtime: [], nextAfter: null });
   assert.deepEqual(listOverrides({ store, groups: ['chat:absent'] }), { baseline: { runtime: 'claude', sessionMode: 'single' }, runtime: [], model: [] });
   for (const readConfig of [
     () => ({ state: 'unreadable' }), () => { throw new Error('bad JSON'); },
     () => ({ state: 'ok', config: { runtime: 'unknown' } }),
   ]) {
-    dependencies.readConfig = readConfig;
-    assert.throws(() => listOverrides({ store }), { code: 'CONFIG_UNREADABLE' });
+    let reads = 0;
+    dependencies.readConfig = () => { reads++; return readConfig(); };
+    const page = listOverrides({ store });
+    assert.deepEqual(page, { runtimeTotal: 0, runtime: [], nextAfter: null });
+    assert.equal('baseline' in page, false); assert.equal(reads, 0);
     assert.throws(() => listOverrides({ store, groups: ['chat:absent'] }), { code: 'CONFIG_UNREADABLE' });
+    assert.equal(reads, 1);
   }
 });
 
@@ -256,7 +260,6 @@ test('runtime override pages are bounded, ordered and retain the unfiltered tota
   }
   assert.equal(keys.length, 250); assert.equal(new Set(keys).size, 250);
   for (let i = 0; i < keys.length; i++) assert.equal(keys[i], expected[i].session_group);
-  assert.equal(listOverrides({ store, limit: 500 }).runtime.length, 250);
   const first = listOverrides({ store, match: 'OC_' });
   const second = listOverrides({ store, match: 'OC_', after: first.nextAfter });
   assert.equal(first.runtimeTotal, 250); assert.equal(second.runtimeTotal, 250);
@@ -308,15 +311,9 @@ test('runtime pagination reads at most one extra SQL row even with a large overr
   } finally { db.prepare = prepare; }
 });
 
-test('override handler defaults its page size and preserves literal search and binary cursors', t => {
+test('override pages preserve literal search and binary cursors', t => {
   const { store, db } = storeFixture(t);
-  const page = store.listRuntimeOverridesPage;
-  store.listRuntimeOverridesPage = options => {
-    assert.equal(options.limit, 100);
-    return page(options);
-  };
   assert.equal(listOverrides({ store }).runtimeTotal, 0);
-  store.listRuntimeOverridesPage = page;
   const insert = db.prepare('INSERT INTO group_runtime_overrides(session_group,runtime) VALUES (?,?)');
   db.transaction(() => {
     for (let i = 0; i < 101; i++) insert.run(`lark:${i % 2 ? 'OC_' : 'oc_'}${String(i).padStart(3, '0')}`, 'codex');
@@ -331,17 +328,18 @@ test('override handler defaults its page size and preserves literal search and b
   assert.equal(new Set(keys).size, 101);
   for (const key of keys) assert.ok(key.toLowerCase().includes('oc_'));
   assert.equal(keys.includes('lark:ocX1'), false);
-  const exact = listOverrides({ store, match: 'OC_', limit: 101 });
-  assert.equal(exact.runtime.length, 101); assert.equal(exact.nextAfter, null);
+  db.prepare('DELETE FROM group_runtime_overrides WHERE session_group=?').run(second.runtime[0].sessionGroup);
+  const exact = listOverrides({ store, match: 'OC_' });
+  assert.equal(exact.runtime.length, 100); assert.equal(exact.nextAfter, null);
   db.prepare('DELETE FROM group_runtime_overrides').run();
-  for (const group of ['chat:A', 'chat:a', 'chat:B']) insert.run(group, 'codex');
-  const selected = listOverrides({ store, groups: ['chat:a', 'chat:A', 'chat:B'] });
-  assert.deepEqual(selected.runtime.map(row => row.sessionGroup), ['chat:A', 'chat:B', 'chat:a']);
-  let after;
-  for (const group of ['chat:A', 'chat:B', 'chat:a']) {
-    const result = listOverrides({ store, limit: 1, after });
-    assert.equal(result.runtime.length, 1); assert.equal(result.runtime[0].sessionGroup, group);
-    assert.equal(result.nextAfter, group === 'chat:a' ? null : group);
-    after = result.nextAfter;
-  }
+  for (let i = 0; i < 99; i++) insert.run(`chat:A${String(i).padStart(2, '0')}`, 'codex');
+  for (const group of ['chat:B', 'chat:a']) insert.run(group, 'codex');
+  const sorted = listOverrides({ store });
+  assert.equal(sorted.runtime.length, 100);
+  for (let i = 0; i < 99; i++) assert.equal(sorted.runtime[i].sessionGroup, `chat:A${String(i).padStart(2, '0')}`);
+  assert.equal(sorted.runtime[99].sessionGroup, 'chat:B');
+  assert.equal(sorted.nextAfter, 'chat:B');
+  const last = listOverrides({ store, after: sorted.nextAfter });
+  assert.deepEqual(last.runtime, [{ sessionGroup: 'chat:a', runtime: 'codex' }]);
+  assert.equal(last.nextAfter, null);
 });
