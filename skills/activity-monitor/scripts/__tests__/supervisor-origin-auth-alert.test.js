@@ -16,7 +16,7 @@ function fixture(t) {
   const db={getModeTransition:()=>state.transition,getDrainFence:group=>state.fences.find(f=>f.sessionGroup===group)??null,
     listDrainFences:()=>state.fences,listPendingSessionGroups:()=>state.pending,listPendingContinuations:()=>[],
     getOriginNeed:()=>({controls:{count:state.controls},inbound:{oldestAt:state.oldestAt}}),
-    insertControl:(content,options)=>{state.queued.push({content,...options});return state.queued.length;},getControlById:()=>null};
+    insertControl:(content,options)=>{const row={id:state.queued.length+1,status:'pending',content,...options};state.queued.push(row);return row;},getControlById:()=>null};
   const scenes={observe:()=>state.scenes,readIdentity:group=>state.scenes.find(s=>s.sessionGroup===group)??{present:false},
     observeGroup:()=>({present:false}),listRuns:()=>state.scenes,bindTarget:scene=>({runtime:scene.runtime,runId:scene.runId})};
   const owner=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},now:()=>state.now,

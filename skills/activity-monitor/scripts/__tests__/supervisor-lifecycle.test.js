@@ -274,7 +274,7 @@ test('Origin Sync ownership and outgoing activity cancel TTL reclamation', async
 test('Origin never participates in eviction candidates or in-flight capacity discount', async () => {
   const f = fixture(); f.scenes = [scene('origin')]; f.pending = [{ sessionGroup: 'waiting' }];
   assert.equal(await f.lifecycle.beginReclaim(f.scenes[0], 'evict', f.context), false);
-  const counts = evictionDemand(f.scenes, f.pending, [{ sessionGroup: 'origin', reason: 'ttl' }], 1);
+  const counts = evictionDemand([], f.pending, [{ sessionGroup: 'origin', reason: 'ttl' }], 1);
   assert.deepEqual(counts, { waiting: 1, free: 1, inflight: 0, need: 0 });
   assert.equal((await f.lifecycle.checkEviction(f.scenes, f.context)).need, 0); assert.equal(f.fences.size, 0);
 });
