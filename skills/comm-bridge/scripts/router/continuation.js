@@ -27,16 +27,16 @@ export function createContinuationRestarts({ now, deps, diagnostic }) {
       const state = entry(group);
       state.attempts++; state.absentSince = null; state.readySince = null; state.readyRunId = null;
     },
-    ready(group) { const state = groups.get(group); if (state) { state.failures = 0; state.reason = null; } },
+    ready(group) { const state = groups.get(group); if (state) { state.failures = 0; } },
     failed(group, runId, reason) {
       const state = entry(group);
-      state.failures++; state.reason = reason; state.absentSince = now(); state.readySince = null; state.readyRunId = null;
+      state.failures++; state.absentSince = now(); state.readySince = null; state.readyRunId = null;
       if (state.failures >= 5 && now() - lastAlertAt >= 1800000) {
         lastAlertAt = now();
         let others = 0;
         for (const [key, value] of groups) if (key !== group && value.failures >= 5) others++;
-        const fields = { sessionGroup: group, runId, failures: state.failures, reason: state.reason, others };
-        diagnostic('continuation_start_failed', { session_group: group, runId, failures: state.failures, reason: state.reason });
+        const fields = { sessionGroup: group, runId, failures: state.failures, reason, others };
+        diagnostic('continuation_start_failed', { session_group: group, runId, failures: state.failures, reason });
         deps.alert?.('continuation_start_failed', fields);
       }
     },
