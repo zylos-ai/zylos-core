@@ -190,14 +190,21 @@ through the normal deployment workflow:
           "zh": "当前服务暂时受限，本次请求未能完成，请稍后重新发送。",
           "en": "The service is rate-limited. This request could not complete. Please resend it later."
         }
+      },
+      "capacity": {
+        "oom_kill": {
+          "zh": "这台机器内存不足，系统已结束一个程序。",
+          "en": "This machine ran out of memory and the system stopped a program."
+        }
       }
     }
   }
 }
 ```
 
-The two template contexts are `inbound` and `failure`, each with `zh` and `en`
-text. Stable quota IDs are `quota_exhausted`, `quota_exhausted_reset`,
+The template contexts are `inbound`, `failure`, and `capacity`, each with `zh`
+and `en` text. Stable quota IDs for `inbound` and `failure` are
+`quota_exhausted`, `quota_exhausted_reset`,
 `model_quota_exhausted`, `usage_credits_required`, `usage_credits_exhausted`,
 and `quota_allocation_unavailable`. Factual nonquota IDs are `model_unavailable`,
 `billing_error`, and `service_error`; baseline IDs are `auth_failed`,
@@ -206,6 +213,21 @@ numbered 1-33 entries identify diagnostic rules, not templates. The reset templa
 supports `{resetAt}`, a validated epoch-millisecond time formatted with an explicit
 IANA time-zone label. `timeZone` defaults to the host zone; invalid zones use UTC.
 Missing/expired/invalid reset values select `quota_exhausted` instead.
+
+The `capacity` context has four IDs: `memory_reclaim` (an idle conversation was
+closed because memory was almost full), `oom_kill` (the system stopped a program
+because memory ran out), `inputs_unreadable` (automatic-mode memory readings have
+been unavailable for 60 seconds), and `publish_failed` (the capacity publication has failed for
+60 seconds). Fixed mode does not send `inputs_unreadable`; after switching back
+to automatic mode, its 60-second timer starts with the first failed reading.
+These are complete notices without inbound or first-failure suffixes.
+Only `memory_reclaim` supports `{idleMinutes}`: the Supervisor supplies the eviction
+idle threshold in minutes, rounding down and using at least 1. An override for
+another ID containing `{idleMinutes}` is invalid and uses the default instead.
+Each capacity ID is sent at most once every 30 minutes through the Supervisor's
+existing alert destination, with Web Console fallback. If configuration cannot be
+read, the alert path uses the default wording and brand. Group names, memory
+readings, and error text remain diagnostics and are not inserted into the message.
 
 Overrides use only the selected ID. A generic `rate_limited` override cannot
 replace an identified `quota_exhausted_reset` message. The earlier `language`

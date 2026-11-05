@@ -7,31 +7,39 @@ import { startSupervisor } from '../supervisor-main.js';
 import * as poolReader from '../../../../cli/lib/session-pool-config.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(t, { mode = 'multi', fixed = 7, readMemory } = {}) {
+async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch = {}, sendAlert, initialScenes = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'capacity-entry-'));
-  let config = { session_mode: mode, runtime: 'claude', session_pool_size: fixed }, time = 1000000;
+  let config = { session_mode: mode, runtime: 'claude', session_pool_size: fixed, ...configPatch }, time = 1000000;
   const env = { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, 'pm2'), ZYLOS_SESSION_POOL_SIZE: '' };
   fs.mkdirSync(path.join(root, '.zylos'));
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify(config));
   assert.notEqual(root, process.env.ZYLOS_DIR);
-  let reads = 0, observations = 0;
+  let reads = 0, observations = 0, configError = false;
+  const currentScenes = initialScenes, fences = new Map(), sends = [];
+  const diagnostics = () => {
+    const file = path.join(root, 'activity-monitor', 'supervisor-events.jsonl');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+  };
   const logs = [];
   const memory = readMemory ?? (async () => ({ source: 'host', limitBytes: 8 * 1024 ** 3, usedBytes: 2 * 1024 ** 3 }));
   const service = await startSupervisor({ env, now: () => time,
-    readMode: () => ({ mode: config.session_mode, keyPresent: true }), readConfig: () => config,
+    readMode: () => ({ mode: config.session_mode, keyPresent: true }), readConfig: () => { if (configError) throw Object.assign(new Error('private configuration unreadable'), { code: 'CONFIG_UNREADABLE' }); return config; },
     readMemoryInputs: () => { reads++; return memory(); },
-    db: { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
+    db: { getModeTransition: () => null, listDrainFences: () => [...fences.values()], getDrainFence: group => fences.get(group),
+      setDrainFence: (group, row) => fences.set(group, { ...row, sessionGroup: group }),
+      getLastActivity: () => 0, getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
       listPendingSessionGroups: () => [], getControlById: () => null,
       resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) },
-    scenes: { observe: async () => { observations++; return []; },
-      readIdentity: async () => ({ present: false }), observeGroup: async () => ({ present: false }),
+    scenes: { observe: async () => { observations++; return currentScenes.map(scene => ({ ...scene })); },
+      readIdentity: async () => ({ present: false }), observeGroup: async group => currentScenes.find(scene => scene.sessionGroup === group) ?? { present: false },
       listRuns: async () => [], readRun: async () => null },
     legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
-    sendAlert: () => { throw new Error('External sends are forbidden in this fixture'); }, log: event => logs.push(event),
+    readSyncMarker: () => ({ held: false, stale: false }),
+    sendAlert: async (target, message) => { sends.push({ target, message }); return sendAlert ? sendAlert(target, message) : true; }, log: event => logs.push(event),
     loopOptions: { schedule: () => 1, cancel: () => {} } });
   t.after(async () => { await service.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const round = async () => { await service.supervisor.loop.tick(); await flush(); };
-  return { root, service, round, logs, reads: () => reads, observations: () => observations,
+  return { root, service, round, logs, sends, fences, currentScenes, diagnostics, setConfigError: value => { configError = value; }, reads: () => reads, observations: () => observations,
     setMode: value => { config = { ...config, session_mode: value }; },
     setFixed: value => { config = { ...config, session_pool_size: value }; },
     advance: ms => { time += ms; },
@@ -138,10 +146,108 @@ for (const fixed of [false, true]) {
     fs.mkdirSync(file); // Actual atomic rename fails against this private directory.
     if (fixed) f.setFixed(4);
     f.advance(61000); await f.round();
-    assert.ok(f.logs.some(event => event.event === 'capacity_publish_failed'));
+    assert.ok(f.diagnostics().some(event => event.event === 'capacity_publish_failed'));
     assert.equal(f.service.supervisor.loop.configuration.capacity, fixed ? 4 : 2);
     assert.equal(f.service.supervisor.loop.configuration.capacitySource, fixed ? 'fixed' : 'fallback');
     assert.deepEqual(JSON.parse(fs.readFileSync(file + '.saved', 'utf8')), published);
     assert.equal(fs.statSync(file).isDirectory(), true);
+  });
+}
+
+for (const route of ['target', 'missing', 'failed']) {
+  // Integration boundary: actual entry -> capacity OOM event -> renderer ->
+  // unchanged guard.notify routing -> injected sender and real F12 diagnostic.
+  // Run for notice/entry wiring; skip unrelated lifecycle. Runner provides fresh
+  // HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; private am.sock and fixture
+  // DB/scenes only, no tmux/PM2/network. Service closes before fixture cleanup.
+  test(`capacity notices use the configured destination and Web Console fallback (${route})`, async t => {
+    let oomKills = 0;
+    const f = await fixture(t, { configPatch: route === 'missing' ? {} : { alert_target: 'telegram:fixture-owner' },
+      readMemory: async () => ({ source: 'cgroup2', limitBytes: 4 * 1024 ** 3, usedBytes: 1 * 1024 ** 3, oomKills }),
+      sendAlert: target => route === 'failed' && target.channel === 'telegram' ? false : true });
+    await flush(); oomKills = 1; f.advance(10000); await f.round(); await flush();
+    const last = f.sends.at(-1);
+    assert.equal(last.target.channel, route === 'target' ? 'telegram' : 'web-console');
+    assert.equal(f.sends.length, route === 'failed' ? 2 : 1);
+    assert.equal(last.message.split('\n').length, 2);
+    assert.match(last.message, /^\[Zylos\] 这台机器内存不够用/);
+    assert.doesNotMatch(last.message, /cgroup|oom|fixture-owner|1073741824/i);
+    assert.ok(f.diagnostics().some(row => row.event === 'container_oom_kill' && row.oomKills === 1));
+  });
+}
+
+// Integration boundary: actual readConfiguration failure and already-observed
+// input/publication failure timers, renderer default config and guard sender.
+// Run when F1 failure/notice scheduling changes; skip unrelated lifecycle.
+// Fresh runner HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; private am.sock,
+// fixture DB and injected memory/scenes, no tmux/PM2/network. Lifecycle stop and
+// file cleanup run even on assertion failure; no detached background work.
+test('unreadable configuration sends delayed default notices without stale calculations or reclaim', async t => {
+  const f = await fixture(t, { fixed: null, readMemory: async () => null,
+    configPatch: { statusNotices: { brand: 'FixtureBrand' } } });
+  await flush();
+  const file = path.join(f.root, 'activity-monitor', 'pool-capacity.json');
+  fs.renameSync(file, file + '.saved'); fs.mkdirSync(file);
+  f.advance(10000); await f.round();
+  const before = f.reads(), observations = f.observations();
+  f.setConfigError(true); f.advance(59000); await f.round(); await flush();
+  assert.equal(f.sends.length, 1, 'only the earlier input failure has reached sixty seconds');
+  assert.match(f.sends[0].message, /^\[Zylos\] 暂时读不到/);
+  f.advance(1000); await f.round(); await flush();
+  assert.equal(f.sends.length, 2); assert.match(f.sends[1].message, /^\[Zylos\] 同时运行的对话数量/);
+  assert.equal(f.reads(), before); assert.equal(f.observations(), observations);
+  assert.equal(f.fences.size, 0);
+  assert.equal(fs.statSync(file).isDirectory(), true);
+  f.advance(60000); await f.round(); await flush(); assert.equal(f.sends.length, 2);
+});
+
+// Integration boundary: real pressure candidate -> beginReclaim -> F12 and
+// guard.notify, with effective startup eviction threshold. Run for pressure
+// wiring/idle duration changes; skip other lifecycle work. All five runner
+// paths isolated; private am.sock, in-memory DB/scenes, no tmux/PM2/network.
+// No process is stopped; only the real beginReclaim fence is observed.
+test('entry pressure uses effective idle minutes and writes its selected group only to diagnostics', async t => {
+  const group = { sessionGroup: 'private-group', present: true, ready: true, state: 'idle',
+    runId: 'private-run', sessionId: 'session', createdAt: 0, idleSince: 0, processRunning: false };
+  const f = await fixture(t, { fixed: null, initialScenes: [group], configPatch: { session_evict_min_idle_seconds: 659 },
+    readMemory: async () => ({ source: 'host', limitBytes: 4 * 1024 ** 3, usedBytes: 3900 * 1024 ** 2 }) });
+  await flush(); f.advance(10000); await f.round(); await flush();
+  assert.equal(f.fences.get(group.sessionGroup)?.reason, 'evict');
+  const notice = f.sends.find(row => row.message.includes('这台机器内存快用完了'));
+  assert.ok(notice); assert.match(notice.message, /10 分钟以上/); assert.match(notice.message, /more than 10 minutes/);
+  assert.doesNotMatch(notice.message, /private-group|private-run|4089446400/);
+  const event = f.diagnostics().find(row => row.event === 'capacity_pressure_evict');
+  assert.equal(event?.session_group, group.sessionGroup); assert.equal(event?.k, 1);
+});
+
+for (const change of ['single', 'fixed', 'stop']) {
+  // Integration boundary: actual capacity async read -> existing admission queue
+  // -> fresh mode/fixed/stopping guard before pressure fencing. Run when this
+  // queue/guard changes; skip other lifecycle work. Fresh runner HOME/ZYLOS_DIR/
+  // PM2_HOME/short TMPDIR/TMUX_TMPDIR; private am.sock and fixture DB/scenes only,
+  // no tmux/PM2/network. Both held promises are released in finally, stop awaited.
+  test(`queued pressure work is cancelled by a fresh ${change} boundary`, { timeout: 2000 }, async t => {
+    let releaseMemory, releaseQueue, memoryReads = 0;
+    const heldMemory = new Promise(resolve => { releaseMemory = resolve; });
+    const heldQueue = new Promise(resolve => { releaseQueue = resolve; });
+    const memory = { source: 'host', limitBytes: 4 * 1024 ** 3, usedBytes: 3900 * 1024 ** 2 };
+    const group = { sessionGroup: 'private-group', present: true, ready: true, state: 'idle', runId: 'run', sessionId: 'session',
+      createdAt: 0, idleSince: 0, processRunning: false };
+    const f = await fixture(t, { fixed: null, initialScenes: [group],
+      readMemory: () => ++memoryReads === 1 ? Promise.resolve(memory) : heldMemory });
+    let stopping;
+    try {
+      await flush(); f.advance(10000); await f.round();
+      const blocker = f.service.supervisor.admission.serialize(() => heldQueue);
+      await flush(); releaseMemory(memory); await flush();
+      if (change === 'single') f.setMode('single');
+      if (change === 'fixed') f.setFixed(3);
+      if (change === 'stop') stopping = f.service.stop();
+      releaseQueue(); await blocker; await flush(); await flush(); await stopping;
+      assert.equal(f.fences.size, 0); assert.equal(f.sends.length, 0);
+      assert.equal(f.diagnostics().some(row => row.event === 'capacity_pressure_evict'), false);
+    } finally {
+      releaseMemory(null); releaseQueue(); await stopping;
+    }
   });
 }
