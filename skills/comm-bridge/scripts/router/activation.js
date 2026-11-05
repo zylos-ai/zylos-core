@@ -230,7 +230,7 @@ export function createActivationManager(context) {
       if (activation.message) deps.db.requeueConversation(activation.message.id);
       releaseSlot(activation);
       state.activations.delete(group);
-      if (activation.continuation) context.continuationRestarts.failed(group, activation.runId);
+      if (activation.continuation) context.continuationRestarts.failed(group, activation.runId, { kind: 'launch_error', code: activation.launchError.code ?? 'unknown' });
       return;
     }
     try {
@@ -238,7 +238,7 @@ export function createActivationManager(context) {
       const live = await deps.readLiveIdentity(group);
       state.live.set(group, live);
       if (live.present && live.runId === activation.runId && live.ready) {
-        if (activation.continuation) context.continuationRestarts.ready(group);
+        context.continuationRestarts.ready(group);
         return;
       }
       if (!activation.launchError && now() - activation.startedAt < options.readyTimeoutMs) return;
@@ -258,7 +258,9 @@ export function createActivationManager(context) {
     state.activations.delete(group);
     state.live.delete(group); // Observation must be refreshed, never fabricate READY.
     if (activation.resident) state.resident.absentSince = now();
-    if (activation.continuation) context.continuationRestarts.failed(group, activation.runId);
+    if (activation.continuation) context.continuationRestarts.failed(group, activation.runId,
+      activation.launchError ? { kind: 'launch_error', code: activation.launchError.code ?? 'unknown' }
+        : { kind: 'timeout', seconds: Math.floor((now() - activation.startedAt) / 1000) });
     diagnostic(activation.launchError ? 'activate_failed' : 'activate_timeout', {
       session_group: group, runId: activation.runId, conversation_id: activation.message?.id ?? null,
       reason: activation.launchError?.code ?? 'ready_timeout',
