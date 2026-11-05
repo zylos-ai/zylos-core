@@ -380,6 +380,28 @@ test('assembled round clears an upgrade fence without recording a replacement ru
  assert.equal(calls.some(row=>['reclaim','run-ending-reconciliation','round'].includes(row.phase)),false);
 });
 
+test('assembled reclaim records the fenced run when the replacement session file is corrupt', async t => {
+ const {supervisor,db,root,scenes}=fixture(t);
+ const group='telegram:corrupt-replacement';
+ const directory=path.join(root,'activity-monitor','session-groups',group);
+ fs.mkdirSync(directory,{recursive:true});
+ fs.writeFileSync(path.join(directory,'current-session.json'),'{invalid-json');
+ const replacement={sessionGroup:group,runId:'replacement-run',runtime:'claude',runDir:directory,present:true,ready:false,processRunning:true};
+ scenes.observeGroup=async()=>replacement;
+ let fence={sessionGroup:group,reason:'upgrade',runId:'old-run'};
+ const originalFence=fence,records=[];
+ db.getDrainFence=sessionGroup=>sessionGroup===group?fence:null;
+ db.countRunningConversations=()=>0;db.countNonTerminalControls=()=>({running:0});
+ db.clearDrainFence=()=>assert.fail('a corrupt replacement file must use the record-and-clear transaction');
+ db.recordRunEnd=(sessionGroup,options)=>{records.push({sessionGroup,...options});if(options.clearFence===true)fence=null;return {recorded:true};};
+ await supervisor.loop.deps.readConfiguration();
+ const context={configuration:{mode:'multi'},scenes:[replacement],fences:[originalFence]};
+ assert.equal(await supervisor.lifecycle.advanceReclaim(originalFence,context),'done');
+ assert.deepEqual(records,[{sessionGroup:group,runId:'old-run',reason:'upgrade',clearFence:true}]);
+ assert.equal(fence,null);assert.deepEqual(context.fences,[]);
+ assert.equal(fs.readFileSync(path.join(directory,'current-session.json'),'utf8'),'{invalid-json');
+});
+
 // Real composition boundary: the round invokes reconciliation and cleanup even
 // when ending records cannot be read. Private files and injected scene/database
 // adapters; run for supervisor cleanup wiring, skip unrelated UI changes.
@@ -415,3 +437,54 @@ for (const method of ['getModeTransition', 'listDrainFences']) {
   broken=false;await supervisor.loop.tick();assert.ok(prunes>0);
  });
 }
+
+for(const method of ['getLastCompletedModeTransition','listSlotOccupancy']) {
+ test(`full supervisor round reports a sustained ${method} failure through its shared database`,async t=>{
+  let now=2_000_000,broken=true,prunes=0,occupancy=true;
+  const row={sessionGroup:'telegram:failed-read',runId:'old',state:'running',createdAt:1},notices=[];
+  const database={
+   listSlotOccupancy:()=>{if(method==='listSlotOccupancy'&&broken)throw new Error('occupancy read failed');return occupancy?[row]:[];},
+   getLastCompletedModeTransition:()=>{if(method==='getLastCompletedModeTransition'&&broken)throw new Error('completed transition read failed');return null;},
+   pruneSlots:options=>{prunes++;const deleted=occupancy&&options.orphans.some(item=>item.sessionGroup===row.sessionGroup&&item.runId===row.runId);if(deleted)occupancy=false;return {deletedHeld:0,deletedOrphans:deleted?[{sessionGroup:row.sessionGroup,runId:row.runId}]:[]};},
+  };
+  const {supervisor,scenes}=fixture(t,{now:()=>now,database,alert:event=>notices.push(event)});
+  scenes.observe=async()=>[{sessionGroup:'origin',present:true,ready:false}];
+  await supervisor.loop.start();assert.equal(occupancy,true);assert.equal(notices.length,0);
+  now+=59000;await supervisor.loop.tick();assert.equal(occupancy,true);assert.equal(notices.length,0);
+  now+=1000;await supervisor.loop.tick();
+  assert.equal(notices.length,1);assert.equal(notices[0].event,'run_ending_reconciliation_failed');
+  if(method==='listSlotOccupancy') {
+   assert.equal(occupancy,true);assert.equal(prunes,0);assert.equal(notices[0].session_group,'*');
+   assert.equal(notices[0].status,'retained');assert.equal(notices[0].slot_deleted,false);
+  } else {
+   assert.equal(occupancy,false);assert.ok(prunes>0);assert.equal(notices[0].session_group,row.sessionGroup);
+   assert.equal(notices[0].status,'deleted');assert.equal(notices[0].slot_deleted,true);
+  }
+  now+=1000;await supervisor.loop.tick();assert.equal(notices.length,1);
+  broken=false;await supervisor.loop.tick();assert.equal(occupancy,false);
+ });
+}
+
+test('a failed transition reread after automatic migration reaches the assembled failure timer',async t=>{
+ let now=2_000_000,reads=0;
+ const notices=[];
+ const {supervisor,db}=fixture(t,{now:()=>now,alert:event=>notices.push(event),
+  readConfiguration:async()=>({mode:'multi',legacy:true,runtime:'claude',capacity:2})});
+ const transition=()=>{reads++;if(reads%2===0)throw new Error('post-migration transition read failed');return null;};
+ db.getModeTransition=transition;supervisor.loop.deps.getModeTransition=transition;
+ supervisor.loop.deps.advanceAutomaticMigration=async()=>{};
+ await supervisor.loop.start();assert.equal(reads,2);assert.equal(notices.length,0);
+ now+=59000;await supervisor.loop.tick();assert.equal(reads,4);assert.equal(notices.length,0);
+ now+=1000;await supervisor.loop.tick();assert.equal(reads,6);assert.equal(notices.length,1);
+ assert.equal(notices[0].session_group,'*');assert.equal(notices[0].status,'retained');
+ assert.equal(notices[0].slot_deleted,false);assert.match(notices[0].message,/Occupancy rows remain/);
+});
+
+test('single-mode authority read failures never send occupancy reconciliation notifications',async t=>{
+ let now=2_000_000;const notices=[];
+ const {supervisor}=fixture(t,{now:()=>now,alert:event=>notices.push(event),readMode:()=>({mode:'single'}),
+  readConfiguration:async()=>({mode:'single',runtime:'claude'}),
+  database:{getModeTransition:()=>{throw new Error('single transition read failed');}}});
+ await supervisor.loop.start();now+=60000;await supervisor.loop.tick();now+=1800000;await supervisor.loop.tick();
+ assert.deepEqual(notices,[]);
+});

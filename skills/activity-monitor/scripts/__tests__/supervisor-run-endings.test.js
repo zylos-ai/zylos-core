@@ -90,3 +90,24 @@ test('session files are read afresh after invalid contents and become usable on 
   assert.equal(f.fileReads.length, 2); assert.equal(f.records().length, 0); assert.equal(f.slots().length, 1);
   await f.write(); await f.step(); assert.equal(f.records()[0].reason, 'unexpected'); assert.equal(f.slots()[0].state, 'held');
 });
+
+
+test('an identity read exception never becomes evidence that a running slot is absent', async t => {
+  const f = await runEndingFixture(t); await f.add(); f.now += 31000;
+  let reads = 0;
+  f.service.readIdentity = () => { reads++; throw Object.assign(new Error('tmux timed out'), { code: 'TMUX_TIMEOUT' }); };
+  await f.step(); await f.step(60000);
+  assert.ok(reads > 0); assert.equal(f.records().length, 0);
+  assert.equal(f.slots().length, 1); assert.equal(f.slots()[0].state, 'running');
+  assert.equal(f.failures().length, 0);
+});
+
+test('an invalid session timestamp starts failure grace and is never recorded as a real ending', async t => {
+  const f = await runEndingFixture(t); await f.add(); f.now += 31000;
+  await fs.writeFile(f.file('test:a'), JSON.stringify({ runId: 'r1', ts: 'invalid' }));
+  await f.step(); assert.equal(f.slots().length, 1); assert.equal(f.service.failures.has('test:a'), true);
+  await f.step(59000); assert.equal(f.slots().length, 1); assert.equal(f.failures().length, 0);
+  await f.step(1000); assert.equal(f.slots().length, 0); assert.equal(f.records().length, 0);
+  assert.equal(f.failures().length, 1); assert.equal(f.failures()[0].slot_deleted, true);
+  assert.equal(f.failures()[0].session_group, 'test:a');
+});

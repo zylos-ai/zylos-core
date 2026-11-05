@@ -96,13 +96,18 @@ export class SupervisorRunEndings {
     }
   }
 
+  async pruneHeld() {
+    try { await this.db.pruneSlots({ orphans: [], minAgeSeconds: READY_TIMEOUT_MS / 1000 }); }
+    catch (cause) { this.reportError(cause, { phase: 'slot-cleanup' }); }
+  }
+
   async prune(context, deferred = false) {
     let slots, fences;
     try { slots = await this.db.listSlotOccupancy(); }
     catch (cause) { this.reportReadFailure(cause); return false; }
     this.syncFailures(slots);
     try { fences = await this.db.listDrainFences(); }
-    catch (cause) { this.reportReadFailure(cause); this.notifyPending(slots); return false; }
+    catch (cause) { this.reportReadFailure(cause); await this.pruneHeld(); this.notifyPending(slots); return false; }
     const orphans = [];
     for (const row of slots) {
       const group = row.sessionGroup;
@@ -129,13 +134,11 @@ export class SupervisorRunEndings {
         if (failure?.runId === row.runId) this.clearFailure(row.sessionGroup);
       }
       const deleted = new Set(result.deletedOrphans.map(row => JSON.stringify([row.sessionGroup, row.runId])));
-      const eligible = new Map(slots.filter(row => row.createdAt <= Math.floor(this.now() / 1000) - READY_TIMEOUT_MS / 1000)
-        .map(row => [JSON.stringify([row.sessionGroup, row.runId]), row]));
       for (const row of orphans) {
         const key = JSON.stringify([row.sessionGroup, row.runId]);
-        // A successful conditional delete missed an age-eligible old identity:
+        // A successful conditional delete missed an old failed identity:
         // that row changed during cleanup, so its failure episode is over.
-        if (eligible.has(key) && !deleted.has(key) && this.failures.get(row.sessionGroup)?.runId === row.runId) this.clearFailure(row.sessionGroup);
+        if (!deleted.has(key) && this.failures.get(row.sessionGroup)?.runId === row.runId) this.clearFailure(row.sessionGroup);
       }
     } catch (cause) { this.reportError(cause, { phase: 'slot-cleanup' }); }
     this.notifyPending(slots);
@@ -150,7 +153,7 @@ export class SupervisorRunEndings {
     this.syncFailures(slots);
     let fences;
     try { fences = await this.db.listDrainFences(); }
-    catch (cause) { this.reportReadFailure(cause); return; }
+    catch (cause) { this.reportReadFailure(cause); await this.pruneHeld(); return; }
     const candidates = [...slots.filter(row => row.state === 'running'), { sessionGroup: 'origin', runId: null }]
       .filter(row => {
         const group = row.sessionGroup;

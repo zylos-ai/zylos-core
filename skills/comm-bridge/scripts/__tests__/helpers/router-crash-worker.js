@@ -87,9 +87,9 @@ if (phase === 'restart') {
     if(readScene().a) throw Error('Restart launched before orphan slot cleanup');
     const orphans=[{sessionGroup:'a',runId:slot.runId}];
     now=slot.createdAt*1000+999;
-    if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans!==0) throw Error('Premature orphan removal');
+    if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans.length!==0) throw Error('Premature orphan removal');
     now+=1;
-    if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans!==1) throw Error('Orphan slot cleanup failed');
+    if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans.length!==1) throw Error('Orphan slot cleanup failed');
     record('orphan-pruned',{runId:slot.runId});
   }
 }

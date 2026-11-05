@@ -235,3 +235,33 @@ test('explicit single opens the actual entry with legacy false', {timeout:15000}
   assert.equal(ready.logs.some(row => row?.phase === 'automatic-migration'), false);
   await stop(worker);
 });
+
+// Integration boundary: real entry, lifecycle loop, reconciliation timer and
+// notification formatting. Run for entry alert wiring; skip unrelated UI work.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR. This case owns
+// its private am.sock and injected scenes/database/sendAlert; no live tmux,
+// runtime, network or external send. Teardown drains the entry and closes Sock.
+test('actual supervisor entry sends the retained-occupancy explanation after sustained authority failure',{timeout:15000},async t=>{
+ const root=prepare(t);let now=2_000_000;const messages=[];
+ const db={getModeTransition:()=>{throw Object.assign(new Error('database read unavailable'),{code:'SQLITE_IOERR'});},
+  listDrainFences:()=>[],getDrainFence:()=>null,listPendingSessionGroups:()=>[],listPendingContinuations:()=>[],
+  listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),getControlById:()=>null,
+  resolveSessionLaunchConfig:()=>({runtime:'claude',mode:'default'})};
+ const scenes={observe:async()=>[],readIdentity:async()=>({present:false}),observeGroup:async()=>({present:false}),
+  listRuns:async()=>[],readRun:async()=>null};
+ const service=await startSupervisor({env:{...process.env,HOME:root,ZYLOS_DIR:root,PM2_HOME:path.join(root,'.pm2')},db,scenes,
+  now:()=>now,readMode:()=>({mode:'multi',keyPresent:true}),readConfig:()=>({session_mode:'multi',runtime:'claude'}),
+  readConfiguration:async()=>({mode:'multi',runtime:'claude',capacity:2}),
+  sendAlert:async(target,message)=>{messages.push({target,message});return true;},
+  legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},log:()=>{},
+  loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ t.after(()=>service.stop());
+ assert.equal(service.server.listening,true);assert.equal(messages.length,0);
+ now+=59000;await service.supervisor.loop.tick();assert.equal(messages.length,0);
+ now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);
+ assert.deepEqual(messages[0].target,{channel:'web-console',endpoint:'console'});
+ assert.match(messages[0].message,/run_ending_reconciliation_failed \(\*\)/);
+ assert.match(messages[0].message,/Occupancy rows remain; groups cannot start until reconciliation recovers\./);
+ now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);
+ await service.stop();assert.equal(service.server.listening,false);
+});

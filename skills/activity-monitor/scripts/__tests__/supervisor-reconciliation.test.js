@@ -56,6 +56,10 @@ for (const failure of ['recordRunEnd', 'file read']) {
 }
 
 test('candidate reads are bounded to running occupancy and Origin despite historical directories', async t => {
+  let directoryReads = 0, stats = 0;
+  const readdir = fs.readdir, stat = fs.stat;
+  t.mock.method(fs, 'readdir', (...args) => { directoryReads++; return readdir(...args); });
+  t.mock.method(fs, 'stat', (...args) => { stats++; return stat(...args); });
   const f = await runEndingFixture(t); await f.add(); await f.write('origin'); f.context.scenes = []; f.now += 31000;
   const base = path.dirname(f.file('test:a'));
   for (let i = 0; i < 1000; i++) {
@@ -64,19 +68,26 @@ test('candidate reads are bounded to running occupancy and Origin despite histor
   }
   const requested = [], list = f.store.listRunEndings;
   f.service.db = { ...f.store, listRunEndings(groups) { requested.push([...groups].sort()); return list(groups); } };
-  f.service.readdir = () => assert.fail('reconciliation must not enumerate historical groups');
+  directoryReads = 0; stats = 0;
   await f.step();
+  assert.equal(directoryReads, 0); assert.equal(stats, 0);
   assert.deepEqual(requested, [['origin', 'test:a']]);
   assert.deepEqual([...f.fileReads].sort(), ['origin', 'test:a']);
   assert.equal(f.records().length, 2); assert.equal(f.store.listPendingContinuations().length, 1);
 });
 
 test('one hundred live rounds do not query candidate records, current files or fresh identities', async t => {
+  let directoryReads = 0, stats = 0;
+  const readdir = fs.readdir, stat = fs.stat;
+  t.mock.method(fs, 'readdir', (...args) => { directoryReads++; return readdir(...args); });
+  t.mock.method(fs, 'stat', (...args) => { stats++; return stat(...args); });
   const f = await runEndingFixture(t); await f.add();
   f.context.scenes.push({ sessionGroup: 'test:a', present: true, runId: 'r1' });
   f.service.db = { ...f.store, listRunEndings() { assert.fail('no candidates'); } };
   const changes = f.db.prepare('SELECT total_changes() n').get().n;
+  directoryReads = 0; stats = 0;
   for (let i = 0; i < 100; i++) await f.step();
+  assert.equal(directoryReads, 0); assert.equal(stats, 0);
   assert.equal(f.db.prepare('SELECT total_changes() n').get().n, changes);
   assert.equal(f.fileReads.length, 0); assert.equal(f.identityReads.length, 0); assert.equal(f.failures().length, 0);
 });
@@ -252,4 +263,43 @@ test('pre-reconciliation read failures share the global timer and reset after re
   f.now += 60000; f.service.reportReadFailure(fail('again')); await Promise.resolve();
   assert.equal(f.service.globalFailure.since, f.now);
   assert.equal(f.failures().length, 1, 'a recovered round starts a new episode');
+});
+
+
+for (const readAt of ['before reconciliation', 'before cleanup']) {
+  test(`unreadable fences ${readAt} still allow expired held rows to be physically pruned`, async t => {
+    const f = await runEndingFixture(t); await f.add();
+    f.store.recordRunEnd('test:a', { runId: 'r1', reason: 'upgrade' });
+    f.now += 120000; f.store.takeSlot('test:b', { runId: 'unseen-b', k: 4 });
+    let reads = 0;
+    f.service.db = { ...f.store, listDrainFences() {
+      reads++;
+      if (readAt === 'before reconciliation' || reads % 2 === 0) throw fail('fences unreadable');
+      return [];
+    } };
+    await f.step();
+    assert.equal(f.db.prepare("SELECT count(*) n FROM slot_occupancy WHERE session_group='test:a'").get().n, 0);
+    assert.equal(f.slots().length, 1); assert.equal(f.slots()[0].runId, 'unseen-b');
+    assert.equal(f.records('test:a')[0].reason, 'upgrade');
+    assert.ok(f.errors.some(error => error.message === 'fences unreadable'));
+  });
+}
+
+test('a direct transition read failure retains a candidate until its grace deadline, then notifies its deletion', async t => {
+  const f = await runEndingFixture(t); await f.add(); f.now += 31000;
+  f.service.db = { ...f.store, getModeTransition() { throw fail('transition unreadable'); } };
+  await f.step(); assert.equal(f.slots().length, 1);
+  await f.step(59000); assert.equal(f.slots().length, 1); assert.equal(f.failures().length, 0);
+  await f.step(1000); assert.equal(f.slots().length, 0);
+  const deleted = f.failures().filter(event => event.slot_deleted);
+  assert.equal(deleted.length, 1); assert.equal(deleted[0].session_group, 'test:a');
+});
+
+test('a vanished running row clears its failure clock without a no-slot notification', async t => {
+  const f = await failedWriteFixture(t); await f.step();
+  assert.equal(f.service.failures.has('test:a'), true);
+  assert.deepEqual(f.store.releaseSlot('test:a', { runId: 'r1', prior: null }), { released: true });
+  await f.step(60000);
+  assert.equal(f.service.failures.has('test:a'), false);
+  assert.equal(f.failures().length, 0); assert.equal(f.records().length, 0);
 });

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
+import path from 'node:path';
+import { SupervisorRunEndings } from '../../../activity-monitor/scripts/supervisor-run-endings.js';
 
 // Integration boundary: real Router and C4 store, injected scene/runtime I/O
 // and clock. Run for ready-session adoption or capacity ordering changes; skip
@@ -16,6 +18,7 @@ function ready(f, group, runId, values = {}) {
 async function start(f, rounds = 2) {
   f.put('origin', { runtime: 'codex' });
   await f.create().initialize();
+  await f.router.idle();
   await f.rounds(rounds);
 }
 function countAdoptions(f) {
@@ -26,15 +29,25 @@ function countAdoptions(f) {
 }
 async function pump(count = 6) { for (let i = 0; i < count; i++) await flush(); }
 
-test('ready sessions are adopted before a waiting group receives capacity', async t => {
-  const f = routerFixture(t, { poolSize: 1 });
+test('ready sessions are adopted before an observed waiting group receives newly free capacity', async t => {
+  const f = routerFixture(t, { poolSize: 1, readyTimeoutMs: 10000 });
+  f.db.takeSlot('blocker', { runId: 'blocker-run', k: 1 });
   const waiting = f.add('waiting');
-  ready(f, 'arrived', 'late-run');
+  ready(f, 'arrived', 'late-run', { ready: false });
   const adoptions = countAdoptions(f);
-  await start(f, 1);
+  await start(f);
+  assert.equal(f.router.state.live.get('waiting').present, false);
+  ready(f, 'arrived', 'late-run');
+  f.router.tick(); await pump();
+  assert.equal(f.router.state.live.get('arrived').ready, true);
+  assert.equal(adoptions.length, 0, 'this round observed readiness after synchronous scheduling');
+  assert.deepEqual(f.db.releaseSlot('blocker', { runId: 'blocker-run', prior: null }), { released: true });
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  f.router.tick();
   assert.deepEqual(adoptions, [['arrived', 'late-run']]);
   assert.equal(f.db.listSlotOccupancy().length, 1);
   assert.equal(f.router.availableCapacity(), 0);
+  await f.router.idle(); await pump();
   assert.equal(f.calls.filter(row => row[0] === 'launch').length, 0);
   assert.equal(f.row(waiting.id).status, 'pending');
 });
@@ -57,7 +70,7 @@ test('a late session is adopted only after its scene becomes ready', async t => 
   await start(f);
   assert.equal(adoptions.length, 0);
   assert.equal(f.db.listSlotOccupancy().length, 0);
-  ready(f, 'a', 'late-run'); await f.rounds(1);
+  ready(f, 'a', 'late-run'); await f.rounds(2);
   assert.deepEqual(adoptions, [['a', 'late-run']]);
   assert.equal(f.db.listSlotOccupancy()[0].runId, 'late-run');
 });
@@ -187,11 +200,123 @@ test('adopting a late run protects its row from a newer conflicting activation r
   for (let round = 0; round < 2; round++) { f.router.tick(); await pump(); }
   assert.ok(input, 'the activation must reach its held launch before the race');
   ready(f, 'a', 'older-late-run');
-  f.router.tick(); await pump();
+  for (let round = 0; round < 2; round++) { f.router.tick(); await pump(); }
   assert.equal(f.db.listSlotOccupancy()[0].runId, 'older-late-run');
   assert.deepEqual(f.db.releaseSlot('a', { runId: input.runId, prior: null }), { released: false });
   launch.resolve(); await f.router.idle();
   assert.equal(f.db.listSlotOccupancy()[0].runId, 'older-late-run');
   assert.equal(f.row(message.id).status, 'pending');
   assert.equal(f.row(message.id).retry_count, 0);
+});
+
+function reconciliation(f) {
+  return new SupervisorRunEndings({
+    db: f.db, env: { ZYLOS_DIR: process.env.ZYLOS_DIR }, now: f.now,
+    readIdentity: async group => f.scene.get(group) ?? { present: false },
+    readFile: async file => {
+      const current = f.current.get(path.basename(path.dirname(file)));
+      if (!current) throw Object.assign(new Error('no session file'), { code: 'ENOENT' });
+      return JSON.stringify(current);
+    },
+    alert: event => f.calls.push(['reconciliation-alert', event]),
+  });
+}
+function reconciliationContext(f) {
+  return { configuration: { mode: 'multi' }, transition: null, fences: [],
+    scenes: [...f.scene].map(([sessionGroup, live]) => ({ sessionGroup, ...live })) };
+}
+
+test('an unready late session timing out leaves no occupancy or ending record', async t => {
+  const f = routerFixture(t, { readyTimeoutMs: 1000 });
+  ready(f, 'a', 'unready-run', { ready: false });
+  await start(f);
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  f.advance(1000); await f.rounds(3);
+  assert.equal(f.scene.has('a'), false);
+  assert.equal(f.calls.filter(row => row[0] === 'stop').length, 1);
+  await reconciliation(f).advance(reconciliationContext(f));
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  assert.equal(f.db.listRunEndings(['a']).length, 0);
+  assert.equal(f.db.listPendingContinuations().length, 0);
+});
+
+test('a rowless ready run ending before adoption has no record continuation or notification', async t => {
+  const f = routerFixture(t);
+  ready(f, 'a', 'gone-before-adoption');
+  f.scene.delete('a');
+  await start(f);
+  await reconciliation(f).advance(reconciliationContext(f));
+  await pump();
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  assert.equal(f.db.listRunEndings(['a']).length, 0);
+  assert.equal(f.db.listPendingContinuations().length, 0);
+  assert.equal(f.calls.filter(row => row[0] === 'alert' || row[0] === 'reconciliation-alert').length, 0);
+});
+
+test('a late run after held rollback receives the retained continuation only once', async t => {
+  const f = routerFixture(t);
+  f.db.takeSlot('a', { runId: 'retained-run', k: 1 });
+  const ended = f.db.recordRunEnd('a', { runId: 'retained-run', reason: 'upgrade' });
+  const { prior } = f.db.takeSlot('a', { runId: 'failed-launch', k: 1 });
+  assert.equal(f.db.releaseSlot('a', { runId: 'failed-launch', prior }).released, true);
+  ready(f, 'a', 'late-run');
+  await start(f, 3);
+  assert.equal(f.db.listSlotOccupancy()[0].runId, 'late-run');
+  assert.equal(f.db.listSlotOccupancy()[0].state, 'running');
+  assert.equal(f.db.getControlById(ended.continuationControlId).status, 'done');
+  assert.equal(f.calls.filter(row => row[0] === 'control' && row[1] === ended.continuationControlId).length, 1);
+  await f.rounds(3);
+  assert.equal(f.calls.filter(row => row[0] === 'control' && row[1] === ended.continuationControlId).length, 1);
+  assert.equal(f.db.listPendingContinuations().length, 0);
+  assert.equal(f.calls.filter(row => row[0] === 'launch').length, 0);
+});
+
+for (const blocked of ['known group identity', 'session listing', 'new group identity']) {
+  test(`a pending ${blocked} read does not block another active delivery or new activation`, async t => {
+    const f = routerFixture(t, { poolSize: 2 }); f.put('a');
+    await start(f);
+    const hold = deferred();
+    const read = f.deps.readLiveIdentity;
+    let blockedReads = 0;
+    if (blocked === 'session listing') {
+      f.deps.listGroupTmuxSessions = async () => { blockedReads++; await hold.promise; return []; };
+    } else {
+      if (blocked === 'known group identity') f.router.state.live.set('x', { present: false });
+      else f.add('x', { priority: 3 });
+      f.deps.readLiveIdentity = async group => {
+        if (group === 'x') { blockedReads++; await hold.promise; }
+        return read(group);
+      };
+    }
+    const active = f.add('a'), fresh = f.add('b', { priority: 1 });
+    try {
+      for (let round = 0; round < 6; round++) { f.router.tick(); await pump(); }
+      assert.ok(blockedReads > 0, 'the unrelated read must actually remain pending');
+      assert.equal(f.row(active.id).status, 'delivered');
+      assert.equal(f.row(fresh.id).status, 'delivered');
+      assert.equal(f.calls.filter(row => row[0] === 'launch' && row[1].sessionGroup === 'b').length, 1);
+    } finally {
+      hold.resolve();
+      await f.router.stop();
+    }
+  });
+}
+
+test('a slow group observation does not delay active delivery for even one round', async t => {
+  const f = routerFixture(t); f.put('a'); await start(f);
+  f.router.state.live.set('x', { present: false });
+  const hold = deferred(), read = f.deps.readLiveIdentity;
+  let reads = 0;
+  f.deps.readLiveIdentity = async group => { if (group === 'x') { reads++; await hold.promise; } return read(group); };
+  const message = f.add('a');
+  try {
+    f.router.tick(); await pump();
+    assert.equal(reads, 1);
+    assert.equal(f.row(message.id).status, 'delivered');
+    for (let round = 0; round < 7; round++) { f.router.tick(); await pump(); }
+    assert.equal(f.calls.filter(row => row[0] === 'conversation' && row[1] === message.id).length, 1);
+  } finally {
+    hold.resolve();
+    await f.router.stop();
+  }
 });

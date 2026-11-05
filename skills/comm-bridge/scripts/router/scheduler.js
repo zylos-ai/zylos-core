@@ -31,7 +31,7 @@ export function createRouter(dependencies, configuration = {}) {
   const observations = new Map();
   const opportunities = new Set();
   const attemptedRound = new Map();
-  let sceneTask = null, roundWork = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
+  let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
   let lastCleanup = -Infinity, lastDiagnostics = -Infinity, lastMismatch = -Infinity;
   const diagnostic = (event, fields = {}) => {
     try { Promise.resolve(deps.diagnostic?.(event, fields)).catch(error => deps.log?.(`Router diagnostic: ${error.message}`)); }
@@ -211,13 +211,7 @@ export function createRouter(dependencies, configuration = {}) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
-    if (state.mode === 'single') { scheduleLanes(); return; }
-    // A ready late arrival must be counted before this round grants capacity.
-    if (!roundWork) roundWork = track(Promise.resolve(sceneTask).then(async () => {
-      await Promise.all([...observations.values()]);
-      scheduleLanes();
-    }).catch(error => diagnostic('scheduler_error', { reason: error.code ?? error.message }))
-      .finally(() => { roundWork = null; }));
+    scheduleLanes();
   }
 
   function initialize() { initialization ??= initializeRouter(context); return initialization; }
@@ -232,8 +226,5 @@ export function createRouter(dependencies, configuration = {}) {
     await Promise.allSettled([...tasks]);
   }
   return { initialize, start, tick, stop, state, availableCapacity: context.availableCapacity,
-    async idle() {
-      // A scheduling round can enqueue observations or lane work after this call.
-      while (tasks.size) await Promise.allSettled([...tasks]);
-    } };
+    async idle() { await Promise.allSettled([...tasks]); } };
 }

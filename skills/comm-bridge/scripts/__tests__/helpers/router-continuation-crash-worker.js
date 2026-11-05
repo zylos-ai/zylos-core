@@ -70,9 +70,9 @@ if (phase === 'restart' && boundary === 'before-launch') {
   if (!slot || slot.state !== 'running') throw Error('Crash lost running occupancy');
   clock = slot.createdAt * 1000 + 999;
   const orphans = [{sessionGroup:'a',runId:slot.runId}];
-  if (store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans !== 0) throw Error('Orphan removed before ready timeout');
+  if (store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans.length !== 0) throw Error('Orphan removed before ready timeout');
   clock += 1;
-  if (store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans !== 1) throw Error('Expired orphan not removed');
+  if (store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans.length !== 1) throw Error('Expired orphan not removed');
   record('orphan-pruned', {runId:slot.runId});
 }
 await router.initialize();
