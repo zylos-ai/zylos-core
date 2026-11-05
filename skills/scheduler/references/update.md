@@ -19,7 +19,7 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 | `--reply-endpoint "<endpoint>"` | Update reply endpoint |
 | `--reply-session-group "<L>"` | Target group-local name; requires explicit `--reply-channel` |
 | `--clear-reply` | Clear reply configuration |
-| `--clear-session-group` | Route the task to Origin and keep the reply configuration; cannot be combined with `--reply-channel`, `--reply-endpoint` or `--reply-session-group` |
+| `--clear-session-group` | Clear the saved execution group and keep the reply configuration; see [Clear the execution group](#clear-the-execution-group); cannot be combined with `--reply-channel`, `--reply-endpoint` or `--reply-session-group` |
 | `--miss-threshold <seconds>` | Update miss threshold |
 | `--json` | Print a single-line result; see [JSON results](#json-results) |
 
@@ -29,9 +29,14 @@ When the schedule is changed, the timezone column is automatically synced to the
 
 Give a failed one-time task a new time (`--in`, `--at`, `--cron` or `--every`) that is in the future. The task returns to `pending`, its failure details are cleared, and the daemon dispatches it at the new time. A time that is not in the future is rejected with `RESCHEDULE_NOT_FUTURE` and nothing is written. An update without a new time leaves the task `failed`.
 
-## Route a task to Origin
+## Clear the execution group
 
-`--clear-session-group` empties the saved execution group, so the next run goes to Origin. Replies still go to the saved reply target. To also stop replies, add `--clear-reply`.
+`--clear-session-group` empties the saved execution group. Where the next run goes depends on the reply configuration:
+
+- With a reply target, it goes to the overall group of the reply channel, not to Origin. For example, a task saved as `telegram`/`g-1` with a Telegram reply target goes to the Telegram overall group.
+- Without a reply target, it goes to Origin.
+
+To send a task to Origin, add `--clear-reply` as well. The task then has no reply target. Running a task in Origin while keeping an external reply target is not supported.
 
 ## JSON results
 
@@ -39,7 +44,7 @@ With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[
 
 Use `--json` whenever you need to know the outcome. Without it, some validation errors still exit 0, so the exit code alone does not prove the update was applied.
 
-Error codes: `INVALID_ARGS`, `TASK_NOT_FOUND`, `TASK_AMBIGUOUS` (`matches` lists the task IDs), `NO_UPDATES`, `RESCHEDULE_NOT_FUTURE`, `SESSION_GROUP_INVALID`, `DB_WRITE_FAILED`, `INTERNAL_ERROR`, and the timezone errors.
+Error codes: `INVALID_ARGS`, `TASK_NOT_FOUND`, `TASK_AMBIGUOUS` (`matches` lists the task IDs), `NO_UPDATES`, `RESCHEDULE_NOT_FUTURE`, `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `DB_WRITE_FAILED`, `INTERNAL_ERROR`, and the timezone errors.
 
 ## Examples
 
@@ -65,10 +70,10 @@ cli.js update task-abc --every "2 hours"
 # Re-enable a failed one-time task
 cli.js update task-abc --in "30 minutes" --json
 
-# Route to Origin and keep replies
+# Clear the execution group; with a reply target the task goes to that channel's overall group
 cli.js update task-abc --clear-session-group
 
-# Route to Origin and stop replies
+# Send the task to Origin; it no longer has a reply target
 cli.js update task-abc --clear-session-group --clear-reply
 ```
 

@@ -88,7 +88,8 @@ Update Options (same as Add, plus):
                           Disable block-queue-until-idle behavior
                           Legacy alias: --no-require-idle
   --clear-reply           Clear reply configuration
-  --clear-session-group   Route to Origin, keeping reply configuration
+  --clear-session-group   Clear the execution group, keeping reply configuration;
+                          with a reply target, runs go to that channel's overall group
 
 Write Options (add/update/remove/pause/resume/done):
   --json                  Single-line success/error envelope; JSON errors exit 1

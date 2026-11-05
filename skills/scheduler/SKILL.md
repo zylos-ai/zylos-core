@@ -27,7 +27,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 
 Write commands (`add`, `update`, `done`, `remove`, `pause`, `resume`) and `history` accept `--json`. Use it whenever you need to know the outcome: without it, some validation errors still exit 0.
 
-To re-enable a failed one-time task or route a task to Origin, use `update`; see `references/update.md`.
+To re-enable a failed one-time task or clear a task's execution group, use `update`; see `references/update.md`.
 
 ## Timezone
 
