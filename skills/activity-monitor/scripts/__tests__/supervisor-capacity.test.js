@@ -48,8 +48,10 @@ test('entry publishes fixed capacity and uses it in metrics without resampling e
   assert.equal(f.record().source, 'fixed');
   assert.equal(f.service.supervisor.loop.configuration.capacity, 7);
   assert.equal(f.reads(), 1);
-  f.setFixed(4); f.advance(10000); await f.round(); await f.round();
+  f.setFixed(4); f.advance(10000); await f.round();
   assert.equal(f.record().k, 4);
+  assert.equal(f.service.supervisor.loop.configuration.capacity, 7);
+  await f.round();
   assert.equal(f.service.supervisor.loop.configuration.capacity, 4);
   const metrics = fs.readFileSync(path.join(f.root, 'activity-monitor', 'pool-metrics.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.ok(metrics.some(row => row.v === 1 && row.k === 7 && row.kSource === 'fixed'));
@@ -124,6 +126,9 @@ for (const fixed of [false, true]) {
     if (!fixed) {
       assert.equal(f.record().k, 2);
       for (let i = 0; i < 12; i++) { f.advance(10000); await f.round(); }
+      assert.equal(f.record().k, 3);
+      assert.equal(f.service.supervisor.loop.configuration.capacity, 2);
+      await f.round();
     }
     const published = f.record();
     assert.equal(published.k, fixed ? 6 : 3);

@@ -53,8 +53,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     const work=capacityController.tick({mode:context.configuration.mode,
       scenes:context.scenes.map(scene=>({...scene})),transitioning:Boolean(context.transition),now:clock()});
     capacityWork.add(work);
-    work.then(()=>{if(configuration?.mode==='multi')applyPublishedCapacity();})
-      .catch(error=>log({error:error.code ?? error.message,phase:'capacity'}))
+    work.catch(error=>log({error:error.code ?? error.message,phase:'capacity'}))
       .finally(()=>capacityWork.delete(work));
     if(context.configuration.mode==='multi')applyPublishedCapacity();
   };

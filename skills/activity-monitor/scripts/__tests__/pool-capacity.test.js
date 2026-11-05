@@ -303,7 +303,7 @@ test('size-based sample rotation and append failure preserve the prior in-memory
   assert.equal(logs.some(row => row.event === 'capacity_samples_write_failed'), true);
 });
 
-test('publication failure retains only last successful record and tracks its start', async t => {
+test('publication failure retains only last successful record', async t => {
   let fail = false;
   const f = fixture(t, { publish(file, record) { if (fail) throw Object.assign(new Error('blocked'), { code: 'EACCES' }); writeCapacityAtomic(file, record); } });
   await f.capacity.tick({ mode: 'multi', now: 0 });
@@ -312,11 +312,44 @@ test('publication failure retains only last successful record and tracks its sta
   await f.capacity.tick({ mode: 'multi', now: 10000 });
   await f.capacity.tick({ mode: 'multi', now: 70000 });
   assert.equal(f.capacity.lastPublished, successful);
-  assert.equal(f.capacity.publishFailedSince, 10000);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.capacity.file)), successful);
   fail = false;
   await f.capacity.tick({ mode: 'multi', now: 80000 });
-  assert.equal(f.capacity.publishFailedSince, null); assert.equal(f.capacity.lastPublished.computedAt, 80000);
+  assert.equal(f.capacity.lastPublished.computedAt, 80000);
+});
+
+test('a failed decrease does not lower published capacity when raw capacity recovers', async t => {
+  let fail = false;
+  const f = fixture(t, { publish(file, record) {
+    if (fail) throw Object.assign(new Error('blocked'), { code: 'EACCES' });
+    writeCapacityAtomic(file, record);
+  } });
+  f.baseline({ k: 3, fixed: false });
+  const initial = await f.capacity.tick({ mode: 'multi', now: 0 });
+  assert.equal(initial.kRaw, 3);
+  assert.equal(initial.k, 3);
+
+  fail = true;
+  f.memory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 1800 * MiB });
+  const failed = await f.capacity.tick({ mode: 'multi', now: 10000 });
+  assert.equal(failed.kRaw, 2);
+  assert.equal(failed.k, 2);
+  assert.equal(f.capacity.lastPublished, initial);
+  assert.equal(JSON.parse(fs.readFileSync(f.capacity.file, 'utf8')).k, 3);
+  assert.ok(f.logs.some(row => row.event === 'capacity_publish_failed'));
+
+  fail = false;
+  f.memory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 1300 * MiB });
+  // At 120 seconds the twelve calculations include the failed raw=2 decrease.
+  // Recovery to the still-published K is not a rise and must not publish that 2.
+  for (let now = 20000; now <= 120000; now += 10000) {
+    const recovered = await f.capacity.tick({ mode: 'multi', now });
+    assert.equal(recovered.kRaw, 3);
+    assert.equal(recovered.k, 3);
+    assert.equal(f.capacity.lastPublished.k, 3);
+    assert.equal(JSON.parse(fs.readFileSync(f.capacity.file, 'utf8')).k, 3);
+  }
+  assert.equal(f.capacity.lastPublished.computedAt, 120000);
 });
 
 test('atomic publication fsyncs before rename and interruption preserves old complete record', t => {

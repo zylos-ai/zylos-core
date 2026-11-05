@@ -90,7 +90,6 @@ export class PoolCapacity {
     this.epoch = 0;
     this.lastPublished = null;
     this.inputsUnreadableSince = null;
-    this.publishFailedSince = null;
     this.lastComputedAt = null;
     this.lastSampleAt = null;
     this.currentK = null;
@@ -232,9 +231,7 @@ export class PoolCapacity {
         this.lastPublished = record;
         this.currentK = k;
         this.wasFixed = baseline.fixed;
-        this.publishFailedSince = null;
       } catch (error) {
-        this.publishFailedSince ??= now;
         this.diagnostic('capacity_publish_failed', { error: error.code });
       }
       // Cancelling a fixed value keeps the startup bound until it is published.
