@@ -307,3 +307,41 @@ test('runtime pagination reads at most one extra SQL row even with a large overr
     assert.ok(Buffer.byteLength(JSON.stringify(page)) < 10000);
   } finally { db.prepare = prepare; }
 });
+
+test('override handler defaults its page size and preserves literal search and binary cursors', t => {
+  const { store, db } = storeFixture(t);
+  const page = store.listRuntimeOverridesPage;
+  store.listRuntimeOverridesPage = options => {
+    assert.equal(options.limit, 100);
+    return page(options);
+  };
+  assert.equal(listOverrides({ store }).runtimeTotal, 0);
+  store.listRuntimeOverridesPage = page;
+  const insert = db.prepare('INSERT INTO group_runtime_overrides(session_group,runtime) VALUES (?,?)');
+  db.transaction(() => {
+    for (let i = 0; i < 101; i++) insert.run(`lark:${i % 2 ? 'OC_' : 'oc_'}${String(i).padStart(3, '0')}`, 'codex');
+    for (const group of ['lark:ocX1', 'chat:other']) insert.run(group, 'claude');
+  })();
+  const first = listOverrides({ store, match: 'OC_' });
+  const second = listOverrides({ store, match: 'OC_', after: first.nextAfter });
+  assert.equal(first.runtime.length, 100); assert.equal(second.runtime.length, 1);
+  assert.equal(first.runtimeTotal, 103); assert.equal(second.runtimeTotal, 103);
+  assert.equal(second.nextAfter, null);
+  const keys = [...first.runtime, ...second.runtime].map(row => row.sessionGroup);
+  assert.equal(new Set(keys).size, 101);
+  for (const key of keys) assert.ok(key.toLowerCase().includes('oc_'));
+  assert.equal(keys.includes('lark:ocX1'), false);
+  const exact = listOverrides({ store, match: 'OC_', limit: 101 });
+  assert.equal(exact.runtime.length, 101); assert.equal(exact.nextAfter, null);
+  db.prepare('DELETE FROM group_runtime_overrides').run();
+  for (const group of ['chat:A', 'chat:a', 'chat:B']) insert.run(group, 'codex');
+  const selected = listOverrides({ store, groups: ['chat:a', 'chat:A', 'chat:B'] });
+  assert.deepEqual(selected.runtime.map(row => row.sessionGroup), ['chat:A', 'chat:B', 'chat:a']);
+  let after;
+  for (const group of ['chat:A', 'chat:B', 'chat:a']) {
+    const result = listOverrides({ store, limit: 1, after });
+    assert.equal(result.runtime.length, 1); assert.equal(result.runtime[0].sessionGroup, group);
+    assert.equal(result.nextAfter, group === 'chat:a' ? null : group);
+    after = result.nextAfter;
+  }
+});

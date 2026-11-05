@@ -109,7 +109,7 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
   };
 }
 
-export function listOverrides({ store, groups, match, limit, after }) {
+export function listOverrides({ store, groups, match, limit = 100, after }) {
   const base = store.readBaseline();
   const baseline = { runtime: base.runtime, sessionMode: base.sessionMode };
   if (groups?.length) return { baseline, ...store.listOverridesForGroups(groups) };

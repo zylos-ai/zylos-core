@@ -84,7 +84,7 @@ function overridesFixture(t) {
   console.log(JSON.stringify({ overridesFixture: root, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2, TMPDIR: tmp, database }));
   const run = (args, extraEnv = {}) => spawnSync(process.execPath, [new URL('../../zylos.js', import.meta.url).pathname, 'group', ...args], { env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 15000 });
   const json = (args, extraEnv) => {
-    const result = run([...args, '--json'], extraEnv);
+    const result = run(args[0] === 'overrides' ? [args[0], '--json', ...args.slice(1)] : [...args, '--json'], extraEnv);
     assert.equal(result.stdout.trim().split('\n').length, 1, result.stdout);
     return { ...result, value: JSON.parse(result.stdout) };
   };
@@ -178,6 +178,9 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
   const maxGroups = f.json(['overrides', ...Array.from({ length: 500 }, (_, i) => ['--group', `chat:g${i}`]).flat()]);
   assert.equal(maxGroups.status, 0, maxGroups.stderr);
   assert.deepEqual(maxGroups.value.data.runtime, []); assert.deepEqual(maxGroups.value.data.model, []);
+  const origin = f.json(['overrides', '--group', 'origin']);
+  assert.equal(origin.status, 0, origin.stderr);
+  assert.deepEqual(origin.value.data.runtime, []); assert.deepEqual(origin.value.data.model, []);
   const internal = f.json(['overrides'], { ZYLOS_PACKAGE_ROOT: path.join(f.root, 'missing-package') });
   assert.equal(internal.status, 1); assert.equal(internal.value.ok, false);
   assert.equal(internal.value.error.code, 'INTERNAL_ERROR');
@@ -252,4 +255,46 @@ test('real override CLI output stays bounded when runtime override history grows
   assert.equal(large.value.data.runtime.length, 100); assert.equal(large.value.data.nextAfter, 'chat:g000099');
   assert.ok(Buffer.byteLength(large.stdout) < Buffer.byteLength(small.stdout) * 2);
   for (let i = 0; i < 100; i++) assert.equal(large.value.data.runtime[i].sessionGroup, small.value.data.runtime[i].sessionGroup);
+});
+
+test('real override CLI searches literal underscores and pages case-sensitive group keys', t => {
+  const f = overridesFixture(t);
+  const insert = f.db.prepare('INSERT INTO group_runtime_overrides(session_group,runtime) VALUES (?,?)');
+  f.db.transaction(() => {
+    for (let i = 0; i < 101; i++) insert.run(`lark:${i % 2 ? 'OC_' : 'oc_'}${String(i).padStart(3, '0')}`, 'codex');
+    for (const group of ['lark:ocX1', 'chat:other', 'chat:--b']) insert.run(group, 'claude');
+  })();
+  const first = f.json(['overrides', '--match', ' OC_ ']);
+  assert.equal(first.status, 0, first.stderr);
+  const second = f.json(['overrides', '--match', 'OC_', '--after', first.value.data.nextAfter]);
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(first.value.data.runtime.length, 100); assert.equal(second.value.data.runtime.length, 1);
+  assert.equal(second.value.data.nextAfter, null);
+  const keys = [...first.value.data.runtime, ...second.value.data.runtime].map(row => row.sessionGroup);
+  assert.equal(new Set(keys).size, 101);
+  for (const row of [first, second]) {
+    assert.equal(row.value.data.runtimeTotal, 104);
+    for (const item of row.value.data.runtime) assert.ok(item.sessionGroup.toLowerCase().includes('oc_'));
+  }
+  assert.equal(keys.includes('lark:ocX1'), false);
+  const exact = f.json(['overrides', '--match', 'OC_', '--limit', '101']);
+  assert.equal(exact.status, 0, exact.stderr); assert.equal(exact.value.data.runtime.length, 101);
+  assert.equal(exact.value.data.nextAfter, null);
+  const dashed = f.json(['overrides', '--match', '--b']);
+  assert.equal(dashed.status, 0, dashed.stderr);
+  assert.deepEqual(dashed.value.data.runtime, [{ sessionGroup: 'chat:--b', runtime: 'claude' }]);
+  const jsonText = f.run(['overrides', '--match', '--json']);
+  assert.equal(jsonText.status, 0, jsonText.stderr); assert.match(jsonText.stdout, /^OK: /);
+  const dashedCursor = f.json(['overrides', '--after', '--b', '--limit', '1']);
+  assert.equal(dashedCursor.status, 0, dashedCursor.stderr);
+  f.db.prepare('DELETE FROM group_runtime_overrides').run();
+  for (const group of ['chat:A', 'chat:a', 'chat:B']) insert.run(group, 'codex');
+  let after;
+  for (const group of ['chat:A', 'chat:B', 'chat:a']) {
+    const page = f.json(['overrides', '--limit', '1', ...(after ? ['--after', after] : [])]);
+    assert.equal(page.status, 0, page.stderr);
+    assert.equal(page.value.data.runtime.length, 1); assert.equal(page.value.data.runtime[0].sessionGroup, group);
+    assert.equal(page.value.data.nextAfter, group === 'chat:a' ? null : group);
+    after = page.value.data.nextAfter;
+  }
 });

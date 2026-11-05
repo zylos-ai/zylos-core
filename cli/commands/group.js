@@ -5,15 +5,15 @@ const usage = 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zy
 export async function groupCommand(args, { run, io = process } = {}) {
   const [kind, ...flags] = args;
   if (kind === 'overrides') {
-    const json = flags.includes('--json');
+    let json = false;
     const groups = [], options = {};
-    let invalid = false, seenJson = false;
+    let invalid = false;
     for (let i = 0; i < flags.length; i++) {
       const flag = flags[i];
-      if (flag === '--json') { if (seenJson) invalid = true; seenJson = true; continue; }
-      if (!['--group', '--match', '--limit', '--after'].includes(flag)) { invalid = true; break; }
+      if (flag === '--json') { if (json) invalid = true; json = true; continue; }
+      if (!['--group', '--match', '--limit', '--after'].includes(flag)) { invalid = true; continue; }
       const value = flags[++i];
-      if (value === undefined || value.startsWith('--')) { invalid = true; break; }
+      if (value === undefined) { invalid = true; break; }
       if (flag === '--group') groups.push(value);
       else if (Object.hasOwn(options, flag.slice(2))) invalid = true;
       else options[flag.slice(2)] = value;
