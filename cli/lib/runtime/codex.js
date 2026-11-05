@@ -115,10 +115,9 @@ export class CodexAdapter extends SessionAdapter {
 
     if (authMode === 'chatgpt' || (authMode !== 'apikey' && !apiKey)) {
       // OAuth/device auth, or no auth.json — defer to the CLI which reads auth.json natively.
-      // NOTE: `codex login status` exits 0 in BOTH states ("Logged in using ..." and
-      // "Not logged in"), so a non-throwing call does NOT mean authenticated — parse
-      // the output text. Treating exit 0 as "ok" here would false-pass a logged-out
-      // OAuth session straight through the runtime-switch / health-probe auth gate.
+      // Parse explicit status text even on exit 0: CLI versions can report
+      // "Not logged in" with either exit 0 or exit 1. A failed command can
+      // confirm logged-out status, but can never establish authenticated status.
       // The status line is written to STDERR (stdout is empty), so combine streams.
       try {
         const { stdout, stderr } = await (this.options.execFile || execFileAsync)(env.CODEX_BIN || 'codex', ['login', 'status'], {
@@ -128,7 +127,10 @@ export class CodexAdapter extends SessionAdapter {
         if (status === 'success') return { status: 'success', reason: 'codex_login_status' };
         if (status === 'failure') return { status: 'failure', reason: 'not_logged_in' };
         return { status: 'uncertain', reason: 'codex_login_status_uncertain' };
-      } catch { /* binary missing, killed, or other error */ }
+      } catch (err) {
+        const status = classifyCodexLoginStatus((err.stdout || '') + (err.stderr || ''));
+        if (typeof err.code === 'number' && status === 'failure') return { status: 'failure', reason: 'not_logged_in' };
+      }
       return { status: 'uncertain', reason: 'codex_login_status_unavailable' };
     }
 
