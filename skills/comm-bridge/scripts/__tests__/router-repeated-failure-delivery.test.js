@@ -5,6 +5,10 @@ import * as database from '../c4-db.js';
 import { createDispatcher } from '../router/factory.js';
 import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
 
+// Run only with isolated HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private tmux
+// socket paths and test databases; never use live resources. All external I/O
+// in this file is injected; setup reads back and asserts the isolation paths.
+
 after(() => database.close());
 
 const consoleTarget = { channel: 'web-console', endpoint: 'console' };

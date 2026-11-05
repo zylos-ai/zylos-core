@@ -110,6 +110,45 @@ test('inbound readiness clears continuation failures and launch diagnostics cont
   assert.equal(message.includes('no code'), false); assert.equal(message.includes('private error'), false);
 });
 
+// Integration boundary: real continuation activation clears failures on readiness.
+// Run for continuation readiness/reset changes; skip unrelated delivery or copy.
+// Isolated HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private socket paths, in-memory
+// SQLite and injected clock/runtime/I/O only; fixture stops Router and closes DB.
+test('continuation readiness restarts the failure count after five failed starts', async t => {
+  const f = routerFixture(t); f.put('origin');
+  const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
+  f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
+  const adapter = f.deps.getSessionAdapter;
+  let attempts = 0;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    attempts++;
+    if (attempts === 6) { f.put('a', { runId: input.runId, ready: false }); return; }
+    throw Object.assign(Error('launch rejected'), { code: 'REFUSED' });
+  } });
+  await f.create().initialize(); await f.rounds(2);
+  const alerts = () => f.calls.filter(call => call[0] === 'alert');
+  for (const delay of [5000,10000,20000,40000,60000]) { f.advance(delay); await f.rounds(4); }
+  assert.equal(attempts, 5);
+  assert.equal(alerts().length, 1);
+  assert.equal(alerts()[0][2].failures, 5);
+  f.advance(60000); await f.rounds(3);
+  assert.equal(attempts, 6);
+  const activation = f.router.state.activations.get('a');
+  assert.equal(activation.continuation, true, 'sixth launch belongs to continuation, without inbound work');
+  f.put('a', { runId: activation.runId, ready: true }); await f.rounds(4);
+  assert.equal(f.router.state.activations.size, 0);
+  assert.equal(f.db.listPendingContinuations().length, 0, 'ready continuation was delivered');
+  f.scene.delete('a'); await f.rounds(2);
+  f.db.recordRunEnd('a', { runId: activation.runId, reason: 'unexpected' });
+  f.advance(1800000); await f.rounds(4);
+  assert.equal(attempts, 7, 'first failure after continuation readiness actually ran');
+  assert.equal(alerts().length, 1, 'first new failure does not alert even after the machine window expires');
+  for (let i = 0; i < 4; i++) { f.advance(60000); await f.rounds(4); }
+  assert.equal(attempts, 11);
+  assert.equal(alerts().length, 2);
+  assert.equal(alerts()[1][2].failures, 5, 'post-readiness failures started at one');
+});
+
 // Integration boundary: scheduler computes actual timeout seconds, while runs
 // that became ready never increment its failure counter. Same private SQLite,
 // injected clock/runtime and fixture cleanup as above; no external services.
