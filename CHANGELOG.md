@@ -5,6 +5,11 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Interrupt notices are not pause orders**: the Claude system instructions now say that Claude Code's "STOP ... wait for the user" interrupt text only cancels that one call, must not be recorded in memory as a pause, and does not stop later messages or scheduled tasks. (#987)
+
 ## [0.9.5] - 2026-11-03
 
 ### Upgrade prerequisite
