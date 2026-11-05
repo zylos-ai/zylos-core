@@ -87,7 +87,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   });
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
   const alert=event=>{
-    const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`].filter(Boolean).join(' ');
+    const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,event.message].filter(Boolean).join(' ');
     const pending=guard.notify(`Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim());
     pendingAlerts.add(pending);pending.finally(()=>pendingAlerts.delete(pending)).catch(log);return pending;
   };

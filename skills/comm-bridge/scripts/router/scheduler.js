@@ -147,6 +147,24 @@ export function createRouter(dependencies, configuration = {}) {
     if (!state.lanes.has(group)) state.lanes.set(group, createLane(context, group));
     return state.lanes.get(group);
   }
+  function adoptReadySlots() {
+    if (!state.sceneObservable) return;
+    for (const group of state.listed) {
+      if (group === null || group === 'origin') continue;
+      const live = state.live.get(group);
+      if (!live?.present || !live.ready || !live.runId) continue;
+      const own = state.slots.get(group);
+      if (own?.state === 'running' && own.runId === live.runId) continue;
+      try {
+        const result = deps.db.adoptSlot(group, { runId: live.runId });
+        if (result.adopted || result.reason === 'already') {
+          state.slots.set(group, { sessionGroup: group, runId: live.runId, state: 'running', heldUntil: null });
+        }
+      } catch (error) {
+        diagnostic('slot_adoption_failed', { session_group: group, runId: live.runId, reason: error.code ?? error.message });
+      }
+    }
+  }
   function tick() {
     if (!state.ready || state.inert || state.stopped) return;
     state.round++;
@@ -170,7 +188,10 @@ export function createRouter(dependencies, configuration = {}) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
-    if (state.mode === 'multi') context.refreshSlots();
+    if (state.mode === 'multi') {
+      context.refreshSlots();
+      adoptReadySlots();
+    }
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
     const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
     state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));

@@ -72,8 +72,15 @@ export class SupervisorLoop {
   async runRound() {
     const d = this.deps;
     d.beginRound?.();
+    const authority = async read => {
+      try { return await read(); }
+      catch (error) {
+        if (this.configuration?.mode === 'multi') await d.reconciliationReadFailed?.(error);
+        throw error;
+      }
+    };
     // Transition owns its own serialization and must precede this round's work.
-    const transition = await d.getModeTransition();
+    const transition = await authority(() => d.getModeTransition());
     if (transition) {
       try { await d.advanceTransition(transition); }
       catch (error) { await d.reportError(error, { phase: 'transition' }); }
@@ -83,7 +90,7 @@ export class SupervisorLoop {
       // Sample all round authorities and scenes while socket admission is excluded.
       this.configuration = await d.readConfiguration(transition);
       context = { configuration: this.configuration, transition,
-        fences: await d.listDrainFences(), restartRequests: [] };
+        fences: await authority(() => d.listDrainFences()), restartRequests: [] };
       try { context.restartRequests = await d.readRestartRequests(); }
       catch (error) {
         // Unreadable intent blocks new work, but cannot strand existing D8 reclaim.
@@ -100,7 +107,7 @@ export class SupervisorLoop {
         try { await d.advanceAutomaticMigration?.(context); }
         catch (error) { await d.reportError(error, { phase: 'automatic-migration' }); }
         // Migration may have accepted a transition while holding this queue.
-        context.transition = await d.getModeTransition();
+        context.transition = await authority(() => d.getModeTransition());
       }
       if (!context.transition) {
         for (const phase of ['advanceManual', 'advanceRestarts', 'reconcileConfiguration']) {

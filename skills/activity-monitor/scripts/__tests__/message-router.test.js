@@ -98,6 +98,24 @@ test('successful authentication waits for lifecycle release; uncertain is explic
   assert.equal((await f.router.route(request())).auth.result, 'unconfirmed');
 });
 
+test('legacy no-reply routing preserves explicit channels during authentication failure', async t => {
+  let checks = 0;
+  const f = fixture(t, { checkAuth: () => { checks++; return { status: 'failure', reason: 'not_logged_in' }; } });
+  f.states.claude.health = 'auth_failed';
+  for (const channel of ['telegram', 'system']) {
+    const input = request({ version: 1, channel, noReply: true });
+    delete input.componentName;
+    const result = await f.router.route(input);
+    assert.equal(result.decision, 'auth_rejected');
+    assert.equal(result.auth.result, 'failed');
+  }
+  assert.equal(checks, 2);
+  const input = request({ version: 1, channel: null, noReply: true });
+  delete input.componentName;
+  assert.equal((await f.router.route(input)).decision, 'pending');
+  assert.equal(checks, 2);
+});
+
 test('authentication notification holds during transition and rejects invalid runtime before recovery', async t => {
   const f = fixture(t, { getModeTransition: () => ({ phase: 'gating' }) });
   f.states.claude.health = 'unavailable';

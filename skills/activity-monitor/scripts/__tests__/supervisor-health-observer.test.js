@@ -171,7 +171,7 @@ test('R10 screen check waits five seconds after paste and is consumed only once'
 });
 
 
-test('an inserted row without a positive integer id ends preparation with an error', async t => {
+test('an inserted row without a positive integer id ends preparation with an error', { timeout: 5000 }, async t => {
   for (const row of [{}, { id: 0 }, { id: -1 }, { id: 1.5 }, { id: '1' }, 1, null]) {
     await t.test(JSON.stringify(row), async t => {
       const f = fixture(t); f.setHealth('rate_limited');

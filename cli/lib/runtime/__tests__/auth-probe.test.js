@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { CodexAdapter } from '../codex.js';
 import { ClaudeAdapter } from '../claude.js';
 
@@ -14,7 +13,7 @@ import { ClaudeAdapter } from '../claude.js';
 // case uses only its own executable and empty auth/config root, with no real
 // runtime, network, database, tmux, or PM2 access. execFile awaits/reaps the child;
 // its timeout also bounds a stuck fixture, before teardown removes private files.
-async function fixture(t, runtime, scenario, { missing = false, timeout } = {}) {
+async function fixture(t, runtime, scenario, { missing = false, timeout, killAfterOutput = false, trace } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'auth-probe-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const command = path.join(root, 'runtime.mjs');
@@ -33,9 +32,21 @@ async function fixture(t, runtime, scenario, { missing = false, timeout } = {}) 
     }),
   };
   const options = { root, env };
-  if (timeout) {
-    const execute = promisify(execFile);
-    options.execFile = (file, args, values) => execute(file, args, { ...values, timeout });
+  if (timeout || killAfterOutput || trace) {
+    options.execFile = (file, args, values) => new Promise((resolve, reject) => {
+      const child = execFile(file, args, { ...values, timeout: timeout ?? 1000 }, (error, stdout, stderr) => {
+        if (trace) Object.assign(trace, { stdout, stderr, code: error?.code, killed: error?.killed, signal: error?.signal });
+        if (error) reject(Object.assign(error, { stdout, stderr }));
+        else resolve({ stdout, stderr });
+      });
+      if (killAfterOutput) {
+        let output = '';
+        child.stderr.on('data', chunk => {
+          output += chunk;
+          if (output.includes('Not logged in')) child.kill('SIGTERM');
+        });
+      }
+    });
   }
   return runtime === 'codex' ? new CodexAdapter(options) : new ClaudeAdapter(options);
 }
@@ -69,6 +80,36 @@ test('Claude exit one with logged-out stdout confirms failure', async t => {
   const adapter = await fixture(t, 'claude', { stdout: 'Not logged in · Please run /login' });
   assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'cli_probe_not_logged_in' });
 });
+
+test('Claude exit one with logged-out stderr confirms failure', async t => {
+  const adapter = await fixture(t, 'claude', { stderr: 'Not logged in · Please run /login' });
+  assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'cli_probe_not_logged_in' });
+});
+
+for (const transient of ['rate_limit_error', 'api_error']) {
+  test(`Claude ${transient} remains transient beside another tool's logged-out text`, async t => {
+    const adapter = await fixture(t, 'claude', { stderr: `[mcp] github: Not logged in\n${transient}` });
+    assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'cli_probe_uncertain' });
+  });
+}
+
+for (const runtime of ['codex', 'claude']) {
+  for (const termination of ['self signal', 'external signal', 'timeout']) {
+    test(`${runtime} logged-out text followed by ${termination} remains uncertain`, async t => {
+      const trace = {};
+      const scenario = { stderr: 'Not logged in', ...(termination === 'self signal' ? { signal: 'SIGTERM' } : { wait: true }) };
+      const adapter = await fixture(t, runtime, scenario, { trace,
+        killAfterOutput: termination === 'external signal', timeout: 1000 });
+      const reason = runtime === 'codex' ? 'codex_login_status_unavailable'
+        : termination === 'self signal' ? 'cli_probe_unexpected_error' : 'cli_probe_uncertain';
+      assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason });
+      assert.equal(trace.stderr, 'Not logged in', 'the child printed the auth text before termination');
+      assert.equal(trace.signal, 'SIGTERM');
+      assert.equal(trace.killed, termination !== 'self signal');
+      assert.notEqual(typeof trace.code, 'number');
+    });
+  }
+}
 
 for (const [name, scenario, result] of [
   ['rate limit', { stderr: 'rate_limit_error' }, { status: 'uncertain', reason: 'cli_probe_uncertain' }],

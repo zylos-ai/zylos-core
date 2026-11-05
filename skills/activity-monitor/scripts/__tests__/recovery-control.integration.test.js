@@ -1,21 +1,28 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import * as c4 from '../../../comm-bridge/scripts/c4-db.js';
-import { RuntimeHealthCoordinator } from '../runtime-health.js';
-import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
-import { getSessionAdapter } from '../../../../cli/lib/runtime/index.js';
+import { createTestEnvironment } from '../../../../scripts/test-environment.js';
+
+const environment = createTestEnvironment();
+const c4 = await import('../../../comm-bridge/scripts/c4-db.js');
+const { RuntimeHealthCoordinator } = await import('../runtime-health.js');
+const { SupervisorHealthObserver } = await import('../supervisor-health-observer.js');
+const { getSessionAdapter } = await import('../../../../cli/lib/runtime/index.js');
+after(() => { c4.close(); environment.cleanup(); });
 
 // Integration boundary: real C4 insert/read, private SQLite, observer, health
 // coordinator and durable HealthStore. Run for recovery control return shape,
 // acknowledgement polling or retry-budget changes; skip unrelated runtime I/O.
-// The official runner supplies private HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR.
+// The official runner supplies private paths; this file creates another private
+// HOME/ZYLOS_DIR/PM2_HOME before importing modules that capture those paths, so
+// config writes and control-row cleanup never touch the runner's shared root.
 // Identity, screen, clock and transport are injected: no runtime, tmux, PM2,
 // network, account or notification is contacted. Teardown stops the observer,
-// closes the private database and removes this test's health files.
+// closes the file-owned database and removes health files; file teardown removes
+// its config/database root and restores the runner's original environment.
 function fixture(t, runtime = 'codex') {
   const zylosDir = process.env.ZYLOS_DIR;
   assert.equal(zylosDir, path.join(os.homedir(), 'zylos'));

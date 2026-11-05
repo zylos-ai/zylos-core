@@ -129,7 +129,7 @@ export class CodexAdapter extends SessionAdapter {
         return { status: 'uncertain', reason: 'codex_login_status_uncertain' };
       } catch (err) {
         const status = classifyCodexLoginStatus((err.stdout || '') + (err.stderr || ''));
-        if (status === 'failure') return { status: 'failure', reason: 'not_logged_in' };
+        if (typeof err.code === 'number' && status === 'failure') return { status: 'failure', reason: 'not_logged_in' };
       }
       return { status: 'uncertain', reason: 'codex_login_status_unavailable' };
     }

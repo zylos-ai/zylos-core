@@ -42,7 +42,7 @@ export class MessageRouter {
   }
   async route(input) {
     if (!validRouteRequest(input)) throw Object.assign(new Error('Invalid route request'), { code: 'invalid_request' });
-    const request = input.version === 1 ? { ...input, sessionGroup: null, coreSide: false } : input;
+    const request = input.version === 1 ? { ...input, sessionGroup: null, coreSide: false, componentName: input.channel ?? null } : input;
     if (await this.getModeTransition()) return this.decision(request, 'unknown', { health: 'unavailable', reason: 'transition_open', decision: 'pending', transitionHold: true });
     const resolution = await this.resolveTargetRuntime(request.sessionGroup);
     const runtime = typeof resolution === 'string' ? resolution : resolution?.runtime;
