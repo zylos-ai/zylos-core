@@ -26,7 +26,10 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   const sends = [], logs = [];
   const adapter = f.deps.getSessionAdapter;
   const dependencies = { ...f.deps,
-    readZylosConfigStrict: readConfig,
+    readZylosConfigStrict: (() => { let initial = true; return () => {
+      if (initial) { initial = false; return { state: 'ok', config: {} }; }
+      return readConfig();
+    }; })(),
     diagnostics: { diagnostic: f.deps.diagnostic, maintain() {} },
     log: message => logs.push(message),
     sendAlert: async (target, message) => { sends.push({ target, message }); return send(target, message, sends.length); },
@@ -48,9 +51,17 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
     for (const delay of [5000, 10000, 20000, 40000, 60000]) await failAfter(delay);
     assert.equal(f.calls.filter(call => call[0] === 'launch').length, 5);
     assert.equal(f.db.getControlById(control).status, 'pending');
+    for (let i = 0; i < 100 && sends.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(sends.length > 0, 'lazy notification path starts');
+    await flush();
   }
   return { ...f, dispatcher, sends, logs, rounds, failAfter, fiveFailures };
 }
+
+test('dispatcher preserves startup configuration read errors', () => {
+  assert.throws(() => createDispatcher({ readZylosConfigStrict: () => { throw Error('startup configuration unavailable'); } }),
+    /startup configuration unavailable/);
+});
 
 // Factory alert composition boundary: run for routing/template changes; skip unrelated UI.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME; SQLite is in-memory and runtime/send I/O is injected.
@@ -106,15 +117,14 @@ for (const failure of ['false', 'reject']) {
   });
 }
 
-for (const failure of ['false', 'reject']) {
-  // Failed-send cooldown boundary: run for notifier or continuation window changes; skip unrelated UI.
-  // Both destinations are injected failures; injected clock proves next-round progress and exact cooldown.
-  test(`dispatcher logs both ${failure} deliveries without reopening the machine window`, async t => {
+// Failed-send cooldown boundary: run for notifier or continuation window changes; skip unrelated UI.
+// Both destinations are injected failures; injected clock proves next-round progress and exact cooldown.
+test('dispatcher logs both rejected deliveries without reopening the machine window', async t => {
     const f = await setup(t, { readConfig: () => ({ state: 'ok', config: { alert_target: 'telegram:owner' } }),
-      send: async () => { if (failure === 'reject') throw Error('transport unavailable'); return false; } });
+      send: async () => { throw Error('transport unavailable'); } });
     await f.fiveFailures();
     assert.equal(f.sends.length, 2);
-    assert.ok(f.logs.length > 0, 'failed delivery is logged');
+    assert.equal(f.logs.filter(value => value?.message === 'transport unavailable').length, 2, 'both transport rejections are logged');
     await f.failAfter(60000);
     assert.equal(f.calls.filter(call => call[0] === 'launch').length, 6);
     assert.equal(f.sends.length, 2);
@@ -124,8 +134,7 @@ for (const failure of ['false', 'reject']) {
     // Backoff is independent of the alert window; the next eligible failed start emits the alert.
     await f.failAfter(60000);
     assert.equal(f.sends.length, 4);
-  });
-}
+});
 
 // Pending-send lifecycle boundary: run for alert awaiting or Router stop changes; skip unrelated templates.
 // The unresolved promise has no worker/process; cleanup always releases it before test teardown.

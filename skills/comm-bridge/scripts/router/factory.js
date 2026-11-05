@@ -17,8 +17,6 @@ import { createRouterDiagnostics } from './diagnostics.js';
 import { createLifecycleProviders } from './lifecycle.js';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { SupervisorServerHealth } from '../../../activity-monitor/scripts/supervisor-server-health.js';
-import { parseServerAlertTarget } from '../../../activity-monitor/scripts/supervisor-server-observation.js';
 import { messageForStatus } from '../status-notice-templates.js';
 
 // The supervisor owns the transport. Loading it on use allows the scheduler's
@@ -40,26 +38,28 @@ export function createDispatcher(overrides = {}, options = {}) {
   const diagnostic = overrides.diagnostic ?? diagnostics.diagnostic;
   const reader = createSessionReader({ env, connectionOptions: tmux });
   const lifecycle = createLifecycleProviders({ env, tmux, diagnostic, log });
+  const config = (overrides.readZylosConfigStrict ?? readZylosConfigStrict)();
+  const poolSize = options.poolSize ?? resolveSessionPoolBaseline({ env, config: config.state === 'ok' ? config.config : {} }).k;
   const readConfig = () => {
     try { const value = (overrides.readZylosConfigStrict ?? readZylosConfigStrict)(); return value.state === 'ok' ? value.config : {}; }
     catch { return {}; }
   };
-  const poolSize = options.poolSize ?? resolveSessionPoolBaseline({ env, config: readConfig() }).k;
+  const alertController = new AbortController();
   const sendAlert = overrides.sendAlert ?? ((target, message) => new Promise((resolve, reject) => {
     const child = execFile(process.execPath, [fileURLToPath(new URL('../c4-send.js', import.meta.url)), target.channel, target.endpoint],
-      { env, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
+      { env, signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
     child.stdin.on('error', reject); child.stdin.end(message + '\n');
   }));
-  const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target),
-    sendAlert: async (target, message) => {
-      const result = await sendAlert(target, message);
-      if (result === false) log(`Router alert delivery failed: ${target.channel}`);
-      return result;
-    }, log });
   const alert = (event, fields) => {
     if (event !== 'continuation_start_failed') { log(`Router alert: ${event} ${JSON.stringify(fields)}`); return; }
     // Notification I/O must neither join scheduler lanes nor delay Router stop.
     void (async () => {
+      const [{ SupervisorServerHealth }, { parseServerAlertTarget }] = await Promise.all([
+        import('../../../activity-monitor/scripts/supervisor-server-health.js'),
+        import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
+      ]);
+      if (alertController.signal.aborted) return;
+      const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
       const message = messageForStatus({ context: 'repeated_failure', noticeCode: 'could_not_restart',
         group: fields.sessionGroup, count: fields.failures, reason: fields.reason, others: fields.others }, readConfig().statusNotices ?? {});
       await guard.notify(message);
@@ -89,6 +89,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     deliverConversation: overrides.deliverConversation ?? delivery.deliverConversation,
   }, { ...options, poolSize });
   return { ...router, async stop() {
+    alertController.abort();
     // Prevent new lanes first; outstanding delivery drains before DB closure.
     const stopping = router.stop();
     await delivery.stop();

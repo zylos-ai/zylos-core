@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import { createContinuationRestarts } from '../router/continuation.js';
 import { messageForStatus } from '../status-notice-templates.js';
-import { routerFixture as baseFixture, flush } from './helpers/router-fixture.js';
+import { routerFixture as baseFixture } from './helpers/router-fixture.js';
 
 function routerFixture(t, options) {
   const paths = Object.fromEntries(['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','TMUX_TMPDIR'].map(key => [key, process.env[key]]));
@@ -17,14 +17,15 @@ function routerFixture(t, options) {
   return f;
 }
 
-test('restart failures share one machine window and exclude recovered groups', async () => {
+test('restart failures share one machine window and exclude recovered groups', () => {
   let clock = 0;
-  const alerts = [], diagnostics = [], logs = [];
+  const alerts = [], diagnostics = [];
   const restarts = createContinuationRestarts({ now: () => clock,
-    deps: { alert: (event, fields) => { alerts.push({ event, ...fields }); return Promise.reject(Error('offline')); }, log: e => logs.push(e) },
+    deps: { alert: (event, fields) => alerts.push({ event, ...fields }) },
     diagnostic: (event, fields) => diagnostics.push({ event, ...fields }) });
   const fail = (group, reason = { kind: 'launch_error', code: 'REFUSED' }) => restarts.failed(group, 'run', reason);
   for (const group of ['a', 'b', 'c']) for (let i = 0; i < 5; i++) fail(group);
+  for (let i = 0; i < 4; i++) fail('below-threshold');
   assert.equal(alerts.length, 1); assert.equal(alerts[0].others, 0);
   clock = 1799000; fail('b'); assert.equal(alerts.length, 1);
   restarts.ready('a'); clock = 1800000;
@@ -34,7 +35,6 @@ test('restart failures share one machine window and exclude recovered groups', a
     reason: { kind: 'timeout', seconds: 17 }, others: 1 });
   assert.deepEqual(diagnostics[1].reason, alerts[1].reason);
   clock += 1800000; fail('a'); assert.equal(alerts.length, 2);
-  await flush(); assert.equal(logs.length, 2);
 });
 
 test('ready without history does not create restart pacing state and observation does not clear failures', () => {
@@ -83,25 +83,37 @@ test('inbound readiness clears continuation failures and launch diagnostics cont
   const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
   f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
   const adapter = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async () => { throw Object.assign(Error('private error'), { code: 'REFUSED' }); } });
+  let attempts = 0;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async () => { attempts++; throw Object.assign(Error('private error'), { code: 'REFUSED' }); } });
   await f.create().initialize(); await f.rounds(2);
   for (const delay of [5000,10000,20000,40000,60000]) { f.advance(delay); await f.rounds(4); }
   const alerts = () => f.calls.filter(row => row[0] === 'alert');
   assert.equal(alerts().length, 1);
+  assert.equal(attempts, 5);
   assert.deepEqual(alerts()[0][2].reason, { kind: 'launch_error', code: 'REFUSED' });
   assert.deepEqual(f.events.find(e => e.event === 'continuation_start_failed').reason, { kind: 'launch_error', code: 'REFUSED' });
   f.deps.getSessionAdapter = adapter; f.add('a'); await f.rounds(6);
   assert.equal(f.router.state.activations.size, 0);
   const runId = f.scene.get('a').runId;
-  f.scene.delete('a'); f.db.recordRunEnd('a', { runId, reason: 'unexpected' });
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async () => { throw Error('no code'); } });
-  f.advance(1800000); await f.rounds(4); f.advance(60000); await f.rounds(4);
+  f.scene.delete('a'); await f.rounds(2); f.db.recordRunEnd('a', { runId, reason: 'unexpected' });
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async () => { attempts++; throw Error('no code'); } });
+  f.advance(1800000); await f.rounds(4);
+  assert.equal(attempts, 6, 'post-recovery continuation actually failed once');
   assert.equal(alerts().length, 1);
+  for (let i = 0; i < 4; i++) { f.advance(60000); await f.rounds(4); }
+  assert.equal(attempts, 10); assert.equal(alerts().length, 2);
+  const fields = alerts()[1][2];
+  assert.deepEqual(fields.reason, { kind: 'launch_error', code: 'unknown' });
+  const message = messageForStatus({ context: 'repeated_failure', noticeCode: 'could_not_restart', group: fields.sessionGroup,
+    count: fields.failures, reason: fields.reason, others: fields.others }, {});
+  assert.ok(message.includes('launch error (unknown)'));
+  assert.equal(message.includes('no code'), false); assert.equal(message.includes('private error'), false);
 });
 
 // Integration boundary: scheduler computes actual timeout seconds, while runs
 // that became ready never increment its failure counter. Same private SQLite,
 // injected clock/runtime and fixture cleanup as above; no external services.
+// Run for activation timeout calculation/settlement changes; skip unrelated UI.
 test('five readiness timeouts report floored elapsed seconds', async t => {
   const f = routerFixture(t, { readyTimeoutMs: 1000 }); f.put('origin');
   const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
@@ -112,11 +124,29 @@ test('five readiness timeouts report floored elapsed seconds', async t => {
   } });
   await f.create().initialize(); await f.rounds(2);
   for (const delay of [5000,10000,20000,40000,60000]) {
-    f.advance(delay); await f.rounds(3); f.advance(1999); await f.rounds(3);
+    f.advance(delay); await f.rounds(3); f.advance(2500); await f.rounds(3);
   }
   const alerts = f.calls.filter(row => row[0] === 'alert');
   assert.equal(alerts.length, 1);
-  assert.deepEqual(alerts[0][2].reason, { kind: 'timeout', seconds: 1 });
+  assert.deepEqual(alerts[0][2].reason, { kind: 'timeout', seconds: 2 });
+  assert.equal(f.db.getControlById(id).status, 'pending');
+});
+
+// Integration boundary: actual continuation NAME_CONFLICT settlement/counter.
+// Run for conflict handling or failure classification; skip unrelated UI. Private
+// SQLite/clock/runtime, no external services, Router and DB cleaned by fixture.
+test('continuation name conflicts count as failures with their structured code', async t => {
+  const f = routerFixture(t); f.put('origin');
+  const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
+  const id = f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' }).continuationControlId;
+  let attempts = 0;
+  f.deps.getSessionAdapter = () => ({ launch: async () => { attempts++; throw Object.assign(Error('private conflict'), { code: 'NAME_CONFLICT' }); } });
+  await f.create().initialize(); await f.rounds(2);
+  for (const delay of [5000,10000,20000,40000,60000]) { f.advance(delay); await f.rounds(4); }
+  assert.equal(attempts, 5);
+  const alerts = f.calls.filter(row => row[0] === 'alert');
+  assert.equal(alerts.length, 1); assert.equal(alerts[0][2].failures, 5);
+  assert.deepEqual(alerts[0][2].reason, { kind: 'launch_error', code: 'NAME_CONFLICT' });
   assert.equal(f.db.getControlById(id).status, 'pending');
 });
 

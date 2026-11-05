@@ -37,8 +37,7 @@ export function createContinuationRestarts({ now, deps, diagnostic }) {
         for (const [key, value] of groups) if (key !== group && value.failures >= 5) others++;
         const fields = { sessionGroup: group, runId, failures: state.failures, reason: state.reason, others };
         diagnostic('continuation_start_failed', { session_group: group, runId, failures: state.failures, reason: state.reason });
-        try { Promise.resolve(deps.alert?.('continuation_start_failed', fields)).catch(error => deps.log?.(error)); }
-        catch (error) { deps.log?.(error); }
+        deps.alert?.('continuation_start_failed', fields);
       }
     },
   };

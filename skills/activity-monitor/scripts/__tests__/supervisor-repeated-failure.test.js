@@ -65,7 +65,7 @@ async function fixture(t, statusNotices) {
     fs.renameSync(temporary, file);
     await round();
   }
-  return { service, sends, logs, records, rows, round, ended, advance: ms => { time += ms; } };
+  return { service, sends, logs, records, rows, round, ended, config, advance: ms => { time += ms; } };
 }
 
 // Integration boundary: real entry, run-ending reconciliation and alert rendering.
@@ -103,6 +103,12 @@ test('ready-run alerts use configured text and reject invalid localized override
   assert.equal(f.sends.length, 1);
   assert.equal(f.sends[0].message,
     '[Acme] 对话 test:custom 已中断 5 次。\n' + expected('test:custom', 5, 'Acme').split('\n')[1]);
+  f.config.statusNotices = { brand: 'Changed', templates: { repeated_failure: {
+    ended_unexpectedly: { zh: '再次 {group}/{count}', en: 'again {group}/{count}' },
+  } } };
+  f.advance(1800000); await f.ended('test:custom');
+  assert.equal(f.sends.length, 2);
+  assert.equal(f.sends[1].message, '[Changed] 再次 test:custom/6\n[Changed] again test:custom/6');
 });
 
 // Integration boundary: actual reconciliation preserves >=10-minute and intentional
