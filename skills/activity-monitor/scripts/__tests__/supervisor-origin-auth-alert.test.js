@@ -9,6 +9,7 @@ import { PENDING_MAX_AGE_SECONDS } from '../../../comm-bridge/scripts/c4-config.
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
+import { startSupervisor } from '../supervisor-main.js';
 
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'origin-auth-'));
@@ -39,6 +40,41 @@ test('Origin inbound expiry warning observes the threshold and resets only after
   f.state.transition={phase:'cutover'};f.health('ok');await f.tick();f.health('auth_failed');f.state.transition=null;
   await f.tick();assert.equal(f.state.alerts.length,1,'transition does not clear the episode');
   f.health('ok');await f.tick();f.health('auth_failed');await f.tick();assert.equal(f.state.alerts.length,2);
+});
+
+// Real entry -> Origin demand/health -> owner alert text. Run for entry alert
+// formatting or wiring; skip unrelated lifecycle work. The runner isolates HOME,
+// ZYLOS_DIR, PM2_HOME and short TMPDIR/TMUX_TMPDIR. Private am.sock, injected
+// scenes/database/sender; no live tmux/PM2/network. Stop before owned-file cleanup.
+test('Origin authentication expiry alert includes its target runtime in the actual entry message', {timeout:5000}, async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'origin-alert-entry-'));
+  const now=1800000000000,oldestAt=now/1000-PENDING_MAX_AGE_SECONDS+300,messages=[];
+  let service;
+  t.after(async()=>{try{await service?.stop();}finally{fs.rmSync(root,{recursive:true,force:true});}});
+  const db={getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,
+    listPendingSessionGroups:()=>[],listPendingContinuations:()=>[],listRunEndings:()=>[],
+    listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),
+    getLastCompletedModeTransition:()=>null,getControlById:()=>null,
+    getOriginNeed:()=>({inbound:{count:1,oldestAt},controls:{count:0,oldestAt:null}}),
+    getOriginSyncBacklog:()=>({total:0,groups:[]}),
+    resolveSessionLaunchConfig:()=>({runtime:'claude',mode:'default'})};
+  const scenes={observe:async()=>[],readIdentity:async()=>({present:false}),
+    observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
+  service=await startSupervisor({env:{...process.env,HOME:root,ZYLOS_DIR:root,PM2_HOME:path.join(root,'.pm2')},
+    db,scenes,now:()=>now,readMode:()=>({mode:'multi',keyPresent:true}),
+    readConfig:()=>({session_mode:'multi',runtime:'claude',session_pool_size:2}),
+    readMemoryInputs:async()=>({source:'host',limitBytes:8*1024**3,usedBytes:2*1024**3}),
+    legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},
+    sendAlert:async(target,message)=>{messages.push({target,message});return true;},
+    log:()=>{},loopOptions:{schedule:()=>1,cancel(){}}});
+  const store=service.supervisor.health.store('claude'),health=store.read();
+  health.health='auth_failed';health.reason='authentication_failed';store.write(health);
+  await service.supervisor.loop.tick();
+  assert.equal(messages.length,1);
+  assert.deepEqual(messages[0].target,{channel:'web-console',endpoint:'console'});
+  assert.match(messages[0].message,/origin_auth_blocked/);
+  assert.match(messages[0].message,/runtime=claude/);
+  assert.ok(messages[0].message.includes(`oldest_at=${oldestAt}`));
 });
 
 test('role-only demand, rate limit, global fence, transition and single mode never emit an authentication expiry warning',async t=>{

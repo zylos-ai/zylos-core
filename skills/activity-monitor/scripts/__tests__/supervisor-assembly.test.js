@@ -5,12 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
-function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={}}={}) {
+import { groupRunDir } from '../../../../cli/lib/session-group-paths.js';
+function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prompts}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
  const calls=[],db={getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig,...database};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
- const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
 test('assembly: restore health before admission; no-launch empty round executes',async t=>{
@@ -20,6 +21,27 @@ test('assembly: restore health before admission; no-launch empty round executes'
 test('assembly: damaged retained while existing lifecycle loop stays scheduled',async t=>{
  const {supervisor,calls,file}=fixture(t,{badRequests:true});await supervisor.loop.start();assert.equal(supervisor.admission.open,true);assert.equal(fs.readFileSync(file,'utf8'),'broken');assert.ok(calls.some(row=>row.error==='requests_unreadable'));
  const reply=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'bad',reason:'upgrade'});assert.equal(reply.code,'requests_unreadable');assert.equal(fs.readFileSync(file,'utf8'),'broken');
+});
+
+// Real createSupervisor -> lifecycle Origin Sync -> marker reader/control write.
+// Run for assembly/Sync wiring; skip unrelated UI work. Runner paths are private;
+// injected scenes/database and marker reader avoid live tmux/PM2/network. The
+// lifecycle-bound fixture stops the supervisor and removes only owned files.
+test('assembled Origin Sync reads its marker in the Origin group run directory',async t=>{
+ const markers=[],controls=[];
+ const {supervisor,root,calls}=fixture(t,{
+  readSyncMarker:options=>{markers.push(options);return {held:false,stale:false};},
+  prompts:{ORIGIN_SYNC_PROMPT:'Origin Sync fixture instruction'},database:{
+  getOriginSyncBacklog:()=>({total:51,groups:[{count:51,firstAt:null,firstCheckpointAt:null,pendingCheckpoints:0}]}),
+  insertControl:(content,options)=>{const row={id:controls.length+1,status:'pending',content,...options};controls.push(row);return row;},
+ }});
+ await supervisor.loop.start();
+ assert.equal(markers.length,1);
+ assert.equal(markers[0].runDir,groupRunDir('origin',{ZYLOS_DIR:root}));
+ assert.equal(markers[0].kind,'origin');assert.equal(markers[0].currentRunId,null);
+ assert.equal(controls.length,1);assert.equal(controls[0].sessionGroup,'origin');
+ assert.equal(controls[0].content,'Origin Sync fixture instruction');
+ assert.equal(calls.some(row=>row.error || row.phase==='round'),false);
 });
 
 
