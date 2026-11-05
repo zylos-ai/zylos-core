@@ -43,7 +43,7 @@ function fixture(options = {}) {
 
 // Integration boundary for every case below: real controller publication and
 // lifecycle candidate/fence paths, with private fixture files and in-memory DB.
-// Run for protection, modes, failure timing, or shared eviction eligibility;
+// Run for protection, modes, fallback diagnostics, or shared eviction eligibility;
 // skip unrelated lifecycle work. Runner proves fresh HOME/ZYLOS_DIR/PM2_HOME
 // and short TMPDIR/TMUX_TMPDIR. No tmux/PM2/network/live DB. Held promises are
 // released in finally; fixture cleanup is awaited after each finite case.
@@ -128,28 +128,29 @@ test('other memory sources never produce OOM diagnostics', async () => {
   }
   assert.equal(f.notices.length, 0); assert.equal(f.events.some(row => row.event === 'container_oom_kill'), false);
 });
-test('unreadable inputs wait sixty seconds and retain cooldown across recovery', async () => {
-  const f = fixture(); f.setMemory(null); await f.tick(0);
-  for (let i = 0; i < 5; i++) await f.tick(10000);
-  await f.tick(9000); assert.equal(f.notices.length, 0); await f.tick(1000); assert.deepEqual(f.notices, ['inputs_unreadable']);
-  f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 1000 * MiB }); await f.tick(10000); assert.equal(f.capacity.inputsUnreadableSince, null);
-  f.setMemory(null); await f.tick(10000); await f.tick(60000); assert.equal(f.notices.length, 1);
-  await f.tick(1720000); assert.equal(f.notices.length, 2);
+// Integration boundary: real controller fallback publication and transition
+// diagnostic. Run for memory fallback/mode changes; skip unrelated lifecycle.
+// Fresh runner HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR, private fixture
+// files and in-memory DB/scenes; no tmux/PM2/network. Fixture cleanup is awaited.
+test('unreadable inputs only diagnose each transition into automatic fallback', async () => {
+  const f = fixture(); f.setMemory(null);
+  const first = await f.tick(0);
+  assert.equal(first.k, 1); assert.equal(first.source, 'fallback'); assert.equal(first.reason, 'inputs_unreadable');
+  assert.equal(f.events.filter(row => row.event === 'capacity_inputs_unreadable').length, 1);
+  await f.tick(60000); await f.tick(60000);
+  assert.equal(f.notices.length, 0); assert.equal(f.events.filter(row => row.event === 'capacity_inputs_unreadable').length, 1);
+  f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 1000 * MiB }); await f.tick(10000);
+  f.setMemory(null); await f.tick(10000);
+  assert.equal(f.events.filter(row => row.event === 'capacity_inputs_unreadable').length, 2); assert.equal(f.notices.length, 0);
+  const fixed = fixture(); fixed.setFixed(true); fixed.setMemory(null);
+  assert.equal((await fixed.tick(0)).source, 'fixed'); await fixed.tick(60000);
+  assert.equal(fixed.events.some(row => row.event === 'capacity_inputs_unreadable'), false); assert.equal(fixed.notices.length, 0);
 });
-test('single cutover clears an existing failure duration and pressure observation before returning to multi', async () => {
-  const f = fixture(); f.setMemory(null); await f.tick(0); assert.notEqual(f.capacity.inputsUnreadableSince, null);
-  await f.capacity.tick({ mode: 'single', now: f.time() }); assert.equal(f.capacity.inputsUnreadableSince, null);
-  await f.tick(60000); assert.equal(f.notices.length, 0); await f.tick(50000); await f.tick(9000); assert.equal(f.notices.length, 0);
-  await f.tick(1000); assert.deepEqual(f.notices, ['inputs_unreadable']);
-  const g = fixture(); await g.tick(0); await g.capacity.tick({ mode: 'single', now: g.time() });
-  await g.tick(10000); assert.equal(g.fences.size, 0); assert.equal(g.notices.length, 0);
-  await g.tick(10000); assert.equal(g.fences.get('old')?.reason, 'evict');
-});
-test('fixed unreadable inputs stay silent and automatic mode starts a fresh failure duration', async () => {
-  const f = fixture(); f.setFixed(true); f.setMemory(null); await f.tick(0); await f.tick(60000);
-  assert.equal(f.notices.length, 0); assert.equal(f.capacity.inputsUnreadableSince, null);
-  f.setFixed(false); await f.tick(10000); await f.tick(50000); await f.tick(9000); assert.equal(f.notices.length, 0);
-  await f.tick(1000); assert.deepEqual(f.notices, ['inputs_unreadable']);
+test('single cutover clears pressure observations before returning to multi', async () => {
+  const f = fixture(); await f.tick(0); assert.equal(f.capacity.pressureCount, 1);
+  await f.capacity.tick({ mode: 'single', now: f.time() }); assert.equal(f.capacity.pressureCount, 0);
+  await f.tick(10000); assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 0); assert.equal(f.capacity.pressureCount, 1);
+  await f.tick(10000); assert.equal(f.fences.get('old')?.reason, 'evict'); assert.deepEqual(f.notices, ['memory_low']);
 });
 test('publication completion rechecks the epoch before memory warnings or reclaim', async () => {
   let release, publishing = false;

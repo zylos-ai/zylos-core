@@ -67,9 +67,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   const capacityAlert=id=>{
     const options={context:'capacity',noticeCode:id};
     const pending=(async()=>{
-      let message;
-      try {message=messageForStatus(options,(await readConfig()).statusNotices ?? {});}
-      catch {message=messageForStatus(options,{});}
+      const message=messageForStatus(options,(await readConfig()).statusNotices ?? {});
       await guard.notify(message);
     })();
     pendingAlerts.add(pending);pending.finally(()=>pendingAlerts.delete(pending)).catch(log);
@@ -108,15 +106,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   const healthIdentity=scene=>Number.isSafeInteger(scene.runtimePid)?{runtime:scene.runtime,session_id:scene.sessionId,claude_pid:scene.runtimePid}:null;
   supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,missingDependencies,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
     readConfiguration:async()=>{
-      let raw;
-      try {raw=await readConfig();}
-      catch(error) {
-        // Already-observed failures still need their delayed notice even when
-        // configuration is unreadable. Do not calculate or reclaim on old F1.
-        capacityController?.checkFailureNotices(clock());
-        throw error;
-      }
-      const {mode,legacy}=await readMode();
+      const raw=await readConfig(), {mode,legacy}=await readMode();
       lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);
       configuration={...raw,...lifecycleConfiguration,mode,legacy,capacityUnavailable:false};
       if(mode!=='multi') {

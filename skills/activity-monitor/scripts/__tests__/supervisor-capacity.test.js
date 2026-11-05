@@ -14,7 +14,7 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch =
   fs.mkdirSync(path.join(root, '.zylos'));
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify(config));
   assert.notEqual(root, process.env.ZYLOS_DIR);
-  let reads = 0, observations = 0, configError = false;
+  let reads = 0, observations = 0;
   const currentScenes = initialScenes, fences = new Map(), sends = [];
   const diagnostics = () => {
     const file = path.join(root, 'activity-monitor', 'supervisor-events.jsonl');
@@ -23,7 +23,7 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch =
   const logs = [];
   const memory = readMemory ?? (async () => ({ source: 'host', limitBytes: 8 * 1024 ** 3, usedBytes: 2 * 1024 ** 3 }));
   const service = await startSupervisor({ env, now: () => time,
-    readMode: () => ({ mode: config.session_mode, keyPresent: true }), readConfig: () => { if (configError) throw Object.assign(new Error('private configuration unreadable'), { code: 'CONFIG_UNREADABLE' }); return config; },
+    readMode: () => ({ mode: config.session_mode, keyPresent: true }), readConfig: () => config,
     readMemoryInputs: () => { reads++; return memory(); },
     db: { getModeTransition: () => null, listDrainFences: () => [...fences.values()], getDrainFence: group => fences.get(group),
       setDrainFence: (group, row) => fences.set(group, { ...row, sessionGroup: group }),
@@ -40,7 +40,7 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch =
     loopOptions: { schedule: () => 1, cancel: () => {} } });
   t.after(async () => { await service.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const round = async () => { await service.supervisor.loop.tick(); await flush(); };
-  return { root, service, round, logs, sends, fences, currentScenes, diagnostics, setConfigError: value => { configError = value; }, reads: () => reads, observations: () => observations,
+  return { root, service, round, logs, sends, fences, currentScenes, diagnostics, reads: () => reads, observations: () => observations,
     setMode: value => { config = { ...config, session_mode: value }; },
     setFixed: value => { config = { ...config, session_pool_size: value }; },
     advance: ms => { time += ms; },
@@ -176,31 +176,6 @@ for (const route of ['target', 'missing', 'failed']) {
     assert.equal(f.diagnostics().some(row => row.event === 'container_oom_kill'), false);
   });
 }
-
-// Integration boundary: actual readConfiguration failure and already-observed
-// input failure timer, renderer default config and guard sender.
-// Run when F1 failure/notice scheduling changes; skip unrelated lifecycle.
-// Fresh runner HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; private am.sock,
-// fixture DB and injected memory/scenes, no tmux/PM2/network. Lifecycle stop and
-// file cleanup run even on assertion failure; no detached background work.
-test('unreadable configuration sends delayed default notices without stale calculations or reclaim', async t => {
-  const f = await fixture(t, { fixed: null, readMemory: async () => null,
-    configPatch: { statusNotices: { brand: 'FixtureBrand' } } });
-  await flush();
-  const file = path.join(f.root, 'activity-monitor', 'pool-capacity.json');
-  fs.renameSync(file, file + '.saved'); fs.mkdirSync(file);
-  f.advance(10000); await f.round();
-  const before = f.reads(), observations = f.observations();
-  f.setConfigError(true); f.advance(59000); await f.round(); await flush();
-  assert.equal(f.sends.length, 1, 'only the earlier input failure has reached sixty seconds');
-  assert.match(f.sends[0].message, /^\[Zylos\] 系统出现异常/);
-  f.advance(1000); await f.round(); await flush();
-  assert.equal(f.sends.length, 1);
-  assert.equal(f.reads(), before); assert.equal(f.observations(), observations);
-  assert.equal(f.fences.size, 0);
-  assert.equal(fs.statSync(file).isDirectory(), true);
-  f.advance(60000); await f.round(); await flush(); assert.equal(f.sends.length, 1);
-});
 
 // Integration boundary: real pressure candidate -> beginReclaim -> F12 and
 // guard.notify, with effective startup eviction threshold. Run for pressure

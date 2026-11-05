@@ -20,10 +20,6 @@ const CAPACITY_TEMPLATES = {
     zh: '这台机器内存快用完了，运行可能变慢或不稳定；如果经常出现，请考虑给这台机器增加内存。',
     en: 'This machine is almost out of memory, so things may slow down or become unstable. If this happens often, consider adding memory to this machine.',
   },
-  inputs_unreadable: {
-    zh: '系统出现异常，暂时无法确认这台机器的内存是否够用。为了稳定运行，现在只能同时运行一个对话，其他对话会排队等候，回复可能变慢。恢复后会自动回到正常状态，不需要你操作；如果长时间没有恢复，请联系技术支持。',
-    en: 'Something is wrong with the system: it cannot confirm whether this machine has enough memory right now. To stay stable, only one conversation can run at a time and others wait in line, so replies may be slower. Things return to normal by themselves once this clears, with nothing for you to do. If it lasts a long time, please contact technical support.',
-  },
 };
 const SUFFIXES = {
   inbound: {

@@ -198,13 +198,14 @@ test('fallback publishes one immediately and recovery waits a complete rise wind
   f.memory(null);
   const fallback = await f.capacity.tick({ mode: 'multi', now: 130000 });
   assert.equal(fallback.k, 1); assert.equal(fallback.source, 'fallback'); assert.equal(fallback.reason, 'inputs_unreadable');
-  assert.equal(f.capacity.inputsUnreadableSince, 130000); assert.equal(Object.hasOwn(fallback, 'memory'), false);
+  assert.equal(Object.hasOwn(fallback, 'memory'), false);
+  assert.equal(f.logs.filter(row => row.event === 'capacity_inputs_unreadable').length, 1);
   await f.capacity.tick({ mode: 'multi', now: 140000 });
-  assert.equal(f.capacity.inputsUnreadableSince, 130000);
+  assert.equal(f.logs.filter(row => row.event === 'capacity_inputs_unreadable').length, 1);
   f.memory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 1300 * MiB });
   for (let now = 150000; now < 270000; now += 10000) assert.equal((await f.capacity.tick({ mode: 'multi', now })).k, 1);
   assert.equal((await f.capacity.tick({ mode: 'multi', now: 270000 })).k, 3);
-  assert.equal(f.capacity.inputsUnreadableSince, null);
+  assert.equal(f.capacity.wasFallback, false);
 });
 
 test('fixed values override bad memory and cancellation resets startup smoothing', async t => {

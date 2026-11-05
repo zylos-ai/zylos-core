@@ -214,18 +214,19 @@ supports `{resetAt}`, a validated epoch-millisecond time formatted with an expli
 IANA time-zone label. `timeZone` defaults to the host zone; invalid zones use UTC.
 Missing/expired/invalid reset values select `quota_exhausted` instead.
 
-The `capacity` context has two IDs: `memory_low` (valid memory readings reach or exceed
-the danger line for two consecutive calculations, in automatic or fixed mode),
-and `inputs_unreadable` (automatic-mode memory readings have been unavailable
-for 60 seconds). Fixed mode does not count unreadable duration; switching back
-to automatic starts its 60-second timer at the first failed automatic reading.
+The `capacity` context has one ID: `memory_low` (valid memory readings reach or
+exceed the danger line for two consecutive calculations, in automatic or fixed
+mode). This is a complete notice without inbound or first-failure suffixes or
+template variables. It is sent at most once every 30 minutes through the
+Supervisor's existing alert destination, with Web Console fallback. If
+configuration cannot be read, that round does not read memory, judge pressure,
+or send a capacity notice. Group names, memory readings, and error text remain
+diagnostics and are not inserted into the message.
 Capacity publication failures and cgroup v2 OOM increments produce diagnostics
-only. These are complete notices without inbound or first-failure suffixes.
-Neither capacity notice has template variables.
-Each capacity ID is sent at most once every 30 minutes through the Supervisor's
-existing alert destination, with Web Console fallback. If configuration cannot be
-read, the alert path uses the default wording and brand. Group names, memory
-readings, and error text remain diagnostics and are not inserted into the message.
+only. Unreadable memory still falls back to capacity one in automatic mode;
+entering fallback writes `capacity_inputs_unreadable` once, with no notice or
+repeat diagnostic while fallback persists. Fixed mode does not enter fallback
+or write this diagnostic.
 
 Overrides use only the selected ID. A generic `rate_limited` override cannot
 replace an identified `quota_exhausted_reset` message. The earlier `language`

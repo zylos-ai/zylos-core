@@ -9,7 +9,6 @@ const COMPUTE_INTERVAL = 10000;
 const SAMPLE_INTERVAL = 30000;
 const STABLE_INTERVAL = 120000;
 const RISE_WINDOW = 120000;
-const NOTICE_DELAY = 60000;
 const NOTICE_INTERVAL = 1800000;
 const SAMPLE_NAME = 'pool-memory-samples.jsonl';
 const SOURCES = new Set(['cgroup2', 'cgroup1', 'host', 'darwin']);
@@ -92,7 +91,6 @@ export class PoolCapacity {
     this.mode = null;
     this.epoch = 0;
     this.lastPublished = null;
-    this.inputsUnreadableSince = null;
     this.noticeSent = new Map();
     this.pressureCount = 0;
     this.oomKills = null;
@@ -115,11 +113,6 @@ export class PoolCapacity {
     if (this.noticeSent.has(id) && now - this.noticeSent.get(id) < NOTICE_INTERVAL) return;
     this.noticeSent.set(id, now);
     this.notify(id);
-  }
-
-  checkFailureNotices(now = this.now()) {
-    if (this.mode !== 'multi') return;
-    if (this.inputsUnreadableSince !== null && now - this.inputsUnreadableSince >= NOTICE_DELAY) this.notice('inputs_unreadable', now);
   }
 
   loadSamples(now) {
@@ -195,7 +188,7 @@ export class PoolCapacity {
       if (this.mode === 'multi') this.epoch++;
       this.mode = mode; this.lastComputedAt = null; this.currentK = null;
       this.history = []; this.stableN = null; this.stableSince = null; this.wasFixed = false; this.wasFallback = false;
-      this.inputsUnreadableSince = null; this.pressureCount = 0; this.oomKills = null;
+      this.pressureCount = 0; this.oomKills = null;
       return null;
     }
     this.mode = mode;
@@ -215,8 +208,6 @@ export class PoolCapacity {
       try { memory = await this.readMemory(); } catch { memory = null; }
       if (epoch !== this.epoch || this.mode !== 'multi') return null;
       const readable = validMemory(memory);
-      if (readable || baseline.fixed) this.inputsUnreadableSince = null;
-      else this.inputsUnreadableSince ??= now;
       this.samples = this.samples.filter(row => row.ts >= now - SAMPLE_WINDOW && row.ts <= now);
       let model;
       if (readable) {
@@ -254,9 +245,9 @@ export class PoolCapacity {
       }
       // Cancelling a fixed value keeps the startup bound until it is published.
       if (baseline.fixed) this.wasFixed = true;
-      this.wasFallback = source === 'fallback';
       if (epoch !== this.epoch || this.mode !== 'multi') return record;
-      this.checkFailureNotices(now);
+      if (source === 'fallback' && !this.wasFallback) this.diagnostic('capacity_inputs_unreadable');
+      this.wasFallback = source === 'fallback';
       const oomKills = readable && memory.source === 'cgroup2' && Number.isSafeInteger(memory.oomKills) && memory.oomKills >= 0
         ? memory.oomKills : null;
       if (oomKills !== null) {
