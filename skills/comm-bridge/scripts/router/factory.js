@@ -40,15 +40,7 @@ export function createDispatcher(overrides = {}, options = {}) {
   const lifecycle = createLifecycleProviders({ env, tmux, diagnostic, log });
   (overrides.readZylosConfigStrict ?? readZylosConfigStrict)();
   const now = overrides.now ?? Date.now;
-  let capacity, capacityReadAt = -Infinity;
-  const poolSize = options.poolSize ?? (() => {
-    const time = now();
-    if (time - capacityReadAt >= 5000) {
-      capacity = readPoolCapacity({ env, now: time }).k;
-      capacityReadAt = time;
-    }
-    return capacity;
-  });
+  const poolSize = options.poolSize ?? (() => readPoolCapacity({ env, now: now() }).k);
   const readConfig = () => {
     try { const value = (overrides.readZylosConfigStrict ?? readZylosConfigStrict)(); return value.state === 'ok' ? value.config : {}; }
     catch { return {}; }
