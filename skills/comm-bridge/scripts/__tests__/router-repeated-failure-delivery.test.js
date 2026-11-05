@@ -63,6 +63,35 @@ test('dispatcher preserves startup configuration read errors', () => {
     /startup configuration unavailable/);
 });
 
+// Other-event boundary: run for factory alert routing changes; skip unrelated copy.
+// The real startup path uses isolated HOME/ZYLOS_DIR/PM2_HOME and an in-memory DB;
+// mode/config and send I/O are injected, with no live runtime or communication.
+test('dispatcher logs unreadable session configuration without notifying the owner', async t => {
+  const f = routerFixture(t);
+  const sends = [], logs = [];
+  const dependencies = { ...f.deps,
+    readZylosConfigStrict: () => ({ state: 'ok', config: {} }),
+    readSessionMode: () => { throw Object.assign(Error('unreadable configuration'), { code: 'CONFIG_UNREADABLE' }); },
+    diagnostics: { diagnostic: f.deps.diagnostic, maintain() {} },
+    log: message => logs.push(message),
+    sendAlert: async (target, message) => { sends.push({ target, message }); return true; },
+  };
+  delete dependencies.alert;
+  const dispatcher = createDispatcher(dependencies, { ...f.options, delivery: { periodicEnabled: false } });
+  t.after(() => dispatcher.stop());
+  await dispatcher.initialize();
+  assert.equal(dispatcher.state.inert, true);
+  assert.ok(f.events.some(event => event.event === 'config_unreadable'));
+  assert.ok(logs.includes('Router alert: config_unreadable {}'));
+  // Drain the same lazy imports used by notifications before asserting no send.
+  await Promise.all([
+    import('../../../activity-monitor/scripts/supervisor-server-health.js'),
+    import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
+  ]);
+  await flush();
+  assert.equal(sends.length, 0);
+});
+
 // Factory alert composition boundary: run for routing/template changes; skip unrelated UI.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME; SQLite is in-memory and runtime/send I/O is injected.
 test('dispatcher sends current defaults to the configured destination and reloads destination and templates', async t => {

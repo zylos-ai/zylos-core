@@ -38,9 +38,7 @@ function copyDependency(name, fromPackage, targetModules) {
 // ZYLOS_DIR, PM2_HOME, short TMPDIR/socket and SQLite; no live tmux/PM2/network.
 // Child commands have deadlines and fixture removal follows their completion.
 test('packed global CLI starts without installed skill dependencies', async t => {
-  // Package extraction may exceed a small shared-memory TMPDIR. The optional
-  // staging directory contains only this fixture's private files and is cleaned.
-  const root = fs.mkdtempSync(path.join(process.env.ZYLOS_TEST_PACKAGE_TMPDIR ?? os.tmpdir(), 'zylos-packed-cli-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-packed-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     !key.toLowerCase().startsWith('npm_') && !['NODE_PATH', 'NODE_OPTIONS', 'ZYLOS_PACKAGE_ROOT'].includes(key)));

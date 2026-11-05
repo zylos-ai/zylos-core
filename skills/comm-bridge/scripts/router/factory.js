@@ -58,7 +58,6 @@ export function createDispatcher(overrides = {}, options = {}) {
         import('../../../activity-monitor/scripts/supervisor-server-health.js'),
         import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
       ]);
-      if (alertController.signal.aborted) return;
       const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
       const message = messageForStatus({ context: 'repeated_failure', noticeCode: 'could_not_restart',
         group: fields.sessionGroup, count: fields.failures, reason: fields.reason, others: fields.others }, readConfig().statusNotices ?? {});
