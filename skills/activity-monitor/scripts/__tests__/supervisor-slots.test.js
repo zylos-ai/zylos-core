@@ -122,6 +122,20 @@ test('unknown scene observations and global fences protect running occupancy', a
   await f.service.advance(f.context); assert.equal(f.rows().length, 1);
 });
 
+test('a fresh identity read timeout preserves occupancy past the readiness deadline', async t => {
+  const f = await fixture(t); f.take(); f.now += 31000;
+  let reads = 0;
+  f.service.readIdentity = () => {
+    reads++;
+    throw Object.assign(new Error('tmux identity read timed out'), { code: 'TMUX_TIMEOUT' });
+  };
+  await f.service.advance(f.context);
+  assert.equal(reads, 1);
+  assert.equal(f.rows().length, 1);
+  assert.equal(f.rows()[0].runId, 'old');
+  assert.equal(f.rows()[0].state, 'running');
+});
+
 test('a slot read failure prevents pruning and single mode never reads occupancy', async t => {
   const f = await fixture(t); let prunes = 0, reads = 0;
   f.service.db = { ...f.store, listSlotOccupancy() { reads++; throw new Error('slots unavailable'); }, pruneSlots() { prunes++; } };

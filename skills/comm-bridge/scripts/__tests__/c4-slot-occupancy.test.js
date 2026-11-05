@@ -44,6 +44,24 @@ test('held takeover keeps one row even above capacity and release restores the e
   assert.equal(rows(db).length, 2);
 });
 
+test('release with a prior reservation cannot rewrite a run that has already ended', t => {
+  let now = start;
+  const { store } = fixture(t, { now: () => now * 1000 });
+  take(store, 'test:a', 'first');
+  store.recordRunEnd('test:a', { runId: 'first', reason: 'upgrade' });
+  now += 10;
+  const { prior } = take(store, 'test:a', 'replacement');
+  assert.equal(prior.state, 'held');
+  now += 10;
+  store.recordRunEnd('test:a', { runId: 'replacement', reason: 'unexpected' });
+  const after = store.listSlotOccupancy();
+  assert.equal(after.length, 1);
+  assert.equal(after[0].heldUntil, now + 120);
+  now++;
+  assert.deepEqual(store.releaseSlot('test:a', { runId: 'replacement', prior }), { released: false });
+  assert.deepEqual(store.listSlotOccupancy(), after);
+});
+
 test('release deletes only its own new running slot and cannot rewrite a newer or ended run', t => {
   const { db, store } = fixture(t, { now: () => start * 1000 });
   take(store);
