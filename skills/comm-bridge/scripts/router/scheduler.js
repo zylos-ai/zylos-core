@@ -19,7 +19,8 @@ export function createRouter(dependencies, configuration = {}) {
   const options = { pendingMaxAgeSeconds: PENDING_MAX_AGE_SECONDS, recoverMaxAgeSeconds: RECOVER_MAX_AGE_SECONDS,
     maxRetries: MAX_RETRIES, cleanupIntervalMs: CONTROL_CLEANUP_INTERVAL_MS, retentionDays: CONTROL_RETENTION_DAYS,
     readyTimeoutMs: READY_TIMEOUT_MS, diagnosticsIntervalMs: 60000, mismatchIntervalMs: 60000, pollIntervalMs: 1000, ...configuration };
-  for (const name of ['readyTimeoutMs','poolSize','pendingMaxAgeSeconds','recoverMaxAgeSeconds','diagnosticsIntervalMs']) {
+  if (typeof options.poolSize !== 'function') throw new TypeError('poolSize must be a function');
+  for (const name of ['readyTimeoutMs','pendingMaxAgeSeconds','recoverMaxAgeSeconds','diagnosticsIntervalMs']) {
     if (!Number.isSafeInteger(options[name]) || options[name] <= 0) throw new TypeError(`${name} must be a positive integer`);
   }
   const deps = dependencies;
@@ -43,7 +44,7 @@ export function createRouter(dependencies, configuration = {}) {
   context.refreshSlots = () => { state.slots = new Map(deps.db.listSlotOccupancy().map(row => [row.sessionGroup, row])); };
   context.availableCapacity = () => {
     if (!state.sceneObservable || [...state.listed].some(group => !state.live.has(group))) return 0;
-    return options.poolSize - state.slots.size;
+    return options.poolSize() - state.slots.size;
   };
   // Capacity opportunities are ordered before asynchronous preflight. They are
   // not pool occupancy: no message is claimed and no launch is reserved yet.

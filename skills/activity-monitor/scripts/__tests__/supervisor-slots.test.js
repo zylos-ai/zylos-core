@@ -241,3 +241,86 @@ test('a replacement run clears the old reclaim fence, is adopted, and records it
   assert.equal(f.db.listPendingContinuations().length, 1);
   assert.equal(f.db.listSlotOccupancy()[0].state, 'held');
 });
+
+// Integration boundary: real Router admission, lifecycle LRU selection/reclaim,
+// and Store occupancy transactions. Run for current-capacity admission or reclaim
+// wiring changes; skip unrelated runtime adapters and UI. The official runner
+// isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; memory SQLite and
+// injected scene/stop I/O create no tmux/socket/process/network resources.
+// Router stop and database closure are bound to the fixture's test teardown.
+test('lower capacity admits a waiting group only after both required idle reclaims complete', async t => {
+  let capacity = 4;
+  const f = routerFixture(t, { poolSize: () => capacity });
+  f.put('origin');
+  for (const [group, age, state] of [
+    ['test:older', 600000, 'idle'],
+    ['test:busy', 1200000, 'busy'],
+    ['test:oldest', 900000, 'idle'],
+    ['test:recent', 100000, 'idle'],
+  ]) {
+    f.put(group, { createdAt: Math.floor((f.now() - age) / 1000),
+      lastActivityAt: f.now() - age, idleSince: f.now() - age, processRunning: true, state });
+  }
+  await f.create().initialize(); await f.rounds(3);
+  assert.equal(f.db.listSlotOccupancy().length, 4);
+  assert.equal(f.router.availableCapacity(), 0);
+  capacity = 3;
+  await f.rounds(2);
+  assert.equal(f.router.availableCapacity(), -1);
+
+  const stops = [], admissionLimits = [];
+  const takeSlot = f.db.takeSlot;
+  f.db.takeSlot = (group, options) => {
+    if (group === 'test:waiting' && options.k !== 100000) admissionLimits.push(options.k);
+    return takeSlot(group, options);
+  };
+  const lifecycle = new SupervisorLifecycle({ db: f.db,
+    observeGroup: async group => {
+      const live = f.scene.get(group);
+      return live ? { ...live, sessionGroup: group, createdAt: live.createdAt * 1000 } : { present: false };
+    },
+    readSyncMarker: () => ({ held: false, stale: false }),
+    stop: async scene => {
+      assert.equal(f.scene.get(scene.sessionGroup)?.runId, scene.runId);
+      stops.push(scene.sessionGroup);
+      await f.deps.getSessionAdapter(scene.runtime).stop({ tmuxName: scene.tmuxName, expectedRunId: scene.runId });
+    },
+  }, { now: f.now });
+  const context = { configuration: { mode: 'multi', capacity }, transition: null, restartRequests: [],
+    fences: f.db.listDrainFences(), scenes: [...f.scene].map(([sessionGroup, live]) =>
+      ({ ...live, sessionGroup, createdAt: live.createdAt * 1000 })) };
+  assert.equal((await lifecycle.checkEviction(context.scenes, context)).need, 0);
+  assert.equal(f.db.listDrainFences().length, 0);
+  const message = f.add('test', { groupName: 'waiting' });
+  await f.rounds(3);
+  assert.equal(f.row(message.id).status, 'pending');
+  assert.equal(f.scene.has('test:waiting'), false);
+  assert.equal(admissionLimits.length, 0);
+
+  assert.deepEqual((await lifecycle.evictionCandidates(context.scenes, context)).map(scene => scene.sessionGroup),
+    ['test:oldest', 'test:older']);
+  assert.deepEqual(await lifecycle.checkEviction(context.scenes, context),
+    { waiting: 1, free: -1, inflight: 0, need: 2, selected: 2 });
+  assert.equal(f.db.getDrainFence('test:busy'), null);
+  assert.equal(f.db.getDrainFence('test:recent'), null);
+
+  assert.equal(await lifecycle.advanceReclaim(f.db.getDrainFence('test:oldest'), context), 'done');
+  assert.equal(f.db.listSlotOccupancy().length, 3);
+  await f.rounds(3);
+  assert.equal(f.row(message.id).status, 'pending');
+  assert.equal(f.scene.has('test:waiting'), false);
+  assert.equal(admissionLimits.length, 0);
+  assert.equal(await lifecycle.advanceReclaim(f.db.getDrainFence('test:older'), context), 'done');
+  assert.equal(f.db.listSlotOccupancy().length, 2);
+  await f.rounds(4);
+  assert.equal(f.row(message.id).status, 'delivered');
+  assert.equal(f.scene.has('test:waiting'), true);
+  assert.deepEqual(admissionLimits, [3]);
+  assert.deepEqual(stops, ['test:oldest', 'test:older']);
+  assert.equal(f.scene.has('test:busy'), true);
+  assert.equal(f.scene.has('test:recent'), true);
+  assert.equal(f.db.listSlotOccupancy().length, 3);
+  assert.deepEqual(f.db.listRunEndings(['test:oldest', 'test:older']).map(row => row.reason), ['evict', 'evict']);
+  assert.equal(f.db.listPendingContinuations().length, 0);
+  assert.equal(f.db.listDrainFences().length, 0);
+});

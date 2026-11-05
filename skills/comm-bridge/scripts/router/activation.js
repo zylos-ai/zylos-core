@@ -56,7 +56,7 @@ export function createActivationManager(context) {
         state.live.set(group, before);
         if (before.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) return;
         runId = uuid();
-        slot = deps.db.takeSlot(group, { runId, k: options.poolSize });
+        slot = deps.db.takeSlot(group, { runId, k: options.poolSize() });
         context.refreshSlots();
         if (!slot.taken) return;
         if (!health.missing && !health.unreadable && restricted.has(health.health) && !hasRuntime(launchConfig.runtime)) {
@@ -159,7 +159,7 @@ export function createActivationManager(context) {
       opportunity = context.acquireOpportunity(group, { id: current.controlId, continuation: true });
       if (!opportunity) return;
       runId = uuid();
-      slot = deps.db.takeSlot(group, { runId, k: options.poolSize });
+      slot = deps.db.takeSlot(group, { runId, k: options.poolSize() });
       context.refreshSlots();
       if (!slot.taken) return;
       activation = { group, runId, launchConfig, startedAt: now(), message: null,

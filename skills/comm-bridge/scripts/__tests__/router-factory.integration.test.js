@@ -62,7 +62,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
     findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
     submit: async () => assert.fail('READY scene needs no start_attempt'),
   };
-  const options = { readyTimeoutMs: 1000, poolSize: 2,
+  const options = { readyTimeoutMs: 1000, poolSize: () => 2,
     delivery: { periodicEnabled: false, verifyWaitMs: 1, idleHoldMs: 31, idleWaitMs: 100, idlePollMs: 1, retryBaseMs: 37 } };
   let dispatcher;
   t.after(async () => { held.resolve(); await dispatcher?.stop(); });
