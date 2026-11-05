@@ -157,6 +157,14 @@ for(const trigger of ['inbound','continuation'])test(`a full transaction rejects
  assert.ok(takes>0,'transaction must actually be reached');assert.equal(launches(f).length,0);assert.equal(f.db.listSlotOccupancy().length,0);
 });
 
+for(const fence of ['b','*'])test(`a ${fence==='*'?'global':'group'} fence appearing during identity read prevents taking occupancy`,async t=>{
+ const f=routerFixture(t,{poolSize:1});held(f);f.add('b');const prior=f.db.listSlotOccupancy();let activationRead=false,introduced=false,takes=0;
+ const resolve=f.db.resolveSessionLaunchConfig;f.db.resolveSessionLaunchConfig=input=>{if(input.sessionGroup==='b')activationRead=true;return resolve(input);};
+ const read=f.deps.readLiveIdentity;f.deps.readLiveIdentity=async group=>{const identity=await read(group);if(group==='b'&&activationRead&&!introduced){await Promise.resolve();introduced=true;if(fence==='*')f.db.setDrainFence('*');else f.db.setDrainFence('b',{reason:'ttl',runId:'old-b'});}return identity;};
+ const take=f.db.takeSlot;f.db.takeSlot=(...args)=>{takes++;return take(...args);};
+ await start(f);assert.equal(introduced,true);assert.equal(takes,0);assert.equal(launches(f).length,0);assert.deepEqual(f.db.listSlotOccupancy(),prior);
+});
+
 for(const fence of ['b','*'])test(`a ${fence==='*'?'global':'group'} fence appearing during the preclaim identity read returns occupancy without claiming`,async t=>{
  const f=routerFixture(t,{poolSize:1});held(f);f.add('b');const prior=f.db.listSlotOccupancy();let introduced=false,takes=0,releases=0;const message=f.db.getNextPending({sessionGroups:['b']});
  const read=f.deps.readLiveIdentity;f.deps.readLiveIdentity=async group=>{const identity=await read(group);if(group==='b'&&takes>0&&!introduced){await Promise.resolve();introduced=true;if(fence==='*')f.db.setDrainFence('*');else f.db.setDrainFence('b',{reason:'ttl',runId:'old-b'});}return identity;};
