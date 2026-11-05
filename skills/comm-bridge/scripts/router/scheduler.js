@@ -165,29 +165,6 @@ export function createRouter(dependencies, configuration = {}) {
       }
     }
   }
-  function scheduleLanes() {
-    if (state.stopped) return;
-    if (state.mode === 'multi') {
-      context.refreshSlots();
-      adoptReadySlots();
-    }
-    const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
-    const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
-    state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
-    const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
-      ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
-    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || a.controlId-b.controlId).map(row => row.sessionGroup), ...wanted];
-    for (const group of new Set(ordered)) {
-      if (!state.live.has(group)) observe(group);
-      const active = state.activations.get(group);
-      if (active && !active.launchSettled && now() - active.startedAt >= options.readyTimeoutMs && !active.warned) {
-        active.warned = true; diagnostic('stop_unconfirmed', { session_group: group, runId: active.runId, reason: 'launch_pending' });
-        deps.alert?.('launch_pending', { sessionGroup: group, runId: active.runId });
-      }
-      const work = lane(group).kick(); if (work) track(work);
-    }
-    for (const [group, current] of state.lanes) if (!wanted.has(group) && !current.working) { current.stop(); state.lanes.delete(group); state.live.delete(group); }
-  }
   function tick() {
     if (!state.ready || state.inert || state.stopped) return;
     state.round++;
@@ -211,9 +188,27 @@ export function createRouter(dependencies, configuration = {}) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
-    scheduleLanes();
+    if (state.mode === 'multi') {
+      context.refreshSlots();
+      adoptReadySlots();
+    }
+    const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
+    const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
+    state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
+    const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
+      ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
+    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || a.controlId-b.controlId).map(row => row.sessionGroup), ...wanted];
+    for (const group of new Set(ordered)) {
+      if (!state.live.has(group)) observe(group);
+      const active = state.activations.get(group);
+      if (active && !active.launchSettled && now() - active.startedAt >= options.readyTimeoutMs && !active.warned) {
+        active.warned = true; diagnostic('stop_unconfirmed', { session_group: group, runId: active.runId, reason: 'launch_pending' });
+        deps.alert?.('launch_pending', { sessionGroup: group, runId: active.runId });
+      }
+      const work = lane(group).kick(); if (work) track(work);
+    }
+    for (const [group, current] of state.lanes) if (!wanted.has(group) && !current.working) { current.stop(); state.lanes.delete(group); state.live.delete(group); }
   }
-
   function initialize() { initialization ??= initializeRouter(context); return initialization; }
   async function start() {
     await initialize();

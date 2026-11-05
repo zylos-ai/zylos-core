@@ -269,8 +269,9 @@ test('pre-reconciliation read failures share the global timer and reset after re
 for (const readAt of ['before reconciliation', 'before cleanup']) {
   test(`unreadable fences ${readAt} still allow expired held rows to be physically pruned`, async t => {
     const f = await runEndingFixture(t); await f.add();
+    f.store.takeSlot('test:b', { runId: 'unseen-b', k: 4 });
     f.store.recordRunEnd('test:a', { runId: 'r1', reason: 'upgrade' });
-    f.now += 120000; f.store.takeSlot('test:b', { runId: 'unseen-b', k: 4 });
+    f.now += 120000;
     let reads = 0;
     f.service.db = { ...f.store, listDrainFences() {
       reads++;
