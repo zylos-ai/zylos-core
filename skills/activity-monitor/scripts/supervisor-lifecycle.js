@@ -53,6 +53,9 @@ export class SupervisorLifecycle {
     this.backlogSent = new Map();
     this.lastSyncCheck = null;
     this.warnings = new Set();
+    this.runEndFailures = new Map();
+    this.roundToken = null;
+    this.runEndNotices = new Map();
   }
 
   async event(event, details) {
@@ -179,6 +182,41 @@ export class SupervisorLifecycle {
     context.fences = context.fences.filter(item => item.sessionGroup !== fence.sessionGroup);
   }
 
+  beginRound() { this.roundToken = {}; }
+
+  async completeRun(fence, context) {
+    if (modeOf(context) !== 'multi' || fence.sessionGroup === '*') return this.clear(fence, context);
+    const key = JSON.stringify([fence.sessionGroup, fence.runId]);
+    const current = await this.d.db.getDrainFence(fence.sessionGroup);
+    if (!current) { context.fences = context.fences.filter(item => item.sessionGroup !== fence.sessionGroup); this.runEndFailures.delete(key); return; }
+    if (current.reason !== fence.reason || current.runId !== fence.runId) { this.runEndFailures.delete(key); throw error('FENCE_MISMATCH', 'Reclaim fence changed'); }
+    try {
+      await this.d.db.recordRunEnd(fence.sessionGroup, { runId: fence.runId, reason: fence.reason,
+        clearFence: fence.reason === 'manual_restart' ? { expectedReason: fence.reason, expectedRunId: fence.runId } : true });
+      this.runEndFailures.delete(key);
+      context.fences = context.fences.filter(item => item.sessionGroup !== fence.sessionGroup);
+    } catch (cause) {
+      if (cause.code === 'FENCE_MISMATCH') { this.runEndFailures.delete(key); throw cause; }
+      const previous = this.runEndFailures.get(key);
+      const round = this.roundToken ?? context;
+      const count = (previous?.count ?? 0) + (previous?.round === round ? 0 : 1);
+      this.runEndFailures.set(key, { count, round });
+      if (count < 3) throw cause;
+      await this.clear(fence, context);
+      this.runEndFailures.delete(key);
+      const now = this.now(), last = this.runEndNotices.get(fence.sessionGroup);
+      if (last === undefined || now - last >= 1800000) {
+        this.runEndNotices.set(fence.sessionGroup, now);
+        const event = { event: 'run_ending_record_failed', session_group: fence.sessionGroup,
+          run_id: fence.runId, reason: 'automatic_continuation_unavailable' };
+        await this.event(event.event, event);
+        if (this.d.alert) Promise.resolve().then(() => this.d.alert(event)).catch(error => {
+          this.runEndNotices.delete(fence.sessionGroup); this.d.reportError?.(error, { phase: 'lifecycle_alert' });
+        });
+      }
+    }
+  }
+
   async beginReclaim(scene, reason, context) {
     if (['ttl', 'evict'].includes(reason) && (scene.sessionGroup === 'origin' || scene.sessionGroup === null)) return false;
     if (!scene.present || !scene.ready || !scene.runId || scene.sessionGroup === null) return false;
@@ -251,7 +289,11 @@ export class SupervisorLifecycle {
       return 'unknown_identity';
     }
     await this.d.intentionalStop?.(group, fence.runId);
-    if (!unfenced) await this.clear(fence, context);
+    if (!unfenced) {
+      const current = scene.present && scene.runId !== fence.runId ? await this.d.readCurrentSession?.(group) : null;
+      if (current?.runId && current.runId !== fence.runId) await this.clear(fence, context);
+      else await this.completeRun(fence, context);
+    }
     this.ttlPreparation.delete(group);
     for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
       this.warnings.delete(JSON.stringify(['reclaim', fence.sessionGroup, fence.runId, fence.reason, name]));
@@ -538,7 +580,7 @@ export class SupervisorLifecycle {
         await this.refreshAuthorities(context);
         if (this.manualBlocked(request, context)) return;
         fence = context.fences.find(item => item.sessionGroup === group);
-        if (fence) await this.clear(fence, context);
+        if (fence) await this.completeRun(fence, context);
         this.d.requests.remove(request.requestId);
         context.restartRequests = context.restartRequests.filter(item => item.requestId !== request.requestId);
         await this.event('manual_restart_done', { requestId: request.requestId, run_id: request.expectedRunId, session_group: group });

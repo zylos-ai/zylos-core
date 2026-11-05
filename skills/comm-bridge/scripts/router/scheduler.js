@@ -2,6 +2,7 @@ import { loadCoreModule } from './core-modules.js';
 const { tmuxNameForGroup, groupFromTmuxName } = await loadCoreModule('session-group-paths.js');
 import { createLane } from './lane.js';
 import { createActivationManager } from './activation.js';
+import { createContinuationRestarts } from './continuation.js';
 import { initializeRouter } from './startup.js';
 import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
   CONTROL_CLEANUP_INTERVAL_MS, CONTROL_RETENTION_DAYS, READY_TIMEOUT_MS } from '../c4-config.js';
@@ -24,7 +25,7 @@ export function createRouter(dependencies, configuration = {}) {
   const deps = dependencies;
   const now = deps.now ?? Date.now;
   const state = { mode: null, inert: false, ready: false, stopped: false, round: 0, sceneObservable: false,
-    live: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
+    live: new Map(), continuations: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
     resident: { failures: 0, absentSince: null, readySince: null, fenced: false } };
   const tasks = new Set();
   const observations = new Map();
@@ -38,11 +39,12 @@ export function createRouter(dependencies, configuration = {}) {
   };
   function track(promise) { tasks.add(promise); promise.finally(() => tasks.delete(promise)).catch(() => {}); return promise; }
   const context = { deps, options, state, diagnostic, now, tmuxName: group => tmuxNameForGroup(group ?? 'origin') };
-  context.availableCapacity = () => {
+  context.continuationRestarts = createContinuationRestarts({ now, deps, diagnostic });
+  context.availableCapacity = (excludeActivation) => {
     if (!state.sceneObservable || [...state.listed].some(group => !state.live.has(group))) return 0;
     const occupied = new Set([...state.listed].filter(group => group !== 'origin' && group !== null));
     for (const [group, live] of state.live) if (group !== 'origin' && group !== null && live?.present) occupied.add(group);
-    for (const group of state.activations.keys()) if (group !== 'origin' && group !== null) occupied.add(group);
+    for (const group of state.activations.keys()) if (group !== 'origin' && group !== null && group !== excludeActivation) occupied.add(group);
     return Math.max(0, options.poolSize - occupied.size);
   };
   // Capacity opportunities are ordered before asynchronous preflight. They are
@@ -52,10 +54,18 @@ export function createRouter(dependencies, configuration = {}) {
     if (attemptedRound.get(group) === state.round) return false;
     const slots = context.availableCapacity() - opportunities.size;
     if (slots <= 0) return false;
-    const eligible = deps.db.listPendingSessionGroups().filter(row => row.sessionGroup !== 'origin' &&
+    const inbound = deps.db.listPendingSessionGroups();
+    const inboundGroups = new Set(inbound.map(row => row.sessionGroup));
+    const candidates = [
+      ...inbound.map(row => ({ ...row, candidateId: row.headId, continuation: false })),
+      ...deps.db.listPendingContinuations().filter(row => !inboundGroups.has(row.sessionGroup))
+        .sort((a, b) => a.endedAt - b.endedAt || a.controlId - b.controlId)
+        .map(row => ({ ...row, candidateId: row.controlId, continuation: true })),
+    ];
+    const eligible = candidates.filter(row => row.sessionGroup !== 'origin' &&
       !state.live.get(row.sessionGroup)?.present && !state.activations.has(row.sessionGroup) && !opportunities.has(row.sessionGroup) &&
       attemptedRound.get(row.sessionGroup) !== state.round);
-    const selected = eligible.slice(0, slots).some(row => row.sessionGroup === group && row.headId === candidate.id);
+    const selected = eligible.slice(0, slots).some(row => row.sessionGroup === group && row.candidateId === candidate.id && row.continuation === Boolean(candidate.continuation));
     if (!selected) return false;
     opportunities.add(group); attemptedRound.set(group, state.round); return true;
   };
@@ -65,7 +75,7 @@ export function createRouter(dependencies, configuration = {}) {
     queueMicrotask(() => {
       if (state.stopped || !state.ready || state.mode !== 'multi') return;
       try {
-        for (const row of deps.db.listPendingSessionGroups()) {
+        for (const row of [...deps.db.listPendingSessionGroups(), ...deps.db.listPendingContinuations()]) {
           if (attemptedRound.get(row.sessionGroup) === state.round) continue;
           const current = state.lanes.get(row.sessionGroup);
           if (current && !current.working) track(current.kick());
@@ -73,10 +83,12 @@ export function createRouter(dependencies, configuration = {}) {
       } catch (error) { diagnostic('scheduler_error', { reason: error.code ?? error.message }); }
     });
   };
+  context.deferOpportunity = group => { attemptedRound.set(group, state.round); context.releaseOpportunity(group); };
   function observe(group) {
     if (observations.has(group)) return observations.get(group);
     const task = Promise.resolve().then(() => deps.readLiveIdentity(group)).then(live => {
       state.live.set(group, live);
+      context.continuationRestarts.observe(group, live);
       if (group === null || group === 'origin') {
         if (live.present) state.resident.absentSince = null;
         if (live.ready) {
@@ -156,9 +168,11 @@ export function createRouter(dependencies, configuration = {}) {
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
+    const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
+    state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
     const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
-      ...pending.map(row => row.sessionGroup), ...state.activations.keys()]);
-    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...wanted];
+      ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
+    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || a.controlId-b.controlId).map(row => row.sessionGroup), ...wanted];
     for (const group of new Set(ordered)) {
       if (!state.live.has(group)) observe(group);
       const active = state.activations.get(group);

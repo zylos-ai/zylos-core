@@ -35,6 +35,13 @@ export function migrateToV2(db) {
       cutoff INTEGER, coverage_snapshot TEXT, absorbed_ids TEXT, reason TEXT,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
+    CREATE TABLE run_endings (
+      session_group TEXT PRIMARY KEY NOT NULL CHECK (session_group <> '' AND session_group <> '*'),
+      run_id TEXT NOT NULL CHECK (run_id <> ''),
+      reason TEXT NOT NULL CHECK (reason IN ('ttl','evict','upgrade','auth','model_config','mode_switch','manual_restart','unexpected')),
+      ended_at INTEGER NOT NULL,
+      continuation_control_id INTEGER
+    );
     CREATE TABLE group_runtime_overrides (
       session_group TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
       runtime TEXT COLLATE BINARY NOT NULL

@@ -10,20 +10,58 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     if (value.allSessionGroups === true) return { sql: 'session_group IS NOT NULL', args: [] };
     requireGroup(value.sessionGroup); return { sql: 'session_group=?', args: [value.sessionGroup] };
   }
+  const continuationContent = 'Your previous session in this group ended before its work was confirmed finished (context rotation, crash, upgrade, configuration change, or authentication recovery). Read the handoff file in full, check the actual state of each unfinished item, and continue the work. If nothing is unfinished, do nothing and stay idle.';
+  const endingColumns = 'session_group AS sessionGroup,run_id AS runId,reason,ended_at AS endedAt,continuation_control_id AS continuationControlId';
+  function insert(c, content, { sessionGroup = null, targetBinding = null, priority = 3, requireIdle = false, bypassState = false, ackDeadlineAt = null, availableAt = null, appendAckSuffix = true } = {}, current = seconds()) {
+    const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
+    if (sessionGroup === null) {
+      let config; try { config = baseline(); } catch (cause) { throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required when configuration cannot be read', { cause }); }
+      if (open || config.sessionMode !== 'single') throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required in multi or during transition');
+    } else requireGroup(sessionGroup);
+    if (sessionGroup !== null && (appendAckSuffix || / ---- ack via:/.test(content)) && ackDeadlineAt === null) throw dataError('ACK_DEADLINE_REQUIRED', 'Targeted acknowledged controls require a deadline');
+    const binding = normalizeTargetBinding(targetBinding);
+    const superseded = run(c, "UPDATE control_queue SET status='superseded',updated_at=?,last_error=NULL WHERE status='pending' AND raw_content=? AND session_group IS ? AND target_binding IS ?", current, content, sessionGroup, binding).changes;
+    const id = Number(run(c, `INSERT INTO control_queue(raw_content,content,priority,require_idle,bypass_state,ack_deadline_at,status,retry_count,available_at,last_error,created_at,updated_at,session_group,target_binding) VALUES(?,?,?,?,?,?,'pending',0,?,NULL,?,?,?,?)`, content, content, priority, requireIdle ? 1 : 0, bypassState ? 1 : 0, ackDeadlineAt, availableAt, current, current, sessionGroup, binding).lastInsertRowid);
+    if (appendAckSuffix) run(c, 'UPDATE control_queue SET content=? WHERE id=?', `${content} ---- ack via: node ${fileURLToPath(new URL('./c4-control.js', import.meta.url))} ack --id ${id}`, id);
+    return { ...get(c, 'SELECT * FROM control_queue WHERE id=?', id), superseded_count: superseded };
+  }
+  function clear(c, group, { expectedReason, expectedRunId } = {}, conditional = false) {
+    requireGroup(group, { global: true });
+    const row = get(c, 'SELECT * FROM drain_fences WHERE session_group=?', group);
+    if (conditional && (!row || row.reason !== expectedReason || row.run_id !== expectedRunId)) throw dataError('FENCE_MISMATCH', 'Fence identity does not match');
+    if (!row) return;
+    if (row.reason === 'manual_restart' || expectedReason === 'manual_restart') {
+      if (expectedReason !== 'manual_restart' || !expectedRunId || row.reason !== expectedReason || row.run_id !== expectedRunId) throw dataError('FENCE_MISMATCH', 'Manual restart fence identity does not match');
+    } else if (group === '*') throw dataError('FENCE_INVALID', 'Transition fences are removed only on completion');
+    run(c, 'DELETE FROM drain_fences WHERE session_group=?', group);
+  }
   return {
-    insertControl: (content, { sessionGroup = null, targetBinding = null, priority = 3, requireIdle = false, bypassState = false, ackDeadlineAt = null, availableAt = null, appendAckSuffix = true } = {}) => write(c => {
-      const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
-      if (sessionGroup === null) {
-        let config; try { config = baseline(); } catch (cause) { throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required when configuration cannot be read', { cause }); }
-        if (open || config.sessionMode !== 'single') throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required in multi or during transition');
-      } else requireGroup(sessionGroup);
-      if (sessionGroup !== null && (appendAckSuffix || / ---- ack via:/.test(content)) && ackDeadlineAt === null) throw dataError('ACK_DEADLINE_REQUIRED', 'Targeted acknowledged controls require a deadline');
-      const binding = normalizeTargetBinding(targetBinding), current = seconds();
-      const superseded = run(c, "UPDATE control_queue SET status='superseded',updated_at=?,last_error=NULL WHERE status='pending' AND raw_content=? AND session_group IS ? AND target_binding IS ?", current, content, sessionGroup, binding).changes;
-      const id = Number(run(c, `INSERT INTO control_queue(raw_content,content,priority,require_idle,bypass_state,ack_deadline_at,status,retry_count,available_at,last_error,created_at,updated_at,session_group,target_binding) VALUES(?,?,?,?,?,?,'pending',0,?,NULL,?,?,?,?)`, content, content, priority, requireIdle ? 1 : 0, bypassState ? 1 : 0, ackDeadlineAt, availableAt, current, current, sessionGroup, binding).lastInsertRowid);
-      if (appendAckSuffix) run(c, 'UPDATE control_queue SET content=? WHERE id=?', `${content} ---- ack via: node ${fileURLToPath(new URL('./c4-control.js', import.meta.url))} ack --id ${id}`, id);
-      return { ...get(c, 'SELECT * FROM control_queue WHERE id=?', id), superseded_count: superseded };
+    insertControl: (content, options) => write(c => insert(c, content, options)),
+    recordRunEnd: (sessionGroup, options = {}) => write(c => {
+      requireGroup(sessionGroup);
+      if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['runId', 'reason', 'clearFence'].includes(key))) throw dataError('INVALID_ARGS', 'Invalid run ending options');
+      const { runId, reason, clearFence = false } = options;
+      if (typeof runId !== 'string' || !runId.trim() || !['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid run ending identity or reason');
+      if (typeof clearFence !== 'boolean' && (!clearFence || typeof clearFence !== 'object' || Array.isArray(clearFence) || Object.keys(clearFence).some(key => !['expectedReason', 'expectedRunId'].includes(key)) || typeof clearFence.expectedReason !== 'string' || typeof clearFence.expectedRunId !== 'string' || !clearFence.expectedRunId)) throw dataError('INVALID_ARGS', 'Invalid fence condition');
+      if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Run endings require multi mode');
+      const previous = get(c, 'SELECT * FROM run_endings WHERE session_group=?', sessionGroup);
+      const recorded = previous?.run_id !== runId;
+      let continuationControlId = previous?.continuation_control_id ?? null;
+      if (recorded) {
+        const current = seconds();
+        const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
+        if (!open && (['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason) || (reason === 'manual_restart' && sessionGroup !== 'origin'))) {
+          continuationControlId = insert(c, continuationContent, { sessionGroup, priority: 2, appendAckSuffix: false }, current).id;
+        } else {
+          continuationControlId = get(c, "SELECT id FROM control_queue WHERE id=? AND status='pending'", continuationControlId)?.id ?? null;
+        }
+        run(c, 'INSERT INTO run_endings(session_group,run_id,reason,ended_at,continuation_control_id) VALUES(?,?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET run_id=excluded.run_id,reason=excluded.reason,ended_at=excluded.ended_at,continuation_control_id=excluded.continuation_control_id', sessionGroup, runId, reason, current, continuationControlId);
+      }
+      if (clearFence) clear(c, sessionGroup, clearFence === true ? {} : clearFence, clearFence !== true);
+      return { recorded, continuationControlId };
     }),
+    listRunEndings: () => read(c => all(c, `SELECT ${endingColumns} FROM run_endings ORDER BY session_group COLLATE BINARY`)),
+    listPendingContinuations: () => read(c => all(c, "SELECT e.session_group AS sessionGroup,c.id AS controlId,c.created_at AS createdAt,e.ended_at AS endedAt FROM run_endings e JOIN control_queue c ON c.id=e.continuation_control_id WHERE c.status='pending' AND e.session_group<>'origin' ORDER BY c.created_at,c.id")),
     getNextPendingControl: (current = seconds(), { sessionGroups } = {}) => {
       let sql = 'session_group IS NULL', args = [];
       if (sessionGroups !== undefined) {
@@ -34,7 +72,13 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       return read(c => get(c, `SELECT * FROM control_queue WHERE status='pending' AND (available_at IS NULL OR available_at<=?) AND ${sql} AND ${unfenced} ORDER BY priority,created_at,id LIMIT 1`, current, ...args) ?? null);
     },
     claimControl: id => write(c => run(c, `UPDATE control_queue SET status='running',updated_at=? WHERE id=? AND status='pending' AND ${unfenced}`, seconds(), id).changes > 0),
-    expirePendingControls: value => { const t = target(value); return write(c => all(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE status='pending' AND ${t.sql} RETURNING id,session_group,raw_content`, seconds(), ...t.args)); },
+    expirePendingControls: value => {
+      const { keepContinuation = false, ...scope } = value ?? {};
+      const t = target(scope);
+      if (typeof keepContinuation !== 'boolean' || (keepContinuation && scope.sessionGroup === undefined)) throw dataError('INVALID_ARGS', 'keepContinuation requires a session group');
+      const keep = keepContinuation ? ' AND NOT EXISTS(SELECT 1 FROM run_endings e WHERE e.session_group=? AND e.continuation_control_id=control_queue.id)' : '';
+      return write(c => all(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE status='pending' AND ${t.sql}${keep} RETURNING id,session_group,raw_content`, seconds(), ...t.args, ...(keepContinuation ? [scope.sessionGroup] : [])));
+    },
     expireStaleRunningControls: (value, { deliveredBefore }) => {
       if (!Number.isSafeInteger(deliveredBefore)) throw dataError('INVALID_ARGS', 'deliveredBefore must be integer Unix seconds');
       const t = target(value); return write(c => all(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE status='running' AND updated_at<? AND ${t.sql} RETURNING id,session_group,raw_content`, seconds(), deliveredBefore, ...t.args));
@@ -59,13 +103,6 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     }),
     getDrainFence: group => { requireGroup(group, { global: true }); return read(c => get(c, `SELECT ${fenceColumns} FROM drain_fences WHERE session_group=?`, group) ?? null); },
     listDrainFences: () => read(c => all(c, `SELECT ${fenceColumns} FROM drain_fences ORDER BY session_group COLLATE BINARY`)),
-    clearDrainFence: (group, { expectedReason, expectedRunId } = {}) => write(c => {
-      requireGroup(group, { global: true });
-      const row = get(c, 'SELECT * FROM drain_fences WHERE session_group=?', group); if (!row) return;
-      if (row.reason === 'manual_restart' || expectedReason === 'manual_restart') {
-        if (expectedReason !== 'manual_restart' || !expectedRunId || row.reason !== expectedReason || row.run_id !== expectedRunId) throw dataError('FENCE_MISMATCH', 'Manual restart fence identity does not match');
-      } else if (group === '*') throw dataError('FENCE_INVALID', 'Transition fences are removed only on completion');
-      run(c, 'DELETE FROM drain_fences WHERE session_group=?', group);
-    }),
+    clearDrainFence: (group, options) => write(c => clear(c, group, options)),
   };
 }

@@ -169,3 +169,13 @@ test('long-running group stays observed without starving another group or reopen
  for(const phase of ['manual','restarts','config','rotation','ttl','evict','sync'])assert.equal(f.calls.includes(phase),false,phase);
  assert.equal(f.timers.length,3);await f.loop.stop();
 });
+
+test('ending reconciliation follows exit cleanup and precedes publication and reclaim', async () => {
+  const f = fixture({ listDrainFences: async () => [{ sessionGroup: 'tg:one' }],
+    reconcileRunEndings: async () => { f.calls.push('endings'); } });
+  await f.loop.start();
+  assert.ok(f.calls.indexOf('exits') < f.calls.indexOf('endings'));
+  assert.ok(f.calls.indexOf('endings') < f.calls.indexOf('probe:origin'));
+  assert.ok(f.calls.indexOf('endings') < f.calls.indexOf('reclaim'));
+  await f.loop.stop();
+});

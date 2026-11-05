@@ -8,7 +8,7 @@ import { RestartRequestStore } from '../restart-request-store.js';
 function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
- const calls=[],db={getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig};
+ const calls=[],db={getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
  const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
@@ -336,4 +336,45 @@ test('configuration recovery during an open transition resets automatic-skip ded
   failure = Object.assign(new Error('same failure after transition'), { code: 'EIO' });
   await supervisor.loop.tick(); await supervisor.loop.tick();
   assert.deepEqual(events().map(row => [row.session_group, row.reason]), [['*', 'EIO'], ['*', 'EIO']]);
+});
+
+// Real assembly boundary: run for supervisor reconciliation or lifecycle wiring
+// changes. Private current-session files and injected scene I/O avoid live runtimes.
+test('assembled round records an absent persisted run exactly once', async t => {
+ const {supervisor,db,root,calls}=fixture(t);
+ const group='telegram:assembled',runId='persisted-run';
+ const directory=path.join(root,'activity-monitor','session-groups',group);
+ fs.mkdirSync(directory,{recursive:true});
+ fs.writeFileSync(path.join(directory,'current-session.json'),JSON.stringify({runId,ts:Date.now()-1000}));
+ const records=[];
+ db.recordRunEnd=(sessionGroup,options)=>{records.push({sessionGroup,...options});return {recorded:true};};
+ await supervisor.loop.start();
+ assert.deepEqual(records,[{sessionGroup:group,runId,reason:'unexpected'}]);
+ assert.equal(calls.some(row=>row.phase==='run-ending-reconciliation' || row.phase==='round'),false);
+});
+
+test('assembled round clears an upgrade fence without recording a replacement run', async t => {
+ const {supervisor,db,root,scenes,calls}=fixture(t);
+ const group='telegram:replacement',runId='replacement-run';
+ const directory=path.join(root,'activity-monitor','session-groups',group);
+ fs.mkdirSync(directory,{recursive:true});
+ fs.writeFileSync(path.join(directory,'current-session.json'),JSON.stringify({runId,ts:Date.now()-1000}));
+ let fence={sessionGroup:group,reason:'upgrade',runId:'old-run'};
+ const records=[],cleared=[];
+ // Keep the replacement in startup: it has an authoritative new identity while
+ // unrelated ready-only health/status and idle checks remain outside this case.
+ const replacement={sessionGroup:group,runId,runtime:'claude',runDir:directory,present:true,ready:false,processRunning:true};
+ scenes.observe=async()=>[replacement];
+ scenes.observeGroup=async()=>replacement;
+ db.listDrainFences=()=>fence?[fence]:[];
+ supervisor.loop.deps.listDrainFences=db.listDrainFences;
+ db.getDrainFence=sessionGroup=>sessionGroup===group?fence:null;
+ db.clearDrainFence=(sessionGroup,expected)=>{cleared.push({sessionGroup,...expected});fence=null;};
+ db.recordRunEnd=(sessionGroup,options)=>{records.push({sessionGroup,...options});return {recorded:true};};
+ db.countRunningConversations=()=>0;
+ db.countNonTerminalControls=()=>({running:0});
+ await supervisor.loop.start();
+ assert.deepEqual(cleared,[{sessionGroup:group,expectedReason:'upgrade',expectedRunId:'old-run'}]);
+ assert.equal(fence,null);assert.equal(records.length,0);
+ assert.equal(calls.some(row=>['reclaim','run-ending-reconciliation','round'].includes(row.phase)),false);
 });

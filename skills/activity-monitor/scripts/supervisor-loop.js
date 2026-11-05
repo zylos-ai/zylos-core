@@ -71,6 +71,7 @@ export class SupervisorLoop {
 
   async runRound() {
     const d = this.deps;
+    d.beginRound?.();
     // Transition owns its own serialization and must precede this round's work.
     const transition = await d.getModeTransition();
     if (transition) {
@@ -110,6 +111,8 @@ export class SupervisorLoop {
     });
     // These workers may acquire lifecycle serialization for their own mutations.
     await d.observeExits?.(context.scenes);
+    try { await d.lifecycleSerial(() => d.reconcileRunEndings?.(context)); }
+    catch (error) { await d.reportError(error, { phase: 'run-ending-reconciliation' }); }
     await this.each(context.scenes, scene => d.probeAndPublish(scene, context), 'observe');
     try { await d.updateCapacity?.(context); }
     catch (error) { await d.reportError(error, { phase: 'capacity' }); }

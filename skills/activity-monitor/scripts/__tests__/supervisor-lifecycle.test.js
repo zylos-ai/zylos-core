@@ -21,6 +21,7 @@ function fixture(Class = SupervisorLifecycle) {
     listDrainFences: () => [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })),
     setDrainFence: (g, value) => { if (!f.fences.has(g)) f.fences.set(g, { sessionGroup: g, ...value }); },
     clearDrainFence: g => f.fences.delete(g),
+    recordRunEnd: (g, options) => { f.endings ??= []; f.endings.push({ sessionGroup: g, ...options }); f.fences.delete(g); return { recorded: true, continuationControlId: null }; },
     countRunningConversations: () => f.conversations,
     countGlobalRunningConversations: () => f.conversations,
     countNonTerminalControls: () => ({ running: f.runningControls, runningWithoutDeadline: f.withoutDeadline }),
@@ -691,4 +692,110 @@ test('LRU selects the oldest activity among multiple eligible idle groups regard
     assert.equal(f.fences.get('oldest').runId, 'run-oldest');
     assert.deepEqual(f.stops, []);
   }
+});
+
+test('completed fenced reclaims record each reason while cancelled and single paths do not', async () => {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+    for (const present of [false, true]) {
+      const f = fixture(), fence = f.fence(reason); if (!present) f.scenes = [];
+      assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+      assert.deepEqual(f.endings, [{ sessionGroup: 'a', runId: 'run-a', reason, clearFence: true }]);
+      assert.deepEqual(f.stops, present ? ['run-a'] : []);
+    }
+    const cancelled = fixture(), row = cancelled.fence(reason); cancelled.scenes[0].state = 'busy';
+    await cancelled.lifecycle.advanceReclaim(row, cancelled.context); assert.equal(cancelled.endings, undefined);
+  }
+  const single = fixture(); single.context.configuration.mode = 'single'; single.scenes = [];
+  await single.lifecycle.advanceReclaim({ sessionGroup: null, runId: 'single', reason: 'auth' }, single.context, { unfenced: true });
+  assert.equal(single.endings, undefined);
+});
+
+test('replacement current-session identity clears only while unreadable or old identity still records', async () => {
+  for (const ready of [{ runId: 'replacement' }, { runId: 'run-a' }, null]) {
+    const f = fixture(), fence = f.fence('model_config'); f.scenes = [scene('a', { runId: 'replacement' })];
+    let reads = 0; f.deps.readCurrentSession = () => { reads++; return ready; };
+    await f.lifecycle.advanceReclaim(fence, f.context);
+    assert.equal(reads, 1); assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
+    assert.equal(f.endings?.length ?? 0, ready?.runId === 'replacement' ? 0 : 1);
+  }
+});
+
+test('recording failure keeps the fence for two rounds then clears and throttles its fallback alert', async () => {
+  const f = fixture(), alerts = []; f.deps.alert = event => alerts.push(event); f.scenes = [];
+  f.db.recordRunEnd = () => { throw Object.assign(new Error('record failed'), { code: 'DB_BUSY' }); };
+  let fence = f.fence('upgrade');
+  const first = f.context;
+  await assert.rejects(f.lifecycle.advanceReclaim(fence, first), { code: 'DB_BUSY' });
+  await assert.rejects(f.lifecycle.advanceReclaim(fence, first), { code: 'DB_BUSY' });
+  assert.equal(f.fences.size, 1, 'duplicate invocation in a round does not advance failure count');
+  await assert.rejects(f.lifecycle.advanceReclaim(fence, f.context), { code: 'DB_BUSY' });
+  assert.equal(f.fences.size, 1);
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+  await Promise.resolve(); assert.equal(f.fences.size, 0); assert.equal(alerts.length, 1);
+  for (let iteration = 0; iteration < 2; iteration++) {
+    fence = f.fence('upgrade');
+    for (let round = 0; round < 2; round++) await assert.rejects(f.lifecycle.advanceReclaim(fence, f.context), { code: 'DB_BUSY' });
+    await f.lifecycle.advanceReclaim(fence, f.context);
+    assert.equal(alerts.length, 1);
+  }
+  f.now += 1800000; fence = f.fence('upgrade');
+  for (let round = 0; round < 2; round++) await assert.rejects(f.lifecycle.advanceReclaim(fence, f.context), { code: 'DB_BUSY' });
+  await f.lifecycle.advanceReclaim(fence, f.context); await Promise.resolve(); assert.equal(alerts.length, 2);
+});
+
+test('manual completion records conditionally and fence mismatch never enters fallback', async () => {
+  const f = fixture(); f.scenes = [];
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
+  f.fence('manual_restart', 'origin');
+  await f.lifecycle.advanceManual(f.context);
+  assert.deepEqual(f.endings, [{ sessionGroup: 'origin', runId: 'run-origin', reason: 'manual_restart', clearFence: { expectedReason: 'manual_restart', expectedRunId: 'run-origin' } }]);
+  const g = fixture(); g.scenes = []; const fence = g.fence('manual_restart', 'origin');
+  g.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
+  g.db.recordRunEnd = () => { throw Object.assign(new Error('mismatch'), { code: 'FENCE_MISMATCH' }); };
+  g.deps.reportError = () => {};
+  for (let round = 0; round < 5; round++) await g.lifecycle.advanceManual(g.context);
+  assert.equal(g.fences.get('origin'), fence); assert.equal(g.requests.length, 1); assert.equal(g.lifecycle.runEndFailures.size, 0);
+  assert.ok(g.events.some(event => event.event === 'manual_restart_blocked'));
+});
+
+test('continuation-only demand does not cause pool eviction', async () => {
+  const f = fixture(); f.pending = [];
+  f.db.listPendingContinuations = () => [{ sessionGroup: 'waiting', endedAt: 1, controlId: 1 }];
+  const result = await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(result.waiting, 0); assert.equal(result.need, 0); assert.equal(f.fences.size, 0);
+});
+
+test('transition and main reclaim passes count one failed completion per supervisor round', async () => {
+  const f = fixture(), fence = f.fence('upgrade'); f.scenes = [];
+  f.db.recordRunEnd = () => { throw Object.assign(new Error('record failed'), { code: 'DB_BUSY' }); };
+  for (let round = 1; round <= 2; round++) {
+    f.lifecycle.beginRound();
+    await assert.rejects(f.lifecycle.advanceReclaim(fence, f.context), { code: 'DB_BUSY' });
+    await assert.rejects(f.lifecycle.advanceReclaim(fence, f.context), { code: 'DB_BUSY' });
+    assert.equal(f.lifecycle.runEndFailures.values().next().value.count, round);
+    assert.equal(f.fences.size, 1);
+  }
+  f.lifecycle.beginRound();
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+  assert.equal(f.fences.size, 0);
+});
+
+
+test('manual recording fallback preserves conditional fence deletion after three failed rounds', async () => {
+  const f = fixture(), alerts = [], cleared = [];
+  f.scenes = [];
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
+  f.fence('manual_restart', 'origin');
+  f.db.recordRunEnd = () => { throw Object.assign(new Error('cannot record'), { code: 'DB_BUSY' }); };
+  const clear = f.db.clearDrainFence;
+  f.db.clearDrainFence = (group, condition) => { cleared.push({ group, condition }); return clear(group); };
+  f.deps.alert = event => alerts.push(event);
+  for (let round = 0; round < 2; round++) {
+    f.lifecycle.beginRound(); await assert.rejects(f.lifecycle.advanceManual(f.context), { code: 'DB_BUSY' });
+    assert.equal(f.fences.size, 1); assert.equal(f.requests.length, 1);
+  }
+  f.lifecycle.beginRound(); await f.lifecycle.advanceManual(f.context); await Promise.resolve();
+  assert.deepEqual(cleared, [{ group: 'origin', condition: { expectedReason: 'manual_restart', expectedRunId: 'run-origin' } }]);
+  assert.equal(f.fences.size, 0); assert.equal(f.requests.length, 0);
+  assert.equal(alerts.filter(event => event.event === 'run_ending_record_failed').length, 1);
 });
