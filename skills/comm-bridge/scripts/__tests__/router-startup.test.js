@@ -67,8 +67,9 @@ test('unowned startup waits from tmux creation; boundary READY avoids stop', asy
   assert.ok(f.calls.some(x => x[0] === 'stop' && x[1].tmuxName.endsWith('-b')));
 });
 
-test('resident retry is seconds not rounds, excludes K, never start_attempt', async t => {
-  const f = routerFixture(t, { poolSize: 1 }); f.put('a'); f.health.set('claude', { health: 'auth_failed' });
+test('Origin demand retry is seconds not rounds, excludes pool capacity, never registers unavailable health', async t => {
+  const f = routerFixture(t, { poolSize: 1 }); f.put('a'); f.health.set('claude', { health: 'unavailable' });
+  f.db.insertControl('Origin work', { sessionGroup: 'origin', appendAckSuffix: false });
   const router = f.create(); await router.initialize(); await f.rounds(2);
   f.advance(3000); await f.rounds(1); assert.equal(f.calls.some(x => x[0] === 'launch'), false);
   f.advance(3000); await f.rounds(3);

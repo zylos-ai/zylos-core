@@ -32,6 +32,39 @@ export function createActivationManager(context) {
       [...state.activations.values()].some(activation => activation.launchStarted && activation.launchConfig.runtime === runtime);
   }
   function wait(group, code) { diagnostic('wait_health', { session_group: group, code, reason: code }); }
+  function waitOrigin(code) {
+    if (state.resident.waitCode !== code) wait('origin', code);
+    state.resident.waitCode = code;
+  }
+
+  async function submitStartAttempt(runtime, group) {
+    if (requests.has(runtime) || uncertain.get(runtime) === state.round) return null;
+    // Hold admission until the caller publishes its in-flight launch or returns.
+    const token = {}; requests.set(runtime, token);
+    try {
+      const runId = uuid();
+      const request = { version: 1, type: 'start_attempt', requestId: requestId(), runtime, sessionGroup: group, runId };
+      let result;
+      try { result = await deps.submit(request); }
+      catch { result = { kind: 'no_reply', sent: true }; }
+      if (!['accepted','rejected','connect_failed','deadline_exceeded','no_reply','invalid_reply','timeout'].includes(result?.kind)) result = { kind: 'invalid_reply', sent: true };
+      if (['accepted', 'rejected'].includes(result?.kind) &&
+          (!validStartAttemptReply(result.reply, request) || (result.kind === 'accepted') !== result.reply.ok)) {
+        result = { kind: 'invalid_reply', sent: true };
+      }
+      if (result.kind !== 'accepted') {
+        if (['no_reply', 'invalid_reply', 'timeout'].includes(result.kind) || (result.kind === 'deadline_exceeded' && result.sent)) {
+          uncertain.set(runtime, state.round);
+        }
+        const code = result.kind === 'invalid_reply' ? 'start_attempt_protocol_error' : result.reply?.code ?? result.kind;
+        return { runtime, token, runId, accepted: false, code };
+      }
+      return { runtime, token, runId, accepted: true };
+    } catch (error) {
+      if (requests.get(runtime) === token) requests.delete(runtime);
+      throw error;
+    }
+  }
 
   async function begin(group, candidate) {
     const resident = group === null || group === 'origin';
@@ -50,32 +83,25 @@ export function createActivationManager(context) {
       const launchConfig = deps.db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: state.mode });
       if (group === null) await deps.prepareSingle(launchConfig.runtime);
       let runId;
-      if (!resident) {
+      if (group !== null) {
+        const origin = group === 'origin';
+        const waitHealth = code => origin ? waitOrigin(code) : wait(group, code);
         const health = deps.readRuntimeHealth(launchConfig.runtime);
-        if (!health.missing && !health.unreadable && health.health === 'auth_failed') { wait(group, 'auth_blocked'); return; }
-        if (!health.missing && !health.unreadable && restricted.has(health.health) && !hasRuntime(launchConfig.runtime)) {
-          requestRuntime = launchConfig.runtime;
-          if (requests.has(requestRuntime) || uncertain.get(requestRuntime) === state.round) return;
-          // Claim the runtime's single-flight position before submit can yield.
-          token = {}; requests.set(requestRuntime, token);
-          runId = uuid();
-          const request = { version: 1, type: 'start_attempt', requestId: requestId(), runtime: requestRuntime, sessionGroup: group, runId };
-          let result;
-          try { result = await deps.submit(request); }
-          catch { result = { kind: 'no_reply', sent: true }; }
-          if (!['accepted','rejected','connect_failed','deadline_exceeded','no_reply','invalid_reply','timeout'].includes(result?.kind)) result = { kind: 'invalid_reply', sent: true };
-          if (['accepted', 'rejected'].includes(result?.kind) &&
-              (!validStartAttemptReply(result.reply, request) || (result.kind === 'accepted') !== result.reply.ok)) {
-            result = { kind: 'invalid_reply', sent: true };
-          }
-          if (result?.kind !== 'accepted') {
-            if (['no_reply', 'invalid_reply', 'timeout'].includes(result?.kind) || (result?.kind === 'deadline_exceeded' && result.sent)) {
-              uncertain.set(requestRuntime, state.round);
-            }
-            wait(group, result?.kind === 'invalid_reply' ? 'start_attempt_protocol_error' : result?.reply?.code ?? result?.kind ?? 'start_attempt_protocol_error');
-            return;
+        const known = !health.missing && !health.unreadable;
+        if (known && health.health === 'auth_failed') { waitHealth('auth_blocked'); return; }
+        if (known && (origin ? health.health === 'rate_limited' : restricted.has(health.health))) {
+          if (hasRuntime(launchConfig.runtime)) {
+            if (origin) { waitHealth('scene_present'); return; }
+          } else {
+            const attempt = await submitStartAttempt(launchConfig.runtime, group);
+            if (!attempt) return;
+            ({ runtime: requestRuntime, token, runId } = attempt);
+            if (!attempt.accepted) { waitHealth(attempt.code); return; }
           }
         }
+        if (origin) state.resident.waitCode = null;
+      }
+      if (!resident) {
         // A grant belongs only to this candidate. Re-observe before claiming;
         // capacity is checked again synchronously with reservation below.
         const live = await deps.readLiveIdentity(group);
