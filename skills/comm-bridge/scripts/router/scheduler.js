@@ -232,5 +232,8 @@ export function createRouter(dependencies, configuration = {}) {
     await Promise.allSettled([...tasks]);
   }
   return { initialize, start, tick, stop, state, availableCapacity: context.availableCapacity,
-    async idle() { await Promise.allSettled([...tasks]); } };
+    async idle() {
+      // A scheduling round can enqueue observations or lane work after this call.
+      while (tasks.size) await Promise.allSettled([...tasks]);
+    } };
 }
