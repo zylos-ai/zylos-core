@@ -160,8 +160,9 @@ test('two concurrent connections competing for the last slot yield exactly one w
   const children = [];
   try {
     for (const group of ['test:left', 'test:right']) {
-      const child = fork(new URL('./helpers/slot-contention-worker.js', import.meta.url), [filename, group], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], signal: t.signal });
-      const closed = once(child, 'close');
+      const child = fork(new URL('./helpers/slot-contention-worker.js', import.meta.url), [filename, group], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], signal: t.signal, killSignal: 'SIGKILL' });
+      child.on('error', () => {}); // Readiness/reply promises report abort errors.
+      const closed = new Promise(resolve => child.once('close', (code, signal) => resolve([code, signal])));
       const ready = once(child, 'message');
       children.push({ child, closed, ready });
     }
