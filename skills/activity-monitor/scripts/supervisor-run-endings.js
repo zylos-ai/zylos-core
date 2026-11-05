@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { READY_TIMEOUT_MS } from '../../comm-bridge/scripts/c4-config.js';
 import { loadCoreModule } from './core-modules.js';
 const { assertSessionGroup, sessionGroupRunRoot } = await loadCoreModule('session-group-paths.js');
 
@@ -50,6 +51,27 @@ export class SupervisorRunEndings {
   }
 
   reset(group) { this.shortRuns.delete(group); }
+
+  async prune(context) {
+    let slots;
+    try { slots = await this.db.listSlotOccupancy(); }
+    catch (error) { this.reportError(error, { phase: 'slot-cleanup' }); return; }
+    const orphans = [];
+    let fences;
+    try { fences = await this.db.listDrainFences(); }
+    catch (error) { this.reportError(error, { phase: 'slot-cleanup' }); }
+    for (const row of slots) {
+      if (row.state !== 'running' || !fences || fences.some(fence => fence.sessionGroup === '*' || fence.sessionGroup === row.sessionGroup)) continue;
+      const scene = context.scenes.find(scene => scene.sessionGroup === row.sessionGroup);
+      if (!this.isObservable(row.sessionGroup) || (scene !== undefined && scene.present !== false)) continue;
+      try {
+        const fresh = await this.readIdentity(row.sessionGroup);
+        if (fresh?.present === false) orphans.push({ sessionGroup: row.sessionGroup, runId: row.runId });
+      } catch { /* An unobservable server is never evidence of absence. */ }
+    }
+    try { await this.db.pruneSlots({ orphans, minAgeSeconds: READY_TIMEOUT_MS / 1000 }); }
+    catch (error) { this.reportError(error, { phase: 'slot-cleanup' }); }
+  }
 
   async advance(context) {
     const failuresThisRound = new Set();
@@ -105,6 +127,7 @@ export class SupervisorRunEndings {
       }
     } finally {
       for (const key of this.failures.keys()) if (!failuresThisRound.has(key)) this.failures.delete(key);
+      if (context.configuration.mode === 'multi') await this.prune(context);
     }
   }
 }

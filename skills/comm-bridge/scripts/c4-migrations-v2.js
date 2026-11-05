@@ -42,6 +42,15 @@ export function migrateToV2(db) {
       ended_at INTEGER NOT NULL,
       continuation_control_id INTEGER
     );
+    CREATE TABLE slot_occupancy (
+      session_group TEXT PRIMARY KEY NOT NULL
+        CHECK (session_group <> '' AND session_group <> '*' AND session_group <> 'origin'),
+      run_id TEXT NOT NULL CHECK (run_id <> ''),
+      state TEXT NOT NULL CHECK (state IN ('running','held')),
+      held_until INTEGER,
+      created_at INTEGER NOT NULL,
+      CHECK ((state = 'running' AND held_until IS NULL) OR (state = 'held' AND held_until IS NOT NULL))
+    );
     CREATE TABLE group_runtime_overrides (
       session_group TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
       runtime TEXT COLLATE BINARY NOT NULL

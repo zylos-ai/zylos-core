@@ -192,5 +192,6 @@ test('pressure does not fence a candidate that becomes busy before beginReclaim'
 test('demand eviction does not fence a candidate that becomes busy before beginReclaim', async () => {
   const f = fixture(); f.current.scenes = [scene('a')]; f.lifecycle.d.observeGroup = () => scene('a', { state: 'busy' });
   const context = f.context(); f.lifecycle.d.db.listPendingSessionGroups = () => [{ sessionGroup: 'waiting' }];
+  f.lifecycle.d.db.listSlotOccupancy = () => [{ sessionGroup: 'a', state: 'running', runId: 'run-a' }];
   const result = await f.lifecycle.checkEviction(context.scenes, context); assert.equal(result.selected, 0); assert.equal(f.fences.size, 0);
 });

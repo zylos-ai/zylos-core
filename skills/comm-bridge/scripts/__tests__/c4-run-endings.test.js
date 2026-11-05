@@ -198,13 +198,13 @@ test('run-ending readers propagate failures and normalize busy errors', () => {
   }
 });
 
-test('run-ending migration preserves v1 rows and creates only the approved empty table', t => {
+test('run-ending migration preserves v1 rows and creates empty ending and occupancy tables', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db, { extensions: true });
   const before = oldRows(db); guardDatabase(db, owner);
   assert.equal(db.pragma('user_version', { simple: true }), 2);
   assert.deepEqual(oldRows(db), before);
   assert.deepEqual(db.prepare('SELECT * FROM run_endings').all(), []);
-  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='slot_occupancy'").get(), undefined);
+  assert.deepEqual(db.prepare('SELECT * FROM slot_occupancy').all(), []);
   const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='run_endings'").get().sql.replace(/\s+/g, ' ');
   assert.equal(ddl, "CREATE TABLE run_endings ( session_group TEXT PRIMARY KEY NOT NULL CHECK (session_group <> '' AND session_group <> '*'), run_id TEXT NOT NULL CHECK (run_id <> ''), reason TEXT NOT NULL CHECK (reason IN ('ttl','evict','upgrade','auth','model_config','mode_switch','manual_restart','unexpected')), ended_at INTEGER NOT NULL, continuation_control_id INTEGER )");
 });

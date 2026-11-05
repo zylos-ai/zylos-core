@@ -25,7 +25,7 @@ export function createRouter(dependencies, configuration = {}) {
   const deps = dependencies;
   const now = deps.now ?? Date.now;
   const state = { mode: null, inert: false, ready: false, stopped: false, round: 0, sceneObservable: false,
-    live: new Map(), continuations: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
+    slots: new Map(), live: new Map(), continuations: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
     resident: { failures: 0, absentSince: null, readySince: null, fenced: false } };
   const tasks = new Set();
   const observations = new Map();
@@ -40,19 +40,22 @@ export function createRouter(dependencies, configuration = {}) {
   function track(promise) { tasks.add(promise); promise.finally(() => tasks.delete(promise)).catch(() => {}); return promise; }
   const context = { deps, options, state, diagnostic, now, tmuxName: group => tmuxNameForGroup(group ?? 'origin') };
   context.continuationRestarts = createContinuationRestarts({ now, deps, diagnostic });
-  context.availableCapacity = (excludeActivation) => {
+  context.refreshSlots = () => { state.slots = new Map(deps.db.listSlotOccupancy().map(row => [row.sessionGroup, row])); };
+  context.availableCapacity = () => {
     if (!state.sceneObservable || [...state.listed].some(group => !state.live.has(group))) return 0;
-    const occupied = new Set([...state.listed].filter(group => group !== 'origin' && group !== null));
-    for (const [group, live] of state.live) if (group !== 'origin' && group !== null && live?.present) occupied.add(group);
-    for (const group of state.activations.keys()) if (group !== 'origin' && group !== null && group !== excludeActivation) occupied.add(group);
-    return Math.max(0, options.poolSize - occupied.size);
+    return options.poolSize - state.slots.size;
   };
   // Capacity opportunities are ordered before asynchronous preflight. They are
   // not pool occupancy: no message is claimed and no launch is reserved yet.
   // A rejected preflight releases its opportunity to the next head this round.
   context.acquireOpportunity = (group, candidate) => {
     if (attemptedRound.get(group) === state.round) return false;
-    const slots = context.availableCapacity() - opportunities.size;
+    const owned = state.slots.get(group);
+    if (owned) {
+      if (!state.sceneObservable || owned.state !== 'held') return false;
+      opportunities.add(group); attemptedRound.set(group, state.round); return true;
+    }
+    const slots = context.availableCapacity() - [...opportunities].filter(key => !state.slots.has(key)).length;
     if (slots <= 0) return false;
     const inbound = deps.db.listPendingSessionGroups();
     const inboundGroups = new Set(inbound.map(row => row.sessionGroup));
@@ -62,7 +65,7 @@ export function createRouter(dependencies, configuration = {}) {
         .sort((a, b) => a.endedAt - b.endedAt || a.controlId - b.controlId)
         .map(row => ({ ...row, candidateId: row.controlId, continuation: true })),
     ];
-    const eligible = candidates.filter(row => row.sessionGroup !== 'origin' &&
+    const eligible = candidates.filter(row => row.sessionGroup !== 'origin' && !state.slots.has(row.sessionGroup) &&
       !state.live.get(row.sessionGroup)?.present && !state.activations.has(row.sessionGroup) && !opportunities.has(row.sessionGroup) &&
       attemptedRound.get(row.sessionGroup) !== state.round);
     const selected = eligible.slice(0, slots).some(row => row.sessionGroup === group && row.candidateId === candidate.id && row.continuation === Boolean(candidate.continuation));
@@ -167,6 +170,7 @@ export function createRouter(dependencies, configuration = {}) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
+    if (state.mode === 'multi') context.refreshSlots();
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
     const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
     state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));

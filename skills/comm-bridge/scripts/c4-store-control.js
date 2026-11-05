@@ -12,6 +12,20 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
   }
   const continuationContent = 'Your previous session in this group ended before its work was confirmed finished (context rotation, crash, upgrade, configuration change, or authentication recovery). Read the handoff file in full, check the actual state of each unfinished item, and continue the work. If nothing is unfinished, do nothing and stay idle.';
   const endingColumns = 'session_group AS sessionGroup,run_id AS runId,reason,ended_at AS endedAt,continuation_control_id AS continuationControlId';
+  const slotColumns = 'session_group AS sessionGroup,run_id AS runId,state,held_until AS heldUntil,created_at AS createdAt';
+  function slotGroup(group) {
+    requireGroup(group);
+    if (group === 'origin') throw dataError('INVALID_ARGS', 'Origin does not occupy a pool slot');
+  }
+  function slotOptions(value, keys) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !keys.includes(key))) throw dataError('INVALID_ARGS', 'Invalid slot options');
+  }
+  function slotRun(runId) {
+    if (typeof runId !== 'string' || !runId.trim()) throw dataError('INVALID_ARGS', 'Invalid slot run identity');
+  }
+  function multiSlots() {
+    if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Pool slots require multi mode');
+  }
   function insert(c, content, { sessionGroup = null, targetBinding = null, priority = 3, requireIdle = false, bypassState = false, ackDeadlineAt = null, availableAt = null, appendAckSuffix = true } = {}, current = seconds()) {
     const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
     if (sessionGroup === null) {
@@ -56,9 +70,52 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
           continuationControlId = get(c, "SELECT id FROM control_queue WHERE id=? AND status='pending'", continuationControlId)?.id ?? null;
         }
         run(c, 'INSERT INTO run_endings(session_group,run_id,reason,ended_at,continuation_control_id) VALUES(?,?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET run_id=excluded.run_id,reason=excluded.reason,ended_at=excluded.ended_at,continuation_control_id=excluded.continuation_control_id', sessionGroup, runId, reason, current, continuationControlId);
+        if (['ttl', 'evict'].includes(reason)) run(c, 'DELETE FROM slot_occupancy WHERE session_group=? AND run_id=?', sessionGroup, runId);
+        else run(c, "UPDATE slot_occupancy SET state='held',held_until=? WHERE session_group=? AND run_id=? AND state='running'", current + 120, sessionGroup, runId);
       }
       if (clearFence) clear(c, sessionGroup, clearFence === true ? {} : clearFence, clearFence !== true);
       return { recorded, continuationControlId };
+    }),
+    takeSlot: (sessionGroup, options) => write(c => {
+      slotGroup(sessionGroup); slotOptions(options, ['runId', 'k']);
+      const { runId, k } = options; slotRun(runId);
+      if (!Number.isSafeInteger(k) || k < 1) throw dataError('INVALID_ARGS', 'Slot capacity must be a positive integer');
+      multiSlots();
+      const current = seconds();
+      run(c, "DELETE FROM slot_occupancy WHERE state='held' AND held_until<=?", current);
+      const prior = get(c, `SELECT ${slotColumns} FROM slot_occupancy WHERE session_group=?`, sessionGroup);
+      if (prior?.state === 'running') return { taken: false, reason: 'own_running' };
+      if (prior) {
+        run(c, "UPDATE slot_occupancy SET run_id=?,state='running',held_until=NULL,created_at=? WHERE session_group=?", runId, current, sessionGroup);
+        return { taken: true, prior };
+      }
+      if (get(c, 'SELECT count(*) AS count FROM slot_occupancy').count >= k) return { taken: false, reason: 'full' };
+      run(c, "INSERT INTO slot_occupancy(session_group,run_id,state,held_until,created_at) VALUES(?,?,'running',NULL,?)", sessionGroup, runId, current);
+      return { taken: true, prior: null };
+    }),
+    releaseSlot: (sessionGroup, options) => write(c => {
+      slotGroup(sessionGroup); slotOptions(options, ['runId', 'prior']);
+      const { runId, prior } = options; slotRun(runId); multiSlots();
+      if (prior !== null) {
+        slotOptions(prior, ['sessionGroup', 'runId', 'state', 'heldUntil', 'createdAt']);
+        slotRun(prior.runId);
+        if (prior.sessionGroup !== sessionGroup || prior.state !== 'held' || !Number.isSafeInteger(prior.heldUntil) || !Number.isSafeInteger(prior.createdAt)) throw dataError('INVALID_ARGS', 'Invalid prior held slot');
+        return { released: run(c, "UPDATE slot_occupancy SET run_id=?,state='held',held_until=?,created_at=? WHERE session_group=? AND run_id=? AND state='running'", prior.runId, prior.heldUntil, prior.createdAt, sessionGroup, runId).changes > 0 };
+      }
+      return { released: run(c, "DELETE FROM slot_occupancy WHERE session_group=? AND run_id=? AND state='running'", sessionGroup, runId).changes > 0 };
+    }),
+    listSlotOccupancy: () => read(c => all(c, `SELECT ${slotColumns} FROM slot_occupancy WHERE state='running' OR held_until>? ORDER BY session_group COLLATE BINARY`, seconds())),
+    pruneSlots: options => write(c => {
+      slotOptions(options, ['orphans', 'minAgeSeconds']);
+      const { orphans, minAgeSeconds } = options;
+      if (!Array.isArray(orphans) || !Number.isSafeInteger(minAgeSeconds) || minAgeSeconds < 0) throw dataError('INVALID_ARGS', 'Invalid slot pruning options');
+      for (const row of orphans) { slotOptions(row, ['sessionGroup', 'runId']); slotGroup(row.sessionGroup); slotRun(row.runId); }
+      multiSlots();
+      const current = seconds();
+      const deletedHeld = run(c, "DELETE FROM slot_occupancy WHERE state='held' AND held_until<=?", current).changes;
+      let deletedOrphans = 0;
+      for (const { sessionGroup, runId } of orphans) deletedOrphans += run(c, "DELETE FROM slot_occupancy WHERE session_group=? AND run_id=? AND state='running' AND created_at<=?", sessionGroup, runId, current - minAgeSeconds).changes;
+      return { deletedHeld, deletedOrphans };
     }),
     listRunEndings: () => read(c => all(c, `SELECT ${endingColumns} FROM run_endings ORDER BY session_group COLLATE BINARY`)),
     listPendingContinuations: () => read(c => all(c, "SELECT e.session_group AS sessionGroup,c.id AS controlId,c.created_at AS createdAt,e.ended_at AS endedAt FROM run_endings e JOIN control_queue c ON c.id=e.continuation_control_id WHERE c.status='pending' AND e.session_group<>'origin' ORDER BY c.created_at,c.id")),

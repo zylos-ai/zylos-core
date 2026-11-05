@@ -10,7 +10,7 @@ async function fixture(t) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const f = { root, now: 2_000_000, rows: new Map(), records: [], alerts: [], errors: [], fresh: [], reads: 0, writes: 0,
     context: { configuration: { mode: 'multi' }, transition: null, fences: [], scenes: [] }, lastDone: null };
-  f.db = { getModeTransition: () => f.context.transition, listDrainFences: () => f.context.fences, listRunEndings: () => [...f.rows.values()], getLastCompletedModeTransition: () => f.lastDone,
+  f.db = { listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: 0 }), getModeTransition: () => f.context.transition, listDrainFences: () => f.context.fences, listRunEndings: () => [...f.rows.values()], getLastCompletedModeTransition: () => f.lastDone,
     recordRunEnd: (group, options) => { f.writes++; f.records.push({ group, ...options }); f.rows.set(group, { sessionGroup: group, runId: options.runId, reason: options.reason, endedAt: Math.floor(f.now / 1000) }); return { recorded: true }; } };
   f.deps = { db: f.db, env: { ZYLOS_DIR: root }, now: () => f.now,
     readIdentity: group => { f.fresh.push(group); return { present: false }; },

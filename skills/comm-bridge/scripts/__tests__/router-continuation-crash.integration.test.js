@@ -11,8 +11,8 @@ import { tmuxNameForGroup } from '../../../../cli/lib/session-group-paths.js';
 const worker = fileURLToPath(new URL('./helpers/router-continuation-crash-worker.js', import.meta.url));
 function start(directory, phase, boundary, env, signal) {
   const child = spawn(process.execPath, [worker, directory, phase, boundary], { env, signal, killSignal: 'SIGKILL', stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-  let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk; });
-  child.on('error', error => { stderr += `${error.name}: ${error.message}`; });
+  let stderr = ''; child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-8192); });
+  child.on('error', error => { stderr = (stderr + `${error.name}: ${error.message}`).slice(-8192); });
   return { child, exited: new Promise(resolve => child.once('close', (code, signal) => resolve([code, signal]))), stderr: () => stderr };
 }
 async function deadline(promise) {
@@ -51,12 +51,17 @@ for (const boundary of ['before-launch', 'before-ready']) {
       } })());
       assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'barrier.json'), 'utf8')), { name: boundary, pid: crashed.child.pid });
       assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(id).status, 'pending');
+      const occupied = f.store.listSlotOccupancy();
+      assert.equal(occupied.length,1); assert.equal(occupied[0].sessionGroup,'a'); assert.equal(occupied[0].state,'running');
       assert.equal(crashed.child.kill('SIGKILL'), true); assert.deepEqual(await crashed.exited, [null, 'SIGKILL']);
+      assert.deepEqual(f.store.listSlotOccupancy(), occupied);
       const before = JSON.parse(fs.readFileSync(path.join(directory, 'scene.json'), 'utf8'));
       const restarted = start(directory, 'restart', boundary, env, t.signal); children.push(restarted);
       assert.deepEqual(await deadline(restarted.exited), [0, null], restarted.stderr());
       const events = fs.readFileSync(path.join(directory, 'events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
       assert.equal(events.filter(row => row.event === 'launch').length, 1);
+      assert.equal(events.filter(row=>row.event==='orphan-pruned').length,boundary==='before-launch'?1:0);
+      assert.equal(f.store.listSlotOccupancy().length,1);
       assert.equal(events.some(row => ['duplicate-launch', 'unexpected-stop'].includes(row.event)), false);
       assert.equal(events.filter(row => row.event === 'control' && row.id === id).length, 1);
       assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(id).status, 'done');

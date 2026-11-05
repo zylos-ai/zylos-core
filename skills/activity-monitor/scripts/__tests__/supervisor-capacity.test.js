@@ -28,6 +28,7 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch =
     db: { getModeTransition: () => null, listDrainFences: () => [...fences.values()], getDrainFence: group => fences.get(group),
       setDrainFence: (group, row) => fences.set(group, { ...row, sessionGroup: group }),
       getLastActivity: () => 0, getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
+      listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: 0 }),
       listPendingSessionGroups: () => [], listPendingContinuations: () => [], listRunEndings: () => [],
       getLastCompletedModeTransition: () => null, getControlById: () => null,
       resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) },

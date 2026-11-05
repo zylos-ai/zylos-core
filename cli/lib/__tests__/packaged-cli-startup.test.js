@@ -104,7 +104,8 @@ test('packed global CLI starts without installed skill dependencies', async t =>
         db: {
           recoverOrphanRunning: () => ({ requeued: { ids: [] }, ageExpired: { ids: [] }, retryExhausted: { ids: [] } }),
           listPendingSessionGroups: () => [{ sessionGroup: 'probe', headPriority: 0, headId: 1 }],
-          listPendingContinuations: () => [],
+          listPendingContinuations: () => [], listSlotOccupancy: () => [],
+          takeSlot: () => ({ taken: true, prior: null }), releaseSlot: () => ({ released: true }),
           getNextPending: filter => filter?.sessionGroups?.includes('probe') ? { id: 1, session_group: 'probe' } : null,
           expirePending: () => false, getDrainFence: () => null,
           resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),

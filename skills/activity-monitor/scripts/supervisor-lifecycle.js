@@ -20,13 +20,13 @@ export function activityTime(value) {
   return result;
 }
 
-export function evictionDemand(scenes, pending, fences, capacity) {
+export function evictionDemand(slots, pending, fences, capacity) {
   if (!Number.isInteger(capacity) || capacity < 1) throw error('CONFIG_UNREADABLE', 'Pool capacity must be positive');
-  const present = new Set(scenes.filter(s => s.present && s.sessionGroup !== 'origin' && s.sessionGroup !== null).map(s => s.sessionGroup));
-  const waiting = new Set(pending.map(row => row.sessionGroup).filter(g => g !== 'origin' && g !== null && !present.has(g))).size;
-  const free = capacity - present.size;
-  const inflight = fences.filter(f => f.sessionGroup !== 'origin' && f.sessionGroup !== '*' && CAPACITY_REASONS.has(f.reason)).length;
-  return { waiting, free, inflight, need: Math.max(0, waiting - free - inflight) };
+  const occupied = new Set(slots.map(row => row.sessionGroup));
+  const waiting = new Set(pending.map(row => row.sessionGroup).filter(g => g !== 'origin' && g !== null && !occupied.has(g))).size;
+  const free = capacity - slots.length;
+  const inflight = fences.filter(f => f.sessionGroup !== 'origin' && f.sessionGroup !== '*' && ['ttl', 'evict'].includes(f.reason)).length;
+  return { waiting, free, inflight, need: waiting ? Math.max(0, waiting - free - inflight) : 0 };
 }
 
 /** Lifecycle methods run inside the same serial section as socket admission.
@@ -359,7 +359,7 @@ export class SupervisorLifecycle {
     const failure = scenes.find(scene => scene.observationError);
     if (failure) throw failure.observationError;
     const fences = context.fences;
-    const demand = evictionDemand(scenes, await this.d.db.listPendingSessionGroups(), fences, context.configuration.capacity);
+    const demand = evictionDemand(await this.d.db.listSlotOccupancy(), await this.d.db.listPendingSessionGroups(), fences, context.configuration.capacity);
     if (!demand.need) return demand;
     const candidates = await this.evictionCandidates(scenes, context);
     let selected = 0;
