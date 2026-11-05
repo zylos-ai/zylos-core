@@ -204,7 +204,7 @@ export class SupervisorRunEndings {
           else {
             const count = (this.shortRuns.get(group) ?? 0) + 1;
             this.shortRuns.set(group, count);
-            if (count >= 5) this.notify(`short:${group}`, { event: 'repeated_unexpected_run_end', session_group: group, reason: 'five_short_runs' });
+            if (count >= 5) this.notify(`short:${group}`, { event: 'repeated_unexpected_run_end', session_group: group, reason: 'five_short_runs', count });
           }
         } catch (cause) { this.failure(group, current.runId, cause); }
       }

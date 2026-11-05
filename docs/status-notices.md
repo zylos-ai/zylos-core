@@ -202,7 +202,7 @@ through the normal deployment workflow:
 }
 ```
 
-The template contexts are `inbound`, `failure`, and `capacity`, each with `zh`
+The template contexts are `inbound`, `failure`, `capacity`, and `repeated_failure`, each with `zh`
 and `en` text. Stable quota IDs for `inbound` and `failure` are
 `quota_exhausted`, `quota_exhausted_reset`,
 `model_quota_exhausted`, `usage_credits_required`, `usage_credits_exhausted`,
@@ -236,3 +236,26 @@ the brand prefix is added separately. Missing or invalid values use defaults.
 Brand text is limited to 80 characters and each localized body to 2000.
 Runtime diagnostic text is never interpolated into messages. Product-specific
 wording is operator configuration, not content accepted from an incoming user.
+
+### Repeated restart failures
+
+`statusNotices.templates.repeated_failure.<ID>.<zh|en>` overrides these bodies:
+
+| ID | Variables | Purpose |
+| --- | --- | --- |
+| `could_not_restart` | `{group}`, `{count}`, `{reason}` | Consecutive continuation starts that never became ready |
+| `could_not_restart_others` | `{others}` | Appended within each language when at least one other group has five failures |
+| `could_not_restart_launch_error` | `{code}` | Localized reason; only launch error code, or `unknown`, never error message text |
+| `could_not_restart_timeout` | `{seconds}` | Localized reason; elapsed wait in whole seconds |
+| `ended_unexpectedly` | `{group}`, `{count}` | Consecutive ready runs ending within ten minutes |
+
+These notices use the common brand prefix once per language, Chinese then English,
+without inbound/failure suffixes. Invalid overrides use defaults under the same
+nonempty/2000-character/control-character validation as other notices.
+The Router alerts after five failed continuation starts, at most once per machine
+every thirty minutes. Any activation becoming ready resets that group's failures,
+including inbound activation. Alert destination and templates are read at sending;
+unreadable configuration uses defaults and Web Console. Delivery failures retain
+the window. Sending does not block scheduling or Router shutdown. Ready runs that
+end unexpectedly use the Supervisor's existing per-group counter and cooldown;
+only the text changes. Neither counter nor cooldown is persisted.
