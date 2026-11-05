@@ -26,7 +26,7 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   f.put('origin');
   const row = f.add('a');
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
-  const control = f.db.recordRunEnd('a', { runId: 'previous', reason: 'unexpected' }).continuationControlId;
+  f.db.recordRunEnd('a', { runId: 'previous', reason: 'unexpected' });
   const sends = [], logs = [];
   const adapter = f.deps.getSessionAdapter;
   const dependencies = { ...f.deps,
@@ -54,7 +54,9 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   async function fiveFailures() {
     for (const delay of [5000, 10000, 20000, 40000, 60000]) await failAfter(delay);
     assert.equal(f.calls.filter(call => call[0] === 'launch').length, 5);
-    assert.equal(f.db.getControlById(control).status, 'pending');
+    assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
+    assert.equal(f.db.listPendingContinuations().some(row => row.sessionGroup === 'a'), true);
+    assert.equal(f.sqlite.prepare('SELECT count(*) n FROM control_queue').get().n, 0);
     for (let i = 0; i < 100 && sends.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(sends.length > 0, 'lazy notification path starts');
     await flush();

@@ -108,8 +108,7 @@ export function createLane(context, group) {
     }
     const row = await nextMessage();
     if (!row) {
-      const continuation = state.continuations.get(group);
-      if (continuation) await context.activation.beginContinuation(group, continuation);
+      if (state.continuations.has(group)) await context.activation.beginContinuation(group);
       return;
     }
     if (context.availableCapacity() <= 0 && state.slots.get(group)?.state !== 'held') {

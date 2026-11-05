@@ -137,7 +137,7 @@ test('continuation readiness restarts the failure count after five failed starts
   assert.equal(activation.continuation, true, 'sixth launch belongs to continuation, without inbound work');
   f.put('a', { runId: activation.runId, ready: true }); await f.rounds(4);
   assert.equal(f.router.state.activations.size, 0);
-  assert.equal(f.db.listPendingContinuations().length, 0, 'ready continuation was delivered');
+  assert.equal(f.db.listPendingContinuations().length, 0, 'ready run cleared its restart marker');
   f.scene.delete('a'); await f.rounds(2);
   f.db.recordRunEnd('a', { runId: activation.runId, reason: 'unexpected' });
   f.advance(1800000); await f.rounds(4);
@@ -156,7 +156,7 @@ test('continuation readiness restarts the failure count after five failed starts
 test('five readiness timeouts report floored elapsed seconds', async t => {
   const f = routerFixture(t, { readyTimeoutMs: 1000 }); f.put('origin');
   const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
-  const id = f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' }).continuationControlId;
+  f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
   const adapter = f.deps.getSessionAdapter;
   f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
     f.put('a', { runId: input.runId, ready: false });
@@ -168,7 +168,9 @@ test('five readiness timeouts report floored elapsed seconds', async t => {
   const alerts = f.calls.filter(row => row[0] === 'alert');
   assert.equal(alerts.length, 1);
   assert.deepEqual(alerts[0][2].reason, { kind: 'timeout', seconds: 2 });
-  assert.equal(f.db.getControlById(id).status, 'pending');
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
+  assert.equal(f.db.listPendingContinuations().some(row => row.sessionGroup === 'a'), true);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM control_queue').get().n, 0);
 });
 
 // Integration boundary: actual continuation NAME_CONFLICT settlement/counter.
@@ -177,7 +179,7 @@ test('five readiness timeouts report floored elapsed seconds', async t => {
 test('continuation name conflicts count as failures with their structured code', async t => {
   const f = routerFixture(t); f.put('origin');
   const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
-  const id = f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' }).continuationControlId;
+  f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
   let attempts = 0;
   f.deps.getSessionAdapter = () => ({ launch: async () => { attempts++; throw Object.assign(Error('private conflict'), { code: 'NAME_CONFLICT' }); } });
   await f.create().initialize(); await f.rounds(2);
@@ -186,7 +188,9 @@ test('continuation name conflicts count as failures with their structured code',
   const alerts = f.calls.filter(row => row[0] === 'alert');
   assert.equal(alerts.length, 1); assert.equal(alerts[0][2].failures, 5);
   assert.deepEqual(alerts[0][2].reason, { kind: 'launch_error', code: 'NAME_CONFLICT' });
-  assert.equal(f.db.getControlById(id).status, 'pending');
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
+  assert.equal(f.db.listPendingContinuations().some(row => row.sessionGroup === 'a'), true);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM control_queue').get().n, 0);
 });
 
 // Integration boundary: ready/exit loop through the actual scheduler, private

@@ -140,7 +140,7 @@ export function createActivationManager(context) {
     }
   }
 
-  async function beginContinuation(group, candidate) {
+  async function beginContinuation(group) {
     if (state.activations.has(group) || group === null || group === 'origin') return;
     let requestRuntime, token, activation, slot, runId;
     let opportunity = false;

@@ -21,9 +21,10 @@ async function deadline(promise) {
   finally { clearTimeout(timer); }
 }
 
-for (const boundary of ['before-launch', 'before-ready']) {
+for (const boundary of ['before-launch', 'before-ready', 'after-ready']) {
   // Coverage: real Router process death after reservation/before launch and after
-  // scene creation/before READY. Run when activation/restart/control preservation
+  // scene creation/before READY, plus after READY/before clearing its marker.
+  // Run when activation/restart/marker preservation
   // changes; skip for unrelated presentation changes. Only run in isolation,
   // never against live resources: private HOME, ZYLOS_DIR, PM2_HOME, short
   // TMPDIR, private tmux socket and test database. No runtime or tmux is run.

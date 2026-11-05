@@ -23,7 +23,7 @@ assert.equal(f.filename, ':memory:');
 f.put('origin');
 const row = f.add('a');
 f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
-const control = f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' }).continuationControlId;
+f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
 const config = { runtime: 'claude', session_mode: 'multi', alert_target: 'telegram:fixture-owner' };
 const logs = [];
 const adapter = f.deps.getSessionAdapter;
@@ -43,7 +43,9 @@ try {
   await dispatcher.initialize(); await rounds(2);
   for (const ms of [5000,10000,20000,40000,60000]) { f.advance(ms); await rounds(3); }
   assert.equal(f.calls.filter(row => row[0] === 'launch').length, 5);
-  assert.equal(f.db.getControlById(control).status, 'pending');
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
+  assert.equal(f.db.listPendingContinuations().some(row => row.sessionGroup === 'a'), true);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM control_queue').get().n, 0);
   const wanted = ['configured','destination_hangs'].includes(process.env.ALERT_TRANSPORT_MODE) ? 1 : 2;
   let delivered = false;
   for (let i = 0; i < 200; i++) {

@@ -28,6 +28,7 @@ function ready(scene) {
   scene.a.current = { runId: scene.a.runId, sessionId: scene.a.sessionId, startupControlIds: [prompt.id] };
   fs.writeFileSync(file('scene.json'), JSON.stringify(scene));
   record('ready', { promptId: prompt.id });
+  barrier('after-ready');
 }
 let router, finished = false;
 const db = { ...store,
