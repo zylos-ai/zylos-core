@@ -55,7 +55,6 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     capacityWork.add(work);
     work.catch(error=>log({error:error.code ?? error.message,phase:'capacity'}))
       .finally(()=>capacityWork.delete(work));
-    if(context.configuration.mode==='multi')applyPublishedCapacity();
   };
   const pendingAlerts=new Set(),pendingNotices=new Set();
   const sendAlert=overrides.sendAlert ?? ((target,message)=>new Promise((resolve,reject)=>{
