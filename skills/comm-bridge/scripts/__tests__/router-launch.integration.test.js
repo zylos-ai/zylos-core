@@ -125,6 +125,9 @@ function assertLaunch(record, live, expected, group) {
   }
 }
 
+// Launch configuration boundary: run for launch/slot mode-validation changes;
+// skip unrelated UI. setup owns HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private
+// tmux socket/SQLite and recorder runtime; teardown stops Router then its server.
 for (const runtime of ['claude', 'codex']) for (const override of [false, true]) {
   test(`real ${runtime} ${override ? 'override' : 'default'} matches argv`, async t => {
     const f = await setup(t, { runtime });
@@ -132,7 +135,7 @@ for (const runtime of ['claude', 'codex']) for (const override of [false, true])
     if (override) f.db.setSessionModelConfig({ sessionGroup: f.group, ...expected });
     await f.run();
     assertLaunch(f.record(), await f.live(), expected, f.group);
-    assert.equal(f.configReads, 1); assert.equal(f.launches.length, 1);
+    assert.equal(f.configReads, 2); assert.equal(f.launches.length, 1);
     assert.equal(f.db.getNextPending({ sessionGroups: [f.group] }), null);
   });
 }
@@ -156,6 +159,7 @@ test('multi origin consumes its runtime and model override', async t => {
   assert.equal(f.configReads, 1); assert.equal(f.launches.length, 1);
 });
 
+// Configuration snapshot boundary: same isolation; run for launch snapshot or slot validation.
 test('one resolved config survives // changes before adapter launch', async t => {
   const f = await setup(t);
   const expected = { runtime: 'claude', mode: 'override', model: 'original', effort: 'high' };
@@ -167,7 +171,7 @@ test('one resolved config survives // changes before adapter launch', async t =>
   };
   await f.run();
   assertLaunch(f.record(), await f.live(), expected, f.group);
-  assert.equal(f.configReads, 1); assert.equal(f.launches.length, 1);
+  assert.equal(f.configReads, 2); assert.equal(f.launches.length, 1);
 });
 
 test('unreadable leaves fresh conversation pending without adapter launch', async t => {
@@ -180,6 +184,7 @@ test('unreadable leaves fresh conversation pending without adapter launch', asyn
   assert.equal(fs.existsSync(path.join(f.tm.dir, 'record.json')), false);
 });
 
+// Configuration oracle boundary: same isolation; run when launch configuration reads change.
 test('same argv/ oracle rejects re-resolving configuration at adapter boundary', async t => {
   const f = await setup(t);
   const expected = { runtime: 'claude', mode: 'override', model: 'original', effort: 'high' };
@@ -192,6 +197,6 @@ test('same argv/ oracle rejects re-resolving configuration at adapter boundary',
   await f.run();
   const record = f.record(), live = await f.live();
   assert.equal(record.config.model, 'changed');
-  assert.equal(f.configReads, 2);
+  assert.equal(f.configReads, 3);
   assert.throws(() => assertLaunch(record, live, expected, f.group), { code: 'ERR_ASSERTION' });
 });

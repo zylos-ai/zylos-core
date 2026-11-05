@@ -41,7 +41,10 @@ export function createRouter(dependencies, configuration = {}) {
   const context = { deps, options, state, diagnostic, now, tmuxName: group => tmuxNameForGroup(group ?? 'origin') };
   context.continuationRestarts = createContinuationRestarts({ now, deps, diagnostic });
   context.refreshSlots = () => { state.slots = new Map(deps.db.listSlotOccupancy().map(row => [row.sessionGroup, row])); };
-  context.availableCapacity = () => options.poolSize - state.slots.size;
+  context.availableCapacity = () => {
+    if (!state.sceneObservable || [...state.listed].some(group => !state.live.has(group))) return 0;
+    return options.poolSize - state.slots.size;
+  };
   // Capacity opportunities are ordered before asynchronous preflight. They are
   // not pool occupancy: no message is claimed and no launch is reserved yet.
   // A rejected preflight releases its opportunity to the next head this round.
@@ -49,7 +52,7 @@ export function createRouter(dependencies, configuration = {}) {
     if (attemptedRound.get(group) === state.round) return false;
     const owned = state.slots.get(group);
     if (owned) {
-      if (owned.state !== 'held') return false;
+      if (!state.sceneObservable || owned.state !== 'held') return false;
       opportunities.add(group); attemptedRound.set(group, state.round); return true;
     }
     const slots = context.availableCapacity() - [...opportunities].filter(key => !state.slots.has(key)).length;

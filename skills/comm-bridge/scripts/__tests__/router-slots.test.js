@@ -124,3 +124,60 @@ test('unknown post-stop observation retains occupancy until target absence is co
  unknown=false;f.db.claimConversation=()=>false;await f.rounds(2);
  assert.equal(f.db.listSlotOccupancy().length,0);
 });
+
+for (const retained of [false,true]) test(`inbound name conflict returns ${retained ? 'retained' : 'new'} occupancy`,async t=>{
+ const f=routerFixture(t,{poolSize:1});if(retained)held(f);const before=f.db.listSlotOccupancy();const message=f.add('b');let conflicts=0;
+ f.deps.getSessionAdapter=()=>({launch:async()=>{conflicts++;throw Object.assign(new Error('name already exists'),{code:'NAME_CONFLICT'});},stop:async()=>assert.fail('name conflict must not stop another run')});
+ await start(f);assert.ok(conflicts>0);assert.deepEqual(f.db.listSlotOccupancy(),before);
+ assert.equal(f.row(message.id).status,'pending');assert.equal(f.row(message.id).retry_count,0);
+});
+
+test('failed release is retried by the next round without losing its retained deadline',async t=>{
+ const f=routerFixture(t,{poolSize:1});held(f);const prior=f.db.listSlotOccupancy();f.health.set('claude',{health:'down'});
+ f.deps.submit=async()=>({kind:'connect_failed',sent:false});const release=f.db.releaseSlot;let attempts=0;
+ f.db.releaseSlot=(...args)=>{attempts++;if(attempts===1)throw Object.assign(new Error('database busy'),{code:'DB_BUSY'});return release(...args);};
+ await start(f);f.advance(5000);await f.rounds(1);
+ assert.equal(attempts,1);assert.equal(f.router.state.activations.has('b'),true);assert.equal(f.db.listSlotOccupancy()[0].state,'running');
+ await f.rounds(1);assert.equal(attempts,2);assert.deepEqual(f.db.listSlotOccupancy(),prior);assert.equal(f.router.state.activations.has('b'),false);
+});
+
+test('a known replacement run after stop releases the old startup occupancy',async t=>{
+ const f=routerFixture(t,{poolSize:1,readyTimeoutMs:1000});f.add('b');let stops=0;
+ f.deps.getSessionAdapter=()=>({launch:async input=>f.put(input.sessionGroup,{runId:input.runId,ready:false}),stop:async()=>{stops++;f.scene.set('b',f.identity('b',{runId:'replacement-run',ready:false,createdAt:f.now()/1000+60}));}});
+ await start(f);f.advance(1000);await f.rounds(1);
+ assert.equal(stops,1);assert.equal(f.db.listSlotOccupancy().length,0);assert.equal(f.router.state.activations.has('b'),false);
+});
+
+test('an absent running owner does not occupy the queue head ahead of a rowless group',async t=>{
+ const f=routerFixture(t,{poolSize:2});f.db.takeSlot('x',{runId:'missing-x',k:2});f.add('x');f.add('y');
+ await start(f);assert.deepEqual(launches(f).map(row=>row[1].sessionGroup),['y']);
+ assert.equal(f.db.listSlotOccupancy().find(row=>row.sessionGroup==='x').runId,'missing-x');
+});
+
+for(const trigger of ['inbound','continuation'])test(`a full transaction rejects ${trigger} activation after eligibility`,async t=>{
+ const f=routerFixture(t,{poolSize:1});if(trigger==='inbound')f.add('b');else{held(f);f.db.takeSlot('b',{runId:'later-b',k:1});f.db.recordRunEnd('b',{runId:'later-b',reason:'ttl'});}
+ let takes=0;f.db.takeSlot=()=>{takes++;return {taken:false,reason:'full'};};
+ await start(f);if(trigger==='continuation'){assert.equal(takes,0);f.advance(5000);await f.rounds(3);}
+ assert.ok(takes>0,'transaction must actually be reached');assert.equal(launches(f).length,0);assert.equal(f.db.listSlotOccupancy().length,0);
+});
+
+for(const fence of ['b','*'])test(`a ${fence==='*'?'global':'group'} fence appearing during identity read prevents taking occupancy`,async t=>{
+ const f=routerFixture(t,{poolSize:1});held(f);f.add('b');const prior=f.db.listSlotOccupancy();let activationRead=false,introduced=false,takes=0;
+ const resolve=f.db.resolveSessionLaunchConfig;f.db.resolveSessionLaunchConfig=input=>{if(input.sessionGroup==='b')activationRead=true;return resolve(input);};
+ const read=f.deps.readLiveIdentity;f.deps.readLiveIdentity=async group=>{const identity=await read(group);if(group==='b'&&activationRead&&!introduced){await Promise.resolve();introduced=true;if(fence==='*')f.db.setDrainFence('*');else f.db.setDrainFence('b',{reason:'ttl',runId:'old-b'});}return identity;};
+ const take=f.db.takeSlot;f.db.takeSlot=(...args)=>{takes++;return take(...args);};
+ await start(f);assert.equal(introduced,true);assert.equal(takes,0);assert.equal(launches(f).length,0);assert.deepEqual(f.db.listSlotOccupancy(),prior);
+});
+
+for(const trigger of ['inbound','continuation'])test(`unobservable session listing blocks ${trigger} from taking its retained row`,async t=>{
+ const f=routerFixture(t,{poolSize:1});held(f);if(trigger==='inbound')f.add('b');const prior=f.db.listSlotOccupancy();let takes=0;
+ f.deps.listGroupTmuxSessions=async()=>{throw new Error('session listing unavailable');};const take=f.db.takeSlot;f.db.takeSlot=(...args)=>{takes++;return take(...args);};
+ await start(f);f.advance(5000);await f.rounds(3);assert.equal(takes,0);assert.equal(launches(f).length,0);assert.deepEqual(f.db.listSlotOccupancy(),prior);
+});
+
+test('unreadable unrelated identity does not block a freshly absent retained owner',async t=>{
+ const f=routerFixture(t,{poolSize:1});held(f);f.add('b');const read=f.deps.readLiveIdentity;
+ f.deps.listGroupTmuxSessions=async()=>[{sessionGroup:'x',tmuxName:f.identity('x').tmuxName},{sessionGroup:'origin',tmuxName:f.identity('origin').tmuxName}];
+ f.deps.readLiveIdentity=async group=>{if(group==='x')throw new Error('unrelated identity unavailable');return read(group);};
+ await start(f);assert.deepEqual(launches(f).map(row=>row[1].sessionGroup),['b']);assert.equal(f.router.availableCapacity(),0);
+});

@@ -20,6 +20,8 @@ function configuration(mode = 'multi') {
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', session_mode: mode }));
 }
+// Factory composition boundary: run for dispatcher/slot fixture changes; skip unrelated UI.
+// createTestEnvironment owns the shared SQLite root; scene/runtime I/O is injected.
 function setup(t, { mode = 'multi', phase } = {}) {
   configuration(mode);
   const prefix = `factory${++sequence}`, a = `${prefix}a`, b = `${prefix}b`;
@@ -31,6 +33,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
     tmuxName: tmuxNameForGroup(group ?? 'origin'), serverGeneration: 'test-generation', paneId: `%${group}`, createdAt: Math.floor(Date.now()/1000) }]));
   const target = group => ({ ...scenes.get(group), sessionGroup: group, sessionId: `$${group}` });
   const wait = async () => { holding = true; await held.promise; };
+  database.getDb().exec('DELETE FROM slot_occupancy'); // Each fixture owns its occupancy; this file shares one database.
   const db = { ...database };
   const overrides = {
     db, diagnostics: { diagnostic: (...args) => calls.push(['event', ...args]), maintain() {} }, log: message => calls.push(['log', message]),

@@ -93,7 +93,7 @@ for (const sceneState of ['absent', 'unready', 'ready']) {
     if (sceneState === 'absent') {
       await f.rounds(3);
       assert.equal(second.availableCapacity(),0);
-      assert.equal(f.calls.some(x=>x[1]===2&&x[0]==='launch'),false,'running occupancy blocks restart before M4 records the ending');
+      assert.equal(f.calls.some(x=>x[1]===2&&x[0]==='launch'),false,'running occupancy blocks restart before the ending is recorded');
       assert.equal(f.db.listSlotOccupancy()[0].runId,originalRun);
       continuationId=f.db.recordRunEnd('a',{runId:originalRun,reason:'unexpected'}).continuationControlId;
       assert.equal(f.db.listSlotOccupancy()[0].state,'held');

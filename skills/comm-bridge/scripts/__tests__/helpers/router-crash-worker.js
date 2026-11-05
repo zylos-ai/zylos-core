@@ -84,12 +84,12 @@ if (phase === 'restart') {
     const slot=store.listSlotOccupancy().find(row=>row.sessionGroup==='a');
     if (!slot || slot.state!=='running') throw Error('Crashed Router lost occupancy');
     for(let i=0;i<2;i++){router.tick();await router.idle();}
-    if(readScene().a) throw Error('Restart launched before M4 orphan cleanup');
+    if(readScene().a) throw Error('Restart launched before orphan slot cleanup');
     const orphans=[{sessionGroup:'a',runId:slot.runId}];
     now=slot.createdAt*1000+999;
     if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans!==0) throw Error('Premature orphan removal');
     now+=1;
-    if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans!==1) throw Error('M4 orphan cleanup failed');
+    if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans!==1) throw Error('Orphan slot cleanup failed');
     record('orphan-pruned',{runId:slot.runId});
   }
 }

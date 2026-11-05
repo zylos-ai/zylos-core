@@ -164,3 +164,25 @@ for (const recovery of ['record recovers', 'record remains unavailable', 'sessio
     }
   });
 }
+
+
+test('unreadable fences protect a reclaiming running row during cleanup', async t => {
+  const f=await fixture(t); f.take(); await f.write(); f.now+=31000;
+  f.store.setDrainFence('test:group',{reason:'upgrade',runId:'old'});
+  f.service.db={...f.store,listDrainFences(){throw new Error('fences unavailable');}};
+  await f.service.advance(f.context);
+  assert.equal(f.rows().length,1); assert.equal(f.rows()[0].state,'running');
+  assert.equal(f.store.listRunEndings().length,0);
+  assert.ok(f.errors.some(error=>error.message==='fences unavailable'));
+});
+
+test('a run seen by the round snapshot keeps occupancy until a later round records its ending', async t => {
+  const f=await fixture(t); f.take(); await f.write(); f.now+=31000;
+  f.context.scenes=[{sessionGroup:'test:group',runId:'old',present:true}];
+  await f.service.advance(f.context);
+  assert.equal(f.rows().length,1); assert.equal(f.rows()[0].state,'running');
+  assert.equal(f.store.listRunEndings().length,0);
+  f.context.scenes=[]; await f.service.advance(f.context);
+  assert.equal(f.rows()[0].state,'held');
+  assert.equal(f.store.listRunEndings()[0].reason,'unexpected');
+});
