@@ -190,14 +190,21 @@ through the normal deployment workflow:
           "zh": "当前服务暂时受限，本次请求未能完成，请稍后重新发送。",
           "en": "The service is rate-limited. This request could not complete. Please resend it later."
         }
+      },
+      "capacity": {
+        "memory_low": {
+          "zh": "这台机器内存紧张，请留意运行情况。",
+          "en": "This machine is low on memory; please watch its operation."
+        }
       }
     }
   }
 }
 ```
 
-The two template contexts are `inbound` and `failure`, each with `zh` and `en`
-text. Stable quota IDs are `quota_exhausted`, `quota_exhausted_reset`,
+The template contexts are `inbound`, `failure`, and `capacity`, each with `zh`
+and `en` text. Stable quota IDs for `inbound` and `failure` are
+`quota_exhausted`, `quota_exhausted_reset`,
 `model_quota_exhausted`, `usage_credits_required`, `usage_credits_exhausted`,
 and `quota_allocation_unavailable`. Factual nonquota IDs are `model_unavailable`,
 `billing_error`, and `service_error`; baseline IDs are `auth_failed`,
@@ -206,6 +213,20 @@ numbered 1-33 entries identify diagnostic rules, not templates. The reset templa
 supports `{resetAt}`, a validated epoch-millisecond time formatted with an explicit
 IANA time-zone label. `timeZone` defaults to the host zone; invalid zones use UTC.
 Missing/expired/invalid reset values select `quota_exhausted` instead.
+
+The `capacity` context has one ID: `memory_low` (valid memory readings reach or
+exceed the danger line for two consecutive calculations, in automatic or fixed
+mode). This is a complete notice without inbound or first-failure suffixes or
+template variables. It is sent at most once every 30 minutes through the
+Supervisor's existing alert destination, with Web Console fallback. If
+configuration cannot be read, that round does not read memory, judge pressure,
+or send a capacity notice. Group names, memory readings, and error text remain
+diagnostics and are not inserted into the message.
+Capacity publication failures and cgroup v2 OOM increments produce diagnostics
+only. Unreadable memory still falls back to capacity one in automatic mode;
+entering fallback writes `capacity_inputs_unreadable` once, with no notice or
+repeat diagnostic while fallback persists. Fixed mode does not enter fallback
+or write this diagnostic.
 
 Overrides use only the selected ID. A generic `rate_limited` override cannot
 replace an identified `quota_exhausted_reset` message. The earlier `language`

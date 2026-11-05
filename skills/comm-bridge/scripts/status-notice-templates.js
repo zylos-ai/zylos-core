@@ -15,6 +15,12 @@ const DEFAULTS = {
     en: 'The service is temporarily unavailable. Please try again later.',
   },
 };
+const CAPACITY_TEMPLATES = {
+  memory_low: {
+    zh: '这台机器内存快用完了，运行可能变慢或不稳定；如果经常出现，请考虑给这台机器增加内存。',
+    en: 'This machine is almost out of memory, so things may slow down or become unstable. If this happens often, consider adding memory to this machine.',
+  },
+};
 const SUFFIXES = {
   inbound: {
     zh: '本条消息已收到，但未进入处理队列。',
@@ -59,20 +65,24 @@ function formatResetTime(resetAt, requestedZone) {
 export function messageForStatus({ health, reason, noticeCode, resetAt, context = 'inbound' } = {}, config = readZylosConfigOrThrow().statusNotices ?? {}) {
   config = config && typeof config === 'object' ? config : {};
   const category = Object.hasOwn(DEFAULTS, noticeCode) ? noticeCode : Object.hasOwn(DEFAULTS, health) ? health : 'unavailable';
-  const mode = context === 'failure' ? 'failure' : 'inbound';
+  const mode = context === 'capacity' && Object.hasOwn(CAPACITY_TEMPLATES, noticeCode)
+    ? 'capacity' : context === 'failure' ? 'failure' : 'inbound';
   const brand = validText(config.brand, 80) && !/[\r\n]/.test(config.brand) ? config.brand.trim() : 'Zylos';
   const now = Date.now();
   const validReset = Number.isSafeInteger(resetAt) && resetAt > now && resetAt - now <= 8 * 86400000;
   const resetText = validReset ? formatResetTime(resetAt,config.timeZone) : null;
-  let code = Object.hasOwn(NOTICE_TEMPLATES,noticeCode) ? noticeCode : null;
+  let code = mode === 'capacity' ? noticeCode : Object.hasOwn(NOTICE_TEMPLATES,noticeCode) ? noticeCode : null;
   if (code === 'quota_exhausted_reset' && !resetText) code = 'quota_exhausted';
   // Codes and times come from structured, trusted classification. Free-form
   // reason text is never used as content or interpreted as a template ID.
   return ['zh','en'].map(locale => {
     const override = config.templates?.[mode]?.[code || category]?.[locale];
-    const description = code ? NOTICE_TEMPLATES[code][locale] : (mode === 'failure' ? FAILURE_REASONS : DEFAULTS)[category][locale];
-    const safeOverride = validText(override,2000) && (!override.includes('{resetAt}') || (code === 'quota_exhausted_reset' && resetText));
-    const body = safeOverride ? override.trim() : `${description}${locale === 'en' ? ' ' : ''}${SUFFIXES[mode][locale]}`;
+    const description = mode === 'capacity' ? CAPACITY_TEMPLATES[code][locale]
+      : code ? NOTICE_TEMPLATES[code][locale] : (mode === 'failure' ? FAILURE_REASONS : DEFAULTS)[category][locale];
+    const safeOverride = validText(override,2000) &&
+      (!override.includes('{resetAt}') || (code === 'quota_exhausted_reset' && resetText));
+    const body = safeOverride ? override.trim() : mode === 'capacity' ? description
+      : `${description}${locale === 'en' ? ' ' : ''}${SUFFIXES[mode][locale]}`;
     const rendered = code === 'quota_exhausted_reset' ? body.replaceAll('{resetAt}',resetText) : body;
     return `[${brand}] ${rendered}`;
   }).join('\n');

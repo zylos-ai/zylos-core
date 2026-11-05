@@ -224,6 +224,7 @@ export class SupervisorLifecycle {
     const fresh = await this.observe(scene.sessionGroup, context);
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return false;
     await this.checkReclaimDependencies(fresh, context);
+    if (reason === 'evict' && !(await this.evictionCandidates([fresh], context)).length) return false;
     if (!await this.beforeWrite(scene.sessionGroup, context)) return false;
     await this.d.db.setDrainFence(scene.sessionGroup, { reason, runId: scene.runId });
     const saved = await this.d.db.getDrainFence(scene.sessionGroup);
@@ -360,21 +361,32 @@ export class SupervisorLifecycle {
     const fences = context.fences;
     const demand = evictionDemand(await this.d.db.listSlotOccupancy(), await this.d.db.listPendingSessionGroups(), fences, context.configuration.capacity);
     if (!demand.need) return demand;
-    const candidates = [];
-    const now = this.now(), minIdle = (context.configuration.evictMinIdleSeconds ?? 300) * 1000;
-    for (const scene of scenes) {
-      if (!scene.present || !scene.ready || !scene.sessionGroup || scene.sessionGroup === 'origin' || scene.state !== 'idle' || fences.some(f => f.sessionGroup === scene.sessionGroup)) continue;
-      const last = await this.lastActivity(scene);
-      if (now - last < minIdle) continue;
-      candidates.push({ ...scene, last });
-    }
-    candidates.sort((a, b) => a.last - b.last || a.sessionGroup.localeCompare(b.sessionGroup));
+    const candidates = await this.evictionCandidates(scenes, context);
     let selected = 0;
     for (const scene of candidates) {
       if (selected >= demand.need) break;
       if (await this.beginReclaim(scene, 'evict', context)) selected++;
     }
     return { ...demand, selected };
+  }
+
+  async evictionCandidates(scenes, context) {
+    const candidates = [], now = this.now(), minIdle = (context.configuration.evictMinIdleSeconds ?? 300) * 1000;
+    for (const scene of scenes) {
+      if (scene.observationError) throw scene.observationError;
+      if (!scene.present || !scene.ready || !scene.sessionGroup || scene.sessionGroup === 'origin' || scene.state !== 'idle' || context.fences.some(f => f.sessionGroup === scene.sessionGroup)) continue;
+      const last = await this.lastActivity(scene);
+      if (now - last < minIdle) continue;
+      candidates.push({ ...scene, last });
+    }
+    return candidates.sort((a, b) => a.last - b.last || a.sessionGroup.localeCompare(b.sessionGroup));
+  }
+
+  async checkCapacityPressure(context) {
+    if (context.fences.some(fence => fence.sessionGroup !== 'origin' && CAPACITY_REASONS.has(fence.reason))) return null;
+    const [candidate] = await this.evictionCandidates(context.scenes, context);
+    if (!candidate) return null;
+    return await this.beginReclaim(candidate, 'evict', context) ? candidate : null;
   }
 
   async checkRotation(scene, context) {
