@@ -12,11 +12,12 @@ import { tmuxNameForGroup } from '../../../../cli/lib/session-group-paths.js';
 const worker = fileURLToPath(new URL('./helpers/router-crash-worker.js', import.meta.url));
 const boundaries = ['claimed', 'reserved', 'old-controls-expired', 'scene-created', 'ready-published', 'startup-controls-delivered', 'business-pasted'];
 
-function startWorker(directory, phase, boundary) {
-  const child = spawn(process.execPath, [worker, directory, phase, boundary], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+function startWorker(directory, phase, boundary, signal) {
+  const child = spawn(process.execPath, [worker, directory, phase, boundary], { signal, killSignal: 'SIGKILL', stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   let stderr = '';
-  child.stderr.on('data', chunk => { stderr += chunk; });
-  const exited = once(child, 'exit');
+  child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4096); });
+  child.on('error', error => { stderr = (stderr + `${error.name}: ${error.message}`).slice(-4096); });
+  const exited = new Promise(resolve => child.once('close', (code, signal) => resolve([code, signal])));
   return { child, exited, stderr: () => stderr };
 }
 async function deadline(promise, label) {
@@ -36,6 +37,10 @@ async function waitBarrier(filename, processState) {
   return JSON.parse(fs.readFileSync(filename, 'utf8'));
 }
 
+// Process boundary: persistent occupancy survives seven Router SIGKILL windows.
+// Run for admission/restart changes; skip unrelated UI. Official isolated
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, private SQLite and injected scene I/O;
+// no tmux, real runtime or network. Abort kills children; finally awaits close.
 for (const boundary of boundaries) {
   test(`process SIGKILL and restart after ${boundary}`, { timeout: 15000 }, async t => {
     const now = 1800000000000;
@@ -50,13 +55,16 @@ for (const boundary of boundaries) {
     const children = [];
     // Ensure child cleanup precedes the fixture's database/directory cleanup.
     try {
-      const crashed = startWorker(directory, 'crash', boundary); children.push(crashed);
+      const crashed = startWorker(directory, 'crash', boundary, t.signal); children.push(crashed);
       assert.deepEqual(await waitBarrier(path.join(directory, 'barrier.json'), crashed), { name: boundary, pid: crashed.child.pid });
       assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').get(row.id).status, 'running');
+      const slotBeforeKill=f.store.listSlotOccupancy();
+      assert.equal(slotBeforeKill.length,1);assert.equal(slotBeforeKill[0].state,'running');
       assert.equal(crashed.child.kill('SIGKILL'), true);
       assert.deepEqual(await crashed.exited, [null, 'SIGKILL']);
+      assert.deepEqual(f.store.listSlotOccupancy(),slotBeforeKill);
       const before = JSON.parse(fs.readFileSync(path.join(directory, 'scene.json'), 'utf8'));
-      const restarted = startWorker(directory, 'restart', boundary); children.push(restarted);
+      const restarted = startWorker(directory, 'restart', boundary, t.signal); children.push(restarted);
       const initialized = await deadline(Promise.race([
         once(restarted.child, 'message').then(([message]) => message),
         restarted.exited.then(result => { throw Error(`restart exited ${result}: ${restarted.stderr()}`); }),
@@ -75,6 +83,8 @@ for (const boundary of boundaries) {
       assert.equal(events.some(x => ['duplicate-launch', 'unexpected-stop'].includes(x.event)), false);
       assert.equal(events.filter(x => x.event === 'launch').length, 1, 'existing scene is never launched twice');
       if (before.a) assert.equal(scene.a.runId, before.a.runId, 'restart adopts the persisted run');
+      assert.equal(events.filter(x=>x.event==='orphan-pruned').length,before.a?0:1);
+      assert.equal(f.store.listSlotOccupancy().length,1);
       const ready = events.find(x => x.event === 'ready');
       assert.ok(ready);
       const recoveryIndex = events.findIndex(x => x.event === 'control' && x.id === ready.recoveryId);

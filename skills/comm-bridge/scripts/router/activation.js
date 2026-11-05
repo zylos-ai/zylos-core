@@ -37,7 +37,7 @@ export function createActivationManager(context) {
     const resident = group === null || group === 'origin';
     if (state.activations.has(group)) return;
     let requestRuntime;
-    let token;
+    let token, slot, runId;
     try {
       if (resident) {
         if (deps.db.getDrainFence('*') !== null || (group !== null && deps.db.getDrainFence(group) !== null)) {
@@ -49,16 +49,21 @@ export function createActivationManager(context) {
       }
       const launchConfig = deps.db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: state.mode });
       if (group === null) await deps.prepareSingle(launchConfig.runtime);
-      let runId;
       if (!resident) {
         const health = deps.readRuntimeHealth(launchConfig.runtime);
         if (!health.missing && !health.unreadable && health.health === 'auth_failed') { wait(group, 'auth_blocked'); return; }
+        const before = await deps.readLiveIdentity(group);
+        state.live.set(group, before);
+        if (before.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) return;
+        runId = uuid();
+        slot = deps.db.takeSlot(group, { runId, k: options.poolSize });
+        context.refreshSlots();
+        if (!slot.taken) return;
         if (!health.missing && !health.unreadable && restricted.has(health.health) && !hasRuntime(launchConfig.runtime)) {
           requestRuntime = launchConfig.runtime;
           if (requests.has(requestRuntime) || uncertain.get(requestRuntime) === state.round) return;
           // Claim the runtime's single-flight position before submit can yield.
           token = {}; requests.set(requestRuntime, token);
-          runId = uuid();
           const request = { version: 1, type: 'start_attempt', requestId: requestId(), runtime: requestRuntime, sessionGroup: group, runId };
           let result;
           try { result = await deps.submit(request); }
@@ -76,11 +81,11 @@ export function createActivationManager(context) {
             return;
           }
         }
-        // A grant belongs only to this candidate. Re-observe before claiming;
-        // capacity is checked again synchronously with reservation below.
+        // A grant belongs only to this candidate. Its occupancy is already reserved;
+        // re-observe identity and the pending head before claiming.
         const live = await deps.readLiveIdentity(group);
         state.live.set(group, live);
-        if (live.present || context.availableCapacity() <= 0) return;
+        if (live.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) return;
         const current = deps.db.getNextPending({ sessionGroups: [group] });
         if (!current || current.id !== candidate.id) return;
         if (deps.db.expirePending(current.id, options.pendingMaxAgeSeconds)) {
@@ -95,8 +100,9 @@ export function createActivationManager(context) {
       }
       runId ??= uuid();
       const activation = { group, runId, launchConfig, startedAt: now(), message: candidate ?? null,
-        resident, launchStarted: false, launchSettled: false, launchError: null };
+        resident, slotPrior: slot?.prior, slotTaken: slot?.taken === true, launchStarted: false, launchSettled: false, launchError: null };
       state.activations.set(group, activation);
+      slot = null; // The activation now owns release/convergence.
       if (!resident) context.releaseOpportunity(group);
       if (resident) { state.resident.failures++; state.resident.absentSince = null; state.resident.readySince = null; }
       try {
@@ -115,6 +121,7 @@ export function createActivationManager(context) {
       activation.launchSettled = true;
       if (activation.launchError?.code === 'NAME_CONFLICT') {
         if (candidate) deps.db.requeueConversation(candidate.id);
+        releaseSlot(activation);
         state.activations.delete(group);
         diagnostic('launch_name_conflict', { session_group: group, runId, conversation_id: candidate?.id ?? null });
         return;
@@ -127,12 +134,15 @@ export function createActivationManager(context) {
       if (activation && !activation.launchStarted) { activation.launchError = error; activation.launchSettled = true; }
     } finally {
       if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
+      if (slot?.taken && !state.activations.has(group)) {
+        deps.db.releaseSlot(group, { runId, prior: slot.prior }); context.refreshSlots();
+      }
     }
   }
 
   async function beginContinuation(group, candidate) {
     if (state.activations.has(group) || group === null || group === 'origin') return;
-    let requestRuntime, token, activation;
+    let requestRuntime, token, activation, slot, runId;
     let opportunity = false;
     try {
       if (deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) { context.deferOpportunity(group); return; }
@@ -148,10 +158,14 @@ export function createActivationManager(context) {
       if (!current || current.controlId !== candidate.controlId) return;
       opportunity = context.acquireOpportunity(group, { id: current.controlId, continuation: true });
       if (!opportunity) return;
-      const runId = uuid();
+      runId = uuid();
+      slot = deps.db.takeSlot(group, { runId, k: options.poolSize });
+      context.refreshSlots();
+      if (!slot.taken) return;
       activation = { group, runId, launchConfig, startedAt: now(), message: null,
-        resident: false, continuation: true, launchStarted: false, launchSettled: false, launchError: null };
+        resident: false, continuation: true, slotTaken: true, slotPrior: slot.prior, launchStarted: false, launchSettled: false, launchError: null };
       state.activations.set(group, activation);
+      slot = null; // The activation now owns release/convergence.
       context.releaseOpportunity(group); opportunity = false;
       if (!health.missing && !health.unreadable && restricted.has(health.health) && !hasRuntime(launchConfig.runtime)) {
         requestRuntime = launchConfig.runtime;
@@ -172,7 +186,7 @@ export function createActivationManager(context) {
       }
       const latest = await deps.readLiveIdentity(group);
       state.live.set(group, latest);
-      if (latest.present || context.availableCapacity(group) <= 0 || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null || deps.db.getNextPending({ sessionGroups: [group] })) return;
+      if (latest.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null || deps.db.getNextPending({ sessionGroups: [group] })) return;
       if (deps.db.listPendingContinuations().find(row => row.sessionGroup === group)?.controlId !== candidate.controlId) return;
       for (const row of deps.db.expirePendingControls({ sessionGroup: group, keepContinuation: true })) diagnostic('control_expired', { session_group: group, control_id: row.id });
       activation.launchStarted = true;
@@ -189,17 +203,32 @@ export function createActivationManager(context) {
     } finally {
       if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
       if (opportunity) context.releaseOpportunity(group);
+      if (slot?.taken && !activation) {
+        deps.db.releaseSlot(group, { runId, prior: slot.prior }); context.refreshSlots();
+      }
       if (activation && !activation.launchStarted && state.activations.get(group) === activation) {
-        state.activations.delete(group); context.releaseOpportunity(group);
+        releaseSlot(activation); state.activations.delete(group); context.releaseOpportunity(group);
       }
     }
   }
 
+  function releaseSlot(activation) {
+    if (!activation.slotTaken) return;
+    deps.db.releaseSlot(activation.group, { runId: activation.runId, prior: activation.slotPrior });
+    activation.slotTaken = false; context.refreshSlots();
+  }
+
   async function advance(group) {
     const activation = state.activations.get(group);
-    if (!activation || !activation.launchSettled) return;
+    if (!activation) return;
+    // Failed prelaunch cleanup retains ownership so a later round can retry it.
+    if (!activation.launchStarted && !activation.launchSettled) {
+      releaseSlot(activation); state.activations.delete(group); return;
+    }
+    if (!activation.launchSettled) return;
     if (activation.launchError?.code === 'NAME_CONFLICT') {
       if (activation.message) deps.db.requeueConversation(activation.message.id);
+      releaseSlot(activation);
       state.activations.delete(group);
       if (activation.continuation) context.continuationRestarts.failed(group, activation.runId);
       return;
@@ -216,6 +245,12 @@ export function createActivationManager(context) {
       await deps.getSessionAdapter(activation.launchConfig.runtime).stop({
         tmuxName: context.tmuxName(group), expectedRunId: activation.runId,
       });
+      if (activation.slotTaken) {
+        const after = await deps.readLiveIdentity(group);
+        state.live.set(group, after);
+        const gone = after?.present === false || (after?.present === true && typeof after.runId === 'string' && after.runId.length > 0 && after.runId !== activation.runId);
+        if (!gone) throw new Error('Target absence is not confirmed');
+      }
     } catch (error) {
       // Before the deadline, a failed observation is only a transient read
       // failure. At convergence it means termination cannot be confirmed.
@@ -224,6 +259,7 @@ export function createActivationManager(context) {
       deps.alert?.('stop_unconfirmed', { sessionGroup: group, runId: activation.runId });
       return;
     }
+    releaseSlot(activation);
     if (activation.message) deps.db.failDelivery(activation.message.id, { maxRetries: options.maxRetries });
     state.activations.delete(group);
     state.live.delete(group); // Observation must be refreshed, never fabricate READY.

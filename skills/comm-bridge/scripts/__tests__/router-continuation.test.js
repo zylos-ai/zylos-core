@@ -181,8 +181,8 @@ test('restart counters throttle repeated launch failure alerts for thirty minute
 
 for (const blocked of ['group_fence', 'auth_failed', 'backoff']) {
   test(`earlier ${blocked} continuation does not starve a later eligible continuation`, async t => {
-    const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
-    continuation(f, 'a'); f.advance(1000); continuation(f, 'b');
+    const f = routerFixture(t, { poolSize: blocked === 'backoff' ? 2 : 1 }); f.put('origin');
+    continuation(f, 'a'); f.advance(1000); if (blocked !== 'backoff') continuation(f, 'b');
     const resolve = f.db.resolveSessionLaunchConfig;
     f.db.resolveSessionLaunchConfig = input => input.sessionGroup === 'a' ? { runtime: 'codex', mode: 'default' } : resolve(input);
     if (blocked === 'group_fence') f.db.setDrainFence('a', { reason: 'ttl', runId: 'old-run' });
@@ -192,6 +192,7 @@ for (const blocked of ['group_fence', 'auth_failed', 'backoff']) {
       f.advance(5000); await f.rounds(5);
       const runId = f.scene.get('a').runId;
       f.scene.delete('a'); f.db.recordRunEnd('a', { runId, reason: 'unexpected' });
+      continuation(f, 'b');
       await f.rounds(2); f.advance(5000); await f.rounds(5);
       assert.equal(calls(f, 'launch').filter(row => row[1].sessionGroup === 'b').length, 1);
     } else { await readyToStart(f); assert.deepEqual(calls(f, 'launch').map(row => row[1].sessionGroup), ['b']); }
@@ -221,13 +222,13 @@ for (const changed of ['fence','scene','capacity','control','inbound']) {
     assert.ok(request);
     if (changed === 'fence') f.db.setDrainFence('a', { reason: 'ttl', runId: 'old-run' });
     if (changed === 'scene') f.put('a');
-    if (changed === 'capacity') { f.put('occupied', { runtime: 'codex' }); f.router.tick(); await flush(); await flush(); }
+    if (changed === 'capacity') assert.deepEqual(f.db.takeSlot('occupied', {runId:'competitor', k:1}), {taken:false, reason:'full'});
     if (changed === 'control') f.sqlite.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(id);
     if (changed === 'inbound') f.add('a');
     hold.resolve({ kind: 'accepted', reply: { ...request, ok: true, result: 'not_restricted' } });
     await f.router.idle();
-    assert.equal(calls(f, 'launch').length, 0);
-    assert.equal(f.router.state.activations.size, 0);
+    assert.equal(calls(f, 'launch').length, changed === 'capacity' ? 1 : 0);
+    assert.equal(f.router.state.activations.size, changed === 'capacity' ? 1 : 0);
     assert.equal(f.db.getControlById(id).status, changed === 'control' ? 'done' : 'pending');
   });
 }

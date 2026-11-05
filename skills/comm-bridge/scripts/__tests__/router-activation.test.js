@@ -10,7 +10,7 @@ test('restricted admission precedes claim and preserves one launchConfig/runId',
   const f = routerFixture(t); f.put('origin', { runtime: 'codex' }); const row = f.add('a');
   f.health.set('claude', { health: 'unavailable' });
   const submit = f.deps.submit;
-  f.deps.submit = request => { assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.router.availableCapacity(), 2); return submit(request); };
+  f.deps.submit = request => { assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.router.availableCapacity(), 1); assert.equal(f.db.listSlotOccupancy()[0].runId, request.runId); return submit(request); };
   const router = f.create(); await router.initialize(); await f.rounds(5);
   assert.equal(calls(f,'submit').length, 1); assert.equal(calls(f,'launch').length, 1);
   assert.equal(calls(f,'launch')[0][1].runId, calls(f,'submit')[0][1].runId);
@@ -37,7 +37,7 @@ test('same runtime single-flight, independent runtime advances, U suppresses cur
   assert.equal(calls(f,'launch').length, 0);
 });
 
-test('admission reply is discarded if candidate, capacity or scene changed', async t => {
+test('admission rechecks candidate and scene while its reserved slot excludes competitors', async t => {
   for (const change of ['fence','capacity','scene','candidate']) {
     await t.test(change, async t => {
       const f = routerFixture(t, { poolSize: 1 }); f.put('origin', { runtime: 'codex' }); const row = f.add('a');
@@ -45,12 +45,12 @@ test('admission reply is discarded if candidate, capacity or scene changed', asy
       f.deps.submit = async value => { request = value; return hold.promise; };
       const router = f.create(); await router.initialize(); await pump(f, 2); assert.ok(request);
       if (change === 'fence') f.db.setDrainFence('a', { reason: 'ttl', runId: 'other' });
-      if (change === 'capacity') { f.put('b'); await pump(f, 2); }
+      if (change === 'capacity') assert.deepEqual(f.db.takeSlot('b', {runId:'competing', k:1}), {taken:false, reason:'full'});
       if (change === 'scene') f.put('a');
       if (change === 'candidate') f.db.claimConversation(row.id);
       hold.resolve({ kind: 'accepted', sent: true, reply: { ...request, ok: true, result: 'not_restricted' } });
-      await router.idle(); assert.equal(calls(f,'launch').length, 0);
-      assert.equal(f.row(row.id).status, change === 'candidate' ? 'running' : 'pending');
+      await router.idle(); assert.equal(calls(f,'launch').length, change === 'capacity' ? 1 : 0);
+      assert.equal(f.row(row.id).status, ['candidate','capacity'].includes(change) ? 'running' : 'pending');
     });
   }
 });
@@ -145,9 +145,9 @@ test('timeout observation failures alert and retain the running row and reservat
   assert.equal(router.state.activations.has('a'), false);
 });
 
-// / the one fresh post-launch read decides timeout convergence.
+// Timeout reads once before stop and confirms absence afterward before release.
 for (const ready of [false, true]) {
-  test(`timeout takes one fresh observation; READY=${ready}`, async t => {
+  test(`timeout observes readiness and confirms stopped absence; READY=${ready}`, async t => {
     const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
     const row = f.add('a'), launch = deferred();
     const adapter = f.deps.getSessionAdapter;
@@ -161,7 +161,7 @@ for (const ready of [false, true]) {
     const read = f.deps.readLiveIdentity; let reads = 0;
     f.deps.readLiveIdentity = async group => { if (group === 'a') reads++; return read(group); };
     launch.resolve(); await router.idle();
-    assert.equal(reads, 1);
+    assert.equal(reads, ready ? 1 : 2);
     assert.equal(calls(f, 'stop').length, ready ? 0 : 1);
     assert.equal(f.row(row.id).retry_count, ready ? 0 : 1);
     assert.equal(router.state.activations.has('a'), ready);
