@@ -63,6 +63,51 @@ for (const blocked of ['group_fence','global_fence','auth_failed','scene']) {
   });
 }
 
+// Real Router/Store with injected health, clock, scene and transport. Run for
+// authentication recovery or marker clearing changes; skip unrelated UI changes.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR. Private
+// SQLite and Router are fixture-owned; no runtime/tmux/PM2/network is invoked.
+test('authentication recovery launches a pending group and readiness clears its marker', async t => {
+  const f = routerFixture(t); f.put('origin', { runtime: 'codex' }); continuation(f);
+  f.health.set('claude', { health: 'auth_failed' });
+  const adapter = f.deps.getSessionAdapter;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    f.calls.push(['launch', input]);
+    f.put(input.sessionGroup, { runId: input.runId, ready: false });
+  } });
+  await initialize(f); await readyToStart(f);
+  assert.equal(calls(f, 'launch').length, 0);
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
+  f.health.set('claude', { health: 'ok' });
+  await readyToStart(f);
+  assert.equal(calls(f, 'launch').length, 1);
+  const runId = calls(f, 'launch')[0][1].runId;
+  assert.notEqual(runId, 'old-run');
+  assert.equal(f.scene.get('a').ready, false);
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
+  f.put('a', { runId, ready: true }); await f.rounds(3);
+  assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 0);
+  assert.equal(f.events.filter(e => e.event === 'continuation_cleared' && e.session_group === 'a' && e.runId === runId).length, 1);
+  assert.equal(calls(f, 'launch').length, 1);
+});
+
+// Real Router/Store with a ready Origin and a persisted zero marker. Run for
+// Origin pending checks or clear timing; skip unrelated launch/delivery changes.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR; fixture
+// teardown stops Router and closes private SQLite. No external I/O is invoked.
+test('a ready Origin with a zero marker never calls continuation clearing', async t => {
+  const f = routerFixture(t);
+  f.db.recordRunEnd('origin', { runId: 'old-origin', reason: 'ttl' });
+  f.put('origin', { runId: 'new-origin', ready: true });
+  assert.equal(f.db.listRunEndings(['origin'])[0].continuationPending, 0);
+  const clear = f.db.clearContinuation; let clears = 0;
+  f.db.clearContinuation = (...args) => { clears++; return clear(...args); };
+  await initialize(f); await f.rounds(6);
+  assert.equal(clears, 0);
+  assert.equal(f.db.listRunEndings(['origin'])[0].continuationPending, 0);
+  assert.equal(calls(f, 'launch').length, 0);
+});
+
 for (const health of ['rate_limited', 'unavailable', 'recovering', 'down']) {
   test(`continuation uses restricted admission for ${health} with the reserved run identity`, async t => {
     const f = routerFixture(t, { poolSize: 1 }); f.put('origin', { runtime: 'codex' }); continuation(f);
