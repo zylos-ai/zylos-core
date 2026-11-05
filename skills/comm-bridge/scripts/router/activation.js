@@ -85,7 +85,7 @@ export function createActivationManager(context) {
         // re-observe identity and the pending head before claiming.
         const live = await deps.readLiveIdentity(group);
         state.live.set(group, live);
-        if (live.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) return;
+        if (live.present) return;
         const current = deps.db.getNextPending({ sessionGroups: [group] });
         if (!current || current.id !== candidate.id) return;
         if (deps.db.expirePending(current.id, options.pendingMaxAgeSeconds)) {
@@ -245,12 +245,6 @@ export function createActivationManager(context) {
       await deps.getSessionAdapter(activation.launchConfig.runtime).stop({
         tmuxName: context.tmuxName(group), expectedRunId: activation.runId,
       });
-      if (activation.slotTaken) {
-        const after = await deps.readLiveIdentity(group);
-        state.live.set(group, after);
-        const gone = after?.present === false || (after?.present === true && typeof after.runId === 'string' && after.runId.length > 0 && after.runId !== activation.runId);
-        if (!gone) throw new Error('Target absence is not confirmed');
-      }
     } catch (error) {
       // Before the deadline, a failed observation is only a transient read
       // failure. At convergence it means termination cannot be confirmed.

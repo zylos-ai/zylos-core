@@ -67,10 +67,13 @@ test('failed inbound claim restores a retained row without launching',async t=>{
  await start(f);assert.deepEqual(f.db.listSlotOccupancy(),[prior]);assert.equal(launches(f).length,0);
 });
 
-test('unconfirmed termination retains startup occupancy until absence is observed',async t=>{
- const f=routerFixture(t,{poolSize:1,readyTimeoutMs:1000});f.add('b');
- f.deps.getSessionAdapter=()=>({launch:async input=>{f.put(input.sessionGroup,{runId:input.runId,ready:false});},stop:async()=>{}});
+test('unconfirmed adapter stop retains startup occupancy until stop succeeds',async t=>{
+ const f=routerFixture(t,{poolSize:1,readyTimeoutMs:1000});const message=f.add('b');
+ f.deps.getSessionAdapter=()=>({launch:async input=>{f.put(input.sessionGroup,{runId:input.runId,ready:false});},stop:async()=>{if(f.scene.has('b'))throw Object.assign(new Error('stop unconfirmed'),{code:'STOP_UNCONFIRMED'});}});
  await start(f);f.advance(1000);await f.rounds(2);assert.equal(f.db.listSlotOccupancy()[0].state,'running');
+ assert.equal(f.row(message.id).status,'running');assert.equal(f.row(message.id).retry_count,0);
+ assert.ok(f.events.some(row=>row.event==='stop_unconfirmed'&&row.reason==='STOP_UNCONFIRMED'));
+ assert.ok(f.calls.some(row=>row[0]==='alert'&&row[1]==='stop_unconfirmed'));
  f.scene.delete('b');f.db.claimConversation=()=>false;await f.rounds(3);assert.equal(f.db.listSlotOccupancy().length,0);
 });
 
@@ -112,16 +115,16 @@ test('authentication recovery gives expired reservation to inbound while retaini
  assert.equal(f.db.listSlotOccupancy().length,2);assert.equal(f.db.listPendingContinuations().some(row=>row.sessionGroup==='a'),true);
 });
 
-test('unknown post-stop observation retains occupancy until target absence is confirmed',async t=>{
- const f=routerFixture(t,{poolSize:1,readyTimeoutMs:1000});f.add('b');let stopped=false,unknown=true;
- const read=f.deps.readLiveIdentity;
- f.deps.readLiveIdentity=async group=>group==='b'&&stopped&&unknown?{present:null}:read(group);
- f.deps.getSessionAdapter=()=>({launch:async input=>f.put(input.sessionGroup,{runId:input.runId,ready:false}),stop:async()=>{stopped=true;f.scene.delete('b');}});
+test('an adapter stop timeout retains occupancy and the running message until retry succeeds',async t=>{
+ const f=routerFixture(t,{poolSize:1,readyTimeoutMs:1000});const message=f.add('b');let unconfirmed=true;
+ f.deps.getSessionAdapter=()=>({launch:async input=>f.put(input.sessionGroup,{runId:input.runId,ready:false}),stop:async()=>{if(unconfirmed)throw Object.assign(new Error('stop timed out'),{code:'TMUX_TIMEOUT'});f.scene.delete('b');}});
  await start(f);f.advance(1000);await f.rounds(2);
  assert.equal(f.db.listSlotOccupancy().length,1);
  assert.equal(f.router.state.activations.has('b'),true);
  assert.ok(f.calls.some(row=>row[0]==='alert'&&row[1]==='stop_unconfirmed'));
- unknown=false;f.db.claimConversation=()=>false;await f.rounds(2);
+ assert.equal(f.row(message.id).status,'running');assert.equal(f.row(message.id).retry_count,0);
+ assert.ok(f.events.some(row=>row.event==='stop_unconfirmed'&&row.reason==='TMUX_TIMEOUT'));
+ unconfirmed=false;f.db.claimConversation=()=>false;await f.rounds(2);
  assert.equal(f.db.listSlotOccupancy().length,0);
 });
 
@@ -141,13 +144,6 @@ test('failed release is retried by the next round without losing its retained de
  await f.rounds(1);assert.equal(attempts,2);assert.deepEqual(f.db.listSlotOccupancy(),prior);assert.equal(f.router.state.activations.has('b'),false);
 });
 
-test('a known replacement run after stop releases the old startup occupancy',async t=>{
- const f=routerFixture(t,{poolSize:1,readyTimeoutMs:1000});f.add('b');let stops=0;
- f.deps.getSessionAdapter=()=>({launch:async input=>f.put(input.sessionGroup,{runId:input.runId,ready:false}),stop:async()=>{stops++;f.scene.set('b',f.identity('b',{runId:'replacement-run',ready:false,createdAt:f.now()/1000+60}));}});
- await start(f);f.advance(1000);await f.rounds(1);
- assert.equal(stops,1);assert.equal(f.db.listSlotOccupancy().length,0);assert.equal(f.router.state.activations.has('b'),false);
-});
-
 test('an absent running owner does not occupy the queue head ahead of a rowless group',async t=>{
  const f=routerFixture(t,{poolSize:2});f.db.takeSlot('x',{runId:'missing-x',k:2});f.add('x');f.add('y');
  await start(f);assert.deepEqual(launches(f).map(row=>row[1].sessionGroup),['y']);
@@ -161,12 +157,13 @@ for(const trigger of ['inbound','continuation'])test(`a full transaction rejects
  assert.ok(takes>0,'transaction must actually be reached');assert.equal(launches(f).length,0);assert.equal(f.db.listSlotOccupancy().length,0);
 });
 
-for(const fence of ['b','*'])test(`a ${fence==='*'?'global':'group'} fence appearing during identity read prevents taking occupancy`,async t=>{
- const f=routerFixture(t,{poolSize:1});held(f);f.add('b');const prior=f.db.listSlotOccupancy();let activationRead=false,introduced=false,takes=0;
- const resolve=f.db.resolveSessionLaunchConfig;f.db.resolveSessionLaunchConfig=input=>{if(input.sessionGroup==='b')activationRead=true;return resolve(input);};
- const read=f.deps.readLiveIdentity;f.deps.readLiveIdentity=async group=>{const identity=await read(group);if(group==='b'&&activationRead&&!introduced){await Promise.resolve();introduced=true;if(fence==='*')f.db.setDrainFence('*');else f.db.setDrainFence('b',{reason:'ttl',runId:'old-b'});}return identity;};
- const take=f.db.takeSlot;f.db.takeSlot=(...args)=>{takes++;return take(...args);};
- await start(f);assert.equal(introduced,true);assert.equal(takes,0);assert.equal(launches(f).length,0);assert.deepEqual(f.db.listSlotOccupancy(),prior);
+for(const fence of ['b','*'])test(`a ${fence==='*'?'global':'group'} fence appearing during the preclaim identity read returns occupancy without claiming`,async t=>{
+ const f=routerFixture(t,{poolSize:1});held(f);f.add('b');const prior=f.db.listSlotOccupancy();let introduced=false,takes=0,releases=0;const message=f.db.getNextPending({sessionGroups:['b']});
+ const read=f.deps.readLiveIdentity;f.deps.readLiveIdentity=async group=>{const identity=await read(group);if(group==='b'&&takes>0&&!introduced){await Promise.resolve();introduced=true;if(fence==='*')f.db.setDrainFence('*');else f.db.setDrainFence('b',{reason:'ttl',runId:'old-b'});}return identity;};
+ const take=f.db.takeSlot,release=f.db.releaseSlot;f.db.takeSlot=(...args)=>{takes++;return take(...args);};
+ f.db.releaseSlot=(...args)=>{releases++;return release(...args);};
+ await start(f);assert.equal(introduced,true);assert.equal(takes,1);assert.equal(releases,1);assert.equal(launches(f).length,0);assert.deepEqual(f.db.listSlotOccupancy(),prior);
+ assert.equal(f.row(message.id).status,'pending');assert.equal(f.row(message.id).retry_count,0);
 });
 
 for(const trigger of ['inbound','continuation'])test(`unobservable session listing blocks ${trigger} from taking its retained row`,async t=>{

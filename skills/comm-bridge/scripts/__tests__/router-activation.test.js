@@ -145,9 +145,9 @@ test('timeout observation failures alert and retain the running row and reservat
   assert.equal(router.state.activations.has('a'), false);
 });
 
-// Timeout reads once before stop and confirms absence afterward before release.
+// Timeout reads readiness once; adapter.stop success authorizes release.
 for (const ready of [false, true]) {
-  test(`timeout observes readiness and confirms stopped absence; READY=${ready}`, async t => {
+  test(`timeout observes readiness and uses the adapter stop result; READY=${ready}`, async t => {
     const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
     const row = f.add('a'), launch = deferred();
     const adapter = f.deps.getSessionAdapter;
@@ -161,7 +161,7 @@ for (const ready of [false, true]) {
     const read = f.deps.readLiveIdentity; let reads = 0;
     f.deps.readLiveIdentity = async group => { if (group === 'a') reads++; return read(group); };
     launch.resolve(); await router.idle();
-    assert.equal(reads, ready ? 1 : 2);
+    assert.equal(reads, 1);
     assert.equal(calls(f, 'stop').length, ready ? 0 : 1);
     assert.equal(f.row(row.id).retry_count, ready ? 0 : 1);
     assert.equal(router.state.activations.has('a'), ready);
