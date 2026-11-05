@@ -22,7 +22,7 @@ for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_s
     const needed = ['upgrade', 'auth', 'model_config', 'manual_restart', 'unexpected'].includes(reason);
     assert.equal(ending.recorded, true);
     assert.equal(clockCalls, 1, 'record and instruction use the same transaction clock sample');
-    assert.deepEqual(store.listRunEndings(), [{ sessionGroup: 'test:group', runId: 'run1', reason, endedAt: clock, continuationControlId: ending.continuationControlId }]);
+    assert.deepEqual(store.listRunEndings(['test:group']), [{ sessionGroup: 'test:group', runId: 'run1', reason, endedAt: clock, continuationControlId: ending.continuationControlId }]);
     if (needed) {
       assert.notEqual(ending.continuationControlId, null);
       const row = control(db, ending.continuationControlId);
@@ -46,7 +46,7 @@ test('manual restart of Origin records the ending without creating a continuatio
   const ending = store.recordRunEnd('origin', { runId: 'manual-origin', reason: 'manual_restart' });
   assert.equal(ending.recorded, true);
   assert.equal(ending.continuationControlId, null);
-  assert.equal(store.listRunEndings()[0].reason, 'manual_restart');
+  assert.equal(store.listRunEndings(['origin'])[0].reason, 'manual_restart');
   assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
 });
 
@@ -61,8 +61,8 @@ test('repeated endings preserve records and controls while still clearing a matc
   store.setDrainFence('origin', { reason: 'manual_restart', runId: 'run1' });
   assert.deepEqual(store.recordRunEnd('origin', { runId: 'run1', reason: 'manual_restart', clearFence: { expectedReason: 'manual_restart', expectedRunId: 'run1' } }), { ...original, recorded: false });
   assert.equal(store.getDrainFence('origin'), null);
-  assert.equal(store.listRunEndings()[0].endedAt, clock);
-  assert.equal(store.listRunEndings()[0].reason, 'upgrade');
+  assert.equal(store.listRunEndings(['origin'])[0].endedAt, clock);
+  assert.equal(store.listRunEndings(['origin'])[0].reason, 'upgrade');
   assert.deepEqual(store.listPendingContinuations(), [], 'Origin continuation is handled by its existing need reader');
 });
 
@@ -76,7 +76,7 @@ test('new endings supersede pending duplicate instructions but retain delivered 
   const three = store.recordRunEnd('a', { runId: 'three', reason: 'model_config' });
   assert.equal(control(db, two.continuationControlId).status, 'done');
   assert.equal(control(db, three.continuationControlId).status, 'pending');
-  assert.equal(store.listRunEndings()[0].continuationControlId, three.continuationControlId);
+  assert.equal(store.listRunEndings(['a'])[0].continuationControlId, three.continuationControlId);
 });
 
 test('non-continuing endings retain only a still-pending instruction and update queue time', t => {
@@ -148,7 +148,7 @@ test('mode transition completion records are permitted while new continuations a
   assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 1);
   assert.equal(store.getDrainFence('a'), null);
   assert.deepEqual(store.recordRunEnd('b', { runId: 'b1', reason: 'auth' }), { recorded: true, continuationControlId: null });
-  assert.equal(store.listRunEndings().length, 2);
+  assert.equal(store.listRunEndings(['a', 'b']).length, 2);
 });
 
 test('pending continuation query filters terminal and deleted controls and sorts by control creation', t => {
@@ -166,7 +166,7 @@ test('pending continuation query filters terminal and deleted controls and sorts
   const before = snapshot(db);
   assert.deepEqual(store.listPendingContinuations().map(row => row.sessionGroup), ['a', 'b', 'z']);
   assert.deepEqual(Object.keys(store.listPendingContinuations()[0]), ['sessionGroup', 'controlId', 'createdAt', 'endedAt']);
-  assert.deepEqual(store.listRunEndings().map(row => row.sessionGroup), ['a', 'b', 'deleted', 'done', 'origin', 'superseded', 'timeout', 'z']);
+  assert.deepEqual(store.listRunEndings(entries.map(([group]) => group)).map(row => row.sessionGroup), ['a', 'b', 'deleted', 'done', 'origin', 'superseded', 'timeout', 'z']);
   assert.deepEqual(snapshot(db), before);
 });
 
@@ -190,21 +190,43 @@ test('activation expiration preserves only its current continuation within the u
   assert.deepEqual(store.listPendingContinuations(), []);
 });
 
+test('run-ending reads use one scoped query and exclude unrelated historical groups', t => {
+  const trace = [];
+  const { db, store } = fixture(t, { now: () => clock * 1000 }, false, { verbose: sql => trace.push(sql) });
+  for (const group of ['a', 'b', 'history', 'origin']) store.recordRunEnd(group, { runId: `run-${group}`, reason: 'ttl' });
+  const before = snapshot(db); trace.length = 0;
+  const result = store.listRunEndings(['b', 'absent', 'a', 'b']);
+  assert.deepEqual(result.map(row => row.sessionGroup), ['a', 'b']);
+  assert.equal(trace.length, 1);
+  assert.match(trace[0], /^SELECT .* FROM run_endings WHERE session_group IN \(/);
+  assert.deepEqual(Object.keys(result[0]), ['sessionGroup', 'runId', 'reason', 'endedAt', 'continuationControlId']);
+  assert.deepEqual(store.listRunEndings(['origin']).map(row => row.runId), ['run-origin']);
+  assert.deepEqual(store.listRunEndings(['absent']), []);
+  assert.deepEqual(snapshot(db), before);
+});
+
+test('run-ending reads reject empty scopes and invalid groups before reading the database', () => {
+  let reads = 0;
+  const store = createStore(() => { reads++; throw new Error('must not open'); });
+  for (const scope of [undefined, null, [], 'a', {}, ['a', null], [''], ['*'], [1], Array(1)]) assert.throws(() => store.listRunEndings(scope));
+  assert.equal(reads, 0);
+});
+
 test('run-ending readers propagate failures and normalize busy errors', () => {
   for (const method of ['listRunEndings', 'listPendingContinuations']) for (const code of ['SQLITE_BUSY', 'SQLITE_IOERR_READ']) {
     const failure = Object.assign(new Error('injected read failure'), { code });
     const store = createStore({ prepare() { return { all() { throw failure; } }; } });
-    assert.throws(() => store[method](), error => code === 'SQLITE_BUSY' ? error.code === 'DB_BUSY' && error.cause === failure : error === failure);
+    assert.throws(() => store[method](...(method === 'listRunEndings' ? [['a']] : [])), error => code === 'SQLITE_BUSY' ? error.code === 'DB_BUSY' && error.cause === failure : error === failure);
   }
 });
 
-test('run-ending migration preserves v1 rows and creates only the approved empty table', t => {
+test('run-ending migration preserves v1 rows and creates empty ending and occupancy tables', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db, { extensions: true });
   const before = oldRows(db); guardDatabase(db, owner);
   assert.equal(db.pragma('user_version', { simple: true }), 2);
   assert.deepEqual(oldRows(db), before);
   assert.deepEqual(db.prepare('SELECT * FROM run_endings').all(), []);
-  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='slot_occupancy'").get(), undefined);
+  assert.deepEqual(db.prepare('SELECT * FROM slot_occupancy').all(), []);
   const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='run_endings'").get().sql.replace(/\s+/g, ' ');
   assert.equal(ddl, "CREATE TABLE run_endings ( session_group TEXT PRIMARY KEY NOT NULL CHECK (session_group <> '' AND session_group <> '*'), run_id TEXT NOT NULL CHECK (run_id <> ''), reason TEXT NOT NULL CHECK (reason IN ('ttl','evict','upgrade','auth','model_config','mode_switch','manual_restart','unexpected')), ended_at INTEGER NOT NULL, continuation_control_id INTEGER )");
 });

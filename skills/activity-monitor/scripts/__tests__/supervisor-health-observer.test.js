@@ -14,7 +14,7 @@ function fixture(t) {
   const coordinator=new RuntimeHealthCoordinator({zylosDir:root,now:()=>clock,readMode:()=>mode,resolveTargetRuntime:()=> 'claude',listScenes:()=>scenes});
   const observer=new SupervisorHealthObserver({coordinator,now:()=>clock,listScenes:()=>scenes,readMode:()=>mode,
     readIdentity:g=>scenes.find(s=>s.sessionGroup===g),readState:()=>state,readScreen:()=>'',matchScreen:()=>matches,
-    insertControl:(content,opts)=>{controls.push({id:controls.length+1,content,...opts,status:'pending'});return controls.length;},
+    insertControl:(content,opts)=>{controls.push({id:controls.length+1,content,...opts,status:'pending'});return controls.at(-1);},
     getControlById:id=>controls[id-1],buildTargetBinding:s=>({runId:s.runId}),stop:s=>stops.push(s),
     getModeTransition:()=>transition,getDrainFence:g=>fences.get(g),manualPending:()=>manual,
     resolveToolRule:()=>({watchdog:{enabled:true,maxRuntimeSec:10,interruptKey:'Escape',interruptGraceSec:5,cooldownSec:2}}),
@@ -168,4 +168,21 @@ test('R10 screen check waits five seconds after paste and is consumed only once'
   f.advance(4999);await f.observer.tick();assert.equal(captures,0);
   f.advance(1);await f.observer.tick();assert.equal(captures,1);
   f.advance(10000);await f.observer.tick();assert.equal(captures,1);
+});
+
+
+test('an inserted row without a positive integer id ends preparation with an error', { timeout: 5000 }, async t => {
+  for (const row of [{}, { id: 0 }, { id: -1 }, { id: 1.5 }, { id: '1' }, 1, null]) {
+    await t.test(JSON.stringify(row), async t => {
+      const f = fixture(t); f.setHealth('rate_limited');
+      f.observer.insertControl = () => row;
+      const pending = f.observer.requestProbe('claude');
+      await f.prepared();
+      assert.deepEqual(await pending, { recovered: false, error: 'Recovery control was not inserted' });
+      assert.equal(f.observer.probeInFlight('claude'), false);
+      assert.equal(f.errors.length, 1);
+      assert.equal(f.health().scheduling.lastRecoveryAt, 0);
+      await f.observer.shutdown();
+    });
+  }
 });

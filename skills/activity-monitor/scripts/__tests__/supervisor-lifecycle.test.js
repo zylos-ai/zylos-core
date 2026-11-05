@@ -19,6 +19,7 @@ function fixture(Class = SupervisorLifecycle) {
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.transition,
     scenes: f.scenes.map(s => ({ ...s })), fences: [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })), restartRequests: [...f.requests] }) });
   f.db = {
+    listSlotOccupancy: () => f.slots ?? f.scenes.filter(s => s.sessionGroup !== 'origin' && s.present).map(s => ({ sessionGroup: s.sessionGroup, runId: s.runId, state: 'running', heldUntil: null, createdAt: 0 })),
     getModeTransition: () => f.transition,
     getDrainFence: g => f.fences.get(g) ?? null,
     listDrainFences: () => [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })),
@@ -397,10 +398,10 @@ test('capacity LRU includes session activity among otherwise eligible sessions',
   const result = await f.lifecycle.checkEviction(f.scenes, f.context);
   assert.equal(result.selected, 1); assert.deepEqual([...f.fences.keys()], ['b']);
 });
-test('LRU uses current occupied startup capacity and excludes model_config from in-flight discount', async () => {
+test('LRU uses occupied slots and discounts only quota-releasing fences', async () => {
   const scenes = [scene('a'), scene('b', { ready: false }), scene('origin')];
   const pending = [{ sessionGroup: 'new' }, { sessionGroup: 'new' }, { sessionGroup: 'a' }];
-  assert.deepEqual(evictionDemand(scenes, pending, [{ sessionGroup: 'a', reason: 'model_config' }], 2), { waiting: 1, free: 0, inflight: 0, need: 1 });
+  assert.deepEqual(evictionDemand(scenes.filter(s => s.sessionGroup !== 'origin').map(s => ({ sessionGroup: s.sessionGroup })), pending, [{ sessionGroup: 'a', reason: 'model_config' }], 2), { waiting: 1, free: 0, inflight: 0, need: 1 });
   const f = fixture(); f.scenes = scenes; f.context.configuration.capacity = 2; f.pending = pending;
   f.requests = [{ reason: 'manual_restart' }]; // Origin-only manual work cannot suspend ordinary pool eviction.
   await f.lifecycle.checkEviction(f.scenes, f.context); assert.equal(f.fences.get('a')?.reason, 'evict');
@@ -1073,4 +1074,15 @@ test('manual recording fallback preserves conditional fence deletion after three
   assert.deepEqual(cleared, [{ group: 'origin', condition: { expectedReason: 'manual_restart', expectedRunId: 'run-origin' } }]);
   assert.equal(f.fences.size, 0); assert.equal(f.requests.length, 0);
   assert.equal(alerts.filter(event => event.event === 'run_ending_record_failed').length, 1);
+});
+
+test('negative free occupancy evicts the required idle runs without changing held rows', async () => {
+  const f=fixture(); f.context.configuration.capacity=3;
+  f.scenes=[scene('a'),scene('b')]; f.pending=[{sessionGroup:'new'}];
+  f.slots=[{sessionGroup:'a',state:'running'},{sessionGroup:'b',state:'running'},
+    {sessionGroup:'held',state:'held'},{sessionGroup:'starting',state:'running'}];
+  const result=await f.lifecycle.checkEviction(f.scenes,f.context);
+  assert.deepEqual(result,{waiting:1,free:-1,inflight:0,need:2,selected:2});
+  assert.deepEqual([...f.fences.keys()],['a','b']);
+  assert.equal(f.slots.find(row=>row.sessionGroup==='held').state,'held');
 });

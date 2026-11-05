@@ -18,6 +18,7 @@ import { HealthEventReader } from './health-event-reader.js';
 import { RestartRequestStore } from './restart-request-store.js';
 import { findMatchingToolRule } from './tool-rules.js';
 import { PoolCapacity } from './pool-capacity.js';
+import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templates.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
@@ -39,7 +40,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     return {...result,legacy:false};
   };
   const readMode=()=>{const result=readModeSource();return result?.then?result.then(normalizeMode):normalizeMode(result);};
-  let supervisor,events,configuration,machineTasks,legacy,lifecycleConfiguration;
+  let supervisor,events,configuration,machineTasks,legacy,lifecycleConfiguration,stopping;
   let poolReader,capacityController;
   const capacityWork=new Set(),clock=overrides.now ?? Date.now;
   const applyPublishedCapacity=()=>{
@@ -63,14 +64,36 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     child.stdin.on('error',reject);child.stdin.end(message+'\n');
   }));
   const guard=new SupervisorServerHealth({readAlertTarget:()=>parseServerAlertTarget(configuration?.alert_target),sendAlert,log});
+  const capacityAlert=()=>{
+    const options={context:'capacity',noticeCode:'memory_low'};
+    const pending=(async()=>{
+      const message=messageForStatus(options,configuration?.statusNotices ?? {});
+      await guard.notify(message);
+    })();
+    pendingAlerts.add(pending);pending.finally(()=>pendingAlerts.delete(pending)).catch(log);
+  };
   const baseScenes=overrides.scenes ?? new SupervisorScenes({env,readMode:readMode,readActivity:scene=>supervisor.readActivity(scene)});
   const scenes=overrides.scenes ?? new SupervisorServerObservation(baseScenes,{guard});
+  const reclaimCapacity=()=>supervisor.admission.serialize(async()=>{
+    // Re-read configuration without applying another capacity refresh. A bad
+    // configuration still blocks lifecycle mutations, including pressure reclaim.
+    const raw=await readConfig(), {mode}=await readMode();
+    if(mode!=='multi' || poolReader.resolveSessionPoolBaseline({env,config:raw}).fixed)return null;
+    const context={configuration:{...raw,...lifecycleConfiguration,mode},
+      transition:await db.getModeTransition(),fences:await db.listDrainFences(),restartRequests:supervisor.admission.readRequests()};
+    context.scenes=await scenes.observe(context);
+    if(stopping)return null;
+    return supervisor.lifecycle.checkCapacityPressure(context);
+  });
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
   const resolveTargetRuntime=async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).mode==='single'?null:group);
   const alert=event=>{
     const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,
-      event.runtime && `runtime=${event.runtime}`,event.oldest_at!==undefined && `oldest_at=${event.oldest_at}`].filter(Boolean).join(' ');
-    const pending=guard.notify(`Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim());
+      event.runtime && `runtime=${event.runtime}`,event.oldest_at!==undefined && `oldest_at=${event.oldest_at}`,event.message].filter(Boolean).join(' ');
+    const message=event.event==='repeated_unexpected_run_end'
+      ? messageForStatus({context:'repeated_failure',noticeCode:'ended_unexpectedly',group:event.sessionGroup ?? event.session_group,count:event.count},configuration?.statusNotices ?? {})
+      : `Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim();
+    const pending=guard.notify(message);
     pendingAlerts.add(pending);pending.finally(()=>pendingAlerts.delete(pending)).catch(log);return pending;
   };
   const prompts={
@@ -99,9 +122,10 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
         const pool=await loadCoreModule('session-pool-config.js');
         if(!['readMemoryInputs','resolveSessionPoolBaseline','readPoolCapacity'].every(name=>typeof pool[name]==='function'))throw unavailable('Session pool configuration reader');
         poolReader=pool;
-        capacityController ??=new PoolCapacity({directory,now:clock,log,
+        capacityController ??=new PoolCapacity({directory,now:clock,log:event=>supervisor.diagnostic(event),
           readMemory:overrides.readMemoryInputs ?? (()=>poolReader.readMemoryInputs({env})),
-          resolveBaseline:()=>poolReader.resolveSessionPoolBaseline({env,config:configuration})});
+          resolveBaseline:()=>poolReader.resolveSessionPoolBaseline({env,config:configuration}),
+          notify:capacityAlert,reclaim:reclaimCapacity});
         applyPublishedCapacity();
       }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('Session pool configuration reader','eviction');}
       return configuration;
@@ -147,7 +171,6 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     sockets.add(socket);socket.once('close',()=>sockets.delete(socket));
     supervisor.connectionHandler(socket);
   });
-  let stopping;
   const stop=()=>stopping ??= (async()=>{
     // Reject new work before draining accepted work. Idle or partial-line peers
     // must not keep shutdown alive indefinitely.

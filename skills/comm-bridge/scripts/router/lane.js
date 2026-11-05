@@ -102,7 +102,7 @@ export function createLane(context, group) {
       if (continuation) await context.activation.beginContinuation(group, continuation);
       return;
     }
-    if (context.availableCapacity() <= 0) {
+    if (context.availableCapacity() <= 0 && state.slots.get(group)?.state !== 'held') {
       diagnostic('wait_capacity', { session_group: group, conversation_id: row.id });
       return;
     }

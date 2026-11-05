@@ -3,7 +3,7 @@ import * as v1 from './c4-v1-owner.js';
 
 export const CLOCK = 1767225600;
 export const NEW_TABLES = ['channel_namespaces', 'group_heads', 'origin_sync_cursors',
-  'drain_fences', 'mode_transitions', 'group_runtime_overrides', 'group_model_overrides', 'run_endings'];
+  'drain_fences', 'mode_transitions', 'group_runtime_overrides', 'group_model_overrides', 'run_endings', 'slot_occupancy'];
 export function seedV1(db, { extensions = false } = {}) {
   db.exec(fs.readFileSync(new URL('../fixtures/migration-history/c4-v0.9.0-v1.sql', import.meta.url), 'utf8'));
   // Replace only invented fixture rows, never import a host database.

@@ -27,7 +27,7 @@ const config = () => JSON.parse(fs.readFileSync(path.join(root, '.zylos/config.j
 const sqlite = new Database(path.join(root, 'comm-bridge/c4.db'));
 guardDatabase(sqlite, schema); sqlite.pragma('journal_mode=WAL');
 const store = createStore(sqlite, { now: () => clock, readConfig: () => ({ state: 'ok', config: config() }), validateComponent: () => true, validateModel: () => true });
-const db = { ...store, insertControl:(...args)=>store.insertControl(...args).id, getDb: () => sqlite, getControlById: id => sqlite.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
+const db = { ...store, getDb: () => sqlite, getControlById: id => sqlite.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
   expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 };
 const env = { ...process.env, HOME: root, ZYLOS_DIR: root };
 const tmux = { socketPath: tmuxSocket, binary, configFile: '/dev/null' };
@@ -97,7 +97,11 @@ process.on('message', async message => {
       const request={version:2,type:'route',requestId:'input-'+clock,noReply:false,receivedAt:clock,channel:'fixture',endpoint:'input',componentName:'fixture',sessionGroup:arg.group || 'chat'};
       result=await new Promise((resolve,reject)=>{const socket=net.createConnection(path.join(root,'activity-monitor/am.sock'));let text='';socket.on('error',reject);socket.on('connect',()=>socket.write(JSON.stringify(request)+'\n'));socket.on('data',chunk=>text+=chunk);socket.on('end',()=>{try{resolve(JSON.parse(text))}catch(e){reject(e)}})});trace('route',{request,result});
     }
-    else if (op === 'settled') result = [...router.state.activations.values()].map(a=>({settled:a.launchSettled,group:a.group}));
+    else if (op === 'settleSlot') { // Only the occupancy transaction; no scan, so Origin stays untouched.
+      const rows = store.listSlotOccupancy().filter(row => row.sessionGroup === arg.group && row.state === 'running');
+      for (const row of rows) { if (arg.how === 'end') store.recordRunEnd(row.sessionGroup, { runId: row.runId, reason: 'unexpected' }); else store.pruneSlots({ orphans: [{ sessionGroup: row.sessionGroup, runId: row.runId }], minAgeSeconds: 0 }); }
+      result = rows.length;
+    } else if (op === 'settled') result = [...router.state.activations.values()].map(a=>({settled:a.launchSettled,group:a.group}));
     else if (op === 'live') result = await reader.readLiveIdentity(arg.group);
     else if (op === 'runtime') result = db.setSessionRuntimeConfig({sessionGroup:arg.group,runtime:arg.runtime});
     else if (op === 'probe') {

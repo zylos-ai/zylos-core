@@ -237,3 +237,12 @@ test('diagnostic maintenance interval rejects non-positive and non-integer value
   f.options.diagnosticsIntervalMs = 1;
   assert.doesNotThrow(() => f.create());
 });
+
+test('listed session with unreadable identity cannot supply shared capacity to a new group',async t=>{
+ const f=routerFixture(t,{poolSize:1});f.add('a');f.put('origin');const read=f.deps.readLiveIdentity;
+ f.deps.listGroupTmuxSessions=async()=>[{sessionGroup:'x',tmuxName:f.identity('x').tmuxName},{sessionGroup:'origin',tmuxName:f.identity('origin').tmuxName}];
+ f.deps.readLiveIdentity=async group=>{if(group==='x')throw new Error('identity unavailable');return read(group);};
+ let takes=0;const take=f.db.takeSlot;f.db.takeSlot=(...args)=>{takes++;return take(...args);};
+ await f.create().initialize();await f.rounds(3);
+ assert.equal(f.router.availableCapacity(),0);assert.equal(takes,0);assert.equal(f.calls.some(row=>row[0]==='launch'),false);
+});

@@ -13,6 +13,9 @@ test('transient registered run preserves attempt budget between supervisor scans
 });
 test('two pending groups share one registered attempt',{timeout:30000},async t=>{const f=await fixture(t);await f.add('a');await f.add('b');await f.attempt();assert.equal(responses(f).filter(x=>x.response.result==='registered').length,1);assert.equal(launches(f).length,1);assert.equal(launches(f)[0].input.runId,responses(f)[0].request.runId);registeredBeforeLaunch(f)});
 test('absent supervisor socket prevents restricted ordinary launch',{timeout:30000},async t=>{const f=await fixture(t);await f.m4.call('stop');assert.equal(fs.existsSync(path.join(f.root,'activity-monitor/am.sock')),false);await f.add();await f.attempt();assert.equal(launches(f).length,0);assert.equal(f.trace('m1','request').length,1)});
+// Interrupted grant boundary: run for admission/occupancy recovery changes; skip unrelated UI.
+// Harness owns HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private socket/SQLite and
+// sleeper runtimes; its teardown stops/reaps children before private server cleanup.
 for(const scenario of ['4a','4a-invalid','4a-no-reply','4b','4d','5','6','7','8','9'])test(''+scenario+' persisted grant survives transport/process/fence interruption',{timeout:30000},async t=>{
  const f=await fixture(t);await f.m4.call('fault',{value:scenario==='4a-no-reply'?'no-reply':scenario==='4a-invalid'?'invalid':scenario==='9'||scenario==='6'?'':'hold'});
  if(scenario==='6')await f.m1.call('fault',{value:'pause-grant'});
@@ -28,6 +31,7 @@ for(const scenario of ['4a','4a-invalid','4a-no-reply','4b','4d','5','6','7','8'
  if(['5','8'].includes(scenario)){if(scenario==='8')await f.m4.kill();f.m4=await f.start('m4');await f.m1.call('fence',{group:'origin'})}
  else await f.m4.call('release');
  if(['6','7'].includes(scenario)){if(scenario==='7')await f.m1.kill();f.m1=await f.start('m1');await f.warm()}
+ if(scenario==='6')await f.m1.call('settleSlot',{group:'chat',how:'orphan'});
  if(scenario==='9'){await f.m1.call('fault',{value:''});await f.m1.call('unfence',{group:'chat'})}
  await f.m4.call('fault',{value:''});
  if(scenario==='4d'){await delay(50);assert.equal(launches(f).length,0)}
@@ -64,15 +68,19 @@ for(const stale of [false,true])test(`⑬${stale?'b':''} bound other ${stale?'af
  await f.time(f.clock+1000);assert.equal((await f.m4.call('probe',{group:'chat'})).classification,'other');let state=await f.health();assert.equal(count(state),1);assert.equal(state.scheduling.lastRecoveryAt,f.clock/1000);assert.equal(state.health,'unavailable');
  await f.m1.call('unfence',{group:'origin'});await f.add('origin');await f.launched('origin');await f.time(f.clock+1000);assert.equal((await f.m4.call('probe',{group:'origin'})).classification,'other');state=await f.health();assert.equal(count(state),2);assert.equal(state.scheduling.lastRecoveryAt,f.clock/1000);registeredBeforeLaunch(f);assert.equal(live.runId,responses(f)[0].request.runId);
 });
+// Replacement identity boundary: explicitly settle the old run's slot before a new grant.
+// Run for slot/admission identity changes; same isolated harness, skip unrelated UI.
 test('⑭ replacement run binds only the new registration',{timeout:30000},async t=>{
- const f=await fixture(t);await f.add();const old=await f.launched();await f.killRun();await f.round();await f.time(f.clock+60000);await f.add();const current=await f.launched();assert.notEqual(old.runId,current.runId);assert.equal(count(await f.health()),2);
+ const f=await fixture(t);await f.add();const old=await f.launched();await f.killRun();await f.m1.call('settleSlot',{group:'chat',how:'end'});await f.round();await f.time(f.clock+60000);await f.add();const current=await f.launched();assert.notEqual(old.runId,current.runId);assert.equal(count(await f.health()),2);
  await f.time(f.clock+1000);await f.m4.call('probe',{group:'chat'});assert.equal(count(await f.health()),2);assert.equal(responses(f).at(-1).request.runId,current.runId);registeredBeforeLaunch(f);
 });
+// Lost association boundary: simulate only the orphan-row transaction between restarts.
+// Run for admission/occupancy restart changes; same isolation/cleanup, skip unrelated UI.
 test('⑮ restart before probe conservatively counts once per lost association',{timeout:30000},async t=>{
  const f=await fixture(t);await f.add();let live=await f.launched();
  for(let cycle=0;cycle<2;cycle++){
   const before=count(await f.health());await f.m4.kill();f.m4=await f.start('m4');await f.m1.call('fence',{group:'origin'});await f.time(f.clock+1000);await f.m4.call('probe',{group:'chat'});const state=await f.health();assert.equal(count(state),before+1);
-  await f.killRun();await f.round();await f.add();await f.attempt();assert.equal(responses(f).at(-1).response.code,'attempt_backoff');assert.equal(count(await f.health()),before+1);
+  await f.killRun();await f.round();await f.m1.call('settleSlot',{group:'chat',how:'orphan'});await f.round();await f.add();await f.attempt();assert.equal(responses(f).at(-1).response.code,'attempt_backoff');assert.equal(count(await f.health()),before+1);
   if(cycle===0){await f.time(f.clock+300000);live=await f.launched();assert.equal(count(await f.health()),before+2)}
  }
 });

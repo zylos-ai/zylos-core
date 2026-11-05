@@ -9,6 +9,7 @@ const COMPUTE_INTERVAL = 10000;
 const SAMPLE_INTERVAL = 30000;
 const STABLE_INTERVAL = 120000;
 const RISE_WINDOW = 120000;
+const NOTICE_INTERVAL = 1800000;
 const SAMPLE_NAME = 'pool-memory-samples.jsonl';
 const SOURCES = new Set(['cgroup2', 'cgroup1', 'host', 'darwin']);
 
@@ -77,11 +78,12 @@ function validMemory(memory) {
     && Number.isFinite(memory.usedBytes) && memory.usedBytes >= 0 && memory.usedBytes <= 2 * memory.limitBytes;
 }
 
-/** One owner calculates, records samples and publishes; no alert or reclaim path. */
+/** One owner calculates and publishes before checking memory protection. */
 export class PoolCapacity {
   constructor({ directory, readMemory, resolveBaseline, now = Date.now, log = () => {}, fs: io = fs,
+    notify = () => {}, reclaim = async () => null,
     publish = (file, record) => writeCapacityAtomic(file, record, { fs: io }) }) {
-    Object.assign(this, { directory, readMemory, resolveBaseline, now, log, io, publish });
+    Object.assign(this, { directory, readMemory, resolveBaseline, now, log, io, publish, notify, reclaim });
     this.file = path.join(directory, 'pool-capacity.json');
     this.sampleFile = path.join(directory, SAMPLE_NAME);
     this.samples = [];
@@ -89,7 +91,9 @@ export class PoolCapacity {
     this.mode = null;
     this.epoch = 0;
     this.lastPublished = null;
-    this.inputsUnreadableSince = null;
+    this.lastMemoryLowAt = null;
+    this.pressureCount = 0;
+    this.oomKills = null;
     this.lastComputedAt = null;
     this.lastSampleAt = null;
     this.currentK = null;
@@ -104,6 +108,12 @@ export class PoolCapacity {
   }
 
   diagnostic(event, details = {}) { this.log({ event, ...details }); }
+
+  notice(now) {
+    if (this.lastMemoryLowAt !== null && now - this.lastMemoryLowAt < NOTICE_INTERVAL) return;
+    this.lastMemoryLowAt = now;
+    this.notify();
+  }
 
   loadSamples(now) {
     this.loaded = true;
@@ -178,6 +188,7 @@ export class PoolCapacity {
       if (this.mode === 'multi') this.epoch++;
       this.mode = mode; this.lastComputedAt = null; this.currentK = null;
       this.history = []; this.stableN = null; this.stableSince = null; this.wasFixed = false; this.wasFallback = false;
+      this.pressureCount = 0; this.oomKills = null;
       return null;
     }
     this.mode = mode;
@@ -197,8 +208,6 @@ export class PoolCapacity {
       try { memory = await this.readMemory(); } catch { memory = null; }
       if (epoch !== this.epoch || this.mode !== 'multi') return null;
       const readable = validMemory(memory);
-      if (readable) this.inputsUnreadableSince = null;
-      else this.inputsUnreadableSince ??= now;
       this.samples = this.samples.filter(row => row.ts >= now - SAMPLE_WINDOW && row.ts <= now);
       let model;
       if (readable) {
@@ -236,7 +245,26 @@ export class PoolCapacity {
       }
       // Cancelling a fixed value keeps the startup bound until it is published.
       if (baseline.fixed) this.wasFixed = true;
+      if (epoch !== this.epoch || this.mode !== 'multi') return record;
+      if (source === 'fallback' && !this.wasFallback) this.diagnostic('capacity_inputs_unreadable');
       this.wasFallback = source === 'fallback';
+      const oomKills = readable && memory.source === 'cgroup2' && Number.isSafeInteger(memory.oomKills) && memory.oomKills >= 0
+        ? memory.oomKills : null;
+      if (oomKills !== null) {
+        if (this.oomKills !== null && oomKills > this.oomKills) {
+          this.diagnostic('container_oom_kill', { oomKills, previousOomKills: this.oomKills });
+        }
+        this.oomKills = oomKills;
+      }
+      const pressure = readable && memory.usedBytes >= memory.limitBytes - calculation.reserveBytes / 2;
+      this.pressureCount = pressure ? Math.min(2, this.pressureCount + 1) : 0;
+      if (this.pressureCount === 2) this.notice(now);
+      if (source === 'auto' && this.pressureCount === 2) {
+        const selected = await this.reclaim(record);
+        if (selected) {
+          this.diagnostic('capacity_pressure_evict', { usedBytes: memory.usedBytes, limitBytes: memory.limitBytes, k, session_group: selected.sessionGroup });
+        }
+      }
       return record;
     } finally { this.computing = false; }
   }

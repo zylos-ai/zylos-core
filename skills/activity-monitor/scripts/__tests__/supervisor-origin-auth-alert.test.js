@@ -14,7 +14,7 @@ function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'origin-auth-'));
   const state={now:1800000000000,oldestAt:null,controls:0,pending:[],fences:[],transition:null,mode:'multi',scenes:[],checks:[],alerts:[],queued:[]};
   const db={getModeTransition:()=>state.transition,getDrainFence:group=>state.fences.find(f=>f.sessionGroup===group)??null,
-    listDrainFences:()=>state.fences,listPendingSessionGroups:()=>state.pending,
+    listDrainFences:()=>state.fences,listPendingSessionGroups:()=>state.pending,listPendingContinuations:()=>[],
     getOriginNeed:()=>({controls:{count:state.controls},inbound:{oldestAt:state.oldestAt}}),
     insertControl:(content,options)=>{state.queued.push({content,...options});return state.queued.length;},getControlById:()=>null};
   const scenes={observe:()=>state.scenes,readIdentity:group=>state.scenes.find(s=>s.sessionGroup===group)??{present:false},

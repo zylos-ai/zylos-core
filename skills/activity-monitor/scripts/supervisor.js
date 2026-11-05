@@ -100,7 +100,7 @@ export function createSupervisor(deps) {
   const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
-    readCurrentSession:group=>endings.currentSession(group),
+    readCurrentSession:async group=>{try{return await endings.currentSession(group);}catch{return null;}},
     intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
   modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
@@ -129,6 +129,7 @@ export function createSupervisor(deps) {
     observeExits:current=>exits.advance(current),
     updateCapacity:context=>deps.updateCapacity?.(context),
     reconcileRunEndings:context=>endings.advance(context),
+    reconciliationReadFailed:error=>endings.reportReadFailure(error),
     afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),
     probeAndPublish:async(scene,context)=>{
       if(!scene.ready || scene.processRunning!==true || !scene.runId || !scene.sessionId)return;
@@ -225,7 +226,7 @@ export function createSupervisor(deps) {
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };
-  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,drainHealthWrites,
+  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,drainHealthWrites,diagnostic,
     stop(){
       if(stopPromise)return stopPromise;
       stopping=true;admission.closeEntry();

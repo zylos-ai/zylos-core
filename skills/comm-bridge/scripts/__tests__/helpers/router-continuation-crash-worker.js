@@ -63,6 +63,18 @@ router = createRouter({ db, now: () => clock,
   handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   diagnostic: (event, fields) => record(event, fields), alert: (event, fields) => record('alert', { alert: event, ...fields }),
 }, { poolSize: 1, readyTimeoutMs: 1000, pollIntervalMs: 5 });
+if (phase === 'restart' && boundary === 'before-launch') {
+  // The dead Router cannot resume an unfinished launch: model the supervisor's observed
+  // orphan selection at its adapter boundary, using the real store transaction.
+  const slot = store.listSlotOccupancy().find(row => row.sessionGroup === 'a');
+  if (!slot || slot.state !== 'running') throw Error('Crash lost running occupancy');
+  clock = slot.createdAt * 1000 + 999;
+  const orphans = [{sessionGroup:'a',runId:slot.runId}];
+  if (store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans.length !== 0) throw Error('Orphan removed before ready timeout');
+  clock += 1;
+  if (store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans.length !== 1) throw Error('Expired orphan not removed');
+  record('orphan-pruned', {runId:slot.runId});
+}
 await router.initialize();
 if (phase === 'restart') {
   const scene = readScene();

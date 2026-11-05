@@ -1,8 +1,9 @@
 /** Restart pacing belongs to the Router process; continuation controls stay in C4. */
 export function createContinuationRestarts({ now, deps, diagnostic }) {
   const groups = new Map();
+  let lastAlertAt = -Infinity;
   function entry(group) {
-    if (!groups.has(group)) groups.set(group, { attempts: 0, failures: 0, absentSince: null, readySince: null, readyRunId: null, lastAlertAt: -Infinity });
+    if (!groups.has(group)) groups.set(group, { attempts: 0, failures: 0, absentSince: null, readySince: null, readyRunId: null });
     return groups.get(group);
   }
   function observe(group, live) {
@@ -26,14 +27,16 @@ export function createContinuationRestarts({ now, deps, diagnostic }) {
       const state = entry(group);
       state.attempts++; state.absentSince = null; state.readySince = null; state.readyRunId = null;
     },
-    ready(group) { entry(group).failures = 0; },
-    failed(group, runId) {
+    ready(group) { const state = groups.get(group); if (state) { state.failures = 0; } },
+    failed(group, runId, reason) {
       const state = entry(group);
       state.failures++; state.absentSince = now(); state.readySince = null; state.readyRunId = null;
-      if (state.failures >= 5 && now() - state.lastAlertAt >= 1800000) {
-        state.lastAlertAt = now();
-        const fields = { sessionGroup: group, runId, failures: state.failures };
-        diagnostic('continuation_start_failed', { session_group: group, runId, failures: state.failures });
+      if (state.failures >= 5 && now() - lastAlertAt >= 1800000) {
+        lastAlertAt = now();
+        let others = 0;
+        for (const [key, value] of groups) if (key !== group && value.failures >= 5) others++;
+        const fields = { sessionGroup: group, runId, failures: state.failures, reason, others };
+        diagnostic('continuation_start_failed', { session_group: group, runId, failures: state.failures, reason });
         deps.alert?.('continuation_start_failed', fields);
       }
     },

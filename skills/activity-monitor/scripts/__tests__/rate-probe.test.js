@@ -23,7 +23,7 @@ function fixture(t) {
       listScenes: () => scenes, readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
       readState: () => ({ tools: [] }), readScreen: () => 'injected runtime response', matchScreen: () => matches,
       buildTargetBinding: scene => ({ runId: scene.runId }),
-      insertControl: (content, opts) => { controls.push({ id: controls.length + 1, content, ...opts, status: 'pending' }); return controls.length; },
+      insertControl: (content, opts) => { controls.push({ id: controls.length + 1, content, ...opts, status: 'pending' }); return controls.at(-1); },
       getControlById: id => controls[id - 1] });
     coordinator.probeInFlight = runtime => observer.probeInFlight(runtime);
     await coordinator.restore('codex');

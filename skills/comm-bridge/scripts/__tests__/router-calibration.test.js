@@ -9,7 +9,7 @@ test('U prevents a later candidate of the same runtime submitting in the same ro
   f.deps.submit = async request => { submitted.push(request); return { kind: 'timeout', sent: true }; };
   const router = f.create();
   const manager = createActivationManager({ deps: f.deps, options: f.options, state: router.state,
-    now: f.now, diagnostic: f.deps.diagnostic });
+    now: f.now, diagnostic: f.deps.diagnostic, refreshSlots: () => {} });
   router.state.mode = 'multi'; router.state.round = 1;
   // Call the production activation manager after the first U has settled;
   // scheduler opportunity bookkeeping must not stand in for runtime admission.
