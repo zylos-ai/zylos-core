@@ -4,10 +4,10 @@ const [entry, scenario] = process.argv.slice(2);
 const { startSupervisor } = await import(pathToFileURL(entry).href);
 const logs=[];let noticeScope;
 const database={getDb:()=>({prepare:()=>({get:scope=>{noticeScope=scope;return {id:1,channel:'fake',endpoint_id:'frozen'};}})}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,
-  getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),listPendingSessionGroups:()=>[],getControlById:()=>null,
+  getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),listPendingSessionGroups:()=>[],listPendingContinuations:()=>[],getControlById:()=>null,
   resolveSessionLaunchConfig:()=>({runtime:'claude',mode:'default'})};
 const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
-const options={db:database,scenes,legacyStatus:{tick(){},close(){}},log:value=>logs.push(value),machineTasks:{tick(){},stop(){}},
+const options={readMemoryInputs:async()=>({source:'host',limitBytes:8*1024**3,usedBytes:2*1024**3}),db:database,scenes,legacyStatus:{tick(){},close(){}},log:value=>logs.push(value),machineTasks:{tick(){},stop(){}},
   sendAlert:()=>{throw new Error('external send forbidden');},
   loopOptions:{intervalMs:10000}};
 if(scenario==='restore-failure')options.requestStore={read(){throw Object.assign(new Error('fixture restore failure'),{code:'RESTORE_FAILED'});}};

@@ -98,6 +98,67 @@ test('successful authentication waits for lifecycle release; uncertain is explic
   assert.equal((await f.router.route(request())).auth.result, 'unconfirmed');
 });
 
+test('authentication notification holds during transition and rejects invalid runtime before recovery', async t => {
+  const f = fixture(t, { getModeTransition: () => ({ phase: 'gating' }) });
+  f.states.claude.health = 'unavailable';
+  const input = { version: 1, type: 'auth_completed', requestId: 'auth', runtime: 'claude' };
+  await f.router.notifyAuthCompleted(input);
+  assert.deepEqual(f.calls.notify, []); assert.deepEqual(f.calls.probes, []);
+  await assert.rejects(f.router.notifyAuthCompleted({ ...input, runtime: '../invalid' }), { code: 'invalid_request' });
+});
+
+test('authentication without a ready scene leaves a user-message launch available and queues no probe', async t => {
+  const f = fixture(t), now = 1792000000000;
+  const coordinator = new RuntimeHealthCoordinator({ zylosDir: f.cacheDirectory, now: () => now,
+    readMode: () => 'multi', resolveTargetRuntime: () => 'claude', listScenes: () => [] });
+  const store = coordinator.store('claude'), state = store.read();
+  state.health = 'unavailable';
+  Object.assign(state.scheduling, { restartFailureCount: 3, lastRecoveryAt: now / 1000 - 1 });
+  store.write(state);
+  let controls = 0;
+  const observer = new SupervisorHealthObserver({ coordinator, now: () => now,
+    readMode: () => 'multi', listScenes: () => [], insertControl: () => { controls++; } });
+  t.after(() => observer.shutdown());
+  f.router.healthCoordinator = coordinator; f.router.now = () => now;
+  f.router.requestProbe = runtime => observer.requestProbe(runtime);
+  await f.router.notifyAuthCompleted({ version: 1, type: 'auth_completed', requestId: 'auth', runtime: 'claude' });
+  assert.equal(controls, 0); assert.equal(observer.probes.size, 0);
+  assert.equal(f.router.readNegativeCache('claude'), null);
+  assert.equal(store.read().scheduling.lastUserMessageRecoveryAt, now / 1000);
+  const launch = await coordinator.registerStartAttempt({ version: 1, type: 'start_attempt', requestId: 'sa-1-0123456789ab',
+    runtime: 'claude', sessionGroup: 'telegram:waiting', runId: '11111111-1111-4111-8111-111111111111' });
+  assert.equal(launch.ok, true); assert.equal(launch.reason, 'user_message');
+});
+
+test('authentication recovery uses the existing observer to prefer a ready Origin of the same runtime', async t => {
+  const f = fixture(t), now = 1792000000000, controls = [];
+  const scenes = [
+    { sessionGroup: 'telegram:other', runtime: 'codex', ready: true, present: true, runId: 'other' },
+    { sessionGroup: 'telegram:starting', runtime: 'claude', ready: false, present: true, runId: 'starting' },
+    { sessionGroup: 'telegram:one', runtime: 'claude', ready: true, present: true, runId: 'chat', sessionId: 'chat-session' },
+    { sessionGroup: 'origin', runtime: 'claude', ready: true, present: true, runId: 'origin-run', sessionId: 'origin-session' },
+  ];
+  const coordinator = new RuntimeHealthCoordinator({ zylosDir: f.cacheDirectory, now: () => now,
+    readMode: () => 'multi', resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
+  const store = coordinator.store('claude'), state = store.read(); state.health = 'unavailable'; store.write(state);
+  const observer = new SupervisorHealthObserver({ coordinator, now: () => now, readMode: () => 'multi', listScenes: () => scenes,
+    readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
+    buildTargetBinding: scene => ({ runId: scene.runId }), readState: () => ({ tools: [] }), readScreen: () => 'healthy',
+    insertControl: (content, options) => { controls.push({ content, ...options, status: 'done' }); return controls.length; },
+    getControlById: id => controls[id - 1] });
+  t.after(() => observer.shutdown());
+  f.router.healthCoordinator = coordinator; f.router.now = () => now;
+  f.router.requestProbe = runtime => observer.requestProbe(runtime);
+  const pending = f.router.notifyAuthCompleted({ version: 1, type: 'auth_completed', requestId: 'auth', runtime: 'claude' });
+  for (let i = 0; i < 30 && !controls.length; i++) await new Promise(resolve => setImmediate(resolve));
+  await Promise.all([...observer.preparations]);
+  assert.equal(controls.length, 1); assert.equal(controls[0].sessionGroup, 'origin');
+  assert.equal(controls[0].targetBinding.runId, 'origin-run');
+  await observer.pollProbe(observer.probes.get('claude'));
+  await pending;
+  assert.equal(store.read().health, 'ok');
+});
+
 // real input acceleration must remain usable by the next dispatcher scheduling round.
 test('absent recovery target leaves accelerated admission uncached; completed failure still caches', async t => {
   for (const accelerated of [false, true]) {

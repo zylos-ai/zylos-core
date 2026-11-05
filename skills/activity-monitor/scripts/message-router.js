@@ -12,6 +12,9 @@ export const ROUTE_PROBE_TIMEOUT_MS = 25000;
 export const messageForRoute = ({ health, reason }) => messageForStatus({ health, reason });
 const runtimeValid = runtime => typeof runtime === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(runtime);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
+export const validAuthCompletedRequest = request => object(request) && request.version === 1
+  && request.type === 'auth_completed' && typeof request.requestId === 'string' && request.requestId.length > 0
+  && runtimeValid(request.runtime) && request.runtime !== 'unknown';
 export function validRouteRequest(request) {
   if (!object(request) || ![1, 2].includes(request.version) || request.type !== 'route'
       || typeof request.requestId !== 'string' || !request.requestId || typeof request.noReply !== 'boolean'
@@ -47,6 +50,15 @@ export class MessageRouter {
       this.log('MessageRouter: target runtime is unknown');
       return this.decision(request, 'unknown', { health: 'unavailable', reason: 'runtime_unknown', observation: 'runtime_unknown', decision: 'pending' });
     }
+    return this.recoverRuntime(request, runtime);
+  }
+  async notifyAuthCompleted(request) {
+    if (!validAuthCompletedRequest(request)) {
+      throw Object.assign(new Error('Invalid authentication notification'), { code: 'invalid_request' });
+    }
+    if (!await this.getModeTransition()) await this.recoverRuntime({ ...request, noReply: false }, request.runtime);
+  }
+  async recoverRuntime(request, runtime) {
     let state = this.healthCoordinator.store(runtime).read();
     if (!state) return this.decision(request, runtime, { health: 'ok', reason: 'ok', decision: 'pending', observation: 'health_record_missing' });
     const rawHealth = state.health ?? 'ok';

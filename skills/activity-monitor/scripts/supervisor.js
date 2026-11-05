@@ -10,6 +10,7 @@ import { RuntimeHealthCoordinator, aggregateRuntimeDemand } from './runtime-heal
 import { SupervisorHealthObserver } from './supervisor-health-observer.js';
 import { MessageRouter } from './message-router.js';
 import { SupervisorExits } from './supervisor-exits.js';
+import { SupervisorRunEndings } from './supervisor-run-endings.js';
 import { SessionActivity } from './session-activity.js';
 import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
@@ -96,8 +97,10 @@ export function createSupervisor(deps) {
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
+  const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
+    readCurrentSession:group=>endings.currentSession(group),
     intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
   modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
@@ -105,6 +108,7 @@ export function createSupervisor(deps) {
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({
+    beginRound:()=>lifecycle.beginRound(),
     readConfiguration:async transition=>{
       roundContext=null;
       try {configuration=await readConfiguration();modeSwitch.recordConfigurationRead();return configuration;}
@@ -123,6 +127,8 @@ export function createSupervisor(deps) {
     advanceTransition:()=>modeSwitch.advance(),
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},
     observeExits:current=>exits.advance(current),
+    updateCapacity:context=>deps.updateCapacity?.(context),
+    reconcileRunEndings:context=>endings.advance(context),
     afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),
     probeAndPublish:async(scene,context)=>{
       if(!scene.ready || scene.processRunning!==true || !scene.runId || !scene.sessionId)return;
@@ -143,7 +149,8 @@ export function createSupervisor(deps) {
         catch(error) { reportError(error,{phase:'recovery-probe',runtime:probe.runtime}); }
       }
       const pendingGroups=await db.listPendingSessionGroups();
-      const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups,fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
+      const continuationGroups=configuration.mode==='multi'?await db.listPendingContinuations():[];
+      const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups:[...pendingGroups,...continuationGroups],fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
       if(configuration.mode==='multi' && !context.fences.some(fence=>['origin','*'].includes(fence.sessionGroup)) &&
           (await db.getOriginNeed(Math.floor(now()/1000))).controls.count>0) {
         const runtime=await deps.resolveTargetRuntime('origin');
@@ -152,7 +159,8 @@ export function createSupervisor(deps) {
       }
       for(const runtime of demand.keys())observer.driveDemand(runtime);
       const metrics={ready:current.filter(s=>s.sessionGroup!=='origin' && s.ready).length,starting:current.filter(s=>s.sessionGroup!=='origin' && !s.ready).length,
-        reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length};
+        reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length,
+        k:configuration.capacity ?? null,kSource:configuration.capacitySource ?? null};
       if(JSON.stringify(metrics)!==lastMetrics) {
         try { appendEvent(poolMetricsPath(deps.env),{v:1,ts:now(),...metrics});lastMetrics=JSON.stringify(metrics); }
         catch(error) { reportError(error,{phase:'pool-metrics'}); }

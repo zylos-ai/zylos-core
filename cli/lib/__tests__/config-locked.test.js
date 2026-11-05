@@ -71,9 +71,11 @@ function startLockHolder(payload) {
   return startWorker(payload, { waitForLock: true });
 }
 
-function runLoopWorker(payload, onResult) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [loopHelper, JSON.stringify(payload)], { stdio: ['ignore', 'pipe', 'pipe'] });
+function runLoopWorker(payload, onResult, signal) {
+  const child = spawn(process.execPath, [loopHelper, JSON.stringify(payload)], {
+    stdio: ['ignore', 'pipe', 'pipe'], signal, killSignal: 'SIGKILL',
+  });
+  const completion = new Promise((resolve) => {
     let pending = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');
@@ -86,9 +88,11 @@ function runLoopWorker(payload, onResult) {
       }
     });
     child.stderr.on('data', chunk => { stderr += chunk; });
-    child.once('error', reject);
+    // Abort emits error before close; wait for close so cleanup reaps the writer.
+    child.once('error', error => { stderr += `${error.name}: ${error.message}`; });
     child.once('close', (status, signal) => resolve({ status, signal, stderr, pending }));
   });
+  return { child, completion };
 }
 
 function readCommitLedger(file) {
@@ -203,41 +207,56 @@ describe('config locking', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { untouched: true, a: 1, b: 2 });
   });
 
-  it('linearizes two real processes doing 100 same-key writes each', { timeout: 30_000 }, async () => {
+  it('linearizes two real processes doing 100 same-key writes each', { timeout: 30_000 }, async (t) => {
     write({ shared: 'initial', untouched: true });
     const ledgerFile = path.join(root, 'commit-ledger.jsonl');
     const arrivalBarrier = path.join(root, 'second-result-reported');
     const results = [];
     const observed = new Set();
-    const observerErrors = [];
+    const observedConfigFile = configFile;
+    let observerError = null;
     let observing = true;
     const observe = async () => {
-      while (observing) {
+      while (observing && !t.signal.aborted) {
         try {
-          const snapshot = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+          const snapshot = JSON.parse(fs.readFileSync(observedConfigFile, 'utf8'));
           assert.equal(snapshot.untouched, true);
           observed.add(snapshot.shared);
         } catch (error) {
-          observerErrors.push(error);
+          observerError = `${error.name}: ${error.message}`;
+          break;
         }
-        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(resolve => setTimeout(resolve, 1));
       }
     };
     const observer = observe();
     const payload = { configFile, lockFile, ledgerFile, arrivalBarrier, iterations: 100 };
-    const [a, b] = await Promise.all([
-      runLoopWorker({ ...payload, writer: 'a' }, result => results.push(result)),
-      runLoopWorker({ ...payload, writer: 'b' }, result => results.push(result)),
-    ]);
-    observing = false;
-    await observer;
+    // Real-process integration: run when config locking, atomic writes or this
+    // observer lifecycle changes; unrelated runtime changes can skip this case.
+    // All paths are private fixtures; no tmux, PM2 or live database is used.
+    const writers = [];
+    let a;
+    let b;
+    try {
+      for (const writer of ['a', 'b']) {
+        writers.push(runLoopWorker({ ...payload, writer }, result => results.push(result), t.signal));
+      }
+      [a, b] = await Promise.all(writers.map(writer => writer.completion));
+    } finally {
+      observing = false;
+      await observer;
+      for (const { child } of writers) {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }
+      await Promise.allSettled(writers.map(writer => writer.completion));
+    }
 
+    assert.ok(observerError === null, observerError ?? 'observer must read complete configurations');
     assert.equal(a.status, 0, a.stderr);
     assert.equal(b.status, 0, b.stderr);
     assert.equal(a.pending, '');
     assert.equal(b.pending, '');
     assert.equal(results.length, 200);
-    assert.deepEqual(observerErrors, []);
     assert.ok([...observed].some(value => value?.startsWith('a:')), 'observer missed writer a');
     assert.ok([...observed].some(value => value?.startsWith('b:')), 'observer missed writer b');
 
@@ -259,12 +278,9 @@ describe('config locking', () => {
         < results.findIndex(result => result.commitSequence === 1),
       'barrier must report commit 2 before commit 1',
     );
-    assert.throws(
-      () => assert.deepEqual(
-        results.map(result => result.value),
-        committed.map(entry => entry.value),
-      ),
-      /Expected values to be strictly deep-equal/,
+    assert.notDeepEqual(
+      results.map(result => result.value),
+      committed.map(entry => entry.value),
     );
   });
 

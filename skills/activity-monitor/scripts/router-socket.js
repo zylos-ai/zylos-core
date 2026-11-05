@@ -1,5 +1,6 @@
 import { loadCoreModule } from './core-modules.js';
 import { StringDecoder } from 'node:string_decoder';
+import { validAuthCompletedRequest } from './message-router.js';
 const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
 
 // Hook wake clients have short deadlines. A peer disconnect must never turn
@@ -44,8 +45,13 @@ export function createSupervisorConnectionHandler({ admission, router, readRun, 
       catch { reply({ ok: false, code: 'invalid_request' }); return; }
       if (!request || typeof request !== 'object' || Array.isArray(request)) { reply({ ok: false, code: 'invalid_request' }); return; }
       try {
-        if (['route','health_events_ready','notify_delivered'].includes(request.type) && !isOpen()) { socket.destroy(); return; }
+        if (['route','health_events_ready','notify_delivered','auth_completed'].includes(request.type) && !isOpen()) { socket.destroy(); return; }
         if (request.type === 'route') { reply(await router.route(request)); return; }
+        if (request.type === 'auth_completed') {
+          if (!validAuthCompletedRequest(request)) { reply({ ok: false, code: 'invalid_request' }); return; }
+          reply({ version: 1, type: 'ack', requestId: request.requestId });
+          await router.notifyAuthCompleted(request); return;
+        }
         if (request.type === 'health_events_ready') {
           if (request.version !== 1 || typeof request.requestId !== 'string' || !request.requestId) { reply({ ok: false, code: 'invalid_request' }); return; }
           await onHealthEvents(request);

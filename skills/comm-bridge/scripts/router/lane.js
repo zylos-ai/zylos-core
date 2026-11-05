@@ -97,7 +97,11 @@ export function createLane(context, group) {
       return;
     }
     const row = await nextMessage();
-    if (!row) return;
+    if (!row) {
+      const continuation = state.continuations.get(group);
+      if (continuation) await context.activation.beginContinuation(group, continuation);
+      return;
+    }
     if (context.availableCapacity() <= 0) {
       diagnostic('wait_capacity', { session_group: group, conversation_id: row.id });
       return;

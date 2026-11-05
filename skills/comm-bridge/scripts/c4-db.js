@@ -466,6 +466,9 @@ export const getContentCheckpointsSince = (...args) => store.getContentCheckpoin
 export const getOriginSyncConversations = (...args) => store.getOriginSyncConversations(...args);
 export const advanceOriginSyncCursor = (...args) => store.advanceOriginSyncCursor(...args);
 export const getOriginSyncBacklog = (...args) => store.getOriginSyncBacklog(...args);
+export const recordRunEnd = (...args) => store.recordRunEnd(...args);
+export const listRunEndings = (...args) => store.listRunEndings(...args);
+export const listPendingContinuations = (...args) => store.listPendingContinuations(...args);
 export const insertControl = (...args) => store.insertControl(...args);
 export const getNextPendingControl = (...args) => store.getNextPendingControl(...args);
 export const claimControl = (...args) => store.claimControl(...args);

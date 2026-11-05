@@ -1,6 +1,68 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { executeAuth } from '../../commands/auth.js';
+import { executeAuth, authCommand } from '../../commands/auth.js';
+
+const authenticated = {
+  exists: () => true, spawn: () => ({ status: 0 }),
+  adapter: () => ({ checkAuth: () => ({ status: 'success' }) }),
+};
+
+test('confirmed native authentication notifies the supervisor for the authenticated runtime', async () => {
+  for (const runtime of ['claude', 'codex']) {
+    let calls = 0;
+    const result = await executeAuth([runtime, '--json'], { ...authenticated,
+      notifyRecovery: notifiedRuntime => {
+        calls++;
+        assert.equal(notifiedRuntime, runtime);
+        return true;
+      }
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.ok, true);
+    assert.equal(result.data.authStatus, 'success');
+    assert.equal(result.data.recoveryNotified, true);
+  }
+});
+
+test('notification transport failures never change confirmed authentication success', async () => {
+  for (const notifyRecovery of [() => false, () => { throw new Error('socket failure'); }]) {
+    const result = await executeAuth(['codex', '--json'], { ...authenticated, notifyRecovery });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.recoveryNotified, false);
+  }
+});
+
+test('failed or unconfirmed authentication never sends a recovery notification', async () => {
+  for (const native of [{ status: 1 }, { signal: 'SIGINT' }, { status: 130 }, { error: new Error('spawn') }]) {
+    let calls = 0;
+    const result = await executeAuth(['codex'], { ...authenticated, spawn: () => native,
+      notifyRecovery: () => { calls++; return true; } });
+    assert.equal(result.ok, false);
+    assert.equal(calls, 0);
+  }
+  for (const status of ['failure', 'uncertain', 'throw']) {
+    let calls = 0;
+    const result = await executeAuth(['codex'], { ...authenticated,
+      adapter: () => ({ checkAuth() { if (status === 'throw') throw new Error('check failed'); return { status }; } }),
+      notifyRecovery: () => { calls++; return true; } });
+    assert.equal(result.ok, false);
+    assert.equal(calls, 0);
+  }
+});
+
+test('auth output reports notification delivery in text and JSON', async t => {
+  const lines = [];
+  t.mock.method(console, 'log', value => lines.push(value));
+  await authCommand(['codex'], { ...authenticated, notifyRecovery: () => false });
+  assert.deepEqual(lines, ['OK: codex authenticated', 'Recovery will resume on the next message or when the cooldown expires.']);
+  lines.length = 0;
+  await authCommand(['codex'], { ...authenticated, notifyRecovery: () => true });
+  assert.deepEqual(lines, ['OK: codex authenticated']);
+  lines.length = 0;
+  await authCommand(['codex', '--json'], { ...authenticated, notifyRecovery: () => true });
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]).data.recoveryNotified, true);
+});
 
 test('auth rejects invalid arguments and missing CLI without native writes', { timeout: 5000 }, async () => {
   let spawned = false;

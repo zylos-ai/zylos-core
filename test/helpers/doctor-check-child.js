@@ -25,7 +25,11 @@ const allowed = new Set(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'PATH', 'CLA
 // The repository test runner adds only its child-process guard preload.
 const guardPreload = `--import=${JSON.stringify(new URL('../../scripts/test-child-preload.js', import.meta.url).href)}`;
 if (process.env.NODE_OPTIONS !== undefined) assert.equal(process.env.NODE_OPTIONS, guardPreload);
-for (const key of Object.keys(process.env)) assert.ok(allowed.has(key) || key === 'NODE_OPTIONS', `Unexpected inherited variable: ${key}`);
+for (const key of Object.keys(process.env)) {
+  // macOS may add this locale marker even to an explicitly constructed env.
+  const systemLocale = process.platform === 'darwin' && key === '__CF_USER_TEXT_ENCODING';
+  assert.ok(allowed.has(key) || key === 'NODE_OPTIONS' || systemLocale, `Unexpected inherited variable: ${key}`);
+}
 
 // Replace only OS/network boundaries; import the product normally below.
 const blocked = () => { throw new Error('Unexpected live network access in doctor fixture'); };

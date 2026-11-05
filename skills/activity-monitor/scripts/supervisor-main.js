@@ -17,6 +17,7 @@ import { readScopedHealthQuota } from './health-quota.js';
 import { HealthEventReader } from './health-event-reader.js';
 import { RestartRequestStore } from './restart-request-store.js';
 import { findMatchingToolRule } from './tool-rules.js';
+import { PoolCapacity } from './pool-capacity.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
@@ -39,6 +40,22 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   };
   const readMode=()=>{const result=readModeSource();return result?.then?result.then(normalizeMode):normalizeMode(result);};
   let supervisor,events,configuration,machineTasks,legacy,lifecycleConfiguration;
+  let poolReader,capacityController;
+  const capacityWork=new Set(),clock=overrides.now ?? Date.now;
+  const applyPublishedCapacity=()=>{
+    const result=poolReader.readPoolCapacity({env,record:capacityController.lastPublished,
+      baseline:()=>poolReader.resolveSessionPoolBaseline({env,config:configuration}),now:clock()});
+    configuration.capacity=result.k;configuration.capacitySource=result.source;
+  };
+  const updateCapacity=context=>{
+    if(!capacityController)return;
+    // Memory commands run independently of the one-second lifecycle loop.
+    const work=capacityController.tick({mode:context.configuration.mode,
+      scenes:context.scenes.map(scene=>({...scene})),transitioning:Boolean(context.transition),now:clock()});
+    capacityWork.add(work);
+    work.catch(error=>log({error:error.code ?? error.message,phase:'capacity'}))
+      .finally(()=>capacityWork.delete(work));
+  };
   const pendingAlerts=new Set(),pendingNotices=new Set();
   const sendAlert=overrides.sendAlert ?? ((target,message)=>new Promise((resolve,reject)=>{
     const child=execFile(process.execPath,[fileURLToPath(new URL('../../comm-bridge/scripts/c4-send.js',import.meta.url)),target.channel,target.endpoint],
@@ -74,10 +91,18 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       const raw=await readConfig(), {mode,legacy}=await readMode();
       lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);
       configuration={...raw,...lifecycleConfiguration,mode,legacy,capacityUnavailable:false};
+      if(mode!=='multi') {
+        if(capacityController)updateCapacity({configuration,scenes:[]});
+        return configuration;
+      }
       try {
         const pool=await loadCoreModule('session-pool-config.js');
-        if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('Session pool configuration reader');
-        configuration.capacity=pool.resolveSessionPoolSize({env,config:raw});
+        if(!['readMemoryInputs','resolveSessionPoolBaseline','readPoolCapacity'].every(name=>typeof pool[name]==='function'))throw unavailable('Session pool configuration reader');
+        poolReader=pool;
+        capacityController ??=new PoolCapacity({directory,now:clock,log,
+          readMemory:overrides.readMemoryInputs ?? (()=>poolReader.readMemoryInputs({env})),
+          resolveBaseline:()=>poolReader.resolveSessionPoolBaseline({env,config:configuration})});
+        applyPublishedCapacity();
       }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('Session pool configuration reader','eviction');}
       return configuration;
     },
@@ -112,7 +137,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
         identity:async()=>{const current=await scenes.readIdentity(scene.sessionGroup);return current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime?identity:null;},
         quota:current=>readScopedHealthQuota({runDir:scene.runDir,runId:scene.runId,identity:current}),mutate:fn=>coordinator.serial(scene.runtime,fn),database:db.getDb(),zylosDir:root});
       pendingNotices.add(pending);pending.finally(()=>pendingNotices.delete(pending)).catch(log);
-    },alert,log,...overrides,readMode,scenes,afterRound:async({context})=>{await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick(context);await overrides.afterRound?.();},
+    },alert,log,...overrides,readMode,scenes,updateCapacity,afterRound:async({context})=>{await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick(context);await overrides.afterRound?.();},
   });
   legacy=overrides.legacyStatus ?? new SupervisorLegacyStatus({env,connectionOptions:baseScenes.connectionOptions ?? {},readHealth:runtime=>supervisor.health.store(runtime).read(),log});
   machineTasks=overrides.machineTasks ?? new SupervisorMachineTasks({zylosDir:root,readMode,readConfig,resolveTargetRuntime,readHealth:runtime=>supervisor.health.store(runtime).read(),log});
@@ -131,6 +156,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     for(const socket of sockets)socket.destroy();
     const stoppingSupervisor=supervisor.stop();stoppingSupervisor.catch(()=>{});
     await supervisor.loop.stop();await supervisor.connectionHandler.drain();
+    await Promise.allSettled([...capacityWork]);
     await machineTasks.stop();
     while(pendingNotices.size)await Promise.allSettled([...pendingNotices]);
     await stoppingSupervisor;await supervisor.drainHealthWrites?.();

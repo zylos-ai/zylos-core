@@ -15,7 +15,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import dns from 'node:dns/promises';
-import { ZYLOS_DIR, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE } from '../lib/config.js';
+import { ZYLOS_DIR, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE, readSessionMode } from '../lib/config.js';
 import { readEnvFile } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
 import { fetchLatestTagAsync, compareSemverDesc } from '../lib/github.js';
@@ -29,6 +29,8 @@ import { collectStatus } from '../lib/status-view.js';
 import { resolveTargetRuntime } from '../lib/session-state-reader.js';
 import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
 import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
+import { alertTargetNotice, formatAlertTargetNotice } from '../lib/alert-target-notice.js';
+import { readPoolCapacity } from '../lib/session-pool-config.js';
 
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
@@ -786,6 +788,15 @@ export async function doctorCommand(args, upstreamSource) {
   displaySystemGroup(diag, diagnostic.groups.system);
   displayAiGroup(diag, diagnostic.groups.ai_service);
   displayServiceGroup(diag, diagnostic.groups.services);
+  console.log(`  ${formatAlertTargetNotice(alertTargetNotice())}`);
+  try {
+    if (readSessionMode().mode === 'multi') {
+      const capacity = readPoolCapacity();
+      if (capacity.valid && capacity.fresh && capacity.record.reason === 'floor') {
+        console.log('  Memory fits only the system assistant; running at most 1 conversation at a time');
+      }
+    }
+  } catch { /* Capacity is informational and does not change diagnostic results. */ }
 
   // ── Phase 4: Channels ─────────────────────────────────────────
 

@@ -1,17 +1,61 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
-import { resolveSessionPoolSize } from '../../../../cli/lib/session-pool-config.js';
+import { resolveSessionPoolBaseline } from '../../../../cli/lib/session-pool-config.js';
+import { CONFIG_FILE, readZylosConfigStrict } from '../../../../cli/lib/config.js';
+import { createDispatcher } from '../router/factory.js';
 
-test('pool size: environment then file then fixed hardware, minimum one', () => {
-  const hardware = { cpuCount: 4, totalMemoryBytes: 8 * 1024 ** 3 };
-  assert.equal(resolveSessionPoolSize({ ...hardware, env: {}, config: {} }), 6);
-  assert.equal(resolveSessionPoolSize({ ...hardware, env: { ZYLOS_SESSION_POOL_SIZE: '25' }, config: { session_pool_size: 3 } }), 25);
+test('pool baseline uses environment then file then memory, minimum one', () => {
+  const hardware = { platform: 'darwin', totalMemoryBytes: 8 * 1024 ** 3 };
+  assert.deepEqual(resolveSessionPoolBaseline({ ...hardware, env: {}, config: {} }), { k: 6, fixed: false });
+  assert.equal(resolveSessionPoolBaseline({ ...hardware, env: { ZYLOS_SESSION_POOL_SIZE: '25' }, config: { session_pool_size: 3 } }).k, 25);
   for (const value of ['0', '-1', '1.5', 'bogus', true, null]) {
-    assert.equal(resolveSessionPoolSize({ ...hardware, env: { ZYLOS_SESSION_POOL_SIZE: value }, config: { session_pool_size: 3 } }), 3);
-    assert.equal(resolveSessionPoolSize({ ...hardware, env: {}, config: { session_pool_size: value } }), 6);
+    assert.equal(resolveSessionPoolBaseline({ ...hardware, env: { ZYLOS_SESSION_POOL_SIZE: value }, config: { session_pool_size: 3 } }).k, 3);
+    assert.equal(resolveSessionPoolBaseline({ ...hardware, env: {}, config: { session_pool_size: value } }).k, 6);
   }
-  assert.equal(resolveSessionPoolSize({ cpuCount: 1, totalMemoryBytes: 1024 ** 3, env: {}, config: {} }), 1);
+  assert.equal(resolveSessionPoolBaseline({ platform: 'darwin', totalMemoryBytes: 1024 ** 3, env: {}, config: {} }).k, 1);
+});
+
+// Integration boundary: the real dispatcher factory reads the fixed pool size
+// from the real configuration file and supplies it to the real scheduler.
+// Run when factory baseline wiring or configuration precedence changes; skip for
+// delivery-only changes. The runner isolates HOME, ZYLOS_DIR, PM2_HOME and a short
+// TMPDIR before imports. DB is in-memory; all terminal/runtime providers are
+// fixtures, so no tmux socket, live database, PM2 service or network is used.
+// Stop the dispatcher and restore the file here; the runner removes its root.
+test('dispatcher default pool size honors the configuration file', { timeout: 2000 }, async t => {
+  assert.ok(process.env.HOME && process.env.ZYLOS_DIR && process.env.PM2_HOME && process.env.TMPDIR);
+  const relative = path.relative(process.env.ZYLOS_DIR, CONFIG_FILE);
+  assert.ok(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  const previous = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE) : null;
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  const f = routerFixture(t);
+  f.put('origin');
+  const options = { readyTimeoutMs: 1000, delivery: { periodicEnabled: false } };
+  assert.equal(Object.hasOwn(options, 'poolSize'), false);
+  let dispatcher;
+  try {
+    // Two fixed values prevent the hardware fallback from passing by coincidence.
+    for (const fixed of [3, 4]) {
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'claude', session_mode: 'multi', session_pool_size: fixed }));
+      assert.equal(readZylosConfigStrict().config.session_pool_size, fixed);
+      dispatcher = createDispatcher({ ...f.deps,
+        env: { ...process.env, ZYLOS_SESSION_POOL_SIZE: '' },
+        diagnostics: { diagnostic() {}, maintain() {} }, sendStatusNotice: async () => {},
+      }, options);
+      await dispatcher.initialize();
+      await dispatcher.idle();
+      assert.equal(dispatcher.availableCapacity(), fixed);
+      await dispatcher.stop();
+      dispatcher = null;
+    }
+  } finally {
+    await dispatcher?.stop();
+    if (previous === null) fs.rmSync(CONFIG_FILE);
+    else fs.writeFileSync(CONFIG_FILE, previous);
+  }
 });
 
 test('strict mode is read once, CONFIG_UNREADABLE stays inert even after repair', async t => {

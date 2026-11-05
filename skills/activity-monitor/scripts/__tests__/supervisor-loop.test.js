@@ -145,7 +145,7 @@ test('every loop step exception reports its phase and schedules the next round',
  for(const [method,phase] of Object.entries({
   getModeTransition:'round',readConfiguration:'round',listDrainFences:'round',readRestartRequests:'restart-requests',
   observe:'round',checkManualFences:'manual-fences',advanceManual:'advanceManual',advanceRestarts:'advanceRestarts',
-  reconcileConfiguration:'reconcileConfiguration',observeExits:'round',probeAndPublish:'observe',advanceReclaim:'reclaim',
+  reconcileConfiguration:'reconcileConfiguration',observeExits:'round',probeAndPublish:'observe',updateCapacity:'capacity',advanceReclaim:'reclaim',
   checkRotation:'rotation',checkTtl:'ttl',checkEviction:'eviction',checkSync:'sync',writeMetricsAndMaintain:'round',afterRound:'after-round',
  })) await t.test(method,async()=>{
   const f=fixture({listDrainFences:async()=>[{sessionGroup:'origin'},{sessionGroup:'tg:one'}]});
@@ -168,4 +168,14 @@ test('long-running group stays observed without starving another group or reopen
  assert.deepEqual(seen.slice(-2),['origin','tg:one']);assert.ok(f.calls.includes('reclaim'));
  for(const phase of ['manual','restarts','config','rotation','ttl','evict','sync'])assert.equal(f.calls.includes(phase),false,phase);
  assert.equal(f.timers.length,3);await f.loop.stop();
+});
+
+test('ending reconciliation follows exit cleanup and precedes publication and reclaim', async () => {
+  const f = fixture({ listDrainFences: async () => [{ sessionGroup: 'tg:one' }],
+    reconcileRunEndings: async () => { f.calls.push('endings'); } });
+  await f.loop.start();
+  assert.ok(f.calls.indexOf('exits') < f.calls.indexOf('endings'));
+  assert.ok(f.calls.indexOf('endings') < f.calls.indexOf('probe:origin'));
+  assert.ok(f.calls.indexOf('endings') < f.calls.indexOf('reclaim'));
+  await f.loop.stop();
 });

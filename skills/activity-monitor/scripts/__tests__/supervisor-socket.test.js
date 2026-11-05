@@ -7,7 +7,7 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { createSupervisorConnectionHandler } from '../router-socket.js';
-import { submit } from '../../../../cli/lib/am-sock-client.js';
+import { submit, notifyAuthCompleted } from '../../../../cli/lib/am-sock-client.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 
 async function socketFixture(t, deps) {
@@ -20,7 +20,7 @@ async function socketFixture(t, deps) {
     const socket=net.createConnection(socketPath);let output='';socket.on('data',data=>output+=data);await once(socket,'connect');
     socket.write(typeof input==='string'?input:JSON.stringify(input)+'\n');await once(socket,'close');return output?JSON.parse(output):null;
   };
-  send.handler=handler;return send;
+  send.handler=handler;send.socketPath=socketPath;return send;
 }
 test('actual socket scopes v2 delivery, rejects stale runs and maps v1 timestamp', async t => {
   const delivered=[],groups=[],logs=[];let mode='multi';
@@ -39,6 +39,33 @@ test('first line is consumed once and malformed requests do not enter admission'
   const accepted=[];const exchange=await socketFixture(t,{admission:{handle:async r=>{accepted.push(r);return {ok:true};}}});
   assert.equal((await exchange('bad\n')).code,'invalid_request');assert.equal((await exchange('[]\n')).code,'invalid_request');
   assert.equal((await exchange('{"type":"first"}\n{"type":"second"}\n')).ok,true);assert.deepEqual(accepted,[{type:'first'}]);
+});
+test('authentication notification validates its envelope and routes in both session modes', async t => {
+  let mode = 'multi', calls = 0;
+  const request = { version: 1, type: 'auth_completed', requestId: 'auth', runtime: 'codex' };
+  const exchange = await socketFixture(t, { readMode: () => ({ mode }), router: {
+    notifyAuthCompleted(input) {
+      calls++; assert.deepEqual(input, request);
+    }
+  } });
+  assert.deepEqual(await exchange(request), { version: 1, type: 'ack', requestId: 'auth' });
+  for (const patch of [{ version: 2 }, { runtime: '../bad' }, { runtime: 'unknown' }, { requestId: '' }, { runtime: null }]) {
+    assert.equal((await exchange({ ...request, ...patch })).code, 'invalid_request');
+  }
+  mode = 'single'; assert.deepEqual(await exchange(request), { version: 1, type: 'ack', requestId: 'auth' });
+  assert.equal(calls, 2);
+});
+test('authentication notification acknowledges receipt before recovery and shutdown drain waits for recovery', async t => {
+  let release, finished = false;
+  const blocked = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const send = await socketFixture(t, { router: { notifyAuthCompleted: async () => { await blocked; finished = true; } } });
+  assert.equal(await notifyAuthCompleted('claude', { socketPath: send.socketPath }), true);
+  let drained = false;
+  const drain = send.handler.drain().then(() => { drained = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(drained, false); assert.equal(finished, false);
+  release(); await drain; assert.equal(finished, true);
 });
 test('uncertain admission write closes without a fabricated rejection; route preserves baseline error', async t => {
   const exchange=await socketFixture(t,{admission:{handle:async()=>{throw Object.assign(new Error('disk'),{code:'EIO'});}},router:{route:async()=>{throw new Error('routing failed');}}});
@@ -81,6 +108,6 @@ test('socket shutdown drain waits accepted async route mutations and closed entr
   const reply=send({type:'route'});await entered;
   let drained=false;const drain=send.handler.drain().then(()=>drained=true);await new Promise(resolve=>setImmediate(resolve));
   assert.equal(drained,false);assert.equal(mutated,false);release();await drain;assert.equal(mutated,true);assert.deepEqual(await reply,{ok:true});
-  open=false;for(const type of ['route','health_events_ready','notify_delivered'])assert.equal(await send({type}),null);
+  open=false;for(const type of ['route','health_events_ready','notify_delivered','auth_completed'])assert.equal(await send({type}),null);
   assert.equal(calls,1);assert.equal((await send({type:'restart_all'})).code,'entry_not_open');
 });

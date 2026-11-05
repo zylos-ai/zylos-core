@@ -12,7 +12,7 @@ const hints = ['Check: pm2 logs worker-a', 'Check: pm2 logs worker-b'];
 const cleanup = [];
 afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 
-function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude' } = {}) {
+function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-')));
   cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
@@ -33,10 +33,19 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
   fs.mkdirSync(path.join(dirs.ZYLOS_DIR, '.zylos'));
   fs.mkdirSync(path.join(dirs.ZYLOS_DIR, '.claude', 'skills'), { recursive: true });
   fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'components.json'), '{}');
-  fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime, session_mode: mode }));
+  fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime, ...(alertTarget === undefined ? {} : { alert_target: alertTarget }), session_mode: sessionMode ?? mode }));
+  if (capacity !== undefined) {
+    fs.mkdirSync(path.join(dirs.ZYLOS_DIR, 'activity-monitor'), { recursive: true });
+    fs.writeFileSync(path.join(dirs.ZYLOS_DIR, 'activity-monitor', 'pool-capacity.json'), JSON.stringify(capacity));
+  }
+  if (sender) {
+    const directory = path.join(dirs.ZYLOS_DIR, '.claude', 'skills', 'telegram', 'scripts');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'send.js'), '');
+  }
   const env = { ...dirs, PATH: bin, CLAUDE_BIN: path.join(bin, 'claude'),
     DOCTOR_TEST_ROOT: root, DOCTOR_TEST_STATE: state, DOCTOR_TEST_NETWORK: network,
-    DOCTOR_TEST_MODE: mode, DOCTOR_TEST_ORIGIN: origin, ZYLOS_SESSION_GROUP: group, DOCTOR_TEST_RUNTIME: runtime,
+    DOCTOR_TEST_MODE: sessionMode ?? mode, DOCTOR_TEST_ORIGIN: origin, ZYLOS_SESSION_GROUP: group, DOCTOR_TEST_RUNTIME: runtime,
     DOCTOR_TEST_TMUX_SOCKET: path.join(dirs.TMPDIR, 'tmux.sock'), NO_COLOR: '1',
     ZYLOS_GH_RETRY_DELAY_MS: '' };
   for (const [key, dir] of Object.entries(dirs)) assert.equal(fs.realpathSync(env[key]), dir);
@@ -58,6 +67,63 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
     call.socket === env.DOCTOR_TEST_TMUX_SOCKET));
   const databaseCreated = fs.existsSync(path.join(dirs.ZYLOS_DIR, 'comm-bridge', 'c4.db'));
   return { ...result, calls, probes, repairs, versions, databaseCreated };
+}
+
+// Boundary: real doctor text uses the shared capacity reader, without adding a
+// failed check. Run for capacity notice or reader changes; skip unrelated repair
+// changes. runDoctor verifies private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR,
+// fake tmux socket and blocked network; no database or live services are used.
+for (const scenario of ['fresh floor', 'stale floor', 'future floor', 'missing', 'invalid', 'memory', 'single']) {
+  test(`capacity notice ${scenario} is informational`, () => {
+    const record = { v: 1, k: 1, reason: 'floor', source: 'auto', computedAt: Date.now() };
+    if (scenario === 'stale floor') record.computedAt -= 61000;
+    if (scenario === 'future floor') record.computedAt += 60000;
+    if (scenario === 'invalid') record.v = 2;
+    if (scenario === 'memory') record.reason = 'memory';
+    const options = { state: 'pass', sessionMode: scenario === 'single' ? 'single' : 'multi',
+      capacity: scenario === 'missing' ? undefined : record };
+    const text = runDoctor(['--check'], options);
+    assert.equal(text.status, 0, text.stderr);
+    const notice = 'Memory fits only the system assistant; running at most 1 conversation at a time';
+    const lines = text.stdout.split(/\r?\n/).map(line => line.trim());
+    assert.deepEqual(lines.filter(line => line.startsWith('Memory fits')), scenario === 'fresh floor' ? [notice] : []);
+    if (scenario === 'fresh floor') {
+      const line = lines.indexOf(notice);
+      assert.ok(lines[line - 1].startsWith('Alert target:'));
+    }
+    const json = runDoctor(['--check', '--json'], options);
+    assert.equal(json.status, 0, json.stderr);
+    const result = JSON.parse(json.stdout);
+    assert.equal(result.passed, true);
+    assert.equal(result.groups.services.passed, true);
+    assert.deepEqual(result.issues, []);
+  });
+}
+
+// Boundary: alert destination is informational in real doctor text/JSON flow.
+// Run for alert notice changes; skip for unrelated doctor repair behavior. Uses
+// private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and fake tmux on a private socket;
+// no C4 database or live services; runDoctor verifies paths and removes fixtures.
+for (const [alertTarget, sender, message] of [
+  [undefined, false, 'Alert target: not set; system alerts go only to Web Console. The agent will ask the owner in the next private chat, or run: zylos config set alert_target <channel>:<endpoint>'],
+  ['web-console:console', false, 'Alert target: web-console:console (the owner chose Web Console only). To change: zylos config set alert_target <channel>:<endpoint>'],
+  ['invalid', false, 'Alert target: invalid value (expected channel:endpoint, both non-empty, without newline or NUL); system alerts fall back to Web Console.'],
+  ['telegram:room', false, 'Alert target: skills/telegram/scripts/send.js not found; system alerts fall back to Web Console.'],
+  ['telegram:room', true, 'Alert target: telegram:room'],
+]) {
+  test(`alert destination ${alertTarget ?? 'missing'} sender=${sender} is a notice without diagnostic failure`, () => {
+    const text = runDoctor(['--check'], { state: 'pass', alertTarget, sender });
+    assert.equal(text.status, 0, text.stderr);
+    assert.deepEqual(text.stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line.startsWith('Alert target:')), [message]);
+    assert.match(text.stdout, /Everything is working/);
+    const json = runDoctor(['--check', '--json'], { state: 'pass', alertTarget, sender });
+    assert.equal(json.status, 0, json.stderr);
+    const result = JSON.parse(json.stdout);
+    assert.equal(result.passed, true);
+    assert.equal(result.groups.services.passed, true);
+    assert.deepEqual(result.issues, []);
+    assert.equal('alertTarget' in result, false);
+  });
 }
 
 // Boundary: ready Claude plus two unresolved services. Run for check gating/hint/exit

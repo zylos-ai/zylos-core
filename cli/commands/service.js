@@ -13,6 +13,7 @@ import { ZYLOS_DIR, SKILLS_DIR, readZylosConfigOrThrow } from '../lib/config.js'
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getCoreEcosystemPath, restartFromEcosystem, restartManagedProcess } from '../lib/pm2.js';
+import { alertTargetNotice, formatAlertTargetNotice } from '../lib/alert-target-notice.js';
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -87,7 +88,7 @@ export function collectHostStatus({ exec = execFileSync, disk = () => fs.statfsS
   return result;
 }
 
-export async function showStatus(args = [], { collect, host = collectHostStatus, resolveRuntime = resolveTargetRuntime, load = () => import('../lib/status-view.js') } = {}) {
+export async function showStatus(args = [], { collect, host = collectHostStatus, resolveRuntime = resolveTargetRuntime, load = () => import('../lib/status-view.js'), alertNotice = alertTargetNotice } = {}) {
   const json = args.includes('--json');
   let result;
   if (args.some(arg => arg !== '--json') || args.filter(arg => arg === '--json').length > 1) {
@@ -121,6 +122,8 @@ export async function showStatus(args = [], { collect, host = collectHostStatus,
     else if (!machine.services.length) console.log('  No services running');
     else for (const item of machine.services) console.log(`  ${item.name}: ${item.status}`);
     console.log(machine.disk ? `Disk: ${Math.round(machine.disk.available / 1024 ** 3)} GiB available / ${Math.round(machine.disk.total / 1024 ** 3)} GiB total` : 'Disk: unavailable');
+    const notice = alertNotice();
+    if (notice.kind !== 'ready') console.log(formatAlertTargetNotice(notice));
   }
   if (!result.ok) process.exitCode = 1;
   return result;

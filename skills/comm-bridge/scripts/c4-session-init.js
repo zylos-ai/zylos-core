@@ -101,6 +101,32 @@ async function withC4Db(label, action) {
   }
 }
 
+/** Read the current alert destination without opening C4 or tmux. */
+async function alertTargetInstruction() {
+  let result;
+  let parseServerAlertTarget;
+  try {
+    const [config, observation] = await Promise.all([
+      import('./local-config.js'),
+      import('../../activity-monitor/scripts/supervisor-server-observation.js'),
+    ]);
+    result = config.readZylosConfigStrict();
+    parseServerAlertTarget = observation.parseServerAlertTarget;
+  }
+  catch { return 'Alert target: UNAVAILABLE (instance config unreadable); do not write it.'; }
+  if (result.state === 'error') return 'Alert target: UNAVAILABLE (instance config unreadable); do not write it.';
+  if (result.state === 'missing' || !Object.hasOwn(result.config, 'alert_target')) {
+    return 'Alert target: not set; system alerts (session unobservable, authentication failure) go only to Web Console. When the owner next messages you in a private chat, ask once whether alerts should go to that chat. Before asking, run "zylos config get alert_target"; if another session has set it, do not ask. If the owner agrees, run "zylos config set alert_target <channel>:<endpoint>", where <endpoint> is the address that channel uses to send a new message to this private chat, not a reply to this particular message (see that channel\'s skill for its address format). If the owner declines, run "zylos config set alert_target web-console:console".';
+  }
+  const value = result.config.alert_target;
+  const target = parseServerAlertTarget(value);
+  if (!target) return 'Alert target: invalid value; system alerts fall back to Web Console. Tell the owner and agree on a new value before changing it.';
+  if (target.channel === 'web-console' && target.endpoint === 'console') {
+    return 'Alert target: web-console:console (the owner chose Web Console only). Do not ask again.';
+  }
+  return `Alert target: ${value}. System alerts go there; change it only if the owner asks.`;
+}
+
 /** Keep original message bytes and drop whole oldest messages to fit. */
 export async function emitC4Conversations(payload, budget = null, {
   scopeReader, withDb = withC4Db,
@@ -123,6 +149,7 @@ export async function emitC4Conversations(payload, budget = null, {
       `Scope: ${scope.scope}. Working memory is not injected. Read the complete snapshot with: node ${path.join(scope.root, '.claude/skills/zylos-memory/scripts/read-work-memory.js')} --json`,
       `Before resuming work, read ${path.join(scope.memoryDir, 'handoff.md')} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`,
     ];
+    if (!isSubsession(payload)) instructions.push(await alertTargetInstruction());
     if (!isSubsession(payload) && (scope.scope === '*' || scope.scope === 'origin')) {
       try {
         const migration = await migrationReader(scope);
