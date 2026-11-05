@@ -100,10 +100,11 @@ export class SupervisorHealthObserver {
       // Binding construction may perform I/O; repeat identity and gates immediately before insertion.
       if (!await this.canAct(scene,{requireReady:true,requireOpen:true}) || this.stopped) continue;
       const deadline = this.now() + (probe.phase === 'recovery' ? this.recoveryDeadlineMs : 300000);
-      const controlId = await this.insertControl(`Heartbeat check. [phase=${probe.phase}]`, {
+      const control = await this.insertControl(`Heartbeat check. [phase=${probe.phase}]`, {
         sessionGroup:mode === 'single' ? null : scene.sessionGroup, targetBinding:binding,
         priority:0,bypassState:true,ackDeadlineAt:Math.floor(deadline/1000),
       });
+      const controlId = control?.id;
       if (!Number.isInteger(controlId) || controlId <= 0) throw new Error('Recovery control was not inserted');
       Object.assign(probe,{scene:{...scene},controlId,deadline,preparing:false});
       if(probe.phase === 'recovery') await this.coordinator.markProbeQueued(probe.runtime);

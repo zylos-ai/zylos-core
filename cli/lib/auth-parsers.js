@@ -27,8 +27,8 @@ export function parseClaudeAuthStatus(stdout) {
 
 /**
  * Classify `codex login status` output into a tristate auth status.
- * The exit code is unusable: `codex login status` exits 0 for BOTH
- * "Logged in using ..." and "Not logged in". So we key off explicit text:
+ * CLI versions can report "Not logged in" with exit 0 or exit 1, so an
+ * exit code alone does not establish auth status. We key off explicit text:
  * "Not logged in" is a confirmed failure, a line beginning with "Logged in"
  * is success, and anything else is inconclusive.
  * NOTE: codex writes the status line to STDERR (stdout is empty) and may emit

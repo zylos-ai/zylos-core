@@ -181,6 +181,9 @@ export class ClaudeAdapter extends SessionAdapter {
       if (isTransient) {
         return { status: 'uncertain', reason: 'cli_probe_uncertain' };
       }
+      if (typeof err.code === 'number' && output.includes('Not logged in')) {
+        return { status: 'failure', reason: 'cli_probe_not_logged_in' };
+      }
       return { status: 'uncertain', reason: 'cli_probe_unexpected_error' };
     }
   }
