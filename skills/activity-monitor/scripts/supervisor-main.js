@@ -65,7 +65,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   }));
   const guard=new SupervisorServerHealth({readAlertTarget:()=>parseServerAlertTarget(configuration?.alert_target),sendAlert,log});
   const capacityAlert=id=>{
-    const options={context:'capacity',noticeCode:id,idleMinutes:Math.max(1,Math.floor((lifecycleConfiguration?.evictMinIdleSeconds ?? 300)/60))};
+    const options={context:'capacity',noticeCode:id};
     const pending=(async()=>{
       let message;
       try {message=messageForStatus(options,(await readConfig()).statusNotices ?? {});}
@@ -76,8 +76,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   };
   const baseScenes=overrides.scenes ?? new SupervisorScenes({env,readMode:readMode,readActivity:scene=>supervisor.readActivity(scene)});
   const scenes=overrides.scenes ?? new SupervisorServerObservation(baseScenes,{guard});
-  const reclaimCapacity=(record,isCurrent)=>supervisor.admission.serialize(async()=>{
-    if(stopping || !isCurrent())return null;
+  const reclaimCapacity=record=>supervisor.admission.serialize(async()=>{
     // Re-read configuration without applying another capacity refresh. A bad
     // configuration still blocks lifecycle mutations, including pressure reclaim.
     const raw=await readConfig(), {mode}=await readMode();
@@ -85,7 +84,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     const context={configuration:{...raw,...lifecycleConfiguration,mode},
       transition:await db.getModeTransition(),fences:await db.listDrainFences(),restartRequests:supervisor.admission.readRequests()};
     context.scenes=await scenes.observe(context);
-    if(stopping || !isCurrent())return null;
+    if(stopping)return null;
     return supervisor.lifecycle.checkCapacityPressure(record,context);
   });
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});

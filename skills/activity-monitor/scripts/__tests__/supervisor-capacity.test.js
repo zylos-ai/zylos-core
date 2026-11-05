@@ -156,29 +156,29 @@ for (const fixed of [false, true]) {
 }
 
 for (const route of ['target', 'missing', 'failed']) {
-  // Integration boundary: actual entry -> capacity OOM event -> renderer ->
+  // Integration boundary: actual entry -> capacity memory warning -> renderer ->
   // unchanged guard.notify routing -> injected sender and real F12 diagnostic.
   // Run for notice/entry wiring; skip unrelated lifecycle. Runner provides fresh
   // HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; private am.sock and fixture
   // DB/scenes only, no tmux/PM2/network. Service closes before fixture cleanup.
   test(`capacity notices use the configured destination and Web Console fallback (${route})`, async t => {
-    let oomKills = 0;
+
     const f = await fixture(t, { configPatch: route === 'missing' ? {} : { alert_target: 'telegram:fixture-owner' },
-      readMemory: async () => ({ source: 'cgroup2', limitBytes: 4 * 1024 ** 3, usedBytes: 1 * 1024 ** 3, oomKills }),
+      readMemory: async () => ({ source: 'cgroup2', limitBytes: 4 * 1024 ** 3, usedBytes: 3900 * 1024 ** 2 }),
       sendAlert: target => route === 'failed' && target.channel === 'telegram' ? false : true });
-    await flush(); oomKills = 1; f.advance(10000); await f.round(); await flush();
+    await flush(); f.advance(10000); await f.round(); await flush();
     const last = f.sends.at(-1);
     assert.equal(last.target.channel, route === 'target' ? 'telegram' : 'web-console');
     assert.equal(f.sends.length, route === 'failed' ? 2 : 1);
     assert.equal(last.message.split('\n').length, 2);
-    assert.match(last.message, /^\[Zylos\] 这台机器内存不够用/);
+    assert.match(last.message, /^\[Zylos\] 这台机器内存快用完了/);
     assert.doesNotMatch(last.message, /cgroup|oom|fixture-owner|1073741824/i);
-    assert.ok(f.diagnostics().some(row => row.event === 'container_oom_kill' && row.oomKills === 1));
+    assert.equal(f.diagnostics().some(row => row.event === 'container_oom_kill'), false);
   });
 }
 
 // Integration boundary: actual readConfiguration failure and already-observed
-// input/publication failure timers, renderer default config and guard sender.
+// input failure timer, renderer default config and guard sender.
 // Run when F1 failure/notice scheduling changes; skip unrelated lifecycle.
 // Fresh runner HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; private am.sock,
 // fixture DB and injected memory/scenes, no tmux/PM2/network. Lifecycle stop and
@@ -193,13 +193,13 @@ test('unreadable configuration sends delayed default notices without stale calcu
   const before = f.reads(), observations = f.observations();
   f.setConfigError(true); f.advance(59000); await f.round(); await flush();
   assert.equal(f.sends.length, 1, 'only the earlier input failure has reached sixty seconds');
-  assert.match(f.sends[0].message, /^\[Zylos\] 暂时读不到/);
+  assert.match(f.sends[0].message, /^\[Zylos\] 系统出现异常/);
   f.advance(1000); await f.round(); await flush();
-  assert.equal(f.sends.length, 2); assert.match(f.sends[1].message, /^\[Zylos\] 同时运行的对话数量/);
+  assert.equal(f.sends.length, 1);
   assert.equal(f.reads(), before); assert.equal(f.observations(), observations);
   assert.equal(f.fences.size, 0);
   assert.equal(fs.statSync(file).isDirectory(), true);
-  f.advance(60000); await f.round(); await flush(); assert.equal(f.sends.length, 2);
+  f.advance(60000); await f.round(); await flush(); assert.equal(f.sends.length, 1);
 });
 
 // Integration boundary: real pressure candidate -> beginReclaim -> F12 and
@@ -207,7 +207,7 @@ test('unreadable configuration sends delayed default notices without stale calcu
 // wiring/idle duration changes; skip other lifecycle work. All five runner
 // paths isolated; private am.sock, in-memory DB/scenes, no tmux/PM2/network.
 // No process is stopped; only the real beginReclaim fence is observed.
-test('entry pressure uses effective idle minutes and writes its selected group only to diagnostics', async t => {
+test('entry pressure writes its selected group only to diagnostics', async t => {
   const group = { sessionGroup: 'private-group', present: true, ready: true, state: 'idle',
     runId: 'private-run', sessionId: 'session', createdAt: 0, idleSince: 0, processRunning: false };
   const f = await fixture(t, { fixed: null, initialScenes: [group], configPatch: { session_evict_min_idle_seconds: 659 },
@@ -215,7 +215,7 @@ test('entry pressure uses effective idle minutes and writes its selected group o
   await flush(); f.advance(10000); await f.round(); await flush();
   assert.equal(f.fences.get(group.sessionGroup)?.reason, 'evict');
   const notice = f.sends.find(row => row.message.includes('这台机器内存快用完了'));
-  assert.ok(notice); assert.match(notice.message, /10 分钟以上/); assert.match(notice.message, /more than 10 minutes/);
+  assert.ok(notice); assert.match(notice.message, /things may slow down or become unstable/);
   assert.doesNotMatch(notice.message, /private-group|private-run|4089446400/);
   const event = f.diagnostics().find(row => row.event === 'capacity_pressure_evict');
   assert.equal(event?.session_group, group.sessionGroup); assert.equal(event?.k, 1);
@@ -245,10 +245,39 @@ for (const change of ['single', 'fixed', 'stop']) {
       if (change === 'fixed') f.setFixed(3);
       if (change === 'stop') stopping = f.service.stop();
       releaseQueue(); await blocker; await flush(); await flush(); await stopping;
-      assert.equal(f.fences.size, 0); assert.equal(f.sends.length, 0);
+      assert.equal(f.fences.size, 0); assert.equal(f.sends.length, 1, 'memory warning does not depend on queued reclaim completion');
       assert.equal(f.diagnostics().some(row => row.event === 'capacity_pressure_evict'), false);
     } finally {
       releaseMemory(null); releaseQueue(); await stopping;
     }
   });
 }
+
+// Integration boundary: entry stop drains a real pending capacity calculation.
+// Run for stop/capacityWork changes; skip unrelated work. All five runner paths
+// isolated, private am.sock/injected DB/scenes, no tmux/PM2/network. Release the
+// held read in finally, await stop before fixture cleanup; bounded test timeout.
+test('stop waits for the pending capacity computation to finish', { timeout: 2000 }, async t => {
+  let release, started = false;
+  const held = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { readMemory: () => { started = true; return held; } });
+  let stopped = false; const stopping = f.service.stop().then(() => { stopped = true; });
+  try {
+    for (let i = 0; i < 20; i++) await flush();
+    assert.equal(started, true); assert.equal(stopped, false);
+  } finally { release(null); await stopping; }
+  assert.equal(stopped, true);
+});
+
+// Integration boundary: effective parsed idle threshold reaches pressure reclaim.
+// Run for lifecycle configuration or pressure wiring; skip unrelated work. Fresh
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR, private am.sock and injected
+// DB/scenes. No tmux/PM2/network or process stop; service closes before cleanup.
+test('entry pressure honors a configured minimum idle duration longer than the candidate age', async t => {
+  const group = { sessionGroup: 'private-group', present: true, ready: true, state: 'idle',
+    runId: 'private-run', sessionId: 'session', createdAt: 0, idleSince: 0, processRunning: false };
+  const f = await fixture(t, { fixed: null, initialScenes: [group], configPatch: { session_evict_min_idle_seconds: 3000 },
+    readMemory: async () => ({ source: 'host', limitBytes: 4 * 1024 ** 3, usedBytes: 3900 * 1024 ** 2 }) });
+  await flush(); f.advance(10000); await f.round(); await flush();
+  assert.equal(f.fences.size, 0); assert.equal(f.sends.length, 1);
+});

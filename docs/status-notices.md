@@ -192,9 +192,9 @@ through the normal deployment workflow:
         }
       },
       "capacity": {
-        "oom_kill": {
-          "zh": "这台机器内存不足，系统已结束一个程序。",
-          "en": "This machine ran out of memory and the system stopped a program."
+        "memory_low": {
+          "zh": "这台机器内存紧张，请留意运行情况。",
+          "en": "This machine is low on memory; please watch its operation."
         }
       }
     }
@@ -214,19 +214,14 @@ supports `{resetAt}`, a validated epoch-millisecond time formatted with an expli
 IANA time-zone label. `timeZone` defaults to the host zone; invalid zones use UTC.
 Missing/expired/invalid reset values select `quota_exhausted` instead.
 
-The `capacity` context has four IDs: `memory_reclaim` (an idle conversation was
-closed because memory was almost full), `oom_kill` (the system stopped a program
-because memory ran out), `inputs_unreadable` (automatic-mode memory readings have
-been unavailable for 60 seconds), and `publish_failed` (automatic-mode capacity
-publication has failed for 60 seconds). Fixed mode sends neither
-`inputs_unreadable` nor `publish_failed`, and does not count their failure
-durations. After switching back to automatic mode, each 60-second timer starts
-with its first failed reading or publication. Publication failures still produce
-diagnostics in fixed mode; cgroup v2 OOM notifications remain enabled.
-These are complete notices without inbound or first-failure suffixes.
-Only `memory_reclaim` supports `{idleMinutes}`: the Supervisor supplies the eviction
-idle threshold in minutes, rounding down and using at least 1. An override for
-another ID containing `{idleMinutes}` is invalid and uses the default instead.
+The `capacity` context has two IDs: `memory_low` (valid memory readings reach or exceed
+the danger line for two consecutive calculations, in automatic or fixed mode),
+and `inputs_unreadable` (automatic-mode memory readings have been unavailable
+for 60 seconds). Fixed mode does not count unreadable duration; switching back
+to automatic starts its 60-second timer at the first failed automatic reading.
+Capacity publication failures and cgroup v2 OOM increments produce diagnostics
+only. These are complete notices without inbound or first-failure suffixes.
+Neither capacity notice has template variables.
 Each capacity ID is sent at most once every 30 minutes through the Supervisor's
 existing alert destination, with Web Console fallback. If configuration cannot be
 read, the alert path uses the default wording and brand. Group names, memory

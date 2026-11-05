@@ -93,7 +93,6 @@ export class PoolCapacity {
     this.epoch = 0;
     this.lastPublished = null;
     this.inputsUnreadableSince = null;
-    this.publishFailedSince = null;
     this.noticeSent = new Map();
     this.pressureCount = 0;
     this.oomKills = null;
@@ -120,9 +119,7 @@ export class PoolCapacity {
 
   checkFailureNotices(now = this.now()) {
     if (this.mode !== 'multi') return;
-    for (const [id, since] of [['inputs_unreadable', this.inputsUnreadableSince], ['publish_failed', this.publishFailedSince]]) {
-      if (since !== null && now - since >= NOTICE_DELAY) this.notice(id, now);
-    }
+    if (this.inputsUnreadableSince !== null && now - this.inputsUnreadableSince >= NOTICE_DELAY) this.notice('inputs_unreadable', now);
   }
 
   loadSamples(now) {
@@ -198,7 +195,7 @@ export class PoolCapacity {
       if (this.mode === 'multi') this.epoch++;
       this.mode = mode; this.lastComputedAt = null; this.currentK = null;
       this.history = []; this.stableN = null; this.stableSince = null; this.wasFixed = false; this.wasFallback = false;
-      this.inputsUnreadableSince = null; this.publishFailedSince = null; this.pressureCount = 0; this.oomKills = null;
+      this.inputsUnreadableSince = null; this.pressureCount = 0; this.oomKills = null;
       return null;
     }
     this.mode = mode;
@@ -252,9 +249,7 @@ export class PoolCapacity {
         this.lastPublished = record;
         this.currentK = k;
         this.wasFixed = baseline.fixed;
-        this.publishFailedSince = null;
       } catch (error) {
-        this.publishFailedSince = baseline.fixed ? null : (this.publishFailedSince ?? now);
         this.diagnostic('capacity_publish_failed', { error: error.code });
       }
       // Cancelling a fixed value keeps the startup bound until it is published.
@@ -267,17 +262,16 @@ export class PoolCapacity {
       if (oomKills !== null) {
         if (this.oomKills !== null && oomKills > this.oomKills) {
           this.diagnostic('container_oom_kill', { oomKills, previousOomKills: this.oomKills });
-          this.notice('oom_kill', now);
         }
         this.oomKills = oomKills;
       }
-      const pressure = source === 'auto' && readable && memory.usedBytes >= memory.limitBytes - calculation.reserveBytes / 2;
+      const pressure = readable && memory.usedBytes >= memory.limitBytes - calculation.reserveBytes / 2;
       this.pressureCount = pressure ? Math.min(2, this.pressureCount + 1) : 0;
-      if (this.pressureCount === 2) {
-        const selected = await this.reclaim(record, () => epoch === this.epoch && this.mode === 'multi');
+      if (this.pressureCount === 2) this.notice('memory_low', now);
+      if (source === 'auto' && this.pressureCount === 2) {
+        const selected = await this.reclaim(record);
         if (selected && epoch === this.epoch && this.mode === 'multi') {
           this.diagnostic('capacity_pressure_evict', { usedBytes: memory.usedBytes, limitBytes: memory.limitBytes, k, session_group: selected.sessionGroup });
-          this.notice('memory_reclaim', now);
         }
       }
       return record;

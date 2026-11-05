@@ -16,21 +16,13 @@ const DEFAULTS = {
   },
 };
 const CAPACITY_TEMPLATES = {
-  memory_reclaim: {
-    zh: '这台机器内存快用完了，已自动关掉一个空闲了 {idleMinutes} 分钟以上的对话；它下次收到消息会自动重新开始。',
-    en: 'This machine is almost out of memory, so one conversation that had been idle for more than {idleMinutes} minutes was closed automatically. It will start again by itself when its next message arrives.',
-  },
-  oom_kill: {
-    zh: '这台机器内存不够用，系统刚刚强制结束了一个程序。被打断的对话和服务会自动重新启动；如果经常出现，请考虑给这台机器增加内存。',
-    en: 'This machine ran out of memory, and the system just force-stopped a program. Interrupted conversations and services restart automatically. If this happens often, consider adding memory to this machine.',
+  memory_low: {
+    zh: '这台机器内存快用完了，运行可能变慢或不稳定；如果经常出现，请考虑给这台机器增加内存。',
+    en: 'This machine is almost out of memory, so things may slow down or become unstable. If this happens often, consider adding memory to this machine.',
   },
   inputs_unreadable: {
-    zh: '暂时读不到这台机器的内存使用情况。为了安全，现在除系统助手外同时只运行一个对话，其他对话排队等候；恢复读取后会自动调整。',
-    en: 'Memory usage on this machine cannot be read right now. To stay safe, only one conversation runs at a time besides the system assistant, and others wait in line. This adjusts automatically once readings recover.',
-  },
-  publish_failed: {
-    zh: '同时运行的对话数量暂时无法更新，系统会按更保守的数量继续运行。',
-    en: 'The number of conversations that can run at the same time cannot be updated right now. The system keeps running with a more cautious number.',
+    zh: '系统出现异常，暂时无法确认这台机器的内存是否够用。为了稳定运行，现在只能同时运行一个对话，其他对话会排队等候，回复可能变慢。恢复后会自动回到正常状态，不需要你操作；如果长时间没有恢复，请联系技术支持。',
+    en: 'Something is wrong with the system: it cannot confirm whether this machine has enough memory right now. To stay stable, only one conversation can run at a time and others wait in line, so replies may be slower. Things return to normal by themselves once this clears, with nothing for you to do. If it lasts a long time, please contact technical support.',
   },
 };
 const SUFFIXES = {
@@ -74,7 +66,7 @@ function formatResetTime(resetAt, requestedZone) {
 }
 
 // Configuration is trusted operator input. Runtime error text is never rendered.
-export function messageForStatus({ health, reason, noticeCode, resetAt, idleMinutes = 5, context = 'inbound' } = {}, config = readZylosConfigOrThrow().statusNotices ?? {}) {
+export function messageForStatus({ health, reason, noticeCode, resetAt, context = 'inbound' } = {}, config = readZylosConfigOrThrow().statusNotices ?? {}) {
   config = config && typeof config === 'object' ? config : {};
   const category = Object.hasOwn(DEFAULTS, noticeCode) ? noticeCode : Object.hasOwn(DEFAULTS, health) ? health : 'unavailable';
   const mode = context === 'capacity' && Object.hasOwn(CAPACITY_TEMPLATES, noticeCode)
@@ -92,13 +84,10 @@ export function messageForStatus({ health, reason, noticeCode, resetAt, idleMinu
     const description = mode === 'capacity' ? CAPACITY_TEMPLATES[code][locale]
       : code ? NOTICE_TEMPLATES[code][locale] : (mode === 'failure' ? FAILURE_REASONS : DEFAULTS)[category][locale];
     const safeOverride = validText(override,2000) &&
-      (!override.includes('{resetAt}') || (code === 'quota_exhausted_reset' && resetText)) &&
-      (!override.includes('{idleMinutes}') || code === 'memory_reclaim');
+      (!override.includes('{resetAt}') || (code === 'quota_exhausted_reset' && resetText));
     const body = safeOverride ? override.trim() : mode === 'capacity' ? description
       : `${description}${locale === 'en' ? ' ' : ''}${SUFFIXES[mode][locale]}`;
-    const rendered = code === 'quota_exhausted_reset' ? body.replaceAll('{resetAt}',resetText)
-      : code === 'memory_reclaim' ? body.replaceAll('{idleMinutes}',
-        Number.isSafeInteger(idleMinutes) && idleMinutes >= 1 ? String(idleMinutes) : '5') : body;
+    const rendered = code === 'quota_exhausted_reset' ? body.replaceAll('{resetAt}',resetText) : body;
     return `[${brand}] ${rendered}`;
   }).join('\n');
 }

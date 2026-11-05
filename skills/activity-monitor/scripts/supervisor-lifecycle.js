@@ -383,9 +383,7 @@ export class SupervisorLifecycle {
   }
 
   async checkCapacityPressure(record, context) {
-    if (record.source !== 'auto' || modeOf(context) !== 'multi') return null;
-    await this.refreshAuthorities(context);
-    if (context.transition || context.fences.some(fence => fence.sessionGroup === '*' || CAPACITY_REASONS.has(fence.reason))) return null;
+    if (context.fences.some(fence => fence.sessionGroup !== 'origin' && CAPACITY_REASONS.has(fence.reason))) return null;
     const [candidate] = await this.evictionCandidates(context.scenes, context);
     if (!candidate) return null;
     return await this.beginReclaim(candidate, 'evict', context) ? candidate : null;

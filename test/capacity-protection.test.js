@@ -25,7 +25,7 @@ function fixture(options = {}) {
   const lifecycle = new SupervisorLifecycle({ db, requests: { read: () => [] },
     observeGroup: group => current.scenes.find(s => s.sessionGroup === group) ?? { present: false },
     readSyncMarker: () => ({ held: false, stale: false }) }, { now: () => now });
-  const context = () => ({ configuration: { mode: 'multi', capacity: 1 }, scenes: current.scenes.map(s => ({ ...s })),
+  const context = () => ({ configuration: { mode: 'multi', capacity: 1, evictMinIdleSeconds: current.evictMinIdleSeconds ?? 300 }, scenes: current.scenes.map(s => ({ ...s })),
     transition: current.transition, fences: [...fences.values()], restartRequests: [] });
   let beforeReclaim;
   const capacity = new PoolCapacity({ directory, readMemory: async () => memory, resolveBaseline: () => ({ k: 1, fixed }),
@@ -41,219 +41,132 @@ function fixture(options = {}) {
     time: () => now };
 }
 
-// Integration boundary: real capacity publication -> lifecycle candidate and
-// beginReclaim fencing. Run for pressure/selection/publication wiring; skip
-// unrelated lifecycle changes. Runner isolates HOME/ZYLOS_DIR/PM2_HOME and
-// short TMPDIR/TMUX_TMPDIR. Only this fixture's files and in-memory DB/scenes;
-// no tmux, real database, PM2 or network. No background tasks survive a case.
-test('pressure publishes first, reclaims one oldest eligible group even at capacity one, and rate limits notices', async () => {
-  const f = fixture();
-  let checks = 0;
-  f.beforeReclaim(record => {
-    checks++;
-    const saved = JSON.parse(fs.readFileSync(path.join(f.directory, 'pool-capacity.json'), 'utf8'));
-    assert.equal(saved.computedAt, record.computedAt);
-    assert.equal(saved.k, record.k);
-  });
-  await f.tick(0); assert.equal(f.fences.size, 0); assert.equal(checks, 0);
-  await f.tick(10000);
-  assert.equal(checks, 1); assert.equal(f.fences.size, 1); assert.equal(f.fences.get('old').reason, 'evict');
-  assert.equal(f.notices.filter(id => id === 'memory_reclaim').length, 1);
-  const diagnostic = f.events.find(row => row.event === 'capacity_pressure_evict');
-  assert.equal(diagnostic.usedBytes, 3900 * MiB); assert.equal(diagnostic.limitBytes, 4 * GiB);
-  assert.equal(diagnostic.k, 1); assert.equal(diagnostic.session_group, 'old');
-  f.fences.clear(); f.current.scenes = [scene('next')];
-  await f.tick(10000); assert.equal(f.fences.get('next').reason, 'evict');
-  assert.equal(f.events.filter(row => row.event === 'capacity_pressure_evict').length, 2);
-  assert.equal(f.notices.filter(id => id === 'memory_reclaim').length, 1);
-  f.fences.clear(); await f.tick(1800000);
-  assert.equal(f.notices.filter(id => id === 'memory_reclaim').length, 2);
+// Integration boundary for every case below: real controller publication and
+// lifecycle candidate/fence paths, with private fixture files and in-memory DB.
+// Run for protection, modes, failure timing, or shared eviction eligibility;
+// skip unrelated lifecycle work. Runner proves fresh HOME/ZYLOS_DIR/PM2_HOME
+// and short TMPDIR/TMUX_TMPDIR. No tmux/PM2/network/live DB. Held promises are
+// released in finally; fixture cleanup is awaited after each finite case.
+test('pressure publishes first and reclaims one oldest eligible ordinary group at capacity one', async () => {
+  const f = fixture(); let checks = 0;
+  f.beforeReclaim(record => { checks++; const saved = JSON.parse(fs.readFileSync(path.join(f.directory, 'pool-capacity.json'), 'utf8')); assert.equal(saved.computedAt, record.computedAt); });
+  await f.tick(0); assert.equal(f.notices.length, 0); assert.equal(checks, 0);
+  await f.tick(10000); assert.equal(checks, 1); assert.equal(f.fences.size, 1); assert.equal(f.fences.get('old').reason, 'evict');
+  assert.deepEqual(f.notices, ['memory_low']);
+  const event = f.events.find(row => row.event === 'capacity_pressure_evict');
+  assert.equal(event.usedBytes, 3900 * MiB); assert.equal(event.limitBytes, 4 * GiB); assert.equal(event.k, 1); assert.equal(event.session_group, 'old');
 });
-
 for (const reason of ['ttl', 'evict', 'upgrade', 'auth']) {
-  // Same isolated capacity -> lifecycle boundary as above; each actual persisted
-  // reclaim reason must suppress pressure selection, including Origin fences.
-  test(`pressure respects an active ${reason} reclaim`, async () => {
-    const f = fixture(); f.fences.set('origin', { sessionGroup: 'origin', reason, runId: 'run-origin' });
-    await f.tick(0); await f.tick(10000);
-    assert.equal(f.fences.size, 1); assert.equal(f.notices.length, 0);
+  test(`pressure respects an ordinary group's active ${reason} reclaim`, async () => {
+    const f = fixture(); f.fences.set('other', { sessionGroup: 'other', reason, runId: 'run-other' });
+    await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 1); assert.deepEqual(f.notices, ['memory_low']);
     assert.equal(f.events.some(row => row.event === 'capacity_pressure_evict'), false);
   });
 }
-
-// Integration boundary: same real controller/lifecycle and in-memory authorities.
-// Run for candidate eligibility and pressure gates; no services/children/network,
-// runner-isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/TMUX_TMPDIR, cleanup fixture files.
-test('pressure leaves busy, young, unready, fenced and Origin sessions untouched and blocks transitions', async () => {
-  for (const kind of ['busy', 'young', 'unready', 'fenced', 'origin', 'transition']) {
-    const f = fixture();
-    f.current.scenes = [scene(kind === 'origin' ? 'origin' : 'a', kind === 'busy' ? { state: 'busy' }
-      : kind === 'young' ? { createdAt: f.time() - 1000 }
-        : kind === 'unready' ? { ready: false } : {})];
+for (const reason of ['auth', 'upgrade']) {
+  test(`Origin ${reason} reclaim does not block reclaim of an ordinary idle group`, async () => {
+    const f = fixture(); f.fences.set('origin', { sessionGroup: 'origin', reason, runId: 'run-origin' });
+    await f.tick(0); await f.tick(10000); assert.equal(f.fences.get('old')?.reason, 'evict'); assert.equal(f.fences.size, 2);
+  });
+}
+test('other reclaim reasons do not block pressure and fenced candidates are excluded', async () => {
+  const f = fixture(); f.fences.set('old', { sessionGroup: 'old', reason: 'model_config', runId: 'run-old' });
+  await f.tick(0); await f.tick(10000);
+  assert.equal(f.fences.get('old').reason, 'model_config'); assert.equal(f.fences.get('young')?.reason, 'evict');
+});
+for (const kind of ['busy', 'young', 'unready', 'fenced', 'origin', 'transition']) {
+  test(`pressure leaves ${kind} sessions untouched while memory warning is independent`, async () => {
+    const f = fixture(); f.current.scenes = [scene(kind === 'origin' ? 'origin' : 'a', kind === 'busy' ? { state: 'busy' }
+      : kind === 'young' ? { createdAt: f.time() - 1000 } : kind === 'unready' ? { ready: false } : {})];
     if (kind === 'fenced') f.fences.set('a', { sessionGroup: 'a', reason: 'model_config', runId: 'run-a' });
     if (kind === 'transition') f.current.transition = { phase: 'pending' };
-    const before = f.fences.size;
-    await f.tick(0); await f.tick(10000);
-    assert.equal(f.fences.size, before, kind); assert.equal(f.notices.length, 0, kind);
+    const before = f.fences.size; await f.tick(0); await f.tick(10000);
+    assert.equal(f.fences.size, before); assert.deepEqual(f.notices, ['memory_low']);
+  });
+}
+test('pressure uses the effective configured minimum idle duration', async () => {
+  const f = fixture(); f.current.evictMinIdleSeconds = 3000; f.current.scenes = [scene('a')];
+  await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, ['memory_low']);
+});
+for (const [usedMiB, expected] of [[3840, 1], [3584, 0]]) {
+  test(`pressure boundary at ${usedMiB} MiB has the specified result`, async () => {
+    const f = fixture(); f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: usedMiB * MiB });
+    await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, expected); assert.equal(f.notices.length, expected);
+  });
+}
+test('memory warning persists without candidates, after cancelled reclaim, and has its own thirty-minute cooldown', async () => {
+  const f = fixture(); f.current.scenes = [scene('busy', { state: 'busy' })];
+  await f.tick(0); assert.equal(f.notices.length, 0); await f.tick(10000); assert.deepEqual(f.notices, ['memory_low']);
+  f.current.scenes = [scene('a')]; f.lifecycle.d.observeGroup = () => scene('a', { state: 'busy' });
+  await f.tick(10000); assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 1);
+  await f.tick(1790000); assert.equal(f.notices.length, 2);
+});
+test('fallback and below-line readings break pressure count while fixed mode warns without reclaim', async () => {
+  for (const kind of ['fallback', 'low']) {
+    const f = fixture(); await f.tick(0); f.setMemory(kind === 'fallback' ? null : { source: 'host', limitBytes: 4 * GiB, usedBytes: 1000 * MiB });
+    await f.tick(10000); assert.equal(f.notices.length, 0);
+    f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 3900 * MiB });
+    await f.tick(10000); assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 0);
+    await f.tick(10000); assert.equal(f.fences.get('old')?.reason, 'evict'); assert.deepEqual(f.notices, ['memory_low']);
   }
+  const f = fixture(); f.setFixed(true); await f.tick(0); await f.tick(10000);
+  assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, ['memory_low']);
 });
-
-// Integration boundary: real controller and lifecycle with private fixture files/DB.
-// Run for protection/notice gates; skip unrelated changes. Runner isolates HOME,
-// ZYLOS_DIR, PM2_HOME and short TMPDIR/TMUX_TMPDIR; no tmux/PM2/network/live DB.
-// Finite steps only; held callbacks are released and fixture cleanup is awaited.
-test('fixed, fallback and below-line calculations break consecutive pressure observations', async () => {
-  for (const kind of ['fixed', 'fallback', 'low']) {
-    const f = fixture(); await f.tick(0);
-    if (kind === 'fixed') f.setFixed(true);
-    else f.setMemory(kind === 'fallback' ? null : { source: 'host', limitBytes: 4 * GiB, usedBytes: 1000 * MiB });
-    await f.tick(10000); assert.equal(f.fences.size, 0);
-    f.setFixed(false); f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 3900 * MiB });
-    await f.tick(10000); assert.equal(f.fences.size, 0, kind);
-    await f.tick(10000); assert.equal(f.fences.get('old').reason, 'evict', kind);
-  }
-});
-
-// Integration boundary: real controller and lifecycle with private fixture files/DB.
-// Run for protection/notice gates; skip unrelated changes. Runner isolates HOME,
-// ZYLOS_DIR, PM2_HOME and short TMPDIR/TMUX_TMPDIR; no tmux/PM2/network/live DB.
-// Finite steps only; held callbacks are released and fixture cleanup is awaited.
-test('fixed mode never reclaims under repeated pressure but reports increasing cgroup OOM counters', async () => {
-  const f = fixture(); f.setFixed(true);
-  f.setMemory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 3900 * MiB, oomKills: 5 });
-  await f.tick(0); assert.equal(f.notices.length, 0, 'first nonzero counter only establishes baseline');
-  f.setMemory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 3900 * MiB, oomKills: 6 });
-  await f.tick(10000); assert.equal(f.notices.join(','), 'oom_kill');
-  f.setMemory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 3900 * MiB, oomKills: 7 });
-  await f.tick(10000); assert.equal(f.notices.length, 1);
-  assert.equal(f.events.filter(row => row.event === 'container_oom_kill').length, 2);
-  await f.tick(1800000); assert.equal(f.notices.length, 1, 'unchanged counter is not an event');
-  f.setMemory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 3900 * MiB, oomKills: 8 });
-  await f.tick(10000); assert.equal(f.notices.filter(id => id === 'oom_kill').length, 2);
-  assert.equal(f.fences.size, 0);
-});
-
-// Integration boundary: real controller and lifecycle with private fixture files/DB.
-// Run for protection/notice gates; skip unrelated changes. Runner isolates HOME,
-// ZYLOS_DIR, PM2_HOME and short TMPDIR/TMUX_TMPDIR; no tmux/PM2/network/live DB.
-// Finite steps only; held callbacks are released and fixture cleanup is awaited.
-test('other memory sources never report OOM notifications', async () => {
-  const f = fixture();
-  for (const source of ['cgroup1', 'host', 'darwin']) {
-    for (const oomKills of [0, 1]) {
-      f.setMemory({ source, limitBytes: 4 * GiB, usedBytes: 1000 * MiB, oomKills });
-      await f.tick(10000);
-    }
+for (const fixed of [false, true]) {
+  test(`OOM increments and publication failures only write diagnostics in ${fixed ? 'fixed' : 'automatic'} mode`, async () => {
+    const f = fixture({ publish: () => { throw Object.assign(new Error('private failure'), { code: 'EACCES' }); } });
+    f.setFixed(fixed); f.setMemory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 1000 * MiB, oomKills: 5 });
+    await f.tick(0); assert.equal(f.events.some(row => row.event === 'container_oom_kill'), false);
+    f.setMemory({ source: 'cgroup2', limitBytes: 4 * GiB, usedBytes: 1000 * MiB, oomKills: 6 });
+    await f.tick(60000); assert.equal(f.events.filter(row => row.event === 'container_oom_kill').length, 1);
+    assert.equal(f.events.filter(row => row.event === 'capacity_publish_failed').length, 2); assert.equal(f.notices.length, 0);
+  });
+}
+test('other memory sources never produce OOM diagnostics', async () => {
+  const f = fixture(); for (const source of ['cgroup1', 'host', 'darwin']) for (const oomKills of [0, 1]) {
+    f.setMemory({ source, limitBytes: 4 * GiB, usedBytes: 1000 * MiB, oomKills }); await f.tick(10000);
   }
   assert.equal(f.notices.length, 0); assert.equal(f.events.some(row => row.event === 'container_oom_kill'), false);
 });
-
-// Integration boundary: real controller and lifecycle with private fixture files/DB.
-// Run for protection/notice gates; skip unrelated changes. Runner isolates HOME,
-// ZYLOS_DIR, PM2_HOME and short TMPDIR/TMUX_TMPDIR; no tmux/PM2/network/live DB.
-// Finite steps only; held callbacks are released and fixture cleanup is awaited.
-test('unreadable inputs and publication failures wait sixty seconds and have independent thirty-minute limits', async () => {
-  const f = fixture( { publish: () => { throw Object.assign(new Error('private fixture failure'), { code: 'EACCES' }); } });
-  f.setMemory(null);
-  for (let i = 0; i <= 5; i++) await f.tick(i === 0 ? 0 : 10000);
-  assert.equal(f.notices.length, 0);
-  await f.tick(9000); assert.equal(f.notices.length, 0);
-  await f.tick(1000);
-  assert.equal(f.notices.join(','), 'inputs_unreadable,publish_failed');
-  assert.equal(f.capacity.publishFailedSince, 1000000);
-  await f.tick(1790000); assert.equal(f.notices.length, 2);
-  await f.tick(10000); assert.equal(f.notices.length, 4);
+test('unreadable inputs wait sixty seconds and retain cooldown across recovery', async () => {
+  const f = fixture(); f.setMemory(null); await f.tick(0);
+  for (let i = 0; i < 5; i++) await f.tick(10000);
+  await f.tick(9000); assert.equal(f.notices.length, 0); await f.tick(1000); assert.deepEqual(f.notices, ['inputs_unreadable']);
+  f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 1000 * MiB }); await f.tick(10000); assert.equal(f.capacity.inputsUnreadableSince, null);
+  f.setMemory(null); await f.tick(10000); await f.tick(60000); assert.equal(f.notices.length, 1);
+  await f.tick(1720000); assert.equal(f.notices.length, 2);
 });
-
-// Integration boundary: real controller and lifecycle with private fixture files/DB.
-// Run for protection/notice gates; skip unrelated changes. Runner isolates HOME,
-// ZYLOS_DIR, PM2_HOME and short TMPDIR/TMUX_TMPDIR; no tmux/PM2/network/live DB.
-// Finite steps only; held callbacks are released and fixture cleanup is awaited.
-test('successful reads and publication reset failure durations without resetting the ID cooldown', async () => {
-  let failing = true;
-  const f = fixture( { publish: (file, record) => {
-    if (failing) throw Object.assign(new Error('private failure'), { code: 'EACCES' });
-    writeCapacityAtomic(file, record);
-  } });
-  f.setMemory(null); await f.tick(0); await f.tick(60000); assert.equal(f.notices.length, 2);
-  failing = false; f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 1000 * MiB });
-  await f.tick(10000); assert.equal(f.capacity.inputsUnreadableSince, null); assert.equal(f.capacity.publishFailedSince, null);
-  failing = true; f.setMemory(null); await f.tick(10000); await f.tick(60000);
-  assert.equal(f.notices.length, 2);
+test('single cutover clears an existing failure duration and pressure observation before returning to multi', async () => {
+  const f = fixture(); f.setMemory(null); await f.tick(0); assert.notEqual(f.capacity.inputsUnreadableSince, null);
+  await f.capacity.tick({ mode: 'single', now: f.time() }); assert.equal(f.capacity.inputsUnreadableSince, null);
+  await f.tick(60000); assert.equal(f.notices.length, 0); await f.tick(50000); await f.tick(9000); assert.equal(f.notices.length, 0);
+  await f.tick(1000); assert.deepEqual(f.notices, ['inputs_unreadable']);
+  const g = fixture(); await g.tick(0); await g.capacity.tick({ mode: 'single', now: g.time() });
+  await g.tick(10000); assert.equal(g.fences.size, 0); assert.equal(g.notices.length, 0);
+  await g.tick(10000); assert.equal(g.fences.get('old')?.reason, 'evict');
 });
-
-// Integration boundary: real controller and lifecycle with private fixture files/DB.
-// Run for protection/notice gates; skip unrelated changes. Runner isolates HOME,
-// ZYLOS_DIR, PM2_HOME and short TMPDIR/TMUX_TMPDIR; no tmux/PM2/network/live DB.
-// Finite steps only; held callbacks are released and fixture cleanup is awaited.
-test('single mode cancels pending late pressure callbacks and old failure durations', async () => {
-  let release;
-  const held = new Promise(resolve => { release = resolve; });
-  const f = fixture( { reclaim: () => held });
-  await f.tick(0);
-  const pending = f.tick(10000);
-  try {
-    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
-    await f.capacity.tick({ mode: 'single', now: f.time() });
-  } finally {
-    release(scene('old')); await pending;
-  }
-  assert.equal(f.notices.length, 0); assert.equal(f.events.some(row => row.event === 'capacity_pressure_evict'), false);
-  assert.equal(f.capacity.inputsUnreadableSince, null); assert.equal(f.capacity.publishFailedSince, null);
-});
-
-// Integration boundary: shared candidate selection -> real beginReclaim's fresh
-// observation. Run for evict eligibility/reclaim changes; skip unrelated work.
-// Runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; fixture files
-// and in-memory DB only; no tmux/PM2/network. Each fixture is cleaned after case.
-test('pressure does not fence a candidate that becomes busy before beginReclaim', async () => {
-  const f = fixture();
-  f.lifecycle.d.observeGroup = group => ({ ...f.current.scenes.find(scene => scene.sessionGroup === group), state: 'busy' });
-  await f.tick(0); await f.tick(10000);
-  assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 0);
-});
-
-// Integration boundary: real controller's fixed/auto timer and notice consumer.
-// Run for fixed-mode notice semantics; skip unrelated changes. Fresh isolated
-// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; private files/in-memory DB,
-// no tmux/PM2/network. Fixture cleanup is registered before calculations.
-test('fixed unreadable inputs stay silent and automatic mode starts a new sixty-second failure duration', async () => {
-  const f = fixture(); f.setFixed(true); f.setMemory(null);
-  await f.tick(0); await f.tick(60000);
+test('fixed unreadable inputs stay silent and automatic mode starts a fresh failure duration', async () => {
+  const f = fixture(); f.setFixed(true); f.setMemory(null); await f.tick(0); await f.tick(60000);
   assert.equal(f.notices.length, 0); assert.equal(f.capacity.inputsUnreadableSince, null);
-  f.setFixed(false); await f.tick(10000);
-  await f.tick(50000); await f.tick(9000); assert.equal(f.notices.length, 0);
-  await f.tick(1000); assert.equal(f.notices.join(','), 'inputs_unreadable');
+  f.setFixed(false); await f.tick(10000); await f.tick(50000); await f.tick(9000); assert.equal(f.notices.length, 0);
+  await f.tick(1000); assert.deepEqual(f.notices, ['inputs_unreadable']);
 });
-
-// Integration boundary: real fixed controller publication failure -> diagnostic
-// and notice consumer. Run for fixed publication failure semantics; skip other
-// changes. Fresh isolated HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR;
-// fixture files/in-memory DB only, no tmux/PM2/network. Cleanup after the case.
-test('fixed publication failures stay silent after sixty seconds but retain diagnostics', async () => {
-  const f = fixture({ publish: () => { throw Object.assign(new Error('private publication failure'), { code: 'EACCES' }); } });
-  f.setFixed(true);
-  await f.tick(0); await f.tick(60000);
-  assert.equal(f.notices.length, 0);
-  assert.equal(f.capacity.publishFailedSince, null);
-  assert.equal(f.events.filter(row => row.event === 'capacity_publish_failed').length, 2);
+test('publication completion rechecks the epoch before memory warnings or reclaim', async () => {
+  let release, publishing = false;
+  const held = new Promise(resolve => { release = resolve; });
+  const f = fixture({ publish: async (file, record) => { if (record.computedAt > 1000000) { publishing = true; await held; } writeCapacityAtomic(file, record); } });
+  await f.tick(0); const pending = f.tick(10000);
+  try { for (let i = 0; i < 20 && !publishing; i++) await new Promise(resolve => setImmediate(resolve)); assert.equal(publishing, true);
+    await f.capacity.tick({ mode: 'single', now: f.time() });
+  } finally { release(); await pending; }
+  assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 0); assert.equal(f.capacity.pressureCount, 0);
 });
-
-// Integration boundary: real controller's fixed-to-automatic publication timer
-// reset and automatic notice consumer. Run for publication mode/timer changes;
-// skip unrelated work. Runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/
-// TMUX_TMPDIR; private fixture files/in-memory DB, no tmux/PM2/network. Finite
-// calculations only, fixture cleanup registered before first calculation.
-test('fixed-to-automatic publication failures start a fresh sixty-second duration', async () => {
-  const f = fixture({ publish: () => { throw Object.assign(new Error('private publication failure'), { code: 'EACCES' }); } });
-  f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 1000 * MiB });
-  f.setFixed(true);
-  await f.tick(0); await f.tick(60000);
-  assert.equal(f.capacity.publishFailedSince, null);
-  f.setFixed(false); await f.tick(10000);
-  assert.equal(f.capacity.publishFailedSince, f.time());
-  await f.tick(50000); await f.tick(9000); assert.equal(f.notices.length, 0);
-  await f.tick(1000); assert.equal(f.notices.join(','), 'publish_failed');
-  await f.tick(1790000); assert.equal(f.notices.length, 1);
-  await f.tick(10000); assert.equal(f.notices.join(','), 'publish_failed,publish_failed');
+test('pressure does not fence a candidate that becomes busy before beginReclaim', async () => {
+  const f = fixture(); f.lifecycle.d.observeGroup = group => ({ ...f.current.scenes.find(s => s.sessionGroup === group), state: 'busy' });
+  await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, ['memory_low']);
+});
+test('demand eviction does not fence a candidate that becomes busy before beginReclaim', async () => {
+  const f = fixture(); f.current.scenes = [scene('a')]; f.lifecycle.d.observeGroup = () => scene('a', { state: 'busy' });
+  const context = f.context(); f.lifecycle.d.db.listPendingSessionGroups = () => [{ sessionGroup: 'waiting' }];
+  const result = await f.lifecycle.checkEviction(context.scenes, context); assert.equal(result.selected, 0); assert.equal(f.fences.size, 0);
 });
