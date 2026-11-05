@@ -96,11 +96,11 @@ test('five failed continuation launches restore held state until its original ex
  assert.equal(f.db.listPendingContinuations().length,1);
 });
 
-for(const reason of ['ttl','evict'])test(`${reason} removes reservation while inherited continuation yields to inbound`,async t=>{
+for(const reason of ['ttl','evict'])test(`${reason} removes reservation and discards the old continuation marker`,async t=>{
  const f=routerFixture(t,{poolSize:1});held(f);
  // A new ending identity represents a later run reclaimed before delivery.
  f.db.takeSlot('b',{runId:'later-b',k:1});f.db.recordRunEnd('b',{runId:'later-b',reason});
- assert.equal(f.db.listSlotOccupancy().length,0);assert.equal(f.db.listPendingContinuations().length,1);
+ assert.equal(f.db.listSlotOccupancy().length,0);assert.equal(f.db.listPendingContinuations().length,0);
  f.add('c');await start(f);f.advance(5000);await f.rounds(6);
  assert.deepEqual(launches(f).map(row=>row[1].sessionGroup),['c']);
 });
@@ -151,7 +151,7 @@ test('an absent running owner does not occupy the queue head ahead of a rowless 
 });
 
 for(const trigger of ['inbound','continuation'])test(`a full transaction rejects ${trigger} activation after eligibility`,async t=>{
- const f=routerFixture(t,{poolSize:1});if(trigger==='inbound')f.add('b');else{held(f);f.db.takeSlot('b',{runId:'later-b',k:1});f.db.recordRunEnd('b',{runId:'later-b',reason:'ttl'});}
+ const f=routerFixture(t,{poolSize:1});if(trigger==='inbound')f.add('b');else{held(f);f.advance(120000);}
  let takes=0;f.db.takeSlot=()=>{takes++;return {taken:false,reason:'full'};};
  await start(f);if(trigger==='continuation'){assert.equal(takes,0);f.advance(5000);await f.rounds(3);}
  assert.ok(takes>0,'transaction must actually be reached');assert.equal(launches(f).length,0);assert.equal(f.db.listSlotOccupancy().length,0);

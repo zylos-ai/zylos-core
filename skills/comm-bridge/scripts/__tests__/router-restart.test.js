@@ -105,7 +105,10 @@ for (const sceneState of ['absent', 'unready', 'ready']) {
       f.put('a', { runId: originalRun }); expected = f.prompts('a');
     }
     await f.rounds(8);
-    if (sceneState === 'absent') expected = f.calls.find(x => x[0] === 'prompts' && x[1] === 2)[2];
+    if (sceneState === 'absent') {
+      expected = f.calls.find(x => x[0] === 'prompts' && x[1] === 2)[2];
+      assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 0);
+    }
     const deliveries = f.calls.filter(x => x[1] === 2 && ['control', 'conversation'].includes(x[0])).map(x => [x[0], x[2]]);
     assert.deepEqual(deliveries, [['control', expected[0]], ['control', expected[1]], ['conversation', row.id]]);
     assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).retry_count, 1);

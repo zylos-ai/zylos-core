@@ -138,7 +138,7 @@ test('continuation-only groups drive authentication demand without changing inbo
   let calls = 0;
   const f = fixture(t, () => { calls++; return { status: 'uncertain' }; });
   f.db.listPendingSessionGroups = () => [];
-  f.db.listPendingContinuations = () => [{ sessionGroup: 'chat:continuation', controlId: 1, createdAt: 1, endedAt: 1 }];
+  f.db.listPendingContinuations = () => [{ sessionGroup: 'chat:continuation', endedAt: 1 }];
   await f.start(); await f.tick();
   assert.equal(calls, 1);
   const metrics = fs.readFileSync(path.join(f.supervisor.health.zylosDir, 'activity-monitor/pool-metrics.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);

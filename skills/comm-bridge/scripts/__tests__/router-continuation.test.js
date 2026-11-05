@@ -45,6 +45,7 @@ test('inbound activation clears its marker before the triggering message', async
   await initialize(f); await f.rounds(5);
   assert.deepEqual(f.calls.filter(row => ['control','conversation'].includes(row[0])).map(row => row.slice(0, 2)), [['conversation', message.id]]);
   assert.equal(calls(f, 'launch').length, 1);
+  assert.equal(f.db.listRunEndings([id])[0].continuationPending, 0);
 });
 
 for (const blocked of ['group_fence','global_fence','auth_failed','scene']) {
@@ -167,7 +168,7 @@ test('restart before launch and after launch preserves and clears a pending mark
     if (launched) f.put('a', { runId: f.scene.get('a').runId, ready: true });
     f.deps.getSessionAdapter = original;
     await initialize(f); await readyToStart(f);
-    assert.equal(calls(f, 'control').filter(row => row[1] === id).length, 0);
+    assert.deepEqual(calls(f, 'control'), []);
     assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
     assert.equal(calls(f, 'launch').length, 1);
   });
@@ -280,7 +281,7 @@ test('transient observation failure after continuation launch does not stop the 
   f.put('a', { runId, ready: true }); await f.rounds(4);
   assert.equal(calls(f, 'stop').length, 0);
   assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
-  assert.equal(calls(f, 'control').filter(row => row[1] === id).length, 0);
+  assert.deepEqual(calls(f, 'control'), []);
 });
 
 test('origin restarts with pending continuation and delivers only the startup prompt', async t => {
@@ -357,12 +358,17 @@ test('clearing a marker retries after an error without blocking inbound delivery
   const f = routerFixture(t); f.put('origin'); continuation(f); f.put('a', { runId: 'new' });
   const message = f.add('a'), clear = f.db.clearContinuation;
   let attempts = 0;
-  f.db.clearContinuation = (...args) => { if (++attempts === 1) throw Error('busy'); return clear(...args); };
+  f.db.clearContinuation = () => { attempts++; throw Error('busy'); };
   await initialize(f); await f.rounds(3);
   assert.equal(f.row(message.id).status, 'delivered');
-  assert.ok(attempts >= 2); assert.equal(f.db.listPendingContinuations().length, 0);
+  assert.ok(attempts >= 2); assert.equal(f.db.listPendingContinuations().length, 1);
   assert.ok(f.events.some(e => e.event === 'continuation_clear_failed'));
+  assert.equal(calls(f, 'conversation').filter(row => row[1] === message.id).length, 1);
   assert.equal(calls(f, 'control').length, 0);
+  f.db.clearContinuation = clear;
+  await f.rounds(2);
+  assert.equal(f.db.listPendingContinuations().length, 0);
+  assert.equal(calls(f, 'conversation').filter(row => row[1] === message.id).length, 1);
 });
 
 test('ready scene matching the ended run retains its marker', async t => {
@@ -416,6 +422,8 @@ test('equal ending timestamps order continuation candidates by session group', a
 // Boundary: production identity reader and target readiness parser read private
 // F3 files; only tmux protocol I/O is fake. Run for marker readiness changes;
 // skip unrelated runtime launch. No tmux/process/network command is executed.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR; the fixture
+// stops Router, closes SQLite and removes its private F3 files on teardown.
 test('real identity reader retains a marker for stale F3 and clears after current F3 publication', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marker-ready-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

@@ -138,6 +138,7 @@ test('upgrade reclaim finishes during gating without creating a continuation bef
 // restart-marker consumption and launch delivery ordering; skip unrelated UI.
 // The fixture uses memory SQLite and stops its router on teardown. No tmux,
 // runtime process, PM2, network or external notification is contacted.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR.
 for (const activation of ['continuation', 'inbound']) {
   test(`${activation} activation clears the marker before delivering only startup and incoming text`, async t => {
     const f = routerFixture(t); f.put('origin');
@@ -182,6 +183,7 @@ for (const activation of ['continuation', 'inbound']) {
 // injected health transport. Run when marker lifetime or idle-ending semantics
 // change, skip unrelated delivery protocols. Private memory SQLite, clock and
 // scene fixtures are lifecycle-owned; there are no runtime processes or sockets.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR.
 test('a health-blocked startup expires at idle TTL without another restart until new input', async t => {
   const f = routerFixture(t); f.put('origin');
   const old = f.add('team');

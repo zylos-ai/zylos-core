@@ -150,11 +150,11 @@ test('pending marker query excludes Origin and cleared rows and orders ending ti
   const { db, store } = fixture(t, { now: () => now * 1000 });
   for (const group of ['z', 'b', 'a', 'clear', 'origin']) {
     store.recordRunEnd(group, { runId: group, reason: 'unexpected' });
-    if (group === 'z') now--;
+    if (group === 'z') now++;
   }
   store.clearContinuation('clear', { runId: 'replacement' });
   const before = snapshot(db);
-  assert.deepEqual(store.listPendingContinuations(), [{ sessionGroup: 'a', endedAt: now }, { sessionGroup: 'b', endedAt: now }, { sessionGroup: 'z', endedAt: clock }]);
+  assert.deepEqual(store.listPendingContinuations(), [{ sessionGroup: 'z', endedAt: clock }, { sessionGroup: 'a', endedAt: now }, { sessionGroup: 'b', endedAt: now }]);
   assert.deepEqual(Object.keys(store.listPendingContinuations()[0]), ['sessionGroup', 'endedAt']);
   assert.deepEqual(snapshot(db), before);
 });
