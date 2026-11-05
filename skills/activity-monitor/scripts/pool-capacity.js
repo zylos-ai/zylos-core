@@ -91,7 +91,7 @@ export class PoolCapacity {
     this.mode = null;
     this.epoch = 0;
     this.lastPublished = null;
-    this.noticeSent = new Map();
+    this.lastMemoryLowAt = null;
     this.pressureCount = 0;
     this.oomKills = null;
     this.lastComputedAt = null;
@@ -109,10 +109,10 @@ export class PoolCapacity {
 
   diagnostic(event, details = {}) { this.log({ event, ...details }); }
 
-  notice(id, now) {
-    if (this.noticeSent.has(id) && now - this.noticeSent.get(id) < NOTICE_INTERVAL) return;
-    this.noticeSent.set(id, now);
-    this.notify(id);
+  notice(now) {
+    if (this.lastMemoryLowAt !== null && now - this.lastMemoryLowAt < NOTICE_INTERVAL) return;
+    this.lastMemoryLowAt = now;
+    this.notify();
   }
 
   loadSamples(now) {
@@ -258,10 +258,10 @@ export class PoolCapacity {
       }
       const pressure = readable && memory.usedBytes >= memory.limitBytes - calculation.reserveBytes / 2;
       this.pressureCount = pressure ? Math.min(2, this.pressureCount + 1) : 0;
-      if (this.pressureCount === 2) this.notice('memory_low', now);
+      if (this.pressureCount === 2) this.notice(now);
       if (source === 'auto' && this.pressureCount === 2) {
         const selected = await this.reclaim(record);
-        if (selected && epoch === this.epoch && this.mode === 'multi') {
+        if (selected) {
           this.diagnostic('capacity_pressure_evict', { usedBytes: memory.usedBytes, limitBytes: memory.limitBytes, k, session_group: selected.sessionGroup });
         }
       }

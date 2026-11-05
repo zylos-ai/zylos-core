@@ -382,7 +382,7 @@ export class SupervisorLifecycle {
     return candidates.sort((a, b) => a.last - b.last || a.sessionGroup.localeCompare(b.sessionGroup));
   }
 
-  async checkCapacityPressure(record, context) {
+  async checkCapacityPressure(context) {
     if (context.fences.some(fence => fence.sessionGroup !== 'origin' && CAPACITY_REASONS.has(fence.reason))) return null;
     const [candidate] = await this.evictionCandidates(context.scenes, context);
     if (!candidate) return null;

@@ -29,10 +29,10 @@ function fixture(options = {}) {
     transition: current.transition, fences: [...fences.values()], restartRequests: [] });
   let beforeReclaim;
   const capacity = new PoolCapacity({ directory, readMemory: async () => memory, resolveBaseline: () => ({ k: 1, fixed }),
-    notify: id => notices.push(id), log: row => events.push(row),
+    notify: value => notices.push(value), log: row => events.push(row),
     reclaim: async record => {
       beforeReclaim?.(record);
-      return lifecycle.checkCapacityPressure(record, context());
+      return lifecycle.checkCapacityPressure(context());
     }, ...options });
   return { capacity, directory, notices, events, fences, current, lifecycle, context,
     setMemory: value => memory = value, setFixed: value => fixed = value,
@@ -52,14 +52,14 @@ test('pressure publishes first and reclaims one oldest eligible ordinary group a
   f.beforeReclaim(record => { checks++; const saved = JSON.parse(fs.readFileSync(path.join(f.directory, 'pool-capacity.json'), 'utf8')); assert.equal(saved.computedAt, record.computedAt); });
   await f.tick(0); assert.equal(f.notices.length, 0); assert.equal(checks, 0);
   await f.tick(10000); assert.equal(checks, 1); assert.equal(f.fences.size, 1); assert.equal(f.fences.get('old').reason, 'evict');
-  assert.deepEqual(f.notices, ['memory_low']);
+  assert.deepEqual(f.notices, [undefined]);
   const event = f.events.find(row => row.event === 'capacity_pressure_evict');
   assert.equal(event.usedBytes, 3900 * MiB); assert.equal(event.limitBytes, 4 * GiB); assert.equal(event.k, 1); assert.equal(event.session_group, 'old');
 });
 for (const reason of ['ttl', 'evict', 'upgrade', 'auth']) {
   test(`pressure respects an ordinary group's active ${reason} reclaim`, async () => {
     const f = fixture(); f.fences.set('other', { sessionGroup: 'other', reason, runId: 'run-other' });
-    await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 1); assert.deepEqual(f.notices, ['memory_low']);
+    await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 1); assert.deepEqual(f.notices, [undefined]);
     assert.equal(f.events.some(row => row.event === 'capacity_pressure_evict'), false);
   });
 }
@@ -81,12 +81,12 @@ for (const kind of ['busy', 'young', 'unready', 'fenced', 'origin', 'transition'
     if (kind === 'fenced') f.fences.set('a', { sessionGroup: 'a', reason: 'model_config', runId: 'run-a' });
     if (kind === 'transition') f.current.transition = { phase: 'pending' };
     const before = f.fences.size; await f.tick(0); await f.tick(10000);
-    assert.equal(f.fences.size, before); assert.deepEqual(f.notices, ['memory_low']);
+    assert.equal(f.fences.size, before); assert.deepEqual(f.notices, [undefined]);
   });
 }
 test('pressure uses the effective configured minimum idle duration', async () => {
   const f = fixture(); f.current.evictMinIdleSeconds = 3000; f.current.scenes = [scene('a')];
-  await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, ['memory_low']);
+  await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, [undefined]);
 });
 for (const [usedMiB, expected] of [[3840, 1], [3584, 0]]) {
   test(`pressure boundary at ${usedMiB} MiB has the specified result`, async () => {
@@ -96,10 +96,11 @@ for (const [usedMiB, expected] of [[3840, 1], [3584, 0]]) {
 }
 test('memory warning persists without candidates, after cancelled reclaim, and has its own thirty-minute cooldown', async () => {
   const f = fixture(); f.current.scenes = [scene('busy', { state: 'busy' })];
-  await f.tick(0); assert.equal(f.notices.length, 0); await f.tick(10000); assert.deepEqual(f.notices, ['memory_low']);
+  await f.tick(0); assert.equal(f.notices.length, 0); await f.tick(10000); assert.deepEqual(f.notices, [undefined]);
   f.current.scenes = [scene('a')]; f.lifecycle.d.observeGroup = () => scene('a', { state: 'busy' });
   await f.tick(10000); assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 1);
-  await f.tick(1790000); assert.equal(f.notices.length, 2);
+  await f.tick(1190000); assert.equal(f.notices.length, 1, 'twenty minutes of high readings remain inside the cooldown');
+  await f.tick(600000); assert.equal(f.notices.length, 2, 'thirty minutes permits the next warning');
 });
 test('fallback and below-line readings break pressure count while fixed mode warns without reclaim', async () => {
   for (const kind of ['fallback', 'low']) {
@@ -107,10 +108,10 @@ test('fallback and below-line readings break pressure count while fixed mode war
     await f.tick(10000); assert.equal(f.notices.length, 0);
     f.setMemory({ source: 'host', limitBytes: 4 * GiB, usedBytes: 3900 * MiB });
     await f.tick(10000); assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 0);
-    await f.tick(10000); assert.equal(f.fences.get('old')?.reason, 'evict'); assert.deepEqual(f.notices, ['memory_low']);
+    await f.tick(10000); assert.equal(f.fences.get('old')?.reason, 'evict'); assert.deepEqual(f.notices, [undefined]);
   }
   const f = fixture(); f.setFixed(true); await f.tick(0); await f.tick(10000);
-  assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, ['memory_low']);
+  assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, [undefined]);
 });
 for (const fixed of [false, true]) {
   test(`OOM increments and publication failures only write diagnostics in ${fixed ? 'fixed' : 'automatic'} mode`, async () => {
@@ -150,7 +151,7 @@ test('single cutover clears pressure observations before returning to multi', as
   const f = fixture(); await f.tick(0); assert.equal(f.capacity.pressureCount, 1);
   await f.capacity.tick({ mode: 'single', now: f.time() }); assert.equal(f.capacity.pressureCount, 0);
   await f.tick(10000); assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 0); assert.equal(f.capacity.pressureCount, 1);
-  await f.tick(10000); assert.equal(f.fences.get('old')?.reason, 'evict'); assert.deepEqual(f.notices, ['memory_low']);
+  await f.tick(10000); assert.equal(f.fences.get('old')?.reason, 'evict'); assert.deepEqual(f.notices, [undefined]);
 });
 test('publication completion rechecks the epoch before memory warnings or reclaim', async () => {
   let release, publishing = false;
@@ -162,9 +163,31 @@ test('publication completion rechecks the epoch before memory warnings or reclai
   } finally { release(); await pending; }
   assert.equal(f.fences.size, 0); assert.equal(f.notices.length, 0); assert.equal(f.capacity.pressureCount, 0);
 });
+// Integration boundary: cancelled fallback publication cannot write diagnostics
+// or preserve fallback state across a mode generation. Run for publication/epoch
+// changes; skip unrelated lifecycle. All five runner paths isolated; private
+// files and in-memory DB/scenes, no tmux/PM2/network. Release held work in finally.
+test('cancelled fallback publication leaves the next real fallback entry observable', async () => {
+  let release, publishing = false, firstPublication = true;
+  const held = new Promise(resolve => { release = resolve; });
+  const f = fixture({ publish: async (file, record) => {
+    if (firstPublication) { firstPublication = false; publishing = true; await held; }
+    writeCapacityAtomic(file, record);
+  } });
+  f.setMemory(null); const pending = f.tick(0);
+  try {
+    for (let i = 0; i < 20 && !publishing; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(publishing, true);
+    await f.capacity.tick({ mode: 'single', now: f.time() });
+  } finally { release(); await pending; }
+  const diagnostics = () => f.events.filter(row => row.event === 'capacity_inputs_unreadable').length;
+  assert.equal(diagnostics(), 0); assert.equal(f.capacity.wasFallback, false);
+  await f.tick(10000); assert.equal(diagnostics(), 1); assert.equal(f.capacity.wasFallback, true);
+  await f.tick(10000); assert.equal(diagnostics(), 1); assert.equal(f.notices.length, 0);
+});
 test('pressure does not fence a candidate that becomes busy before beginReclaim', async () => {
   const f = fixture(); f.lifecycle.d.observeGroup = group => ({ ...f.current.scenes.find(s => s.sessionGroup === group), state: 'busy' });
-  await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, ['memory_low']);
+  await f.tick(0); await f.tick(10000); assert.equal(f.fences.size, 0); assert.deepEqual(f.notices, [undefined]);
 });
 test('demand eviction does not fence a candidate that becomes busy before beginReclaim', async () => {
   const f = fixture(); f.current.scenes = [scene('a')]; f.lifecycle.d.observeGroup = () => scene('a', { state: 'busy' });

@@ -177,6 +177,48 @@ for (const route of ['target', 'missing', 'failed']) {
   });
 }
 
+// Integration boundary: actual entry configuration -> capacity renderer -> guard
+// sender preserves the platform's localized override and brand. Run for notice
+// wiring/config changes; skip unrelated lifecycle. Fresh HOME/ZYLOS_DIR/PM2_HOME,
+// short TMPDIR/TMUX_TMPDIR, private am.sock/fixture DB/scenes; no tmux/PM2/network.
+// Service stop is awaited before fixture cleanup.
+test('entry memory warnings preserve the configured brand and localized override', async t => {
+  const f = await fixture(t, { fixed: null,
+    configPatch: { statusNotices: { brand: 'Acme', templates: { capacity: { memory_low: { zh: '请留意这台机器的内存。' } } } } },
+    readMemory: async () => ({ source: 'host', limitBytes: 4 * 1024 ** 3, usedBytes: 3900 * 1024 ** 2 }) });
+  await flush(); f.advance(10000); await f.round(); await flush();
+  assert.equal(f.sends.length, 1);
+  const [zh, en] = f.sends[0].message.split('\n');
+  assert.equal(zh, '[Acme] 请留意这台机器的内存。');
+  assert.equal(en, '[Acme] This machine is almost out of memory, so things may slow down or become unstable. If this happens often, consider adding memory to this machine.');
+});
+
+// Integration boundary: actual renderer rejection -> pending-alert handler ->
+// next real capacity calculation. Run for async alert error handling; skip other
+// lifecycle work. All five runner paths isolated, private am.sock and fixture
+// DB/scenes/sender, no tmux/PM2/network. Listener removed in finally; service stop
+// and fixture cleanup remain attached to the test lifecycle.
+test('entry renderer failure is handled and the next capacity calculation continues', async t => {
+  const statusNotices = {}, failure = new Error('fixture renderer failure');
+  const f = await fixture(t, { fixed: null, configPatch: { statusNotices },
+    readMemory: async () => ({ source: 'host', limitBytes: 4 * 1024 ** 3, usedBytes: 3900 * 1024 ** 2 }) });
+  await flush();
+  Object.defineProperty(statusNotices, 'templates', { get() { throw failure; } });
+  let unhandledCount = 0;
+  const listener = () => { unhandledCount++; };
+  process.on('unhandledRejection', listener);
+  try {
+    f.advance(10000); await f.round();
+    const firstCalculation = f.record().computedAt;
+    for (let i = 0; i < 6; i++) await flush();
+    assert.equal(f.sends.length, 0); assert.ok(f.logs.includes(failure));
+    f.advance(10000); await f.round();
+    for (let i = 0; i < 6; i++) await flush();
+    assert.ok(f.record().computedAt > firstCalculation);
+    assert.equal(f.service.supervisor.loop.running, true); assert.equal(unhandledCount, 0);
+  } finally { process.off('unhandledRejection', listener); }
+});
+
 // Integration boundary: real pressure candidate -> beginReclaim -> F12 and
 // guard.notify, with effective startup eviction threshold. Run for pressure
 // wiring/idle duration changes; skip other lifecycle work. All five runner

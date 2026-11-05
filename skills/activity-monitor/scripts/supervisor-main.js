@@ -64,17 +64,17 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     child.stdin.on('error',reject);child.stdin.end(message+'\n');
   }));
   const guard=new SupervisorServerHealth({readAlertTarget:()=>parseServerAlertTarget(configuration?.alert_target),sendAlert,log});
-  const capacityAlert=id=>{
-    const options={context:'capacity',noticeCode:id};
+  const capacityAlert=()=>{
+    const options={context:'capacity',noticeCode:'memory_low'};
     const pending=(async()=>{
-      const message=messageForStatus(options,(await readConfig()).statusNotices ?? {});
+      const message=messageForStatus(options,configuration?.statusNotices ?? {});
       await guard.notify(message);
     })();
     pendingAlerts.add(pending);pending.finally(()=>pendingAlerts.delete(pending)).catch(log);
   };
   const baseScenes=overrides.scenes ?? new SupervisorScenes({env,readMode:readMode,readActivity:scene=>supervisor.readActivity(scene)});
   const scenes=overrides.scenes ?? new SupervisorServerObservation(baseScenes,{guard});
-  const reclaimCapacity=record=>supervisor.admission.serialize(async()=>{
+  const reclaimCapacity=()=>supervisor.admission.serialize(async()=>{
     // Re-read configuration without applying another capacity refresh. A bad
     // configuration still blocks lifecycle mutations, including pressure reclaim.
     const raw=await readConfig(), {mode}=await readMode();
@@ -83,7 +83,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       transition:await db.getModeTransition(),fences:await db.listDrainFences(),restartRequests:supervisor.admission.readRequests()};
     context.scenes=await scenes.observe(context);
     if(stopping)return null;
-    return supervisor.lifecycle.checkCapacityPressure(record,context);
+    return supervisor.lifecycle.checkCapacityPressure(context);
   });
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
   const alert=event=>{
