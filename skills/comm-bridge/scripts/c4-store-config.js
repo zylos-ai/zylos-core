@@ -85,7 +85,7 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
         };
       });
     },
-    listRuntimeOverridesPage: ({ match, limit = 100, after } = {}) => snapshot(c => {
+    listRuntimeOverridesPage: ({ match, limit, after }) => snapshot(c => {
       const total = get(c, 'SELECT COUNT(*) AS total FROM group_runtime_overrides').total;
       const conditions = [], values = [];
       if (after !== undefined) { conditions.push('session_group > ? COLLATE BINARY'); values.push(after); }

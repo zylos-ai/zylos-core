@@ -25,7 +25,7 @@ export async function groupCommand(args, { run, io = process } = {}) {
       options.match = options.match.trim();
       if (!options.match || options.match.length > 64) invalid = true;
     }
-    if (options.after !== undefined && !options.after.trim()) invalid = true;
+    if (options.after === '') invalid = true;
     if (invalid) {
       const result = { ok: false, error: { code: 'INVALID_ARGUMENT', message: usage, persisted: [] } };
       (json ? io.stdout : io.stderr).write(json ? `${JSON.stringify(result)}\n` : `Error [${result.error.code}]: ${result.error.message}\n`);

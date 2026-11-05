@@ -156,7 +156,7 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
     ['--group'], ['--match'], ['--limit'], ['--after'],
     ['--group', 'chat:a', '--limit', '1'], ['--group', 'chat:a', '--match', 'a'], ['--group', 'chat:a', '--after', 'a'],
     ['--limit', '0'], ['--limit', '501'], ['--limit', 'x'], ['--limit', '1.5'], ['--limit', '-1'],
-    ['--match', '  '], ['--match', 'x'.repeat(65)], ['--after', ''], ['--after', '   '],
+    ['--match', '  '], ['--match', 'x'.repeat(65)], ['--after', ''],
     ['--limit', '1', '--limit', '2'], ['--match', 'a', '--match', 'b'], ['--after', 'a', '--after', 'b'],
     Array.from({ length: 501 }, (_, i) => ['--group', `chat:g${i}`]).flat(),
   ]) {
@@ -198,6 +198,7 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
   const badDb = f.json(['overrides']);
   assert.equal(badDb.status, 1); assert.equal(badDb.value.ok, false);
   assert.equal(typeof badDb.value.error.code, 'string'); assert.equal('data' in badDb.value, false);
+  assert.deepEqual(Object.keys(badDb.value.error).sort(), ['code', 'message']);
   const badDbText = f.run(['overrides']);
   assert.equal(badDbText.status, 1); assert.equal(badDbText.stdout, ''); assert.match(badDbText.stderr, /^Error \[/);
 });
@@ -255,6 +256,26 @@ test('real override CLI output stays bounded when runtime override history grows
   assert.equal(large.value.data.runtime.length, 100); assert.equal(large.value.data.nextAfter, 'chat:g000099');
   assert.ok(Buffer.byteLength(large.stdout) < Buffer.byteLength(small.stdout) * 2);
   for (let i = 0; i < 100; i++) assert.equal(large.value.data.runtime[i].sessionGroup, small.value.data.runtime[i].sessionGroup);
+});
+
+test('real override CLI accepts trailing JSON flags and valid search and cursor boundaries', t => {
+  const f = overridesFixture(t);
+  const insert = f.db.prepare('INSERT INTO group_runtime_overrides(session_group,runtime) VALUES (?,?)');
+  for (const group of ['chat:other', 'chat:--json', `chat:${'x'.repeat(64)}`]) insert.run(group, 'codex');
+  for (const [args, expected] of [
+    [['overrides', '--limit', '1', '--json'], 'chat:--json'],
+    [['overrides', '--group', 'chat:other', '--json'], 'chat:other'],
+    [['overrides', '--match', '--json', '--json'], 'chat:--json'],
+    [['overrides', '--match', 'x'.repeat(64), '--json'], `chat:${'x'.repeat(64)}`],
+    [['overrides', '--after', '   ', '--limit', '1', '--json'], 'chat:--json'],
+  ]) {
+    const result = f.run(args);
+    assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
+    assert.equal(result.stdout.trim().split('\n').length, 1);
+    const value = JSON.parse(result.stdout);
+    assert.equal(value.ok, true);
+    assert.deepEqual(value.data.runtime, [{ sessionGroup: expected, runtime: 'codex' }]);
+  }
 });
 
 test('real override CLI searches literal underscores and pages case-sensitive group keys', t => {
