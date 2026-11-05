@@ -88,7 +88,7 @@ test('auth external failures sanitize details; core and channel-less noReply sta
   assert.equal(result.decision, 'auth_rejected'); assert.equal(result.auth.result, 'failed');
   assert.equal(result.auth.detail.length, 500); assert.doesNotMatch(result.auth.detail, /[\x00-\x1f]/); assert.ok(result.userMessage);
   assert.equal((await f.router.route(request({ coreSide: true, coreSource: 'scheduler' }))).decision, 'pending');
-  assert.equal((await f.router.route(request({ noReply: true, channel: null, componentName: null }))).decision, 'pending');
+  assert.equal((await f.router.route(request({ noReply: true, channel: 'system', componentName: null, sessionGroup: 'origin' }))).decision, 'pending');
   assert.equal(checks, 1);
 });
 test('successful authentication waits for lifecycle release; uncertain is explicit', async t => {
@@ -144,7 +144,7 @@ test('authentication recovery uses the existing observer to prefer a ready Origi
   const observer = new SupervisorHealthObserver({ coordinator, now: () => now, readMode: () => 'multi', listScenes: () => scenes,
     readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
     buildTargetBinding: scene => ({ runId: scene.runId }), readState: () => ({ tools: [] }), readScreen: () => 'healthy',
-    insertControl: (content, options) => { controls.push({ content, ...options, status: 'done' }); return controls.length; },
+    insertControl: (content, options) => { controls.push({ id: controls.length + 1, content, ...options, status: 'done' }); return controls.at(-1); },
     getControlById: id => controls[id - 1] });
   t.after(() => observer.shutdown());
   f.router.healthCoordinator = coordinator; f.router.now = () => now;
@@ -193,7 +193,7 @@ for (const terminal of ['failed', 'timeout']) test(`actual observer ${terminal} 
     readState: () => ({ tools: [] }), readScreen: () => 'injected failed runtime response', matchScreen: () => ({}),
     buildTargetBinding: scene => ({ runId: scene.runId }),
     insertControl: (content, options) => {
-      controls.push({ id: controls.length + 1, content, ...options, status: 'pending' }); return controls.length;
+      controls.push({ id: controls.length + 1, content, ...options, status: 'pending' }); return controls.at(-1);
     }, getControlById: id => controls[id - 1] });
   t.after(() => observer.shutdown());
   coordinator.probeInFlight = runtime => observer.probeInFlight(runtime);

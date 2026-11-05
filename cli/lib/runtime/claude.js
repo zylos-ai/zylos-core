@@ -168,6 +168,9 @@ export class ClaudeAdapter extends SessionAdapter {
       return { status: 'success', reason: 'cli_probe' };
     } catch (err) {
       const output = (err.stdout ?? '') + (err.stderr ?? '');
+      if (output.includes('Not logged in')) {
+        return { status: 'failure', reason: 'cli_probe_not_logged_in' };
+      }
       if (output.includes('authentication_error')) {
         return { status: 'failure', reason: 'cli_probe_authentication_error' };
       }

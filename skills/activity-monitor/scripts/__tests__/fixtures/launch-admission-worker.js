@@ -27,7 +27,7 @@ const config = () => JSON.parse(fs.readFileSync(path.join(root, '.zylos/config.j
 const sqlite = new Database(path.join(root, 'comm-bridge/c4.db'));
 guardDatabase(sqlite, schema); sqlite.pragma('journal_mode=WAL');
 const store = createStore(sqlite, { now: () => clock, readConfig: () => ({ state: 'ok', config: config() }), validateComponent: () => true, validateModel: () => true });
-const db = { ...store, insertControl:(...args)=>store.insertControl(...args).id, getDb: () => sqlite, getControlById: id => sqlite.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
+const db = { ...store, getDb: () => sqlite, getControlById: id => sqlite.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
   expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 };
 const env = { ...process.env, HOME: root, ZYLOS_DIR: root };
 const tmux = { socketPath: tmuxSocket, binary, configFile: '/dev/null' };

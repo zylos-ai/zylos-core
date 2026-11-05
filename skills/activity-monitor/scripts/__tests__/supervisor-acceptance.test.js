@@ -21,7 +21,7 @@ function fixture(t, create = createSupervisor) {
     resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
     insertControl: (content, options) => {
       controls.push({ id: controls.length + 1, content, ...options, status: 'pending' });
-      return controls.length;
+      return controls.at(-1);
     },
     getControlById: id => controls[id - 1],
   };

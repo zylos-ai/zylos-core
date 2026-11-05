@@ -23,7 +23,7 @@ function fixture(t, create = createSupervisor) {
   const state = { current: [], controls: [], pending: [{ sessionGroup: 'telegram:a', retry_count: 2 }], matches: {}, stops: [] };
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
     listPendingSessionGroups: () => state.pending,
-    insertControl: (content, options) => { state.controls.push({ id: state.controls.length + 1, content, ...options, status: 'pending' }); return state.controls.length; },
+    insertControl: (content, options) => { state.controls.push({ id: state.controls.length + 1, content, ...options, status: 'pending' }); return state.controls.at(-1); },
     getControlById: id => state.controls[id - 1],
   };
   const scenes = { observe: () => state.current, readIdentity(group) { return this.observeGroup(group); }, observeGroup: group => state.current.find(s => s.sessionGroup === group) ?? { present: false },

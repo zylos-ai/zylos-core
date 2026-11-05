@@ -83,7 +83,7 @@ export class MessageRouter {
   }
   async authDecision(request, runtime, state) {
     const health = 'auth_failed'; const reason = this.reason(state);
-    if (request.coreSide || (request.noReply && !request.channel)) return this.decision(request, runtime, { health, reason, decision: 'pending' });
+    if (request.coreSide || (request.noReply && !request.componentName)) return this.decision(request, runtime, { health, reason, decision: 'pending' });
     const action = this.checkAuth?.(runtime);
     const result = await this.awaitBudget(Promise.resolve(action ?? { result: 'uncertain', reason: 'authentication check unavailable' }));
     if (result?.result === 'success' || result?.status === 'success') return this.decision(request, runtime, { health, reason, decision: 'pending' });
