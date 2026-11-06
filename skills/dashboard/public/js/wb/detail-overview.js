@@ -1,7 +1,7 @@
-import { element } from './plain-text.js?v=82';
-import { modelCell, pendingModel } from './board.js?v=82';
-import { toolLabel, waitText } from './view-mode.js?v=82';
-import { timeValue } from './detail-timeline.js?v=82';
+import { element } from './plain-text.js?v=83';
+import { modelCell, pendingModel } from './board.js?v=83';
+import { toolLabel, waitText } from './view-mode.js?v=83';
+import { timeValue } from './detail-timeline.js?v=83';
 
 export function activeSubagents(events, runId) {
   const agents = new Map();

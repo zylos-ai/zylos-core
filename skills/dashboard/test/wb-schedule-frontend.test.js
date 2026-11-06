@@ -289,6 +289,25 @@ test('read-only agents get no write entry points and target groups open the over
   assert.equal(h.calls.some(call => call.method !== 'GET'), false);
 });
 
+test('target buttons pass the exact group key to the supplied opener from list and detail', async context => {
+  const groups = [
+    { kind: 'group', sessionGroup: 'openmax:research', componentName: 'openmax', displayName: 'Research' },
+    { kind: 'group', sessionGroup: 'telegram:older-group', componentName: 'telegram', displayName: null },
+  ];
+  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
+    : page(groups.map((target, index) => task({ id: `task-${index}`, target }))));
+  await tick();
+  const targets = () => allNodes(h.root).filter(node => node.tagName === 'BUTTON' && node.classList.contains('wb-sched-target'));
+  targets()[0].dispatch('click');
+  targets()[1].dispatch('click');
+  assert.deepEqual(h.opened, groups.map(group => group.sessionGroup));
+  assert.equal(targets()[1].textContent, 'Telegram · older-group');
+  allNodes(h.root).filter(node => node.classList.contains('wb-sched-select'))[1].dispatch('click');
+  await tick();
+  targets().at(-1).dispatch('click');
+  assert.deepEqual(h.opened, [...groups.map(group => group.sessionGroup), 'telegram:older-group']);
+});
+
 test('schedule page shows an unknown time zone, unavailable previews and the idle setting', async context => {
   const broken = task({ id: 'task-cron', name: 'Broken rule', cron: 'bad', requireIdle: true,
     nextRuns: { unavailable: true, reason: 'cron_preview_unavailable' } });

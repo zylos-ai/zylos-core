@@ -1,10 +1,10 @@
-import { mountWorkbench } from './wb/shell.js?v=82';
-import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=82';
-import { mountSchedule } from './wb/schedule.js?v=82';
+import { mountWorkbench } from './wb/shell.js?v=83';
+import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=83';
+import { mountSchedule } from './wb/schedule.js?v=83';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { pct, resolveCpuDisplay } from './gauge-utils.js';
-import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=82';
+import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=83';
 import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import { priceWithEditedBaseRates } from './pricing-form.js';
@@ -4675,13 +4675,6 @@ const stopSchedule = mountSchedule({
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   writable: () => !remoteIsReadOnly(),
-  onOpenGroup: sessionGroup => {
-    // Opens the overview and narrows the board to the task's target group.
-    document.querySelector('.tab[data-tab="overview"]')?.click();
-    const search = document.querySelector('#wb-search');
-    if (!search) return;
-    search.value = sessionGroup;
-    search.dispatchEvent(new Event('input'));
-  },
+  onOpenGroup: openWorkbenchGroup,
 });
 window.addEventListener('pagehide', stopSchedule);

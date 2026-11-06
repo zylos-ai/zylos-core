@@ -1,4 +1,4 @@
-import { element, fallbackName } from './plain-text.js?v=82';
+import { element, fallbackName } from './plain-text.js?v=83';
 export function showSidePanel(root, row, { document = root.ownerDocument, t = key => key } = {}) {
   const close = element(document, 'button', t('wb.back'));
   close.type = 'button'; close.addEventListener('click', () => { root.hidden = true; });
