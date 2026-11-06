@@ -118,10 +118,24 @@ test('workbench HTTP routes retain read authentication, method guards and source
   failSearch = true;
   const failedSearch = await request('/api/workbench/groups/search?q=telegram');
   assert.equal(failedSearch.status, 502); assert.deepEqual(await failedSearch.json(), { error: 'group_search_failed', reason: 'c4_groups_failed' });
+  for (const [index, event_type] of ['user_prompt_submit', 'stop'].entries()) assert.equal(engine.store.insertEvent({
+    id: `inbound-fixture-${index}`, ingest_id: `inbound-fixture:${index}`, timestamp: new Date(clock - 1000 + index * 500).toISOString(),
+    event_type, category: 'turn', session_group: 'telegram:a', run_id: 'fixture-run',
+    metadata: {}, source: 'hook',
+  }).inserted, true);
   failInbound = true;
   const failedInbound = await request('/api/workbench/activity?range=6h');
-  assert.equal(failedInbound.status, 502); assert.deepEqual(await failedInbound.json(), { error: 'READ_FAILED', reason: 'READ_FAILED' });
+  assert.equal(failedInbound.status, 200);
+  const partial = await failedInbound.json();
+  assert.equal(partial.inboundError, 'inbound_unreadable');
+  assert.equal(partial.groups['telegram:a'].cells.length, 72);
+  assert.equal(partial.groups['telegram:a'].cells.includes('busy'), true);
+  assert.equal(Object.values(partial.groups).every(group => group.inbound.length === 0), true);
+  assert.deepEqual(partial.groups['telegram:a'].inbound, []);
   failInbound = false;
+  const recoveredInbound = await request('/api/workbench/activity?range=6h');
+  assert.equal(recoveredInbound.status, 200);
+  assert.equal(Object.hasOwn(await recoveredInbound.json(), 'inboundError'), false);
   // Store unexpected failures map to internal_error, without exception text.
   const realQuery = engine.store.queryEvents;
   engine.store.queryEvents = () => { throw new Error('private storage details'); };

@@ -140,8 +140,11 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const width = range === '60m' ? 60000 : 300000, size = range === '60m' ? 60 : 72;
     const start = Math.floor(at / width) * width - (size - 1) * width;
     const events = keys.flatMap(sessionGroup => queryAllEvents(store, { sessionGroup, since: new Date(start).toISOString(), types: activityTypes }));
-    const inbound = keys.length ? c4Reader.getInboundTimes({ since: start, groups: keys }) : [];
+    let inbound = [], inboundError = false;
+    try { if (keys.length) inbound = c4Reader.getInboundTimes({ since: start, groups: keys }); }
+    catch { inboundError = true; }
     const value = activityBuckets({ range, now: at, rows: snapshot.rows, events, inbound });
+    if (inboundError) return { ...value, inboundError: 'inbound_unreadable' };
     activities.set(range, { at: now(), value });
     return value;
   }

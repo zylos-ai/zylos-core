@@ -470,21 +470,49 @@ for (const [source, ok] of [['c4', 'true'], ['q', 1], ['ov', false]]) {
   });
 }
 
-// Integration: C4 read failure must be observable and must not cache a successful
-// empty activity response. Run for inbound/error/cache changes; skip rendering-
+// Integration: C4 read failure preserves Dashboard cells, marks only inbound
+// unavailable and is not cached. Run for inbound/error/cache changes; skip rendering-
 // only changes. Owned temporary DB/root, no network/children; fixture cleanup.
-test('inbound activity missing database and SQL failures expose a source reason', async t => {
+test('inbound read failures preserve cells, expose a source reason and remain uncached', async t => {
   const f = fixture(t), reader = new C4Reader(f.root);
+  f.store.queryEvents = filter => filter.sessionGroup === 'telegram:g0' ? [{
+    session_group: 'telegram:g0', run_id: 'run-telegram:g0', event_type: 'user_prompt_submit',
+    timestamp: new Date(f.now() - 1000).toISOString(), metadata: {},
+  }] : [];
   f.addCleanup(() => reader.close());
   f.c4Reader.getInboundTimes = options => reader.getInboundTimes(options);
-  await assert.rejects(f.service.activity('60m'), { code: 'READ_FAILED', reason: 'READ_FAILED', statusCode: 502 });
+  const activity = await f.service.activity('60m');
+  assert.equal(activity.inboundError, 'inbound_unreadable');
+  assert.equal(activity.groups['telegram:g0'].cells.length, 60);
+  assert.equal(activity.groups['telegram:g0'].cells.includes('busy'), true);
+  assert.equal(Object.values(activity.groups).every(group => group.inbound.length === 0), true);
+  assert.deepEqual(activity.groups['telegram:g0'].inbound, []);
   fs.mkdirSync(path.join(f.root, 'comm-bridge'));
   const writer = new Database(path.join(f.root, 'comm-bridge', 'c4.db'));
   writer.exec('CREATE TABLE unrelated(id INTEGER)'); writer.close();
-  await assert.rejects(f.service.activity('60m'), { code: 'READ_FAILED', reason: 'READ_FAILED', statusCode: 502 });
+  assert.equal((await f.service.activity('60m')).inboundError, 'inbound_unreadable');
   reader.close();
   const fixed = new Database(path.join(f.root, 'comm-bridge', 'c4.db'));
   fixed.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY,session_group TEXT,direction TEXT,channel TEXT,timestamp TEXT)'); fixed.close();
-  assert.ok((await f.service.activity('60m')).groups['telegram:g0']);
+  const recovered = await f.service.activity('60m');
+  assert.ok(recovered.groups['telegram:g0']);
+  assert.equal(Object.hasOwn(recovered, 'inboundError'), false);
   await assert.rejects(workbenchResponse(f.service, '/api/workbench/activity', new URLSearchParams()), { code: 'invalid_range', statusCode: 400 });
+});
+
+// Integration: Origin error privacy in both collectStatus views; run for Origin
+// response/merge changes, skip rendering-only edits. Owned roots, injected Core
+// readers/CLI, no live resources or children; fixture cleanup is registered.
+for (const mode of ['multi', 'single']) test(`Origin read errors are redacted in ${mode} responses`, async t => {
+  const f = fixture(t); f.setMode(mode);
+  const original = f.reader.readSessionState;
+  const secret = 'sk-123456789012345678901234', raw = `Origin read failed ${secret} person@example.com`;
+  f.reader.readSessionState = key => (mode === 'single' || key === 'origin') ? Promise.reject(new Error(raw)) : original(key);
+  const snapshot = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams());
+  const origin = snapshot.rows.find(row => row.origin);
+  assert.equal(origin.live.error.code, 'READ_FAILED');
+  assert.match(origin.live.error.message, /REDACTED/); assert.match(origin.live.error.message, /EMAIL/);
+  assert.equal(JSON.stringify(snapshot).includes(raw), false);
+  assert.equal(JSON.stringify(snapshot).includes(secret), false);
+  assert.equal(JSON.stringify(snapshot).includes('person@example.com'), false);
 });

@@ -51,4 +51,6 @@ test('an observed service disappearing from PM2 counts consecutive offline sampl
   assert.deepEqual(attention().problems, [{ kind: 'channel_down', service: 'zylos-telegram', pm2Status: null }]);
   counter.update({ processes: [{ name: 'zylos-telegram', pm2_env: { status: 'online' } }] });
   assert.equal(attention().ok, true);
+  counter.update(missing); assert.equal(attention().ok, true);
+  counter.update(missing); assert.equal(attention().problems[0].kind, 'channel_down');
 });
