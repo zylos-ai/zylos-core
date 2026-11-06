@@ -553,5 +553,17 @@
   "activity.switching": "Session mode is switching.",
   "action.origin_not_running": "Origin is not running. These actions are unavailable while it sleeps; work wakes it automatically.",
   "result.restart_wake_requested": "Origin is asleep, so no stop is needed; waking has been requested.",
-  "result.restart_wake_failed": "The wake request was not written. Please retry."
+  "result.restart_wake_failed": "The wake request was not written. Please retry.",
+  "result.target_scope_mismatch": "Refresh the Origin target before submitting.",
+  "result.target_required": "Refresh and confirm the current Origin run.",
+  "result.restart_accepted": "Restart accepted; completion and new Origin readiness are not yet confirmed.",
+  "result.restart_already_accepted": "Restart was already accepted; check the current Origin state.",
+  "result.restart_already_stopped": "The session is already stopped.",
+  "result.restart_rejected": "Restart rejected ({code}).",
+  "result.restart_target_changed": "Origin changed (current run: {runId}). Refresh before retrying.",
+  "result.invalid_mode": "Session mode must be single or multi.",
+  "result.mode_switch_accepted": "Mode switch to {value} accepted; check the current transition state.",
+  "result.mode_switch_unchanged": "Session mode is already {value}.",
+  "result.mode_switch_rejected": "Mode switch rejected ({code}).",
+  "result.mode_switch_unknown": "Mode switch result is unknown. Check the current mode before retrying."
 }

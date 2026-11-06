@@ -125,7 +125,7 @@ test('manual restart distinguishes wake requests and failed wake writes in multi
   assert.equal((await handleCoreAction('restart-session', {}, config)).messageKey, 'result.restart_wake_failed');
   mode = 'single'; reply = { kind: 'accepted', reply: { result: 'already_stopped' } };
   const single = await handleCoreAction('restart-session', {}, config);
-  assert.equal(single.messageKey, undefined); assert.match(single.message, /already_stopped/);
+  assert.equal(single.messageKey, 'result.restart_already_stopped'); assert.match(single.message, /already_stopped/);
   mode = 'multi';
   assert.equal((await handleCoreAction('interrupt', {}, config)).error, 'TARGET_REQUIRED');
   assert.equal((await handleCoreAction('chop-chop', {}, config)).error, 'TARGET_REQUIRED');

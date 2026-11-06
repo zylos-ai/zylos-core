@@ -553,5 +553,17 @@
   "activity.switching": "正在切换会话模式。",
   "action.origin_not_running": "Origin 未运行，休眠期间不可用；有工作时会自动唤醒。",
   "result.restart_wake_requested": "Origin 正在休眠，无需停止；已请求唤醒。",
-  "result.restart_wake_failed": "唤醒请求未写入，请重试。"
+  "result.restart_wake_failed": "唤醒请求未写入，请重试。",
+  "result.target_scope_mismatch": "请刷新 Origin 目标后再提交。",
+  "result.target_required": "请刷新并确认当前 Origin 运行后再操作。",
+  "result.restart_accepted": "重启请求已接受；旧运行结束与新 Origin 就绪仍待确认。",
+  "result.restart_already_accepted": "重启请求已被接受，请查看当前 Origin 状态。",
+  "result.restart_already_stopped": "会话已停止。",
+  "result.restart_rejected": "重启请求被拒绝（{code}）。",
+  "result.restart_target_changed": "Origin 已变化（当前运行：{runId}），请刷新后再操作。",
+  "result.invalid_mode": "会话模式必须为 single 或 multi。",
+  "result.mode_switch_accepted": "已接受切换到 {value} 模式的请求，请查看当前切换状态。",
+  "result.mode_switch_unchanged": "当前会话模式已经是 {value}。",
+  "result.mode_switch_rejected": "模式切换被拒绝（{code}）。",
+  "result.mode_switch_unknown": "模式切换结果未知，请先查看当前模式再决定是否重试。"
 }
