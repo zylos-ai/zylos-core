@@ -14,18 +14,18 @@ After JSON, only JSON whitespace or exactly one existing Core suffix is accepted
 
 Here `\n` denotes LF bytes, not backslash characters. `health` and `reason` are nonempty strings containing no LF; spaces are allowed. The complete template is anchored at the end of content (apart from JSON whitespace), with its final period belonging to the template. Their values are diagnostic text, not a finite enum or guaranteed token. No extra prose, second JSON, repeated suffix or prefix-matching approximation is accepted. Source: `skills/comm-bridge/scripts/c4-store-delivery.js`, `markStatusNoticeSuppressed`. The writer defaults missing health to `unavailable` and missing reason to health; it appends only to eligible failed inbound records. Parsing ignores this annotation, preserving original C4 identity and `metadata.zylos.answerId`. It neither changes storage nor claims the notification was delivered.
 
-Every input, including plain text and the prefix/JSON/any suffix, has a maximum of **65,536 UTF-8 bytes**, inclusive. Count bytes, not UTF-16 units or characters. The reader reports oversized content as invalid; sending enforcement belongs to the channel hook. No truncation of structured content. Images/large data use existing references, not inline binaries.
+Marked content, including prefix/JSON/any suffix, has a maximum of **65,536 UTF-8 bytes**, inclusive. Count bytes, not UTF-16 units or characters. The parser returns unmarked ordinary text unchanged regardless of its length, preserving existing history from every channel. The Dashboard channel BeforeSend hook separately enforces a 65,536-byte sending cap on both ordinary and structured content before storage; this is a sending rule, not a general history-reading cap. No truncation of structured content. Images/large data use existing references, not inline binaries.
 
 `parseC4Content(content)` returns `{kind:'text',text}`, `{kind:'envelope',envelope,suffix}` or `{kind:'invalid',reason}`. Invalid tagged content never becomes ordinary text; invalid results do not carry raw payload. Consumers provide their existing readable error/C4 reference and no actions. Unsupported versions/types are invalid for this adapter and therefore read-only fallback/error, never an invitation to fetch remote code.
 
 ## Parse result reason categories
 
-These fixed functional values are part of the common parser contract. Classification checks content type, then byte limit, then prefix/framing, JSON syntax, suffix, and envelope schema. A marked non-object is invalid_json; unmarked JSON is text.
+These fixed functional values are part of the common parser contract. Classification checks content type, then prefix. Unmarked content returns text immediately; only marked content is checked for byte limit, framing/JSON syntax, suffix and envelope schema. A marked non-object is invalid_json; unmarked JSON is text.
 
 | reason | Meaning |
 | --- | --- |
 | `content_type` | Input is not a string. |
-| `content_too_large` | UTF-8 encoded content exceeds 65,536 bytes, marked or ordinary. |
+| `content_too_large` | Marked UTF-8 content exceeds 65,536 bytes. Unmarked text is never invalidated by this reading limit. |
 | `invalid_json` | Marked body is not one complete syntactically valid JSON object. |
 | `invalid_suffix` | The complete object has neither JSON whitespace nor the exact known suffix after it. |
 | `invalid_envelope` | Parsed object has unsupported version/type, missing/invalid fields or inconsistent question/answer references. |
