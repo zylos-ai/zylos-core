@@ -544,13 +544,15 @@ test('explicit transcript discovery takes precedence over the legacy statusline'
   fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
   fs.writeFileSync(
     path.join(tmpDir, 'activity-monitor', 'statusline.json'),
-    JSON.stringify({ session_id: 'some-other-session' })
+    JSON.stringify({ session_id: 'test-session-123' })
   );
 
-  fs.writeFileSync(jsonlPath, makeJsonlLine('u1', { requestId: 'req_primary' }) + '\n');
+  fs.writeFileSync(jsonlPath, makeJsonlLine('legacy', { requestId: 'req_legacy' }) + '\n');
+  const explicit = path.join(tmpDir, 'explicit.jsonl');
+  fs.writeFileSync(explicit, makeJsonlLine('u1', { requestId: 'req_primary' }) + '\n');
   store.insertEvent({ id: 'start', ingest_id: 'start', timestamp: new Date().toISOString(), runtime: 'claude',
     session_id: 'test-session-123', session_group: 'origin', run_id: 'current', event_type: 'session_start',
-    category: 'session', source: 'core-log', metadata: { transcript_path: jsonlPath } });
+    category: 'session', source: 'core-log', metadata: { transcript_path: explicit } });
   await new ConversationCollector(store, config, { getSnapshot: async () => ({ listKnown: true, rows: [] }) }).collect();
   const rows = store.db.prepare("SELECT session_id FROM metric_points WHERE metric_name='usage_event'").all();
   assert.equal(rows.length, 1); assert.equal(rows[0].session_id, 'test-session-123');

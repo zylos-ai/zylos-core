@@ -58,10 +58,10 @@ test('legacy discovery adopts saved file offsets and yields to explicit Claude s
   assert.equal(f.store.getUsageTranscript(p).session_group, null);
   const other = fixture(t), explicit = other.file('explicit');
   fs.mkdirSync(path.join(other.root, 'activity-monitor'), { recursive: true });
-  fs.writeFileSync(path.join(other.root, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: id }));
+  fs.writeFileSync(path.join(other.root, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: 'session-A' }));
   const otherDir = path.join(other.root, '.claude', 'projects', claudeProjectSlug(other.root));
   fs.mkdirSync(otherDir, { recursive: true });
-  fs.writeFileSync(path.join(otherDir, `${id}.jsonl`), '{}\n');
+  fs.writeFileSync(path.join(otherDir, 'session-A.jsonl'), '{}\n');
   other.start(explicit, 'A'); other.inventory.discover();
   assert.equal(other.store.activeUsageTranscripts().length, 1);
 });
@@ -287,11 +287,45 @@ test('valid current-run snapshots are reused for twelve polls and refreshed afte
   assert.equal(calls, 2);
 });
 
+test('discovery refreshes a recovered snapshot before reading a new Origin transcript', async t => {
+  const f = fixture(t);
+  let calls = 0, currentRun = 'old-run';
+  f.inventory.getSnapshot = async () => {
+    calls++;
+    if (calls === 1) throw new Error('snapshot unavailable');
+    return { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: currentRun } }] };
+  };
+  const collector = new ConversationCollector(f.store, { homeDir: f.root, zylosDir: f.root }, { transcripts: f.inventory });
+  await collector.collect();
+  assert.equal(f.inventory.snapshot, null);
+  f.advance(5000);
+  await collector.collect();
+  assert.equal(calls, 2);
+  f.advance(55000);
+  currentRun = 'run-origin';
+  const file = f.file('new-origin');
+  fs.writeFileSync(file, ['s1', 's2'].map(id => JSON.stringify({
+    type: 'assistant', uuid: id, sessionId: 'session-origin', timestamp: new Date(f.now()).toISOString(),
+    message: { content: [{ type: 'text', text: id }] },
+  })).join('\n') + '\n');
+  f.start(file, 'origin');
+  await collector.collect();
+  assert.equal(calls, 3);
+  const summaries = f.store.queryEvents({ types: ['assistant_message'], order: 'asc' });
+  assert.equal(summaries.length, 2);
+  assert.equal(summaries[0].summary, 's1');
+  assert.equal(summaries[1].summary, 's2');
+  assert.equal(f.store.getUsageTranscript(file).byte_offset, fs.statSync(file).size);
+  await collector.collect();
+  assert.equal(f.store.queryEvents({ types: ['assistant_message'] }).length, 2);
+  assert.equal(calls, 3);
+});
+
 test('incomplete and failed status snapshots suppress finishing and current attribution without caching', async t => {
   for (const snapshot of [
     { listKnown: false, reason: 'group_list_failed', rows: [{ sessionGroup: 'origin', live: null }] },
     { rows: [] },
-    { listKnown: true, sources: { status: { ok: false } }, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] },
+    { listKnown: false, sources: { status: { ok: false } }, rows: [{ sessionGroup: 'origin', live: null }] },
   ]) {
     const f = fixture(t, snapshot), p = f.file('incomplete'); f.start(p, 'origin');
     fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
@@ -376,4 +410,56 @@ test('legacy statusline rotation discovers the new file and only it is current O
   assert.equal(f.store.activeUsageTranscripts().length, 2);
   assert.equal(current.find(([id]) => id === 'legacy-first')[1], false);
   assert.equal(current.find(([id]) => id === 'legacy-next')[1], true);
+});
+
+test('legacy Origin discovery coexists with an explicit session in another group', async t => {
+  const f = fixture(t, { listKnown: true, rows: [
+    { sessionGroup: 'origin', live: { runId: null } },
+    { sessionGroup: 'A', live: { runId: 'run-A' } },
+  ] });
+  const explicit = f.file('new-group'); f.start(explicit, 'A');
+  const projectDir = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root));
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.mkdirSync(path.join(f.root, 'activity-monitor'), { recursive: true });
+  const legacy = path.join(projectDir, 'legacy-origin.jsonl');
+  fs.writeFileSync(legacy, '{}\n');
+  fs.writeFileSync(path.join(f.root, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: 'legacy-origin' }));
+  const seen = new Map();
+  await f.inventory.collect('claude', (row, current) => {
+    seen.set(row.transcript_path, current); return { byteOffset: fs.statSync(row.transcript_path).size };
+  });
+  assert.equal(seen.size, 2);
+  assert.equal(seen.get(legacy), true);
+  assert.equal(seen.get(explicit), false);
+  assert.equal(f.store.getUsageTranscript(legacy).session_group, null);
+  assert.equal(f.store.getUsageTranscript(explicit).session_group, 'A');
+});
+
+test('rotated legacy sessions finish after idle EOF while the current legacy remains active', async t => {
+  const f = fixture(t, { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: null } }] });
+  const projectDir = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root));
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.mkdirSync(path.join(f.root, 'activity-monitor'), { recursive: true });
+  const status = path.join(f.root, 'activity-monitor', 'statusline.json');
+  const first = path.join(projectDir, 'one.jsonl'), next = path.join(projectDir, 'two.jsonl');
+  fs.writeFileSync(first, '{}\n');
+  fs.utimesSync(first, new Date(f.now()), new Date(f.now()));
+  fs.writeFileSync(status, JSON.stringify({ session_id: 'one' }));
+  const read = row => ({ byteOffset: fs.statSync(row.transcript_path).size });
+  await f.inventory.collect('claude', read);
+  assert.equal(f.store.getUsageTranscript(first).status, 'active');
+  f.advance(60000);
+  fs.writeFileSync(next, '{}\n');
+  fs.utimesSync(next, new Date(f.now()), new Date(f.now()));
+  fs.writeFileSync(status, JSON.stringify({ session_id: 'two' }));
+  await f.inventory.collect('claude', read);
+  assert.equal(f.store.getUsageTranscript(first).status, 'active');
+  f.advance(5 * 3600000);
+  await f.inventory.collect('claude', read);
+  assert.equal(f.store.getUsageTranscript(first).status, 'finished');
+  assert.equal(f.store.getUsageTranscript(next).status, 'active');
+  f.advance(9 * DAY);
+  await f.inventory.collect('claude', read);
+  assert.equal(f.store.getUsageTranscript(first), null);
+  assert.equal(f.store.getUsageTranscript(next).status, 'active');
 });
