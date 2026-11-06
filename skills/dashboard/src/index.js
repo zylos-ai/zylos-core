@@ -11,6 +11,8 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { AuthGate, exchangeApiKeyForToken, generateApiKey, hashApiKey, migratePasswordIfNeeded, validateApiSession } from './lib/auth.js';
 import { handleChatSettings } from './lib/chat/settings.js';
+import { ChatHistory } from './lib/chat/history.js';
+import { handleChatHistory } from './lib/chat/history-routes.js';
 import { browserBaseFromRequest } from './lib/browser-base.js';
 import { mutateConfig } from './lib/config-mutation.js';
 import {
@@ -1651,6 +1653,7 @@ async function handleMemoryApi(req, res, pathname, url) {
 }
 
 export function createServer() {
+  const history = new ChatHistory({ c4Reader });
   const rootDir = publicDir();
   const fleetProxy = new FleetProxy({ config, rootDir, poller: fleetPoller, authGate: auth });
 
@@ -1691,6 +1694,7 @@ export function createServer() {
     }
 
     if (await handleChatSettings(req, res, url, { auth, config })) return;
+    if (await handleChatHistory(req, res, url, { auth, config, history })) return;
 
     if (await observerService.handle(req, res, url)) {
       return;
