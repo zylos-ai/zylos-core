@@ -230,3 +230,18 @@ test('an unavailable backlog view retains the requested Origin scope', async () 
   assert.deepEqual(countCalls, [['unsummarized', '--group', 'origin', '--json']]);
   assert.deepEqual(lockCalls[0].slice(1), ['status', '--group', 'origin', '--json']);
 });
+
+
+test('reading another scope discards expired backlog entries permanently', async () => {
+  let clock = 1000, calls = 0;
+  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock,
+    runC4Db: async () => ({ ok: true, data: { count: ++calls } }),
+    execute: async () => ({ stdout: JSON.stringify({ sync: { held: false } }) }) });
+  assert.equal((await backlog('telegram:a')).count, 1);
+  clock = 31001;
+  assert.equal((await backlog('telegram:b')).count, 2);
+  // A backwards wall-clock adjustment cannot resurrect an expired entry that
+  // was already discarded while another scope was read.
+  clock = 1001;
+  assert.equal((await backlog('telegram:a')).count, 3);
+});

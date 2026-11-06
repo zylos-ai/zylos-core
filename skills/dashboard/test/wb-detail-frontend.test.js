@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
-import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText } from '../public/js/wb/detail.js';
+import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
 import { renderOverview, detailNumbers, activeSubagents } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
 import { createGroupConfig, fetchJson, runningText, validConfigChange } from '../public/js/wb/group-config.js';
@@ -200,7 +200,7 @@ test('auto naming preserves supplied words, substitutes only CLI path and copies
   assert.equal(allNodes(root).some(node => node.tagName === 'SCRIPT'), false);
 });
 
-test('detail polling skips hidden pages, retains data on failure, recovers and never polls configuration children', async () => {
+test('snapshot-driven detail refresh skips hidden pages, retains data on failure and recovers without a timer', async () => {
   let visible = true, failing = false, version = 1;
   const calls = [], f = detailFixture(async path => {
     calls.push(path);
@@ -209,13 +209,14 @@ test('detail polling skips hidden pages, retains data on failure, recovers and n
   }, { isVisible: () => visible });
   await f.controller.open('a', { rows: [], listKnown: true });
   const count = calls.length;
-  visible = false; await f.timers[0](); assert.equal(calls.length, count);
+  assert.equal(f.timers.length, 0, 'detail does not create an independent poll timer');
+  visible = false; await f.controller.updateSnapshot({ rows: [], listKnown: true }); assert.equal(calls.length, count);
   visible = true; failing = true; await f.controller.refresh();
   assert.equal(f.controller.state.recent[0].timestamp, '1'); assert.equal(f.controller.state.error, 'offline');
   failing = false; version = 2; await f.controller.refresh();
   assert.equal(f.controller.state.recent[0].timestamp, '2'); assert.equal(f.controller.state.error, null);
   assert.equal(calls.some(path => path.includes('/config')), false);
-  f.controller.destroy(); assert.equal(f.timers[0], null);
+  f.controller.destroy(); assert.equal(f.timers.length, 0);
 });
 
 test('detail cancels on group and agent changes, resets tabs and ignores old responses even when abort is ignored', async () => {
@@ -248,7 +249,7 @@ test('every group has bound action buttons and Origin translated wake replies pr
   }, { confirm: () => true });
   await f.controller.open(row('a'), { rows: [row('a')], listKnown: true });
   await f.controller.act('interrupt'); await f.controller.act('chop-chop'); await f.controller.act('restart');
-  assert.deepEqual(actions.map(item => item[1]), Array.from({ length: 3 }, () => ({ runId: 'run-a', sessionId: 'session-a' })));
+  assert.deepEqual(actions.map(item => item[1]), Array.from({ length: 3 }, () => ({ sessionGroup: 'a', runId: 'run-a', sessionId: 'session-a' })));
   assert.equal(actions.every(item => item[0].includes('/groups/a/actions/')), true);
   f.controller.destroy();
 });
@@ -274,27 +275,29 @@ test('plain detail header reports platform and uptime from run creation rather t
   f.controller.destroy();
 });
 
-test('overview polls current subagent evidence while preserving a previously selected timeline filter', async () => {
+test('overview derives current subagent changes from recent events without opening the full timeline', async () => {
   let stopped = false;
   const current = row('a');
   const calls = [], f = detailFixture(async path => {
     calls.push(path);
-    if (path.includes('run_id=run-a')) return response({ events: [
-      { run_id: 'run-a', event_type: 'subagent_start', metadata: { agent_id: 'worker' }, event_seq: 1 },
-      ...(stopped ? [{ run_id: 'run-a', event_type: 'subagent_stop', metadata: { agent_id: 'worker' }, event_seq: 2 }] : []),
+    if (path.startsWith('/api/timeline')) return response({ events: [
+      { run_id: 'run-a', event_type: stopped && !path.includes('run_id=') ? 'subagent_stop' : 'subagent_start',
+        metadata: { agent_id: 'worker' }, event_seq: stopped && !path.includes('run_id=') ? 2 : 1 },
     ] });
     return response(defaultRead(path));
   });
   await f.controller.open(current, { rows: [current], listKnown: true });
   assert.match(f.root.textContent, /wb.detail.subagent · worker/);
-  await f.controller.timeline.setFilter('tools');
   stopped = true; calls.length = 0;
-  await f.controller.refresh();
+  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
   assert.doesNotMatch(f.root.textContent, /wb.detail.subagent · worker/);
-  assert.equal(f.controller.timeline.state.filter, 'tools');
-  const currentReads = calls.filter(path => path.includes('run_id=run-a'));
-  assert.equal(currentReads.length, 1, 'overview reads current evidence once, without also refreshing a hidden filtered list');
-  assert.equal(new URL(currentReads[0], 'http://fixture').searchParams.has('types'), false);
+  assert.equal(f.controller.timeline.state.open, false);
+  assert.equal(calls.length, 3);
+  assert.equal(calls.filter(path => path.startsWith('/api/timeline')).length, 1);
+  assert.equal(calls.some(path => path.includes('run_id=')), false);
+  await f.controller.selectTab('timeline');
+  await f.controller.selectTab('overview');
+  assert.doesNotMatch(f.root.textContent, /wb.detail.subagent · worker/, 'older timeline pages cannot supersede a newer recent stop');
   f.controller.destroy();
 });
 
@@ -370,4 +373,88 @@ test('current message range advances with the clock while ended runs keep exact 
   assert.equal(calls.filter(url => url.pathname.endsWith('/messages')).every(url => url.searchParams.get('until') === new Date(1100).toISOString()), true);
   assert.equal(calls.some(url => url.pathname === '/api/timeline'), false, 'ended-only groups do not fetch current events');
   loader.close();
+});
+
+
+test('stopped Origin and single keep restart available with bound scope while ordinary groups do not', async () => {
+  const sent = [];
+  for (const key of ['origin', null]) {
+    const current = row(key, { presence: 'not_running', live: null });
+    const buttons = groupActionButtons(current);
+    assert.equal(buttons.find(button => button.action === 'restart').disabled, false);
+    assert.equal(buttons.filter(button => button.action !== 'restart').every(button => button.disabled), true);
+    assert.equal(groupActionButtons(current, false).every(button => button.disabled), true);
+    const f = detailFixture(async (path, options) => {
+      if (options?.method === 'POST') { sent.push(JSON.parse(options.body)); return response({ result: 'accepted' }); }
+      return response(defaultRead(path));
+    }, { confirm: () => true });
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    await f.controller.act('restart'); f.controller.destroy();
+  }
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].sessionGroup, 'origin');
+  assert.equal(sent[1].sessionGroup, null);
+  assert.equal(groupActionButtons(row('a', { presence: 'not_running', live: null })).every(button => button.disabled), true);
+});
+
+test('group action successes are translated, known non-submission keeps its reason and start time is formatted', () => {
+  assert.equal(groupActionText({ result: 'accepted' }, t), 'wb.actions.accepted');
+  assert.equal(groupActionText({ steps: [{ submission: 'submitted' }, { submission: 'submitted' }] }, t),
+    '1: wb.actions.submitted · 2: wb.actions.submitted');
+  assert.equal(groupActionText({ submission: 'not_submitted', reason: 'zylos_dir_mismatch', unknown: true }, t),
+    'wb.actions.notSubmitted · zylos_dir_mismatch');
+  assert.equal(groupActionText({ submission: 'not_submitted', error: { code: 'INSTANCE_ROOT_MISMATCH', message: 'different instance' } }, t),
+    'wb.actions.notSubmitted · INSTANCE_ROOT_MISMATCH · different instance');
+  assert.equal(formatStartedAt(1000, 'en'), new Date(1000000).toLocaleString('en'));
+  assert.notEqual(formatStartedAt(1000, 'en'), '1000');
+  assert.equal(formatStartedAt(null, 'en'), null);
+});
+
+test('snapshot rounds stay bounded with 5000 history events and append only one current page without overlap', async () => {
+  const events = Array.from({ length: 5000 }, (_, index) => ({ run_id: 'run-a', event_seq: index + 1, event_type: 'post_tool_use' }));
+  const current = row('a'), calls = [];
+  let holdRecent = null;
+  const f = detailFixture(async path => {
+    calls.push(path); const url = new URL(path, 'http://fixture');
+    if (url.pathname === '/api/timeline') {
+      if (!url.searchParams.has('run_id')) {
+        if (holdRecent) return holdRecent.promise;
+        return response({ events: [] });
+      }
+      const after = Number(url.searchParams.get('after_seq') ?? 0);
+      return response({ events: events.slice(after, after + 1000) });
+    }
+    if (url.pathname.endsWith('/runs')) return response({ runs: [run('run-a')], totalEvents: events.length, totalRuns: 1, unattributed: 0 });
+    if (url.pathname.endsWith('/messages')) return response({ messages: [] });
+    return response(defaultRead(path));
+  });
+  const snapshot = { rows: [current], listKnown: true };
+  await f.controller.open(current, snapshot);
+  assert.equal(calls.length, 3);
+  assert.equal(calls.some(path => path.includes('run_id=')), false);
+  calls.length = 0; await f.controller.updateSnapshot(snapshot);
+  assert.equal(calls.length, 3, 'overview round is independent of current event history');
+  calls.length = 0; await f.controller.selectTab('timeline');
+  assert.equal(f.controller.timeline.state.events.get('run-a').length, 5000);
+  assert.equal(calls.filter(path => path.includes('run_id=')).length, 6, 'initial explicit opening paginates the entire run');
+  events.push(...Array.from({ length: 1500 }, (_, index) => ({ run_id: 'run-a', event_seq: 5001 + index, event_type: 'post_tool_use' })));
+  calls.length = 0;
+  holdRecent = deferred();
+  const one = f.controller.updateSnapshot(snapshot), two = f.controller.updateSnapshot(snapshot);
+  assert.equal(calls.length, 3, 'concurrent board updates share the same bounded refresh');
+  holdRecent.resolve(response({ events: [] })); holdRecent = null;
+  await Promise.all([one, two]);
+  assert.equal(calls.length, 5, 'timeline round adds one event page and one metadata-only message read');
+  assert.equal(f.controller.timeline.state.events.get('run-a').length, 6000);
+  const eventRead = new URL(calls.find(path => path.includes('run_id=')), 'http://fixture');
+  assert.equal(eventRead.searchParams.get('after_seq'), '5000');
+  calls.length = 0; await f.controller.updateSnapshot(snapshot);
+  assert.equal(calls.length, 5);
+  assert.equal(f.controller.timeline.state.events.get('run-a').length, 6500);
+  assert.equal(new URL(calls.find(path => path.includes('run_id=')), 'http://fixture').searchParams.get('after_seq'), '6000');
+  await f.controller.selectTab('overview');
+  calls.length = 0; await f.controller.updateSnapshot(snapshot);
+  assert.equal(calls.length, 3);
+  assert.equal(calls.some(path => path.includes('run_id=')), false, 'overview never refreshes hidden full-current history');
+  f.controller.destroy();
 });

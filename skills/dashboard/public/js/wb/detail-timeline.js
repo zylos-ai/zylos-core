@@ -81,17 +81,38 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       if (runId === state.currentRunId && state.filter === 'all') state.currentEvents = events;
     }
   }
-  async function loadRuns(before, gen = generation) {
-    const query = new URLSearchParams({ limit: '3' });
-    if (before != null) query.set('before', before);
-    const value = await read(path('runs') + '?' + query, gen);
+  function updateRuns(value) {
     const merged = new Map(state.runs.map(run => [run.runId, run]));
     for (const run of value.runs ?? []) merged.set(run.runId, run);
     state.runs = [...merged.values()].sort((a, b) => timeValue(b.startAt) - timeValue(a.startAt));
     state.totalEvents = value.totalEvents ?? 0;
     state.totalRuns = value.totalRuns ?? 0;
     state.unattributed = value.unattributed ?? 0;
+  }
+  async function loadRuns(before, gen = generation) {
+    const query = new URLSearchParams({ limit: '3' });
+    if (before != null) query.set('before', before);
+    const value = await read(path('runs') + '?' + query, gen);
+    updateRuns(value);
     await loadMessages(gen);
+  }
+  async function appendCurrent(gen) {
+    const runId = state.currentRunId;
+    if (!runId || state.filter === 'messages') return;
+    const filterGen = filterGeneration;
+    const loaded = state.events.get(runId) ?? [];
+    const afterSeq = loaded.at(-1)?.event_seq ?? 0;
+    const query = new URLSearchParams({ session_group: state.key ?? '', run_id: runId,
+      order: 'asc', limit: '1000', after_seq: String(afterSeq) });
+    const types = timelineTypes[state.filter];
+    if (types?.length) query.set('types', types.join(','));
+    const value = await read('/api/timeline?' + query, gen);
+    if (filterGen !== filterGeneration) return;
+    // A snapshot refresh reads one page only. If over 1000 new events arrive,
+    // the following board snapshot continues from this page's final sequence.
+    const events = [...loaded, ...(value.events ?? [])];
+    state.events.set(runId, events);
+    if (state.filter === 'all') state.currentEvents = events;
   }
   async function guarded(operation) {
     const gen = generation;
@@ -104,7 +125,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     } finally { if (current(gen)) { state.loading = false; publish(); } }
   }
   return {
-    state,
+    state, updateRuns,
     async open(key, currentRunId) {
       this.close();
       state.key = key;
@@ -117,17 +138,11 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
         await Promise.all([loadRuns(null, gen), currentRunId ? runEvents(currentRunId, gen) : Promise.resolve()]);
       });
     },
-    async refresh({ overview = false } = {}) {
-      if (!state.open || !active()) return;
+    async refresh() {
+      if (!state.open || !active() || state.loading) return;
       const gen = generation;
       await guarded(async () => {
-        if (state.currentRunId) {
-          if (overview && state.filter !== 'all') {
-            const filterGen = filterGeneration;
-            const events = await fetchEvents(state.currentRunId, gen, filterGen, 'all');
-            if (current(gen) && filterGen === filterGeneration) state.currentEvents = events;
-          } else await runEvents(state.currentRunId, gen);
-        }
+        await appendCurrent(gen);
         await loadMessages(gen);
       });
     },

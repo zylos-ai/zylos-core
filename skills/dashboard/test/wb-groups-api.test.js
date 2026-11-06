@@ -72,6 +72,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
 test('snapshot shares in-flight collection, caches from completion, and captures each live observation once', async t => {
   const f = fixture(t), initial = f.cli.runC4Db;
+  assert.equal(f.service.getCachedSnapshot(), null);
   let release;
   const held = new Promise(resolve => { release = resolve; });
   f.cli.runC4Db = async args => { await held; return initial(args); };
@@ -85,7 +86,10 @@ test('snapshot shares in-flight collection, caches from completion, and captures
   assert.deepEqual(f.calls.find(args => args[0] === 'groups'), ['groups', '--active-since', String(1800000000000 - 7 * 86400000), '--json']);
   assert.equal(f.calls.filter(args => args.includes('--key-match')).length, 0);
   f.advance(1000); assert.equal(await f.service.getSnapshot(), results[0]); assert.equal(f.calls.length, 3);
-  f.advance(1100); await f.service.getSnapshot(); assert.equal(f.calls.length, 6);
+  f.advance(1100);
+  assert.equal(f.service.getCachedSnapshot(), results[0], 'cached-only reads do not rebuild an expired snapshot');
+  assert.equal(f.calls.length, 3);
+  await f.service.getSnapshot(); assert.equal(f.calls.length, 6);
   assert.equal(f.reads.length, 2, 'weekly account cache survives snapshot expiry');
   f.advance(30000); await f.service.getSnapshot(); assert.equal(f.reads.length, 4);
 });

@@ -139,5 +139,7 @@
   "wb.timeline.earlier": "Load 3 earlier runs",
   "wb.timeline.latest": "Back to latest",
   "wb.name.loading": "Loading naming prompt",
-  "wb.detail.title": "Group details"
+  "wb.detail.title": "Group details",
+  "wb.actions.accepted": "Restart request accepted",
+  "wb.actions.notSubmitted": "Request not submitted"
 }

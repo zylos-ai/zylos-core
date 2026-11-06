@@ -155,7 +155,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     activities.set(range, { at: now(), value });
     return value;
   }
-  return { getSnapshot, activity, channelDownCounter,
+  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, activity, channelDownCounter,
     search: (q, at = now()) => searchGroups(q, { now: at, runC4Db: cli.runC4Db, getSnapshot, displayNames, sanitizer }) };
 }
 

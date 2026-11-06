@@ -7,9 +7,9 @@ export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } =
     if (before !== undefined && !Number.isFinite(Date.parse(before))) {
       throw Object.assign(new Error('Invalid run page boundary'), { code: 'INVALID_ARGUMENT', statusCode: 400 });
     }
-    const snapshot = await getSnapshot();
+    const snapshot = await getSnapshot() ?? { rows: [] };
     const group = key === 'origin' && snapshot.view === 'single' ? null : key;
-    const currentRunId = snapshot.rows.find(row => row.sessionGroup === group)?.live?.runId ?? null;
+    const currentRunId = snapshot.rows?.find(row => row.sessionGroup === group)?.live?.runId ?? null;
     const params = { key: group, limit, ...(before === undefined ? {} : { before }) };
     const rows = store.db.prepare(`SELECT run_id AS runId, MIN(timestamp) AS startAt,
       MAX(timestamp) AS endAt, COUNT(*) AS n FROM runtime_events

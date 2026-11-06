@@ -139,5 +139,7 @@
   "wb.timeline.earlier": "加载更早的 3 段",
   "wb.timeline.latest": "回到最新",
   "wb.name.loading": "正在读取起名提示词",
-  "wb.detail.title": "组详情"
+  "wb.detail.title": "组详情",
+  "wb.actions.accepted": "重启请求已接受",
+  "wb.actions.notSubmitted": "请求未提交"
 }

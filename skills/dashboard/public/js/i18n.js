@@ -1,4 +1,4 @@
-import { initWbPack } from './wb/i18n-wb.js?v=81';
+import { initWbPack } from './wb/i18n-wb.js?v=82';
 const SUPPORTED = ['en', 'zh'];
 const STORAGE_KEY = 'zylos-dashboard-locale';
 const PACK_CACHE_PREFIX = 'zylos-dashboard-i18n-';

@@ -17,6 +17,9 @@ export function createGroupBacklog({ zylosDir, runC4Db,
       try { if ((await getSnapshot())?.view === 'single') scope = null; }
       catch { /* An unreadable view retains the explicitly requested group. */ }
     }
+    for (const [cachedScope, entry] of cache) {
+      if (now() - entry.at >= 30000) cache.delete(cachedScope);
+    }
     const groupArgs = scope === null ? [] : ['--group', scope];
     const saved = cache.get(scope);
     if (saved && now() - saved.at < 30000) return saved.value;

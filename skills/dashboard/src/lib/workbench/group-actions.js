@@ -61,7 +61,8 @@ export function createGroupActions({ zylosDir, config = { zylosDir },
       return { ...second, steps: [first, second] };
     }
     if (coreConfig.ZYLOS_DIR && path.resolve(coreConfig.ZYLOS_DIR) !== path.resolve(zylosDir)) {
-      return { ...uncertain('Core instance root does not match this Dashboard'), submission: 'not_submitted' };
+      return { ok: false, submission: 'not_submitted',
+        error: { code: 'INSTANCE_ROOT_MISMATCH', message: 'Core instance root does not match this Dashboard' } };
     }
     const { submit, lookupRestartRequest } = await loadCoreModule('am-sock-client.js');
     const requestId = uuid(), deadlineAt = now() + 10000;

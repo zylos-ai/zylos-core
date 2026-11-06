@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGroupActions } from '../src/lib/workbench/group-actions.js';
 
-function fixture({ results = [{ ok: true, data: { id: 1 } }], mode = 'multi', reply = { kind: 'accepted', reply: { result: 'accepted' } }, completion = 'accepted' } = {}) {
+function fixture({ results = [{ ok: true, data: { id: 1 } }], mode = 'multi', reply = { kind: 'accepted', reply: { result: 'accepted' } }, completion = 'accepted', coreRoot } = {}) {
   let clock = 1000;
   const calls = [], sleeps = [], submissions = [], lookups = [], origin = [];
   const config = { zylosDir: '/isolated/instance', extra: 'retained' };
@@ -12,7 +12,7 @@ function fixture({ results = [{ ok: true, data: { id: 1 } }], mode = 'multi', re
     sleep: async ms => { sleeps.push(ms); clock += ms; },
     handleCoreAction: async (...args) => { origin.push(args); return { ok: true, messageKey: 'existing_core_reply' }; },
     loadCoreModule: async name => {
-      if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
+      if (name === 'config.js') return { readSessionMode: () => ({ mode }), ZYLOS_DIR: coreRoot };
       assert.equal(name, 'am-sock-client.js');
       return { submit: async (...args) => { submissions.push(args); return reply; },
         lookupRestartRequest: async (...args) => { lookups.push(args); return completion; } };
@@ -34,6 +34,10 @@ test('Origin actions reuse the existing handler with the same body and configura
     const call = f.origin.at(-1);
     assert.equal(call[0], coreAction); assert.equal(call[1], body); assert.equal(call[2], f.config);
   }
+  const stopped = { sessionGroup: 'origin', sessionId: null };
+  await f.action('origin', 'restart', stopped);
+  assert.equal(f.origin.at(-1)[0], 'restart-session');
+  assert.equal(f.origin.at(-1)[1], stopped, 'a stopped Origin restart is forwarded unchanged');
   assert.equal(f.calls.length, 0); assert.equal(f.submissions.length, 0);
 });
 
@@ -121,4 +125,16 @@ test('restart uncertainty reads back once while failed submission never reads ba
     assert.equal((await stopped.action('telegram:A', 'restart', target)).submission, 'not_submitted');
     assert.equal(stopped.submissions.length, 1); assert.equal(stopped.lookups.length, 0);
   }
+});
+
+
+test('an instance root mismatch is definitely not submitted and never contacts the supervisor', async () => {
+  const f = fixture({ coreRoot: '/isolated/another-instance' });
+  const result = await f.action('telegram:A', 'restart', target);
+  assert.equal(result.ok, false);
+  assert.equal(result.submission, 'not_submitted');
+  assert.notEqual(result.unknown, true);
+  assert.equal(result.error.code, 'INSTANCE_ROOT_MISMATCH');
+  assert.equal(f.submissions.length, 0);
+  assert.equal(f.lookups.length, 0);
 });
