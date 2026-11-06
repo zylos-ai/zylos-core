@@ -82,6 +82,21 @@ export function serveStatic(req, res, rootDir) {
     sendJson(res, 400, { error: 'invalid_request' });
     return true;
   }
+  // One shared browser/Node module; do not expose the surrounding scripts tree.
+  if (pathname === '/_assets/chat-schema.js') {
+    const schema = path.resolve(rootDir, '..', '..', 'comm-bridge', 'scripts', 'c4-content-schema.js');
+    try {
+      if (!fs.statSync(schema).isFile()) return false;
+      res.writeHead(200, {
+        'content-type': MIME_TYPES['.js'],
+        'cache-control': 'public, max-age=60'
+      });
+      fs.createReadStream(schema).pipe(res);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   const assetPath = pathname.startsWith('/_assets/') ? pathname.slice('/_assets/'.length) : null;
   const relative = assetPath || (pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, ''));
   const vendorPrefix = 'vendor/';
