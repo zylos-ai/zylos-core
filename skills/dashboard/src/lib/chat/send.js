@@ -135,20 +135,30 @@ export class ChatSender {
     return this._reconcile(row, id.startsWith('d:'));
   }
 
+  _initialReceipt(row, content) {
+    if (row.firstContent !== content) {
+      throw Object.assign(fail('chat_conversation_started', 409), {
+        conversationId: canonicalId(row), preserveInput: true,
+      });
+    }
+    return this._receipt(row, { initial: true });
+  }
+
   async send(id, { content, retry = false } = {}, { authorize } = {}) {
     if (typeof content !== 'string' || !content.trim() || Buffer.byteLength(content) > MAX_CONTENT_BYTES || typeof retry !== 'boolean') {
       throw fail('invalid_chat_content');
     }
     let row = await this.resolve(id);
     const initial = id.startsWith('d:');
-    if (this.inflight.has(row.localId)) return { ...this._receipt(row, { initial }), retryAllowed: false };
+    if (initial && row.state === 'active') return this._initialReceipt(row, content);
+    if (this.inflight.has(row.localId)) return { ...this._receipt(row, { initial }), retryAllowed: false, preserveInput: true };
     this.inflight.set(row.localId, true);
     try {
-      if (initial && row.state === 'active') return this._receipt(row, { initial });
       if (unknown(row.lastOutcome)) {
         const receipt = await this._reconcile(row, initial);
         row = this.conversations.get(row.localId);
-        if ((initial && row.state === 'active') || !retry || (row.state !== 'active' && receipt.needsReconciliation)) return receipt;
+        if (initial && row.state === 'active') return this._initialReceipt(row, content);
+        if (!retry || (row.state !== 'active' && receipt.needsReconciliation)) return receipt;
       }
       if (row.lastOutcome?.kind === 'committed' && row.pendingContent === content &&
           (row.lastOutcome.error || row.lastOutcome.action === 'suppressed')) return this._receipt(row, { initial });

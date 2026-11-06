@@ -6,7 +6,7 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
-import { ChatConversations } from '../src/lib/chat/conversations.js';
+import { ChatConversations, isChatLocalIdUsed } from '../src/lib/chat/conversations.js';
 import { ChatHistory } from '../src/lib/chat/history.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
@@ -143,4 +143,97 @@ test('a draft source read failure is an explicit history failure rather than an 
   const f = fixture(t); f.conversations.create();
   f.store.close();
   assert.throws(() => f.history.list({ tab: 'mine' }));
+});
+
+
+test('an unnamed draft stays unnamed and remains eligible for agent naming after activation', t => {
+  const f = fixture(t);
+  const draft = f.conversations.create();
+  assert.equal(draft.displayName, null);
+  assert.equal(f.history.list({ tab: 'mine' }).items[0].display_name, null);
+  f.conversations.bind(draft.localId, 'dash-owned');
+  const id = f.add(draft.localId);
+  f.conversations.markCommitted(draft.localId, { id });
+  const key = `dash-owned:${draft.localId}`;
+  assert.equal(f.store.getGroupDisplayName(key), null);
+  assert.equal(f.conversations.get(draft.localId).displayName, null);
+  assert.equal(f.history.list({ tab: 'mine' }).items[0].display_name, null);
+  assert.equal(f.store.writeGroupDisplayName(key, 'Agent title', 'agent'), true);
+  assert.equal(f.history.list({ tab: 'mine' }).items[0].display_name, 'Agent title');
+});
+
+test('draft naming reuses the store policy and an existing group name stays authoritative', t => {
+  const f = fixture(t);
+  const calls = [];
+  const write = f.store.writeGroupDisplayName.bind(f.store);
+  t.mock.method(f.store, 'writeGroupDisplayName', (...args) => { calls.push(args); return write(...args); });
+  const named = f.conversations.create({ displayName: 'User draft title' });
+  f.conversations.bind(named.localId, 'dash-owned');
+  f.conversations.markCommitted(named.localId);
+  assert.deepEqual(calls, [[`dash-owned:${named.localId}`, 'User draft title', 'human']]);
+  f.conversations.rename(named.localId, 'Renamed title');
+  assert.deepEqual(calls[1], [`dash-owned:${named.localId}`, 'Renamed title', 'human']);
+  const existing = f.conversations.create({ displayName: 'Unused draft title' });
+  f.conversations.bind(existing.localId, 'dash-owned');
+  write(`dash-owned:${existing.localId}`, 'Existing agent title', 'agent');
+  f.conversations.markCommitted(existing.localId);
+  assert.equal(calls.length, 2, 'activation must preserve the existing group name without another write');
+  assert.equal(f.conversations.get(existing.localId).displayName, 'Existing agent title');
+});
+
+test('initial content is durable across receipt updates and cannot be overwritten after activation', t => {
+  const f = fixture(t); const draft = f.conversations.create();
+  f.conversations.bind(draft.localId, 'dash-owned');
+  f.conversations.beginSend(draft.localId, { content: 'Initial attempt', initial: true });
+  assert.equal(f.conversations.get(draft.localId).firstContent, 'Initial attempt');
+  f.conversations.markDraft(draft.localId);
+  f.conversations.beginSend(draft.localId, { content: 'Explicit replacement after no store', initial: true });
+  f.conversations.markCommitted(draft.localId, { id: 1 });
+  f.conversations.saveOutcome(draft.localId, { id: 1, outcome: { kind: 'stored' } });
+  f.conversations.beginSend(draft.localId, { content: 'Later message', initial: false });
+  assert.equal(f.conversations.get(draft.localId).firstContent, 'Explicit replacement after no store');
+  f.conversations.beginSend(draft.localId, { content: 'Cannot replace first', initial: true });
+  assert.equal(f.conversations.get(draft.localId).firstContent, 'Explicit replacement after no store');
+});
+
+test('the real draft pagination query uses its matching partial expression index without sorting', t => {
+  const f = fixture(t);
+  for (let i = 0; i < 10; i++) f.conversations.create();
+  const statements = [];
+  const prepare = f.store.db.prepare.bind(f.store.db);
+  t.mock.method(f.store.db, 'prepare', sql => { statements.push(sql); return prepare(sql); });
+  const first = f.conversations.listDrafts({ limit: 2 });
+  const second = f.conversations.listDrafts({ limit: 2, position: first.at(-1) });
+  t.mock.restoreAll();
+  assert.equal(first.length, 2); assert.equal(second.length, 2);
+  assert.equal(new Set([...first, ...second].map(row => row.id)).size, 4);
+  for (const [index, sql] of statements.entries()) {
+    const position = index === 0 ? null : first.at(-1);
+    const plan = f.store.db.prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all({ stamp: position?.stamp ?? null, id: position?.id ?? '', limit: 2 });
+    assert.ok(plan.some(row => /USING INDEX idx_chat_conversations_drafts_page/.test(row.detail)));
+    assert.equal(plan.some(row => /USE TEMP B-TREE/.test(row.detail)), false);
+  }
+});
+
+test('historical collision checks use dashboard endpoint or its bound head and never write C4', t => {
+  const f = fixture(t);
+  f.add('dashboard-endpoint', { group: 'dash-owned:other', head: false });
+  f.add('external-endpoint', { channel: 'telegram', group: 'telegram:external-endpoint' });
+  f.db.prepare('INSERT INTO channel_namespaces VALUES (?,?)').run('other-owned', 'other-component');
+  f.db.prepare('INSERT INTO group_heads VALUES(?,?)').run('dash-owned:head-only', 999);
+  f.db.prepare('INSERT INTO group_heads VALUES(?,?)').run('other-owned:foreign-head', 1000);
+  const before = {
+    rows: f.db.prepare('SELECT COUNT(*) n FROM conversations').get().n,
+    heads: f.db.prepare('SELECT COUNT(*) n FROM group_heads').get().n,
+    namespaces: f.db.prepare('SELECT COUNT(*) n FROM channel_namespaces').get().n,
+  };
+  assert.equal(isChatLocalIdUsed(f.reader, 'dashboard-endpoint'), true);
+  assert.equal(isChatLocalIdUsed(f.reader, 'head-only'), true);
+  assert.equal(isChatLocalIdUsed(f.reader, 'external-endpoint'), false);
+  assert.equal(isChatLocalIdUsed(f.reader, 'foreign-head'), false);
+  assert.equal(isChatLocalIdUsed(f.reader, 'fresh'), false);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM conversations').get().n, before.rows);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM group_heads').get().n, before.heads);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM channel_namespaces').get().n, before.namespaces);
 });

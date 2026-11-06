@@ -105,7 +105,7 @@ export class ChatHistory {
       const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
       const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
       return { ...row, preview: projectC4Content(latest?.content ?? '', { c4Id: latest?.id }).slice(0, 160),
-        display_name: name ?? registered?.displayName ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
+        display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
         ...(registered ? { localId: registered.localId } : {}), draft: false };
     });

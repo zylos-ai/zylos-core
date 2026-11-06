@@ -111,21 +111,33 @@ test('local ID collisions retry without changing an existing registration or Cor
 test('first and later messages retain the registered endpoint and group through rename and reopen', async t => {
   const f = fixture(t), { draft, receipt, id } = await activate(f);
   assert.equal(receipt.stored, true);
+  assert.equal(receipt.retryAllowed, false, 'stored receipts never permit a retry');
   assert.equal(receipt.deliveryState, 'pending');
   assert.equal(receipt.messageId, f.rows(draft.localId)[0].id);
   assert.equal(f.conversations.get(draft.localId).firstMessageId, receipt.messageId);
   assert.equal(f.count('group_heads'), 1);
   assert.equal(f.counts.receive, 1);
+  const initialReplay = await f.sender.send(draft.id, { content: 'hello first' });
+  assert.equal(initialReplay.messageId, receipt.messageId);
+  assert.equal(initialReplay.retryAllowed, false);
+  await assert.rejects(f.sender.send(draft.id, { content: 'different initial text' }), {
+    code: 'chat_conversation_started', statusCode: 409, conversationId: id, preserveInput: true,
+  });
   f.conversations.rename(draft.localId, 'new name');
   const second = await f.makeSender().send(id, { content: 'after TTL and refresh' });
   assert.equal(second.stored, true);
+  assert.equal(second.retryAllowed, false, 'stored receipts never permit a retry');
   assert.equal(f.count('group_heads'), 1);
   for (const row of f.rows(draft.localId)) {
     assert.equal(row.endpoint_id, draft.localId);
     assert.equal(row.session_group, `${receipt.namespace}:${draft.localId}`);
   }
-  const replay = await f.sender.send(draft.id, { content: 'a repeated initial click' });
+  const replay = await f.sender.send(draft.id, { content: 'hello first' });
   assert.equal(replay.messageId, receipt.messageId);
+  assert.equal(replay.retryAllowed, false);
+  await assert.rejects(f.sender.send(draft.id, { content: 'a new message in a stale draft tab' }), {
+    code: 'chat_conversation_started', statusCode: 409, conversationId: id, preserveInput: true,
+  });
   assert.equal(f.counts.receive, 2, 'old draft endpoint cannot become a later send');
   assert.equal(f.db.open, true, 'receive must not close its caller database');
 });
@@ -200,10 +212,12 @@ test('a suppressed initial receipt is stored failed state and a repeated initial
   const result = await f.sender.send(draft.id, { content: 'suppressed inbound' });
   assert.equal(result.action, 'suppressed');
   assert.equal(result.stored, true);
+  assert.equal(result.retryAllowed, false, 'stored receipts never permit a retry');
   assert.equal(result.deliveryState, 'suppressed');
   assert.equal(f.conversations.get(draft.localId).state, 'active');
   const again = await f.sender.send(draft.id, { content: 'suppressed inbound', retry: true });
   assert.equal(again.messageId, result.messageId);
+  assert.equal(again.retryAllowed, false);
   assert.equal(f.counts.receive, 1);
   assert.equal(f.count('conversations'), 1);
 });
@@ -215,6 +229,7 @@ for (const code of ['UNHEALTHY_NOTIFY_FAILED', 'UNHEALTHY_NOTIFY_UNCERTAIN']) {
     f.setNotification(code === 'UNHEALTHY_NOTIFY_FAILED' ? 'failed' : 'uncertain');
     const first = await f.sender.send(draft.id, { content: 'committed before notification' });
     assert.equal(first.stored, true);
+    assert.equal(first.retryAllowed, false, 'stored receipts never permit a retry');
     assert.equal(first.deliveryState, 'failed', 'authority row takes precedence over notice action');
     assert.equal(first.error, code);
     assert.equal(f.counts.notifications, 1);
@@ -239,6 +254,7 @@ test('an unknown initial send without a head preserves input across reopen and n
   f.setInvoke(null);
   const retried = await fresh.send(draft.id, { content: 'initial uncertain input', retry: true });
   assert.equal(retried.stored, true);
+  assert.equal(retried.retryAllowed, false, 'stored receipts never permit a retry');
   assert.equal(f.counts.receive, 2);
 });
 
@@ -264,6 +280,7 @@ test('a later receipt cannot become the authority for an unknown initial message
   f.setInvoke(null);
   const later = await f.sender.send(first.conversationId, { content: 'deliberate later message', retry: true });
   assert.equal(later.stored, true);
+  assert.equal(later.retryAllowed, false, 'stored receipts never permit a retry');
   assert.ok(later.messageId);
   assert.equal(f.conversations.get(draft.localId).firstMessageId, null);
   const initialReplay = await f.sender.send(draft.id, { content: 'initial unknown message' });
@@ -322,6 +339,7 @@ test('an unknown later send survives restart and refresh without resending until
   f.setInvoke(null);
   const retried = await restarted.send(active.id, { content: 'later uncertain input', retry: true });
   assert.equal(retried.stored, true);
+  assert.equal(retried.retryAllowed, false, 'stored receipts never permit a retry');
   assert.equal(f.counts.receive, 3);
   assert.equal(f.count('group_heads'), 1);
 });
@@ -334,8 +352,10 @@ test('a committed non-success later receipt reuses authority for the same input 
   });
   const first = await f.sender.send(active.id, { content: 'committed later' });
   assert.equal(first.stored, true);
+  assert.equal(first.retryAllowed, false, 'stored receipts never permit a retry');
   const repeat = await f.makeSender().send(active.id, { content: 'committed later', retry: true });
   assert.equal(repeat.messageId, first.messageId);
+  assert.equal(repeat.retryAllowed, false);
   assert.equal(f.counts.receive, 2);
   assert.equal(f.rows(active.draft.localId).length, 2);
 });
@@ -412,4 +432,94 @@ test('starting a send rolls back its pending input and state if the outcome writ
   assert.equal(f.dashboard.db.inTransaction, false);
   assert.equal(f.counts.receive, 0);
   emptyCore(f);
+});
+
+// The private connection wrapper counts or rejects only the exact head read.
+// Namespace ownership remains readable so a retry must be stopped by failed
+// reconciliation itself, rather than an earlier unrelated connection failure.
+function headProbe(f) {
+  let reads = 0, reject = false;
+  const connection = new Proxy(f.db, { get(target, key) {
+    if (key === 'prepare') return sql => {
+      if (/FROM group_heads WHERE session_group=/.test(sql)) {
+        reads++;
+        if (reject) throw Error('private head lookup unavailable');
+      }
+      return target.prepare(sql);
+    };
+    const value = target[key]; return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const sender = new ChatSender({ conversations: f.conversations, c4Reader: { _open: () => connection },
+    loadCore: async () => f.core, zylosDir: f.root });
+  return { sender, count: () => reads, setReject: value => { reject = value; } };
+}
+
+test('a branded unknown commit error with null persisted state checks the head and retains uncertain input', async t => {
+  const f = fixture(t), draft = f.conversations.create(), probe = headProbe(f);
+  f.setInvoke(() => { throw dataError('INTERNAL_ERROR', 'Core commit state unknown', { persisted: null }); });
+  const result = await probe.sender.send(draft.id, { content: 'uncertain branded input' });
+  assert.equal(probe.count(), 1, 'unknown commit state requires an exact head lookup');
+  assert.equal(result.stored, null, 'unknown is distinct from explicitly not stored');
+  assert.equal(result.preserveInput, true);
+  assert.equal(f.conversations.get(draft.localId).lastOutcome.kind, 'unknown');
+  assert.equal(f.conversations.get(draft.localId).pendingContent, 'uncertain branded input');
+  assert.equal(f.counts.receive, 1);
+  assert.equal(f.count('conversations'), 0);
+});
+
+test('explicit retry cannot call receive while the first send head lookup remains unavailable', async t => {
+  const f = fixture(t), draft = f.conversations.create(), probe = headProbe(f);
+  probe.setReject(true);
+  f.setInvoke(() => { throw dataError('INTERNAL_ERROR', 'Core commit state unknown', { persisted: null }); });
+  const first = await probe.sender.send(draft.id, { content: 'keep waiting for authority' });
+  assert.equal(first.needsReconciliation, true);
+  assert.equal(first.retryAllowed, false);
+  f.setInvoke(null);
+  const retry = await probe.sender.send(draft.id, { content: 'keep waiting for authority', retry: true });
+  assert.equal(probe.count(), 2);
+  assert.equal(retry.needsReconciliation, true);
+  assert.equal(retry.retryAllowed, false);
+  assert.equal(retry.preserveInput, true);
+  assert.equal(f.counts.receive, 1, 'retry must not bypass a failed head lookup');
+  assert.equal(f.count('conversations'), 0);
+});
+
+test('a suppressed later message replays the same stored receipt without another receive', async t => {
+  const f = fixture(t), active = await activate(f);
+  f.setRoute({ decision: 'unavailable', runtime: 'claude', health: 'unavailable', reason: 'fixture' });
+  const first = await f.sender.send(active.id, { content: 'later notification suppressed' });
+  assert.equal(first.action, 'suppressed');
+  assert.equal(first.stored, true);
+  assert.equal(first.retryAllowed, false);
+  assert.equal(first.deliveryState, 'suppressed');
+  const replay = await f.makeSender().send(active.id, { content: 'later notification suppressed', retry: true });
+  assert.equal(replay.messageId, first.messageId);
+  assert.equal(replay.retryAllowed, false);
+  assert.equal(f.counts.receive, 2);
+  assert.equal(f.rows(active.draft.localId).length, 2);
+});
+
+test('an absent authority row yields reconciliation state rather than pending delivery', async t => {
+  const f = fixture(t), active = await activate(f);
+  f.db.prepare('DELETE FROM conversations WHERE id=?').run(active.receipt.messageId);
+  const reopened = await f.makeSender().reconcile(active.id);
+  assert.equal(reopened.stored, true, 'saved commit evidence is retained');
+  assert.equal(reopened.messageId, active.receipt.messageId);
+  assert.equal(reopened.deliveryState, 'pending_reconciliation');
+  assert.equal(reopened.needsReconciliation, true);
+  assert.equal(reopened.retryAllowed, false);
+  assert.equal(f.counts.receive, 1);
+});
+
+test('an unnamed draft activates without a human naming lock and remains nameable by the agent', async t => {
+  const f = fixture(t), draft = f.conversations.create();
+  assert.equal(draft.displayName, null);
+  const sent = await f.sender.send(draft.id, { content: 'unnamed discussion' });
+  const key = `${sent.namespace}:${draft.localId}`;
+  assert.equal(sent.stored, true);
+  assert.equal(sent.retryAllowed, false);
+  assert.equal(f.dashboard.getGroupDisplayName(key), null);
+  assert.equal(f.dashboard.writeGroupDisplayName(key, 'Agent supplied name', 'agent'), true);
+  assert.equal(f.conversations.get(draft.localId).displayName, 'Agent supplied name');
+  assert.equal(f.dashboard.getGroupDisplayName(key).source, 'agent');
 });

@@ -44,20 +44,24 @@ export async function handleChatConversations(req, res, url, { auth, config, con
       sendJson(res, 201, { conversation: conversations.create(body) });
       return true;
     }
-    const row = await sender.resolve(id);
     const authorize = record => requireChatWrite(req, auth, config, {
       mode: readMode(), conversation: record, namespace: record.namespace, localId: record.localId,
       draft: record.namespace === null && record.state !== 'active',
     });
-    const denied = authorize(row);
-    if (denied) { deniedResponse(res, denied); return true; }
     if (match[2]) {
       sendJson(res, 200, await sender.send(id, body, { authorize }));
     } else {
+      const row = await sender.resolve(id);
+      const denied = authorize(row);
+      if (denied) { deniedResponse(res, denied); return true; }
       sendJson(res, 200, { conversation: conversations.rename(row.localId, body.displayName) });
     }
   } catch (error) {
-    sendJson(res, error.statusCode || error.status || 502, { error: error.code || error.message || 'chat_write_failed' });
+    sendJson(res, error.statusCode || error.status || 502, {
+      error: error.code || error.message || 'chat_write_failed',
+      ...(error.statusCode === 409 && typeof error.conversationId === 'string'
+        ? { conversationId: error.conversationId, preserveInput: true } : {}),
+    });
   }
   return true;
 }

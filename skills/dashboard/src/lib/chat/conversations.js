@@ -1,9 +1,23 @@
+import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { validName } from '../workbench/display-names.js';
 import { validateGroupName, validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const groupId = key => `g:${Buffer.from(key).toString('hex').toUpperCase()}`;
+
+/** Check historical ownership without registering a namespace or creating a Core group. */
+export function isChatLocalIdUsed(c4Reader, localId) {
+  const db = c4Reader._open();
+  if (!db) {
+    if (fs.existsSync(c4Reader._dbPath)) throw fail('chat_history_unavailable', 502);
+    return false;
+  }
+  return !!db.prepare(`SELECT 1 FROM conversations WHERE channel='dashboard' AND endpoint_id=@localId
+    UNION ALL SELECT 1 FROM group_heads h JOIN channel_namespaces n
+      ON h.session_group=n.namespace || ':' || @localId
+      WHERE n.component_name='dashboard' LIMIT 1`).get({ localId });
+}
 
 /** Dashboard-owned registration only; creating or renaming a draft never writes C4. */
 export class ChatConversations {
@@ -31,9 +45,9 @@ export class ChatConversations {
       id: row.state === 'active' ? groupId(sessionGroup) : `d:${row.local_id}`,
       localId: row.local_id, channel: 'dashboard', namespace: row.namespace, sessionGroup,
       displayName: row.state === 'active'
-        ? this.store.getGroupDisplayName(sessionGroup)?.display_name ?? row.local_id : row.display_name,
+        ? this.store.getGroupDisplayName(sessionGroup)?.display_name ?? null : row.display_name,
       state: row.state, createdAt: row.created_at, updatedAt: row.updated_at,
-      firstMessageId: row.first_message_id, pendingContent: row.pending_content,
+      firstMessageId: row.first_message_id, firstContent: row.first_content, pendingContent: row.pending_content,
       lastMessageId: row.last_message_id, lastOutcome,
     };
   }
@@ -49,9 +63,9 @@ export class ChatConversations {
     return row ? this._project(row) : null;
   }
 
-  create({ displayName = '新对话' } = {}) {
-    const name = validName(displayName);
-    if (name === null) throw fail('invalid_chat_display_name');
+  create({ displayName = null } = {}) {
+    const name = displayName === null ? null : validName(displayName);
+    if (displayName !== null && name === null) throw fail('invalid_chat_display_name');
     const insert = this.db.prepare(`INSERT INTO chat_conversations
       (local_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(local_id) DO NOTHING`);
     for (let attempt = 0; attempt < 32; attempt++) {
@@ -70,10 +84,7 @@ export class ChatConversations {
     this.db.transaction(() => {
       const row = this._row(localId);
       if (row.state === 'active') {
-        this.db.prepare(`INSERT INTO group_display_names(session_group, display_name, source)
-          VALUES (?, ?, 'human') ON CONFLICT(session_group) DO UPDATE SET
-          display_name=excluded.display_name, source='human', updated_at=datetime('now')`)
-          .run(`${row.namespace}:${localId}`, name);
+        this.store.writeGroupDisplayName(`${row.namespace}:${localId}`, name, 'human');
       } else this.db.prepare('UPDATE chat_conversations SET display_name=? WHERE local_id=?').run(name, localId);
       this.db.prepare('UPDATE chat_conversations SET updated_at=? WHERE local_id=?').run(this.now(), localId);
     }).immediate();
@@ -92,10 +103,9 @@ export class ChatConversations {
     this.db.transaction(() => {
       const row = this._row(localId);
       if (!row.namespace) throw fail('chat_conversation_forbidden', 403);
-      if (row.state !== 'active') {
-        this.db.prepare(`INSERT INTO group_display_names(session_group, display_name, source)
-          VALUES (?, ?, 'human') ON CONFLICT(session_group) DO NOTHING`)
-          .run(`${row.namespace}:${localId}`, row.display_name);
+      const group = `${row.namespace}:${localId}`;
+      if (row.state !== 'active' && row.display_name !== null && !this.store.getGroupDisplayName(group)) {
+        this.store.writeGroupDisplayName(group, row.display_name, 'human');
       }
       // Head-only recovery has no first-message ID; a later receipt cannot fill it.
       this.db.prepare(`UPDATE chat_conversations SET state='active', display_name=NULL,
@@ -114,6 +124,8 @@ export class ChatConversations {
 
   beginSend(localId, { content, initial }) {
     this.db.transaction(() => {
+      if (initial) this.db.prepare(`UPDATE chat_conversations SET first_content=?
+        WHERE local_id=? AND state <> 'active'`).run(content, localId);
       this.markUnknown(localId, content);
       this.saveOutcome(localId, { content, outcome: { kind: 'sending', initial } });
     }).immediate();

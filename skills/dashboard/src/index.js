@@ -13,7 +13,7 @@ import { AuthGate, exchangeApiKeyForToken, generateApiKey, hashApiKey, migratePa
 import { handleChatSettings } from './lib/chat/settings.js';
 import { ChatHistory } from './lib/chat/history.js';
 import { handleChatHistory } from './lib/chat/history-routes.js';
-import { ChatConversations } from './lib/chat/conversations.js';
+import { ChatConversations, isChatLocalIdUsed } from './lib/chat/conversations.js';
 import { ChatSender } from './lib/chat/send.js';
 import { handleChatConversations } from './lib/chat/write-routes.js';
 import { browserBaseFromRequest } from './lib/browser-base.js';
@@ -1656,17 +1656,7 @@ async function handleMemoryApi(req, res, pathname, url) {
 }
 
 export function createServer() {
-  const conversations = new ChatConversations({ store, isUsed(localId) {
-    const db = c4Reader._open();
-    if (!db) {
-      if (fs.existsSync(c4Reader._dbPath)) throw Object.assign(new Error('chat_history_unavailable'), { statusCode: 502 });
-      return false;
-    }
-    return !!db.prepare(`SELECT 1 FROM conversations WHERE channel='dashboard' AND endpoint_id=@localId
-      UNION ALL SELECT 1 FROM group_heads h JOIN channel_namespaces n
-        ON h.session_group=n.namespace || ':' || @localId
-        WHERE n.component_name='dashboard' LIMIT 1`).get({ localId });
-  } });
+  const conversations = new ChatConversations({ store, isUsed: localId => isChatLocalIdUsed(c4Reader, localId) });
   const sender = new ChatSender({ conversations, c4Reader, zylosDir: config.zylosDir });
   const history = new ChatHistory({ c4Reader, conversations });
   const rootDir = publicDir();

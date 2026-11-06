@@ -367,13 +367,49 @@ test('draft migration preserves existing group names and user data from the prio
   assert.equal(db.prepare('SELECT display_name FROM chat_conversations').get().display_name, 'Draft name');
 });
 
-test('a conflicting draft table rolls the new migration back without changing historical data', t => {
-  const file = fixture(t); schema22(file);
+test('draft migration can be replayed without replacing registrations or names', t => {
+  const file = fixture(t); const store = new Store(file); store.close();
   const db = new Database(file); t.after(() => db.close());
-  db.exec("CREATE TABLE chat_conversations(user_note TEXT); INSERT INTO chat_conversations VALUES('retained')");
-  assert.throws(() => owner.migrate(db), /already exists/);
-  assert.equal(owner.inspectSchema(db).currentVersion, 22);
-  assert.equal(db.prepare('SELECT user_note FROM chat_conversations').get().user_note, 'retained');
-  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='idx_chat_conversations_state_updated'").get(), undefined);
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=23').get().n, 0);
+  db.exec(`INSERT INTO chat_conversations(local_id,display_name,created_at,updated_at) VALUES('saved','Saved draft',1,1);
+    INSERT INTO group_display_names(session_group,display_name,source) VALUES('dashboard:old','Human name','human');
+    DELETE FROM schema_migrations WHERE version=23;`);
+  assert.deepEqual(owner.migrate(db), { currentVersion: 23, targetVersion: 23, needsMigration: false });
+  assert.equal(db.prepare('SELECT display_name FROM chat_conversations WHERE local_id=?').get('saved').display_name, 'Saved draft');
+  assert.equal(db.prepare('SELECT display_name FROM group_display_names').get().display_name, 'Human name');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=23').get().n, 1);
+});
+
+// Admission-only fixture mutations exercise schema inspection, never runtime
+// source rewriting. A readonly probe must reject these shapes without writes.
+for (const [shape, transform] of [
+  ['missing first content', sql => sql.replace('first_content TEXT,', '')],
+  ['nullable local identifier', sql => sql.replace('local_id TEXT PRIMARY KEY NOT NULL', 'local_id TEXT PRIMARY KEY')],
+  ['missing primary key', sql => sql.replace('local_id TEXT PRIMARY KEY NOT NULL', 'local_id TEXT NOT NULL')],
+  ['nullable state', sql => sql.replace("state TEXT NOT NULL DEFAULT 'draft'", "state TEXT DEFAULT 'draft'")],
+  ['required namespace', sql => sql.replace('namespace TEXT,', 'namespace TEXT NOT NULL,')],
+  ['required draft name', sql => sql.replace('display_name TEXT,', 'display_name TEXT NOT NULL,')],
+]) test(`current schema rejects a ${shape} registration layout without mutation`, t => {
+  const file = fixture(t); const store = new Store(file); store.close();
+  const db = new Database(file);
+  const table = db.prepare("SELECT sql FROM sqlite_master WHERE name='chat_conversations'").get().sql;
+  const index = db.prepare("SELECT sql FROM sqlite_master WHERE name='idx_chat_conversations_drafts_page'").get().sql;
+  const changed = transform(table); assert.notEqual(changed, table);
+  db.exec('DROP TABLE chat_conversations'); db.exec(changed); db.exec(index); db.close();
+  const before = fs.readFileSync(file);
+  const reader = new Database(file, { readonly: true, fileMustExist: true });
+  try {
+    assert.throws(() => owner.inspectSchema(reader), /Unsupported Dashboard conversation registration|no such column: first_content/);
+  } finally { reader.close(); }
+  assert.deepEqual(fs.readFileSync(file), before);
+});
+
+for (const [shape, sql] of [
+  ['missing', ''],
+  ['wrong expression', "CREATE INDEX idx_chat_conversations_drafts_page ON chat_conversations(updated_at DESC,local_id) WHERE state <> 'active'"],
+  ['unfiltered', "CREATE INDEX idx_chat_conversations_drafts_page ON chat_conversations(updated_at / 86400000.0 + 2440587.5 DESC, ('d:' || local_id) COLLATE BINARY)"],
+]) test(`current schema rejects a ${shape} draft pagination index`, t => {
+  const file = fixture(t); const store = new Store(file); store.close();
+  const db = new Database(file); t.after(() => db.close());
+  db.exec('DROP INDEX idx_chat_conversations_drafts_page'); if (sql) db.exec(sql);
+  assert.throws(() => owner.inspectSchema(db), /Unsupported Dashboard draft page index/);
 });
