@@ -13,6 +13,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
 import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
+import { projectC4Content } from './c4-content-projection.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export { migrateSchema, stripTrailingAckSuffix } from './c4-migrations.js';
@@ -364,7 +365,7 @@ export function formatConversations(conversations) {
     const dir = conv.direction === 'in' ? 'IN' : 'OUT';
     const endpoint = conv.endpoint_id ? `:${conv.endpoint_id}` : '';
     lines.push(`[${conv.timestamp}] ${dir} (${conv.channel}${endpoint}):`);
-    lines.push(conv.content);
+    lines.push(projectC4Content(conv.content, { c4Id: conv.id }));
     lines.push('');
   }
 
@@ -381,7 +382,7 @@ export function formatConversations(conversations) {
  *   per-message delivery threshold are replaced by a preview + attachment
  *   pointer (dispatch-style). Pass false when a caller has its own size
  *   control (e.g. the session-start shard's whole-message budget packer)
- *   and wants original content inline (#724).
+ *   and wants complete projected content inline (#724).
  * @returns {string} - formatted text for agent delivery/session init
  */
 export function formatConversationsForAgent(conversations, { spill = true } = {}) {
@@ -393,7 +394,7 @@ export function formatConversationsForAgent(conversations, { spill = true } = {}
   for (const conv of conversations) {
     const dir = conv.direction === 'in' ? 'IN' : 'OUT';
     const endpoint = conv.endpoint_id ? `:${conv.endpoint_id}` : '';
-    const content = conv.content || '';
+    const content = projectC4Content(conv.content || '', { c4Id: conv.id });
     const replyViaSuffix = (
       conv.direction === 'in' &&
       conv.endpoint_id &&

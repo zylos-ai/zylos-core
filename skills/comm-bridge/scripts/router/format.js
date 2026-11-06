@@ -2,6 +2,7 @@ import path from 'node:path';
 import { SKILLS_DIR } from '../c4-config.js';
 import { replyVia } from '../c4-query-format.js';
 import { truncateForDelivery } from '../c4-utils.js';
+import { projectC4Content } from '../c4-content-projection.js';
 
 const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
 
@@ -21,7 +22,7 @@ function withoutLegacyRoute(content, row) {
 }
 
 export function formatConversation(row, { scriptPath = sendPath } = {}) {
-  const content = withoutLegacyRoute(row.content || '', row);
+  const content = withoutLegacyRoute(projectC4Content(row.content || '', { c4Id: row.id }), row);
   const suffix = row.endpoint_id ? ` ${replyVia(row, scriptPath)}` : '';
   return truncateForDelivery(content, suffix, row.id);
 }

@@ -127,7 +127,7 @@ async function alertTargetInstruction() {
   return `Alert target: ${value}. System alerts go there; change it only if the owner asks.`;
 }
 
-/** Keep original message bytes and drop whole oldest messages to fit. */
+/** Pack complete projected messages; drop whole oldest messages to fit. */
 export async function emitC4Conversations(payload, budget = null, {
   scopeReader, withDb = withC4Db,
   migrationReader = async scope => {
