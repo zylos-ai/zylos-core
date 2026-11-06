@@ -347,7 +347,6 @@
   "chat.mine": "我的对话",
   "chat.external": "外部聊天记录",
   "chat.refresh": "刷新",
-  "chat.new": "新建对话",
   "chat.name": "对话名称（可选）",
   "chat.create": "新建对话",
   "chat.rename": "改名",
@@ -367,7 +366,6 @@
   "chat.invalidContent": "无法解析此消息。",
   "chat.user": "用户",
   "chat.assistant": "助手",
-  "chat.error": "请求未能完成",
   "chat.unnamed": "未命名对话",
   "chat.conversations": "对话列表",
   "chat.history": "消息历史",
@@ -381,5 +379,13 @@
   "chat.state.switch_absorbed": "已吸收入模式切换上下文",
   "chat.state.pending_reconciliation": "状态待核对 · 请先核对再决定重试",
   "chat.state.not_stored": "未入库 · 已保留输入",
-  "chat.state.sending": "发送中…"
+  "chat.state.sending": "发送中…",
+  "chat.state.stored_pending_reconciliation": "已入库 · 投递待核对，不要重发",
+  "chat.error.forbidden": "没有访问此对话的权限。",
+  "chat.error.requiresMulti": "请切换 multi 模式后再发送消息。",
+  "chat.error.conversationStarted": "此对话已开始。已保留消息，请查看对话后再发送。",
+  "chat.error.notFound": "找不到此对话。",
+  "chat.error.unavailable": "暂时无法读取对话数据，请尝试刷新。",
+  "chat.error.sendUnknown": "发送结果未知，请先核对状态，再决定是否重试。",
+  "chat.error.requestFailed": "请求未能完成，请稍后重试。"
 }

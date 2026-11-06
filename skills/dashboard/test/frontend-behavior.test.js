@@ -454,6 +454,7 @@ test('multi-agent vs single mode landing view is gated on fleet size', () => {
   assert.match(app, /showAgentDetail\(\{ animate: !prefersReducedMotion\(\) \}\)/);
   // Early fetch drives the landing-view decision.
   assert.match(app, /applyFleetMode\(fleet\)/);
+  assert.match(app, /if \(\['settings', 'chat'\]\.includes\(tabForPath\(window\.location\.pathname\)\)\) \{/);
 });
 
 test('fleet ↔ agent view transition is wired with a graceful fallback', () => {
@@ -871,7 +872,7 @@ test('back button resolves in-page remote first, standalone remote second, fleet
 test('popstate routes /fleet/<name> paths into remote view only on the parent document', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   // The standalone remote document keeps plain tab routing.
-  assert.match(app, /if \(!REMOTE_AGENT\) \{\s*\n\s*const m = path\.match\(\/\\\/fleet\\\/\(\[\^\/\]\+\)\\\/\?\(\?::?trends\|usage\|schedule\|settings\|memory\|observer\)\?\$\/\);?/);
+  assert.match(app, /if \(!REMOTE_AGENT\) \{\s*\n\s*const m = path\.match\(\/\\\/fleet\\\/\(\[\^\/\]\+\)\\\/\?\(\?::?trends\|usage\|schedule\|settings\|memory\|observer\|chat\)\?\$\/\);?/);
   assert.match(app, /await enterRemoteAgent\(decodeURIComponent\(m\[1\]\), \{ push: false \}\);/);
   assert.match(app, /else if \(state\.remoteAgent\) \{\s*\n\s*await exitRemoteAgent\(\{ push: false \}\);/);
   assert.match(app, /const path = name === 'overview' \? `\$\{prefix\}\/` : `\$\{prefix\}\/\$\{name === 'trends' \? 'usage' : name\}`;/);
@@ -1541,7 +1542,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
-  assert.match(index, /app\.js\?v=87/);
+  assert.match(index, /app\.js\?v=88/);
   assert.match(index, /style\.css\?v=59/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
@@ -1617,7 +1618,7 @@ test('fleet management entry stays local and its controls are retained in settin
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
-  assert.match(index, /app\.js\?v=87/);
+  assert.match(index, /app\.js\?v=88/);
   assert.match(index, /<path d="M12 8V4H8"/);
   assert.match(index, /<rect width="16" height="12" x="4" y="8" rx="2"/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
@@ -2495,4 +2496,12 @@ test('workbench shell releases host ownership before selecting a group so Escape
     h.stop();
     assert.equal(h.listeners.has('keydown'), false);
   });
+});
+
+test('browser visibility changes do not refresh conversation pagination', () => {
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf("document.addEventListener('visibilitychange', () => {", app.indexOf('function initTabs()'));
+  const handler = app.slice(start, app.indexOf("const initialTab", start));
+  assert.ok(start > 0);
+  assert.doesNotMatch(handler, /refreshChat|chatPage/);
 });

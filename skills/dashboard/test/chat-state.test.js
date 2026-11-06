@@ -198,3 +198,29 @@ test('reopened same instance receives completion of its pending send', async () 
   wait.resolve({stored:true,conversationId:'g:A',deliveryState:'pending'}); await send;
   assert.equal(snapshots.at(-1).sending,false); assert.equal(snapshots.at(-1).receipt.stored,true); state.destroy();
 });
+test('untouched draft has no send status and stored delivery uncertainty differs from unknown storage', () => {
+  assert.equal(receiptState({stored:false,deliveryState:null,retryAllowed:true,preserveInput:false}),null);
+  assert.equal(receiptState({stored:true,deliveryState:'pending_reconciliation',retryAllowed:false}),'stored_pending_reconciliation');
+  assert.equal(receiptState({stored:null,deliveryState:'pending_reconciliation',retryAllowed:true}),'pending_reconciliation');
+});
+for (const stored of [false,null]) test(`reopening ${stored === false ? 'not stored' : 'unknown subsequent send'} restores persisted input and error`,async()=>{
+  const {state}=fixture(path=>!path.includes('?')&&path.includes('/conversations/')?{stored,deliveryState:stored===null?'pending_reconciliation':null,preserveInput:true,retryAllowed:true,error:'DB_BUSY',conversationId:'g:A',conversation:{id:'g:A',state:'active',pendingContent:'persisted text'}}:undefined);
+  await state.open(); await state.select('g:A'); assert.equal(state.snapshot().input,'persisted text'); assert.equal(state.snapshot().error,'DB_BUSY');
+  assert.equal(state.snapshot().retryRequired,stored===null); state.destroy();
+});
+test('unset session mode uses effective single with no write entry',async()=>{
+  const {state}=fixture(path=>path==='/api/session-mode'?{data:{sessionMode:null}}:undefined);
+  await state.open(); await state.select('g:A'); assert.equal(state.snapshot().mode,'single'); assert.equal(state.snapshot().canWrite,false); assert.equal(state.snapshot().canCreate,false); state.destroy();
+});
+test('remote disable discards saved cells even after access is restored',async()=>{
+  let disabled=false; const {state}=fixture(path=>disabled&&path.includes('conversations?')?Promise.reject({code:'remote_chat_disabled'}):undefined);
+  await state.open(); await state.select('g:A'); state.setInput('private saved text'); disabled=true; await state.refresh();
+  assert.equal(state.snapshot().items.length,0); assert.equal(state.snapshot().conversation,null); assert.equal(state.snapshot().receipt,null); assert.equal(state.snapshot().input,'');
+  disabled=false; await state.refresh(); await state.select('g:A'); assert.equal(state.snapshot().input,''); state.destroy();
+});
+test('canonical conflict clears old draft receipt and loads canonical history without sending again',async()=>{
+  const {state,calls}=fixture((path,options)=>options?.method==='POST'?Promise.reject({status:409,payload:{error:'chat_conversation_started',conversationId:'g:B',preserveInput:true}}):path.includes('/messages?')?{items:[{id:9,content:'canonical history'}]}:undefined);
+  await state.open(); await state.select('d:A'); state.setInput('next text'); await state.send();
+  assert.equal(state.snapshot().selectedId,'g:B'); assert.equal(state.snapshot().receipt,null); assert.equal(state.snapshot().input,'next text'); assert.equal(state.snapshot().messages[0].content,'canonical history');
+  assert.equal(calls.filter(row=>row.options?.method==='POST').length,1); state.destroy();
+});

@@ -2585,7 +2585,6 @@ function initTabs() {
   });
   document.addEventListener('visibilitychange', () => {
     syncFleetSubscription();
-    refreshChat();
     // A backgrounded tab freezes SSE and the poll timers, so on return the
     // page may paint a pre-freeze frame (e.g. a rate-limit window that has
     // since reset) until the 10-30s fallbacks fire. Refetch now instead (#247).

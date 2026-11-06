@@ -8,9 +8,9 @@ export function messageState(row) {
 }
 export function receiptState(receipt) {
   if (!receipt || receipt.stored === null) return 'pending_reconciliation';
-  if (receipt.stored === false) return 'not_stored';
+  if (receipt.stored === false) return receipt.preserveInput || receipt.error || receipt.deliveryState ? 'not_stored' : null;
   return ['pending', 'running', 'delivered', 'stored', 'auth_rejected', 'suppressed', 'failed', 'switch_absorbed'].includes(receipt.deliveryState)
-    ? receipt.deliveryState : 'pending_reconciliation';
+    ? receipt.deliveryState : 'stored_pending_reconciliation';
 }
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
 const base = '/api/chat/conversations';
@@ -68,7 +68,8 @@ export function createChatState({ request, identity = null, onChange } = {}) {
       await run(() => request(pathFor(id)), data => {
         current.conversation = data.conversation; current.ownershipResolved = !!data.conversation; current.receipt = data;
         current.retryRequired = data.stored === null;
-        if (current.retryRequired && !current.input && data.conversation?.pendingContent) current.input = data.conversation.pendingContent;
+        if (data.preserveInput && data.stored !== true && !current.input && data.conversation?.pendingContent) current.input = data.conversation.pendingContent;
+        current.error = data.error || null;
         if (data.conversationId && data.conversationId !== id) {
           cells.set(`${currentTab}:${data.conversationId}`, current);
           if (version === selectedVersion && selectedId === id) selectedId = data.conversationId;
@@ -146,8 +147,15 @@ export function createChatState({ request, identity = null, onChange } = {}) {
     } catch (err) {
       if (valid(e) && err?.payload?.conversationId && err.payload.preserveInput) {
         const canonical = err.payload.conversationId;
+        current.receipt = null; current.retryRequired = false;
         cells.set(`${currentTab}:${canonical}`, current);
         if (selectedId === id && tab === currentTab) selectedId = canonical;
+        const navigation = selectedVersion;
+        await run(() => request(pathFor(canonical)), data => { current.conversation = data.conversation; current.ownershipResolved = !!data.conversation; emit(); }, e);
+        if (valid(e) && tab === currentTab && selectedVersion === navigation) {
+          await list();
+          if (valid(e) && tab === currentTab && selectedVersion === navigation) await history(current, canonical, currentTab, 'initial', e);
+        }
       } else if (sendIdentity === openedIdentity && !blocked) {
         if (!err?.status || err?.code === 'chat_invalid_response') { current.retryRequired = true; current.receipt = { stored: null, needsReconciliation: true, retryAllowed: false, preserveInput: true }; }
       }

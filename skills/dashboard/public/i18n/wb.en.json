@@ -347,7 +347,6 @@
   "chat.mine": "My conversations",
   "chat.external": "External history",
   "chat.refresh": "Refresh",
-  "chat.new": "New conversation",
   "chat.name": "Conversation name (optional)",
   "chat.create": "New conversation",
   "chat.rename": "Rename",
@@ -367,7 +366,6 @@
   "chat.invalidContent": "This message could not be decoded.",
   "chat.user": "User",
   "chat.assistant": "Assistant",
-  "chat.error": "Could not complete the request",
   "chat.unnamed": "Untitled conversation",
   "chat.conversations": "Conversations",
   "chat.history": "Message history",
@@ -381,5 +379,13 @@
   "chat.state.switch_absorbed": "Included in mode switch context",
   "chat.state.pending_reconciliation": "Result unknown · check before retrying",
   "chat.state.not_stored": "Not stored · input retained",
-  "chat.state.sending": "Sending…"
+  "chat.state.sending": "Sending…",
+  "chat.state.stored_pending_reconciliation": "Stored · delivery pending reconciliation; do not resend",
+  "chat.error.forbidden": "You do not have access to this conversation.",
+  "chat.error.requiresMulti": "Switch to multi mode before sending messages.",
+  "chat.error.conversationStarted": "This conversation has already started. Your message is kept; review the conversation before sending it.",
+  "chat.error.notFound": "This conversation could not be found.",
+  "chat.error.unavailable": "Conversation data is temporarily unavailable. Try refreshing.",
+  "chat.error.sendUnknown": "The send result is unknown. Check delivery status before deciding whether to retry.",
+  "chat.error.requestFailed": "The request could not be completed. Please try again later."
 }

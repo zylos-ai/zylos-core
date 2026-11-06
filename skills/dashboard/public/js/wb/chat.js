@@ -1,5 +1,5 @@
-import { element } from './plain-text.js';
-import { createChatState, messageState, receiptState } from './chat-state.js';
+import { element } from './plain-text.js?v=85';
+import { createChatState, messageState, receiptState } from './chat-state.js?v=88';
 import { parseC4Content } from '../../chat-schema.js';
 
 export function messageText(content, t = key => key) {
@@ -7,6 +7,16 @@ export function messageText(content, t = key => key) {
   if (parsed.kind === 'text') return parsed.text;
   if (parsed.kind === 'envelope') return parsed.envelope.fallbackText;
   return t('chat.invalidContent');
+}
+
+export function errorKey(code) {
+  if (['chat_auth_required', 'chat_conversation_forbidden', 'insufficient_scope'].includes(code)) return 'chat.error.forbidden';
+  if (code === 'chat_requires_multi') return 'chat.error.requiresMulti';
+  if (code === 'chat_conversation_started') return 'chat.error.conversationStarted';
+  if (['chat_conversation_not_found', 'chat_message_not_found'].includes(code)) return 'chat.error.notFound';
+  if (['chat_core_unavailable', 'chat_history_unavailable', 'chat_conversation_unavailable'].includes(code)) return 'chat.error.unavailable';
+  if (code === 'chat_send_unknown') return 'chat.error.sendUnknown';
+  return 'chat.error.requestFailed';
 }
 
 export function mountChat({ root, document = root.ownerDocument, t = key => key,
@@ -65,7 +75,7 @@ export function mountChat({ root, document = root.ownerDocument, t = key => key,
     if (s.nextCursor) list.append(action('loadMore', () => state.loadMore(), s.loading));
     const main = node('section', undefined, 'chat-main'); main.setAttribute('aria-label', t('chat.history'));
     if (s.mode === 'single') main.append(node('p', t('chat.single'), 'chat-notice'));
-    if (s.error) { const error = node('p', t('chat.error') + ' (' + s.error + ')', 'chat-error'); error.setAttribute('role', 'alert'); main.append(error); }
+    if (s.error) { const error = node('p', t(errorKey(s.error)), 'chat-error'); error.setAttribute('role', 'alert'); main.append(error); }
     if (s.loading) main.append(node('p', t('chat.loading'), 'chat-notice'));
     if (!s.selectedId) main.append(node('p', t('chat.select'), 'chat-notice'));
     else {
@@ -91,7 +101,8 @@ export function mountChat({ root, document = root.ownerDocument, t = key => key,
         messages.append(message);
       }
       main.append(messages);
-      if (s.receipt || s.sending) { const status = node('p', t('chat.state.' + (s.sending ? 'sending' : receiptState(s.receipt))), 'chat-message-status'); status.setAttribute('role', 'status'); main.append(status); }
+      const receiptLabel = s.sending ? 'sending' : receiptState(s.receipt);
+      if ((s.receipt || s.sending) && receiptLabel) { const status = node('p', t('chat.state.' + receiptLabel), 'chat-message-status'); status.setAttribute('role', 'status'); main.append(status); }
       if (s.canWrite) {
         const form = node('form', undefined, 'chat-composer');
         const input = node('textarea', undefined, 'chat-input'); input.value = s.input; input.setAttribute('aria-label', t('chat.input')); input.disabled = s.sending;

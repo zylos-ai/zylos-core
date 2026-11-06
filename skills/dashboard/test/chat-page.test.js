@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick, deferred } from './fixtures/workbench-dom.js';
 // Resolve the browser's shared static-schema URL to the identical source module.
@@ -9,10 +10,10 @@ registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
   return next(specifier, context);
 } });
-const { mountChat, messageText } = await import('../public/js/wb/chat.js');
+const { mountChat, messageText, errorKey } = await import('../public/js/wb/chat.js');
 const labels = { 'chat.remoteDisabled': 'Remote disabled', 'chat.single': 'Switch to multi to chat' };
 const t = key => labels[key] ?? key;
-function fixture({ mode = 'multi', tab = 'mine', denied = false, rows = [], draft = false, malformedStatus = null, secondGroup = false } = {}) {
+function fixture({ mode = 'multi', tab = 'mine', denied = false, rows = [], draft = false, malformedStatus = null, secondGroup = false, receipt = {}, translate = t } = {}) {
   const document = createDocument(), root = document.createElement('div'), calls = [];
   let isDenied = denied, pendingMessage = null;
   const fetch = async (path, options) => {
@@ -22,12 +23,13 @@ function fixture({ mode = 'multi', tab = 'mine', denied = false, rows = [], draf
     let body = path.includes('session-mode') ? { data: { sessionMode: mode } }
       : path.includes('/messages') ? { items: rows, nextCursor: null, afterCursor: 'after' }
       : path.includes('/status') ? { items: rows }
-      : /conversations\/[^/]+$/.test(path) ? { draft, conversation: { id: draft ? 'd:local' : 'g:AA', state: draft ? 'draft' : 'active', displayName: 'Example' } }
+      : /conversations\/[^/]+$/.test(path) ? { draft, stored: false, deliveryState: null, retryAllowed: true, preserveInput: false, pendingContent: null, error: null, ...receipt, conversation: { id: draft ? 'd:local' : 'g:AA', state: draft ? 'draft' : 'active', displayName: 'Example', pendingContent: receipt.pendingContent ?? null } }
       : { items: [{ id: draft ? 'd:local' : 'g:AA', display_name: 'Example', draft }, ...(secondGroup ? [{ id: 'g:BB', display_name: 'Second group', draft: false }] : [])], nextCursor: null };
     if (isDenied && path.includes('/api/chat/')) body = { error: 'remote_chat_disabled' };
-    return { ok: !body.error, status: body.error ? 403 : 200, json: async () => body };
+    const forbidden = isDenied && path.includes('/api/chat/');
+    return { ok: !forbidden, status: forbidden ? 403 : 200, json: async () => body };
   };
-  const page = mountChat({ root, document, t, fetch, endpoint: path => path });
+  const page = mountChat({ root, document, t: translate, fetch, endpoint: path => path });
   const button = key => allNodes(root).find(node => node.dataset.action === key);
   const select = async () => { allNodes(root).find(node => node.dataset.conversationId)?.dispatch('click'); await tick(); await tick(); };
   return { root, page, calls, button, select, tab, deny() { isDenied = true; }, holdMessage(pending) { pendingMessage = pending; } };
@@ -85,6 +87,7 @@ test('remote-disabled replaces the entire page with only its notice', async () =
 test('draft receipt offers rename and send without history refresh actions', async () => {
   const f = fixture({ draft: true }); await f.page.open(); await f.select();
   assert.ok(f.button('create')); assert.ok(f.button('send'));
+  assert.equal(allNodes(f.root).filter(node => node.attributes.role === 'status').length, 0);
   assert.ok(f.root.textContent.includes('chat.rename'));
   assert.equal(f.button('refreshMessages'), undefined);
   assert.equal(f.root.textContent.includes('chat.state.not_stored'), false); assert.equal(f.button('refreshStatus'), undefined);
@@ -132,4 +135,38 @@ test('late old successful message response cannot restore the remote-disabled DO
   await tick(); await tick();
   assert.equal(f.root.textContent, 'Remote disabled');
   f.page.destroy();
+});
+
+
+test('reopened not-stored draft restores saved input and shows a readable error', async () => {
+  const f = fixture({ draft: true, receipt: { stored: false, preserveInput: true, pendingContent: 'Saved message', error: 'chat_core_unavailable' } });
+  await f.page.open(); await f.select();
+  assert.equal(allNodes(f.root).find(node => node.tagName === 'TEXTAREA').value, 'Saved message');
+  assert.ok(f.root.textContent.includes('chat.error.unavailable'));
+  assert.equal(f.root.textContent.includes('chat_core_unavailable'), false);
+  f.page.destroy();
+});
+
+test('stored delivery awaiting reconciliation and unknown storage display distinct status labels', async () => {
+  for (const locale of ['en', 'zh']) {
+    const pack = JSON.parse(readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
+    const displayed = [];
+    for (const stored of [true, null]) {
+      const f = fixture({ translate: key => pack[key] ?? key, receipt: { stored, deliveryState: 'pending_reconciliation', needsReconciliation: true, retryAllowed: false, preserveInput: true } });
+      await f.page.open(); await f.select();
+      displayed.push(allNodes(f.root).find(node => node.attributes.role === 'status').textContent);
+      f.page.destroy();
+    }
+    assert.equal(displayed[0], pack['chat.state.stored_pending_reconciliation']);
+    assert.equal(displayed[1], pack['chat.state.pending_reconciliation']);
+    assert.notEqual(displayed[0], displayed[1]);
+    assert.match(displayed[0], locale === 'zh' ? /已入库.*不要重发/ : /Stored.*do not resend/);
+  }
+});
+
+test('error mapping uses explanatory localized keys with a safe generic fallback', () => {
+  assert.equal(errorKey('chat_conversation_started'), 'chat.error.conversationStarted');
+  assert.equal(errorKey('chat_requires_multi'), 'chat.error.requiresMulti');
+  assert.equal(errorKey('chat_auth_required'), 'chat.error.forbidden');
+  assert.equal(errorKey('unexpected internal message'), 'chat.error.requestFailed');
 });
