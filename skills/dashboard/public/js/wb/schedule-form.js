@@ -68,6 +68,7 @@ export function saveAllowed(state, preview, { creating = false, reenable = false
   if (preview?.valid === false) return false;
   if (!state.value.trim() && (creating || reenable)) return false;
   if (creating && !state.prompt.trim()) return false;
+  if (!/^\d{1,9}$/.test(String(state.missThreshold ?? '').trim())) return false;
   return true;
 }
 

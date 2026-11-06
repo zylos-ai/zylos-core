@@ -76,9 +76,13 @@ test('form arguments never carry delivery options for any form input', () => {
     ['update', 'task-1', '--prompt', 'p', '--every', '1h', '--no-block-queue-until-idle']);
   // Only the positional content of a new task can be read as an option by the CLI.
   assert.throws(() => formToArgs({ prompt: '--- weekly report ---', schedule: { kind: 'every', value: '1h' } }, {}),
-    error => error.formCode === 'invalid_form');
+    error => error.formCode === 'prompt_starts_with_dashes');
   assert.throws(() => formToArgs({ prompt: 'x', priority: '--clear-reply', schedule: { kind: 'every', value: '1h' } }, {}),
     error => error.formCode === 'invalid_form');
+  for (const missThreshold of ['1.5', '1e3']) {
+    assert.throws(() => formToArgs({ prompt: 'x', missThreshold, schedule: { kind: 'every', value: '1h' } }, {}),
+      error => error.formCode === 'invalid_form');
+  }
   assert.deepEqual(formToArgs({ prompt: 'x', name: '--- weekly ---', schedule: { kind: 'cron', value: '--x' } }, {}),
     ['add', 'x', '--name', '--- weekly ---', '--cron', '--x']);
   assert.deepEqual(formToArgs({ prompt: '--reply-channel', schedule: { kind: 'every', value: '--every' } }, { id: 'task-1' }),
@@ -136,8 +140,12 @@ test('scheduler writes report done or the scheduler rejection text', async conte
   const positional = await d.write('POST', '/api/workbench/schedule', { name: 'Weekly', prompt: '--- weekly report ---',
     schedule: { kind: 'every', value: '1h' } });
   assert.deepEqual({ status: positional.status, result: positional.body.result, code: positional.body.code },
-    { status: 400, result: 'rejected', code: 'invalid_form' });
-  assert.match(writeMessage(positional.body, t), /^表单内容不合规/);
+    { status: 400, result: 'rejected', code: 'prompt_starts_with_dashes' });
+  assert.equal(writeMessage(positional.body, t), '新建任务的内容不能以 -- 开头');
+  const threshold = await d.write('POST', '/api/workbench/schedule', { prompt: 'x', missThreshold: '1.5',
+    schedule: { kind: 'every', value: '1h' } });
+  assert.deepEqual({ status: threshold.status, code: threshold.body.code }, { status: 400, code: 'invalid_form' });
+  assert.equal(writeMessage(threshold.body, t), '表单内容不合规');
   assert.equal((await d.write('POST', '/api/workbench/schedule/--json/pause')).body.code, 'invalid_task');
   assert.equal(await d.write('PATCH', '/api/workbench/schedule/task-1'), null);
 });

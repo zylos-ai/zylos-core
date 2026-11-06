@@ -498,10 +498,8 @@ html[data-detail=plain] #observer-tab {
 }
 
 .wb-sched-row {
-  display: grid;
-  grid-template-columns: minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) auto minmax(0,1fr);
+  display: flex;
   gap: 8px;
-  cursor: pointer;
   align-items: center;
   padding: 6px 8px;
   text-align: left;
@@ -509,6 +507,21 @@ html[data-detail=plain] #observer-tab {
   background: var(--bg-elevated);
   border: 1px solid var(--border,#ddd);
   border-radius: 6px;
+}
+
+.wb-sched-select {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
 }
 
 .wb-sched-row.active {
@@ -600,6 +613,11 @@ html[data-detail=plain] #observer-tab {
 
 @media (max-width: 720px) {
   .wb-sched-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .wb-sched-select {
     grid-template-columns: 1fr;
   }
 }

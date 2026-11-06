@@ -60,8 +60,11 @@ test('list sections order enabled tasks by next run and keep expired and complet
   for (const [status, value] of [[500, { error: 'internal_error' }], [502, { result: 'unknown', reason: 'scheduler_cli_failed' }], [200, null]]) {
     assert.equal(writeOutcome(status, value).result, 'unknown');
   }
-  assert.match(writeMessage({ result: 'rejected', code: 'invalid_form', message: 'New task content cannot start with "--"' }, t),
-    /^表单内容不合规（新建任务的内容不能以 -- 开头） · /);
+  assert.equal(writeMessage({ result: 'rejected', code: 'invalid_form', message: 'missThreshold must be a whole number' }, t),
+    '表单内容不合规');
+  assert.equal(writeMessage({ result: 'rejected', code: 'prompt_starts_with_dashes', message: 'New task content cannot start with "--"' }, t),
+    '新建任务的内容不能以 -- 开头');
+  assert.equal(writeMessage({ result: 'rejected', code: 'invalid_task', message: 'Invalid task id' }, t), 'Invalid task id');
 });
 
 test('the shared form has no delivery fields and saving follows the preview', () => {
@@ -96,6 +99,16 @@ test('the shared form has no delivery fields and saving follows the preview', ()
   const reenable = createForm(document, { state: initialForm(expired, { reenable: true }), t, reenable: true });
   assert.equal(reenable.save.disabled, true);
   assert.equal(reenable.root.children[3].children[1].disabled, true);
+  for (const missThreshold of ['1.5', '1e3', '', '-1']) {
+    assert.equal(saveAllowed({ ...initialForm(), prompt: 'x', value: '1h', missThreshold }, null, { creating: true }), false, missThreshold);
+  }
+  assert.equal(saveAllowed({ ...initialForm(), prompt: 'x', value: '1h', missThreshold: '600' }, null, { creating: true }), true);
+  const thresholdForm = createForm(document, { state: { ...initialForm(), prompt: 'x', kind: 'every', value: '1h' }, t, creating: true });
+  assert.equal(thresholdForm.save.disabled, false);
+  const thresholdInput = allNodes(thresholdForm.root).find(node => node.type === 'number');
+  thresholdInput.value = '1.5';
+  thresholdInput.dispatch('input');
+  assert.equal(thresholdForm.save.disabled, true);
   assert.equal(saveAllowed({ ...initialForm(expired, { reenable: true }), value: '2030-01-01T09:00' },
     { valid: false, error: 'reschedule_not_future' }, { reenable: true }), false);
   const original = initialForm(task(), { tz: 'Asia/Singapore' });
@@ -121,7 +134,7 @@ test('preview requests are debounced and stale or failed previews do not block s
   await first;
   await second;
   assert.deepEqual(results, [{ valid: null, error: 'preview_unavailable' }]);
-  assert.equal(saveAllowed({ name: '', prompt: 'x', value: '0 8 * * *' }, results[0], { creating: true }), true);
+  assert.equal(saveAllowed({ name: '', prompt: 'x', value: '0 8 * * *', missThreshold: '300' }, results[0], { creating: true }), true);
 });
 
 function harness(context, respond, { writable = true, hidden = false } = {}) {
@@ -231,7 +244,7 @@ test('an unknown write result re-reads the list once and a re-enable moves the t
   });
   await tick();
   assert.match(textOf(h.root), /已失效/);
-  allNodes(h.root).find(node => node.classList.contains('wb-sched-row')).dispatch('click');
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();
   assert.match(textOf(h.root), /上次出错：Missed execution window/);
   assert.match(textOf(h.root), /在系统助手执行 · 结果不另外发送/);
@@ -267,11 +280,11 @@ test('read-only agents get no write entry points and target groups open the over
     : page([task({ target: group, reply: { channel: 'telegram', endpoint: '1001' } })]), { writable: false });
   await tick();
   assert.equal(buttons(h.root, '新建').length, 0);
-  allNodes(h.root).find(node => node.classList.contains('wb-sched-row')).dispatch('click');
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();
   for (const label of ['编辑', '删除', '暂停', '改时间并重新启用']) assert.equal(buttons(h.root, label).length, 0, label);
   assert.match(textOf(h.root), /在 Telegram · dm-1001 执行 · 结果发到 Telegram/);
-  buttons(h.root, 'Telegram · dm-1001')[0].dispatch('click', { stopPropagation() {} });
+  buttons(h.root, 'Telegram · dm-1001')[0].dispatch('click');
   assert.deepEqual(h.opened, ['telegram:dm-1001']);
   assert.equal(h.calls.some(call => call.method !== 'GET'), false);
 });
@@ -283,16 +296,16 @@ test('schedule page shows an unknown time zone, unavailable previews and the idl
     : { ...page([broken]), tz: null, tzReason: 'tz_unavailable', daily7d: { tz: 'UTC', utcFallback: true, days: [] } });
   await tick();
   assert.match(textOf(h.root), /时区未知 · 时间按 UTC 显示/);
-  const row = allNodes(h.root).find(node => node.classList.contains('wb-sched-row'));
-  assert.equal(row.children.find(node => node.classList.contains('wb-sched-next')).textContent, '无法预览');
+  const select = allNodes(h.root).find(node => node.classList.contains('wb-sched-select'));
+  assert.equal(select.children.find(node => node.classList.contains('wb-sched-next')).textContent, '无法预览');
   assert.equal(allNodes(h.root).some(node => node.classList.contains('wb-sched-dot')), false);
-  row.dispatch('click');
+  select.dispatch('click');
   await tick();
   assert.match(textOf(h.root), /接下来 5 次 · 无法预览/);
   assert.match(textOf(h.root), /等空闲再跑：是/);
 });
 
-test('a refused write explains the refusal and rows never nest buttons', async context => {
+test('a refused write explains the refusal and rows hold two sibling buttons', async context => {
   const group = { kind: 'group', sessionGroup: 'telegram:dm-1001', componentName: 'telegram', displayName: null };
   const h = harness(context, (path, options) => {
     if (options.method === 'PUT') return { ok: false, status: 413, json: async () => ({ error: 'payload_too_large' }) };
@@ -300,10 +313,17 @@ test('a refused write explains the refusal and rows never nest buttons', async c
   });
   await tick();
   const row = allNodes(h.root).find(node => node.classList.contains('wb-sched-row'));
-  assert.notEqual(row.tagName, 'BUTTON');
-  assert.equal(row.attributes.role, 'button');
-  assert.equal(allNodes(row).filter(node => node.tagName === 'BUTTON').length, 1);
-  row.dispatch('keydown', { key: 'Enter', preventDefault() {} });
+  assert.equal(row.tagName, 'DIV');
+  assert.equal(row.listeners.size, 0);
+  assert.deepEqual(row.children.map(node => [node.tagName, node.className]),
+    [['BUTTON', 'wb-sched-select'], ['BUTTON', 'wb-sched-target']]);
+  assert.equal(allNodes(row.children[0]).filter(node => node.tagName === 'BUTTON').length, 1);
+  // Activating the group button opens the group and does not select the task.
+  row.children[1].dispatch('click');
+  await tick();
+  assert.deepEqual(h.opened, ['telegram:dm-1001']);
+  assert.equal(textOf(h.root).includes('等空闲再跑'), false);
+  row.children[0].dispatch('click');
   await tick();
   assert.match(textOf(h.root), /等空闲再跑：否/);
   buttons(h.root, '编辑')[0].dispatch('click');

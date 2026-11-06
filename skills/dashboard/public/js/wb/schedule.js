@@ -87,7 +87,9 @@ export function groupTasks(tasks, { status = 'all', target = 'all', query = '', 
 }
 
 const EXPLAINED = new Set(['RESCHEDULE_NOT_FUTURE', 'TASK_WRONG_STATUS', 'tz_unavailable', 'invalid_time', 'invalid_form',
-  'invalid_task', 'invalid_json', 'payload_too_large', 'insufficient_scope', 'read_only_proxy', 'unauthorized']);
+  'prompt_starts_with_dashes', 'invalid_json', 'payload_too_large', 'insufficient_scope', 'read_only_proxy', 'unauthorized']);
+// Form checks done by the Dashboard itself: the translated text is the whole message.
+const FORM_CODES = new Set(['invalid_form', 'prompt_starts_with_dashes', 'invalid_time', 'tz_unavailable']);
 const REFUSED = new Set(['invalid_json', 'payload_too_large', 'insufficient_scope', 'read_only_proxy', 'unauthorized']);
 
 /** Turns an HTTP reply into a write outcome; a definite refusal without an envelope is still rejected. */
@@ -102,6 +104,7 @@ export function writeMessage(outcome, t = key => key) {
   if (outcome?.result === 'done') return null;
   if (outcome?.result === 'rejected') {
     const hint = EXPLAINED.has(outcome.code) ? t('wb.schedule.error.' + outcome.code) : null;
+    if (hint && FORM_CODES.has(outcome.code)) return hint;
     return [hint, outcome.message].filter(Boolean).join(' · ') || outcome.code;
   }
   return t('wb.schedule.unknownResult');
@@ -338,22 +341,12 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   function renderTarget(task) {
     const label = targetLabel(task.target, { t, level: level() });
     if (task.target?.kind !== 'group') return element(document, 'span', label, 'wb-sched-target');
-    return button(document, label, event => {
-      event?.stopPropagation?.();
-      onOpenGroup(task.target.sessionGroup);
-    }, 'wb-sched-target');
+    return button(document, label, () => onOpenGroup(task.target.sessionGroup), 'wb-sched-target');
   }
   function renderRow(task) {
-    // A row holds the target-group button, so it is not a button itself.
+    // Two sibling buttons: one selects the task, the other opens its target group.
     const row = element(document, 'div', undefined, 'wb-sched-row' + (task.id === selected ? ' active' : ''));
-    row.setAttribute('role', 'button');
-    row.tabIndex = 0;
-    row.addEventListener('click', () => select(task.id));
-    row.addEventListener('keydown', event => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault?.();
-      select(task.id);
-    });
+    const open = button(document, undefined, () => select(task.id), 'wb-sched-select');
     const name = element(document, 'span', task.name, 'wb-sched-name');
     name.append(element(document, 'small', firstSentence(task.prompt)));
     const rule = element(document, 'span', scheduleText(task, { t, locale: locale() }), 'wb-sched-rule');
@@ -361,7 +354,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const upcoming = nextRun(task);
     const next = element(document, 'span', task.nextRuns?.unavailable ? t('wb.schedule.noPreview')
       : upcoming == null ? '—' : `${relativeTime(upcoming, now(), t)} · ${time(upcoming)}`, 'wb-sched-next');
-    row.append(name, rule, next, recentCells(document, task.recent, t), renderTarget(task));
+    open.append(name, rule, next, recentCells(document, task.recent, t));
+    row.append(open, renderTarget(task));
     return row;
   }
   function renderHistory(task) {

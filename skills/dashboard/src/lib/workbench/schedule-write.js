@@ -59,7 +59,7 @@ export function formToArgs(form, { id = null, tz = null } = {}) {
   const prompt = text(form.prompt, 'prompt');
   // `add` takes the content as a positional argument, which the CLI reads as an
   // option when it starts with "--". Values after a flag are always values.
-  if (id === null && prompt.startsWith('--')) throw formError('invalid_form', 'New task content cannot start with "--"');
+  if (id === null && prompt.startsWith('--')) throw formError('prompt_starts_with_dashes', 'New task content cannot start with "--"');
   const args = id === null ? ['add', prompt] : ['update', id];
   if (name) args.push('--name', name);
   if (id !== null && prompt) args.push('--prompt', prompt);
