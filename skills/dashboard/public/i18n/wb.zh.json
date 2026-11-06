@@ -387,5 +387,5 @@
   "chat.error.notFound": "找不到此对话。",
   "chat.error.unavailable": "暂时无法读取对话数据，请尝试刷新。",
   "chat.error.sendUnknown": "发送结果未知，请先核对状态，再决定是否重试。",
-  "chat.error.requestFailed": "请求未能完成，请稍后重试。"
+  "chat.error.requestFailed": "请求未能完成。"
 }

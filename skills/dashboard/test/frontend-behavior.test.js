@@ -2505,3 +2505,12 @@ test('browser visibility changes do not refresh conversation pagination', () => 
   assert.ok(start > 0);
   assert.doesNotMatch(handler, /refreshChat|chatPage/);
 });
+
+test('hidden documents keep conversation initialization enabled', () => {
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('function refreshChat()');
+  const handler = app.slice(start, app.indexOf('function refreshUsage()', start));
+  assert.ok(start > 0);
+  assert.doesNotMatch(handler, /visibilityState/);
+  assert.match(handler, /activeTabName\(\) === 'chat'.*chatPage\?\.open\(\)/);
+});

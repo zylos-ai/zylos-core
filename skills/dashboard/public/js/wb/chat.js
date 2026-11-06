@@ -75,7 +75,7 @@ export function mountChat({ root, document = root.ownerDocument, t = key => key,
     if (s.nextCursor) list.append(action('loadMore', () => state.loadMore(), s.loading));
     const main = node('section', undefined, 'chat-main'); main.setAttribute('aria-label', t('chat.history'));
     if (s.mode === 'single') main.append(node('p', t('chat.single'), 'chat-notice'));
-    if (s.error) { const error = node('p', t(errorKey(s.error)), 'chat-error'); error.setAttribute('role', 'alert'); main.append(error); }
+    if (s.error && !(s.receipt?.stored === true && s.error === s.receipt.error)) { const error = node('p', t(errorKey(s.error)), 'chat-error'); error.setAttribute('role', 'alert'); main.append(error); }
     if (s.loading) main.append(node('p', t('chat.loading'), 'chat-notice'));
     if (!s.selectedId) main.append(node('p', t('chat.select'), 'chat-notice'));
     else {

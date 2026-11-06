@@ -170,3 +170,17 @@ test('error mapping uses explanatory localized keys with a safe generic fallback
   assert.equal(errorKey('chat_auth_required'), 'chat.error.forbidden');
   assert.equal(errorKey('unexpected internal message'), 'chat.error.requestFailed');
 });
+
+test('stored notification errors do not invite retry in either language', async () => {
+  for (const locale of ['en', 'zh']) {
+    const pack = JSON.parse(readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
+    for (const code of ['UNHEALTHY_NOTIFY_FAILED', 'UNHEALTHY_NOTIFY_UNCERTAIN']) {
+      const f = fixture({ translate: key => pack[key] ?? key, receipt: { stored: true, deliveryState: 'pending_reconciliation', needsReconciliation: true, retryAllowed: false, preserveInput: false, error: code } });
+      await f.page.open(); await f.select();
+      assert.ok(f.root.textContent.includes(pack['chat.state.stored_pending_reconciliation']));
+      assert.doesNotMatch(f.root.textContent, locale === 'zh' ? /重试/ : /retry|try again/i);
+      assert.equal(allNodes(f.root).some(node => node.attributes.role === 'alert'), false);
+      f.page.destroy();
+    }
+  }
+});

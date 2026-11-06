@@ -387,5 +387,5 @@
   "chat.error.notFound": "This conversation could not be found.",
   "chat.error.unavailable": "Conversation data is temporarily unavailable. Try refreshing.",
   "chat.error.sendUnknown": "The send result is unknown. Check delivery status before deciding whether to retry.",
-  "chat.error.requestFailed": "The request could not be completed. Please try again later."
+  "chat.error.requestFailed": "The request could not be completed."
 }

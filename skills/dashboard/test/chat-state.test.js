@@ -213,8 +213,8 @@ test('unset session mode uses effective single with no write entry',async()=>{
   await state.open(); await state.select('g:A'); assert.equal(state.snapshot().mode,'single'); assert.equal(state.snapshot().canWrite,false); assert.equal(state.snapshot().canCreate,false); state.destroy();
 });
 test('remote disable discards saved cells even after access is restored',async()=>{
-  let disabled=false; const {state}=fixture(path=>disabled&&path.includes('conversations?')?Promise.reject({code:'remote_chat_disabled'}):undefined);
-  await state.open(); await state.select('g:A'); state.setInput('private saved text'); disabled=true; await state.refresh();
+  let disabled=false; const {state}=fixture(path=>path.includes('conversations?')?(disabled?Promise.reject({code:'remote_chat_disabled'}):{items:[{id:'g:A',display_name:'Private A'},{id:'g:B',display_name:'Private B'}],nextCursor:null}):undefined);
+  await state.open(); await state.select('g:A'); state.setInput('private saved text'); assert.equal(state.snapshot().items.length,2); disabled=true; await state.refresh();
   assert.equal(state.snapshot().items.length,0); assert.equal(state.snapshot().conversation,null); assert.equal(state.snapshot().receipt,null); assert.equal(state.snapshot().input,'');
   disabled=false; await state.refresh(); await state.select('g:A'); assert.equal(state.snapshot().input,''); state.destroy();
 });

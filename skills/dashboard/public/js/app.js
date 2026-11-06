@@ -2519,7 +2519,7 @@ function scheduleSseReconnect() {
 // ─── Tabs ───
 let usagePage = null, workbench = null, chatPage = null;
 function refreshChat() {
-  if (activeTabName() === 'chat' && !state.fleetViewActive && document.visibilityState !== 'hidden') return chatPage?.open();
+  if (activeTabName() === 'chat' && !state.fleetViewActive) return chatPage?.open();
   chatPage?.close();
 }
 function refreshUsage() {
