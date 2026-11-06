@@ -6,6 +6,7 @@ import * as childProcess from 'node:child_process';
 import * as timerPromises from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { formatActionResult } from '../public/js/action-result.js';
+import { executeSessionMode } from '../../../cli/commands/session-mode.js';
 
 const dictionary = locale => JSON.parse(fs.readFileSync(new URL(`../public/i18n/${locale}.json`, import.meta.url), 'utf8'));
 const translate = (messages, key, params = {}) => (messages[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? `{${name}}`));
@@ -89,6 +90,7 @@ test('session action de-duplication ignores only top-level run and session ident
 // Run for Core response mapping, validation or translation-key changes; skip
 // unrelated collectors/UI. The caller isolates HOME/ZYLOS_DIR/PM2_HOME and short
 // TMPDIR. Core socket, commands, timers and spawn are mocked at their I/O boundary;
+// Real executeSessionMode generates uncertain CLI envelopes with injected send/lookup;
 // no live process, socket, database, runtime, PM2 or network resource is touched.
 test('every Core action return path has a bilingual message key', async t => {
   let mode = 'multi';
@@ -203,10 +205,25 @@ test('every Core action return path has a bilingual message key', async t => {
       assert.equal(invalidRuntime.error, 'INVALID_RUNTIME');
       const unknown = await invoke('unknown-action', body(), 'result.unknown_action');
       assert.equal(unknown.error, 'UNKNOWN_ACTION');
+      const uncertainModes = [
+        await executeSessionMode(['switch', 'multi', '--json'], {
+          send: async () => { throw new Error('socket reset'); },
+        }),
+        await executeSessionMode(['switch', 'multi', '--json'], {
+          send: async () => ({ kind: 'deadline_exceeded', sent: true }),
+          lookup: async () => 'deadline_exceeded',
+        }),
+      ];
+      assert.equal(uncertainModes[0].error.code, 'no_reply');
+      assert.equal(uncertainModes[1].error.code, 'deadline_exceeded');
+      for (const result of uncertainModes) {
+        assert.equal(result.error.persisted, null);
+        assert.equal(Object.hasOwn(result, 'unknown'), false);
+      }
       for (const command of [
+        ...uncertainModes,
         { ok: true, data: { result: 'accepted' } },
         { ok: true, data: { result: 'noop' } },
-        { ok: true, data: { result: 'unchanged' } },
         { ok: false, error: { code: 'transition_open' } },
         { ok: false, error: { code: 'config_unreadable' } },
         { ok: false, error: { code: 'legacy_session_present' } },
@@ -219,8 +236,8 @@ test('every Core action return path has a bilingual message key', async t => {
         commands = [command];
         const expected = command instanceof Error || typeof command === 'string'
           ? (command?.stdout ? 'result.mode_switch_rejected' : 'result.mode_switch_unknown')
-          : command.ok ? (['noop', 'unchanged'].includes(command.data?.result) ? 'result.mode_switch_unchanged' : 'result.mode_switch_accepted')
-          : 'result.mode_switch_rejected';
+          : command.ok ? (command.data?.result === 'noop' ? 'result.mode_switch_unchanged' : 'result.mode_switch_accepted')
+          : uncertainModes.includes(command) ? 'result.mode_switch_unknown' : 'result.mode_switch_rejected';
         await invoke('switch-mode', { ...body(), mode: 'multi' }, expected);
         assert.equal(commandCalls.at(-1).file, 'zylos');
         assert.deepEqual(commandCalls.at(-1).args, ['session-mode', 'switch', 'multi', '--json']);

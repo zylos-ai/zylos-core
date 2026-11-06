@@ -90,9 +90,9 @@ export async function handleCoreAction(action, body, config) {
   if (action === 'switch-mode') {
     if (!['single', 'multi'].includes(body?.mode)) return { ok: false, error: 'INVALID_MODE', messageKey: 'result.invalid_mode' };
     const result = await command('zylos', ['session-mode', 'switch', body.mode, '--json'], { timeout: 30000 });
-    const unchanged = result.ok && ['noop', 'unchanged'].includes(result.data?.result);
+    const unchanged = result.ok && result.data?.result === 'noop';
     return { ...result, messageKey: result.ok ? (unchanged ? 'result.mode_switch_unchanged' : 'result.mode_switch_accepted')
-      : result.unknown ? 'result.mode_switch_unknown' : 'result.mode_switch_rejected',
+      : (result.unknown || result.error?.persisted === null) ? 'result.mode_switch_unknown' : 'result.mode_switch_rejected',
       messageParams: { value: body.mode, code: result.error?.code || 'unknown' } };
   }
   if (action === 'switch-runtime') {
