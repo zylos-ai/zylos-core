@@ -38,9 +38,8 @@ export function createDispatcher(overrides = {}, options = {}) {
   const diagnostic = overrides.diagnostic ?? diagnostics.diagnostic;
   const reader = createSessionReader({ env, connectionOptions: tmux });
   const lifecycle = createLifecycleProviders({ env, tmux, diagnostic, log });
-  (overrides.readZylosConfigStrict ?? readZylosConfigStrict)();
   const now = overrides.now ?? Date.now;
-  const poolSize = options.poolSize ?? (() => readPoolCapacity({ env, now: now() }).k);
+  const poolSize = () => readPoolCapacity({ env, now: now() }).k;
   const readConfig = () => {
     try { const value = (overrides.readZylosConfigStrict ?? readZylosConfigStrict)(); return value.state === 'ok' ? value.config : {}; }
     catch { return {}; }

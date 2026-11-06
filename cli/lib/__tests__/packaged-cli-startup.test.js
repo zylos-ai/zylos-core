@@ -43,13 +43,16 @@ test('packed global CLI starts without installed skill dependencies', async t =>
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     !key.toLowerCase().startsWith('npm_') && !['NODE_PATH', 'NODE_OPTIONS', 'ZYLOS_PACKAGE_ROOT'].includes(key)));
   Object.assign(env, { HOME: root, ZYLOS_DIR: path.join(root, 'home-zylos'),
-    PM2_HOME: path.join(root, '.pm2'),
+    PM2_HOME: path.join(root, '.pm2'), ZYLOS_SESSION_POOL_SIZE: '2',
     npm_config_update_notifier: 'false', npm_config_cache: path.join(root, 'npm-cache'), npm_config_userconfig: path.join(root, 'npmrc'),
     npm_config_globalconfig: path.join(root, 'global-npmrc') });
   fs.writeFileSync(env.npm_config_userconfig, '');
   fs.writeFileSync(env.npm_config_globalconfig, '');
   assert.ok(env.PM2_HOME.startsWith(env.HOME + path.sep));
   assert.ok(env.ZYLOS_DIR.startsWith(env.HOME + path.sep));
+  // No publication exists in this private root, so the shared reader uses env K.
+  // A fresh publication would take precedence over this fixed fallback.
+  assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'activity-monitor/pool-capacity.json')), false);
   t.diagnostic(JSON.stringify({ packagedFixture: root, HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
     PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, TMUX_TMPDIR: env.TMUX_TMPDIR }));
   const packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', root],
@@ -127,7 +130,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
         readRuntimeHealth: () => ({ health: 'unavailable' }),
         diagnostics: { diagnostic: (event, fields) => events.push({ event, ...fields }), maintain() {} },
         log() {},
-      }, { poolSize: () => 2 });
+      });
       try {
         await dispatcher.initialize();
         for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }

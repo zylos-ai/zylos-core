@@ -30,10 +30,7 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   const sends = [], logs = [];
   const adapter = f.deps.getSessionAdapter;
   const dependencies = { ...f.deps,
-    readZylosConfigStrict: (() => { let initial = true; return () => {
-      if (initial) { initial = false; return { state: 'ok', config: {} }; }
-      return readConfig();
-    }; })(),
+    readZylosConfigStrict: readConfig,
     diagnostics: { diagnostic: f.deps.diagnostic, maintain() {} },
     log: message => logs.push(message),
     sendAlert: async (target, message) => { sends.push({ target, message }); return send(target, message, sends.length); },
@@ -61,11 +58,6 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   }
   return { ...f, dispatcher, sends, logs, rounds, failAfter, fiveFailures };
 }
-
-test('dispatcher preserves startup configuration read errors', () => {
-  assert.throws(() => createDispatcher({ readZylosConfigStrict: () => { throw Error('startup configuration unavailable'); } }),
-    /startup configuration unavailable/);
-});
 
 // Other-event boundary: run for factory alert routing changes; skip unrelated copy.
 // The real startup path uses isolated HOME/ZYLOS_DIR/PM2_HOME and an in-memory DB;

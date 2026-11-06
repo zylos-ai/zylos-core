@@ -17,7 +17,9 @@ const now = () => Date.now() + offset;
 const store = createStore(database, { now, readConfig: () => ({ state: 'ok', config }), validateComponent: () => true });
 const db = { ...store, getDb: () => database, insertControl: (...args) => store.insertControl(...args).id,
   getControlById: id => database.prepare('SELECT * FROM control_queue WHERE id=?').get(id), expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 };
-const env = { ...process.env, HOME: root, ZYLOS_DIR: root }, tmux = { socketPath, binary, configFile: '/dev/null' };
+// The private root has no publication: env fixes K; a fresh file would override it.
+if (fs.existsSync(path.join(root, 'activity-monitor/pool-capacity.json'))) throw Error('Unexpected capacity publication in isolated fixture');
+const env = { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_SESSION_POOL_SIZE: '4' }, tmux = { socketPath, binary, configFile: '/dev/null' };
 const reader = createSessionReader({ env, connectionOptions: tmux });
 const trace = (kind, fields = {}) => fs.appendFileSync(path.join(root, 'manual-router.jsonl'), JSON.stringify({ kind, ...fields }) + '\n');
 const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode, keyPresent: true }),
@@ -42,7 +44,7 @@ const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode, 
   prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   handleExpired: async () => {}, formatConversation: row => row.content,
   diagnostic: (event, fields) => trace('diagnostic', { event, ...fields }), diagnostics: { maintain() {} }, log: message => trace('log', { message }),
-}, { tmux, poolSize: () => 4, readyTimeoutMs: 100, delivery: { periodicEnabled: false, verifyWaitMs: 1, verifyAttempts: 1, captureEnabled: false } });
+}, { tmux, readyTimeoutMs: 100, delivery: { periodicEnabled: false, verifyWaitMs: 1, verifyAttempts: 1, captureEnabled: false } });
 await router.initialize(); await router.idle();
 process.on('message', async message => {
   const { id, op } = message;
