@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { resolveCoreConfigModule } from './core-config-loader.js';
 import { sendError } from './c4-send-args.js';
 import { runHookProcess } from './c4-hook-process.js';
+import { normalizeHookMessage, validateHookOutput } from './c4-content-schema.js';
 
 // Resolve Core's declared YAML dependency in both repository and installed layouts.
 const yaml = createRequire(resolveCoreConfigModule())('js-yaml');
@@ -90,24 +91,14 @@ export function assertHookProcessSucceeded(result) {
   }
 }
 
-/** The accepted wire normalizes human messages without changing the reason. */
-export function normalizeHookMessage(message) {
-  return Array.from(message.replace(/[\r\n\u2028\u2029]/gu, ' ')).slice(0, 500).join('');
-}
-
 export function parseBeforeSendOutput(stdout) {
   const invalid = () => { throw sendError('HOOK_INVALID_OUTPUT', 'BeforeSend hook returned invalid output'); };
   let output;
   try { output = JSON.parse(stdout); } catch { invalid(); }
-  if (!mapping(output) || output.version !== 1) invalid();
-  const keys = Object.keys(output);
-  if (output.decision === 'continue') {
-    if (keys.length !== 2 || keys.some(key => !['version', 'decision'].includes(key))) invalid();
-    return output;
-  }
-  if (output.decision !== 'abort' || typeof output.message !== 'string' || keys.length !== 3 ||
-      keys.some(key => !['version', 'decision', 'message'].includes(key))) invalid();
-  return { version: 1, decision: 'abort', message: normalizeHookMessage(output.message) };
+  if (!validateHookOutput(output)) invalid();
+  return output.decision === 'abort'
+    ? { ...output, message: normalizeHookMessage(output.message) }
+    : output;
 }
 
 function available(value) { return typeof value === 'string' && value.trim() !== ''; }

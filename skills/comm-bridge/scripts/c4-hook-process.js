@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_STDOUT_BYTES = 1024 * 1024;
+const PARENT_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'];
 
 /** One Node timer segment; the caller recomputes the remaining monotonic time. */
 export function hookTimerChunk(remainingMs) {
@@ -18,17 +19,33 @@ export async function runHookProcess({ command, args = [], input, timeoutMs, cwd
     const started = performance.now();
     const output = [];
     let child, timer, stdoutBytes = 0, error = null, timedOut = false, outputTooLarge = false, settled = false;
-    const grouped = process.platform !== 'win32';
+    let parentSignal = null;
 
     function terminate() {
       if (!child?.pid) return;
       try {
-        if (grouped) process.kill(-child.pid, 'SIGKILL');
-        else child.kill('SIGKILL');
+        process.kill(-child.pid, 'SIGKILL');
       } catch (cause) {
         if (cause.code !== 'ESRCH') error ??= cause;
       }
     }
+
+    function removeParentHandlers() {
+      for (const signal of PARENT_SIGNALS) process.removeListener(signal, parentTerminated);
+      process.removeListener('exit', terminate);
+    }
+
+    function parentTerminated(signal) {
+      parentSignal = signal;
+      terminate();
+      removeParentHandlers();
+      // Restore native signal termination instead of turning an interrupted
+      // send into a hook result. SIGKILL cannot be intercepted for cleanup.
+      process.kill(process.pid, signal);
+    }
+
+    for (const signal of PARENT_SIGNALS) process.on(signal, parentTerminated);
+    process.on('exit', terminate);
 
     function finish(exitCode = null, signal = null) {
       if (settled) return;
@@ -38,10 +55,11 @@ export async function runHookProcess({ command, args = [], input, timeoutMs, cwd
       timedOut ||= performance.now() - started >= timeoutMs;
       clearTimeout(timer);
       terminate();
+      removeParentHandlers();
       child?.stdin?.destroy();
       child?.stdout?.destroy();
       child?.stderr?.destroy();
-      resolve({ stdout: Buffer.concat(output, stdoutBytes).toString('utf8'), exitCode, signal, error, timedOut, outputTooLarge });
+      if (!parentSignal) resolve({ stdout: Buffer.concat(output, stdoutBytes).toString('utf8'), exitCode, signal, error, timedOut, outputTooLarge });
     }
 
     function deadline() {
@@ -62,7 +80,7 @@ export async function runHookProcess({ command, args = [], input, timeoutMs, cwd
     }
 
     try {
-      child = spawn(command, args, { cwd, env, shell: false, detached: grouped, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(command, args, { cwd, env, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (cause) {
       error = cause;
       finish();

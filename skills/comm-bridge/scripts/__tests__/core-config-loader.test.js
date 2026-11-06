@@ -84,6 +84,7 @@ test('npm fallback resolves once for concurrent and repeated successful loads', 
     const modules = await Promise.all(Array.from({ length: 5 }, () => loadCoreConfig()));
     for (const module of modules) assert.equal(module, modules[0]);
     assert.equal(modules[0].readZylosConfigStrict().state, 'missing');
+    for (let i = 0; i < 5; i++) assert.equal(resolveCoreConfigModule(), ${JSON.stringify(path.join(fx.npmRoot, 'zylos/cli/lib/config.js'))});
     fs.mkdirSync(${JSON.stringify(path.join(fx.env.ZYLOS_DIR, '.zylos'))}, { recursive: true });
     fs.writeFileSync(modules[0].CONFIG_FILE, '{');
     assert.equal((await loadCoreConfig()).readZylosConfigStrict().state, 'error');

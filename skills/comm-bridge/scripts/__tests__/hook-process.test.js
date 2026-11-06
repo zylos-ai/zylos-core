@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import { test } from 'node:test';
 import { hookTimerChunk, runHookProcess } from '../c4-hook-process.js';
 
@@ -135,8 +136,8 @@ function active(pid) {
 // PM2, database or network is used. Run when hook spawn/deadline/cleanup changes;
 // declaration or wire-only edits may skip these cases. Teardown kills the one
 // known process group on assertion failure and removes only its own directory.
-for (const mode of ['inherited', 'orphan']) {
-  test(`managed hook stops ${mode} child process activity`, { skip: process.platform === 'win32', timeout: 10000 }, async t => {
+for (const mode of ['inherited', 'orphan', 'orphan-inherited']) {
+  test(`managed hook stops ${mode} child process activity`, { timeout: 10000 }, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-process-'));
     const filename = path.join(root, 'leaf.pid');
     let pid;
@@ -152,7 +153,103 @@ for (const mode of ['inherited', 'orphan']) {
     assert.equal(Number.isSafeInteger(pid) && pid > 1, true);
     assert.equal(result.timedOut, mode === 'inherited');
     assert.equal(result.exitCode, mode === 'inherited' ? null : 0);
+    if (mode === 'orphan-inherited') assert.deepEqual(JSON.parse(result.stdout), { version: 1, decision: 'continue' });
     for (let i = 0; i < 100 && active(pid); i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(active(pid), false, 'fixture descendant must no longer be running');
+  });
+}
+
+function ownedFiles(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-owner-'));
+  const filename = path.join(root, 'leaf.pid');
+  const pidAt = file => {
+    try { return Number(fs.readFileSync(file, 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  const kill = (pid, group = false) => {
+    if (!Number.isSafeInteger(pid) || pid <= 1) return;
+    try { process.kill(group ? -pid : pid, 'SIGKILL'); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+  };
+  t.after(() => {
+    kill(pidAt(`${filename}.leader`), true);
+    kill(pidAt(filename));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  return { filename, pidAt, kill };
+}
+
+test('infinite stdout terminates on output size before a long declared timeout', { timeout: 5000 }, async t => {
+  const f = ownedFiles(t);
+  const started = performance.now();
+  const result = await invoke('infinite-stdout', f.filename, { timeoutMs: 10000 });
+  assert.equal(result.outputTooLarge, true);
+  assert.equal(result.timedOut, false);
+  assert.ok(performance.now() - started < 2000, 'overflow must stop promptly rather than waiting for timeout');
+});
+
+test('an immediate abort remains a normal exit when the hook never reads large stdin', async () => {
+  const result = await invoke('early-abort', undefined, { input: 'x'.repeat(2 * 1024 * 1024) });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.error, null, 'EPIPE from early stdin closure does not replace an abort');
+  assert.equal(result.timedOut, false);
+  assert.deepEqual(JSON.parse(result.stdout), { version: 1, decision: 'abort', message: 'too large' });
+});
+
+test('parent signal and exit listeners are removed after every invocation', async () => {
+  const events = ['SIGTERM', 'SIGINT', 'SIGHUP', 'exit'];
+  const before = events.map(event => process.listenerCount(event));
+  const pending = invoke('delay', 100);
+  assert.deepEqual(events.map(event => process.listenerCount(event)), before.map(count => count + 1));
+  await pending;
+  assert.deepEqual(events.map(event => process.listenerCount(event)), before);
+  await invoke('delay', 200, { timeoutMs: 1 });
+  assert.deepEqual(events.map(event => process.listenerCount(event)), before);
+  await runHookProcess({ command: '/nonexistent-hook-command', input: '', timeoutMs: 3000 });
+  assert.deepEqual(events.map(event => process.listenerCount(event)), before);
+  await invoke('stdout', 1024 * 1024 + 1);
+  assert.deepEqual(events.map(event => process.listenerCount(event)), before);
+});
+
+// Standalone parent processes import the real runner. Every test owns both the
+// parent's process group and the hook's separate group, with teardown independent
+// of the runner under test. No source rewriting, signal mock or live process is
+// involved. SIGKILL cannot run a parent cleanup handler and is not promised here.
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'exit']) {
+  test(`parent ${signal} terminates its active managed hook group`, { timeout: 10000 }, async t => {
+    const f = ownedFiles(t);
+    const parent = spawn(process.execPath, [script, 'supervise', f.filename], {
+      detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    const closed = new Promise(resolve => parent.once('exit', (code, exitSignal) => resolve({ code, signal: exitSignal })));
+    t.after(async () => {
+      if (parent.exitCode === null && parent.signalCode === null) f.kill(parent.pid, true);
+      await closed;
+    });
+    let diagnostics = '';
+    for (const stream of [parent.stdout, parent.stderr]) stream.on('data', data => {
+      diagnostics += data.toString();
+      if (diagnostics.length > 65536) { diagnostics = diagnostics.slice(-65536); f.kill(parent.pid, true); }
+    });
+    let timer;
+    try {
+      await Promise.race([
+        new Promise(resolve => parent.once('message', resolve)),
+        closed.then(() => { throw new Error(`Parent exited before its hook started: ${diagnostics}`); }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Parent fixture readiness timeout')), 5000); }),
+      ]);
+    } finally { clearTimeout(timer); }
+    const leader = f.pidAt(`${f.filename}.leader`), leaf = f.pidAt(f.filename);
+    assert.equal(Number.isSafeInteger(leader) && leader > 1, true);
+    assert.equal(Number.isSafeInteger(leaf) && leaf > 1, true);
+    assert.equal(active(leader), true);
+    assert.equal(active(leaf), true);
+    if (signal === 'exit') parent.send('exit');
+    else parent.kill(signal);
+    const result = await closed;
+    assert.deepEqual(result, signal === 'exit' ? { code: 23, signal: null } : { code: null, signal });
+    for (let i = 0; i < 100 && (active(leader) || active(leaf)); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(active(leader), false, diagnostics);
+    assert.equal(active(leaf), false, diagnostics);
   });
 }

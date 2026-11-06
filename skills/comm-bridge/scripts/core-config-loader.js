@@ -33,7 +33,7 @@ function configOnPath() {
   }
 }
 
-export function resolveCoreConfigModule() {
+function findCoreConfigModule() {
   if (process.env.ZYLOS_PACKAGE_ROOT) {
     const explicit = configInRoot(process.env.ZYLOS_PACKAGE_ROOT, false);
     if (explicit) return explicit;
@@ -55,6 +55,14 @@ export function resolveCoreConfigModule() {
   } catch {}
   throw new Error('Cannot locate the installed zylos-core cli/lib/config.js');
 }
+// The installed Core package location is stable for this process; failed lookups retry.
+let coreConfigPath;
+
+export function resolveCoreConfigModule() {
+  if (!coreConfigPath) coreConfigPath = findCoreConfigModule();
+  return coreConfigPath;
+}
+
 let coreConfigPromise;
 
 export async function loadCoreConfig() {

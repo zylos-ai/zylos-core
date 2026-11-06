@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import Database from 'better-sqlite3';
 import { createStore } from '../c4-v2-store.js';
 import { guardDatabase } from '../sqlite-schema.js';
@@ -21,7 +22,11 @@ const frontmatter = c4 => `---\nname: example\nc4: ${JSON.stringify(c4)}\n---\n#
 function setup(t, { installed = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'send-hook-'));
   let db;
-  t.after(() => { db?.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const processRecords = [];
+  t.after(() => {
+    for (const file of processRecords) killRecordedProcesses(file);
+    db?.close(); fs.rmSync(root, { recursive: true, force: true });
+  });
   const home = path.join(root, 'home'), zylos = path.join(home, 'zylos');
   const skillsDir = path.join(zylos, '.claude', 'skills');
   const tmp = path.join(root, 'tmp'), bin = path.join(root, 'bin');
@@ -62,7 +67,7 @@ function setup(t, { installed = false } = {}) {
     cli = path.join(destination, 'scripts', 'c4-send.js');
     console.log('Installed send isolation:', JSON.stringify(Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'PATH'].map(key => [key, env[key]]))));
   }
-  return { root, x, y, db, api, calls, env, skillsDir, markers, cli,
+  return { root, x, y, db, api, calls, env, skillsDir, markers, cli, processRecords,
     options: { api, skillsDir, env, appendFallback: async () => { calls.fallback++; } },
     manifest: source => fs.writeFileSync(path.join(x, 'SKILL.md'), source),
     invoke: (channel = 'x', args = []) => spawnSync(process.execPath, [cli, channel, 'private-endpoint', '--stdin', ...args], {
@@ -90,6 +95,54 @@ function hook(f, source, timeout_ms = 500) {
 }
 
 const output = value => `process.stdout.write(${JSON.stringify(JSON.stringify(value))});`;
+
+function killRecordedProcesses(file) {
+  let record;
+  try { record = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  assert.ok(Number.isSafeInteger(record.leader) && record.leader > 1);
+  try { process.kill(-record.leader, 'SIGKILL'); }
+  catch (error) { if (error.code !== 'ESRCH') throw error; }
+  for (const pid of [record.leader, ...record.pids]) {
+    assert.ok(Number.isSafeInteger(pid) && pid > 1);
+    try { process.kill(pid, 'SIGKILL'); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+  }
+}
+
+function supervisedHook(f, source, timeoutMs) {
+  const file = path.join(f.root, `hook-process-${f.processRecords.length}.json`);
+  f.processRecords.push(file);
+  hook(f, `import { writeFileSync as writeRecord } from 'node:fs';
+    const processRecord={leader:process.pid,pids:[]}; const recordFile=${JSON.stringify(file)};
+    writeRecord(recordFile,JSON.stringify(processRecord)); ${source}`, timeoutMs);
+  return file;
+}
+
+async function boundedHook(f, operation, budgetMs = 2000) {
+  let exceeded = false;
+  const timer = setTimeout(() => {
+    exceeded = true;
+    for (const file of f.processRecords) killRecordedProcesses(file);
+  }, budgetMs);
+  try {
+    const result = await operation;
+    assert.equal(exceeded, false, 'Hook exceeded the independent fixture deadline');
+    return result;
+  } finally { clearTimeout(timer); }
+}
+
+function processAlive(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    if (/\) Z /.test(stat)) return false;
+    return true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    try { process.kill(pid, 0); return true; }
+    catch (cause) { if (cause.code === 'ESRCH') return false; throw cause; }
+  }
+}
 
 const malformed = [
   ['broken YAML', '---\nc4: [unterminated\n---\n'],
@@ -345,5 +398,62 @@ test('stdout one byte over the limit rejects valid JSON before original send eff
   const f = setup(t);
   hook(f, `process.stdout.write(JSON.stringify({version:1,decision:'continue'}).padEnd(1024*1024+1,' '));`, 1500);
   await assert.rejects(sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options), { code: 'HOOK_INVALID_OUTPUT' });
+  noSendSideEffects(f);
+});
+
+
+// These declaration failures use real sendExternal/SQLite; run when manifest
+// reading changes, skip unrelated process/transport edits. No process may start.
+test('an unreadable SKILL directory rejects before hook, routing or persistence', async t => {
+  const f = setup(t);
+  fs.mkdirSync(path.join(f.x, 'SKILL.md'));
+  await assert.rejects(sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options), { code: 'HOOK_INVALID_OUTPUT' });
+  empty(f);
+});
+
+test('a valid BOM and CRLF declaration actually executes its hook', async t => {
+  const f = setup(t), marker = path.join(f.root, 'x-hook-started');
+  hook(f, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)},'checked'); ${output({ version: 1, decision: 'abort', message: 'checked BOM declaration' })}`);
+  f.manifest('\uFEFF' + frontmatter({ before_send: { ...validHook, timeout_ms: 500 } }).replace(/\n/g, '\r\n'));
+  await assert.rejects(sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options), { code: 'HOOK_ABORTED', message: 'checked BOM declaration' });
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'checked');
+  noSendSideEffects(f);
+});
+
+// Actual hook process groups and private Store. Run for lifecycle/stream changes;
+// skip unrelated manifest or UI changes. The fixture independently records and
+// kills every owned group/PID within 2s, even if product cleanup regresses; the
+// send promise settles before SQLite teardown. Infinite output is rate-bounded
+// to avoid unbounded memory use while testing an output-cap regression.
+test('a normal hook leader with an unref stdout descendant continues without timeout', { timeout: 5000 }, async t => {
+  const f = setup(t);
+  const file = supervisedHook(f, `import { spawn } from 'node:child_process';
+    const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','inherit','ignore']});
+    processRecord.pids.push(child.pid); writeRecord(recordFile,JSON.stringify(processRecord));
+    child.unref(); ${output({ version: 1, decision: 'continue' })}`, 10000);
+  const record = await boundedHook(f, sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options));
+  assert.equal(record.content, message);
+  assert.equal(f.calls.insert, 1); assert.equal(f.calls.fallback, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.markers.x, 'utf8')), ['private-endpoint', message]);
+  const childPid = JSON.parse(fs.readFileSync(file, 'utf8')).pids[0];
+  for (let i = 0; i < 50 && processAlive(childPid); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(processAlive(childPid), false, 'Inherited-stdout descendant must be stopped');
+});
+
+test('an endless stdout stream fails quickly at the cap before original send effects', { timeout: 5000 }, async t => {
+  const f = setup(t);
+  supervisedHook(f, `const chunk='x'.repeat(65536); setInterval(()=>process.stdout.write(chunk),5);`, 10000);
+  const started = performance.now();
+  await boundedHook(f, assert.rejects(sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options), { code: 'HOOK_INVALID_OUTPUT' }));
+  assert.ok(performance.now() - started < 2000, 'Output cap must fail before the long declaration timeout');
+  noSendSideEffects(f);
+});
+
+test('a hook that ignores a large stdin body can abort without an execution error', { timeout: 5000 }, async t => {
+  const f = setup(t);
+  supervisedHook(f, output({ version: 1, decision: 'abort', message: 'content too large' }), 10000);
+  const large = 'x'.repeat(2 * 1024 * 1024);
+  assert.ok(Buffer.byteLength(large) > 65536);
+  await boundedHook(f, assert.rejects(sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, large, f.options), { code: 'HOOK_ABORTED', message: 'content too large' }));
   noSendSideEffects(f);
 });
