@@ -53,7 +53,12 @@ import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
 import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
-import { createDisplayNames } from './lib/workbench/display-names.js';
+import { createDisplayNames, validKey } from './lib/workbench/display-names.js';
+import { createRuns } from './lib/workbench/runs.js';
+import { createGroupConfig } from './lib/workbench/group-config.js';
+import { createGroupBacklog } from './lib/workbench/group-backlog.js';
+import { createGroupActions } from './lib/workbench/group-actions.js';
+import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
 import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-snapshot.js';
 import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
 import { buildRestartStatus } from './lib/core-actions.js';
@@ -378,6 +383,29 @@ const displayNames = createDisplayNames({ store, zylosDir: config.zylosDir, sani
 const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames,
   readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
   readPm2: () => pm2Collector.getLatestPM2Data() });
+const groupRuns = createRuns({ store, getSnapshot: workbench.getSnapshot });
+const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
+const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, getSnapshot: workbench.getSnapshot });
+const groupAction = createGroupActions({ zylosDir: config.zylosDir, config });
+
+function workbenchGroupKey(encoded) {
+  let key;
+  try { key = decodeURIComponent(encoded); } catch {}
+  if (key !== 'origin' && !validKey(key)) {
+    throw Object.assign(new Error('Invalid session group'), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  }
+  return key;
+}
+
+function workbenchFailure(res, error) {
+  if ([400, 413].includes(error.status)) {
+    sendJson(res, error.status, { error: error.message });
+    return;
+  }
+  const status = error.statusCode ?? 500;
+  sendJson(res, status, { ok: false, error: { code: status === 500 ? 'internal_error' : error.code,
+    message: status === 500 ? 'Request failed' : error.message } });
+}
 
 // Rate-limit metric values arrive either as a plain number or as an object
 // keyed by window (same variants the single-agent page handles).
@@ -1089,6 +1117,43 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/workbench/name-prompt') {
+    try {
+      const todo = await displayNames.listNames({ unnamed: true, activeSinceMs: 3 * 86400000 });
+      const script = path.join(config.zylosDir, '.claude', 'skills', 'dashboard', 'scripts', 'group-name.js');
+      sendJson(res, 200, { text: namePromptText(script, NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH),
+        todo: todo.map(row => row.fallbackName) });
+    } catch (error) { workbenchFailure(res, error); }
+    return true;
+  }
+
+  const detailRead = pathname.match(/^\/api\/workbench\/groups\/([^/]+)\/(runs|messages|backlog|config)$/);
+  if (detailRead) {
+    try {
+      const key = workbenchGroupKey(detailRead[1]);
+      let data;
+      switch (detailRead[2]) {
+        case 'runs':
+          data = await groupRuns(key, {
+            before: url.searchParams.get('before') ?? undefined,
+            limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 3,
+          });
+          break;
+        case 'messages':
+          data = { messages: c4Reader.getGroupMessages(key === 'origin' &&
+            (await workbench.getSnapshot()).view === 'single' ? null : key, {
+            since: url.searchParams.get('since') ?? 0,
+            until: url.searchParams.get('until') ?? Date.now(),
+          }) };
+          break;
+        case 'backlog': data = await groupBacklog(key); break;
+        case 'config': data = await groupConfig.get(key); break;
+      }
+      sendJson(res, 200, data);
+    } catch (error) { workbenchFailure(res, error); }
+    return true;
+  }
+
   if (['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(pathname)) {
     try { sendJson(res, 200, await workbenchResponse(workbench, pathname, url.searchParams)); }
     catch (error) {
@@ -1607,6 +1672,19 @@ export function createServer() {
 
     if (pathname.startsWith('/api/fleet/agents/')) {
       await handleFleetAgentDelete(req, res, pathname);
+      return;
+    }
+
+    const detailWrite = pathname.match(/^\/api\/workbench\/groups\/([^/]+)\/(config|actions\/(interrupt|chop-chop|restart))$/);
+    if (detailWrite && req.method === 'POST') {
+      try {
+        const key = workbenchGroupKey(detailWrite[1]);
+        const body = await readJsonBody(req, 4096);
+        const result = detailWrite[2] === 'config'
+          ? await groupConfig.submit(key, body)
+          : await groupAction(key, detailWrite[3], body);
+        sendJson(res, 200, result);
+      } catch (error) { workbenchFailure(res, error); }
       return;
     }
 

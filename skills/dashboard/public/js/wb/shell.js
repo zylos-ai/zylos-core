@@ -1,14 +1,16 @@
-import { createViewMode, observerNavEntry } from './view-mode.js?v=81';
-import { boardController, renderBoard } from './board.js?v=81';
-import { createBoardSearch } from './board-search.js?v=81';
-import { instanceStrip } from './instance-strip.js?v=81';
-import { renderAttention } from './attention-bar.js?v=81';
-import { showSidePanel } from './side-panel.js?v=81';
-import { element } from './plain-text.js?v=81';
+import { createViewMode, observerNavEntry } from './view-mode.js?v=82';
+import { boardController, renderBoard } from './board.js?v=82';
+import { createBoardSearch } from './board-search.js?v=82';
+import { instanceStrip } from './instance-strip.js?v=82';
+import { renderAttention } from './attention-bar.js?v=82';
+import { createGroupDetail } from './detail.js?v=82';
+import { loadNamePrompt, renderAutoName } from './auto-name.js?v=82';
+import { element } from './plain-text.js?v=82';
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
   endpoint = path => path, identity = () => endpoint('/api/workbench/groups'), openSettings = () => {},
   observerStatus = () => null, observerAvailable = () => true,
+  writable = () => true, onMemory = () => {},
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
   const board = document.querySelector('#wb-board');
   if (!board) return () => {};
@@ -17,6 +19,9 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const rangeInput = document.querySelector('#wb-range');
   const toggle = document.querySelector('#wb-detail-toggle');
   const nav = document.querySelector('#observer-tab');
+  let groupDetail = null, nameRequest = null;
+  const nameButton = document.querySelector('#wb-auto-name');
+  const nameDialog = document.querySelector('#wb-auto-name-dialog');
   let snapshot = null, searchRows = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
     range = '60m', activityGen = 0, cost = null, transition = null, owner = identity(), stopped = false;
   try {
@@ -51,6 +56,13 @@ export function mountWorkbench({ document = globalThis.document, window = global
   };
   function redraw() {
     syncNav();
+    groupDetail?.setViewDetail();
+    document.querySelector('#wb-side')?.setAttribute('aria-label', t('wb.detail.title'));
+    if (nameButton) {
+      nameButton.textContent = t('wb.name.auto');
+      nameButton.disabled = !writable();
+      nameButton.title = writable() ? '' : t('wb.readOnly');
+    }
     const legend = document.querySelector('#wb-legend');
     if (legend) {
       legend.replaceChildren();
@@ -75,8 +87,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     renderBoard(board, snapshot, {
       rows, query: search.query(), activity, document, t, level: mode.detailLevel(),
       onSearch: () => searchInput.focus(),
-      onSelect: row => showSidePanel(document.querySelector('#wb-side'),
-        snapshot.view === 'single' ? { ...row, name: { displayName: t('wb.single') } } : row, { document, t }),
+      onSelect: row => groupDetail?.open(row, snapshot),
     });
   }
   const search = createBoardSearch({
@@ -97,6 +108,9 @@ export function mountWorkbench({ document = globalThis.document, window = global
   function resetOwner() {
     if (owner === identity()) return false;
     owner = identity();
+    groupDetail?.close();
+    nameRequest?.abort();
+    if (nameDialog) { nameDialog.hidden = true; nameDialog.replaceChildren(); }
     controller.invalidate();
     search.input('');
     searchInput.value = '';
@@ -119,6 +133,37 @@ export function mountWorkbench({ document = globalThis.document, window = global
     return document.visibilityState !== 'hidden' && document.querySelector('#tab-overview')?.classList.contains('active') &&
       !document.querySelector('#agent-detail')?.hidden;
   };
+  groupDetail = createGroupDetail({ root: document.querySelector('#wb-side'), document, t,
+    fetch: (path, options) => fetch(endpoint(path), options), identity, writable,
+    detail: () => mode.detailLevel(), isVisible: visible, onMemory,
+    onRename: () => controller.refresh(),
+  });
+  const autoName = async () => {
+    if (!writable() || !nameDialog) return;
+    nameRequest?.abort();
+    nameRequest = new AbortController();
+    const captured = identity(), signal = nameRequest.signal;
+    const current = () => !stopped && !signal.aborted && captured === identity();
+    nameDialog.hidden = false;
+    nameDialog.replaceChildren(element(document, 'p', t('wb.name.loading')));
+    try {
+      const value = await loadNamePrompt({ request: async path => {
+        const response = await fetch(endpoint(path), { signal });
+        if (!response.ok) throw Error('read_failed');
+        return response.json();
+      } });
+      if (!current()) return;
+      renderAutoName(nameDialog, value, { document, t,
+        onClose: () => { nameDialog.hidden = true; nameDialog.replaceChildren(); } });
+    } catch (error) {
+      if (current()) {
+        const close = element(document, 'button', t('wb.close'));
+        close.type = 'button'; close.addEventListener('click', () => { nameDialog.hidden = true; });
+        nameDialog.replaceChildren(element(document, 'p', t('wb.readFailed')), close);
+      }
+    }
+  };
+  nameButton?.addEventListener('click', autoName);
   const controller = boardController({
     visible,
     fetchSnapshot: async () => {
@@ -133,6 +178,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     },
     onSnapshot: value => {
       snapshot = value.snapshot;
+      groupDetail.updateSnapshot(snapshot);
       cost = value.cost;
       error = null;
       lastSuccess = Date.now();
@@ -214,6 +260,9 @@ export function mountWorkbench({ document = globalThis.document, window = global
   return () => {
     stopped = true;
     controller.stop();
+    groupDetail.destroy();
+    nameRequest?.abort();
+    nameButton?.removeEventListener('click', autoName);
     clearInterval(modeTimer);
     search.destroy();
     unsubscribe();

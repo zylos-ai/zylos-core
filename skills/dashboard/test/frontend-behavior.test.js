@@ -1543,8 +1543,8 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
-  assert.match(index, /app\.js\?v=81/);
-  assert.match(index, /style\.css\?v=55/);
+  assert.match(index, /app\.js\?v=82/);
+  assert.match(index, /style\.css\?v=56/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
@@ -1611,7 +1611,7 @@ test('fleet management entry is local-only and modal is extensible for future ma
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
-  assert.match(index, /app\.js\?v=81/);
+  assert.match(index, /app\.js\?v=82/);
   assert.match(index, /<path d="M12 8V4H8"/);
   assert.match(index, /<rect width="16" height="12" x="4" y="8" rx="2"/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
@@ -1746,7 +1746,7 @@ test('i18n loader survives flaky pack fetches (#208)', async () => {
   assert.match(i18n, /renderI18n\(\);[\s\S]*?\} catch \{/);
 
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /from '\.\/i18n\.js\?v=81'/);
+  assert.match(app, /from '\.\/i18n\.js\?v=82'/);
 });
 
 test('overlapping initI18n calls: stale slow request cannot overwrite the newer locale (#211 review)', async () => {
@@ -2155,7 +2155,7 @@ function workbenchSnapshot(kind = 'idle', key = 'a') {
 }
 function workbenchHarness(context, read, options = {}) {
   const document = wbDocument(), listeners = new Map(), windowListeners = new Map();
-  const selectors = ['#wb-board', '#wb-search', '#wb-range', '#wb-detail-toggle', '#observer-tab', '#wb-instance', '#wb-attention', '#wb-side', '#tab-overview', '#agent-detail'];
+  const selectors = ['#wb-board', '#wb-search', '#wb-range', '#wb-detail-toggle', '#observer-tab', '#wb-instance', '#wb-attention', '#wb-side', '#wb-auto-name', '#wb-auto-name-dialog', '#tab-overview', '#agent-detail'];
   const nodes = new Map(selectors.map(selector => [selector, document.createElement('div')]));
   nodes.get('#tab-overview').className = 'active'; document.visibilityState = options.hidden ? 'hidden' : 'visible';
   document.querySelector = selector => nodes.get(selector);
@@ -2180,7 +2180,9 @@ function workbenchHarness(context, read, options = {}) {
     identity: () => owner, endpoint: path => owner === 'local' ? path : '/fleet/' + owner + path,
     observerStatus: options.observerStatus ?? (() => null), observerAvailable: options.observerAvailable ?? (() => true),
     openSettings: options.openSettings ?? (() => {}),
-    fetch: async path => {
+    writable: options.writable ?? (() => true),
+    fetch: async (path, requestOptions) => {
+      options.onRequest?.(path, requestOptions);
       calls.push(path);
       const value = read ? await read(path, fallback) : fallback(path);
       return value?.json ? value : { ok: true, json: async () => value };
@@ -2368,4 +2370,52 @@ test('workbench shell hides unknown recovering and unavailable observer navigati
   assert.equal(click().prevented, 1); assert.equal(settings.length, 2);
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   assert.match(app, /observerAvailable: status => !remoteIsReadOnly\(\) && !observerRecoveryReason\(status\)/);
+});
+
+// Detail mounting boundary: real shell row selection and injected transport only;
+// run for detail/shell wiring, skip backend-only work. The harness owns timers,
+// DOM, and fetches, and teardown releases all listeners without live resources.
+test('workbench shell opens selected detail and aborts its reads when agent changes', async context => {
+  const pending = wbDeferred(), requests = [];
+  const h = workbenchHarness(context, (path, fallback) => path.includes('/groups/a/runs')
+    ? pending.promise : fallback(path), { onRequest: (path, options) => requests.push({ path, options }) });
+  await wbTick(); await wbTick();
+  h.nodes.get('#wb-board').children[0].dispatch('click');
+  await wbTick();
+  assert.equal(h.nodes.get('#wb-side').hidden, false);
+  const runRequest = requests.find(item => item.path.includes('/groups/a/runs'));
+  assert.ok(runRequest?.options?.signal);
+  h.setOwner('Other'); h.mutate();
+  assert.equal(runRequest.options.signal.aborted, true);
+  assert.equal(h.nodes.get('#wb-side').hidden, true);
+  pending.resolve({ runs: [], totalEvents: 901, totalRuns: 30 });
+  await wbTick(); await wbTick();
+  assert.equal(h.nodes.get('#wb-side').textContent, '');
+});
+// Auto-name mounting boundary: GET-only prompt and writable gate; injected DOM,
+// timers and transport as above, no clipboard write or external message is sent.
+test('workbench shell gates automatic naming and discards an old agent prompt', async context => {
+  let writable = false;
+  const pending = wbDeferred(), requests = [];
+  const h = workbenchHarness(context, (path, fallback) => path.endsWith('/name-prompt')
+    ? pending.promise : fallback(path), { writable: () => writable,
+    onRequest: (path, options) => requests.push({ path, options }) });
+  await wbTick(); await wbTick();
+  const button = h.nodes.get('#wb-auto-name'), dialog = h.nodes.get('#wb-auto-name-dialog');
+  assert.equal(button.disabled, true);
+  button.dispatch('click'); await wbTick();
+  assert.equal(requests.some(item => item.path.endsWith('/name-prompt')), false);
+  writable = true; h.listeners.get('dashboard-locale-change')();
+  assert.equal(button.disabled, false);
+  button.dispatch('click'); await wbTick();
+  const prompt = requests.find(item => item.path.endsWith('/name-prompt'));
+  assert.ok(prompt?.options?.signal);
+  assert.equal(dialog.hidden, false);
+  h.setOwner('Other'); h.mutate();
+  assert.equal(prompt.options.signal.aborted, true);
+  pending.resolve({ text: 'old private prompt', todo: [] });
+  await wbTick(); await wbTick();
+  assert.equal(dialog.hidden, true);
+  assert.equal(dialog.textContent, '');
+  assert.equal(requests.some(item => item.options?.method === 'POST'), false);
 });

@@ -53,7 +53,7 @@ function fixture(t, remoteScope) {
 // either allowlist; skip UI-only edits. No sockets, child processes, DB, PM2 or
 // tmux. Auth cleanup timer belongs to this test and is removed in teardown.
 for (const route of workbenchWriteRoutes) {
-  test(`workbench proxy ${route.method} name follows local and remote key scopes`, { timeout: 5000 }, async t => {
+  test(`workbench proxy ${route.method} ${route.path} follows local and remote key scopes`, { timeout: 5000 }, async t => {
     const adminRemote = fixture(t, 'admin');
     let response = await adminRemote.request(route, 'read');
     assert.equal(response.status, 403);
