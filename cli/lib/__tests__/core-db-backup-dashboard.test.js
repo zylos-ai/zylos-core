@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {createRequire} from 'node:module';
 import {Store} from '../../../skills/dashboard/src/lib/store.js';
+import {TARGET_SCHEMA_VERSION} from '../../../skills/dashboard/src/lib/schema.js';
 import {migrateSchema13} from '../../../skills/dashboard/test/fixtures/schema13.js';
 import {inspectUpgradeSource} from '../upgrade-entry.js';
 import {createCoreDbSnapshot,runCoreDbWorker,validateSnapshotManifest,probeCoreDbVersions,rehearseCoreDbUpgrade,prepareRecoveryDependencies,inspectDashboardOwnerManaged} from '../core-db-backup.js';
@@ -286,6 +287,8 @@ function legacyDashboard(file) {
   db.close();
 }
 
+// Migration integration: run for Dashboard schema/owner changes, skip UI-only.
+// Private roots/SQLite and bounded worker children; fixture owns cleanup, no live services.
 test('schema 13 skips all owner actions before cutoff and migrates only on first Store open', t => {
   const f = controlledMigration(t, false);
   legacyDashboard(f.source);
@@ -305,11 +308,12 @@ test('schema 13 skips all owner actions before cutoff and migrates only on first
   beforeOpen.close();
   const store = new Store(f.source);
   try {
-    assert.equal(store.db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version,21);
+    assert.equal(store.db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version,TARGET_SCHEMA_VERSION);
     assert.equal(store.db.prepare('SELECT id FROM runtime_events').get().id,'retained');
   } finally {store.close();}
 });
 
+// Same isolated migration boundary; verifies the current target through real Core handles.
 test('real current schema owner uses Core handles for probe rehearsal and controlled no-op', t => {
   const f = controlledMigration(t,true);
   for (const root of [f.dashboardRoot,path.join(f.driverRoot,'dashboard')]) useRealDashboardOwner(root);
@@ -317,14 +321,14 @@ test('real current schema owner uses Core handles for probe rehearsal and contro
   const before=fs.readFileSync(f.source);
   const options={driverRoot:f.driverRoot,dashboardOwnerManaged:true};
   assert.deepEqual(probeCoreDbVersions(f.root,f.target,options).databases[3],{
-    source:'components/dashboard/dashboard.db',status:'present',fromVersion:21,toVersion:21,needsMigration:false,
+    source:'components/dashboard/dashboard.db',status:'present',fromVersion:TARGET_SCHEMA_VERSION,toVersion:TARGET_SCHEMA_VERSION,needsMigration:false,
   });
   assert.deepEqual(rehearseCoreDbUpgrade(f.root,f.target,options).databases[3],{
-    source:'components/dashboard/dashboard.db',status:'present',fromVersion:21,toVersion:21,
+    source:'components/dashboard/dashboard.db',status:'present',fromVersion:TARGET_SCHEMA_VERSION,toVersion:TARGET_SCHEMA_VERSION,
   });
   assert.deepEqual(fs.readFileSync(f.source),before);
   const row=runCoreDbWorker(f.request).databases[3];
-  assert.equal(row.currentVersion,21);assert.equal(row.needsMigration,false);
+  assert.equal(row.currentVersion,TARGET_SCHEMA_VERSION);assert.equal(row.needsMigration,false);
   assert.deepEqual(fs.readFileSync(f.source),before);
   assert.equal(fs.existsSync(path.join(f.dashboardRoot,'node_modules')),false);
   const reopened = new Store(f.source);reopened.close();
