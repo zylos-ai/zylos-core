@@ -6,11 +6,12 @@ export const CHAT_SETTINGS_PATH = '/api/chat/settings';
 export function isChatDataRoute(method, pathname) {
   return method === 'GET' && (
     pathname === '/api/chat/conversations' ||
+    /^\/api\/chat\/conversations\/[^/]+$/.test(pathname) ||
     /^\/api\/chat\/conversations\/[^/]+\/(?:messages|status|questions)$/.test(pathname)
   ) || method === 'POST' && (
     pathname === '/api/chat/drafts' ||
     /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers)$/.test(pathname)
-  );
+  ) || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(pathname);
 }
 
 /** Call on the data instance before querying conversation data. */

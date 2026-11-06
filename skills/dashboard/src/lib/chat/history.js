@@ -15,8 +15,9 @@ export function deliveryState(row) {
 }
 
 export class ChatHistory {
-  constructor({ c4Reader }) {
+  constructor({ c4Reader, conversations = null }) {
     this.c4Reader = c4Reader;
+    this.conversations = conversations;
     this.secret = randomBytes(32);
   }
 
@@ -77,7 +78,7 @@ export class ChatHistory {
     limit = this._limit(limit);
     const scope = `list:${tab}`;
     const position = this._cursor(cursor, scope);
-    const rows = this._query(`${this._source(tab)}, summaries AS (
+    let rows = this._query(`${this._source(tab)}, summaries AS (
       SELECT identity AS id, session_group, channel, endpoint_id,
         COALESCE(MAX(julianday(timestamp)), 0) AS stamp, COUNT(*) AS count
       FROM allowed GROUP BY identity
@@ -86,8 +87,13 @@ export class ChatHistory {
       ORDER BY stamp DESC, id COLLATE BINARY LIMIT @limit`, {
       stamp: position?.stamp ?? null, id: position?.id ?? '', limit: limit + 1,
     });
+    if (tab === 'mine' && this.conversations) {
+      rows = [...rows, ...this._drafts(limit + 1, position)]
+        .sort((a, b) => b.stamp - a.stamp || Buffer.compare(Buffer.from(a.id), Buffer.from(b.id)));
+    }
     const more = rows.length > limit;
     const items = rows.slice(0, limit).map(row => {
+      if (row.draft) return row;
       const { where, parameters } = this._scope(tab, row.session_group === ''
         ? "c.session_group='' AND c.channel=@channel AND c.endpoint_id=@endpoint"
         : 'c.session_group=@group', row.session_group === ''
@@ -96,13 +102,41 @@ export class ChatHistory {
       const latest = this._query(`SELECT c.id, c.content FROM conversations c INDEXED BY ${index}
         WHERE ${visible} AND ${where}
         ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
+      const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
+      const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
       return { ...row, preview: projectC4Content(latest?.content ?? '', { c4Id: latest?.id }).slice(0, 160),
-        display_name: row.session_group === '' ? '旧历史' : tab === 'mine'
-          ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group,
-        draft: false };
+        display_name: name ?? registered?.displayName ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
+          ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
+        ...(registered ? { localId: registered.localId } : {}), draft: false };
     });
     const last = items.at(-1);
     return { items, nextCursor: more ? this._token({ scope, stamp: last.stamp, id: last.id }) : null };
+  }
+
+  _drafts(limit, position) {
+    const drafts = [];
+    let next = position;
+    // Each source read is limited, including when stale unknown registrations
+    // already have a Core head. Keep only one result page and one source batch.
+    while (drafts.length < limit) {
+      const batch = this.conversations.listDrafts({ limit, position: next });
+      if (!batch.length) break;
+      for (const row of batch) {
+        const group = row.namespace ? `${row.namespace}:${row.local_id}` : null;
+        const established = group && this._query(`SELECT h.session_group FROM group_heads h
+          JOIN channel_namespaces n ON n.namespace=@namespace AND n.component_name='dashboard'
+          WHERE h.session_group=@group LIMIT 1`, { namespace: row.namespace, group })[0];
+        if (established) continue;
+        drafts.push({ id: row.id, localId: row.local_id, session_group: group ?? '',
+          channel: 'dashboard', endpoint_id: row.local_id, stamp: row.stamp, count: 0,
+          preview: '', display_name: row.display_name, draft: true, state: row.state });
+        if (drafts.length === limit) break;
+      }
+      if (batch.length < limit) break;
+      const last = batch.at(-1);
+      next = { stamp: last.stamp, id: last.id };
+    }
+    return drafts;
   }
 
   _range(tab, id) {

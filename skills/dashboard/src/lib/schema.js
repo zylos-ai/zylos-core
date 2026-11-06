@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 23;
+export const TARGET_SCHEMA_VERSION = 24;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -94,6 +94,7 @@ export function inspectDatabase(db) {
       runtime_events: 'id ingest_id event_seq timestamp runtime session_id event_type category summary duration_ms metadata source confidence session_group run_id',
       metric_points: 'id timestamp runtime session_id metric_name metric_value dimensions source confidence session_group',
       group_display_names: 'session_group display_name source updated_at',
+      chat_conversations: 'local_id namespace display_name state created_at updated_at first_message_id pending_content last_message_id last_outcome',
       usage_transcripts: 'transcript_path parent_path runtime session_group run_id session_id byte_offset status first_seen_at updated_at',
       activity_facts: 'id timestamp fact_type runtime session_id project data',
       source_health: 'name signal_type status extra updated_at',
@@ -128,10 +129,18 @@ export function inspectDatabase(db) {
     for (const [table, name, columns] of [
       ['metric_points', 'idx_metric_points_group_ts', 'metric_name,session_group,timestamp'],
       ['usage_transcripts', 'idx_usage_transcripts_status_updated', 'status,updated_at'],
+      ['chat_conversations', 'idx_chat_conversations_state_updated', 'state,updated_at,local_id'],
     ]) {
       const index = db.pragma(`index_list(${table})`).find(item => item.name === name);
       const actual = db.pragma(`index_info(${name})`).map(column => column.name);
       if (!index || index.unique || index.partial || actual.join(',') !== columns) throw new Error('Unsupported Dashboard group data index');
+    }
+    const drafts = db.pragma('table_info(chat_conversations)');
+    if (drafts.filter(column => column.pk).map(column => column.name).join(',') !== 'local_id'
+        || drafts.find(column => column.name === 'local_id')?.type.toUpperCase() !== 'TEXT'
+        || ['namespace', 'display_name'].some(name => drafts.find(column => column.name === name)?.notnull)
+        || ['local_id', 'state', 'created_at', 'updated_at'].some(name => !drafts.find(column => column.name === name)?.notnull)) {
+      throw new Error('Unsupported Dashboard conversation registration');
     }
     const cursorColumns = db.pragma('table_info(core_log_cursors)');
     const primary = cursorColumns.filter(column => column.pk).sort((a,b) => a.pk-b.pk).map(column => column.name);
@@ -406,6 +415,28 @@ export function migrateDatabase(db) {
             UNIQUE(session_group, interrupt_id)
           );
           INSERT OR IGNORE INTO schema_migrations (version) VALUES (23);
+        `);
+      })();
+    }
+    if (currentVersion < 24) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE chat_conversations (
+            local_id TEXT PRIMARY KEY NOT NULL,
+            namespace TEXT,
+            display_name TEXT,
+            state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','unknown','active')),
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            first_message_id INTEGER,
+            pending_content TEXT,
+            last_message_id INTEGER,
+            last_outcome TEXT,
+            CHECK(state <> 'active' OR (namespace IS NOT NULL AND display_name IS NULL))
+          );
+          CREATE INDEX idx_chat_conversations_state_updated
+            ON chat_conversations(state, updated_at DESC, local_id);
+          INSERT INTO schema_migrations(version) VALUES(24);
         `);
       })();
     }

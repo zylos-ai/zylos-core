@@ -331,3 +331,49 @@ for (const [kind, ddl] of [
   } finally { reader.close(); }
   assert.deepEqual(fs.readFileSync(file), before);
 });
+
+function schema22(file) {
+  schema21(file);
+  const db = new Database(file);
+  db.exec(`CREATE INDEX idx_events_group_run_seq ON runtime_events(session_group,run_id,event_seq);
+    INSERT INTO schema_migrations(version) VALUES(22);`);
+  db.close();
+}
+
+// Migration boundary: real historical Dashboard SQLite only. Run for draft
+// schema changes; skip unrelated UI edits. No C4, child, network, tmux or PM2;
+// every handle closes before the fixture's own directory is removed.
+test('draft migration preserves existing group names and user data from the prior schema', t => {
+  const file = fixture(t); schema22(file);
+  const db = new Database(file); t.after(() => db.close());
+  db.exec(`INSERT INTO group_display_names(session_group,display_name,source) VALUES('dashboard:old','Existing name','human');
+    CREATE TABLE user_chat_notes(note TEXT);
+    INSERT INTO user_chat_notes VALUES('retained');
+    ALTER TABLE runtime_events ADD COLUMN user_label TEXT;
+    UPDATE runtime_events SET user_label='retained';`);
+  const names = db.prepare('SELECT * FROM group_display_names').all();
+  const events = db.prepare('SELECT * FROM runtime_events').all();
+  assert.deepEqual(owner.inspectSchema(db), { currentVersion: 22, targetVersion: 23, needsMigration: true });
+  assert.deepEqual(owner.migrate(db), { currentVersion: 23, targetVersion: 23, needsMigration: false });
+  assert.deepEqual(db.prepare('SELECT * FROM group_display_names').all(), names);
+  assert.deepEqual(db.prepare('SELECT * FROM runtime_events').all(), events);
+  assert.equal(db.prepare('SELECT note FROM user_chat_notes').get().note, 'retained');
+  db.prepare(`INSERT INTO chat_conversations(local_id,display_name,created_at,updated_at) VALUES(?,?,?,?)`)
+    .run('fresh-local', 'Draft name', 1, 1);
+  assert.equal(db.prepare('SELECT state FROM chat_conversations').get().state, 'draft');
+  assert.deepEqual(owner.migrate(db), { currentVersion: 23, targetVersion: 23, needsMigration: false });
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=23').get().n, 1);
+  const reopened = new Store(file); reopened.close();
+  assert.equal(db.prepare('SELECT display_name FROM chat_conversations').get().display_name, 'Draft name');
+});
+
+test('a conflicting draft table rolls the new migration back without changing historical data', t => {
+  const file = fixture(t); schema22(file);
+  const db = new Database(file); t.after(() => db.close());
+  db.exec("CREATE TABLE chat_conversations(user_note TEXT); INSERT INTO chat_conversations VALUES('retained')");
+  assert.throws(() => owner.migrate(db), /already exists/);
+  assert.equal(owner.inspectSchema(db).currentVersion, 22);
+  assert.equal(db.prepare('SELECT user_note FROM chat_conversations').get().user_note, 'retained');
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='idx_chat_conversations_state_updated'").get(), undefined);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=23').get().n, 0);
+});
