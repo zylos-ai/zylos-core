@@ -54,10 +54,12 @@ import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
 import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
-import { createDisplayNames, validKey } from './lib/workbench/display-names.js';
+import { createDisplayNames, validKey, fallbackName } from './lib/workbench/display-names.js';
+import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 import { createRuns } from './lib/workbench/runs.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
+import { createMemoryBacklog } from './lib/workbench/memory-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
 import { searchTerm } from './lib/workbench/group-search.js';
@@ -391,6 +393,7 @@ const getDetailSnapshot = () => workbench.getCachedSnapshot() ?? workbench.getSn
 const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
 const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, getSnapshot: getDetailSnapshot });
+const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog });
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config });
 
 async function runtimeOverridesPage(params) {
@@ -1161,6 +1164,12 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/workbench/memory/backlog') {
+    try { sendJson(res, 200, await memoryBacklog()); }
+    catch { sendJson(res, 503, { error: 'backlog_failed' }); }
+    return true;
+  }
+
   if (pathname === '/api/workbench/name-prompt') {
     try {
       const todo = await displayNames.listNames({ unnamed: true, activeSinceMs: 3 * 86400000 });
@@ -1610,7 +1619,14 @@ async function handleMemoryApi(req, res, pathname, url) {
       return true;
     }
     if (pathname === '/api/memory/tree') {
-      sendJson(res, 200, await memoryBrowser.tree());
+      const tree = await memoryBrowser.tree();
+      const names = displayNames.listAll();
+      const groupRoot = tree.root.children.find(node => node.path === 'session-groups' && node.type === 'directory');
+      const sessionGroups = (groupRoot?.children ?? [])
+        .filter(node => node.type === 'directory' && parseSessionGroup(node.name) !== null)
+        .map(node => ({ sessionGroup: node.name, displayName: names.get(node.name)?.displayName ?? null,
+          fallbackName: fallbackName(node.name) }));
+      sendJson(res, 200, { ...tree, sessionGroups });
       return true;
     }
     if (pathname === '/api/memory/file') {

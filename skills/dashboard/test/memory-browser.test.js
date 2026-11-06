@@ -4,10 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { installMemoryScripts, memoryTestEnv } from './fixtures/memory-installation.js';
 import { MemoryBrowser, memoryErrorPayload, validateMemoryQueryPath } from '../src/lib/memory-browser.js';
 
 function makeZylosDir() {
-  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-memory-browser-test-'));
+  const zylosDir = fs.mkdtempSync('/tmp/wbr-');
   fs.mkdirSync(path.join(zylosDir, 'memory', 'reference'), { recursive: true });
   fs.writeFileSync(path.join(zylosDir, 'memory', 'identity.md'), '# Identity\n');
   fs.writeFileSync(path.join(zylosDir, 'memory', 'reference', 'projects.md'), '# Projects\n');
@@ -17,13 +18,14 @@ function makeZylosDir() {
   } catch {
     // Some platforms disallow symlinks in temp dirs; the tree test still covers .git hiding.
   }
+  installMemoryScripts(zylosDir);
   return zylosDir;
 }
 
 test('memory tree returns navigation metadata without hashes or symlinks', async () => {
   const zylosDir = makeZylosDir();
   try {
-    const browser = new MemoryBrowser({ zylosDir });
+    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
     const tree = await browser.tree();
     const serialized = JSON.stringify(tree);
     assert.equal(serialized.includes('.git'), false);
@@ -51,7 +53,7 @@ test('memory file returns text metadata and rejects traversal, large, and binary
     } catch {
       // Some platforms disallow symlinks in temp dirs; other path checks still run.
     }
-    const browser = new MemoryBrowser({ zylosDir });
+    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
 
     const file = await browser.file('identity.md');
     assert.equal(file.path, 'identity.md');
@@ -75,11 +77,12 @@ test('memory file returns text metadata and rejects traversal, large, and binary
   }
 });
 
+// Integration: changed memory-save transport and file publication require this case; read-only UI changes may skip it.
 test('memory writeFile saves existing text files with optimistic locking', async () => {
   const zylosDir = makeZylosDir();
   try {
     const memoryDir = path.join(zylosDir, 'memory');
-    const browser = new MemoryBrowser({ zylosDir });
+    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
     const before = await browser.file('identity.md');
 
     const saved = await browser.writeFile('identity.md', {
@@ -100,11 +103,12 @@ test('memory writeFile saves existing text files with optimistic locking', async
   }
 });
 
+// Integration: changed Core conflict mapping requires this case; read-only UI changes may skip it.
 test('memory writeFile rejects stale hashes and leaves file unchanged', async () => {
   const zylosDir = makeZylosDir();
   try {
     const memoryDir = path.join(zylosDir, 'memory');
-    const browser = new MemoryBrowser({ zylosDir });
+    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
     const before = await browser.file('identity.md');
     fs.writeFileSync(path.join(memoryDir, 'identity.md'), '# Identity\nExternal\n');
     const current = await browser.file('identity.md');
@@ -115,7 +119,7 @@ test('memory writeFile rejects stale hashes and leaves file unchanged', async ()
         assert.equal(err.code, 'memory_conflict');
         assert.equal(err.status, 409);
         assert.equal(err.current.sha256, current.sha256);
-        assert.equal(Object.hasOwn(err.current, 'text'), false);
+        assert.equal(err.current.text, '# Identity\nExternal\n');
         return true;
       }
     );
@@ -130,7 +134,7 @@ test('memory writeFile validates write body, supported file type, and size', asy
   try {
     const memoryDir = path.join(zylosDir, 'memory');
     fs.writeFileSync(path.join(memoryDir, 'notes.bin'), 'plain text');
-    const browser = new MemoryBrowser({ zylosDir });
+    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
     const before = await browser.file('identity.md');
 
     await assert.rejects(() => browser.writeFile('identity.md', { text: '# Bad\n', sha256: 'not-a-hash' }), (err) => err.code === 'invalid_memory_write');
@@ -153,7 +157,7 @@ test('memory git metadata uses validated relative paths and returns latest commi
     execFileSync('git', ['-C', memoryDir, 'add', 'identity.md']);
     execFileSync('git', ['-C', memoryDir, 'commit', '-m', 'add identity'], { stdio: 'ignore' });
 
-    const browser = new MemoryBrowser({ zylosDir });
+    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
     const result = await browser.git('identity.md');
     assert.equal(result.path, 'identity.md');
     assert.equal(result.commit.subject, 'add identity');
@@ -181,14 +185,15 @@ test('unexpected filesystem errors do not leak errno codes in API payloads', () 
   assert.equal(JSON.stringify(payload.body).includes('EACCES'), false);
 });
 
-test('memory conflict payload includes current metadata without text', async () => {
+test('memory conflict payload preserves current metadata and text', async () => {
   const current = {
     path: 'identity.md',
     name: 'identity.md',
     size_bytes: 12,
     mtime: new Date().toISOString(),
     sha256: 'a'.repeat(64),
-    markdown: true
+    markdown: true,
+    text: 'latest text'
   };
   const err = new Error('memory_conflict');
   err.code = 'memory_conflict';
@@ -199,5 +204,5 @@ test('memory conflict payload includes current metadata without text', async () 
   const payload = memoryErrorPayload(err);
   assert.equal(payload.status, 409);
   assert.deepEqual(payload.body, { error: 'memory_conflict', current });
-  assert.equal(JSON.stringify(payload.body).includes('"text"'), false);
+  assert.equal(payload.body.current.text, 'latest text');
 });

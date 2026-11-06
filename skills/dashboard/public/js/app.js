@@ -4,6 +4,7 @@ import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v
 import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=85';
 import { renderVersion } from './wb/settings-version.js?v=85';
 import { mountWorkbench } from './wb/shell.js?v=85';
+import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from './wb/memory-scope.js?v=85';
 import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=85';
 import { mountSchedule } from './wb/schedule.js?v=85';
 import { ObserverHistory } from './observer-history.js?v=2';
@@ -1239,6 +1240,15 @@ async function requestAgentJson(path, options = {}) {
   return r.json();
 }
 
+const memoryScopeView = createMemoryScope({
+  document, root: $('#memory-scope'), chartsRoot: $('#memory-charts'), t,
+  request: fetchAgentJson, getTree: () => state.memory.tree,
+  identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
+  onChange: () => renderMemory(), onFile: path => openMemoryFile(path).catch(() => {}),
+  onGroup: path => state.memory.collapsed.delete(path),
+});
+window.addEventListener('pagehide', () => memoryScopeView.destroy());
+
 function resetMemoryState() {
   if (state.memory?.draftTimer) clearTimeout(state.memory.draftTimer);
   stopMemoryLiveCheck();
@@ -1273,6 +1283,8 @@ function fmtBytes(bytes) {
 }
 
 function memoryStatusMessage(code) {
+  const writeMessage = memoryWriteMessage(code, t);
+  if (writeMessage) return writeMessage;
   if (code === 'insufficient_scope') return t('memory.error_scope');
   if (code === 'memory_file_too_large') return t('memory.error_too_large');
   if (code === 'unsupported_memory_file') return t('memory.error_unsupported');
@@ -1660,7 +1672,8 @@ function renderMemory() {
     status.hidden = true;
   }
 
-  tree.innerHTML = state.memory.tree ? renderMemoryTreeNode(state.memory.tree.root) : `<p class="empty-state">${esc(t('memory.loading'))}</p>`;
+  memoryScopeView.render();
+  tree.innerHTML = state.memory.tree ? renderMemoryTreeNode(memoryScopeView.tree(state.memory.tree)) : `<p class="empty-state">${esc(t('memory.loading'))}</p>`;
   tree.querySelectorAll('.memory-file').forEach((btn) => {
     btn.addEventListener('click', () => openMemoryFile(btn.dataset.path).catch(() => {}));
   });
@@ -1707,6 +1720,7 @@ async function loadMemoryTree({ force = false } = {}) {
     renderMemory();
     return;
   }
+  memoryScopeView.load().catch(() => {});
   if (state.memory.tree && !force) {
     renderMemory();
     return;
@@ -1716,7 +1730,7 @@ async function loadMemoryTree({ force = false } = {}) {
   renderMemory();
   try {
     state.memory.tree = await fetchAgentJson('/api/memory/tree');
-    const selected = state.memory.selectedPath || preferredMemoryPath(state.memory.tree?.root);
+    const selected = memoryScopeView.initialPath(state.memory.tree, state.memory.selectedPath, preferredMemoryPath);
     if (selected) await openMemoryFile(selected);
   } catch (err) {
     state.memory.error = err.code || 'memory_browser_failed';
@@ -1798,16 +1812,16 @@ function resetMemoryEdit() {
 async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = state.memory.file?.sha256 } = {}) {
   const file = state.memory.file;
   if (!file?.path || !sha256) return;
+  const captured = captureMemorySave(state.memory);
+  if (!captured) return;
   flushMemoryDraftSave();
   state.memory.saving = true;
   state.memory.error = null;
   renderMemoryActions();
   try {
-    const saved = await requestAgentJson(`/api/memory/file?path=${encodeURIComponent(file.path)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, sha256 })
-    });
+    const saved = await saveMemoryOnce({ request: requestAgentJson, readFile: fetchAgentJson,
+      path: file.path, text, sha256, isCurrent: () => memorySaveCurrent(captured, state.memory) });
+    if (!saved) return;
     state.memory.file = saved;
     state.memory.draft = saved.text;
     state.memory.dirty = false;
@@ -1816,11 +1830,15 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
     state.memory.conflictRetryText = '';
     state.memory.liveNotice = null;
     clearMemoryDraft(saved.path);
-    state.memory.git = await fetchAgentJson(`/api/memory/git?path=${encodeURIComponent(saved.path)}`).catch(() => ({ commit: null }));
+    const git = await fetchAgentJson(`/api/memory/git?path=${encodeURIComponent(saved.path)}`).catch(() => ({ commit: null }));
+    if (!memorySaveAppliedCurrent(captured, state.memory, saved)) return;
+    state.memory.git = git;
     await loadMemoryTree({ force: true });
   } catch (err) {
+    if (!memorySaveCurrent(captured, state.memory)) return;
     if (err.code === 'memory_conflict') {
       const latest = await fetchAgentJson(`/api/memory/file?path=${encodeURIComponent(file.path)}`).catch(() => null);
+      if (!memorySaveCurrent(captured, state.memory)) return;
       if (isCompleteMemoryFile(latest)) {
         state.memory.conflict = buildMemoryConflict(latest, text, text);
         state.memory.liveNotice = latest;
@@ -1836,8 +1854,10 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
     state.memory.error = err.code || 'memory_browser_failed';
     renderMemory();
   } finally {
-    state.memory.saving = false;
-    renderMemory();
+    if (memorySaveOwnerCurrent(captured, state.memory)) {
+      state.memory.saving = false;
+      renderMemory();
+    }
   }
 }
 
@@ -4567,7 +4587,10 @@ const workbench = mountWorkbench({
     if (section === 'observer') document.querySelector('#observer-settings-group')?.scrollIntoView({ block: 'center' });
   },
   writable: () => wbWritable(remoteIsReadOnly),
-  onMemory: () => document.querySelector('.tab[data-tab="memory"]')?.click(),
+  onMemory: key => {
+    memoryScopeView.selectGroup(key);
+    document.querySelector('.tab[data-tab="memory"]')?.click();
+  },
   observerStatus: () => state.observer.status,
   observerAvailable: status => !remoteIsReadOnly() && !observerRecoveryReason(status),
 });

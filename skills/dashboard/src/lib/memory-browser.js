@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { createMemoryWriter } from './workbench/memory-write.js';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
@@ -118,8 +119,10 @@ export function validateMemoryQueryPath(value, options = {}) {
 }
 
 export class MemoryBrowser {
-  constructor({ zylosDir, maxFileBytes = DEFAULT_MAX_FILE_BYTES } = {}) {
-    this.memoryRoot = path.join(zylosDir || process.env.ZYLOS_DIR || process.cwd(), 'memory');
+  constructor({ zylosDir, maxFileBytes = DEFAULT_MAX_FILE_BYTES, executeMemoryWrite, env = process.env } = {}) {
+    this.zylosDir = zylosDir || env.ZYLOS_DIR || process.cwd();
+    this.memoryRoot = path.join(this.zylosDir, 'memory');
+    this.saveMemory = createMemoryWriter({ zylosDir: this.zylosDir, execute: executeMemoryWrite, env });
     this.maxFileBytes = maxFileBytes;
     this._realRoot = null;
     this._writeQueues = new Map();
@@ -256,32 +259,20 @@ export class MemoryBrowser {
     if (currentStat.size > this.maxFileBytes) throw memoryError('memory_file_too_large', 413);
     const currentBuffer = await fs.readFile(real);
     if (!isValidUtf8Text(currentBuffer)) throw memoryError('unsupported_memory_file', 415);
-    const current = filePayload(rel, currentStat, currentBuffer);
-    if (current.sha256 !== sha256) {
-      throw memoryError('memory_conflict', 409, { current });
-    }
-
-    const nextBuffer = Buffer.from(text, 'utf8');
-    const dir = path.dirname(real);
-    const base = path.basename(real);
-    const temp = path.join(dir, `.${base}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}.tmp`);
     try {
-      await fs.writeFile(temp, nextBuffer, { mode: currentStat.mode & 0o777 });
-      await fs.rename(temp, real);
-    } catch (err) {
-      try {
-        await fs.unlink(temp);
-      } catch {
-        // Best-effort cleanup for interrupted writes.
+      await this.saveMemory(rel, { text, sha256 });
+    } catch (error) {
+      if (error.code === 'memory_conflict') {
+        const current = await this.file(rel);
+        error.current = {
+          ...current,
+          text: typeof error.current?.text === 'string' ? error.current.text : current.text,
+          sha256: error.current?.sha256 || current.sha256,
+        };
       }
-      throw err;
+      throw error;
     }
-
-    const nextStat = await fs.lstat(real);
-    return {
-      ...filePayload(rel, nextStat, nextBuffer),
-      text
-    };
+    return this.file(rel);
   }
 
   async git(relativePath) {
@@ -328,7 +319,8 @@ export function memoryErrorPayload(err) {
     status: err.status,
     body: {
       error: err.code,
-      ...(err.current ? { current: err.current } : {})
+      ...(err.current ? { current: err.current } : {}),
+      ...(err.coreCode ? { code: err.coreCode } : {})
     }
   };
 }

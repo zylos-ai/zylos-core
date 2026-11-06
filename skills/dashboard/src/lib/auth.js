@@ -292,6 +292,8 @@ function isScheduleWrite(method, pathname) {
 }
 
 function needsAdminApiAccess(pathname, method) {
+  // Proxy targets collapse repeated slashes before forwarding to the remote.
+  pathname = pathname.replace(/\/{2,}/g, '/');
   if (pathname === '/api/observer' || pathname.startsWith('/api/observer/')) return true;
   if (pathname.startsWith('/api/actions')) return true;
   if (pathname === '/api/settings' && method === 'PUT') return true;
@@ -302,6 +304,7 @@ function needsAdminApiAccess(pathname, method) {
   if (isScheduleWrite(method, pathname)) return true;
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return true;
   if (pathname === '/api/memory' || pathname.startsWith('/api/memory/')) return true;
+  if (pathname === '/api/workbench/memory' || pathname.startsWith('/api/workbench/memory/')) return true;
   const proxiedWrite = pathname.match(/^\/fleet\/[^/]+\/api\/(.+)$/);
   if (!proxiedWrite) return false;
   const remotePath = `/api/${proxiedWrite[1]}`;
