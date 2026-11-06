@@ -12,7 +12,7 @@ import { readInstanceConfigurationIssue } from '../instance-config-status.js';
 const badConfigs = [
   ['invalid JSON', '{', /JSON/],
   ['unsupported runtime', '{"runtime":"unsupported","session_mode":"multi"}', /Unsupported runtime: unsupported/],
-  ['invalid session mode', '{"session_mode":"wrong"}', /session_mode must be/],
+  ['invalid session mode', '{"session_mode":"wrong"}', /Invalid baseline session mode/],
 ];
 const valid = '{"runtime":"claude","session_mode":"single"}';
 
@@ -52,7 +52,8 @@ for (const [name, source, reason] of badConfigs) {
     assert.equal(issue.code, 'CONFIG_UNREADABLE');
     assert.match(issue.message, reason);
     assert.match(issue.notice, /All groups \(including Origin\) cannot start/);
-    assert.match(issue.notice, /automatically after the configuration is fixed/);
+    assert.match(issue.notice, /automatic if the communication service was already running/);
+    assert.match(issue.notice, /started or restarted.*zylos restart/);
     const text = run([]);
     assert.equal(text.split('\n')[0], issue.notice);
     assert.match(text, /fixture-scheduler: online/);
@@ -114,4 +115,24 @@ test('strict read failures and optional baseline defaults use the same diagnosti
       assert.match(readInstanceConfigurationIssue({ read: () => readConfigStrict(file) }).message, /JSON object/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
+});
+
+test('a healthy configuration keeps an unrelated collector failure silent on stdout', async () => {
+  const lines = [], errors = [], log = console.log, err = console.error, exitCode = process.exitCode;
+  console.log = line => lines.push(line); console.error = line => errors.push(line);
+  try {
+    const deps = { collect: () => { throw new Error('session reader unavailable'); },
+      configIssue: () => readInstanceConfigurationIssue({ read: () => ({ state: 'ok', config: {} }) }),
+      host: () => assert.fail('Healthy collector failure must not query host extras'),
+      alertNotice: () => assert.fail('Healthy collector failure must not print alert target') };
+    const result = await showStatus([], deps);
+    assert.equal(result.ok, false);
+    assert.equal(lines.length, 0);
+    assert.match(errors[0], /STATUS_UNAVAILABLE/);
+    await showStatus(['--json'], deps);
+    const json = JSON.parse(lines[0]);
+    assert.equal(json.error.code, 'STATUS_UNAVAILABLE');
+    assert.equal('configurationIssue' in json, false);
+    assert.equal('data' in json, false);
+  } finally { console.log = log; console.error = err; process.exitCode = exitCode; }
 });

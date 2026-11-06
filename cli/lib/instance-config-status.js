@@ -1,21 +1,14 @@
 import { readZylosConfigStrict } from './config.js';
-import { SUPPORTED_RUNTIMES } from './runtime/index.js';
+import { configFunctions } from '../../skills/comm-bridge/scripts/c4-store-config.js';
 
 /** Read-only explanation of the instance baseline that every group needs to start. */
 export function readInstanceConfigurationIssue({ read = readZylosConfigStrict } = {}) {
   try {
-    const result = read();
-    if (result.state === 'error') throw result.error;
-    const config = result.state === 'missing' ? {} : result.config;
-    const runtime = config.runtime ?? 'claude';
-    if (!SUPPORTED_RUNTIMES.includes(runtime)) throw new Error(`Unsupported runtime: ${runtime}`);
-    if (config.session_mode !== undefined && !['single', 'multi'].includes(config.session_mode)) {
-      throw new Error('session_mode must be "single" or "multi"');
-    }
+    configFunctions({ dependencies: { readConfig: read } }).baseline();
     return null;
   } catch (error) {
     const code = 'CONFIG_UNREADABLE';
-    const message = error?.message ?? String(error);
-    return { code, message, notice: `Instance configuration (.zylos/config.json) is unreadable [${code}]: ${message}. All groups (including Origin) cannot start. Startup resumes automatically after the configuration is fixed.` };
+    const message = error.cause?.message ?? error.message;
+    return { code, message, notice: `Instance configuration (.zylos/config.json) is unreadable [${code}]: ${message}. All groups (including Origin) cannot start. After fixing the configuration, recovery is automatic if the communication service was already running. If it started or restarted while the configuration was invalid, run zylos restart after fixing it.` };
   }
 }

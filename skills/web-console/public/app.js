@@ -163,6 +163,7 @@ export class ZylosConsole {
   }
 
   updateStatusDisplay(status) {
+    this.statusText.closest('.status')?.classList.toggle('config-unreadable', Boolean(status.configurationIssue));
     this.statusDot.className = 'status-dot';
     if (status.configurationIssue) {
       this.statusDot.classList.add('offline');

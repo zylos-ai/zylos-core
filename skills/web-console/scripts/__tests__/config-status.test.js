@@ -95,8 +95,14 @@ async function fixture(t) {
 
 function dom() {
   const dot = { className: '', classList: { add(value) { dot.className += ` ${value}`; } } };
-  const text = { textContent: '', set innerHTML(_) { assert.fail('Status must use textContent'); } };
-  return { statusDot: dot, statusText: text };
+  const classes = new Set(['status']);
+  const area = { classList: {
+    toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); },
+    contains(name) { return classes.has(name); }
+  } };
+  const text = { textContent: '', closest(selector) { assert.equal(selector, '.status'); return area; },
+    set innerHTML(_) { assert.fail('Status must use textContent'); } };
+  return { statusDot: dot, statusText: text, statusArea: area };
 }
 
 let consoleClass;
@@ -131,7 +137,7 @@ test('HTTP status explains corrupt configuration and clears it after repair', { 
   for (const [source, reason] of [
     ['{', /JSON|position|property name/],
     ['{"runtime":"unsupported","session_mode":"multi"}', /Unsupported runtime: unsupported/],
-    ['{"runtime":"claude","session_mode":"wrong"}', /session_mode/]
+    ['{"runtime":"claude","session_mode":"wrong"}', /session mode/]
   ]) {
     fs.writeFileSync(f.configFile, source);
     const status = await read();
@@ -139,10 +145,12 @@ test('HTTP status explains corrupt configuration and clears it after repair', { 
     assert.equal(status.configurationIssue.code, 'CONFIG_UNREADABLE');
     assert.match(status.configurationIssue.message, reason);
     assert.match(status.configurationIssue.notice, /Origin/);
-    assert.match(status.configurationIssue.notice, /automatically/);
+    assert.match(status.configurationIssue.notice, /recovery is automatic if the communication service was already running/);
+    assert.match(status.configurationIssue.notice, /run zylos restart after fixing it/);
     assert.equal(status.message, status.configurationIssue.notice);
     ZylosConsole.prototype.updateStatusDisplay.call(display, status);
     assert.equal(display.statusText.textContent, status.configurationIssue.notice);
+    assert.equal(display.statusArea.classList.contains('config-unreadable'), true);
     assert.match(display.statusDot.className, /offline/);
     assert.equal(fs.readFileSync(f.configFile, 'utf8'), source, 'Status must not repair configuration');
     fs.writeFileSync(f.configFile, f.valid);
@@ -150,6 +158,7 @@ test('HTTP status explains corrupt configuration and clears it after repair', { 
     assert.deepEqual(repaired, baseline);
     ZylosConsole.prototype.updateStatusDisplay.call(display, repaired);
     assert.doesNotMatch(display.statusText.textContent, /CONFIG_UNREADABLE|configuration|Origin/);
+    assert.equal(display.statusArea.classList.contains('config-unreadable'), false);
   }
   assert.equal(f.connection.prepare('SELECT count(*) AS n FROM conversations').get().n, 0, 'Status must never send a chat message');
   assert.equal(f.connection.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0, 'Status must never enqueue a control');
@@ -161,10 +170,24 @@ test('browser status renders the configuration reason as literal text and restor
   const notice = 'Instance configuration unreadable [CONFIG_UNREADABLE]: <img onerror=alert(1)>; all groups including Origin cannot start; repair recovers automatically.';
   ZylosConsole.prototype.updateStatusDisplay.call(display, { state: 'error', message: notice, configurationIssue: { code: 'CONFIG_UNREADABLE', message: '<img onerror=alert(1)>', notice } });
   assert.equal(display.statusText.textContent, notice);
+  assert.equal(display.statusArea.classList.contains('config-unreadable'), true);
   assert.match(display.statusDot.className, /offline/);
   for (const [state, text, cls] of [['idle', 'Claude is ready', 'online'], ['busy', 'Claude is busy', 'busy'], ['offline', 'Claude is offline', 'offline']]) {
     ZylosConsole.prototype.updateStatusDisplay.call(display, { state });
     assert.equal(display.statusText.textContent, text);
     assert.equal(display.statusDot.className, `status-dot ${cls}`);
+    assert.equal(display.statusArea.classList.contains('config-unreadable'), false);
   }
+});
+
+test('mobile styles reveal only configuration failures and allow the reason to wrap', () => {
+  const styles = fs.readFileSync(new URL('../../public/styles.css', import.meta.url), 'utf8');
+  const mobile = styles.match(/@media\s*\(max-width:\s*600px\)\s*\{([\s\S]*)/);
+  assert.ok(mobile, 'Mobile status rules must remain scoped to 600px');
+  assert.match(mobile[1], /\.status-text\s*\{\s*display:\s*none;/);
+  const exception = mobile[1].match(/\.status\.config-unreadable \.status-text\s*\{([^}]+)\}/);
+  assert.ok(exception, 'Configuration reason must override mobile hiding');
+  assert.match(exception[1], /display:\s*block;/);
+  assert.match(exception[1], /white-space:\s*normal;/);
+  assert.match(exception[1], /overflow-wrap:\s*anywhere;/);
 });

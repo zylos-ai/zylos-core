@@ -710,4 +710,14 @@ header h1 {
   .status-text {
     display: none;
   }
+
+  .status.config-unreadable .status-text {
+    display: block;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .status.config-unreadable .status-dot {
+    flex-shrink: 0;
+  }
 }
