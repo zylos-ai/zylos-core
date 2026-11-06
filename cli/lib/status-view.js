@@ -1,3 +1,4 @@
+import { readInstanceConfigurationIssue } from './instance-config-status.js';
 import { readOriginFacts } from './origin-presence.js';
 import { readSessionMode, ZYLOS_DIR } from './config.js';
 import { listGroupTmuxSessions } from './session-group-paths.js';
@@ -9,7 +10,8 @@ const readError = error => ({ code: 'READ_FAILED', message: error.message });
 
 export async function collectStatus({ mode = readSessionMode, list = listGroupTmuxSessions,
   session = readSessionState, health = readRuntimeHealth, runtimes = SUPPORTED_RUNTIMES,
-  now = Date.now, facts = readOriginFacts, resolveRoot = () => fs.realpathSync(ZYLOS_DIR) } = {}) {
+  now = Date.now, facts = readOriginFacts, configIssue = readInstanceConfigurationIssue, resolveRoot = () => fs.realpathSync(ZYLOS_DIR) } = {}) {
+  const configurationIssue = configIssue();
   resolveRoot();
   const readAt = now();
   let sessionMode;
@@ -48,5 +50,6 @@ export async function collectStatus({ mode = readSessionMode, list = listGroupTm
       updatedAt: source === 'record' ? record.updatedAt : null };
   }
   const originNeed = view === 'multi' ? (await facts({ nowSec: Math.floor(readAt / 1000) })).originNeed : null;
-  return { sessionMode, view, origin, originNeed, groups, groupListError, runtimeHealth, readAt };
+  return { sessionMode, view, origin, originNeed, groups, groupListError, runtimeHealth, readAt,
+    ...(configurationIssue ? { configurationIssue } : {}) };
 }

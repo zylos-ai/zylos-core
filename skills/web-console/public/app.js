@@ -2,7 +2,7 @@
  * Zylos Web Console - Frontend Application with WebSocket
  */
 
-class ZylosConsole {
+export class ZylosConsole {
   constructor(timezone) {
     this.messagesContainer = document.getElementById('messages');
     this.messageForm = document.getElementById('message-form');
@@ -164,6 +164,11 @@ class ZylosConsole {
 
   updateStatusDisplay(status) {
     this.statusDot.className = 'status-dot';
+    if (status.configurationIssue) {
+      this.statusDot.classList.add('offline');
+      this.statusText.textContent = status.configurationIssue.notice;
+      return;
+    }
 
     switch (status.state) {
       case 'busy':
