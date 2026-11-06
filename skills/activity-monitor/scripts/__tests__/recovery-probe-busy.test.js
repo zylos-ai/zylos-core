@@ -108,8 +108,9 @@ for (const health of ['rate_limited', 'unavailable', 'recovering', 'down']) {
 test('activity becoming busy during binding is rechecked before insertion', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.add('origin');
   f.observer.buildTargetBinding = value => { f.state(scene, { state: 'busy' }); return { runId: value.runId }; };
-  const p = await f.prepare(); assert.equal((await p.result).noTarget, true);
+  const p = await f.prepare();
   assert.equal(f.controls.length, 0); assert.equal(f.waitAt(), f.now());
+  assert.equal((await p.result).noTarget, true);
 });
 
 test('tools observed after insertion remain evidence after completion and retry uses a fresh heartbeat', { timeout: 5000 }, async t => {
@@ -295,16 +296,17 @@ test('no scene does not start waiting and another runtime cannot supply a target
   assert.equal(f.controls.length, 0); assert.equal(f.waitAt(), undefined);
 });
 
-test('multi recovery excludes a stopped process without starting idle waiting', { timeout: 5000 }, async t => {
-  for (const state of ['idle', 'busy']) await t.test(state, { timeout: 5000 }, async t => {
+for (const state of ['busy', 'idle']) {
+  test(`multi recovery excludes a stopped ${state} process without starting idle waiting`, { timeout: 5000 }, async t => {
     const f = fixture(t), scene = f.add('origin', { state });
     scene.processRunning = false;
     const before = f.bytes();
-    assert.equal((await (await f.prepare()).result).noTarget, true);
+    const pending = await f.prepare();
     assert.equal(f.controls.length, 0); assert.equal(f.waitAt(), undefined);
+    assert.equal((await pending.result).noTarget, true);
     assert.equal(f.bytes(), before); assert.equal(f.stops.length, 0);
   });
-});
+}
 
 test('single recovery and unordered hook verification ignore busy activity and retain baseline deadlines', { timeout: 5000 }, async t => {
   for (const kind of ['single', 'hook']) for (const processRunning of [true, false]) await t.test(
