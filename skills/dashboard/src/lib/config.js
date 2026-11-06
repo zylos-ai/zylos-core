@@ -147,6 +147,7 @@ export function loadConfig() {
   const defaults = {
     port: 3470,
     host: '127.0.0.1',
+    chat: { allowRemote: false },
     zylosDir,
     dataDir,
     auth: {
@@ -250,6 +251,7 @@ export function loadConfig() {
       validation_errors: fleetRegistry.errors
     },
     configPath,
+    chat: { allowRemote: loaded.chat?.allowRemote === true },
     configError: loaded.configError || null
   };
 }

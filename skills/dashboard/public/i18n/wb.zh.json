@@ -338,5 +338,9 @@
   "wb.host.max": "最高",
   "wb.host.range.6h": "6 小时",
   "wb.host.range.24h": "24 小时",
-  "wb.host.range.7d": "7 天"
+  "wb.host.range.7d": "7 天",
+  "wb.settings.allowRemoteChat": "允许远端查看对话",
+  "wb.settings.chatReadFailed": "无法读取对话访问设置",
+  "wb.settings.chatSaveFailed": "无法保存对话访问设置",
+  "wb.settings.chatSaved": "对话访问设置已保存"
 }

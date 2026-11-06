@@ -1,5 +1,8 @@
 // One table shared by auth and proxy contract tests; add a route with its handler.
 export const workbenchWriteRoutes = [
+  { method: 'POST', path: '/api/chat/drafts', body: '{"name":"Private chat"}' },
+  { method: 'POST', path: '/api/chat/conversations/local-chat/send', body: '{"content":"Hello"}' },
+  { method: 'POST', path: '/api/chat/conversations/local-chat/answers', body: '{"answer":"Yes"}' },
   { method: 'PUT', path: '/api/workbench/groups/telegram%3Ateam/name', body: '{"name":"Product sync"}' },
   { method: 'DELETE', path: '/api/workbench/groups/telegram%3Ateam/name', body: null },
   { method: 'POST', path: '/api/workbench/groups/telegram%3Ateam/config', body: '{"kind":"runtime","value":"codex"}' },

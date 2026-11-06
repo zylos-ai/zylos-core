@@ -35,6 +35,7 @@ import { openDb, DB_PATH as WC_DB_PATH, SessionStore, PersistentUploadRegistry }
 import * as wcSchema from './schema.js';
 import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
 import { loadConsoleStatusReader } from './session-status.js';
+import { createConversationHistoryHandler } from './conversation-history.js';
 import { getDb as getC4Db, getChannelNamespace } from '../../comm-bridge/scripts/c4-db.js';
 import { preflightDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
 
@@ -464,27 +465,7 @@ app.get('/api/status', async (req, res) => {
 /**
  * Get conversation history
  */
-app.get('/api/conversations', (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 50;
-    const channel = req.query.channel || 'web-console';
-
-    // channel is caller-controlled; 'void' is the internal record-only
-    // channel (#689) and must never reach a display surface.
-    const stmt = db.prepare(`
-      SELECT id, direction, channel, endpoint_id, content, timestamp
-      FROM conversations
-      WHERE channel = ? AND channel != 'void'
-      ORDER BY timestamp DESC
-      LIMIT ?
-    `);
-
-    const conversations = stmt.all(channel, limit).map(cleanMessageForDisplay);
-    res.json(conversations.reverse());
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+app.get('/api/conversations', createConversationHistoryHandler(db, cleanMessageForDisplay));
 
 /**
  * Get all recent conversations (for display)

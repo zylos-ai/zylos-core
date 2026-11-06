@@ -10,6 +10,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { AuthGate, exchangeApiKeyForToken, generateApiKey, hashApiKey, migratePasswordIfNeeded, validateApiSession } from './lib/auth.js';
+import { handleChatSettings } from './lib/chat/settings.js';
 import { browserBaseFromRequest } from './lib/browser-base.js';
 import { mutateConfig } from './lib/config-mutation.js';
 import {
@@ -1688,6 +1689,8 @@ export function createServer() {
     if (await auth.handle(req, res, url)) {
       return;
     }
+
+    if (await handleChatSettings(req, res, url, { auth, config })) return;
 
     if (await observerService.handle(req, res, url)) {
       return;

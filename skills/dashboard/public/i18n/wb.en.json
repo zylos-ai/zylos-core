@@ -338,5 +338,9 @@
   "wb.host.max": "Maximum",
   "wb.host.range.6h": "6 hours",
   "wb.host.range.24h": "24 hours",
-  "wb.host.range.7d": "7 days"
+  "wb.host.range.7d": "7 days",
+  "wb.settings.allowRemoteChat": "Allow remote conversation access",
+  "wb.settings.chatReadFailed": "Could not load conversation access setting",
+  "wb.settings.chatSaveFailed": "Could not save conversation access setting",
+  "wb.settings.chatSaved": "Conversation access setting saved"
 }

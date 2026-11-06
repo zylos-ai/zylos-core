@@ -3,6 +3,7 @@ import { createPricingPanel } from './wb/settings-pricing.js?v=87';
 import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=87';
 import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=87';
 import { renderVersion } from './wb/settings-version.js?v=87';
+import { mountChatSettings } from './wb/chat-settings.js?v=87';
 import { mountWorkbench } from './wb/shell.js?v=87';
 import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=87';
 import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=85';
@@ -3915,6 +3916,7 @@ let settingsSnapshot = null;
 let settingsUpgrade = null;
 let settingsVersionRoot = null;
 let settingsActionDescription = '';
+let settingsChat = null;
 
 function initSettingsPage() {
   const root = $('#tab-settings');
@@ -3932,6 +3934,11 @@ function initSettingsPage() {
   const observerNote = document.createElement('p'); observerNote.dataset.i18n = 'wb.settings.observerNote'; observerNote.textContent = t('wb.settings.observerNote'); settingsPage.sections.observer.prepend(observerNote);
   const fleetNote = document.createElement('p'); fleetNote.dataset.i18n = 'wb.settings.fleetNameNote'; fleetNote.textContent = t('wb.settings.fleetNameNote'); settingsPage.sections.fleet.prepend(fleetNote);
   const defaults = document.createElement('div'); defaults.id = 'settings-defaults'; settingsPage.sections.defaults.prepend(defaults);
+  settingsChat = mountChatSettings(settingsPage.sections.defaults, { t,
+    local: () => !REMOTE_AGENT && !state.remoteAgent,
+    read: () => requestAgentJson('/api/chat/settings'),
+    write: body => requestAgentJson('/api/chat/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  });
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
     settingsSnapshot = value.snapshot;
@@ -3978,6 +3985,7 @@ async function executeSettingsAction(action, body) {
 function refreshSettingsPage() {
   closeSettingsModal();
   settingsLoader?.open();
+  settingsChat?.refresh();
   refreshObserverStatus({ quiet: true }).catch(() => {});
   refreshModeStatus().catch(() => {});
   if (!REMOTE_AGENT) {
@@ -3997,6 +4005,7 @@ function openSettingsModal(section = 'defaults') {
 }
 function closeSettingsModal() {
   settingsLoader?.invalidate();
+  settingsChat?.invalidate();
   settingsDefaults?.destroy(); settingsDefaults = null;
   settingsPricing?.destroy(); settingsPricing = null; settingsSnapshot = null;
   if (settingsModal) resetSettingsDrafts(settingsModal);

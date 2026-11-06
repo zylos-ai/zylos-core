@@ -11,15 +11,16 @@ import { createCoreCli } from '../src/lib/workbench/core-cli.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { AuthGate } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
+import { chatHttpFixture } from './helpers/chat-http.js';
 
 function fixture(t, { count = 1, statusError = false, modeError = false, overrideError = false,
-  c4Error = false, queueError = false, groupListError = false, noSample = false, readPm2 = () => null } = {}) {
+  c4Error = false, queueError = false, groupListError = false, noSample = false, readPm2 = () => null, groupKeys, displayNames } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-snapshot-'));
   const cleanup = [];
   t.after(async () => { for (const close of cleanup.reverse()) await close(); fs.rmSync(root, { recursive: true, force: true }); });
   let clock = 1800000000000, mode = 'multi', unexpected = false, configRuntime = 'codex', configFailure = false, healthRecord = { missing: true };
   const calls = [], observations = [], events = [], reads = [];
-  const keys = Array.from({ length: count }, (_, index) => `telegram:g${index}`);
+  const keys = groupKeys ?? Array.from({ length: count }, (_, index) => `telegram:g${index}`);
   const live = new Map(keys.map(key => [key, { identity: { present: true, ready: true, runtime: 'claude', runId: `run-${key}`,
     createdAt: clock / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
     status: { valid: true, sampledAt: clock, value: { state: 'busy', active_tool_details: [{ id: 'T', name: 'Bash', input: { command: 'echo sk-123456789012345678901234' } }] } },
@@ -49,7 +50,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
       events.push(filter); return [];
     } };
   const c4Reader = { getInboundTimes: () => [] };
-  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2,
+  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, displayNames,
     c4Reader, readConfigRuntime: () => { if (configFailure) throw new Error('config'); return configRuntime; }, loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => { if (modeError) throw new Error('config'); return { mode }; } };
       if (name === 'session-state-reader.js') return reader;
@@ -66,6 +67,54 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     setNow: value => { clock = value; }, advance: value => { clock += value; }, setMode: value => { mode = value; },
     failUnexpected: value => { unexpected = value; }, now: () => clock };
 }
+
+// Integration: real snapshot/search plus two private HTTP auth/proxy instances.
+// Run for chat access/proxy changes; skip CSS-only changes. Owned temporary root,
+// injected Core/CLI, no live DB/PM2/tmux; teardown closes sockets and auth timer.
+test('remote chat permission preserves workbench groups and search for all API scopes', async t => {
+  const names = new Map([['dashboard:local-chat', { displayName: 'Private project', effectiveName: 'Private project' }]]);
+  const f = fixture(t, { groupKeys: ['dashboard:local-chat', 'telegram:external'], displayNames: {
+    listAll: () => names, search: term => term === 'Private project' ? [{ sessionGroup: 'dashboard:local-chat' }] : [],
+  } });
+  const original = f.cli.runC4Db;
+  // Core's groups reader supplies the existing 80-character preview.
+  const preview = ('Visible summary sk-123456789012345678901234 ' + 'x'.repeat(100)).slice(0, 80);
+  f.cli.runC4Db = async args => {
+    const value = await original(args);
+    if (args[0] !== 'groups') return value;
+    const groups = value.data.groups.map(row => ({ ...row, componentName: row.sessionGroup.split(':')[0],
+      sessionGroupName: row.sessionGroup.split(':').slice(1).join(':'), preview: { ...row.preview, text: preview } }));
+    return args.includes('--key-match') ? { ...value, data: groups } : { ...value, data: { ...value.data, groups } };
+  };
+  const http = await chatHttpFixture(t, {}, { workbench: url => workbenchResponse(f.service, url.pathname, url.searchParams) });
+  for (const allowRemote of [false, true]) {
+    http.config.chat.allowRemote = allowRemote;
+    for (const identity of ['read', 'admin']) for (const fleet of [false, true]) {
+      const direct = await http.request({ method: 'GET', path: '/api/workbench/groups' }, { identity, fleet });
+      assert.equal(direct.status, 200);
+      const value = JSON.parse(direct.text);
+      for (const key of ['dashboard:local-chat', 'telegram:external']) {
+        const row = value.rows.find(row => row.sessionGroup === key);
+        assert.ok(row.state); assert.ok(Object.hasOwn(row, 'duration'));
+        assert.match(row.preview.text, /Visible summary/);
+        assert.match(row.preview.text, /REDACTED/);
+        assert.ok(row.preview.text.length > 0 && row.preview.text.length <= 80);
+        assert.doesNotMatch(row.preview.text, /sk-123456/);
+      }
+      const search = await http.request({ method: 'GET', path: '/api/workbench/groups/search?q=local-chat' }, { identity, fleet });
+      assert.equal(search.status, 200);
+      assert.ok(JSON.parse(search.text).rows.some(row => row.sessionGroup === 'dashboard:local-chat'));
+      assert.deepEqual(JSON.parse(search.text).rows.find(row => row.sessionGroup === 'dashboard:local-chat').preview,
+        value.rows.find(row => row.sessionGroup === 'dashboard:local-chat').preview);
+      const named = await http.request({ method: 'GET', path: '/api/workbench/groups/search?q=Private%20project' }, { identity, fleet });
+      assert.equal(named.status, 200);
+      assert.ok(JSON.parse(named.text).rows.some(row => row.sessionGroup === 'dashboard:local-chat'));
+      const activity = await http.request({ method: 'GET', path: '/api/workbench/activity?range=60m' }, { identity, fleet });
+      assert.equal(activity.status, 200);
+      assert.deepEqual(JSON.parse(activity.text), await f.service.activity('60m'));
+    }
+  }
+});
 
 // Integration: Cross-module snapshot/cache boundary; run for collection or cache changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live

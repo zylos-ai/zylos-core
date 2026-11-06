@@ -1,4 +1,5 @@
 import { isSameOriginRequest } from './request-origin.js';
+import { CHAT_SETTINGS_PATH } from './chat/access.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -72,7 +73,8 @@ function isSseResponse(resp) {
 }
 
 function isAllowedProxyWrite(method, suffix) {
-  return ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(suffix) ||
+  return method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers)$/.test(suffix)) ||
+    ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(suffix) ||
     method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(suffix) ||
     method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(suffix) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/schedule\/[^/]+$/.test(suffix) ||
@@ -104,7 +106,7 @@ function observerLeaseId(req, suffix) {
 }
 
 function isLocalOnlyEndpoint(suffix) {
-  return suffix === '/api/fleet/agents' ||
+  return suffix === CHAT_SETTINGS_PATH || suffix === '/api/fleet/agents' ||
     suffix.startsWith('/api/fleet/agents/') ||
     suffix === '/api/agent/name' ||
     suffix === '/api/keys' ||
