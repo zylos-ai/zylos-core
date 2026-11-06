@@ -97,6 +97,26 @@ test('creating, reopening and renaming a draft leaves Core empty and never start
   emptyCore(f);
 });
 
+test('a canonical group ID cannot send through a registration that is still a draft', async t => {
+  const f = fixture(t), draft = f.conversations.create();
+  const binding = f.c4.ensureChannelNamespace('dashboard');
+  const bound = f.conversations.bind(draft.localId, binding.namespace);
+  assert.equal(bound.state, 'draft');
+  assert.equal(bound.lastOutcome, null, 'the draft has no uncertain send to reconcile');
+  const canonical = groupId(`${bound.namespace}:${draft.localId}`);
+  const before = f.dashboard.db.prepare('SELECT * FROM chat_conversations WHERE local_id=?').get(draft.localId);
+  await assert.rejects(f.sender.send(canonical, { content: 'forged canonical draft submission' }), {
+    code: 'chat_conversation_forbidden', statusCode: 403,
+  });
+  assert.deepEqual(f.dashboard.db.prepare('SELECT * FROM chat_conversations WHERE local_id=?').get(draft.localId), before);
+  assert.equal(f.counts.receive, 0);
+  assert.equal(f.counts.routes, 0);
+  assert.equal(f.counts.notifications, 0);
+  assert.equal(f.count('conversations'), 0);
+  assert.equal(f.count('group_heads'), 0);
+  assert.equal(f.count('channel_namespaces'), 1, 'only the fixture namespace binding exists');
+});
+
 test('local ID collisions retry without changing an existing registration or Core history', t => {
   const sequence = ['same', 'same', 'fresh'];
   const f = fixture(t, { idGenerator: () => sequence.shift() });
@@ -496,6 +516,34 @@ function headProbe(f) {
     loadCore: async () => f.core, zylosDir: f.root });
   return { sender, count: () => reads, setReject: value => { reject = value; } };
 }
+
+test('an old draft rejects different text when its send call recovers the committed first insert', async t => {
+  const f = fixture(t), draft = f.conversations.create(), probe = headProbe(f);
+  probe.setReject(true);
+  f.setInvoke(async args => { await f.realReceive(args); throw Error('lost committed first receipt'); });
+  const first = await probe.sender.send(draft.id, { content: 'committed while head lookup failed' });
+  assert.equal(first.needsReconciliation, true);
+  assert.equal(f.conversations.get(draft.localId).state, 'unknown');
+  assert.equal(probe.count(), 1);
+  assert.equal(f.counts.receive, 1);
+  assert.equal(f.count('group_heads'), 1);
+  const pending = f.conversations.get(draft.localId);
+  const canonical = groupId(`${pending.namespace}:${draft.localId}`);
+  probe.setReject(false);
+  f.setInvoke(null);
+  // Do not open/reconcile first: this send must recover the head itself before
+  // checking whether the old draft ID is trying to submit different text.
+  await assert.rejects(probe.sender.send(draft.id, { content: 'different text after unknown first result' }), {
+    code: 'chat_conversation_started', statusCode: 409, conversationId: canonical, preserveInput: true,
+  });
+  assert.equal(probe.count(), 2, 'the second send performs its own head reconciliation');
+  assert.equal(f.conversations.get(draft.localId).state, 'active');
+  assert.equal(f.conversations.get(draft.localId).firstMessageId, null, 'head recovery cannot invent a first message ID');
+  assert.equal(f.counts.receive, 1, 'different text is not silently sent as another first message');
+  const rows = f.rows(draft.localId);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].content, 'committed while head lookup failed');
+});
 
 test('a branded unknown commit error with null persisted state checks the head and retains uncertain input', async t => {
   const f = fixture(t), draft = f.conversations.create(), probe = headProbe(f);

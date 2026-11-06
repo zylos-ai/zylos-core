@@ -10,7 +10,7 @@ export function isChatDataRoute(method, pathname) {
     /^\/api\/chat\/conversations\/[^/]+\/(?:messages|status|questions)$/.test(pathname)
   ) || method === 'POST' && (
     pathname === '/api/chat/drafts' ||
-    /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers)$/.test(pathname)
+    /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|controls)$/.test(pathname)
   ) || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(pathname);
 }
 

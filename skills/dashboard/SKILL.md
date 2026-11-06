@@ -208,3 +208,56 @@ and stable-ID cursor order. Drafts use their Dashboard update time, appear only 
 mine, and are omitted once an authoritative Core head exists. External history
 remains read-only. These draft and ordinary-send endpoints manage registration,
 naming and message submission; question answers and UI actions have separate contracts.
+
+### Questions, answers and delivery recovery
+
+`GET /api/chat/conversations/:id/questions?limit=50&cursor=…` returns a bounded
+`items` page with `nextCursor`. Each item preserves the original question
+references, summary and constraints, its Dashboard lifecycle state, any accepted
+`answer_id` and its delivery receipt. Opening or refreshing the group checks
+persisted answer deliveries in bounded batches. It never resends an answer.
+
+`POST /api/chat/conversations/:id/answers` accepts
+`{interruptId, action, retry?: boolean}`. `action` is the shared protocol's
+ActionRequest, including its stable `id`. No caller-supplied summary, channel,
+namespace, endpoint or target group is accepted. The server uses the original
+saved question, validates the answer against its saved block/interrupt and
+builds the self-contained answer fallback from its stored summary and option or
+field labels. The original group must be an active registered Dashboard
+conversation. Local browser admins may write in multi mode; API requests also
+require the data instance's remote-chat switch and admin scope. Cookie writes
+require the same origin. Read keys and single mode cannot accept answers.
+
+One question accepts one answer. Repeating the same action and ID returns its
+saved answer and delivery; a competing answer cannot overwrite it. Acceptance,
+question status and the unfinished delivery row commit in one Dashboard
+transaction before the original in-process Core `receive()` call. The sender
+reuses the installed-Core loader, instance DB_PATH check and receive-result
+classification used by ordinary sends. One answer has at most one in-flight
+call in this process. No cross-process exactly-once guarantee is made.
+
+Before the first delivery or an explicit retry, the server reads indexed C4
+pages limited to the original group, Dashboard channel, inbound direction and
+endpoint. Only a valid parsed answer's `metadata.zylos.answerId` matches; text
+that merely contains the ID cannot match. A single existing row is reused in
+any status, including failed, suppressed and switch_absorbed. Multiple matches
+or a failed query remain pending reconciliation. Returned `action: delivered`
+does not establish delivery to an agent; receipts use the authority row's
+status/delivery_action.
+
+A definite pre-insert failure retains the accepted answer and permits an
+explicit retry of that action ID. Unknown results are checked once when the
+call ends. Startup recovery checks unfinished deliveries once, and opening or
+refreshing their group checks again. Only a successful absence check after the
+old call is known to have ended permits `retry: true`; recovery never sends on
+its own. Committed evidence always prevents a resend even if the authority row
+is temporarily unreadable. There are no retry leases, timers or polling jobs.
+
+`POST /api/chat/conversations/:id/controls` accepts `{envelope}` containing a
+valid shared-protocol `control` with an explicit `stop` or `replace` operation.
+The original question message and interrupt must match. Replacement requires a
+separately registered paused question in the same group. Verified outbound
+control envelopes apply the same lifecycle operation after channel delivery
+readback. Dashboard records `stopped` or `superseded` plus replacement metadata;
+the original C4 question remains immutable. Confirmation `cancel` remains an
+accepted answer. Ordinary new chat messages leave paused questions unchanged.

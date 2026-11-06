@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 24;
+export const TARGET_SCHEMA_VERSION = 25;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -90,6 +90,9 @@ export function inspectDatabase(db) {
   if (!Number.isInteger(currentVersion) || currentVersion < 0) throw new Error('Unsupported Dashboard schema version');
   if (currentVersion === TARGET_SCHEMA_VERSION) {
     const required = {
+      chat_answers: 'answer_id question_c4_id session_group endpoint_id content action created_at',
+      chat_answer_deliveries: 'answer_id state c4_id error updated_at',
+      chat_question_controls: 'question_c4_id operation replacement_interrupt_id control_message_id created_at',
       chat_questions: 'c4_id session_group endpoint_id message_id interrupt_id question_summary constraints status created_at',
       runtime_events: 'id ingest_id event_seq timestamp runtime session_id event_type category summary duration_ms metadata source confidence session_group run_id',
       metric_points: 'id timestamp runtime session_id metric_name metric_value dimensions source confidence session_group',
@@ -114,6 +117,32 @@ export function inspectDatabase(db) {
     const questionReference = db.pragma('index_list(chat_questions)').some(index => index.unique
       && db.pragma(`index_info(${index.name})`).map(column => column.name).join(',') === 'session_group,interrupt_id');
     if (questionKey.join(',') !== 'c4_id' || !questionReference) throw new Error('Unsupported Dashboard question identity');
+    for (const [table, key, required] of [
+      ['chat_answers', 'answer_id', ['answer_id', 'question_c4_id', 'session_group', 'endpoint_id', 'content', 'action', 'created_at']],
+      ['chat_answer_deliveries', 'answer_id', ['answer_id', 'state', 'updated_at']],
+      ['chat_question_controls', 'question_c4_id', ['question_c4_id', 'operation', 'control_message_id', 'created_at']],
+    ]) {
+      const columns = db.pragma(`table_info(${table})`);
+      if (columns.filter(column => column.pk).map(column => column.name).join(',') !== key
+          || required.some(name => !columns.find(column => column.name === name)?.notnull)
+          || columns.some(column => column.type.toUpperCase() !==
+            (['created_at', 'updated_at', 'c4_id'].includes(column.name) ? 'INTEGER' : 'TEXT'))) {
+        throw new Error('Unsupported Dashboard answer persistence');
+      }
+    }
+    const answerUnique = db.pragma('index_list(chat_answers)').some(index => index.unique
+      && db.pragma(`index_info(${index.name})`).map(column => column.name).join(',') === 'question_c4_id');
+    if (!answerUnique) throw new Error('Unsupported Dashboard answer identity');
+    for (const [table, name, expected] of [
+      ['chat_answers', 'idx_chat_answers_group', 'session_group,answer_id'],
+      ['chat_answer_deliveries', 'idx_chat_answer_deliveries_state', 'state,answer_id'],
+    ]) {
+      const index = db.pragma(`index_list(${table})`).find(item => item.name === name);
+      if (!index || index.unique || index.partial
+          || db.pragma(`index_info(${name})`).map(column => column.name).join(',') !== expected) {
+        throw new Error('Unsupported Dashboard answer lookup index');
+      }
+    }
     const indexes = db.pragma('index_list(core_log_cursors)');
     const active = indexes.find(index => index.name === 'idx_core_log_cursors_active');
     const activeColumns = db.pragma('index_info(idx_core_log_cursors_active)').map(column => column.name);
@@ -444,6 +473,38 @@ export function migrateDatabase(db) {
             ON chat_conversations(updated_at / 86400000.0 + 2440587.5 DESC, ('d:' || local_id) COLLATE BINARY)
             WHERE state <> 'active';
           INSERT OR IGNORE INTO schema_migrations(version) VALUES(24);
+        `);
+      })();
+    }
+    if (currentVersion < 25) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS chat_answers (
+            answer_id TEXT PRIMARY KEY NOT NULL,
+            question_c4_id TEXT NOT NULL UNIQUE,
+            session_group TEXT NOT NULL,
+            endpoint_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            action TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_chat_answers_group ON chat_answers(session_group, answer_id);
+          CREATE TABLE IF NOT EXISTS chat_answer_deliveries (
+            answer_id TEXT PRIMARY KEY NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending',
+            c4_id INTEGER,
+            error TEXT,
+            updated_at INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_chat_answer_deliveries_state ON chat_answer_deliveries(state, answer_id);
+          CREATE TABLE IF NOT EXISTS chat_question_controls (
+            question_c4_id TEXT PRIMARY KEY NOT NULL,
+            operation TEXT NOT NULL,
+            replacement_interrupt_id TEXT,
+            control_message_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+          );
+          INSERT OR IGNORE INTO schema_migrations(version) VALUES(25);
         `);
       })();
     }

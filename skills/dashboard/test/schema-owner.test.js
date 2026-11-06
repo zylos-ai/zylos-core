@@ -6,6 +6,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { execFileSync } from 'node:child_process';
 import { dashboardSchemaOwner as owner } from '../src/lib/schema-owner.js';
+import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { Store } from '../src/lib/store.js';
 import { migrateSchema13 } from './fixtures/schema13.js';
 
@@ -28,8 +29,8 @@ test('first Store open creates a missing database; owner only consumes open hand
   assert.equal('supportsNewDatabase' in owner, false);
   const store = new Store(file);
   t.after(() => store.close());
-  assert.deepEqual(owner.inspectSchema(store.db), {currentVersion:24,targetVersion:24,needsMigration:false});
-  assert.deepEqual(owner.migrate(store.db), {currentVersion:24,targetVersion:24,needsMigration:false});
+  assert.deepEqual(owner.inspectSchema(store.db), {currentVersion:TARGET_SCHEMA_VERSION,targetVersion:TARGET_SCHEMA_VERSION,needsMigration:false});
+  assert.deepEqual(owner.migrate(store.db), {currentVersion:TARGET_SCHEMA_VERSION,targetVersion:TARGET_SCHEMA_VERSION,needsMigration:false});
   assert.equal(store.db.open, true, 'owner must not close the caller handle');
 });
 test('first Store open schema 13 migration preserves history/auth, nullable identity, constraints and reentry', t => {
@@ -80,7 +81,7 @@ test('first Store open initializes its schema alongside unrelated tables', t => 
   db.close();
   const store=new Store(file); t.after(()=>store.close());
   assert.equal(store.db.prepare('SELECT x FROM unrelated').get().x,42);
-  assert.deepEqual(owner.inspectSchema(store.db),{currentVersion:24,targetVersion:24,needsMigration:false});
+  assert.deepEqual(owner.inspectSchema(store.db),{currentVersion:TARGET_SCHEMA_VERSION,targetVersion:TARGET_SCHEMA_VERSION,needsMigration:false});
 });
 test('first Store open attempts legacy migration without a layout admission check', t => {
   const file=fixture(t);
@@ -120,7 +121,7 @@ for (const version of [14, 15, 16, 17, 18, 19]) test(`first Store open migrates 
   const file = fixture(t); legacy(file);
   const db = new Database(file); db.prepare('INSERT INTO schema_migrations(version) VALUES(?)').run(version); db.close();
   const store = new Store(file); t.after(() => store.close());
-  assert.equal(owner.inspectSchema(store.db).currentVersion,24);
+  assert.equal(owner.inspectSchema(store.db).currentVersion,TARGET_SCHEMA_VERSION);
   assert.equal(store.db.prepare('SELECT token_hash FROM auth_sessions').get().token_hash,'retained');
   assert.equal(store.db.prepare('SELECT COUNT(*) n FROM runtime_events').get().n,1);
 });
@@ -188,8 +189,8 @@ test('historical schema migrates group data atomically without changing old metr
   const file = fixture(t); schema20(file);
   const db = new Database(file); t.after(() => db.close());
   const before = db.prepare('SELECT * FROM metric_points').get();
-  assert.deepEqual(owner.inspectSchema(db), { currentVersion: 20, targetVersion: 24, needsMigration: true });
-  assert.deepEqual(owner.migrate(db), { currentVersion: 24, targetVersion: 24, needsMigration: false });
+  assert.deepEqual(owner.inspectSchema(db), { currentVersion: 20, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: true });
+  assert.deepEqual(owner.migrate(db), { currentVersion: TARGET_SCHEMA_VERSION, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: false });
   assert.deepEqual(db.prepare('SELECT * FROM metric_points').get(), { ...before, session_group: null });
   for (const table of ['group_display_names', 'usage_transcripts']) assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table));
   assert.deepEqual(db.pragma('index_info(idx_metric_points_group_ts)').map(c => c.name), ['metric_name', 'session_group', 'timestamp']);
@@ -219,8 +220,8 @@ test('schema above target refuses migration and malformed group indexes are reje
   const db = new Database(file); t.after(() => db.close());
   db.exec('DROP INDEX idx_metric_points_group_ts; CREATE INDEX idx_metric_points_group_ts ON metric_points(timestamp)');
   assert.throws(() => owner.inspectSchema(db), /Unsupported Dashboard group data index/);
-  db.exec('INSERT INTO schema_migrations(version) VALUES(25)');
-  assert.equal(owner.inspectSchema(db).currentVersion, 25);
+  db.prepare('INSERT INTO schema_migrations(version) VALUES(?)').run(TARGET_SCHEMA_VERSION + 1);
+  assert.equal(owner.inspectSchema(db).currentVersion, TARGET_SCHEMA_VERSION + 1);
   assert.throws(() => owner.migrate(db), { code: 'SCHEMA_TOO_NEW' });
 });
 
@@ -233,7 +234,7 @@ test('current schema rejects a missing display-name table or metric group column
     try {
       if (missing === 'names') db.exec('DROP TABLE group_display_names');
       else db.exec('DROP INDEX idx_metric_points_group_ts; ALTER TABLE metric_points DROP COLUMN session_group');
-      assert.equal(db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version, 24);
+      assert.equal(db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version, TARGET_SCHEMA_VERSION);
       assert.throws(() => owner.inspectSchema(db), missing === 'names'
         ? /no such table: group_display_names/ : /no such column: session_group/);
     } finally { db.close(); }
@@ -279,16 +280,16 @@ test('historical group schema gains the run event index while preserving data an
     UPDATE runtime_events SET session_group='telegram:a', run_id='old-run', user_note='retained';
   `);
   const before = db.prepare('SELECT * FROM runtime_events').get();
-  assert.deepEqual(owner.inspectSchema(db), { currentVersion: 21, targetVersion: 24, needsMigration: true });
+  assert.deepEqual(owner.inspectSchema(db), { currentVersion: 21, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: true });
   assert.equal(db.pragma('index_info(idx_events_group_run_seq)').length, 0);
-  assert.deepEqual(owner.migrate(db), { currentVersion: 24, targetVersion: 24, needsMigration: false });
+  assert.deepEqual(owner.migrate(db), { currentVersion: TARGET_SCHEMA_VERSION, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: false });
   assert.deepEqual(db.pragma('index_info(idx_events_group_run_seq)').map(column => column.name),
     ['session_group', 'run_id', 'event_seq']);
   const index = db.pragma('index_list(runtime_events)').find(item => item.name === 'idx_events_group_run_seq');
   assert.equal(index.unique, 0); assert.equal(index.partial, 0);
   assert.deepEqual(db.prepare('SELECT * FROM runtime_events').get(), before);
   assert.equal(db.prepare('SELECT note FROM user_notes').get().note, 'retained');
-  assert.deepEqual(owner.migrate(db), { currentVersion: 24, targetVersion: 24, needsMigration: false });
+  assert.deepEqual(owner.migrate(db), { currentVersion: TARGET_SCHEMA_VERSION, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: false });
   assert.equal(db.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=22').get().n, 1);
   const reopened = new Store(file); reopened.close();
   assert.deepEqual(db.prepare('SELECT * FROM runtime_events').get(), before);
@@ -371,8 +372,8 @@ test('draft migration preserves existing group names and user data from the prio
   const events = db.prepare('SELECT * FROM runtime_events').all();
   const questions = db.prepare('SELECT * FROM chat_questions').all();
   assert.equal(questions.length, 1);
-  assert.deepEqual(owner.inspectSchema(db), { currentVersion: 23, targetVersion: 24, needsMigration: true });
-  assert.deepEqual(owner.migrate(db), { currentVersion: 24, targetVersion: 24, needsMigration: false });
+  assert.deepEqual(owner.inspectSchema(db), { currentVersion: 23, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: true });
+  assert.deepEqual(owner.migrate(db), { currentVersion: TARGET_SCHEMA_VERSION, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: false });
   assert.deepEqual(db.prepare('SELECT * FROM group_display_names').all(), names);
   assert.deepEqual(db.prepare('SELECT * FROM runtime_events').all(), events);
   assert.deepEqual(db.prepare('SELECT * FROM chat_questions').all(), questions);
@@ -381,7 +382,7 @@ test('draft migration preserves existing group names and user data from the prio
   db.prepare(`INSERT INTO chat_conversations(local_id,display_name,created_at,updated_at) VALUES(?,?,?,?)`)
     .run('fresh-local', 'Draft name', 1, 1);
   assert.equal(db.prepare('SELECT state FROM chat_conversations').get().state, 'draft');
-  assert.deepEqual(owner.migrate(db), { currentVersion: 24, targetVersion: 24, needsMigration: false });
+  assert.deepEqual(owner.migrate(db), { currentVersion: TARGET_SCHEMA_VERSION, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: false });
   assert.equal(db.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=24').get().n, 1);
   const reopened = new Store(file); reopened.close();
   assert.equal(db.prepare('SELECT display_name FROM chat_conversations').get().display_name, 'Draft name');
@@ -392,8 +393,8 @@ test('draft migration can be replayed without replacing registrations or names',
   const db = new Database(file); t.after(() => db.close());
   db.exec(`INSERT INTO chat_conversations(local_id,display_name,created_at,updated_at) VALUES('saved','Saved draft',1,1);
     INSERT INTO group_display_names(session_group,display_name,source) VALUES('dashboard:old','Human name','human');
-    DELETE FROM schema_migrations WHERE version=24;`);
-  assert.deepEqual(owner.migrate(db), { currentVersion: 24, targetVersion: 24, needsMigration: false });
+    DELETE FROM schema_migrations WHERE version>=24;`);
+  assert.deepEqual(owner.migrate(db), { currentVersion: TARGET_SCHEMA_VERSION, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: false });
   assert.equal(db.prepare('SELECT display_name FROM chat_conversations WHERE local_id=?').get('saved').display_name, 'Saved draft');
   assert.equal(db.prepare('SELECT display_name FROM group_display_names').get().display_name, 'Human name');
   assert.equal(db.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=24').get().n, 1);

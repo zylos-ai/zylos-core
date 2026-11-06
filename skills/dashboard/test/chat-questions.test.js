@@ -139,14 +139,14 @@ test('Another C4 row cannot reuse a question reference within the same group', t
   assert.equal(f.count('chat_questions', f.dashboardDb), 2);
 });
 
-// Boundary: answers/controls and extra chat cannot resolve an open question here.
+// Boundary: answers and extra ordinary chat cannot resolve an open question.
 // Run on registration dispatch changes; UI-only edits may skip.
-test('Non-question messages and control envelopes do not change an existing question state', t => {
+test('Non-question messages and answer envelopes do not change an existing question state', t => {
   const f = setupChannelFixture(t), row = f.insert(contentFor('single'));
   assert.equal(f.receive(deliveryPacket(row)).status, 0);
   for (const item of fixtures.valid) {
     const parsed = parseC4Content(item.content);
-    if (parsed.kind !== 'envelope' || parsed.envelope.interrupt) continue;
+    if (parsed.kind !== 'envelope' || parsed.envelope.interrupt || parsed.envelope.kind === 'control') continue;
     assert.equal(f.receive(deliveryPacket(f.insert(item.content))).status, 0, item.name);
     assert.equal(question(f, row.id).status, 'paused', item.name);
     assert.equal(f.count('chat_questions', f.dashboardDb), 1);
@@ -191,4 +191,41 @@ test('Question delivery uses ZYLOS_DIR when it differs from the HOME default', t
   const row = f.c4Db.prepare('SELECT * FROM conversations').get();
   assert.equal(question(f, row.id).question_summary, parseC4Content(row.content).envelope.questionSummary);
   assert.equal(fs.existsSync(path.join(f.env.HOME, 'zylos')), false);
+});
+
+// Boundary: verified outbound lifecycle controls update Dashboard overlays only.
+// Run on control dispatch/lifecycle changes; unrelated UI-only edits may skip.
+test('An explicit stop closes its stored question without fabricating a cancel answer or changing C4', t => {
+  const f = setupChannelFixture(t), row = f.insert(contentFor('single'));
+  assert.equal(f.receive(deliveryPacket(row)).status, 0);
+  const controlRow = f.insert(contentFor('stop'));
+  assert.equal(f.receive(deliveryPacket(controlRow)).status, 0);
+  assert.equal(question(f, row.id).status, 'stopped');
+  assert.equal(f.count('chat_answers', f.dashboardDb), 0);
+  assert.equal(f.c4Db.prepare('SELECT content FROM conversations WHERE id=?').get(row.id).content, row.content);
+  assert.equal(f.receive(deliveryPacket(controlRow)).status, 0, 'same control delivery is idempotent');
+  assert.equal(f.count('chat_question_controls', f.dashboardDb), 1);
+});
+
+// Boundary: replace requires a separately registered replacement in the same group.
+// Run on replacement validation changes; unrelated UI-only edits may skip.
+test('An explicit replacement requires registration and preserves both immutable question messages', t => {
+  const f = setupChannelFixture(t), row = f.insert(contentFor('single'));
+  assert.equal(f.receive(deliveryPacket(row)).status, 0);
+  const controlRow = f.insert(contentFor('replace'));
+  assert.notEqual(f.receive(deliveryPacket(controlRow)).status, 0);
+  assert.equal(question(f, row.id).status, 'paused');
+  const replacement = structuredClone(parseC4Content(contentFor('single')).envelope);
+  replacement.messageId = 'replacement_message'; replacement.interruptId = 'new_question';
+  const replacementRow = f.insert(CONTENT_PREFIX + JSON.stringify(replacement));
+  assert.equal(f.receive(deliveryPacket(replacementRow)).status, 0);
+  assert.equal(f.receive(deliveryPacket(controlRow)).status, 0);
+  assert.equal(question(f, row.id).status, 'superseded');
+  assert.equal(question(f, replacementRow.id).status, 'paused');
+  const saved = f.dashboardDb.prepare('SELECT * FROM chat_question_controls WHERE question_c4_id=?').get(String(row.id));
+  assert.equal(saved.replacement_interrupt_id, 'new_question');
+  assert.equal(f.count('chat_answers', f.dashboardDb), 0);
+  for (const original of [row, replacementRow]) {
+    assert.equal(f.c4Db.prepare('SELECT content FROM conversations WHERE id=?').get(original.id).content, original.content);
+  }
 });

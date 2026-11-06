@@ -9,6 +9,19 @@ const canonicalId = row => `g:${Buffer.from(`${row.namespace}:${row.localId}`).t
 const messageId = value => Number.isSafeInteger(value) && value > 0 ? value : null;
 const unknown = outcome => ['sending', 'unknown'].includes(outcome?.kind);
 
+/** Shared receive facts; notification hints never establish delivery to an agent. */
+export function classifyReceiveResult(result, failure, isDataError = localDataError) {
+  const error = typeof failure?.code === 'string' ? failure.code : 'chat_send_unknown';
+  const committed = !failure && result?.ok === true && messageId(result.id) ||
+    failure && Array.isArray(failure.persisted) && failure.persisted.includes('D1');
+  if (committed) return { kind: 'committed', id: messageId(failure ? failure.id : result.id),
+    ...(failure ? { error } : { action: result.action }) };
+  if (failure && isDataError(failure) && Array.isArray(failure.persisted) && failure.persisted.length === 0) {
+    return { kind: 'not_stored', id: null, error };
+  }
+  return { kind: 'unknown', id: null, error };
+}
+
 /** One process-local sender; persistence records uncertainty, never a retry lease. */
 export class ChatSender {
   constructor({ conversations, c4Reader, loadCore, zylosDir }) {
@@ -190,24 +203,19 @@ export class ChatSender {
         result = await core.receive(['--channel', 'dashboard', '--endpoint', row.localId,
           '--session-group', row.localId, '--content', content]);
       } catch (error) { failure = error; }
-      const errorCode = typeof failure?.code === 'string' ? failure.code : 'chat_send_unknown';
-      const committed = !failure && result?.ok === true && messageId(result.id) ||
-        failure && Array.isArray(failure.persisted) && failure.persisted.includes('D1');
-      if (committed) {
-        const savedId = messageId(failure ? failure.id : result.id);
+      const { id: savedId, ...outcome } = classifyReceiveResult(result, failure, core.isDataError ?? localDataError);
+      if (outcome.kind === 'committed') {
         this.conversations.markCommitted(row.localId, { id: savedId });
-        row = this.conversations.saveOutcome(row.localId, { content: failure || result.action === 'suppressed' ? content : null,
-          id: savedId, outcome: { kind: 'committed', initial,
-            ...(failure ? { error: errorCode } : { action: result.action }) } });
+        row = this.conversations.saveOutcome(row.localId, { content: failure || outcome.action === 'suppressed' ? content : null,
+          id: savedId, outcome: { ...outcome, initial } });
         return this._receipt(row, { initial });
       }
-      const branded = (core.isDataError ?? localDataError)(failure);
-      if (failure && branded && Array.isArray(failure.persisted) && failure.persisted.length === 0) {
+      if (outcome.kind === 'not_stored') {
         this.conversations.markDraft(row.localId);
-        row = this.conversations.saveOutcome(row.localId, { content, outcome: { kind: 'not_stored', initial, error: errorCode } });
+        row = this.conversations.saveOutcome(row.localId, { content, outcome: { ...outcome, initial } });
         return this._receipt(row, { initial });
       }
-      row = this.conversations.saveOutcome(row.localId, { content, outcome: { kind: 'unknown', initial, error: errorCode } });
+      row = this.conversations.saveOutcome(row.localId, { content, outcome: { ...outcome, initial } });
       return this._reconcile(row, initial);
     } finally { this.inflight.delete(row.localId); }
   }

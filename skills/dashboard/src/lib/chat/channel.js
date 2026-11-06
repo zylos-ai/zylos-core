@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import os from 'node:os';
 import path from 'node:path';
 import { registerQuestion } from './questions.js';
+import { recordQuestionControl } from './question-controls.js';
 import { validateDeliveryPacket } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 
 const mismatch = () => Object.assign(new Error('Dashboard delivery does not match an authoritative outbound row.'), { code: 'DELIVERY_MISMATCH' });
@@ -22,5 +23,6 @@ export function acceptDelivery(packet, { env = process.env } = {}) {
     throw Object.assign(new Error('Cannot read the authoritative C4 delivery row.'), { code: 'C4_READ_FAILED' });
   } finally { db?.close(); }
   registerQuestion(row, { env });
+  recordQuestionControl(row, { env });
   return row;
 }
