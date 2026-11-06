@@ -104,7 +104,7 @@ test('CLI emits one JSON line for invalid args, reader load failure, and success
 
 test('status adds only the projected Origin need in multi and null in single', async () => {
   let seconds;
-  const projection = { inbound: 2, controls: 1, oldestAt: 1 };
+  const projection = { inbound: 0, controls: 0, continuation: true, oldestAt: 1 };
   const multi = await collectStatus(fixture({ facts: ({ nowSec }) => { seconds = nowSec; return { originNeed: projection, transitionOpen: true, fenced: true }; } }));
   assert.equal(seconds, 2);
   assert.deepEqual(multi.originNeed, projection);
@@ -129,7 +129,10 @@ test('status JSON preserves successful envelope and observed presence on a faile
 });
 
 for (const [need, health, pattern] of [
-  [{ inbound: 0, controls: 0, oldestAt: null }, {}, /Origin is asleep/],
+  [{ inbound: 0, controls: 0, continuation: false, oldestAt: null }, {}, /Origin is asleep/],
+  [{ inbound: 0, controls: 0, continuation: true, oldestAt: 999 }, {}, /Origin is waking up/],
+  [{ inbound: 0, controls: 0, continuation: true, oldestAt: 600 }, {}, /over 5 minutes/],
+  [{ inbound: 0, controls: 0, continuation: true, oldestAt: 600 }, { health: 'auth_failed' }, /codex authentication/],
   [{ inbound: 0, controls: 1, oldestAt: 999 }, {}, /Origin is waking up/],
   [{ inbound: 1, controls: 0, oldestAt: 600 }, {}, /over 5 minutes/],
   [{ inbound: 1, controls: 0, oldestAt: 600 }, { health: 'auth_failed' }, /codex authentication/],

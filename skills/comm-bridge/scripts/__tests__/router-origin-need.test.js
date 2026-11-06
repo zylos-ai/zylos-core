@@ -220,3 +220,25 @@ test('a surviving startup prompt wakes Origin and a replacement is delivered exa
   assert.equal(f.db.getControlById(replacement.id).status, 'done');
   assert.deepEqual(calls(f, 'control').map(row => row[1]), [replacement.id]);
 });
+
+// Real Router/Store with private memory SQLite and injected health/clock/scene.
+// Run for Origin marker demand or readiness changes; skip unrelated UI work.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; no real tmux,
+// runtime, network or child process. Fixture stops Router and closes the DB.
+test('only an Origin restart marker wakes after authentication and cannot wake again once cleared', async t => {
+  const f = routerFixture(t); await startIdle(f);
+  f.health.set('claude', { health: 'auth_failed' });
+  f.db.recordRunEnd('origin', { runId: 'ended-origin', reason: 'unexpected' });
+  await f.rounds(3);
+  assert.equal(calls(f, 'launch').length, 0);
+  assert.equal(f.db.getOriginNeed().continuation.pending, true);
+  f.health.set('claude', { health: 'ok' }); await f.rounds(4);
+  assert.equal(calls(f, 'launch').length, 1);
+  assert.equal(calls(f, 'launch')[0][1].sessionGroup, 'origin');
+  assert.deepEqual(f.db.getOriginNeed().continuation, { pending: false, oldestAt: null });
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM control_queue').get().n, 0);
+  assert.equal(calls(f, 'conversation').length, 0);
+  f.scene.delete('origin'); f.current.delete('origin');
+  f.advance(65000); await f.rounds(4);
+  assert.equal(calls(f, 'launch').length, 1);
+});

@@ -117,3 +117,25 @@ test('real C4 bound controls do not drive Origin auth checks, while repeated abs
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM control_queue WHERE status = ? AND content = ?').get('pending',MANUAL_WAKE_PROMPT).n,1);
   assert.equal(store.getOriginNeed(f.state.now/1000).controls.count,1);await f.tick();assert.equal(f.state.checks.length,1);
 });
+
+// Real Supervisor/Store and private memory DB, injected clock/scene/auth. Run
+// for Origin continuation demand changes; skip unrelated lifecycle. Official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; no real tmux/PM2/network.
+// Fixture stops Supervisor and closes DB; no independent background loop.
+test('only an Origin restart marker drives authentication demand until clearing without an inbound expiry alert', async t => {
+  const f=fixture(t), {store}=databaseFixture(t,{now:()=>f.state.now});
+  f.db.getOriginNeed=store.getOriginNeed;
+  await f.start(); await f.tick(); assert.equal(f.state.checks.length,0);
+  store.recordRunEnd('origin',{runId:'old-origin',reason:'unexpected'});
+  assert.deepEqual(store.getOriginNeed().continuation,{pending:true,oldestAt:f.state.now/1000});
+  for(const sessionGroup of ['origin','*']) {
+    f.state.fences=[{sessionGroup}]; await f.tick(); assert.equal(f.state.checks.length,0);
+  }
+  f.state.fences=[]; await f.tick(); assert.deepEqual(f.state.checks,['claude']);
+  f.state.now+=60000; await f.tick(); assert.equal(f.state.checks.length,2);
+  f.state.now+=PENDING_MAX_AGE_SECONDS*1000; await f.tick(); assert.equal(f.state.checks.length,3);
+  assert.equal(f.state.alerts.length,0);
+  assert.equal(store.clearContinuation('origin',{runId:'new-origin'}).cleared,true);
+  f.state.now+=60000; await f.tick(); assert.equal(f.state.checks.length,3);
+  assert.equal(f.state.alerts.length,0);
+});

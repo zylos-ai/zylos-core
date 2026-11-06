@@ -9,8 +9,8 @@ export async function readOriginFacts({ zylosDir = ZYLOS_DIR, nowSec = Math.floo
       const need = await store.getOriginNeed(nowSec);
       const transition = await store.getModeTransition();
       const fence = await store.getDrainFence('origin') ?? await store.getDrainFence('*');
-      const times = [need.inbound.oldestAt, need.controls.oldestAt].filter(time => time !== null);
-      return { originNeed: { inbound: need.inbound.count, controls: need.controls.count,
+      const times = [need.inbound.oldestAt, need.controls.oldestAt, need.continuation.oldestAt].filter(time => time !== null);
+      return { originNeed: { inbound: need.inbound.count, controls: need.controls.count, continuation: need.continuation.pending,
         oldestAt: times.length ? Math.min(...times) : null }, transitionOpen: transition !== null, fenced: fence !== null };
     } finally { await close(); }
   } catch (error) {
@@ -23,7 +23,7 @@ export async function readOriginFacts({ zylosDir = ZYLOS_DIR, nowSec = Math.floo
 export function describeOrigin({ view, origin, originNeed, runtimeHealth, targetRuntime, nowSec }) {
   if (view !== 'multi') return { state: origin.presence, failure: false };
   const readable = originNeed && !originNeed.error;
-  const needed = readable && originNeed.inbound + originNeed.controls > 0;
+  const needed = readable && (originNeed.inbound + originNeed.controls > 0 || originNeed.continuation);
   const health = targetRuntime !== null ? runtimeHealth?.[targetRuntime] : null;
   if (needed && health?.health === 'auth_failed') return { state: 'auth_wait', failure: true };
   if (origin.presence !== 'not_running') return { state: origin.presence, failure: false };

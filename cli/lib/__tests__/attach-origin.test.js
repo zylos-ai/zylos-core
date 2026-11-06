@@ -34,3 +34,11 @@ test('single absence keeps the existing initialization advice', async () => {
   assert.match(text, /No active codex session/);
   assert.doesNotMatch(text, /Origin is asleep|Group sessions start/);
 });
+
+test('marker-only Origin attach reports waking or authentication and sleeps once cleared', async () => {
+  const data = { ...status, originNeed: { inbound: 0, controls: 0, continuation: true, oldestAt: 999 } };
+  assert.match(await absentAttach('origin', data), /Origin is waking up/);
+  assert.match(await absentAttach('origin', { ...data, runtimeHealth: { codex: { health: 'auth_failed' } } }), /codex authentication/);
+  data.originNeed = { inbound: 0, controls: 0, continuation: false, oldestAt: null };
+  assert.match(await absentAttach('origin', data), /Origin is asleep/);
+});

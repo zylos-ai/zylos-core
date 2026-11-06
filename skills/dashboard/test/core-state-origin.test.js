@@ -82,6 +82,14 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.equal(core.accountUsage, null);
   assert.equal(metrics.resolve('rate_limit').value, null);
   assert.equal(metrics.resolve('rate_limit_7d').value, null);
+  facts.originNeed = { inbound: 0, controls: 0, continuation: true, oldestAt: Math.floor(Date.now() / 1000) };
+  assert.equal((await core.refresh()).state, 'WAKING');
+  facts.originNeed.oldestAt -= 400;
+  assert.equal((await core.refresh()).state, 'WAKE_OVERDUE');
+  health = { health: 'auth_failed' };
+  assert.equal((await core.refresh()).state, 'AUTH_WAIT');
+  facts.originNeed = { inbound: 0, controls: 0, continuation: false, oldestAt: null };
+  assert.equal((await core.refresh()).state, 'SLEEPING');
   const reads = factsReads;
   mode = 'single';
   assert.equal((await core.refresh()).state, 'OFFLINE');

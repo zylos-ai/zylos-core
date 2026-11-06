@@ -6,7 +6,7 @@ import { enqueueStartupPrompt } from '../../../activity-monitor/scripts/session-
 const binding = { expectedRunId: 'old-run', tmuxTarget: {
   serverGeneration: 'generation-1', sessionId: '$1', paneId: '%1',
 } };
-const empty = () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null } });
+const empty = () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null }, continuation: { pending: false, oldestAt: null } });
 function incoming(db, { timestamp = '2026-11-03 10:00:00', direction = 'in', status = 'pending', group = 'origin' } = {}) {
   db.prepare(`INSERT INTO conversations(timestamp,direction,channel,content,status,session_group)
     VALUES(?,?,'system','message',?,?)`).run(timestamp, direction, status, group);
@@ -33,6 +33,7 @@ test('only pending Origin inbound contributes, including old rows, with UTC Unix
   assert.deepEqual(store.getOriginNeed(2_000_000_000), {
     inbound: { count: 2, oldestAt: Date.parse('2026-11-03T10:00:00Z') / 1000 },
     controls: { count: 0, oldestAt: null },
+    continuation: { pending: false, oldestAt: null },
   });
 });
 
@@ -106,4 +107,24 @@ test('Origin and global drain fences do not hide need and reads never mutate que
   assert.deepEqual(store.getOriginNeed(100), expected);
   assert.deepEqual(store.getOriginNeed(), expected);
   assert.deepEqual(snapshot(), before);
+});
+
+// Real Store and private memory SQLite, injected clock. Run for Origin need or
+// marker changes; skip unrelated delivery. Official runner isolates HOME,
+// ZYLOS_DIR/PM2_HOME/short TMPDIR; no tmux/network/children; fixture closes DB.
+test('only the pending Origin ending contributes continuation need until cleared', t => {
+  const { db, store } = fixture(t, { now: () => 123_000 });
+  store.recordRunEnd('other', { runId: 'other-old', reason: 'unexpected' });
+  assert.deepEqual(store.getOriginNeed(999), empty());
+  store.recordRunEnd('origin', { runId: 'origin-old', reason: 'unexpected' });
+  const expected = { ...empty(), continuation: { pending: true, oldestAt: 123 } };
+  assert.deepEqual(store.getOriginNeed(999), expected);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM control_queue').get().n, 0);
+  assert.deepEqual(store.clearContinuation('origin', { runId: 'origin-old' }), { cleared: false });
+  assert.deepEqual(store.getOriginNeed(999), expected);
+  assert.deepEqual(store.clearContinuation('origin', { runId: 'origin-new' }), { cleared: true });
+  assert.deepEqual(store.getOriginNeed(999), empty());
+  store.recordRunEnd('origin', { runId: 'origin-new', reason: 'unexpected' });
+  store.recordRunEnd('origin', { runId: 'origin-later', reason: 'ttl' });
+  assert.deepEqual(store.getOriginNeed(999), empty());
 });

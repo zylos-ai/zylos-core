@@ -41,22 +41,22 @@ test('messages describe wake conditions and read errors without promising startu
   assert.equal(formatOriginDescription({ state: 'running' }, 'codex'), null);
 });
 
-test('read facts projects both counts and earliest non-null need and closes on failures', async () => {
-  for (const times of [[null, null], [120, null], [null, 90], [120, 90]]) {
+test('read facts projects counts, continuation and earliest non-null need and closes on failures', async () => {
+  for (const times of [[null, null, null], [120, null, null], [null, 90, null], [null, null, 60], [120, 90, 60], [60, 90, 120], [120, 60, 90]]) {
     let closed = 0;
     const result = await readOriginFacts({ zylosDir: '/isolated', nowSec: 200, open: root => {
       assert.equal(root, '/isolated');
       return { close: () => closed++, store: {
-        getOriginNeed: now => { assert.equal(now, 200); return { inbound: { count: 2, oldestAt: times[0] }, controls: { count: 3, oldestAt: times[1] } }; },
+        getOriginNeed: now => { assert.equal(now, 200); return { inbound: { count: 2, oldestAt: times[0] }, controls: { count: 3, oldestAt: times[1] }, continuation: { pending: times[2] !== null, oldestAt: times[2] } }; },
         getModeTransition: () => ({ phase: 'gating' }), getDrainFence: group => { assert.equal(group, 'origin'); return {}; },
       } };
     } });
-    assert.deepEqual(result, { originNeed: { inbound: 2, controls: 3, oldestAt: times.every(x => x === null) ? null : Math.min(...times.filter(x => x !== null)) }, transitionOpen: true, fenced: true });
+    assert.deepEqual(result, { originNeed: { inbound: 2, controls: 3, continuation: times[2] !== null, oldestAt: times.every(x => x === null) ? null : Math.min(...times.filter(x => x !== null)) }, transitionOpen: true, fenced: true });
     assert.equal(closed, 1);
   }
   for (const method of ['getOriginNeed', 'getModeTransition', 'getDrainFence']) {
     let closed = 0;
-    const store = { getOriginNeed: () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null } }), getModeTransition: () => null, getDrainFence: () => null };
+    const store = { getOriginNeed: () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null }, continuation: { pending: false, oldestAt: null } }), getModeTransition: () => null, getDrainFence: () => null };
     store[method] = () => { throw new Error('cannot read'); };
     assert.deepEqual(await readOriginFacts({ open: () => ({ store, close: () => closed++ }) }), {
       originNeed: { error: { code: 'READ_FAILED', message: 'cannot read' } }, transitionOpen: null, fenced: null,
@@ -83,8 +83,8 @@ test('shared reader opens only the supplied C4 read-only, preserving bytes and r
   const opened = await openReadStore(root);
   assert.throws(() => opened.store.insertControl('forbidden', { sessionGroup: 'origin', appendAckSuffix: false }), error => error.code === 'DB_WRITE_FAILED' && /readonly/i.test(error.message));
   opened.close();
-  assert.deepEqual(await readOriginFacts({ zylosDir: root, nowSec: 1099 }), { originNeed: { inbound: 0, controls: 0, oldestAt: null }, transitionOpen: false, fenced: true });
-  assert.deepEqual(await readOriginFacts({ zylosDir: root, nowSec: 1100 }), { originNeed: { inbound: 0, controls: 1, oldestAt: 1100 }, transitionOpen: false, fenced: true });
+  assert.deepEqual(await readOriginFacts({ zylosDir: root, nowSec: 1099 }), { originNeed: { inbound: 0, controls: 0, continuation: false, oldestAt: null }, transitionOpen: false, fenced: true });
+  assert.deepEqual(await readOriginFacts({ zylosDir: root, nowSec: 1100 }), { originNeed: { inbound: 0, controls: 1, continuation: false, oldestAt: 1100 }, transitionOpen: false, fenced: true });
   assert.deepEqual(fs.readFileSync(filename), before);
   const missing = await readOriginFacts({ zylosDir: path.join(root, 'missing'), nowSec: 1100 });
   assert.equal(missing.originNeed.error.code, 'READ_FAILED');
@@ -113,4 +113,26 @@ test('absent multi target resolution reads strict configuration and C4 without w
   await assert.rejects(reader.resolveTargetRuntime('origin'), error => error.code === 'CONFIG_UNREADABLE');
   const live = createSessionReader({ env: { ZYLOS_DIR: root }, open: async () => ({ close() {} }), observe: async () => ({ present: true, runtime: 'claude' }) });
   assert.equal(await live.resolveTargetRuntime('origin'), 'claude');
+});
+
+// Shared reader and interpreter over an isolated file DB. Run for Origin demand
+// projections/display; skip unrelated runtime behavior. Official runner isolates
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; no tmux/network/background processes.
+// Read handles close inside readOriginFacts; teardown closes writer and files.
+test('marker-only Origin facts drive wake and authentication states and sleep after clearing', async t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'origin-marker-'));
+  fs.mkdirSync(path.join(root,'comm-bridge'));
+  const db=new Database(path.join(root,'comm-bridge/c4.db')); guardDatabase(db,schema);
+  t.after(()=>{db.close();fs.rmSync(root,{recursive:true,force:true});});
+  const store=createStore(db,{now:()=>700_000,readConfig:()=>({state:'ok',config:{runtime:'codex',session_mode:'multi'}})});
+  store.recordRunEnd('origin',{runId:'old',reason:'unexpected'});
+  const facts=await readOriginFacts({zylosDir:root,nowSec:999});
+  assert.deepEqual(facts.originNeed,{inbound:0,controls:0,continuation:true,oldestAt:700});
+  for(const [nowSec,health,state,failure] of [[999,'ok','waking',false],[1000,'ok','wake_overdue',true],[1000,'auth_failed','auth_wait',true],[1000,'rate_limited','rate_wait',false]]) {
+    assert.deepEqual(describeOrigin({...base,originNeed:facts.originNeed,nowSec,runtimeHealth:{codex:{health}}}),{state,failure});
+  }
+  store.clearContinuation('origin',{runId:'new'});
+  const cleared=await readOriginFacts({zylosDir:root,nowSec:1000});
+  assert.deepEqual(cleared.originNeed,{inbound:0,controls:0,continuation:false,oldestAt:null});
+  assert.deepEqual(describeOrigin({...base,originNeed:cleared.originNeed,runtimeHealth:{codex:{health:'auth_failed'}}}),{state:'sleeping',failure:false});
 });

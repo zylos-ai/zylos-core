@@ -152,11 +152,13 @@ export function createSupervisor(deps) {
       const pendingGroups=await db.listPendingSessionGroups();
       const continuationGroups=configuration.mode==='multi'?await db.listPendingContinuations():[];
       const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups:[...pendingGroups,...continuationGroups],fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
-      if(configuration.mode==='multi' && !context.fences.some(fence=>['origin','*'].includes(fence.sessionGroup)) &&
-          (await db.getOriginNeed(Math.floor(now()/1000))).controls.count>0) {
-        const runtime=await deps.resolveTargetRuntime('origin');
-        if(!demand.has(runtime))demand.set(runtime,new Set());
-        demand.get(runtime).add('origin');
+      if(configuration.mode==='multi' && !context.fences.some(fence=>['origin','*'].includes(fence.sessionGroup))) {
+        const need=await db.getOriginNeed(Math.floor(now()/1000));
+        if(need.controls.count>0 || need.continuation?.pending) {
+          const runtime=await deps.resolveTargetRuntime('origin');
+          if(!demand.has(runtime))demand.set(runtime,new Set());
+          demand.get(runtime).add('origin');
+        }
       }
       for(const runtime of demand.keys())observer.driveDemand(runtime);
       const metrics={ready:current.filter(s=>s.sessionGroup!=='origin' && s.ready).length,starting:current.filter(s=>s.sessionGroup!=='origin' && !s.ready).length,

@@ -691,7 +691,7 @@ describe('Origin demand and drain fence API', () => {
 
   it('exports an empty read-only Origin demand view', () => {
     assert.deepEqual(mod.getOriginNeed(1000), {
-      inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null },
+      inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null }, continuation: { pending: false, oldestAt: null },
     });
   });
 
