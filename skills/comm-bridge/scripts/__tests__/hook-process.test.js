@@ -126,7 +126,7 @@ function active(pid) {
     const state = execFileSync('ps', ['-p', String(pid), '-o', 'stat='], { encoding: 'utf8', timeout: 1000 }).trim();
     return state !== '' && !state.startsWith('Z');
   } catch (error) {
-    if (error.code === 'ENOENT' || error.status === 1) return false;
+    if (['ENOENT', 'ESRCH'].includes(error.code) || error.status === 1) return false;
     throw error;
   }
 }
@@ -142,8 +142,15 @@ for (const mode of ['inherited', 'orphan', 'orphan-inherited']) {
     const filename = path.join(root, 'leaf.pid');
     let pid;
     t.after(() => {
-      try { process.kill(-Number(fs.readFileSync(`${filename}.leader`, 'utf8')), 'SIGKILL'); }
-      catch (error) { if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error; }
+      let leader;
+      try { leader = Number(fs.readFileSync(`${filename}.leader`, 'utf8')); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (Number.isSafeInteger(leader) && leader > 1) {
+        for (const target of [-leader, leader]) {
+          try { process.kill(target, 'SIGKILL'); }
+          catch (error) { if (error.code !== 'ESRCH') throw error; }
+        }
+      }
       if (!pid && fs.existsSync(filename)) pid = Number(fs.readFileSync(filename, 'utf8'));
       if (pid && active(pid)) { try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
       fs.rmSync(root, { recursive: true, force: true });
@@ -154,8 +161,12 @@ for (const mode of ['inherited', 'orphan', 'orphan-inherited']) {
     assert.equal(result.timedOut, mode === 'inherited');
     assert.equal(result.exitCode, mode === 'inherited' ? null : 0);
     if (mode === 'orphan-inherited') assert.deepEqual(JSON.parse(result.stdout), { version: 1, decision: 'continue' });
-    for (let i = 0; i < 100 && active(pid); i++) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.equal(active(pid), false, 'fixture descendant must no longer be running');
+    let running = active(pid);
+    for (let i = 0; i < 100 && running; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      running = active(pid);
+    }
+    assert.equal(running, false, 'fixture descendant must no longer be running');
   });
 }
 
@@ -172,7 +183,9 @@ function ownedFiles(t) {
     catch (error) { if (error.code !== 'ESRCH') throw error; }
   };
   t.after(() => {
-    kill(pidAt(`${filename}.leader`), true);
+    const leader = pidAt(`${filename}.leader`);
+    kill(leader, true);
+    kill(leader);
     kill(pidAt(filename));
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -223,7 +236,10 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'exit']) {
     });
     const closed = new Promise(resolve => parent.once('exit', (code, exitSignal) => resolve({ code, signal: exitSignal })));
     t.after(async () => {
-      if (parent.exitCode === null && parent.signalCode === null) f.kill(parent.pid, true);
+      if (parent.exitCode === null && parent.signalCode === null) {
+        f.kill(parent.pid, true);
+        f.kill(parent.pid);
+      }
       await closed;
     });
     let diagnostics = '';
@@ -246,10 +262,24 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'exit']) {
     assert.equal(active(leaf), true);
     if (signal === 'exit') parent.send('exit');
     else parent.kill(signal);
-    const result = await closed;
+    let exitTimer;
+    let result;
+    try {
+      result = await Promise.race([
+        closed,
+        new Promise((_, reject) => { exitTimer = setTimeout(() => reject(new Error('Parent did not exit within 3 seconds')), 3000); }),
+      ]);
+    } finally { clearTimeout(exitTimer); }
+    assert.ok(parent.exitCode !== null || parent.signalCode !== null, 'parent process must have exited');
     assert.deepEqual(result, signal === 'exit' ? { code: 23, signal: null } : { code: null, signal });
-    for (let i = 0; i < 100 && (active(leader) || active(leaf)); i++) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.equal(active(leader), false, diagnostics);
-    assert.equal(active(leaf), false, diagnostics);
+    // Use the last bounded observation for the assertions: a second /proc read
+    // can race with exit again after ESRCH has already established absence.
+    let leaderActive = active(leader), leafActive = active(leaf);
+    for (let i = 0; i < 100 && (leaderActive || leafActive); i++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      leaderActive = active(leader); leafActive = active(leaf);
+    }
+    assert.equal(leaderActive, false, diagnostics);
+    assert.equal(leafActive, false, diagnostics);
   });
 }

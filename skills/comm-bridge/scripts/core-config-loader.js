@@ -33,6 +33,9 @@ function configOnPath() {
   }
 }
 
+// Cache only a successful npm fallback; explicit, development and PATH lookups stay live.
+let npmFallback;
+
 function findCoreConfigModule() {
   if (process.env.ZYLOS_PACKAGE_ROOT) {
     const explicit = configInRoot(process.env.ZYLOS_PACKAGE_ROOT, false);
@@ -44,6 +47,7 @@ function findCoreConfigModule() {
   if (development) return development;
   const installed = configOnPath();
   if (installed) return installed;
+  if (npmFallback) return npmFallback;
   try {
     const npmRoot = execFileSync('npm', ['root', '-g'], {
       encoding: 'utf8',
@@ -51,16 +55,12 @@ function findCoreConfigModule() {
       timeout: 5000,
     }).trim();
     const fallback = npmRoot && configInRoot(path.join(npmRoot, 'zylos'));
-    if (fallback) return fallback;
+    if (fallback) return npmFallback = fallback;
   } catch {}
   throw new Error('Cannot locate the installed zylos-core cli/lib/config.js');
 }
-// The installed Core package location is stable for this process; failed lookups retry.
-let coreConfigPath;
-
 export function resolveCoreConfigModule() {
-  if (!coreConfigPath) coreConfigPath = findCoreConfigModule();
-  return coreConfigPath;
+  return findCoreConfigModule();
 }
 
 let coreConfigPromise;

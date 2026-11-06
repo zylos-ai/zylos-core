@@ -10,7 +10,11 @@ export function hookTimerChunk(remainingMs) {
   return Math.min(remainingMs, MAX_TIMER_MS);
 }
 
-/** One synchronous hook invocation; stdin carries the already serialized input. */
+/**
+ * One synchronous hook invocation; stdin carries the already serialized input.
+ * Parent signal cleanup is for one-shot CLI processes such as c4-send only:
+ * the host must not register its own handlers for these signals or invoke hooks concurrently.
+ */
 export async function runHookProcess({ command, args = [], input, timeoutMs, cwd, env = process.env }) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new TypeError('timeoutMs must be a finite positive number');
   if (typeof input !== 'string') throw new TypeError('input must be a serialized string');

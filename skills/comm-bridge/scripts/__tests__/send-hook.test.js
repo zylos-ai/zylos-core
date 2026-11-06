@@ -138,6 +138,7 @@ function processAlive(pid) {
     if (/\) Z /.test(stat)) return false;
     return true;
   } catch (error) {
+    if (error.code === 'ESRCH') return false;
     if (error.code !== 'ENOENT') throw error;
     try { process.kill(pid, 0); return true; }
     catch (cause) { if (cause.code === 'ESRCH') return false; throw cause; }
