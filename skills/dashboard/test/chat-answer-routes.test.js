@@ -56,6 +56,9 @@ async function fixture(t) {
   };
   const delivery = {
     async deliver(answerId, { initial, retry, authorize }) {
+      // Model the real adapter's successful pre-call absence check before its
+      // awaited Core loading/authorization boundary; no C4 is queried here.
+      store.db.prepare("UPDATE chat_answer_deliveries SET state='not_stored' WHERE answer_id=? AND state='pending'").run(answerId);
       await beforeDelivery?.();
       const denied = await authorize();
       if (denied) throw error(denied.error, denied.status);
@@ -197,13 +200,13 @@ test('remote admin answers require the instance switch and authorization is rech
   assert.equal(f.calls.deliveries.length, 1);
 });
 
-test('delivery receives a live authorization callback and denied delivery leaves its accepted record pending', async t => {
+test('delivery receives a live authorization callback and denied delivery retains the checked absent answer', async t => {
   const f = await fixture(t), question = f.seed();
   f.setBeforeDelivery(async () => { await Promise.resolve(); f.setMode('single'); });
   assert.equal((await f.request('/answers', { body: f.answer(question) })).status, 403);
   assert.equal(f.count('chat_answers'), 1);
   assert.equal(f.count('chat_answer_deliveries'), 1);
-  assert.equal(f.store.db.prepare('SELECT state FROM chat_answer_deliveries').get().state, 'pending');
+  assert.equal(f.store.db.prepare('SELECT state FROM chat_answer_deliveries').get().state, 'not_stored');
   assert.equal(f.calls.deliveries.length, 0);
 });
 
@@ -242,7 +245,7 @@ test('question pages show lifecycle and delivery overlays while every refresh re
   assert.equal((await f.request('/questions', { method: 'GET', identity: 'read' })).status, 403);
 });
 
-test('explicit stop and replace control envelopes change lifecycle without inventing cancel answers', async t => {
+test('HTTP stop changes only the local question and HTTP replacement is rejected', async t => {
   const f = await fixture(t), stopped = f.seed();
   const stop = { envelope: envelope('stop') };
   assert.equal((await f.request('/controls', { body: stop })).status, 200);
@@ -252,10 +255,11 @@ test('explicit stop and replace control envelopes change lifecycle without inven
   const replacement = f.seed('single', { messageId: 'new_message', interruptId: 'new_question' });
   const control = envelope('replace'); control.interruptId = old.interruptId; control.control.messageId = old.messageId;
   const replaced = await f.request('/controls', { body: { envelope: control } });
-  assert.equal(replaced.status, 200);
-  assert.equal(replaced.body.question.status, 'superseded');
+  assert.equal(replaced.status, 400);
+  assert.equal(replaced.body.error, 'invalid_chat_control');
+  assert.equal(f.answers.question(group, old.interruptId).status, 'paused');
   assert.equal(f.answers.question(group, replacement.interruptId).status, 'paused');
-  assert.equal(f.count('chat_question_controls'), 2);
+  assert.equal(f.count('chat_question_controls'), 1);
   assert.equal(f.count('chat_answers'), 0);
   assert.equal(f.calls.deliveries.length, 0);
   for (const body of [{ envelope: envelope('single') }, { envelope: { ...envelope('stop'), control: { operation: 'cancel', messageId: old.messageId } } },
@@ -266,7 +270,7 @@ test('explicit stop and replace control envelopes change lifecycle without inven
   assert.equal(page.status, 200);
   const states = Object.fromEntries(page.body.items.map(item => [item.interrupt_id, item.status]));
   assert.equal(states[stopped.interruptId], 'stopped');
-  assert.equal(states[old.interruptId], 'superseded');
+  assert.equal(states[old.interruptId], 'paused');
   assert.equal(states[replacement.interruptId], 'paused');
 });
 

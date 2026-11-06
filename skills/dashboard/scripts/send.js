@@ -8,7 +8,7 @@ export function runSend({ input = () => fs.readFileSync(0, 'utf8'), env = proces
     acceptDelivery(JSON.parse(input()), { env });
     return 0;
   } catch (error) {
-    const stored = error.code?.startsWith('QUESTION_') || error.code === 'INVALID_CONTENT';
+    const stored = error.storedControlFailure === true || error.code?.startsWith('QUESTION_') || error.code === 'INVALID_CONTENT';
     const message = stored
       ? `${error.message} Message is already stored in C4 and visible read-only in Dashboard. Do not resend.`
       : 'Dashboard delivery unconfirmed.';

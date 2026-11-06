@@ -36,7 +36,7 @@ export function answerDeliveryFixture(t) {
     readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
   const namespace = c4.ensureChannelNamespace('dashboard').namespace;
   const counts = { receive: 0, queries: 0, pages: 0, maxPage: 0, notifications: 0 };
-  let route = { decision: 'pending', runtime: 'claude' }, invoke = null, queryError = false, notification = 'suppressed';
+  let route = { decision: 'pending', runtime: 'claude' }, invoke = null, queryError = false, notification = 'suppressed', contentProbe = null;
   const observed = new Proxy(readonly, { get(target, key) {
     if (key === 'prepare') return sql => {
       if (sql.includes('FROM conversations INDEXED BY idx_conv_group_id')) {
@@ -46,7 +46,10 @@ export function answerDeliveryFixture(t) {
         return { all(parameters) {
           const rows = statement.all(parameters);
           counts.pages++; counts.maxPage = Math.max(counts.maxPage, rows.length);
-          return rows;
+          return rows.map(row => new Proxy(row, { get(target, key) {
+            if (key === 'content') contentProbe?.(target);
+            return target[key];
+          } }));
         } };
       }
       return target.prepare(sql);
@@ -99,5 +102,6 @@ export function answerDeliveryFixture(t) {
   return { root, db, c4, store, answers, sender, delivery, reader, core, namespace, counts,
     realReceive, createQuestion, accept, answerRows, makeDelivery,
     setInvoke: value => { invoke = value; }, setRoute: value => { route = value; },
-    setQueryError: value => { queryError = value; }, setNotification: value => { notification = value; } };
+    setQueryError: value => { queryError = value; }, setNotification: value => { notification = value; },
+    setContentProbe: value => { contentProbe = value; } };
 }

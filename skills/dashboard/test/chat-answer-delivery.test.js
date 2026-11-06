@@ -47,17 +47,23 @@ test('accepted answer and pending delivery commit before receive, then saved row
   assert.equal(f.counts.receive, 1, 'ordinary duplicate and explicit retry both reuse a committed answer');
 });
 
-test('blocked receive never starts a second call during duplicate submissions or same-process recovery', { timeout: 3000 }, async t => {
-  const f = answerDeliveryFixture(t), { answer } = f.accept();
+test('after startup a blocked receive remains single-call during duplicate submissions and refresh', { timeout: 3000 }, async t => {
+  const f = answerDeliveryFixture(t);
+  await f.delivery.recover();
+  const { answer } = f.accept();
   let release, entered;
   const barrier = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });
-  f.setInvoke(async args => { entered(); await barrier; return f.realReceive(args); });
+  f.setInvoke(async args => {
+    if (f.counts.receive > 1) throw Error('fixture duplicate receive');
+    entered(); await barrier; return f.realReceive(args);
+  });
   const pending = f.delivery.deliver(answer.answerId, { initial: true });
   try {
     await Promise.race([started, pending.then(() => { throw Error('fixture receive did not block'); })]);
     for (const operation of [() => f.delivery.deliver(answer.answerId, { retry: true }),
-      () => f.delivery.reconcile(answer.answerId), () => f.delivery.recover()]) {
+      () => f.delivery.reconcileGroup(answer.sessionGroup), () => f.delivery.reconcile(answer.answerId),
+      () => f.delivery.recover()]) {
       await operation();
       assert.equal(f.counts.receive, 1);
       assert.equal(deliveryRow(f, answer.answerId).state, 'sending');
@@ -250,20 +256,6 @@ for (const phase of ['accepted', 'inserted', 'receipt']) test(`startup recovery 
   assert.equal(f.answers.get(answer.answerId).sessionGroup, answer.sessionGroup);
 });
 
-test('a persisted sending marker is not retryable until startup establishes the old process ended', async t => {
-  const f = answerDeliveryFixture(t), { answer } = f.accept();
-  mark(f, answer.answerId, 'sending');
-  const duplicate = await f.delivery.deliver(answer.answerId, { retry: true });
-  assert.equal(duplicate.retryAllowed, false);
-  assert.equal(duplicate.needsReconciliation, true);
-  assert.equal(f.counts.queries, 0);
-  assert.equal(f.counts.receive, 0);
-  await f.delivery.recover();
-  assert.equal(f.delivery.receipt(answer.answerId).retryAllowed, true);
-  assertCommitted(await f.delivery.deliver(answer.answerId, { retry: true }));
-  assert.equal(f.counts.receive, 1);
-});
-
 test('startup lookup failure retains uncertainty and a later refresh can recover the row', async t => {
   const f = answerDeliveryFixture(t), { answer } = f.accept(), row = insertAnswer(f, answer);
   mark(f, answer.answerId, 'sending');
@@ -299,7 +291,7 @@ test('an interrupted startup pass still permits a later refresh to reconcile unt
   const restarted = f.makeDelivery(), original = restarted.db;
   restarted.db = new Proxy(original, { get(target, key) {
     if (key === 'prepare') return sql => {
-      if (sql.includes("SELECT answer_id FROM chat_answer_deliveries WHERE")) {
+      if (sql.includes("SELECT d.answer_id FROM chat_answer_deliveries d WHERE")) {
         throw Error('fixture startup database read unavailable');
       }
       return target.prepare(sql);
@@ -315,16 +307,23 @@ test('an interrupted startup pass still permits a later refresh to reconcile unt
   assert.equal(f.counts.receive, 0, 'refresh only checks authority; it cannot resend');
 });
 
-test('a committed D1 receipt without an ID is recovered automatically and never resent', async t => {
-  const f = answerDeliveryFixture(t), { answer } = f.accept();
-  f.setInvoke(async args => { await f.realReceive(args); throw dataError('UNHEALTHY_NOTIFY_UNCERTAIN', 'committed without receipt ID', { persisted: ['D1'] }); });
+for (const lookup of ['found', 'absent', 'failed']) test(`a committed receipt without an ID immediately checks authority when lookup is ${lookup}`, async t => {
+  const f = answerDeliveryFixture(t); await f.delivery.recover();
+  const { answer } = f.accept();
+  f.setInvoke(async args => {
+    if (lookup !== 'absent') await f.realReceive(args);
+    if (lookup === 'failed') f.setQueryError(true);
+    throw dataError('UNHEALTHY_NOTIFY_UNCERTAIN', 'committed without receipt ID', { persisted: ['D1'] });
+  });
   const result = await f.delivery.deliver(answer.answerId, { initial: true });
   assertCommitted(result);
-  assert.equal(result.messageId, null);
-  assert.equal(result.needsReconciliation, true);
+  assert.equal(f.counts.queries, 2, 'one initial lookup and one immediate post-receipt lookup');
+  assert.equal(result.messageId, lookup === 'found' ? f.answerRows(answer.answerId)[0].id : null);
+  assert.equal(result.needsReconciliation, lookup !== 'found');
+  assert.equal(deliveryRow(f, answer.answerId).state, 'committed', 'D1 evidence survives failed or absent lookup');
   const restarted = f.makeDelivery();
-  assert.equal((await restarted.recover()).checked, 1);
-  assert.equal(restarted.receipt(answer.answerId).messageId, f.answerRows(answer.answerId)[0].id);
+  const recovered = await restarted.recover();
+  assert.equal(recovered.checked, lookup === 'found' ? 0 : 1);
   await restarted.deliver(answer.answerId, { retry: true });
   assert.equal(f.counts.receive, 1);
 });
@@ -339,19 +338,75 @@ test('loss of a previously committed authority row cannot turn its receipt into 
   assert.equal(f.counts.receive, 1);
 });
 
-test('recovery reads indexed bounded group pages and stops at the second matching answer', async t => {
-  const f = answerDeliveryFixture(t), { answer } = f.accept();
-  // Core owns each transaction; insert fixture rows directly only inside this
-  // fixture transaction to avoid wrapping its transaction-aware store twice.
+test('reconciliation reads bounded group pages when the matching answer is late in history', async t => {
+  const f = answerDeliveryFixture(t); await f.delivery.recover();
+  const { answer } = f.accept();
   f.db.transaction(() => {
     const insert = f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,session_group,content,status) VALUES('in','dashboard',?,?,?,'pending')");
     for (let i = 0; i < 205; i++) insert.run(answer.endpointId, answer.sessionGroup, `unrelated ${i}`);
   })();
-  insertAnswer(f, answer); insertAnswer(f, answer);
+  const row = insertAnswer(f, answer);
+  const result = await f.delivery.deliver(answer.answerId, { initial: true });
+  assertCommitted(result);
+  assert.equal(result.messageId, row.id);
+  assert.equal(f.counts.pages, 3);
+  assert.equal(f.counts.maxPage, 100);
+  assert.equal(f.counts.receive, 0);
+});
+
+test('the second exact match stops parsing later records and prevents later page reads', async t => {
+  const f = answerDeliveryFixture(t); await f.delivery.recover();
+  const { answer } = f.accept();
+  insertAnswer(f, answer); const second = insertAnswer(f, answer);
+  f.db.transaction(() => {
+    const insert = f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,session_group,content,status) VALUES('in','dashboard',?,?,?,'pending')");
+    for (let i = 0; i < 205; i++) insert.run(answer.endpointId, answer.sessionGroup, `after second match ${i}`);
+  })();
+  let contentReads = 0;
+  f.setContentProbe(row => {
+    assert.ok(row.id <= second.id, 'a record after the second match must not be parsed');
+    contentReads++;
+  });
   const result = await f.delivery.deliver(answer.answerId, { initial: true });
   assert.equal(result.error, 'chat_answer_duplicate');
-  assert.ok(f.counts.pages >= 3);
-  assert.equal(f.counts.maxPage, 100);
+  assert.equal(result.needsReconciliation, true);
+  assert.equal(result.retryAllowed, false);
+  assert.equal(contentReads, 3, 'the group seed and the two exact matches are parsed; nothing after them');
+  assert.equal(f.counts.pages, 1, 'later pages were not read');
+  assert.equal(f.counts.receive, 0);
+});
+
+test('a group with only settled answers performs no reconciliation scans on refresh or recovery', async t => {
+  const f = answerDeliveryFixture(t); await f.delivery.recover();
+  let sessionGroup;
+  const ids = [];
+  for (let i = 0; i < 8; i++) {
+    const { answer } = f.accept();
+    const row = insertAnswer(f, answer);
+    mark(f, answer.answerId, 'committed', row.id);
+    ids.push(answer.answerId); sessionGroup = answer.sessionGroup;
+  }
+  f.db.transaction(() => {
+    const insert = f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,session_group,content,status) VALUES('in','dashboard','answer-group',?,?,'pending')");
+    for (let i = 0; i < 205; i++) insert.run(sessionGroup, `settled group history ${i}`);
+  })();
+  f.setQueryError(true);
+  const before = f.store.db.prepare('SELECT answer_id,state,c4_id,error FROM chat_answer_deliveries ORDER BY answer_id').all();
+  const group = await f.delivery.reconcileGroup(sessionGroup, { limit: 1 });
+  assert.equal(group.items.length, 0);
+  assert.equal(group.nextCursor, null);
+  assert.equal((await f.delivery.recover()).checked, 0);
+  for (const id of ids) {
+    const result = await f.delivery.reconcile(id);
+    assertCommitted(result);
+    assert.equal(result.deliveryState, 'pending');
+    assert.equal(result.needsReconciliation, false);
+    assert.equal(Object.hasOwn(result, 'error'), false);
+  }
+  const after = f.store.db.prepare('SELECT answer_id,state,c4_id,error FROM chat_answer_deliveries ORDER BY answer_id').all();
+  assert.deepEqual(after, before);
+  assert.equal(f.counts.queries, 0, 'settled rows use scoped status-by-ID reads, never group scans');
+  assert.equal(f.counts.pages, 0);
   assert.equal(f.counts.receive, 0);
 });
 

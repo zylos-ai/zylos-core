@@ -58,6 +58,7 @@ export async function handleChatAnswers(req, res, url, { auth, config, answers, 
       if (!object(body) || Object.keys(body).some(key => key !== 'envelope') || !object(body.envelope)) {
         throw fail('invalid_chat_parameters');
       }
+      if (body.envelope.control?.operation !== 'stop') throw fail('invalid_chat_control');
       const question = answers.control({ sessionGroup: row.sessionGroup, endpointId: row.localId,
         envelope: body.envelope });
       sendJson(res, 200, { question });

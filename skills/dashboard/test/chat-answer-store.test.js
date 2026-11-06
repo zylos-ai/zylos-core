@@ -176,6 +176,65 @@ test('explicit replacement requires a separately registered paused question in t
   assert.equal(f.count('chat_answers'), 0);
 });
 
+test('an accepted confirmation answer cannot be changed into a stopped question', t => {
+  const f = fixture(t), q = f.question('confirmation');
+  const accepted = f.accept(q, f.action(q, { outcome: 'cancel' }));
+  const before = f.answers.question(q.group, q.envelope.interruptId);
+  assert.throws(() => f.answers.control({ sessionGroup: q.group, endpointId: q.endpoint,
+    envelope: control(q, 'stop') }), { code: 'chat_question_not_paused', statusCode: 409 });
+  assert.deepEqual(f.answers.question(q.group, q.envelope.interruptId), before);
+  assert.equal(f.answers.question(q.group, q.envelope.interruptId).status, 'answered');
+  assert.equal(f.answers.get(accepted.answer.answerId).answerId, accepted.answer.answerId);
+  assert.equal(f.count('chat_answers'), 1); assert.equal(f.count('chat_answer_deliveries'), 1);
+  assert.equal(f.count('chat_question_controls'), 0);
+});
+
+for (const status of ['answered', 'stopped', 'superseded']) {
+  test(`a ${status} question cannot be selected as a replacement`, t => {
+    const f = fixture(t), old = f.question(), candidate = f.question('single', { interruptId: 'replacement_candidate' });
+    if (status === 'answered') {
+      f.accept(candidate, f.action(candidate, { selected: [candidate.envelope.blocks[0].data.options[0].id] }));
+    } else if (status === 'stopped') {
+      f.answers.control({ sessionGroup: candidate.group, endpointId: candidate.endpoint, envelope: control(candidate, 'stop') });
+    } else {
+      const next = f.question('single', { interruptId: 'next_replacement' });
+      f.answers.control({ sessionGroup: candidate.group, endpointId: candidate.endpoint,
+        envelope: control(candidate, 'replace', next.envelope.interruptId) });
+    }
+    const beforeOld = f.answers.question(old.group, old.envelope.interruptId);
+    const beforeCandidate = f.answers.question(candidate.group, candidate.envelope.interruptId);
+    const controls = f.count('chat_question_controls');
+    assert.equal(beforeCandidate.status, status);
+    assert.throws(() => f.answers.control({ sessionGroup: old.group, endpointId: old.endpoint,
+      envelope: control(old, 'replace', candidate.envelope.interruptId) }), { code: 'chat_question_not_paused', statusCode: 409 });
+    assert.deepEqual(f.answers.question(old.group, old.envelope.interruptId), beforeOld);
+    assert.deepEqual(f.answers.question(candidate.group, candidate.envelope.interruptId), beforeCandidate);
+    assert.equal(f.count('chat_question_controls'), controls);
+  });
+}
+
+for (const conflict of ['replace after stop', 'stop after replace', 'different replacement']) {
+  test(`a conflicting second lifecycle control rejects ${conflict} without changing the saved control`, t => {
+    const f = fixture(t), old = f.question();
+    const replacement = f.question('single', { interruptId: 'replacement_question' });
+    const other = f.question('single', { interruptId: 'other_replacement' });
+    const first = conflict === 'replace after stop' ? control(old, 'stop')
+      : control(old, 'replace', replacement.envelope.interruptId);
+    f.answers.control({ sessionGroup: old.group, endpointId: old.endpoint, envelope: first });
+    const before = f.answers.question(old.group, old.envelope.interruptId);
+    const storedControl = f.store.db.prepare('SELECT * FROM chat_question_controls WHERE question_c4_id=?').get(old.id);
+    const second = conflict === 'stop after replace' ? control(old, 'stop')
+      : control(old, 'replace', conflict === 'different replacement' ? other.envelope.interruptId : replacement.envelope.interruptId);
+    assert.throws(() => f.answers.control({ sessionGroup: old.group, endpointId: old.endpoint,
+      envelope: second }), { code: 'chat_question_not_paused', statusCode: 409 });
+    assert.deepEqual(f.answers.question(old.group, old.envelope.interruptId), before);
+    assert.deepEqual(f.store.db.prepare('SELECT * FROM chat_question_controls WHERE question_c4_id=?').get(old.id), storedControl);
+    assert.equal(f.count('chat_question_controls'), 1); assert.equal(f.count('chat_answers'), 0);
+    assert.equal(f.answers.question(replacement.group, replacement.envelope.interruptId).status, 'paused');
+    assert.equal(f.answers.question(other.group, other.envelope.interruptId).status, 'paused');
+  });
+}
+
 for (const invalid of ['plain-text', 'unknown-replacement', 'cross-group-replacement', 'wrong-message']) {
   test(`lifecycle rejects ${invalid} and leaves the old question paused`, t => {
     const f = fixture(t), q = f.question();
@@ -274,3 +333,29 @@ for (const [shape, transform, expected] of [
   assert.throws(() => owner.migrate(f.store.db), expected);
   assert.equal(f.count('chat_answers'), 0);
 });
+
+// Index admission uses real private SQLite layouts on a readonly caller handle.
+// Run for answer schema/index inspection changes; UI-only changes may skip.
+// Failed inspection and migration must leave the fixture's database bytes intact.
+for (const [table, index, columns, wrongColumns] of [
+  ['chat_answers', 'idx_chat_answers_group', 'session_group,answer_id', 'answer_id,session_group'],
+  ['chat_answer_deliveries', 'idx_chat_answer_deliveries_state', 'state,answer_id', 'answer_id,state'],
+]) for (const shape of ['missing', 'wrong columns', 'unique', 'partial']) {
+  test(`answer schema rejects a ${shape} ${index} without changing the database`, t => {
+    const f = fixture(t);
+    f.store.db.exec(`DROP INDEX ${index}`);
+    if (shape !== 'missing') {
+      f.store.db.exec(`CREATE ${shape === 'unique' ? 'UNIQUE ' : ''}INDEX ${index}
+        ON ${table}(${shape === 'wrong columns' ? wrongColumns : columns})
+        ${shape === 'partial' ? "WHERE answer_id <> ''" : ''}`);
+    }
+    f.store.db.pragma('wal_checkpoint(TRUNCATE)');
+    const before = fs.readFileSync(f.file);
+    const reader = new Database(f.file, { readonly: true, fileMustExist: true });
+    try {
+      assert.throws(() => owner.inspectSchema(reader), /Unsupported Dashboard answer lookup index/);
+      assert.throws(() => owner.migrate(reader), /Unsupported Dashboard answer lookup index/);
+    } finally { reader.close(); }
+    assert.ok(fs.readFileSync(f.file).equals(before), 'admission failure must not change database bytes');
+  });
+}

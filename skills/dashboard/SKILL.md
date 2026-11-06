@@ -215,7 +215,10 @@ naming and message submission; question answers and UI actions have separate con
 `items` page with `nextCursor`. Each item preserves the original question
 references, summary and constraints, its Dashboard lifecycle state, any accepted
 `answer_id` and its delivery receipt. Opening or refreshing the group checks
-persisted answer deliveries in bounded batches. It never resends an answer.
+only unresolved answer deliveries in bounded batches, using the same selection
+as startup recovery. A confirmed delivery with a saved C4 ID reads that row's
+status directly; it does not rescan the group's messages or replace its saved
+commit evidence with a lookup error. Opening a group never resends an answer.
 
 `POST /api/chat/conversations/:id/answers` accepts
 `{interruptId, action, retry?: boolean}`. `action` is the shared protocol's
@@ -254,10 +257,18 @@ its own. Committed evidence always prevents a resend even if the authority row
 is temporarily unreadable. There are no retry leases, timers or polling jobs.
 
 `POST /api/chat/conversations/:id/controls` accepts `{envelope}` containing a
-valid shared-protocol `control` with an explicit `stop` or `replace` operation.
-The original question message and interrupt must match. Replacement requires a
-separately registered paused question in the same group. Verified outbound
-control envelopes apply the same lifecycle operation after channel delivery
-readback. Dashboard records `stopped` or `superseded` plus replacement metadata;
-the original C4 question remains immutable. Confirmation `cancel` remains an
-accepted answer. Ordinary new chat messages leave paused questions unchanged.
+valid shared-protocol `control` with operation `stop` only. It closes that saved
+question in this Dashboard. It does not append a C4 message, notify the agent,
+or stop its runtime. The client supplies `envelope.messageId`, stored as
+`control_message_id` only to identify this local lifecycle record; it is not a
+C4 row ID. The original question message and interrupt must match. HTTP
+`replace` is rejected.
+
+Agent-authored stop/replace envelopes are applied after the channel verifies
+the authoritative stored outbound row. Replacement requires a separately
+registered paused question in the same group. Dashboard records `stopped` or
+`superseded` plus replacement metadata; the original C4 question remains
+immutable. If application fails after storage, the channel reports the original
+error code and that the message is already stored/read-only and must not be
+resent. Confirmation `cancel` remains an accepted answer. Ordinary new chat
+messages leave paused questions unchanged.

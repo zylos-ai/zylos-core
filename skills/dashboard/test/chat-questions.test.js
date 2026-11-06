@@ -5,6 +5,7 @@ import path from 'node:path';
 import { parseC4Content, CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { projectC4Content } from '../../comm-bridge/scripts/c4-content-projection.js';
 import { setupChannelFixture, deliveryPacket } from './helpers/channel-fixture.js';
+import { ChatAnswers } from '../src/lib/chat/answers.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const contentFor = name => fixtures.valid.find(item => item.name === name).content;
@@ -213,7 +214,11 @@ test('An explicit replacement requires registration and preserves both immutable
   const f = setupChannelFixture(t), row = f.insert(contentFor('single'));
   assert.equal(f.receive(deliveryPacket(row)).status, 0);
   const controlRow = f.insert(contentFor('replace'));
-  assert.notEqual(f.receive(deliveryPacket(controlRow)).status, 0);
+  const failed = f.receive(deliveryPacket(controlRow));
+  assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr, /Error \[chat_question_not_found\]/);
+  assertStoredWarning(failed);
+  assert.doesNotMatch(failed.stderr, /Dashboard delivery unconfirmed/);
   assert.equal(question(f, row.id).status, 'paused');
   const replacement = structuredClone(parseC4Content(contentFor('single')).envelope);
   replacement.messageId = 'replacement_message'; replacement.interruptId = 'new_question';
@@ -228,4 +233,48 @@ test('An explicit replacement requires registration and preserves both immutable
   for (const original of [row, replacementRow]) {
     assert.equal(f.c4Db.prepare('SELECT content FROM conversations WHERE id=?').get(original.id).content, original.content);
   }
+});
+
+// Boundary: real send-hook -> C4 commit -> Dashboard send process after a
+// competing user answer. Failure must retain the committed control and warn
+// against another send; only the Dashboard lifecycle overlay is rejected.
+test('an agent stop after a user answer reports its stored control without changing the answered question', t => {
+  const f = setupChannelFixture(t);
+  const sent = f.send(contentFor('single'));
+  assert.equal(sent.status, 0, sent.stderr);
+  const original = f.c4Db.prepare('SELECT * FROM conversations').get();
+  const saved = question(f, original.id);
+  const action = structuredClone(parseC4Content(contentFor('answer_single_select')).envelope.action);
+  new ChatAnswers({ store: f.dashboardStore }).accept({ sessionGroup: saved.session_group,
+    endpointId: saved.endpoint_id, interruptId: saved.interrupt_id, action });
+  const result = f.send(contentFor('stop'));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /chat_question_not_paused/);
+  assertStoredWarning(result);
+  assert.doesNotMatch(result.stderr, /Dashboard delivery unconfirmed/);
+  assert.equal(f.count('conversations'), 2);
+  const control = f.c4Db.prepare('SELECT * FROM conversations WHERE id<>?').get(original.id);
+  assert.equal(parseC4Content(control.content).envelope.kind, 'control');
+  assert.equal(control.session_group, original.session_group);
+  assert.equal(control.content, contentFor('stop'));
+  assert.equal(question(f, original.id).status, 'answered');
+  assert.equal(f.count('chat_answers', f.dashboardDb), 1);
+  assert.equal(f.count('chat_question_controls', f.dashboardDb), 0);
+  assert.equal(f.c4Db.prepare('SELECT content FROM conversations WHERE id=?').get(original.id).content, original.content);
+});
+
+// Boundary: a committed control cannot recreate a missing Dashboard database.
+// The untyped storage error still needs the same stored/read-only warning.
+test('a missing Dashboard database reports a stored control failure without recreating the database', t => {
+  const f = setupChannelFixture(t), control = f.insert(contentFor('stop'));
+  f.dashboardStore.close();
+  fs.unlinkSync(f.dashboardPath);
+  const result = f.receive(deliveryPacket(control));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Error \[QUESTION_CONTROL_FAILED\]/);
+  assertStoredWarning(result);
+  assert.doesNotMatch(result.stderr, /Dashboard delivery unconfirmed/);
+  assert.equal(fs.existsSync(f.dashboardPath), false);
+  assert.equal(f.count('conversations'), 1);
+  assert.equal(f.c4Db.prepare('SELECT content FROM conversations WHERE id=?').get(control.id).content, control.content);
 });
