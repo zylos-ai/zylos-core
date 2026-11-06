@@ -2254,7 +2254,7 @@ test('workbench shell discards an agent response whose JSON finishes after the v
   assert.ok(h.calls.includes('/fleet/Other/api/workbench/groups'));
 });
 // Mounted read-failure boundary: run for shell/controller changes; skip server-only changes. Uses the isolated fake lifecycle above.
-test('workbench shell retains rendered rows and warns after a snapshot read failure', async context => {
+test('workbench shell retains and redraws old rows after a snapshot read failure', async context => {
   let failed = false;
   const h = workbenchHarness(context, (path, fallback) => {
     if (failed && path.endsWith('/api/workbench/groups')) throw Error('offline');
@@ -2264,6 +2264,16 @@ test('workbench shell retains rendered rows and warns after a snapshot read fail
   assert.equal(board.children[0].children[0].textContent, 'A'); failed = true;
   await h.poll(5000); await wbTick();
   assert.equal(board.children.length, 1); assert.equal(board.children[0].children[0].textContent, 'A');
+  assert.match(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
+  const oldRow = board.children[0], before = h.calls.length;
+  assert.equal(oldRow.children.length, 4);
+  const toggle = h.nodes.get('#wb-detail-toggle'); toggle.checked = true; toggle.dispatch('change');
+  assert.equal(h.calls.length, before);
+  assert.notEqual(board.children[0], oldRow);
+  assert.equal(board.children.length, 1);
+  assert.equal(board.children[0].children.length, 7);
+  assert.equal(board.children[0].children[0].textContent, 'Aa');
+  assert.equal(board.children[0].children[1].textContent, 'wb.state.idle');
   assert.match(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
 });
 // Mode/board timer boundary: run for polling changes; skip server-only changes. Uses the isolated fake lifecycle above.
@@ -2276,6 +2286,31 @@ test('workbench shell samples session mode on mount and every minute independent
   assert.equal(modeReads(), 1); assert.equal(h.calls.filter(path => path === '/api/workbench/groups').length, beforeGroups + 3);
   await h.poll(60000); await wbTick(); assert.equal(modeReads(), 2);
   h.document.visibilityState = 'hidden'; await h.poll(60000); assert.equal(modeReads(), 2);
+  h.stop(); assert.equal(h.intervals.size, 0);
+});
+// Mode failure rendering boundary: run for mode-read/attention changes; skip
+// server-only changes. Uses the isolated injected lifecycle and teardown above.
+test('workbench shell removes the transition hint after a session mode read failure', async context => {
+  let failed = false, modeReads = 0;
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path === '/api/session-mode') {
+      modeReads++;
+      if (failed) throw Error('offline');
+      return { data: { transition: { phase: 'draining' } } };
+    }
+    return fallback(path);
+  });
+  await wbTick(); await wbTick();
+  const attention = h.nodes.get('#wb-attention');
+  const hints = () => attention.children.filter(node => node.classList.contains('wb-transition'));
+  assert.equal(modeReads, 1);
+  assert.equal(hints().length, 1);
+  assert.equal(hints()[0].textContent, 'wb.transition · draining');
+  failed = true; await h.poll(60000); await wbTick();
+  assert.equal(modeReads, 2);
+  assert.equal(hints().length, 0);
+  assert.equal(attention.textContent.includes('wb.transition'), false);
+  assert.equal(h.nodes.get('#wb-board').children[0].children[0].textContent, 'A');
   h.stop(); assert.equal(h.intervals.size, 0);
 });
 // Same-agent navigation boundary: run for identity/navigation changes; skip server-only changes. Uses the isolated fake lifecycle above.
