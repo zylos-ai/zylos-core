@@ -2793,6 +2793,7 @@ function initLocaleToggle() {
   $('#locale-toggle').addEventListener('click', async () => {
     await initI18n(getLocale() === 'zh' ? 'en' : 'zh');
     renderAll();
+    refreshCharts();
     refreshSettingsPage();
   });
 }
@@ -3912,7 +3913,7 @@ function initSettingsPage() {
     settingsSnapshot = value.snapshot;
     settingsDefaults?.destroy();
     settingsDefaults = renderDefaults(defaults, { ...value, t, read,
-      execute: executeSettingsAction, writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup });
+      execute: executeSettingsAction, writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup });
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
@@ -4361,6 +4362,7 @@ function setModalBodyDisabled(disabled) {
 }
 
 function showConfirm(text) {
+  if (pendingConfirmCancel) pendingConfirmCancel();
   return new Promise((resolve) => {
     const box = actionsModal?.querySelector('#action-confirm');
     const msg = actionsModal?.querySelector('#action-confirm-text');

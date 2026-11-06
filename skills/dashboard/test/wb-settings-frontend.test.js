@@ -253,6 +253,21 @@ test('literal settings translation keys used by modules exist in a language pack
   const packs=['en','zh'].map(lang=>({...JSON.parse(fs.readFileSync(new URL('../public/i18n/'+lang+'.json',import.meta.url))),...JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.'+lang+'.json',import.meta.url)))}));
   for(const file of ['settings','settings-defaults','settings-pricing','settings-ui','settings-version']){
     const source=fs.readFileSync(new URL('../public/js/wb/'+file+'.js',import.meta.url),'utf8');
-    for(const match of source.matchAll(/\bt\('([^']+)'\)/g))for(const pack of packs)assert.ok(Object.hasOwn(pack,match[1]),file+': '+match[1]);
+    for(const match of source.matchAll(/\bt\('([^']+)'(?=\s*[,\)])/g))for(const pack of packs)assert.ok(Object.hasOwn(pack,match[1]),file+': '+match[1]);
   }
+});
+
+test('default controls retain the restart lock after an accepted runtime change', async () => {
+  const document = documentFixture(), root = document.createElement('div');
+  let writable = true;
+  const meta = { current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } };
+  const panel = renderDefaults(root, { snapshot: snapshot(), page: {}, metadata: { claude: meta, codex: meta }, document, t,
+    read: async () => ({}), writable: () => writable,
+    execute: async () => { writable = false; root.querySelectorAll('button, select, input').forEach(control => { control.disabled = true; }); return true; } });
+  await root.querySelector('#settings-use-claude').dispatch('click');
+  for (const runtime of ['claude', 'codex']) {
+    for (const id of ['settings-use-', 'settings-save-model-', 'settings-save-effort-', 'settings-model-', 'settings-effort-'])
+      assert.equal(root.querySelector('#' + id + runtime).disabled, true, id + runtime);
+  }
+  panel.destroy();
 });
