@@ -57,6 +57,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     totalEvents: 0, totalRuns: 0, currentEvents: [], error: null, lastSuccess: null,
     configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
+  let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null, subagentGeneration = 0;
   const getWritable = () => typeof writable === 'function' ? writable() : writable;
   const getLevel = () => typeof detail === 'function' ? detail() : detail;
   const active = gen => !stopped && controller != null && !controller.signal.aborted && generation === gen && owner === identity();
@@ -74,7 +75,6 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     onChange(value) {
       state.totalEvents = value.totalEvents;
       state.totalRuns = value.totalRuns;
-      if (value.currentRunId && value.filter === 'all') rememberSubagents(value.currentEvents);
       draw();
     },
     onError: () => {},
@@ -175,6 +175,42 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     }
     state.currentEvents = [...agents.values()];
   }
+  function resetSubagents() {
+    subagentController?.abort();
+    subagentController = null;
+    subagentRun = null;
+    subagentCursor = 0;
+    subagentReady = false;
+    subagentGeneration++;
+    state.currentEvents = [];
+  }
+  async function loadSubagents() {
+    const runId = state.row.live?.runId;
+    if (!runId) return;
+    if (subagentRun !== runId) {
+      resetSubagents();
+      subagentRun = runId;
+      subagentController = new AbortController();
+    }
+    const gen = subagentGeneration;
+    const initial = !subagentReady;
+    // Only the first attempt may paginate. A failed initial read resumes one
+    // page per board snapshot, so recovery cannot restart unbounded work.
+    subagentReady = true;
+    do {
+      const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', run_id: runId,
+        types: 'subagent_start,subagent_stop', order: 'asc', limit: '1000' });
+      if (subagentCursor || !initial) query.set('after_seq', String(subagentCursor));
+      const value = await request('/api/timeline?' + query, { signal: subagentController.signal });
+      if (gen !== subagentGeneration || state.row?.live?.runId !== runId) return;
+      const events = value.events ?? [];
+      rememberSubagents(events);
+      const next = events.at(-1)?.event_seq;
+      if (events.length && (!Number.isFinite(next) || next <= subagentCursor)) throw new Error('timeline_cursor_invalid');
+      if (events.length) subagentCursor = next;
+      if (events.length < 1000) return;
+    } while (initial);
+  }
   async function selectTab(tab) {
     invalidateOwner();
     if (!controller || !active(generation)) return;
@@ -189,18 +225,18 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     invalidateOwner();
     if (!controller || !active(generation) || !isVisible()) return Promise.resolve();
     if (refreshTask) return refreshTask;
-    const gen = generation, key = state.row.sessionGroup ?? 'origin';
+    const gen = generation, key = state.row.sessionGroup ?? 'origin', runId = state.row.live?.runId;
     const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', order: 'desc', limit: '5' });
     const task = (async () => {
       const values = await Promise.allSettled([
         request('/api/timeline?' + query),
         request(`/api/workbench/groups/${encodeURIComponent(key)}/backlog`),
         request(`/api/workbench/groups/${encodeURIComponent(key)}/runs?limit=3`),
+        loadSubagents(),
       ]);
-      if (!active(gen)) return;
+      if (!active(gen) || state.row.live?.runId !== runId) return;
       if (values[0].status === 'fulfilled') {
         state.recent = values[0].value.events ?? [];
-        rememberSubagents(state.recent);
       }
       if (values[1].status === 'fulfilled') state.backlog = values[1].value;
       if (values[2].status === 'fulfilled') {
@@ -224,6 +260,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   function close() {
     controller?.abort(); controller = null; generation++;
     timeline.close();
+    resetSubagents();
     refreshTask = null;
     state.row = null; state.tab = 'overview'; state.recent = []; state.currentEvents = [];
     state.totalEvents = state.totalRuns = 0; state.backlog = null; state.error = null;
@@ -250,7 +287,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (!state.historical) state.row = snapshot.rows?.find(row => row.sessionGroup === state.row.sessionGroup) ??
         olderRow(state.row.sessionGroup, { name: state.row.name, listKnown: snapshot.listKnown });
       if (previousRun !== state.row.live?.runId) {
-        state.currentEvents = [];
+        resetSubagents();
         timeline.close();
       }
       draw();

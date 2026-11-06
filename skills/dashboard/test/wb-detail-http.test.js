@@ -33,8 +33,8 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   put.run(2, 'origin', 'out', 'telegram', '2026-10-01 12:00:00', 'private Origin body');
   put.run(3, null, 'out', 'internal', '2026-10-01 12:00:00', 'private internal body');
   put.run(4, 'telegram:a', 'in', 'telegram', '2026-10-01 12:00:00', 'private ordinary body');
-  const clock = 1800000000000;
-  let engine, auth, reader, server, view = 'multi', snapshotReads = 0;
+  let clock = 1800000000000;
+  let engine, auth, reader, server, view = 'multi', snapshotReads = 0, cachedSnapshot = null;
   const calls = [], restarts = [];
   const previous = process.env.ZYLOS_DIR;
   t.after(async () => {
@@ -68,6 +68,13 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       const cutoff = Number(args[args.indexOf('--active-since') + 1]);
       return { stdout: JSON.stringify({ ok: true, data: { groups: groups.filter(row => row.lastActivityAt >= cutoff), hasOlder: false } }) };
     }
+    if (args[0] === path.join(root, '.claude/skills/comm-bridge/scripts/c4-db.js') && args[1] === 'unsummarized') {
+      const global = !args.includes('--group');
+      return { stdout: JSON.stringify({ ok: true, data: { count: global ? 3 : 7, firstAt: 100 } }) };
+    }
+    if (args[0] === path.join(root, '.claude/skills/zylos-memory/scripts/sync-lock.js')) {
+      return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
+    }
     assert.fail(`Unexpected child request: ${file} ${args.join(' ')}`);
   };
   const execFile = () => assert.fail('callback child invocation must not bypass the injected transport');
@@ -91,8 +98,8 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     live: { runId: view === 'single' ? 'single-run' : 'origin-run' } }], instance: {} });
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     createGroupSnapshot: () => ({
-      getSnapshot: async () => { snapshotReads++; return snapshot(); },
-      getCachedSnapshot: snapshot,
+      getSnapshot: async () => { snapshotReads++; cachedSnapshot = snapshot(); return cachedSnapshot; },
+      getCachedSnapshot: () => cachedSnapshot,
       channelDownCounter: { update() {} },
     }),
     workbenchResponse: () => assert.fail('detail requests must not dispatch another workbench read route'),
@@ -171,7 +178,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   });
 
   await t.test('single message HTTP reads NULL attribution without exposing bodies or Origin rows', async () => {
-    view = 'single';
+    view = 'single'; cachedSnapshot = snapshot();
     const range = '?since=2026-10-01T00%3A00%3A00Z&until=2026-10-02T00%3A00%3A00Z';
     const response = await request('/api/workbench/groups/origin/messages' + range);
     assert.equal(response.status, 200);
@@ -180,7 +187,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     assert.deepEqual(Object.keys(value.messages[0]), ['id', 'direction', 'channel', 'timestamp']);
     assert.doesNotMatch(JSON.stringify(value), /private|content/);
     assert.equal(snapshotReads, 0, 'message reads reuse the cached single view without rebuilding');
-    view = 'multi';
+    view = 'multi'; cachedSnapshot = snapshot();
     const originResponse = await request('/api/workbench/groups/origin/messages' + range);
     assert.deepEqual((await originResponse.json()).messages.map(row => row.id), [2]);
   });
@@ -197,7 +204,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     }
     const before = snapshotReads, childBefore = calls.length;
     for (const [mode, expectedRun] of [['single', 'single-run'], ['multi', 'origin-run']]) {
-      view = mode;
+      view = mode; cachedSnapshot = snapshot();
       const response = await request('/api/workbench/groups/origin/runs?limit=3');
       assert.equal(response.status, 200);
       const value = await response.json();
@@ -208,6 +215,60 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       assert.equal(snapshotReads, before, 'run reads must not invoke the rebuilding snapshot getter');
     }
     assert.equal(calls.length, childBefore);
+  });
+
+  await t.test('backlog HTTP reads reuse cached views without rebuilding even when count cache is warm', async () => {
+    const before = snapshotReads;
+    for (const [mode, count, syncing] of [['single', 3, true], ['multi', 7, false]]) {
+      view = mode; cachedSnapshot = snapshot();
+      for (let round = 0; round < 2; round++) {
+        const response = await request('/api/workbench/groups/origin/backlog');
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { count, firstAt: 100, syncing });
+        assert.equal(snapshotReads, before, 'backlog must not invoke the rebuilding getter with a cached view');
+      }
+    }
+    const countCalls = calls.filter(call => call.args[1] === 'unsummarized');
+    assert.deepEqual(countCalls.map(call => call.args.slice(1)), [
+      ['unsummarized', '--json'], ['unsummarized', '--group', 'origin', '--json'],
+    ]);
+    const lockCalls = calls.filter(call => call.args[0].endsWith('/sync-lock.js'));
+    assert.deepEqual(lockCalls.map(call => call.args.slice(1)), [
+      ['status', '--json'], ['status', '--group', 'origin', '--json'],
+    ]);
+  });
+
+  await t.test('cold detail scopes build one snapshot and subsequent reads reuse it while unreadable views keep Origin', async () => {
+    const range = '?since=2026-10-01T00%3A00%3A00Z&until=2026-10-02T00%3A00%3A00Z';
+    const assertSingle = async route => {
+      const response = await request('/api/workbench/groups/origin/' + route);
+      assert.equal(response.status, 200, route);
+      const value = await response.json();
+      if (route === 'runs') {
+        assert.deepEqual(value.runs.map(run => run.runId), ['single-run']);
+        assert.equal(value.runs[0].endReason, 'running');
+      } else if (route === 'backlog') assert.deepEqual(value, { count: 3, firstAt: 100, syncing: true });
+      else assert.deepEqual(value.messages.map(row => row.id), [1]);
+    };
+    for (const first of ['runs', 'backlog', 'messages' + range]) {
+      view = 'single'; cachedSnapshot = null;
+      const before = snapshotReads;
+      await assertSingle(first);
+      assert.equal(snapshotReads, before + 1, first + ' must resolve a cold cache once');
+      for (const route of ['runs', 'backlog', 'messages' + range]) await assertSingle(route);
+      assert.equal(snapshotReads, before + 1, 'hot detail routes must share the newly populated snapshot');
+    }
+    // A cached snapshot with no usable view is an observed failure, not a cold
+    // cache. Preserve its explicit Origin request rather than guessing single.
+    cachedSnapshot = { view: null, rows: [], instance: {} };
+    clock += 30001;
+    const before = snapshotReads;
+    const response = await request('/api/workbench/groups/origin/backlog');
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { count: 7, firstAt: 100, syncing: false });
+    assert.deepEqual(calls.at(-2).args.slice(1), ['unsummarized', '--group', 'origin', '--json']);
+    assert.deepEqual(calls.at(-1).args.slice(1), ['status', '--group', 'origin', '--json']);
+    assert.equal(snapshotReads, before, 'a cached unreadable view must not trigger a new build');
   });
 
   await t.test('invalid group keys are rejected before any child command or restart submission', async () => {

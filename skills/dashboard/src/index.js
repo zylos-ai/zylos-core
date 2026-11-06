@@ -383,9 +383,10 @@ const displayNames = createDisplayNames({ store, zylosDir: config.zylosDir, sani
 const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames,
   readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
   readPm2: () => pm2Collector.getLatestPM2Data() });
-const groupRuns = createRuns({ store, getSnapshot: workbench.getCachedSnapshot });
+const getDetailSnapshot = () => workbench.getCachedSnapshot() ?? workbench.getSnapshot();
+const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
-const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, getSnapshot: workbench.getCachedSnapshot });
+const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, getSnapshot: getDetailSnapshot });
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config });
 
 function workbenchGroupKey(encoded) {
@@ -1141,7 +1142,7 @@ async function handleApi(req, res, pathname, url) {
           break;
         case 'messages':
           data = { messages: c4Reader.getGroupMessages(key === 'origin' &&
-            (workbench.getCachedSnapshot() ?? await workbench.getSnapshot()).view === 'single' ? null : key, {
+            (await getDetailSnapshot()).view === 'single' ? null : key, {
             since: url.searchParams.get('since') ?? 0,
             until: url.searchParams.get('until') ?? Date.now(),
           }) };

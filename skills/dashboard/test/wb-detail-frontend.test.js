@@ -27,6 +27,7 @@ function detailFixture(fetch, options = {}) {
   return { controller, root, timers, document };
 }
 function defaultRead(path) {
+  if (path.includes('types=subagent_start')) return { events: [] };
   if (path.startsWith('/api/timeline')) return { events: [{ event_type: 'stop', timestamp: 'recent' }] };
   if (path.includes('/backlog')) return { count: 3, firstAt: 100, syncing: false };
   if (path.includes('/messages')) return { messages: [] };
@@ -205,7 +206,7 @@ test('snapshot-driven detail refresh skips hidden pages, retains data on failure
   const calls = [], f = detailFixture(async path => {
     calls.push(path);
     if (failing) throw Error('offline');
-    return response(path.startsWith('/api/timeline') ? { events: [{ event_type: 'stop', timestamp: String(version) }] } : defaultRead(path));
+    return response(path.includes('types=subagent_start') ? { events: [] } : path.startsWith('/api/timeline') ? { events: [{ event_type: 'stop', timestamp: String(version) }] } : defaultRead(path));
   }, { isVisible: () => visible });
   await f.controller.open('a', { rows: [], listKnown: true });
   const count = calls.length;
@@ -275,29 +276,55 @@ test('plain detail header reports platform and uptime from run creation rather t
   f.controller.destroy();
 });
 
-test('overview derives current subagent changes from recent events without opening the full timeline', async () => {
-  let stopped = false;
-  const current = row('a');
-  const calls = [], f = detailFixture(async path => {
-    calls.push(path);
-    if (path.startsWith('/api/timeline')) return response({ events: [
-      { run_id: 'run-a', event_type: stopped && !path.includes('run_id=') ? 'subagent_stop' : 'subagent_start',
-        metadata: { agent_id: 'worker' }, event_seq: stopped && !path.includes('run_id=') ? 2 : 1 },
-    ] });
+test('overview restores a current subagent whose start predates the five recent events', async () => {
+  const current = row('a'), calls = [];
+  const f = detailFixture(async path => {
+    calls.push(path); const url = new URL(path, 'http://fixture');
+    if (url.pathname === '/api/timeline') {
+      if (url.searchParams.get('types') === 'subagent_start,subagent_stop') return response({ events: [
+        { run_id: 'run-a', event_type: 'subagent_start', metadata: { agent_id: 'worker' }, event_seq: 1 },
+      ] });
+      return response({ events: Array.from({ length: 5 }, (_, index) => ({ run_id: 'run-a', event_type: 'post_tool_use', event_seq: 96 + index })) });
+    }
     return response(defaultRead(path));
   });
   await f.controller.open(current, { rows: [current], listKnown: true });
   assert.match(f.root.textContent, /wb.detail.subagent · worker/);
-  stopped = true; calls.length = 0;
-  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
-  assert.doesNotMatch(f.root.textContent, /wb.detail.subagent · worker/);
+  const subagentRead = new URL(calls.find(path => path.includes('types=subagent_start')), 'http://fixture');
+  assert.equal(subagentRead.searchParams.get('run_id'), 'run-a');
+  assert.equal(subagentRead.searchParams.get('order'), 'asc');
   assert.equal(f.controller.timeline.state.open, false);
-  assert.equal(calls.length, 3);
-  assert.equal(calls.filter(path => path.startsWith('/api/timeline')).length, 1);
-  assert.equal(calls.some(path => path.includes('run_id=')), false);
+  assert.equal(calls.length, 4);
+  f.controller.destroy();
+});
+
+test('overview consumes a subagent stop followed by more than five unrelated events using an independent cursor', async () => {
+  const current = row('a'), calls = [];
+  let stopped = false;
+  const f = detailFixture(async path => {
+    calls.push(path); const url = new URL(path, 'http://fixture');
+    if (url.pathname === '/api/timeline') {
+      if (url.searchParams.get('types') === 'subagent_start,subagent_stop') return response({ events: [
+        { run_id: 'run-a', event_type: stopped ? 'subagent_stop' : 'subagent_start', metadata: { agent_id: 'worker' }, event_seq: stopped ? 2 : 1 },
+      ] });
+      if (url.searchParams.has('run_id')) return response({ events: [] });
+      return response({ events: Array.from({ length: 5 }, (_, index) => ({ run_id: 'run-a', event_type: 'post_tool_use', event_seq: 96 + index })) });
+    }
+    return response(defaultRead(path));
+  });
+  const snapshot = { rows: [current], listKnown: true };
+  await f.controller.open(current, snapshot);
+  assert.match(f.root.textContent, /wb.detail.subagent · worker/);
   await f.controller.selectTab('timeline');
+  await f.controller.timeline.setFilter('tools');
   await f.controller.selectTab('overview');
-  assert.doesNotMatch(f.root.textContent, /wb.detail.subagent · worker/, 'older timeline pages cannot supersede a newer recent stop');
+  stopped = true; calls.length = 0;
+  await f.controller.updateSnapshot(snapshot);
+  assert.doesNotMatch(f.root.textContent, /wb.detail.subagent · worker/);
+  const subagentRead = new URL(calls.find(path => path.includes('types=subagent_start')), 'http://fixture');
+  assert.equal(subagentRead.searchParams.get('after_seq'), '1');
+  assert.equal(f.controller.timeline.state.filter, 'tools');
+  assert.equal(calls.length, 4);
   f.controller.destroy();
 });
 
@@ -417,6 +444,7 @@ test('snapshot rounds stay bounded with 5000 history events and append only one 
   const f = detailFixture(async path => {
     calls.push(path); const url = new URL(path, 'http://fixture');
     if (url.pathname === '/api/timeline') {
+      if (url.searchParams.get('types') === 'subagent_start,subagent_stop') return response({ events: [] });
       if (!url.searchParams.has('run_id')) {
         if (holdRecent) return holdRecent.promise;
         return response({ events: [] });
@@ -430,10 +458,10 @@ test('snapshot rounds stay bounded with 5000 history events and append only one 
   });
   const snapshot = { rows: [current], listKnown: true };
   await f.controller.open(current, snapshot);
-  assert.equal(calls.length, 3);
-  assert.equal(calls.some(path => path.includes('run_id=')), false);
+  assert.equal(calls.length, 4);
+  assert.equal(calls.some(path => path.includes('run_id=') && !path.includes('types=subagent_start')), false);
   calls.length = 0; await f.controller.updateSnapshot(snapshot);
-  assert.equal(calls.length, 3, 'overview round is independent of current event history');
+  assert.equal(calls.length, 4, 'overview round is independent of current event history');
   calls.length = 0; await f.controller.selectTab('timeline');
   assert.equal(f.controller.timeline.state.events.get('run-a').length, 5000);
   assert.equal(calls.filter(path => path.includes('run_id=')).length, 6, 'initial explicit opening paginates the entire run');
@@ -441,20 +469,141 @@ test('snapshot rounds stay bounded with 5000 history events and append only one 
   calls.length = 0;
   holdRecent = deferred();
   const one = f.controller.updateSnapshot(snapshot), two = f.controller.updateSnapshot(snapshot);
-  assert.equal(calls.length, 3, 'concurrent board updates share the same bounded refresh');
+  assert.equal(calls.length, 4, 'concurrent board updates share the same bounded refresh');
   holdRecent.resolve(response({ events: [] })); holdRecent = null;
   await Promise.all([one, two]);
-  assert.equal(calls.length, 5, 'timeline round adds one event page and one metadata-only message read');
+  assert.equal(calls.length, 6, 'timeline round adds one event page and one metadata-only message read');
   assert.equal(f.controller.timeline.state.events.get('run-a').length, 6000);
-  const eventRead = new URL(calls.find(path => path.includes('run_id=')), 'http://fixture');
+  const eventRead = new URL(calls.find(path => path.includes('run_id=') && !path.includes('types=subagent_start')), 'http://fixture');
   assert.equal(eventRead.searchParams.get('after_seq'), '5000');
   calls.length = 0; await f.controller.updateSnapshot(snapshot);
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 6);
   assert.equal(f.controller.timeline.state.events.get('run-a').length, 6500);
-  assert.equal(new URL(calls.find(path => path.includes('run_id=')), 'http://fixture').searchParams.get('after_seq'), '6000');
+  assert.equal(new URL(calls.find(path => path.includes('run_id=') && !path.includes('types=subagent_start')), 'http://fixture').searchParams.get('after_seq'), '6000');
   await f.controller.selectTab('overview');
   calls.length = 0; await f.controller.updateSnapshot(snapshot);
-  assert.equal(calls.length, 3);
-  assert.equal(calls.some(path => path.includes('run_id=')), false, 'overview never refreshes hidden full-current history');
+  assert.equal(calls.length, 4);
+  assert.equal(calls.some(path => path.includes('run_id=') && !path.includes('types=subagent_start')), false, 'overview never refreshes hidden full-current history');
+  f.controller.destroy();
+});
+
+test('subagent initial read paginates its typed stream and later snapshots consume only one page', async () => {
+  const stream = Array.from({ length: 1001 }, (_, index) => ({ run_id: 'run-a', event_seq: index + 1,
+    event_type: index === 1000 ? 'subagent_stop' : 'subagent_start', metadata: { agent_id: 'worker' } }));
+  const current = row('a'), calls = [];
+  const f = detailFixture(async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.searchParams.get('types') === 'subagent_start,subagent_stop') {
+      calls.push(url);
+      const after = Number(url.searchParams.get('after_seq') ?? 0);
+      return response({ events: stream.slice(after, after + 1000) });
+    }
+    return response(defaultRead(path));
+  });
+  const snapshot = { rows: [current], listKnown: true };
+  await f.controller.open(current, snapshot);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].searchParams.get('after_seq'), '1000');
+  assert.doesNotMatch(f.root.textContent, /wb.detail.subagent · worker/);
+  stream.push(...Array.from({ length: 1500 }, (_, index) => ({ run_id: 'run-a', event_seq: 1002 + index,
+    event_type: 'subagent_start', metadata: { agent_id: 'worker' } })));
+  calls.length = 0; await f.controller.updateSnapshot(snapshot);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].searchParams.get('after_seq'), '1001');
+  calls.length = 0; await f.controller.updateSnapshot(snapshot);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].searchParams.get('after_seq'), '2001');
+  f.controller.destroy();
+});
+
+test('filter reload excludes refresh append until the new filtered array is authoritative', async () => {
+  const oldPage = deferred(), toolsPage = deferred(), calls = [];
+  let phase = 'initial';
+  const loader = createTimelineLoader({ request: async path => {
+    const url = new URL(path, 'http://fixture'); calls.push(url);
+    if (url.pathname.endsWith('/runs')) return { runs: [run('r')], totalRuns: 1, totalEvents: 4 };
+    if (url.pathname.endsWith('/messages')) return { messages: [] };
+    if (phase === 'initial') return { events: [{ run_id: 'r', event_seq: 1, event_type: 'pre_tool_use' },
+      { run_id: 'r', event_seq: 2, event_type: 'stop' }] };
+    if (phase === 'racing') return url.searchParams.has('types') ? toolsPage.promise : oldPage.promise;
+    return { events: [{ run_id: 'r', event_seq: 4, event_type: 'post_tool_use' }] };
+  } });
+  await loader.open('a', 'r');
+  phase = 'racing';
+  const oldRefresh = loader.refresh();
+  const filterReload = loader.setFilter('tools');
+  oldPage.resolve({ events: [{ run_id: 'r', event_seq: 3, event_type: 'stop' }] });
+  await oldRefresh;
+  assert.equal(loader.state.loading, true, 'finishing the old refresh cannot unlock a pending filter reload');
+  const count = calls.length;
+  await loader.refresh();
+  assert.equal(calls.length, count, 'a second snapshot cannot append an old array while the new filter is loading');
+  toolsPage.resolve({ events: [{ run_id: 'r', event_seq: 1, event_type: 'pre_tool_use' }] });
+  await filterReload;
+  phase = 'ready';
+  await loader.refresh();
+  assert.equal(loader.state.events.get('r').length, 2);
+  assert.equal(loader.state.events.get('r').every(event => ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.event_type)), true);
+  assert.equal(loader.state.loading, false);
+  loader.close();
+});
+
+test('an active timeline discards the previous run and reads the replacement run after a board snapshot changes', async () => {
+  let current = row('a');
+  const calls = [], signals = [];
+  const f = detailFixture(async (path, options) => {
+    calls.push(path); const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return response({ runs: [run(current.live.runId)], totalRuns: 1, totalEvents: 1 });
+    if (url.pathname === '/api/timeline' && url.searchParams.has('run_id')) {
+      signals.push(options.signal);
+      if (url.searchParams.has('types')) return response({ events: [] });
+      return response({ events: [{ run_id: url.searchParams.get('run_id'), event_seq: 1,
+        event_type: url.searchParams.get('run_id') === 'run-a' ? 'old_run_event' : 'new_run_event' }] });
+    }
+    return response(defaultRead(path));
+  });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  await f.controller.selectTab('timeline');
+  assert.match(f.root.textContent, /old_run_event/);
+  const oldSignals = [...signals]; calls.length = 0;
+  current = row('a', { live: { runId: 'run-b', sessionId: 'session-b' } });
+  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+  assert.equal(oldSignals.every(signal => signal.aborted), true);
+  assert.equal(f.controller.timeline.state.currentRunId, 'run-b');
+  assert.equal(f.controller.timeline.state.events.has('run-a'), false);
+  assert.equal(f.controller.timeline.state.events.get('run-b').length, 1);
+  assert.match(f.root.textContent, /new_run_event/);
+  assert.doesNotMatch(f.root.textContent, /old_run_event/);
+  assert.equal(calls.filter(path => path.includes('run_id=')).every(path => path.includes('run_id=run-b')), true);
+  f.controller.destroy();
+});
+
+
+test('failed initial subagent pagination resumes at one page per later snapshot', async () => {
+  const stream = Array.from({ length: 2500 }, (_, index) => ({ run_id: 'run-a', event_seq: index + 1,
+    event_type: 'subagent_start', metadata: { agent_id: 'worker' } }));
+  const current = row('a'), calls = [];
+  let fail = true;
+  const f = detailFixture(async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.searchParams.get('types') === 'subagent_start,subagent_stop') {
+      calls.push(url);
+      const after = Number(url.searchParams.get('after_seq') ?? 0);
+      if (fail && after === 1000) throw new Error('offline');
+      return response({ events: stream.slice(after, after + 1000) });
+    }
+    return response(defaultRead(path));
+  });
+  const snapshot = { rows: [current], listKnown: true };
+  await f.controller.open(current, snapshot);
+  assert.equal(calls.length, 2);
+  assert.equal(f.controller.state.error, 'offline');
+  fail = false; calls.length = 0;
+  await f.controller.updateSnapshot(snapshot);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].searchParams.get('after_seq'), '1000');
+  calls.length = 0; await f.controller.updateSnapshot(snapshot);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].searchParams.get('after_seq'), '2000');
   f.controller.destroy();
 });
