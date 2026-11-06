@@ -6,7 +6,7 @@ import { resolveCoreConfigModule } from './core-config-loader.js';
 import { sendError } from './c4-send-args.js';
 import { safeEntryId } from './c4-entry-id.js';
 import { appendOutGroupFallback } from './c4-outbound-events.js';
-import { runBeforeSendHook } from './c4-channel-hooks.js';
+import { readChannelHookMetadata, runBeforeSendHook } from './c4-channel-hooks.js';
 
 const pathsModule = path.join(path.dirname(resolveCoreConfigModule()), 'session-group-paths.js');
 const { runDirFromEnv, legacyRunDir } = await import(pathToFileURL(pathsModule).href);
@@ -58,21 +58,29 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
     throw sendError('INVALID_ARGS', 'Invalid channel: Channel script not found or component unavailable');
   }
   assertEndpointPassable(endpoint, request.id);
+  const stdinDelivery = readChannelHookMetadata(channel, { skillsDir })?.delivery === 'stdin';
   await runBeforeSendHook(request, message, { skillsDir, env });
   const record = api.insertConversation('out', channel, endpoint, message,
     { status: 'delivered', groupName, wholeGroup, sessionId: senderSessionId(env) });
   await appendFallback?.(record, groupName);
   return new Promise((resolve, reject) => {
     let child;
+    let inputError;
     const spawnFailed = error => reject(sendError('COMPONENT_SPAWN_FAILED',
       `Component did not start (${error.code || 'UNKNOWN'}); audit retained; not sent`));
-    try { child = spawn('node', [script, ...(endpoint === null ? [] : [endpoint]), message], { stdio: 'inherit' }); }
+    const args = stdinDelivery ? [script] : [script, ...(endpoint === null ? [] : [endpoint]), message];
+    try { child = spawn('node', args, { env, stdio: stdinDelivery ? ['pipe', 'inherit', 'inherit'] : 'inherit' }); }
     catch (error) { spawnFailed(error); return; }
     child.once('error', spawnFailed);
     child.once('close', (code, signal) => {
-      if (code === 0) resolve(record);
-      else reject(Object.assign(sendError('SEND_FAILED', `Failed to send: component exit ${code ?? signal}; audit retained; delivery unconfirmed`), { exitCode: code }));
+      if (code === 0 && !inputError) resolve(record);
+      else reject(Object.assign(sendError('SEND_FAILED', `Failed to send: ${inputError ? 'component stdin failed' : `component exit ${code ?? signal}`}; audit retained; delivery unconfirmed`), { exitCode: inputError && code === 0 ? 1 : code }));
     });
+    if (stdinDelivery) {
+      child.stdin.on('error', error => { inputError = error; });
+      child.stdin.end(JSON.stringify({ version: 1, c4_id: record.id, channel: record.channel,
+        endpoint_id: record.endpoint_id, session_group: record.session_group, content: message }));
+    }
   });
 }
 

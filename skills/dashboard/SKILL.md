@@ -1,8 +1,15 @@
 ---
 name: dashboard
 version: 0.6.9
-description: Read-only Zylos observability dashboard for agent state, costs, tools, communication, scheduler, and PM2 service health. Full features on Claude runtime. PM2, system health, communication, and scheduler monitoring on all runtimes.
+description: Zylos observability dashboard with a plain-text conversation channel for agent state, costs, tools, communication, scheduler, and PM2 service health. Full features on Claude runtime. PM2, system health, communication, and scheduler monitoring on all runtimes.
 type: capability
+
+c4:
+  delivery: stdin
+  before_send:
+    hook_id: dashboard.content
+    entry: scripts/send-hook.js
+    timeout_ms: 1500
 
 lifecycle:
   npm: true
@@ -42,7 +49,43 @@ config:
 
 # Zylos Dashboard
 
-Read-only observability dashboard for a local Zylos agent.
+Observability dashboard for a local Zylos agent, with a plain-text Dashboard channel.
+
+## Plain-text channel
+
+The Dashboard channel requires Core support for channel-declared synchronous
+BeforeSend hooks and post-storage stdin delivery. Deploy the matching Core and
+Dashboard capabilities together; an older argv-only Core cannot deliver this
+channel. This declaration does not add a separate service or registration step.
+
+Send plain text through the C4 send entry, using the original conversation ID as
+the endpoint and its local group name when replying within that group:
+
+```bash
+cat <<'EOF_MESSAGE' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js dashboard conversation_a --session-group conversation_a
+Your plain-text reply.
+EOF_MESSAGE
+```
+
+Use the exact endpoint/group from the originating conversation; display names do
+not select a destination. Do not call the low-level `c4-db.js insert` command for
+Dashboard sends: it bypasses BeforeSend. Core stores the original text, then
+passes the six-field delivery packet to `scripts/send.js` on stdin; the script's
+argv does not carry the message body. Callers do not construct this packet.
+
+The synchronous hook permits unmarked text up to 65,536 UTF-8 bytes, including
+ordinary JSON and Core status notices. Content beginning with the exact shared
+`[C4-CONTENT]` plus LF prefix is rejected at this stage, as is oversized text.
+Rejection happens before C4 storage or channel delivery. Structured messages,
+question registration, drafts and answering controls are separate capabilities.
+
+A successful send confirms the stored row and channel handoff; it does not prove
+that a person viewed the text. Dashboard delivery reads the authoritative C4 row
+by its ID using a read-only connection and does not call back into Dashboard HTTP.
+Plain-text delivery does not open or write the Dashboard database; later question
+registration extends the same channel module.
+
+## Dashboard service
 
 ```bash
 npm start
