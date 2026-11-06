@@ -6,9 +6,18 @@ const stable = value => JSON.stringify(value, function (_key, item) {
   return item && typeof item === 'object' && !Array.isArray(item)
     ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item;
 });
+const storedAction = value => {
+  try {
+    const action = JSON.parse(value);
+    if (!action || typeof action !== 'object' || Array.isArray(action)) throw new Error('Invalid saved action');
+    return { action };
+  } catch {
+    return { actionError: 'chat_answer_action_invalid' };
+  }
+};
 const projectAnswer = row => ({ answerId: row.answer_id, questionC4Id: row.question_c4_id,
   sessionGroup: row.session_group, endpointId: row.endpoint_id, content: row.content,
-  action: JSON.parse(row.action), createdAt: row.created_at });
+  ...storedAction(row.action), createdAt: row.created_at });
 
 const questionSelect = `SELECT q.*, a.answer_id, c.operation AS control_operation,
   c.replacement_interrupt_id, c.control_message_id FROM chat_questions q

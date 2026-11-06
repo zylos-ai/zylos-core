@@ -11,24 +11,27 @@ import { ChatAnswers } from '../src/lib/chat/answers.js';
 import { handleChatAnswers } from '../src/lib/chat/answer-routes.js';
 import { sendJson } from '../src/lib/http.js';
 import { parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { answerDeliveryFixture } from './helpers/answer-delivery-fixture.js';
 
 const protocol = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const envelope = name => structuredClone(protocol.valid.find(item => item.name === name).envelope);
 const group = 'dashboard-owned:local-chat';
 const conversationId = `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
-const route = `/api/chat/conversations/${encodeURIComponent(conversationId)}`;
 const error = (code, statusCode) => Object.assign(new Error(code), { code, statusCode });
 
 // Boundary: actual HTTP route, AuthGate and conditional Dashboard transactions.
 // Run for answer routes, authorization, body validation or question-page
-// changes; unrelated UI edits may skip. Delivery is a narrow adapter spy: actual
-// receive and C4 authority are covered by chat-answer-delivery.test.js. Every
+// changes; unrelated UI edits may skip. Default delivery is a narrow adapter
+// spy; recovery cases inject the real two-database delivery fixture. Every
 // case owns its temporary SQLite DB, loopback listener and auth cleanup timer;
 // no Core process, external network, tmux, PM2 or model runs here.
-async function fixture(t) {
+async function fixture(t, { engine, question } = {}) {
+  const sessionGroup = question?.sessionGroup ?? group;
+  const expectedId = `g:${Buffer.from(sessionGroup).toString('hex').toUpperCase()}`;
+  const targetRoute = `/api/chat/conversations/${encodeURIComponent(expectedId)}`;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-answer-http-'));
-  const store = new Store(path.join(root, 'dashboard.db'));
-  const answers = new ChatAnswers({ store });
+  const store = engine?.store ?? new Store(path.join(root, 'dashboard.db'));
+  const answers = engine?.answers ?? new ChatAnswers({ store });
   const digest = value => crypto.createHash('sha256').update(value).digest('hex');
   const cookie = 'isolated-answer-cookie';
   const tokens = { read: `zylos_st_${'a'.repeat(64)}`, admin: `zylos_st_${'b'.repeat(64)}` };
@@ -47,13 +50,13 @@ async function fixture(t) {
   const receipts = new Map();
   const sender = {
     async resolve(id) {
-      if (id !== conversationId) throw error('chat_conversation_forbidden', 403);
+      if (id !== expectedId) throw error('chat_conversation_forbidden', 403);
       await onResolve?.();
-      return { channel: 'dashboard', namespace: 'dashboard-owned', localId: 'local-chat',
-        sessionGroup: group, state };
+      return { channel: 'dashboard', namespace: sessionGroup.split(':')[0], localId: question?.endpointId ?? 'local-chat',
+        sessionGroup, state };
     },
   };
-  const delivery = {
+  const delivery = engine?.delivery ?? {
     async deliver(answerId, { initial, retry, authorize }) {
       // Model the real adapter's successful pre-call absence check before its
       // awaited Core loading/authorization boundary; no C4 is queried here.
@@ -86,12 +89,12 @@ async function fixture(t) {
     clearInterval(auth._cleanupTimer);
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
-    store.close();
+    if (!engine) store.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const base = `http://127.0.0.1:${server.address().port}`;
-  async function request(suffix, { method = 'POST', body = {}, identity = 'cookie', origin = base, target = route } = {}) {
+  async function request(suffix, { method = 'POST', body = {}, identity = 'cookie', origin = base, target = targetRoute } = {}) {
     const headers = { 'content-type': 'application/json' };
     if (origin !== null) headers.origin = origin;
     if (identity === 'cookie') headers.cookie = `__Secure-zylos_dashboard_session=${cookie}`;
@@ -274,3 +277,89 @@ test('remote access is checked again after asynchronous answer reconciliation', 
   assert.equal(Object.hasOwn(result.body, 'items'), false);
   assert.equal(f.calls.deliveries.length, 0);
 });
+
+// Boundary: real Dashboard/C4 files and receive, private HTTP and AuthGate.
+// Run for saved-action projection/retry changes; skip presentation-only edits.
+// The delivery fixture owns both databases; the HTTP fixture owns its listener
+// and auth timer. No live PM2, tmux, runtime, model or external network is used.
+test('a refreshed question exposes its saved action for one explicit retry after absence is confirmed', async t => {
+  const engine = answerDeliveryFixture(t), question = engine.createQuestion();
+  const accepted = engine.accept({ question });
+  const answerId = accepted.answer.answerId;
+  engine.store.db.prepare("UPDATE chat_answer_deliveries SET state='unknown' WHERE answer_id=?").run(answerId);
+  const f = await fixture(t, { engine: { ...engine, delivery: engine.makeDelivery() }, question });
+  f.setMode('single');
+  engine.setQueryError(true);
+  let page = await f.request('/questions', { method: 'GET' });
+  assert.equal(page.status, 200);
+  assert.equal(page.body.items[0].delivery.retryAllowed, false);
+  assert.equal(engine.counts.receive, 0);
+  engine.setQueryError(false);
+  page = await f.request('/questions', { method: 'GET' });
+  assert.equal(page.status, 200);
+  const item = page.body.items[0];
+  const saved = JSON.parse(engine.store.db.prepare('SELECT action FROM chat_answers WHERE answer_id=?').get(answerId).action);
+  assert.deepEqual(item.action, saved);
+  assert.equal(item.action.id, item.answer_id);
+  assert.equal(Object.hasOwn(item, 'actionError'), false);
+  assert.equal(item.delivery.retryAllowed, true);
+  assert.equal(engine.counts.receive, 0, 'refresh never sends the accepted answer');
+  const body = { interruptId: item.interrupt_id, action: item.action, retry: true };
+  assert.equal((await f.request('/answers', { body })).status, 403);
+  assert.equal(engine.counts.receive, 0, 'read-only mode can read the action but cannot retry');
+  f.setMode('multi');
+  const retried = await f.request('/answers', { body });
+  assert.equal(retried.status, 200);
+  assert.deepEqual(retried.body.answer.action, saved);
+  assert.equal(retried.body.delivery.stored, true);
+  assert.equal(engine.counts.receive, 1);
+  assert.equal(engine.answerRows(answerId).length, 1);
+  const repeated = await f.request('/answers', { body });
+  assert.equal(repeated.status, 200);
+  assert.equal(engine.counts.receive, 1);
+  const changed = structuredClone(body); changed.action.payload.selected = ['b'];
+  const conflict = await f.request('/answers', { body: changed });
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.body.error, 'chat_answer_conflict');
+  assert.equal(engine.counts.receive, 1);
+  assert.deepEqual(engine.answers.get(answerId).action, saved);
+  const original = engine.db.prepare('SELECT content FROM conversations WHERE id=?').get(question.row.id);
+  assert.equal(original.content, question.row.content);
+});
+
+// Boundary: corrupted saved JSON must be isolated even for unresolved receipts,
+// whose group refresh reads the accepted answer before projecting the page.
+// Uses the same private real-store/receive fixture; no receive call is needed.
+for (const corrupted of ['{broken', 'null', '[]']) {
+  test(`an invalid saved action ${corrupted} marks only its question and leaves other items readable`, async t => {
+    const engine = answerDeliveryFixture(t), badQuestion = engine.createQuestion();
+    const bad = engine.accept({ question: badQuestion }).answer;
+    const goodQuestion = engine.createQuestion(), good = engine.accept({ question: goodQuestion }).answer;
+    const unanswered = engine.createQuestion();
+    engine.store.db.prepare('UPDATE chat_answers SET action=? WHERE answer_id=?').run(corrupted, bad.answerId);
+    engine.store.db.prepare("UPDATE chat_answer_deliveries SET state='unknown'").run();
+    const f = await fixture(t, { engine, question: badQuestion });
+    const page = await f.request('/questions', { method: 'GET' });
+    assert.equal(page.status, 200);
+    assert.equal(page.body.items.length, 3);
+    const broken = page.body.items.find(item => item.answer_id === bad.answerId);
+    assert.equal(broken.actionError, 'chat_answer_action_invalid');
+    assert.equal(Object.hasOwn(broken, 'action'), false);
+    assert.equal(broken.delivery.retryAllowed, true);
+    const intact = page.body.items.find(item => item.answer_id === good.answerId);
+    assert.deepEqual(intact.action, good.action);
+    assert.equal(Object.hasOwn(intact, 'actionError'), false);
+    assert.equal(intact.delivery.retryAllowed, true);
+    const paused = page.body.items.find(item => item.interrupt_id === unanswered.envelope.interruptId);
+    assert.equal(paused.status, 'paused');
+    for (const field of ['action', 'actionError', 'delivery']) assert.equal(Object.hasOwn(paused, field), false);
+    const attempted = await f.request('/answers', { body: {
+      interruptId: badQuestion.envelope.interruptId, action: bad.action, retry: true,
+    } });
+    assert.equal(attempted.status, 409, 'a corrupted saved action is never repaired from client data');
+    assert.equal(engine.store.db.prepare('SELECT action FROM chat_answers WHERE answer_id=?').get(bad.answerId).action, corrupted);
+    assert.equal(engine.counts.receive, 0);
+    assert.equal(engine.answerRows(bad.answerId).length, 0);
+    assert.equal(engine.answerRows(good.answerId).length, 0);
+  });
+}
