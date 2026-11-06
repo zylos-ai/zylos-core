@@ -6,6 +6,7 @@ import { resolveCoreConfigModule } from './core-config-loader.js';
 import { sendError } from './c4-send-args.js';
 import { safeEntryId } from './c4-entry-id.js';
 import { appendOutGroupFallback } from './c4-outbound-events.js';
+import { runBeforeSendHook } from './c4-channel-hooks.js';
 
 const pathsModule = path.join(path.dirname(resolveCoreConfigModule()), 'session-group-paths.js');
 const { runDirFromEnv, legacyRunDir } = await import(pathToFileURL(pathsModule).href);
@@ -57,6 +58,7 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
     throw sendError('INVALID_ARGS', 'Invalid channel: Channel script not found or component unavailable');
   }
   assertEndpointPassable(endpoint, request.id);
+  await runBeforeSendHook(request, message, { skillsDir, env });
   const record = api.insertConversation('out', channel, endpoint, message,
     { status: 'delivered', groupName, wholeGroup, sessionId: senderSessionId(env) });
   await appendFallback?.(record, groupName);
