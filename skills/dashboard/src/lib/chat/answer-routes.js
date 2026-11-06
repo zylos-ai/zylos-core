@@ -10,7 +10,7 @@ const respondDenied = (res, denied) => {
 
 /** Server-owned conversation routing and saved question constraints govern every action. */
 export async function handleChatAnswers(req, res, url, { auth, config, answers, delivery, sender, readMode }) {
-  const match = /^\/api\/chat\/conversations\/([^/]+)\/(questions|answers|controls)$/.exec(url.pathname);
+  const match = /^\/api\/chat\/conversations\/([^/]+)\/(questions|answers)$/.exec(url.pathname);
   if (!match) return false;
   const read = match[2] === 'questions';
   const preflight = read ? requireChatAccess(req, auth, config)
@@ -54,16 +54,6 @@ export async function handleChatAnswers(req, res, url, { auth, config, answers, 
     }
     const denied = authorize();
     if (denied) { respondDenied(res, denied); return true; }
-    if (match[2] === 'controls') {
-      if (!object(body) || Object.keys(body).some(key => key !== 'envelope') || !object(body.envelope)) {
-        throw fail('invalid_chat_parameters');
-      }
-      if (body.envelope.control?.operation !== 'stop') throw fail('invalid_chat_control');
-      const question = answers.control({ sessionGroup: row.sessionGroup, endpointId: row.localId,
-        envelope: body.envelope });
-      sendJson(res, 200, { question });
-      return true;
-    }
     if (!object(body) || Object.keys(body).some(key => !['interruptId', 'action', 'retry'].includes(key)) ||
         typeof body.interruptId !== 'string' || !object(body.action) ||
         (Object.hasOwn(body, 'retry') && typeof body.retry !== 'boolean')) throw fail('invalid_chat_parameters');

@@ -11,7 +11,6 @@ import { ChatAnswers } from '../src/lib/chat/answers.js';
 import { handleChatAnswers } from '../src/lib/chat/answer-routes.js';
 import { sendJson } from '../src/lib/http.js';
 import { parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
-import { chatHttpFixture } from './helpers/chat-http.js';
 
 const protocol = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const envelope = name => structuredClone(protocol.valid.find(item => item.name === name).envelope);
@@ -21,7 +20,7 @@ const route = `/api/chat/conversations/${encodeURIComponent(conversationId)}`;
 const error = (code, statusCode) => Object.assign(new Error(code), { code, statusCode });
 
 // Boundary: actual HTTP route, AuthGate and conditional Dashboard transactions.
-// Run for answer/control routes, authorization, body validation or question-page
+// Run for answer routes, authorization, body validation or question-page
 // changes; unrelated UI edits may skip. Delivery is a narrow adapter spy: actual
 // receive and C4 authority are covered by chat-answer-delivery.test.js. Every
 // case owns its temporary SQLite DB, loopback listener and auth cleanup timer;
@@ -122,17 +121,15 @@ async function fixture(t) {
     setState: value => { state = value; }, setOnReconcile: value => { onReconcile = value; } };
 }
 
-test('answer and control routes reject read keys, closed remote access, foreign origins and single mode before acceptance', async t => {
+test('answer routes reject read keys, closed remote access, foreign origins and single mode before acceptance', async t => {
   const f = await fixture(t), question = f.seed(), body = f.answer(question);
   for (const options of [{ identity: 'read' }, { identity: 'admin' }, { origin: 'https://outside.invalid' }, { origin: null }]) {
     assert.equal((await f.request('/answers', { ...options, body })).status, 403);
-    assert.equal((await f.request('/controls', { ...options, body: { envelope: envelope('stop') } })).status, 403);
   }
   f.config.chat.allowRemote = true;
   assert.equal((await f.request('/answers', { identity: 'read', body })).status, 403);
   f.setMode('single');
   assert.equal((await f.request('/answers', { body })).status, 403);
-  assert.equal((await f.request('/controls', { body: { envelope: envelope('stop') } })).status, 403);
   assert.equal(f.count('chat_answers'), 0);
   assert.equal(f.count('chat_answer_deliveries'), 0);
   assert.equal(f.count('chat_question_controls'), 0);
@@ -245,35 +242,6 @@ test('question pages show lifecycle and delivery overlays while every refresh re
   assert.equal((await f.request('/questions', { method: 'GET', identity: 'read' })).status, 403);
 });
 
-test('HTTP stop changes only the local question and HTTP replacement is rejected', async t => {
-  const f = await fixture(t), stopped = f.seed();
-  const stop = { envelope: envelope('stop') };
-  assert.equal((await f.request('/controls', { body: stop })).status, 200);
-  assert.equal((await f.request('/controls', { body: stop })).status, 200);
-  assert.equal(f.answers.question(group, stopped.interruptId).status, 'stopped');
-  const old = f.seed('single', { messageId: 'old_message', interruptId: 'old_question' });
-  const replacement = f.seed('single', { messageId: 'new_message', interruptId: 'new_question' });
-  const control = envelope('replace'); control.interruptId = old.interruptId; control.control.messageId = old.messageId;
-  const replaced = await f.request('/controls', { body: { envelope: control } });
-  assert.equal(replaced.status, 400);
-  assert.equal(replaced.body.error, 'invalid_chat_control');
-  assert.equal(f.answers.question(group, old.interruptId).status, 'paused');
-  assert.equal(f.answers.question(group, replacement.interruptId).status, 'paused');
-  assert.equal(f.count('chat_question_controls'), 1);
-  assert.equal(f.count('chat_answers'), 0);
-  assert.equal(f.calls.deliveries.length, 0);
-  for (const body of [{ envelope: envelope('single') }, { envelope: { ...envelope('stop'), control: { operation: 'cancel', messageId: old.messageId } } },
-    { ...stop, sessionGroup: 'forged' }]) {
-    assert.equal((await f.request('/controls', { body })).status, 400);
-  }
-  const page = await f.request('/questions', { method: 'GET' });
-  assert.equal(page.status, 200);
-  const states = Object.fromEntries(page.body.items.map(item => [item.interrupt_id, item.status]));
-  assert.equal(states[stopped.interruptId], 'stopped');
-  assert.equal(states[old.interruptId], 'paused');
-  assert.equal(states[replacement.interruptId], 'paused');
-});
-
 test('confirmation cancel is an accepted answer and cannot become a stop control', async t => {
   const f = await fixture(t), question = f.seed('confirmation');
   const response = await f.request('/answers', { body: f.answer(question) });
@@ -284,24 +252,12 @@ test('confirmation cancel is an accepted answer and cannot become a stop control
   assert.equal(f.count('chat_answers'), 1);
 });
 
-test('fleet proxy permits explicit controls while keeping both admin and remote-switch gates', async t => {
-  const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
-  const controlRoute = { method: 'POST', path: '/api/chat/conversations/local-chat/controls' };
-  assert.equal((await f.request(controlRoute, { fleet: true })).status, 200);
-  const before = f.counts.upstream;
-  assert.equal((await f.request(controlRoute, { fleet: true, identity: 'read' })).status, 403);
-  assert.equal(f.counts.upstream, before);
-  f.config.chat.allowRemote = false;
-  assert.equal((await f.request(controlRoute, { fleet: true })).status, 403);
-});
-
-// Bound-but-unactivated records cannot answer or control an established question.
+// Bound-but-unactivated records cannot answer an established question.
 // Run when write eligibility changes; unrelated UI work may skip.
-test('a bound draft cannot accept answers or controls through the conversation API', async t => {
+test('a bound draft cannot accept answers through the conversation API', async t => {
   const f = await fixture(t), question = f.seed();
   f.setState('draft');
   assert.equal((await f.request('/answers', { body: f.answer(question) })).status, 403);
-  assert.equal((await f.request('/controls', { body: { envelope: envelope('stop') } })).status, 403);
   assert.equal(f.count('chat_answers'), 0);
   assert.equal(f.count('chat_question_controls'), 0);
   assert.equal(f.calls.deliveries.length, 0);

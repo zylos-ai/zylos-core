@@ -256,14 +256,6 @@ old call is known to have ended permits `retry: true`; recovery never sends on
 its own. Committed evidence always prevents a resend even if the authority row
 is temporarily unreadable. There are no retry leases, timers or polling jobs.
 
-`POST /api/chat/conversations/:id/controls` accepts `{envelope}` containing a
-valid shared-protocol `control` with operation `stop` only. It closes that saved
-question in this Dashboard. It does not append a C4 message, notify the agent,
-or stop its runtime. The client supplies `envelope.messageId`, stored as
-`control_message_id` only to identify this local lifecycle record; it is not a
-C4 row ID. The original question message and interrupt must match. HTTP
-`replace` is rejected.
-
 Agent-authored stop/replace envelopes are applied after the channel verifies
 the authoritative stored outbound row. Replacement requires a separately
 registered paused question in the same group. Dashboard records `stopped` or

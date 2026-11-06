@@ -217,6 +217,7 @@ test('An explicit replacement requires registration and preserves both immutable
   const failed = f.receive(deliveryPacket(controlRow));
   assert.notEqual(failed.status, 0);
   assert.match(failed.stderr, /Error \[chat_question_not_found\]/);
+  assert.match(failed.stderr, /original or replacement question has not been registered/);
   assertStoredWarning(failed);
   assert.doesNotMatch(failed.stderr, /Dashboard delivery unconfirmed/);
   assert.equal(question(f, row.id).status, 'paused');
@@ -249,7 +250,8 @@ test('an agent stop after a user answer reports its stored control without chang
     endpointId: saved.endpoint_id, interruptId: saved.interrupt_id, action });
   const result = f.send(contentFor('stop'));
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /chat_question_not_paused/);
+  assert.match(result.stderr, /Error \[chat_question_not_paused\]/);
+  assert.match(result.stderr, /no longer waiting for an answer.*answered, stopped or replaced/);
   assertStoredWarning(result);
   assert.doesNotMatch(result.stderr, /Dashboard delivery unconfirmed/);
   assert.equal(f.count('conversations'), 2);
@@ -272,6 +274,7 @@ test('a missing Dashboard database reports a stored control failure without recr
   const result = f.receive(deliveryPacket(control));
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Error \[QUESTION_CONTROL_FAILED\]/);
+  assert.match(result.stderr, /Dashboard database unavailable/);
   assertStoredWarning(result);
   assert.doesNotMatch(result.stderr, /Dashboard delivery unconfirmed/);
   assert.equal(fs.existsSync(f.dashboardPath), false);

@@ -24,6 +24,14 @@ export function recordQuestionControl(row, { env = process.env } = {}) {
     // Preserve the cause while distinguishing application failure from an
     // uncertain send, so callers do not try to store the control again.
     error.code ||= 'QUESTION_CONTROL_FAILED';
+    const causes = {
+      chat_question_not_paused: 'The original or replacement question is no longer waiting for an answer (it may be answered, stopped or replaced).',
+      chat_question_not_found: 'The original or replacement question has not been registered in this conversation.',
+      chat_question_forbidden: 'The control does not match the original question message or channel endpoint in this conversation.',
+      invalid_chat_control: 'The control action is invalid for this question.',
+      chat_question_unavailable: 'The saved question constraints are unavailable or invalid.',
+    };
+    if (causes[error.code]) error.message = causes[error.code];
     error.storedControlFailure = true;
     throw error;
   }

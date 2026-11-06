@@ -74,7 +74,7 @@ function isSseResponse(resp) {
 
 function isAllowedProxyWrite(method, suffix) {
   return method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
-    method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|controls)$/.test(suffix)) ||
+    method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers)$/.test(suffix)) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(suffix) ||
     method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(suffix) ||
     method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(suffix) ||
