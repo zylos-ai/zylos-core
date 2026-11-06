@@ -56,3 +56,11 @@ test('shared historical row does not invent sampled observations', () => {
   assert.equal(row.presence, 'not_running'); assert.equal(row.reason, null); assert.deepEqual(row.tools, []);
   assert.deepEqual(searchTerm(' --b '), { term: '--b', keyable: false });
 });
+
+
+test('display-name-only search returns no rows when no name matches', async () => {
+  const f = fixture(), value = await searchGroups('不存在', f.deps);
+  assert.deepEqual(value, { rows: [], truncated: false });
+  assert.equal(f.calls.some(args => args.includes('--key-match')), false);
+  assert.ok(f.calls.some(args => args[0] === 'names' && args[1] === '不存在'));
+});

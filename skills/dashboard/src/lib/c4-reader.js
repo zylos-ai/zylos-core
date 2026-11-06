@@ -52,8 +52,9 @@ export class C4Reader {
 
   getInboundTimes({ since, groups }) {
     if (!groups.length) return [];
+    const failure = () => Object.assign(new Error('Inbound activity unavailable'), { code: 'READ_FAILED', reason: 'READ_FAILED', statusCode: 502 });
     const db = this._open();
-    if (!db) return [];
+    if (!db) throw failure();
     try {
       return db.prepare(`SELECT session_group, timestamp FROM conversations
         WHERE direction='in' AND channel<>'internal'
@@ -63,7 +64,7 @@ export class C4Reader {
           session_group: row.session_group,
           timestamp: Date.parse(row.timestamp.includes('T') ? row.timestamp : row.timestamp.replace(' ', 'T') + 'Z'),
         }));
-    } catch { return []; }
+    } catch { throw failure(); }
   }
 
   getPendingQueue() {

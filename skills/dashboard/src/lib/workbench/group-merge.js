@@ -10,12 +10,13 @@ export function safePreview(item, sanitizer = new Sanitizer('')) {
 }
 
 export function mergeGroups({ status, c4, q, names = new Map(), statusError }, sanitizer = new Sanitizer('')) {
+  const safeLive = value => value?.error ? { ...value, error: { ...value.error, message: sanitizer.safeSummary(value.error.message) } } : value;
   if (status?.view === 'single') return { rows: [{ sessionGroup: null, title: '唯一会话',
-    presence: status.origin.presence, live: status.origin, c4: null, preview: null, name: null, origin: true }], hasOlder: null };
+    presence: status.origin.presence, live: safeLive(status.origin), c4: null, preview: null, name: null, origin: true }], hasOlder: null };
   const live = new Map();
   if (status) {
-    live.set('origin', status.origin);
-    for (const row of status.groups) live.set(row.sessionGroup, row);
+    live.set('origin', safeLive(status.origin));
+    for (const row of status.groups) live.set(row.sessionGroup, safeLive(row));
   }
   const listKnown = status != null && status.groupListError == null;
   const items = new Map((c4.ok ? c4.data.groups : []).map(row => [row.sessionGroup, row]));

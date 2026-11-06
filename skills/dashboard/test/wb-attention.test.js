@@ -33,16 +33,22 @@ test('start failures and every failed source become problems', () => {
   const result = buildAttention(snap);assert.equal(result.problems.length, 5);assert.equal(result.problems[0].count30m, 3);
   assert.equal(result.problems.filter(problem => problem.kind === 'data_unreadable').length, 4);
 });
-test('a service absent from PM2 samples is down and recovers when it appears online', () => {
+test('a service never observed in PM2 does not become a channel failure', () => {
+  const counter = createChannelDownCounter();
+  const online = { processes: [{ name: 'web-console', pm2_env: { status: 'online' } }] };
+  const snap = snapshot([{ ...row('a', 'claude', 'not_running'), c4: { componentName: 'web-console' } }]);
+  counter.update(online); counter.update(online);
+  assert.equal(counter.get('zylos-web-console'), 0);
+  assert.equal(buildAttention(snap, { channelDownCounter: counter, pm2Data: online }).ok, true);
+});
+test('an observed service disappearing from PM2 counts consecutive offline samples', () => {
   const counter = createChannelDownCounter(), missing = { processes: [] };
   const snap = snapshot([{ ...row('a', 'claude', 'not_running'), c4: { componentName: 'telegram' } }]);
   const attention = () => buildAttention(snap, { channelDownCounter: counter, pm2Data: missing });
-  assert.equal(counter.get('zylos-telegram'), 0);
+  counter.update({ processes: [{ name: 'zylos-telegram', pm2_env: { status: 'online' } }] });
   counter.update(missing); assert.equal(attention().ok, true);
   counter.update(missing);
   assert.deepEqual(attention().problems, [{ kind: 'channel_down', service: 'zylos-telegram', pm2Status: null }]);
   counter.update({ processes: [{ name: 'zylos-telegram', pm2_env: { status: 'online' } }] });
   assert.equal(attention().ok, true);
-  counter.update(missing); assert.equal(attention().ok, true);
-  counter.update(missing); assert.equal(attention().problems[0].kind, 'channel_down');
 });

@@ -45,3 +45,29 @@ test('healthy starting, absent and running-idle groups retain their distinct rea
   assert.equal(waitingReason(row(), ctx('ok')).reason, 'pool_capacity_missing');
   assert.equal(waitingReason(row({ presence: 'running' }), ctx('ok')).reason, 'no_rule');
 });
+
+test('pending starting groups wait for authentication before reporting startup', () => {
+  assert.deepEqual(waitingReason(row({ presence: 'starting' }), ctx('auth_failed')),
+    { kind: 'auth_wait', runtime: 'claude' });
+});
+
+test('activation failures include the exact thirty-minute boundary and exclude older events', () => {
+  const event = age => ({ session_group: 'a', timestamp: new Date(now - age).toISOString(),
+    event_type: 'activate_failed', metadata: { reason: 'ready_timeout' } });
+  const atBoundary = waitingReason(row(), { ...ctx('ok'), activations: [event(1800000), event(1800001)] });
+  assert.equal(atBoundary.kind, 'start_failed'); assert.equal(atBoundary.count30m, 1);
+  assert.equal(atBoundary.lastAt, new Date(now - 1800000).toISOString());
+  assert.equal(waitingReason(row(), { ...ctx('ok'), activations: [event(1800001)] }).reason, 'pool_capacity_missing');
+});
+
+test('activation failure reasons preserve codes and redact arbitrary error text', () => {
+  const failure = reason => ({ session_group: 'a', timestamp: new Date(now).toISOString(),
+    event_type: 'activate_failed', metadata: { reason } });
+  const reasonFor = reason => waitingReason(row(), { ...ctx('ok'), activations: [failure(reason)] }).reasonCode;
+  assert.equal(reasonFor('ready_timeout'), 'ready_timeout');
+  const secret = 'sk-123456789012345678901234';
+  const reason = reasonFor('launch failed with ' + secret + ' for person@example.com');
+  assert.equal(reason.includes(secret), false); assert.equal(reason.includes('person@example.com'), false);
+  assert.match(reason, /REDACTED/); assert.match(reason, /EMAIL/);
+  assert.equal(reasonFor({ message: secret }), null);
+});

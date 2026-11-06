@@ -341,8 +341,8 @@ observerService.historyService = new HistoryService({ config, store, stateEngine
 
 // Wire collector updates to state engine
 pm2Collector._onUpdate = (data) => {
-  workbench.channelDownCounter.update(data);
   stateEngine.onPM2Update(data);
+  workbench.channelDownCounter.update(data);
 };
 systemCollector._onUpdate = (data) => {
   stateEngine.onSystemUpdate(data);

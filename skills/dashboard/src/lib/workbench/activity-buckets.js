@@ -76,8 +76,10 @@ export function activityBuckets({ range, now, rows, events = [], inbound = [] })
     for (const [runId, run] of groupRuns) {
       run.sort((a, b) => a.at - b.at || (a.event_seq ?? 0) - (b.event_seq ?? 0));
       const end = runId != null && runId === currentRuns.get(key) ? now : run.at(-1).at;
-      paint(run[0].at, end, 'idle');
-      for (const [from, to] of runIntervals(run, end)) paint(from, to, 'busy');
+      if (runId != null) {
+        paint(run[0].at, end, 'idle');
+        for (const [from, to] of runIntervals(run, end)) paint(from, to, 'busy');
+      }
       for (const event of run) {
         if (WAIT_TYPES.has(event.event_type)) paint(event.at, event.at, 'waiting');
         if (ERROR_TYPES.has(event.event_type)) paint(event.at, event.at, 'error');

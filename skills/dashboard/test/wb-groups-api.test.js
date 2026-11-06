@@ -17,7 +17,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-snapshot-'));
   const cleanup = [];
   t.after(async () => { for (const close of cleanup.reverse()) await close(); fs.rmSync(root, { recursive: true, force: true }); });
-  let clock = 1800000000000, mode = 'multi', unexpected = false, configRuntime = 'codex', configFailure = false;
+  let clock = 1800000000000, mode = 'multi', unexpected = false, configRuntime = 'codex', configFailure = false, healthRecord = { missing: true };
   const calls = [], observations = [], events = [], reads = [];
   const keys = Array.from({ length: count }, (_, index) => `telegram:g${index}`);
   const live = new Map(keys.map(key => [key, { identity: { present: true, ready: true, runtime: 'claude', runId: `run-${key}`,
@@ -57,12 +57,12 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
         if (statusError) throw new Error('status');
         return collectStatus({ ...options, mode: () => ({ mode }), now: () => clock, resolveRoot: () => root,
           list: () => { if (groupListError) throw new Error('list'); return keys.map(sessionGroup => ({ sessionGroup })); },
-          health: () => ({ missing: true }) });
+          health: () => healthRecord });
       } };
     } });
   return { service, root, calls, observations, live, reads, events, reader, cli, store, c4Reader,
     addCleanup: close => cleanup.push(close),
-    setConfigRuntime: value => { configRuntime = value; }, failConfig: value => { configFailure = value; },
+    setHealth: value => { healthRecord = value; }, setConfigRuntime: value => { configRuntime = value; }, failConfig: value => { configFailure = value; },
     setNow: value => { clock = value; }, advance: value => { clock += value; }, setMode: value => { mode = value; },
     failUnexpected: value => { unexpected = value; }, now: () => clock };
 }
@@ -82,6 +82,7 @@ test('snapshot shares in-flight collection, caches from completion, and captures
   const results = await Promise.all([first, second, third]);
   assert.equal(results[0], results[1]); assert.equal(results[0], results[2]);
   assert.equal(f.calls.length, 3); assert.equal(f.observations.length, 2);
+  assert.deepEqual(f.calls.find(args => args[0] === 'groups'), ['groups', '--active-since', String(1800000000000 - 7 * 86400000), '--json']);
   assert.equal(f.calls.filter(args => args.includes('--key-match')).length, 0);
   f.advance(1000); assert.equal(await f.service.getSnapshot(), results[0]); assert.equal(f.calls.length, 3);
   f.advance(1100); await f.service.getSnapshot(); assert.equal(f.calls.length, 6);
@@ -273,16 +274,18 @@ test('target overrides include row 101 and model-only rows while desired stays d
   f.cli.readOverrides = async groups => {
     requested = groups;
     return { ok: true, data: { baseline: { runtime: 'claude' },
-      runtime: [{ sessionGroup: 'telegram:g100', runtime: 'codex' }, { sessionGroup: 'telegram:g0', runtime: 'codex' }],
-      model: [modelOnly, { sessionGroup: 'telegram:g0', runtime: 'codex', model: 'saved-model', effort: 'low' }] } };
+      runtime: [{ sessionGroup: 'telegram:g100', runtime: 'codex' }, { sessionGroup: 'telegram:g0', runtime: 'codex' }, { sessionGroup: 'unlisted-group', runtime: 'codex' }],
+      model: [modelOnly, { sessionGroup: 'telegram:g0', runtime: 'codex', model: 'saved-model', effort: 'low' }, { sessionGroup: 'unlisted-group', runtime: 'claude', model: 'unlisted-model', effort: 'high' }] } };
   };
   const value = await f.service.getSnapshot(), rows = new Map(value.rows.map(row => [row.sessionGroup, row]));
   assert.equal(rows.get('telegram:g100').target.runtime, 'codex');
-  assert.deepEqual(rows.get('telegram:g2').target.model, modelOnly);
+  assert.deepEqual(rows.get('telegram:g2').target.model, { model: modelOnly.model, effort: modelOnly.effort });
   assert.equal(rows.get('telegram:g100').target.model, 'default');
   assert.equal(rows.get('telegram:g0').target.runtime, 'claude');
   assert.deepEqual(rows.get('telegram:g0').desired, { runtime: 'codex', mode: 'override', model: 'saved-model', effort: 'low' });
-  assert.equal(requested.length, 103); assert.equal(requested.includes('unlisted-group'), false);
+  assert.equal(requested.length, 103);
+  assert.equal(requested.includes('unlisted-group'), false, 'a real override outside all row sources is not queried');
+  assert.equal(rows.has('unlisted-group'), false);
 });
 
 // Integration: Cross-module failed-source union/baseline boundary; run for source merge changes.
@@ -383,11 +386,105 @@ test('full snapshot and activity cycle leaves C4 and Dashboard event storage unc
   f.cli.runC4Db = async args => { c4.prepare('SELECT id FROM conversations').all(); return cli(args); };
   const beforeC4 = fs.readFileSync(c4File), version = c4.pragma('data_version', { simple: true });
   const eventBytes = () => Buffer.from(JSON.stringify(store.queryEvents({ limit: 1000 })));
-  const beforeEvents = eventBytes(), dashboardBytes = fs.readFileSync(path.join(f.root, 'dashboard.db'));
+  const storageBytes = file => new Map(['', '-wal'].map(suffix => [suffix, fs.existsSync(file + suffix) ? fs.readFileSync(file + suffix) : null]));
+  const beforeEvents = eventBytes(), dashboardBytes = storageBytes(path.join(f.root, 'dashboard.db'));
+  assert.ok(dashboardBytes.get('-wal')?.length > 0, 'fixture has WAL content to protect');
   await f.service.getSnapshot(); await f.service.activity('60m');
   assert.equal(c4.pragma('data_version', { simple: true }), version);
   assert.equal(fs.readFileSync(c4File).equals(beforeC4), true);
   assert.equal(eventBytes().equals(beforeEvents), true);
-  assert.equal(fs.readFileSync(path.join(f.root, 'dashboard.db')).equals(dashboardBytes), true);
+  const afterDashboard = storageBytes(path.join(f.root, 'dashboard.db'));
+  for (const [suffix, before] of dashboardBytes) {
+    const after = afterDashboard.get(suffix);
+    assert.equal(before === null ? after === null : after !== null && after.equals(before), true, `Dashboard ${suffix || 'main'} bytes unchanged`);
+  }
   assert.equal(f.calls.every(args => ['groups', 'group-queues', 'overrides'].includes(args[0])), true);
+});
+
+// Integration: source-envelope and row-enrichment boundaries. Run for Core input,
+// privacy or snapshot changes; skip rendering-only changes. Owned temporary roots,
+// injected CLI/reader adapters, no live tmux/PM2/network/children; fixture cleanup.
+test('snapshot keeps global fences and runtime authentication attention on affected rows', async t => {
+  const f = fixture(t), normal = f.cli.runC4Db;
+  const globalFence = { reason: null, createdAt: f.now() / 1000 - 20 };
+  f.cli.runC4Db = async args => args[0] === 'group-queues'
+    ? { ok: true, data: { groups: [], globalFence } } : normal(args);
+  f.setHealth({ health: 'auth_failed' });
+  const snapshot = await f.service.getSnapshot(), row = snapshot.rows.find(item => item.sessionGroup === 'telegram:g0');
+  assert.deepEqual(row.fence, globalFence);
+  assert.equal(row.wait.kind, 'fenced'); assert.equal(row.wait.fenceReason, 'mode_switch');
+  assert.ok(row.attention.some(item => item.kind === 'auth_failed' && item.runtime === 'claude'));
+  assert.ok(row.attention.find(item => item.kind === 'auth_failed').groups.includes(row.sessionGroup));
+});
+
+// Integration: malformed tool input and live-error privacy boundaries. Run when
+// observation projection changes; skip rendering-only changes. Owned temporary
+// roots, injected sources, no external resources; fixture cleanup.
+test('snapshot tolerates non-array tool details and redacts Core read failure text', async t => {
+  const f = fixture(t);
+  f.live.get('telegram:g0').status.value.active_tool_details = { unexpected: true };
+  let snapshot = await f.service.getSnapshot();
+  assert.deepEqual(snapshot.rows.find(item => item.sessionGroup === 'telegram:g0').tools, []);
+  const reader = f.reader.readSessionState;
+  f.reader.readSessionState = key => key === 'telegram:g0'
+    ? Promise.reject(new Error('failed Bearer secret123 and sk-123456789012345678901234')) : reader(key);
+  f.advance(2100); snapshot = await f.service.getSnapshot();
+  const row = snapshot.rows.find(item => item.sessionGroup === 'telegram:g0');
+  assert.equal(row.live.error.code, 'READ_FAILED'); assert.match(row.live.error.message, /REDACTED/);
+  assert.equal(JSON.stringify(snapshot).includes('secret123'), false);
+  assert.equal(JSON.stringify(snapshot).includes('sk-123456789012345678901234'), false);
+  assert.equal('buildGroupSnapshot' in f.service, false);
+});
+
+// Integration: target configuration uses the same model descriptor for live and
+// saved overrides. Run for launch/override projection changes; skip rendering-only
+// edits. Temporary root and injected read-only sources; fixture cleanup.
+test('live and stopped targets project one model descriptor shape', async t => {
+  const f = fixture(t);
+  f.live.get('telegram:g0').identity.launchConfig = { runtime: 'claude', mode: 'override', model: 'live-model', effort: 'high' };
+  let snapshot = await f.service.getSnapshot();
+  assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'telegram:g0').target.model, { model: 'live-model', effort: 'high' });
+  f.live.delete('telegram:g0'); f.advance(2100);
+  snapshot = await f.service.getSnapshot();
+  assert.equal(snapshot.rows.find(row => row.sessionGroup === 'telegram:g0').target.model, 'default');
+});
+
+// Integration: exact boolean envelope acceptance must fail only its own source.
+// Run for Core CLI response changes; skip rendering-only edits. CLI execution is
+// injected, never spawns; isolated temporary root and fixture lifecycle cleanup.
+for (const [source, ok] of [['c4', 'true'], ['q', 1], ['ov', false]]) {
+  test(`imprecise ${source} envelope fails locally without rejecting snapshot`, async t => {
+    const f = fixture(t);
+    const cli = createCoreCli({ zylosDir: f.root, execute: async (file, argv) => {
+      const kind = argv[1] === 'groups' ? 'c4' : argv[1] === 'group-queues' ? 'q' : 'ov';
+      const data = kind === 'c4' ? { groups: [], hasOlder: false } : kind === 'q'
+        ? { groups: [], globalFence: null } : { baseline: { runtime: 'claude' }, runtime: [], model: [] };
+      return { stdout: JSON.stringify({ ok: kind === source ? ok : true, data }) };
+    } });
+    f.cli.runC4Db = cli.runC4Db; f.cli.readOverrides = cli.readOverrides;
+    const value = await f.service.getSnapshot();
+    assert.equal(value.sources[source].ok, false);
+    assert.equal(value.sources[source].reason, { c4: 'c4_groups_failed', q: 'queue_summary_failed', ov: 'override_list_failed' }[source]);
+    for (const other of ['c4', 'q', 'ov'].filter(key => key !== source)) assert.equal(value.sources[other].ok, true);
+    assert.equal(value.rows.length, 2);
+  });
+}
+
+// Integration: C4 read failure must be observable and must not cache a successful
+// empty activity response. Run for inbound/error/cache changes; skip rendering-
+// only changes. Owned temporary DB/root, no network/children; fixture cleanup.
+test('inbound activity missing database and SQL failures expose a source reason', async t => {
+  const f = fixture(t), reader = new C4Reader(f.root);
+  f.addCleanup(() => reader.close());
+  f.c4Reader.getInboundTimes = options => reader.getInboundTimes(options);
+  await assert.rejects(f.service.activity('60m'), { code: 'READ_FAILED', reason: 'READ_FAILED', statusCode: 502 });
+  fs.mkdirSync(path.join(f.root, 'comm-bridge'));
+  const writer = new Database(path.join(f.root, 'comm-bridge', 'c4.db'));
+  writer.exec('CREATE TABLE unrelated(id INTEGER)'); writer.close();
+  await assert.rejects(f.service.activity('60m'), { code: 'READ_FAILED', reason: 'READ_FAILED', statusCode: 502 });
+  reader.close();
+  const fixed = new Database(path.join(f.root, 'comm-bridge', 'c4.db'));
+  fixed.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY,session_group TEXT,direction TEXT,channel TEXT,timestamp TEXT)'); fixed.close();
+  assert.ok((await f.service.activity('60m')).groups['telegram:g0']);
+  await assert.rejects(workbenchResponse(f.service, '/api/workbench/activity', new URLSearchParams()), { code: 'invalid_range', statusCode: 400 });
 });

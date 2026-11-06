@@ -94,7 +94,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       const observation = captured.get(row.sessionGroup);
       row.createdAt = observation?.identity.createdAt ?? null;
       row.launchConfig = observation?.identity.launchConfig ?? null;
-      row.tools = observation?.status.valid ? (observation.status.value.active_tool_details ?? []).map(tool => ({
+      row.tools = observation?.status.valid && Array.isArray(observation.status.value.active_tool_details) ? observation.status.value.active_tool_details.map(tool => ({
         id: tool.id, name: tool.name, detail: sanitizer.sanitizeToolDetail(tool.name, tool.input), startedAt: tool.startedAt,
       })) : [];
       const usage = observation?.usage;
@@ -107,8 +107,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       const selectedRuntime = ov.ok ? ov.data.runtime.find(item => item.sessionGroup === row.sessionGroup)?.runtime ?? ov.data.baseline.runtime : null;
       const selectedModel = ov.ok ? ov.data.model.find(item => item.sessionGroup === row.sessionGroup && item.runtime === selectedRuntime) : null;
       row.target = ['running', 'starting'].includes(row.presence)
-        ? { runtime: observation?.identity.runtime ?? row.live?.runtime ?? null, model: row.launchConfig?.model ?? null }
-        : ov.ok ? { runtime: selectedRuntime, model: selectedModel ?? 'default' }
+        ? { runtime: observation?.identity.runtime ?? row.live?.runtime ?? null, model: row.launchConfig?.mode === 'override'
+          ? { model: row.launchConfig.model, effort: row.launchConfig.effort } : 'default' }
+        : ov.ok ? { runtime: selectedRuntime, model: selectedModel ? { model: selectedModel.model, effort: selectedModel.effort } : 'default' }
           : { runtime: null, reason: 'override_list_failed' };
       if (status?.view === 'single') row.target.onlyMulti = true;
       row.desired = status?.view === 'single' || !ov.ok ? null : selectedModel
@@ -144,7 +145,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     activities.set(range, { at: now(), value });
     return value;
   }
-  return { getSnapshot, buildGroupSnapshot, activity, channelDownCounter,
+  return { getSnapshot, activity, channelDownCounter,
     search: (q, at = now()) => searchGroups(q, { now: at, runC4Db: cli.runC4Db, getSnapshot, displayNames, sanitizer }) };
 }
 
@@ -158,6 +159,6 @@ export async function workbenchResponse(service, pathname, searchParams) {
       view: snapshot.view, counts: snapshot.counts, pool: { used: snapshot.instance.pool.used, capacity: snapshot.instance.pool.capacity }, hasOlder: snapshot.hasOlder } : snapshot;
   }
   if (pathname === '/api/workbench/groups/search') return service.search(searchParams.get('q'));
-  if (pathname === '/api/workbench/activity') return service.activity(searchParams.get('range') ?? '60m');
+  if (pathname === '/api/workbench/activity') return service.activity(searchParams.get('range'));
   return null;
 }

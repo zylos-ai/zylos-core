@@ -1,3 +1,6 @@
+import { Sanitizer } from '../sanitizer.js';
+
+const sanitizer = new Sanitizer('');
 const timestamp = value => typeof value === 'number' ? value : Date.parse(value);
 
 export function fenceLabel(reason) {
@@ -25,7 +28,7 @@ export function waitingReason(row, { runtimeHealth = {}, activations = [], now =
     const last = events[0];
     if (last && ['activate_failed', 'activate_timeout'].includes(last.event_type)) return {
       kind: 'start_failed', count30m: events.filter(event => ['activate_failed', 'activate_timeout'].includes(event.event_type)).length,
-      lastAt: last.timestamp, reasonCode: last.metadata?.reason ?? null };
+      lastAt: last.timestamp, reasonCode: sanitizer.safeSummary(last.metadata?.reason) };
     return { kind: 'unknown', reason: 'pool_capacity_missing' };
   }
   if (row.presence === 'running' && row.live.status.valid && row.live.status.state === 'busy') return { kind: 'queued' };

@@ -136,3 +136,37 @@ test('single view has no group event or inbound projection', () => {
   });
   assert.deepEqual(output.groups, {});
 });
+
+for (const run_id of [null, undefined]) test('unattributed events paint only waiting or error points: ' + run_id, () => {
+  const at = 5 * hour + 10 * minute;
+  const output = result([
+    event('wait_health', at, { run_id }),
+    event('user_prompt_submit', at + minute, { run_id }),
+    event('pre_tool_use', at + 2 * minute, { run_id }),
+    event('stop', at + 3 * minute, { run_id }),
+    event('wait_capacity', at + 30 * minute, { run_id }),
+    event('activate_failed', at + 31 * minute, { run_id }),
+  ], { rows: [row('chat:a', null)] });
+  assert.equal(cell(output, at), 'waiting');
+  for (let index = 1; index < 30; index++) assert.equal(cell(output, at + index * minute), 'none');
+  assert.equal(cell(output, at + 30 * minute), 'waiting');
+  assert.equal(cell(output, at + 31 * minute), 'error');
+  assert.equal(cell(output, at + 32 * minute), 'none');
+});
+
+test('a point at a cell boundary paints the following cell only', () => {
+  const at = 5 * hour + 10 * minute;
+  const output = result([event('wait_capacity', at, { run_id: null })]);
+  assert.equal(cell(output, at - 1), 'none');
+  assert.equal(cell(output, at), 'waiting');
+  assert.equal(cell(output, at + minute), 'none');
+});
+
+test('an interval ending at a cell boundary excludes the following cell', () => {
+  const at = 5 * hour + 10 * minute;
+  const output = result([
+    event('session_start', at), event('user_prompt_submit', at), event('stop', at + minute),
+  ]);
+  assert.equal(cell(output, at), 'busy');
+  assert.equal(cell(output, at + minute), 'idle');
+});
