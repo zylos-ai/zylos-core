@@ -72,7 +72,8 @@ function isSseResponse(resp) {
 }
 
 function isAllowedProxyWrite(method, suffix) {
-  return method === 'POST' && /^\/api\/actions\/[^/]+$/.test(suffix) ||
+  return ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(suffix) ||
+    method === 'POST' && /^\/api\/actions\/[^/]+$/.test(suffix) ||
     method === 'PUT' && (suffix === '/api/settings' || suffix === '/api/memory/file') ||
     method === 'POST' && (
       /^\/api\/observer\/(?:install|enable|disable|leases|agent-size)$/.test(suffix) ||

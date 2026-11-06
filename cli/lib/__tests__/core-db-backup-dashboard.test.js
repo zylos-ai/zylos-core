@@ -110,9 +110,9 @@ for(const bundled of [false,true])for(const version of [13,20,99]) test(`real Da
 });
 
 test('Dashboard rehearsal receives Core handles and migrates only the private copy',t=>{
-  const {root,target,source,database,driverRoot}=fixture(t,{targetVersion:21});database(20).close();const before=fs.readFileSync(source);
-  assert.deepEqual(probeCoreDbVersions(root,target,{driverRoot}).databases[3],{source:'components/dashboard/dashboard.db',status:'present',fromVersion:20,toVersion:21,needsMigration:true});
-  assert.equal(rehearseCoreDbUpgrade(root,target,{driverRoot}).databases[3].toVersion,21);
+  const {root,target,source,database,driverRoot}=fixture(t,{targetVersion:22});database(20).close();const before=fs.readFileSync(source);
+  assert.deepEqual(probeCoreDbVersions(root,target,{driverRoot}).databases[3],{source:'components/dashboard/dashboard.db',status:'present',fromVersion:20,toVersion:22,needsMigration:true});
+  assert.equal(rehearseCoreDbUpgrade(root,target,{driverRoot}).databases[3].toVersion,22);
   assert.deepEqual(fs.readFileSync(source),before);
   const db=new Database(source);try {assert.equal(db.pragma('user_version',{simple:true}),7);}finally{db.close();}
 });
@@ -190,7 +190,7 @@ test('controlled upgrade leaves missing Dashboard creation to its first ordinary
 });
 
 test('controlled Dashboard migration preserves too-new rejection and classifies migration failure',t=>{
-  const {source,database,driverRoot,request}=controlledMigration(t,true,{targetVersion:21});
+  const {source,database,driverRoot,request}=controlledMigration(t,true,{targetVersion:22});
   database(99).close();
   const tooNew=fs.readFileSync(source);
   assert.throws(()=>runCoreDbWorker(request),{code:'SCHEMA_TOO_NEW'});
@@ -209,7 +209,7 @@ test('controlled Dashboard migration preserves too-new rejection and classifies 
 });
 
 for(const managed of [false,true]) test(`controlled migration uses persisted Dashboard owner state ${managed} despite caller disagreement`,t=>{
-  const {source,database,driverRoot,request}=controlledMigration(t,managed,{targetVersion:21});
+  const {source,database,driverRoot,request}=controlledMigration(t,managed,{targetVersion:22});
   database(managed?20:13).close();
   const before=fs.readFileSync(source);
   const owner=path.join(driverRoot,'dashboard/src/lib/schema-owner.js');
@@ -218,7 +218,7 @@ for(const managed of [false,true]) test(`controlled migration uses persisted Das
   const result=runCoreDbWorker({...request,dashboardOwnerManaged:!managed});
   const row=result.databases.find(item=>item.source==='components/dashboard/dashboard.db');
   const db=new Database(source,{readonly:true,fileMustExist:true});
-  try {assert.equal(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version,managed?21:13);}
+  try {assert.equal(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version,managed?22:13);}
   finally {db.close();}
   assert.equal(row.ownerSkipped,managed?undefined:true);
   assert.equal(fs.existsSync(calls),managed);
@@ -235,7 +235,7 @@ test('missing Dashboard never loads its owner or creates a database before cutof
   assert.equal(fs.existsSync(source),false);
 });
 
-for(const version of [0,13,19,20,21,99]) test(`Dashboard management uses schema_migrations ${version}, not user_version`,t=>{
+for(const version of [0,13,19,20,21,22,99]) test(`Dashboard management uses schema_migrations ${version}, not user_version`,t=>{
   const {root,source,database,driverRoot}=fixture(t);database(version).close();
   const before=fs.readFileSync(source);
   assert.equal(inspectDashboardOwnerManaged(root,{driverRoot}),version>=20);
@@ -305,26 +305,26 @@ test('schema 13 skips all owner actions before cutoff and migrates only on first
   beforeOpen.close();
   const store = new Store(f.source);
   try {
-    assert.equal(store.db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version,20);
+    assert.equal(store.db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version,21);
     assert.equal(store.db.prepare('SELECT id FROM runtime_events').get().id,'retained');
   } finally {store.close();}
 });
 
-test('real schema 20 owner uses Core handles for probe rehearsal and controlled no-op', t => {
+test('real current schema owner uses Core handles for probe rehearsal and controlled no-op', t => {
   const f = controlledMigration(t,true);
   for (const root of [f.dashboardRoot,path.join(f.driverRoot,'dashboard')]) useRealDashboardOwner(root);
   const store = new Store(f.source);store.close();
   const before=fs.readFileSync(f.source);
   const options={driverRoot:f.driverRoot,dashboardOwnerManaged:true};
   assert.deepEqual(probeCoreDbVersions(f.root,f.target,options).databases[3],{
-    source:'components/dashboard/dashboard.db',status:'present',fromVersion:20,toVersion:20,needsMigration:false,
+    source:'components/dashboard/dashboard.db',status:'present',fromVersion:21,toVersion:21,needsMigration:false,
   });
   assert.deepEqual(rehearseCoreDbUpgrade(f.root,f.target,options).databases[3],{
-    source:'components/dashboard/dashboard.db',status:'present',fromVersion:20,toVersion:20,
+    source:'components/dashboard/dashboard.db',status:'present',fromVersion:21,toVersion:21,
   });
   assert.deepEqual(fs.readFileSync(f.source),before);
   const row=runCoreDbWorker(f.request).databases[3];
-  assert.equal(row.currentVersion,20);assert.equal(row.needsMigration,false);
+  assert.equal(row.currentVersion,21);assert.equal(row.needsMigration,false);
   assert.deepEqual(fs.readFileSync(f.source),before);
   assert.equal(fs.existsSync(path.join(f.dashboardRoot,'node_modules')),false);
   const reopened = new Store(f.source);reopened.close();

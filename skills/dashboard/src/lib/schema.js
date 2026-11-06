@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 20;
+export const TARGET_SCHEMA_VERSION = 21;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -91,7 +91,9 @@ export function inspectDatabase(db) {
   if (currentVersion === TARGET_SCHEMA_VERSION) {
     const required = {
       runtime_events: 'id ingest_id event_seq timestamp runtime session_id event_type category summary duration_ms metadata source confidence session_group run_id',
-      metric_points: 'id timestamp runtime session_id metric_name metric_value dimensions source confidence',
+      metric_points: 'id timestamp runtime session_id metric_name metric_value dimensions source confidence session_group',
+      group_display_names: 'session_group display_name source updated_at',
+      usage_transcripts: 'transcript_path parent_path runtime session_group run_id session_id byte_offset status first_seen_at updated_at',
       activity_facts: 'id timestamp fact_type runtime session_id project data',
       source_health: 'name signal_type status extra updated_at',
       state_snapshots: 'id runtime session_id running_tool open_turn pending_permission possibly_stuck_since last_progress_cursor snapshot_at last_message last_prompt last_progress_at',
@@ -115,6 +117,14 @@ export function inspectDatabase(db) {
     const groupColumns = db.pragma('index_info(idx_events_group_seq)').map(column => column.name);
     const group = db.pragma('index_list(runtime_events)').find(index => index.name === 'idx_events_group_seq');
     if (!group || group.unique || group.partial || groupColumns.join(',') !== 'session_group,event_seq') throw new Error('Unsupported Dashboard event group index');
+    for (const [table, name, columns] of [
+      ['metric_points', 'idx_metric_points_group_ts', 'metric_name,session_group,timestamp'],
+      ['usage_transcripts', 'idx_usage_transcripts_status_updated', 'status,updated_at'],
+    ]) {
+      const index = db.pragma(`index_list(${table})`).find(item => item.name === name);
+      const actual = db.pragma(`index_info(${name})`).map(column => column.name);
+      if (!index || index.unique || index.partial || actual.join(',') !== columns) throw new Error('Unsupported Dashboard group data index');
+    }
     const cursorColumns = db.pragma('table_info(core_log_cursors)');
     const primary = cursorColumns.filter(column => column.pk).sort((a,b) => a.pk-b.pk).map(column => column.name);
     if (primary.join(',') !== 'stream,file_dev,file_ino,generation') throw new Error('Unsupported Dashboard cursor primary key');
@@ -336,4 +346,31 @@ export function migrateDatabase(db) {
         `);
       })();
     }
+    if (currentVersion < 21) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS group_display_names (
+            session_group TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            source TEXT NOT NULL CHECK (source IN ('human','agent')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          ALTER TABLE metric_points ADD COLUMN session_group TEXT;
+          CREATE INDEX IF NOT EXISTS idx_metric_points_group_ts ON metric_points(metric_name, session_group, timestamp);
+          CREATE TABLE IF NOT EXISTS usage_transcripts (
+            transcript_path TEXT PRIMARY KEY,
+            parent_path TEXT,
+            runtime TEXT NOT NULL CHECK (runtime IN ('claude','codex')),
+            session_group TEXT, run_id TEXT, session_id TEXT NOT NULL,
+            byte_offset INTEGER NOT NULL DEFAULT 0 CHECK (byte_offset >= 0),
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','finished','missing')),
+            first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          CREATE INDEX IF NOT EXISTS idx_usage_transcripts_status_updated ON usage_transcripts(status, updated_at);
+          INSERT OR IGNORE INTO schema_migrations (version) VALUES (21);
+        `);
+      })();
+    }
+
 }

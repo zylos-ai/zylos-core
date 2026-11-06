@@ -292,13 +292,15 @@ function needsAdminApiAccess(pathname, method) {
   if (pathname === '/api/settings' && method === 'PUT') return true;
   if (pathname === '/api/fleet/agents' || pathname.startsWith('/api/fleet/agents/')) return true;
   if (pathname === '/api/agent/name') return true;
+  if (['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(pathname)) return true;
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return true;
   if (pathname === '/api/memory' || pathname.startsWith('/api/memory/')) return true;
   const proxiedWrite = pathname.match(/^\/fleet\/[^/]+\/api\/(.+)$/);
   if (!proxiedWrite) return false;
   const remotePath = `/api/${proxiedWrite[1]}`;
   if (remotePath === '/api/memory' || remotePath.startsWith('/api/memory/')) return true;
-  return method === 'POST' && remotePath.startsWith('/api/actions/') ||
+  return ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(remotePath) ||
+    method === 'POST' && remotePath.startsWith('/api/actions/') ||
     method === 'PUT' && remotePath === '/api/settings';
 }
 

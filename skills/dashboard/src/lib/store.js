@@ -30,6 +30,20 @@ export class Store {
   }
 
   _prepareStatements() {
+    this._getGroupDisplayName = this.db.prepare('SELECT session_group, display_name, source, updated_at FROM group_display_names WHERE session_group = ?');
+    this._listGroupDisplayNames = this.db.prepare('SELECT session_group, display_name, source, updated_at FROM group_display_names ORDER BY updated_at DESC');
+    this._searchGroupDisplayNames = this.db.prepare('SELECT session_group, display_name, source FROM group_display_names WHERE instr(lower(display_name), lower(?)) > 0 ORDER BY updated_at DESC LIMIT ?');
+    this._setGroupDisplayName = this.db.prepare(`INSERT INTO group_display_names(session_group, display_name, source) VALUES(?,?,?)
+      ON CONFLICT(session_group) DO UPDATE SET display_name=excluded.display_name, source=excluded.source, updated_at=datetime('now')`);
+    this._clearGroupDisplayName = this.db.prepare('DELETE FROM group_display_names WHERE session_group = ?');
+    this._writeGroupDisplayName = this.db.transaction((key, name, source, clear) => {
+      const current = this._getGroupDisplayName.get(key);
+      if (source === 'agent' && current?.source === 'human') return false;
+      if (clear) this._clearGroupDisplayName.run(key);
+      else this._setGroupDisplayName.run(key, name, source);
+      return true;
+    });
+
     this._insertEvent = this.db.prepare(`
       INSERT OR IGNORE INTO runtime_events
         (id, ingest_id, event_seq, timestamp, runtime, session_id, session_group, run_id, event_type, category, summary, duration_ms, metadata, source, confidence)
@@ -331,6 +345,13 @@ export class Store {
       const result = this._deleteRevokedApiKeys.run();
       return result.changes;
     });
+  }
+
+  getGroupDisplayName(key) { return this._getGroupDisplayName.get(key) ?? null; }
+  listGroupDisplayNames() { return this._listGroupDisplayNames.all(); }
+  searchGroupDisplayNames(q, limit) { return this._searchGroupDisplayNames.all(q, limit); }
+  writeGroupDisplayName(key, name, source, { clear = false } = {}) {
+    return this._writeGroupDisplayName.immediate(key, name, source, clear);
   }
 
   insertEvent(event) {

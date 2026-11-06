@@ -53,6 +53,7 @@ import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
 import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
+import { createDisplayNames } from './lib/workbench/display-names.js';
 import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-snapshot.js';
 import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
 import { buildRestartStatus } from './lib/core-actions.js';
@@ -373,7 +374,8 @@ const metricResolver = new MetricResolver(store, collectors, config, { stateEngi
 
 // 9b. C4 reader (read-only access to comm-bridge DB)
 const c4Reader = new C4Reader(config.zylosDir);
-const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer,
+const displayNames = createDisplayNames({ store, zylosDir: config.zylosDir, sanitizer });
+const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames,
   readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
   readPm2: () => pm2Collector.getLatestPM2Data() });
 
@@ -1605,6 +1607,22 @@ export function createServer() {
 
     if (pathname.startsWith('/api/fleet/agents/')) {
       await handleFleetAgentDelete(req, res, pathname);
+      return;
+    }
+
+    const groupNameRoute = pathname.match(/^\/api\/workbench\/groups\/([^/]+)\/name$/);
+    if (groupNameRoute && ['PUT', 'DELETE'].includes(req.method)) {
+      try {
+        let key;
+        try { key = decodeURIComponent(groupNameRoute[1]); }
+        catch { throw Object.assign(new Error('Invalid session group'), { code: 'KEY_INVALID' }); }
+        const data = req.method === 'PUT'
+          ? displayNames.setName(key, (await readJsonBody(req, 4096))?.name, 'human')
+          : displayNames.clearName(key, 'human');
+        sendJson(res, 200, { ok: true, data });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: { code: error.code ?? 'INVALID_ARGS', message: error.message } });
+      }
       return;
     }
 
