@@ -33,7 +33,7 @@ function setup(t) {
     fs.cpSync(path.join(source, 'scripts'), path.join(dest, 'scripts'), { recursive: true, filter: file => !file.split(path.sep).includes('__tests__') });
     fs.symlinkSync(fs.realpathSync(path.join(source, 'node_modules')), path.join(dest, 'node_modules'));
     if (name === 'comm-bridge') fs.copyFileSync(path.join(source, 'init-db.sql'), path.join(dest, 'init-db.sql'));
-    else fs.cpSync(path.join(source, 'src/lib/chat'), path.join(dest, 'src/lib/chat'), { recursive: true });
+    else fs.cpSync(path.join(source, 'src/lib'), path.join(dest, 'src/lib'), { recursive: true });
   }
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'pm2'), TMPDIR: tmp,
     TMUX_TMPDIR: tmp, PATH: bin, ZYLOS_PACKAGE_ROOT: core, ZYLOS_SESSION_GROUP: 'origin',

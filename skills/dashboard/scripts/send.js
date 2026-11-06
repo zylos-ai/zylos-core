@@ -8,7 +8,8 @@ export function runSend({ input = () => fs.readFileSync(0, 'utf8'), env = proces
     acceptDelivery(JSON.parse(input()), { env });
     return 0;
   } catch (error) {
-    stderr.write(`Error [${error.code || 'INVALID_DELIVERY'}]: Dashboard delivery unconfirmed.\n`);
+    const reason = error.code === 'QUESTION_REFERENCE_CONFLICT' ? 'Question reference belongs to another C4 row. ' : '';
+    stderr.write(`Error [${error.code || 'INVALID_DELIVERY'}]: ${reason}Dashboard delivery unconfirmed.\n`);
     return 1;
   }
 }

@@ -1,7 +1,7 @@
 ---
 name: dashboard
 version: 0.6.9
-description: Zylos observability dashboard with a plain-text conversation channel for agent state, costs, tools, communication, scheduler, and PM2 service health. Full features on Claude runtime. PM2, system health, communication, and scheduler monitoring on all runtimes.
+description: Zylos observability dashboard with a conversation channel for agent state, costs, tools, communication, scheduler, and PM2 service health. Full features on Claude runtime. PM2, system health, communication, and scheduler monitoring on all runtimes.
 type: capability
 
 c4:
@@ -49,9 +49,9 @@ config:
 
 # Zylos Dashboard
 
-Observability dashboard for a local Zylos agent, with a plain-text Dashboard channel.
+Observability dashboard for a local Zylos agent, with a Dashboard conversation channel.
 
-## Plain-text channel
+## Conversation channel
 
 The Dashboard channel requires Core support for channel-declared synchronous
 BeforeSend hooks and post-storage stdin delivery. Deploy the matching Core and
@@ -75,15 +75,40 @@ argv does not carry the message body. Callers do not construct this packet.
 
 The synchronous hook permits unmarked text up to 65,536 UTF-8 bytes, including
 ordinary JSON and Core status notices. Content beginning with the exact shared
-`[C4-CONTENT]` plus LF prefix is rejected at this stage, as is oversized text.
-Rejection happens before C4 storage or channel delivery. Structured messages,
-question registration, drafts and answering controls are separate capabilities.
+`[C4-CONTENT]` plus LF prefix must pass the shared C4 envelope parser: version,
+block types, actions, fields and known Core suffix rules are validated without
+rewriting the original content. Malformed envelopes and any oversized message
+are rejected before storage or channel delivery. See Core's
+`docs/c4-content-protocol.md` for the envelope contract and examples.
+
+After the stored row is verified, an interactive message is registered with its
+original group, C4 reference, question summary, constraints and paused state.
+Repeated delivery of the same C4 reference preserves the existing record and
+its current state. A different C4 row reusing the same group and interrupt ID
+fails registration; its content remains stored and read-only, and does not
+replace the original question. If registration fails, repair by delivering the
+same stored C4 reference again; do not resend the message to create another out.
+Answers, stop/replace control envelopes and noninteractive messages do not
+register or change questions in this channel receiver. Answering and lifecycle
+controls are separate capabilities.
 
 A successful send confirms the stored row and channel handoff; it does not prove
 that a person viewed the text. Dashboard delivery reads the authoritative C4 row
 by its ID using a read-only connection and does not call back into Dashboard HTTP.
-Plain-text delivery does not open or write the Dashboard database; later question
-registration extends the same channel module.
+Plain-text and noninteractive delivery do not open the Dashboard database.
+Question registration writes only to Dashboard's database after the C4 readback;
+it never writes C4 or creates a second message/head.
+
+Release prerequisites (verify actual installed versions before deployment):
+
+| Component | Minimum version |
+| --- | --- |
+| Core | TBD — finalized with Core release (待定，随 Core 定版); must include shared envelope parsing, all model/history readers migrated to projection, BeforeSend and stdin delivery |
+| identity-reflection | TBD — finalized with Core release (待定，随 Core 定版); must include the reviewed projected-history adapter |
+| thinking-patterns | TBD — finalized with Core release (待定，随 Core 定版); must include the reviewed projected-history adapter |
+
+These are release requirements. No automatic capability detector or runtime
+disable switch substitutes for verifying the deployed versions.
 
 ## Dashboard service
 

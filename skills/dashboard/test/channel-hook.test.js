@@ -38,8 +38,16 @@ test('Dashboard hook counts UTF-8 bytes at the exact plain-text limit', () => {
   }
 });
 
-test('Dashboard hook aborts every marked envelope before schema interpretation', () => {
-  for (const fixture of [...fixtures.valid, ...fixtures.invalid]) {
+test('Dashboard hook permits every valid shared envelope without rewriting content', () => {
+  for (const fixture of fixtures.valid) {
+    const input = wire(fixture.content), before = JSON.stringify(input);
+    assert.deepEqual(evaluateBeforeSend(input), { version: 1, decision: 'continue' }, fixture.name);
+    assert.equal(JSON.stringify(input), before);
+  }
+});
+
+test('Dashboard hook aborts malformed or unsupported marked envelopes', () => {
+  for (const fixture of fixtures.invalid) {
     assert.ok(fixture.content.startsWith(CONTENT_PREFIX));
     rejects(fixture.content);
   }

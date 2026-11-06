@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-import { CONTENT_PREFIX, MAX_CONTENT_BYTES, validateHookInput } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, validateHookInput } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { isMainModule } from '../../comm-bridge/scripts/is-main-module.js';
 
 const abort = message => ({ version: 1, decision: 'abort', message });
 
-/** Gate Dashboard output before C4 storage; structured delivery is not enabled. */
+/** Validate Dashboard output before C4 storage without performing registration. */
 export function evaluateBeforeSend(input) {
   if (!validateHookInput(input) || input.hook_id !== 'dashboard.content' || input.request.channel !== 'dashboard') {
     return abort('Invalid Dashboard BeforeSend input.');
@@ -15,7 +15,8 @@ export function evaluateBeforeSend(input) {
     return abort('Dashboard content exceeds 65536 UTF-8 bytes.');
   }
   if (content.startsWith(CONTENT_PREFIX)) {
-    return abort('Dashboard currently accepts plain text only.');
+    const parsed = parseC4Content(content);
+    if (parsed.kind !== 'envelope') return abort('Invalid Dashboard structured content.');
   }
   return { version: 1, decision: 'continue' };
 }

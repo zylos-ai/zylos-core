@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 22;
+export const TARGET_SCHEMA_VERSION = 23;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -90,6 +90,7 @@ export function inspectDatabase(db) {
   if (!Number.isInteger(currentVersion) || currentVersion < 0) throw new Error('Unsupported Dashboard schema version');
   if (currentVersion === TARGET_SCHEMA_VERSION) {
     const required = {
+      chat_questions: 'c4_id session_group endpoint_id message_id interrupt_id question_summary constraints status created_at',
       runtime_events: 'id ingest_id event_seq timestamp runtime session_id event_type category summary duration_ms metadata source confidence session_group run_id',
       metric_points: 'id timestamp runtime session_id metric_name metric_value dimensions source confidence session_group',
       group_display_names: 'session_group display_name source updated_at',
@@ -108,6 +109,10 @@ export function inspectDatabase(db) {
     for (const [table, columns] of Object.entries(required)) {
       db.prepare(`SELECT ${columns.split(' ').join(', ')} FROM ${table} LIMIT 0`).all();
     }
+    const questionKey = db.pragma('table_info(chat_questions)').filter(column => column.pk).map(column => column.name);
+    const questionReference = db.pragma('index_list(chat_questions)').some(index => index.unique
+      && db.pragma(`index_info(${index.name})`).map(column => column.name).join(',') === 'session_group,interrupt_id');
+    if (questionKey.join(',') !== 'c4_id' || !questionReference) throw new Error('Unsupported Dashboard question identity');
     const indexes = db.pragma('index_list(core_log_cursors)');
     const active = indexes.find(index => index.name === 'idx_core_log_cursors_active');
     const activeColumns = db.pragma('index_info(idx_core_log_cursors_active)').map(column => column.name);
@@ -381,6 +386,26 @@ export function migrateDatabase(db) {
           CREATE INDEX IF NOT EXISTS idx_events_group_run_seq
             ON runtime_events(session_group, run_id, event_seq);
           INSERT OR IGNORE INTO schema_migrations (version) VALUES (22);
+        `);
+      })();
+    }
+
+    if (currentVersion < 23) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE chat_questions (
+            c4_id TEXT PRIMARY KEY NOT NULL,
+            session_group TEXT NOT NULL,
+            endpoint_id TEXT,
+            message_id TEXT NOT NULL,
+            interrupt_id TEXT NOT NULL,
+            question_summary TEXT NOT NULL,
+            constraints TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'paused',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(session_group, interrupt_id)
+          );
+          INSERT OR IGNORE INTO schema_migrations (version) VALUES (23);
         `);
       })();
     }
