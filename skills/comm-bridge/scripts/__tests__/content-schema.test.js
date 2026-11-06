@@ -167,6 +167,17 @@ test('message answer metadata and control reject unknown fields', () => {
   assert.deepEqual(parseC4Content(encode(control)), { kind: 'invalid', reason: 'invalid_envelope' });
 });
 
+test('control envelopes reject metadata and blocks at the top level', () => {
+  for (const name of ['stop', 'replace']) {
+    const envelope = fixtures.valid.find(row => row.name === name).envelope;
+    assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
+    for (const extra of [{ metadata: {} }, { blocks: [] }]) {
+      assert.deepEqual(parseC4Content(encode({ ...envelope, ...extra })),
+        { kind: 'invalid', reason: 'invalid_envelope' }, `${name}: ${Object.keys(extra)[0]}`);
+    }
+  }
+});
+
 test('suppression suffix requires nonempty fields and permits intervening JSON whitespace', () => {
   const raw = fixtures.valid[0].content;
   const header = '\n\n[C4] Status notification suppressed by cooldown while health=';
@@ -300,5 +311,7 @@ test('message metadata accepts depth six and rejects depth seven and deeply nest
   const prefix = CONTENT_PREFIX + '{"version":1,"kind":"message","messageId":"deep_metadata","fallbackText":"text","blocks":[],"metadata":{"nested":';
   const deep = prefix + '['.repeat(32000) + '0' + ']'.repeat(32000) + '}}';
   assert.ok(Buffer.byteLength(deep) < MAX_CONTENT_BYTES);
-  assert.deepEqual(parseC4Content(deep), { kind: 'invalid', reason: 'invalid_envelope' });
+  const rejected = parseC4Content(deep);
+  assert.equal(rejected.kind, 'invalid');
+  assert.equal(rejected.reason, 'invalid_envelope');
 });
