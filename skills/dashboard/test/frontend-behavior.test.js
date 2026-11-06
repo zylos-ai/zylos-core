@@ -2129,7 +2129,7 @@ test('usage and legacy trends paths share tab mapping across local and fleet his
     for (let index = 0; index < paths.length; index++) assert.equal(tabForPath(paths[index]), expected[index]);
     assert.equal(tabForPath(prefix + '/settings'), 'settings');
     assert.equal(tabForPath(prefix + '/observer'), 'observer');
-    assert.equal(tabForPath(prefix + '/schedule'), 'overview');
+    assert.equal(tabForPath(prefix + '/schedule'), 'schedule');
   }
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   const tabs = app.slice(app.indexOf('function initTabs()'), app.indexOf('function initObserverControls()'));

@@ -74,6 +74,8 @@ function isSseResponse(resp) {
 function isAllowedProxyWrite(method, suffix) {
   return ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(suffix) ||
     method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(suffix) ||
+    method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(suffix) ||
+    ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/schedule\/[^/]+$/.test(suffix) ||
     method === 'POST' && /^\/api\/actions\/[^/]+$/.test(suffix) ||
     method === 'PUT' && (suffix === '/api/settings' || suffix === '/api/memory/file') ||
     method === 'POST' && (

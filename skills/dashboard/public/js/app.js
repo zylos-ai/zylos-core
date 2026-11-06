@@ -1,5 +1,6 @@
 import { mountWorkbench } from './wb/shell.js?v=82';
 import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=82';
+import { mountSchedule } from './wb/schedule.js?v=82';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { pct, resolveCpuDisplay } from './gauge-utils.js';
@@ -4668,3 +4669,19 @@ export function openWorkbenchGroup(key) {
   return workbench.openGroup(key);
 }
 window.addEventListener('pagehide', () => workbench.destroy());
+const stopSchedule = mountSchedule({
+  t,
+  locale: getLocale,
+  endpoint: path => api(agentPath(path)),
+  identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
+  writable: () => !remoteIsReadOnly(),
+  onOpenGroup: sessionGroup => {
+    // Opens the overview and narrows the board to the task's target group.
+    document.querySelector('.tab[data-tab="overview"]')?.click();
+    const search = document.querySelector('#wb-search');
+    if (!search) return;
+    search.value = sessionGroup;
+    search.dispatchEvent(new Event('input'));
+  },
+});
+window.addEventListener('pagehide', stopSchedule);

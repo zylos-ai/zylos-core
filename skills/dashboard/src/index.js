@@ -61,6 +61,9 @@ import { createGroupBacklog } from './lib/workbench/group-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
 import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-snapshot.js';
+import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
+import { createScheduleWrite } from './lib/workbench/schedule-write.js';
+import { createScheduleTz } from './lib/workbench/schedule-tz.js';
 import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
 import { buildRestartStatus } from './lib/core-actions.js';
 import { createCoreStateChangePublisher } from './lib/core-state-publisher.js';
@@ -407,6 +410,10 @@ function workbenchFailure(res, error) {
   sendJson(res, status, { ok: false, error: { code: status === 500 ? 'internal_error' : error.code,
     message: status === 500 ? 'Request failed' : error.message } });
 }
+const scheduleTz = createScheduleTz({ zylosDir: config.zylosDir });
+const scheduleReader = createScheduleRead({ zylosDir: config.zylosDir, scheduleTz, displayNames,
+  getSnapshot: () => workbench.getSnapshot() });
+const scheduleWriter = createScheduleWrite({ zylosDir: config.zylosDir, scheduleTz });
 
 // Rate-limit metric values arrive either as a plain number or as an object
 // keyed by window (same variants the single-agent page handles).
@@ -1155,6 +1162,17 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/workbench/schedule' || pathname.startsWith('/api/workbench/schedule/')) {
+    try {
+      const value = await scheduleReadResponse(scheduleReader, pathname, url.searchParams);
+      if (value === undefined) return false;
+      sendJson(res, 200, value);
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, { error: error.statusCode ? error.code : 'internal_error' });
+    }
+    return true;
+  }
+
   if (['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(pathname)) {
     try { sendJson(res, 200, await workbenchResponse(workbench, pathname, url.searchParams)); }
     catch (error) {
@@ -1703,6 +1721,23 @@ export function createServer() {
         if (['KEY_INVALID', 'NAME_INVALID', 'NAME_SET_BY_HUMAN'].includes(error.code)) {
           sendJson(res, 400, { ok: false, error: { code: error.code, message: error.message } });
         } else if ((error.status === 400 && error.message === 'invalid_json') ||
+          (error.status === 413 && error.message === 'payload_too_large')) {
+          sendJson(res, error.status, { error: error.message });
+        } else {
+          sendJson(res, 500, { error: 'internal_error' });
+        }
+      }
+      return;
+    }
+
+    if ((pathname === '/api/workbench/schedule' || pathname.startsWith('/api/workbench/schedule/')) &&
+      ['POST', 'PUT', 'DELETE'].includes(req.method)) {
+      try {
+        const outcome = await scheduleWriter.write(req.method, pathname, () => readJsonBody(req, 64 * 1024));
+        if (outcome) sendJson(res, outcome.status, outcome.body);
+        else sendText(res, 405, 'method not allowed');
+      } catch (error) {
+        if ((error.status === 400 && error.message === 'invalid_json') ||
           (error.status === 413 && error.message === 'payload_too_large')) {
           sendJson(res, error.status, { error: error.message });
         } else {

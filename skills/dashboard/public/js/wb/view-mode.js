@@ -65,6 +65,7 @@ export function tabForPath(path) {
   if (path.endsWith('/settings')) return 'settings';
   if (path.endsWith('/memory')) return 'memory';
   if (path.endsWith('/observer')) return 'observer';
+  if (path.endsWith('/schedule')) return 'schedule';
   return 'overview';
 }
 

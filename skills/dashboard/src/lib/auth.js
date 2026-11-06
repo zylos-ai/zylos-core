@@ -286,6 +286,11 @@ function nextTarget(req, base) {
   return isPathWithinBase(target, base) ? target : browserRoot(base);
 }
 
+function isScheduleWrite(method, pathname) {
+  return method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(pathname) ||
+    ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/schedule\/[^/]+$/.test(pathname);
+}
+
 function needsAdminApiAccess(pathname, method) {
   if (pathname === '/api/observer' || pathname.startsWith('/api/observer/')) return true;
   if (pathname.startsWith('/api/actions')) return true;
@@ -294,6 +299,7 @@ function needsAdminApiAccess(pathname, method) {
   if (pathname === '/api/agent/name') return true;
   if (['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(pathname)) return true;
   if (method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(pathname)) return true;
+  if (isScheduleWrite(method, pathname)) return true;
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return true;
   if (pathname === '/api/memory' || pathname.startsWith('/api/memory/')) return true;
   const proxiedWrite = pathname.match(/^\/fleet\/[^/]+\/api\/(.+)$/);
@@ -303,6 +309,7 @@ function needsAdminApiAccess(pathname, method) {
   if (remotePath === '/api/workbench/memory' || remotePath.startsWith('/api/workbench/memory/')) return true;
   return ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(remotePath) ||
     method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(remotePath) ||
+    isScheduleWrite(method, remotePath) ||
     method === 'POST' && remotePath.startsWith('/api/actions/') ||
     method === 'PUT' && remotePath === '/api/settings';
 }

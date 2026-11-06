@@ -6,4 +6,9 @@ export const workbenchWriteRoutes = [
   ...['interrupt', 'chop-chop', 'restart'].map(action => ({ method: 'POST',
     path: `/api/workbench/groups/telegram%3Ateam/actions/${action}`,
     body: '{"runId":"private-run","sessionId":"private-session"}' })),
+  { method: 'POST', path: '/api/workbench/schedule', body: '{"prompt":"Check","schedule":{"kind":"every","value":"1h"}}' },
+  { method: 'PUT', path: '/api/workbench/schedule/task-fixture', body: '{"name":"Renamed"}' },
+  { method: 'DELETE', path: '/api/workbench/schedule/task-fixture', body: null },
+  { method: 'POST', path: '/api/workbench/schedule/task-fixture/pause', body: null },
+  { method: 'POST', path: '/api/workbench/schedule/task-fixture/resume', body: null },
 ];
