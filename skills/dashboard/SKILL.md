@@ -176,8 +176,13 @@ Receipts distinguish `stored: false`, `stored: true`, and `stored: null` (unknow
 `messageId` is saved when Core provides it. `deliveryState` is read from the C4
 inbound row's status and delivery action; Core's returned `action` is only a hint.
 An `action` of `delivered` does not establish that the message reached an agent.
-An existing group head proves only that the group exists, not which message was
-stored or delivered.
+For an uncertain first send, the exact group head proves the first insert
+committed because Core writes both in one transaction. The receipt has
+`stored: true` and `retryAllowed: false` through both draft and canonical IDs;
+without the original message ID its delivery state still needs reconciliation.
+Retrying that first text through the canonical ID reuses the receipt, while new
+text is a normal subsequent send and does not require `retry: true`. The head
+does not establish a message ID or delivery status.
 
 `DB_BUSY`, `DB_WRITE_FAILED`, and branded pre-insert errors with `persisted: []`
 are definite no-store results. The draft and input remain available for retry.
@@ -201,5 +206,5 @@ this does not promise cross-process exactly-once delivery.
 The mine list merges bounded Core and draft sources using the existing timestamp
 and stable-ID cursor order. Drafts use their Dashboard update time, appear only in
 mine, and are omitted once an authoritative Core head exists. External history
-remains read-only. This implementation adds no archive, delete, close, question
-answering or frontend action.
+remains read-only. These draft and ordinary-send endpoints manage registration,
+naming and message submission; question answers and UI actions have separate contracts.

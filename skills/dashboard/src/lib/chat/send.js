@@ -89,19 +89,23 @@ export class ChatSender {
 
   _receipt(row, { initial = false, headMissing = false, headFailed = false } = {}) {
     const lastOutcome = row.lastOutcome;
-    const initialReplay = initial && row.state === 'active';
-    const outcome = initialReplay && lastOutcome?.initial === false ? null : lastOutcome;
-    const id = initialReplay ? messageId(row.firstMessageId) : messageId(row.lastMessageId);
-    const uncertain = unknown(outcome) && !initialReplay;
-    const stored = initialReplay ? (id || outcome?.kind === 'committed' ? true : null) : outcome?.kind === 'committed' ? true : uncertain ? null : false;
-    const state = id && stored ? this._status(row, id) : uncertain || (initialReplay && !id) ? 'pending_reconciliation' : null;
+    // Activation proves the initial insert committed, even when its receipt
+    // was lost. That evidence belongs to the send, not the ID used to open it.
+    const first = row.state === 'active' && (initial ||
+      (lastOutcome?.initial === true && unknown(lastOutcome)));
+    const outcome = first && lastOutcome?.initial === false ? null : lastOutcome;
+    const id = messageId(first ? row.firstMessageId : row.lastMessageId);
+    const uncertain = unknown(outcome) && !first;
+    const stored = first || outcome?.kind === 'committed' ? true : uncertain ? null : false;
+    const state = stored ? (id ? this._status(row, id) : 'pending_reconciliation')
+      : uncertain ? 'pending_reconciliation' : null;
     return { conversationId: row.state === 'active' ? canonicalId(row) : `d:${row.localId}`,
       localId: row.localId, channel: row.channel, namespace: row.namespace,
       draft: row.state !== 'active', stored, messageId: id,
       deliveryState: state,
       needsReconciliation: headFailed || (!headMissing && (uncertain || state === 'pending_reconciliation')),
-      retryAllowed: !initialReplay && !headFailed && stored !== true && !(outcome?.kind === 'sending' && this.inflight.has(row.localId)),
-      preserveInput: initialReplay ? !id && unknown(outcome) : (uncertain || outcome?.kind === 'not_stored'),
+      retryAllowed: !first && !headFailed && stored !== true && !(outcome?.kind === 'sending' && this.inflight.has(row.localId)),
+      preserveInput: !first && (uncertain || outcome?.kind === 'not_stored'),
       ...(outcome?.action ? { action: outcome.action } : {}),
       ...(outcome?.error ? { error: outcome.error } : {}) };
   }
@@ -158,7 +162,11 @@ export class ChatSender {
         const receipt = await this._reconcile(row, initial);
         row = this.conversations.get(row.localId);
         if (initial && row.state === 'active') return this._initialReceipt(row, content);
-        if (!retry || (row.state !== 'active' && receipt.needsReconciliation)) return receipt;
+        if (row.state === 'active' && row.lastOutcome?.initial === true) {
+          // A recovered first insert cannot be retried through the canonical
+          // entry. Different text is a normal subsequent send.
+          if (content === row.firstContent) return this._receipt(row, { initial: true });
+        } else if (!retry || (row.state !== 'active' && receipt.needsReconciliation)) return receipt;
       }
       if (row.lastOutcome?.kind === 'committed' && row.pendingContent === content &&
           (row.lastOutcome.error || row.lastOutcome.action === 'suppressed')) return this._receipt(row, { initial });

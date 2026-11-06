@@ -404,8 +404,11 @@ test('draft migration can be replayed without replacing registrations or names',
 for (const [shape, transform] of [
   ['missing first content', sql => sql.replace('first_content TEXT,', '')],
   ['nullable local identifier', sql => sql.replace('local_id TEXT PRIMARY KEY NOT NULL', 'local_id TEXT PRIMARY KEY')],
+  ['non-text local identifier', sql => sql.replace('local_id TEXT PRIMARY KEY NOT NULL', 'local_id INTEGER PRIMARY KEY NOT NULL')],
   ['missing primary key', sql => sql.replace('local_id TEXT PRIMARY KEY NOT NULL', 'local_id TEXT NOT NULL')],
   ['nullable state', sql => sql.replace("state TEXT NOT NULL DEFAULT 'draft'", "state TEXT DEFAULT 'draft'")],
+  ['nullable creation timestamp', sql => sql.replace('created_at INTEGER NOT NULL', 'created_at INTEGER')],
+  ['nullable update timestamp', sql => sql.replace('updated_at INTEGER NOT NULL', 'updated_at INTEGER')],
   ['required namespace', sql => sql.replace('namespace TEXT,', 'namespace TEXT NOT NULL,')],
   ['required draft name', sql => sql.replace('display_name TEXT,', 'display_name TEXT NOT NULL,')],
 ]) test(`current schema rejects a ${shape} registration layout without mutation`, t => {
@@ -419,6 +422,7 @@ for (const [shape, transform] of [
   const reader = new Database(file, { readonly: true, fileMustExist: true });
   try {
     assert.throws(() => owner.inspectSchema(reader), /Unsupported Dashboard conversation registration|no such column: first_content/);
+    assert.throws(() => owner.migrate(reader), /Unsupported Dashboard conversation registration|no such column: first_content/);
   } finally { reader.close(); }
   assert.deepEqual(fs.readFileSync(file), before);
 });

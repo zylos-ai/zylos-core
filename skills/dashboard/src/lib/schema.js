@@ -443,7 +443,7 @@ export function migrateDatabase(db) {
           CREATE INDEX IF NOT EXISTS idx_chat_conversations_drafts_page
             ON chat_conversations(updated_at / 86400000.0 + 2440587.5 DESC, ('d:' || local_id) COLLATE BINARY)
             WHERE state <> 'active';
-          INSERT INTO schema_migrations(version) VALUES(24);
+          INSERT OR IGNORE INTO schema_migrations(version) VALUES(24);
         `);
       })();
     }

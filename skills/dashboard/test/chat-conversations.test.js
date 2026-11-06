@@ -271,6 +271,39 @@ test('an unknown initial send with an established head activates the conversatio
   assert.equal(f.count('conversations'), 1);
 });
 
+test('head recovery prevents canonical retries of the first text and permits a new subsequent message', async t => {
+  const f = fixture(t), draft = f.conversations.create();
+  f.setInvoke(async args => { await f.realReceive(args); throw Error('lost initial receipt'); });
+  const sent = await f.sender.send(draft.id, { content: 'committed first text' });
+  const restarted = f.makeSender();
+  const canonical = sent.conversationId;
+  assert.ok(canonical.startsWith('g:'));
+  for (const id of [draft.id, canonical]) {
+    const opened = await restarted.reconcile(id);
+    assert.equal(opened.stored, true);
+    assert.equal(opened.messageId, null, 'head evidence cannot invent a message ID');
+    assert.equal(opened.needsReconciliation, true);
+    assert.equal(opened.retryAllowed, false);
+    assert.equal(opened.preserveInput, false);
+  }
+  const replay = await restarted.send(canonical, { content: 'committed first text', retry: true });
+  assert.equal(replay.retryAllowed, false);
+  assert.equal(replay.stored, true);
+  assert.equal(f.counts.receive, 1);
+  assert.deepEqual(f.rows(draft.localId).map(row => row.content), ['committed first text']);
+  await assert.rejects(restarted.send(draft.id, { content: 'new text from old draft', retry: true }), {
+    code: 'chat_conversation_started', statusCode: 409, conversationId: canonical, preserveInput: true,
+  });
+  assert.equal(f.counts.receive, 1);
+  f.setInvoke(null);
+  const later = await restarted.send(canonical, { content: 'normal subsequent text' });
+  assert.equal(later.stored, true);
+  assert.equal(later.retryAllowed, false);
+  assert.equal(f.counts.receive, 2);
+  assert.deepEqual(f.rows(draft.localId).map(row => row.content), ['committed first text', 'normal subsequent text']);
+  assert.equal(f.conversations.get(draft.localId).firstMessageId, null);
+});
+
 test('a later receipt cannot become the authority for an unknown initial message', async t => {
   const f = fixture(t), draft = f.conversations.create();
   f.setInvoke(async args => { await f.realReceive(args); throw Error('lost initial receipt'); });
@@ -278,14 +311,14 @@ test('a later receipt cannot become the authority for an unknown initial message
   assert.equal(first.draft, false);
   assert.equal(first.messageId, null);
   f.setInvoke(null);
-  const later = await f.sender.send(first.conversationId, { content: 'deliberate later message', retry: true });
+  const later = await f.sender.send(first.conversationId, { content: 'deliberate later message' });
   assert.equal(later.stored, true);
   assert.equal(later.retryAllowed, false, 'stored receipts never permit a retry');
   assert.ok(later.messageId);
   assert.equal(f.conversations.get(draft.localId).firstMessageId, null);
   const initialReplay = await f.sender.send(draft.id, { content: 'initial unknown message' });
   assert.equal(initialReplay.messageId, null);
-  assert.equal(initialReplay.stored, null);
+  assert.equal(initialReplay.stored, true, 'activation proves the first insert committed');
   assert.equal(initialReplay.needsReconciliation, true);
   assert.equal(f.counts.receive, 2);
 });
@@ -318,9 +351,18 @@ test('an owned canonical list entry opens and reconciles an uncertain first send
   const opened = await f.makeSender().reconcile(listed[0].id);
   assert.equal(opened.draft, false);
   assert.equal(opened.messageId, null);
-  assert.equal(opened.stored, null);
+  assert.equal(opened.stored, true);
+  assert.equal(opened.retryAllowed, false);
+  assert.equal(opened.preserveInput, false);
   assert.equal(f.conversations.get(draft.localId).state, 'active');
   assert.equal((await f.sender.resolve(listed[0].id)).localId, draft.localId);
+  assert.equal(f.counts.receive, 1);
+  await assert.rejects(f.sender.send(draft.id, { content: 'different after delayed head recovery' }), {
+    code: 'chat_conversation_started', statusCode: 409, conversationId: listed[0].id, preserveInput: true,
+  });
+  const replay = await f.makeSender().send(listed[0].id, { content: 'uncertain first message', retry: true });
+  assert.equal(replay.retryAllowed, false);
+  assert.equal(f.rows(draft.localId).length, 1);
   assert.equal(f.counts.receive, 1);
 });
 
@@ -390,6 +432,7 @@ test('concurrent initial submissions share one in-flight receive for the registe
   try {
     await Promise.race([started, pending.then(() => { throw Error('receive finished before the fixture barrier'); })]);
     const duplicate = await f.sender.send(draft.id, { content: 'one initial submission' });
+    assert.equal(duplicate.preserveInput, true);
     assert.equal(duplicate.retryAllowed, false);
     assert.equal(duplicate.needsReconciliation, true);
     assert.equal(f.counts.receive, 1);
