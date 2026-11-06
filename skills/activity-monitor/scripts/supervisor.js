@@ -10,12 +10,14 @@ import { RuntimeHealthCoordinator, aggregateRuntimeDemand } from './runtime-heal
 import { SupervisorHealthObserver } from './supervisor-health-observer.js';
 import { MessageRouter } from './message-router.js';
 import { SupervisorExits } from './supervisor-exits.js';
+import { SupervisorRunEndings } from './supervisor-run-endings.js';
 import { SessionActivity } from './session-activity.js';
 import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
+import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js';
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
-const { assertSessionGroup, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
+const { assertSessionGroup, groupRunDir, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
 
 export const AUTH_DEMAND_RETRY_MS = 60000;
 
@@ -25,6 +27,7 @@ export function createSupervisor(deps) {
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
   let observer,router,admission,lifecycle,modeSwitch,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
+  const originAuthAlerted=new Set();
   const missingDependencies=deps.missingDependencies ?? new Set();
   const reportError=(error,context={})=>{
     if(['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code)) {
@@ -99,8 +102,10 @@ export function createSupervisor(deps) {
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
+  const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prompts,
-    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError,
+    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
+    readCurrentSession:async group=>{try{return await endings.currentSession(group);}catch{return null;}},
     intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
   modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
@@ -108,6 +113,7 @@ export function createSupervisor(deps) {
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({
+    beginRound:()=>lifecycle.beginRound(),
     readConfiguration:async transition=>{
       roundContext=null;
       try {configuration=await readConfiguration();modeSwitch.recordConfigurationRead();return configuration;}
@@ -126,6 +132,9 @@ export function createSupervisor(deps) {
     advanceTransition:()=>modeSwitch.advance(),
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},
     observeExits:current=>exits.advance(current),
+    updateCapacity:context=>deps.updateCapacity?.(context),
+    reconcileRunEndings:context=>endings.advance(context),
+    reconciliationReadFailed:error=>endings.reportReadFailure(error),
     afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),
     probeAndPublish:async(scene,context)=>{
       if(!scene.ready || scene.processRunning!==true || !scene.runId || !scene.sessionId)return;
@@ -146,10 +155,20 @@ export function createSupervisor(deps) {
         catch(error) { reportError(error,{phase:'recovery-probe',runtime:probe.runtime}); }
       }
       const pendingGroups=await db.listPendingSessionGroups();
-      const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups,fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
+      const continuationGroups=configuration.mode==='multi'?await db.listPendingContinuations():[];
+      const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups:[...pendingGroups,...continuationGroups],fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
+      if(configuration.mode==='multi' && !context.fences.some(fence=>['origin','*'].includes(fence.sessionGroup))) {
+        const need=await db.getOriginNeed(Math.floor(now()/1000));
+        if(need.controls.count>0 || need.continuation?.pending) {
+          const runtime=await deps.resolveTargetRuntime('origin');
+          if(!demand.has(runtime))demand.set(runtime,new Set());
+          demand.get(runtime).add('origin');
+        }
+      }
       for(const runtime of demand.keys())observer.driveDemand(runtime);
       const metrics={ready:current.filter(s=>s.sessionGroup!=='origin' && s.ready).length,starting:current.filter(s=>s.sessionGroup!=='origin' && !s.ready).length,
-        reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length};
+        reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length,
+        k:configuration.capacity ?? null,kSource:configuration.capacitySource ?? null};
       if(JSON.stringify(metrics)!==lastMetrics) {
         try { appendEvent(poolMetricsPath(deps.env),{v:1,ts:now(),...metrics});lastMetrics=JSON.stringify(metrics); }
         catch(error) { reportError(error,{phase:'pool-metrics'}); }
@@ -200,7 +219,14 @@ export function createSupervisor(deps) {
           return observed.present===false || (typeof observed.runId==='string' && observed.runId!==target.runId);
         },hasAuthFence:async target=>configuration.mode==='multi' && (await db.getDrainFence(target.sessionGroup))?.reason==='auth'});
       }
-
+      if(configuration.mode!=='multi' || context.transition || context.fences.some(fence=>fence.sessionGroup==='*'))return;
+      const runtime=await deps.resolveTargetRuntime('origin');
+      if(health.store(runtime).read().health!=='auth_failed') {originAuthAlerted.delete(runtime);return;}
+      const seconds=Math.floor(now()/1000),need=await db.getOriginNeed(seconds);
+      if(need.inbound.oldestAt!==null && seconds-need.inbound.oldestAt>=PENDING_MAX_AGE_SECONDS-300 && !originAuthAlerted.has(runtime)) {
+        await deps.alert({event:'origin_auth_blocked',runtime,oldest_at:need.inbound.oldestAt});
+        originAuthAlerted.add(runtime);
+      }
     },
   },deps.loopOptions);
   const connectionHandler=createSupervisorConnectionHandler({admission,router,isOpen:()=>admission.open && !stopping,readRun:group=>scenes.readRun(group),readMode,
@@ -208,7 +234,7 @@ export function createSupervisor(deps) {
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };
-  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,drainHealthWrites,
+  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,drainHealthWrites,diagnostic,
     stop(){
       if(stopPromise)return stopPromise;
       stopping=true;admission.closeEntry();

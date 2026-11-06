@@ -13,6 +13,10 @@ export const T=1800000000000;
 export async function fixture(t,{health='unavailable',budget={},mode='multi'}={}) {
  const children=[];const tm=isolatedTmux(t,{prefix:'launch-admission-',beforeCleanup:async()=>{if(process.env.LAUNCH_ADMISSION_TRACE_DIR){const dir=path.join(process.env.LAUNCH_ADMISSION_TRACE_DIR,createHash('sha256').update(t.name).digest('hex').slice(0,12));fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'case.json'),JSON.stringify({name:t.name,root,processes:children.map(p=>({role:p.role,pid:p.child.pid}))}));for(const role of ['m1','m4'])if(fs.existsSync(path.join(root,role+'.jsonl')))fs.copyFileSync(path.join(root,role+'.jsonl'),path.join(dir,role+'.jsonl'));}for(const p of children)await p.kill()}});
  const root=fs.realpathSync(tm.dir);let clock=T;
+ assert.ok(root.startsWith(fs.realpathSync(process.env.TMPDIR)+path.sep));
+ assert.equal(path.dirname(tm.socketPath),tm.dir);
+ assert.ok(process.env.PM2_HOME?.startsWith('/tmp/') || process.env.PM2_HOME?.startsWith('/private/tmp/'));
+ t.diagnostic(JSON.stringify({HOME:root,ZYLOS_DIR:root,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,tmuxSocket:tm.socketPath,database:path.join(root,'comm-bridge/c4.db')}));
  fs.mkdirSync(path.join(root,'.zylos'));fs.mkdirSync(path.join(root,'comm-bridge'));
  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:mode}));seedCodexTrustFixture({root,home:root});
  fs.mkdirSync(path.join(root,'named-runtime'));fs.writeFileSync(path.join(root,'named-runtime/sleeper.c'),'#include <unistd.h>\nint main(void){sleep(600);return 0;}\n');execFileSync('cc',[path.join(root,'named-runtime/sleeper.c'),'-o',path.join(root,'named-runtime/claude')]);fs.copyFileSync(path.join(root,'named-runtime/claude'),path.join(root,'named-runtime/codex'));fs.chmodSync(path.join(root,'named-runtime/codex'),0o700);

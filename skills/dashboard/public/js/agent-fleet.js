@@ -55,6 +55,7 @@ export function stateMood(agent) {
   const reason = String(agent?.health_reason || '').toLowerCase();
   const activity = String(agent?.activity || '').toLowerCase();
   if (state === 'OFFLINE' || reason === 'offline' || reason === 'unreachable' || reason === 'version_unsupported' || reason === 'auth_failed') return 'offline';
+  if (state === 'AUTH_WAIT' || state === 'WAKE_OVERDUE') return 'stuck';
   if (state === 'STUCK' || state === 'POSSIBLY_STUCK' || reason.includes('stuck')) return 'stuck';
   if (state === 'IDLE') return 'idle';
   if (state === 'BUSY' && (activity.includes('thinking') || activity.includes('思考'))) return 'thinking';
@@ -81,6 +82,8 @@ function stateLabel(agent, labels, mood = stateMood(agent)) {
   if (reason === 'unreachable') return labels.unreachable;
   if (reason === 'auth_failed') return labels.authFailed;
   if (labels.reasonLabels?.[reason]) return labels.reasonLabels[reason];
+  const state = String(agent?.state || 'UNKNOWN').toUpperCase();
+  if (['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(state)) return labels[state.toLowerCase()];
   if (mood === 'busy') return labels.busy;
   if (mood === 'thinking') return labels.thinking;
   if (mood === 'stuck') return labels.stuck;
@@ -213,6 +216,9 @@ export function defaultAgentFleetLabels() {
     busy: 'Working',
     thinking: 'Thinking',
     idle: 'Idle',
+    sleeping: 'Sleeping', waking: 'Waking up', wake_overdue: 'Wake unsuccessful',
+    auth_wait: 'Waiting for authentication', rate_wait: 'Waiting for rate limit',
+    reclaiming: 'Reclaiming', switching: 'Switching',
     stuck: 'Possible Stuck',
     offline: 'Offline',
     unreachable: 'Unreachable',

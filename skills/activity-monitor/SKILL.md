@@ -139,30 +139,40 @@ The activity monitor periodically enqueues system health checks via the C4 contr
 - **Interval**: Every 24 hours (86400 seconds)
 - **Persisted state**: `~/zylos/activity-monitor/health-check-state.json` (survives restarts)
 - **Priority**: 3 (normal)
-- **Gated by health**: Only enqueued when `health === 'ok'`
-- **Gated by agent**: Only enqueued when the agent process is running
+- **Gated by target runtime health**: Allowed when the resolved Origin target runtime's health is missing or `ok`; unreadable or unhealthy state defers the check
+- **Origin presence**: No running Origin session is required
+- **Mode transition**: Deferred while a mode switch is in progress
 
 The health check control message instructs Claude to:
 1. Check PM2 services via the health-check skill's sanitized PM2 snapshot helper
 2. Check disk space via `df -h`
 3. Check memory via `free -m`
-4. If issues found, notify the most recent communication channel
+4. If issues are found, choose the designated owner or ops contact from memory, otherwise the usual collaborator
 5. Log results to `~/zylos/logs/health.log`
 6. Acknowledge the control message
 
 Raw `pm2 jlist` output must never enter an agent/tool transcript because it
 contains each process's inherited environment.
 
+## Upgrade Check
+
+The activity monitor runs `upgrade-check.js` once per local date at or after
+06:00. `upgrade_check_enabled` defaults to `true`. It uses the resolved Origin
+target runtime's missing-or-`ok` health and requires no Origin session. A mode
+transition defers it; after recovery it catches up later that day. State is
+persisted in `~/zylos/activity-monitor/upgrade-check-state.json`.
+
 ## Daily Upgrade
 
 The activity monitor enqueues a daily Claude Code upgrade via the C4 control queue.
 
 - **Enabled**: Off by default. Enable with `zylos config set daily_upgrade_enabled true`
-- **Schedule**: 5:00 AM local time (configured by `DAILY_UPGRADE_HOUR`)
+- **Schedule**: At or after 5:00 AM local time; catches up later the same day
 - **Timezone**: Loaded from `~/zylos/.env` `TZ` field, falls back to `process.env.TZ`, then `UTC`
 - **Persisted state**: `~/zylos/activity-monitor/daily-upgrade-state.json` (tracks last upgrade date)
 - **Priority**: 3 (normal)
-- **Gated by health**: Only enqueued when `health === 'ok'`
+- **Gated by target runtime**: Only for a resolved Claude target with missing or `ok` health; no Origin session is required
+- **Mode transition**: Deferred while a mode switch is in progress
 - **Gated by config**: Only enqueued when `daily_upgrade_enabled` is `true` in config
 - **Once per day**: Checks local date to avoid duplicate enqueues
 
@@ -196,10 +206,12 @@ The activity monitor runs a daily git commit of the `memory/` directory.
 
 ## Timing Guarantees
 
-Both daily tasks (upgrade, memory commit) use the same `DailySchedule` class:
-- **Window**: Each target hour provides a ~3600s window; with ~1s loop interval it is virtually impossible to miss entirely
-- **Dedup**: Date-based (`last_date === today`) ensures exactly-once per day, even with imprecise timing
+Machine tasks use `SupervisorMachineTasks`:
+- **Catch-up**: Upgrade check (06:00) and optional Claude upgrade (05:00) remain due later that local date until successfully recorded
+- **Memory commit**: Runs only during the 03:00 hour, including during a mode transition; it does not catch up after that hour
+- **Dedup**: Successful work records `last_date`; failed work remains eligible for retry
 - **Persistence**: State files survive activity monitor restarts
+- **Usage**: Account health, configured intervals and active hours govern sampling/alerts; Origin presence, idle state, input state and pending-work gates are not required. Mode transitions defer usage work
 
 ## Permission Auto-Approve
 

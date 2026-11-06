@@ -1401,3 +1401,8 @@ test('stateToFleetRecord accepts legacy string-form last_message', () => {
   }, { self: false, nowMs: 0 });
   assert.equal(record.activity, 'plain text reply');
 });
+
+test('sleeping Origin remains online in Fleet', () => {
+  const row = stateToFleetRecord({ name: 'Origin' }, { state: 'SLEEPING' }, { self: true });
+  assert.equal(row.state, 'SLEEPING'); assert.equal(row.pulse_rate, 1); assert.equal(row.health_reason, 'ok');
+});

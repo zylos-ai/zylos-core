@@ -7,6 +7,7 @@ const scene = { sessionGroup: 'a', present: true, ready: true, runId: 'run-a', s
   runtime: 'claude', processRunning: true, state: 'idle', idleSince: 0, createdAt: 0, usagePercent: 50,
   runDir: path.join(process.env.ZYLOS_DIR, 'activity-monitor/session-groups/a') };
 const db = { getModeTransition: () => null, listDrainFences: () => [...fences.values()],
+  getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
   getDrainFence: group => fences.get(group) ?? null,
   setDrainFence: (group, value) => fences.set(group, { sessionGroup: group, ...value }),
   listPendingSessionGroups: () => [], getControlById: () => null,
@@ -14,7 +15,7 @@ const db = { getModeTransition: () => null, listDrainFences: () => [...fences.va
   insertControl: (content, options) => { const row = { id: controls.length + 1, content, ...options }; controls.push(row); return row; },
   resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };
 const service = await startSupervisor({ db, now: () => now,
-  scenes: { observe: async () => [], readIdentity(group) { return this.observeGroup(group); }, observeGroup: async () => scene, listRuns: async () => [], readRun: async () => null },
+  scenes: { bindTarget: target => ({ expectedRunId: target.runId, tmuxTarget: { serverGeneration: 'private-server', sessionId: '$1', paneId: '%1' } }), observe: async () => [], readIdentity(group) { return this.observeGroup(group); }, observeGroup: async () => scene, listRuns: async () => [], readRun: async () => null },
   legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
   readSyncMarker: () => ({ held: false, stale: false }),
   loopOptions: { schedule: () => 1, cancel() {} }, log() {},

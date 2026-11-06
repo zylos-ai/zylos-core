@@ -27,7 +27,7 @@ const config = () => JSON.parse(fs.readFileSync(path.join(root, '.zylos/config.j
 const sqlite = new Database(path.join(root, 'comm-bridge/c4.db'));
 guardDatabase(sqlite, schema); sqlite.pragma('journal_mode=WAL');
 const store = createStore(sqlite, { now: () => clock, readConfig: () => ({ state: 'ok', config: config() }), validateComponent: () => true, validateModel: () => true });
-const db = { ...store, insertControl:(...args)=>store.insertControl(...args).id, getDb: () => sqlite, getControlById: id => sqlite.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
+const db = { ...store, getDb: () => sqlite, getControlById: id => sqlite.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
   expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 };
 const env = { ...process.env, HOME: root, ZYLOS_DIR: root };
 const tmux = { socketPath: tmuxSocket, binary, configFile: '/dev/null' };
@@ -76,7 +76,7 @@ if (role === 'm4') {
     deliverConversation: async (row, live) => db.markDelivered(row.id, { sessionId: live.sessionId }),
     handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
     diagnostic: (event, fields) => trace('diagnostic', { event, ...fields }), log: value => trace('log', { value }),
-  }, { poolSize: 4, readyTimeoutMs: 10000 });
+  }, { poolSize: () => 4, readyTimeoutMs: 10000 });
   await router.initialize();
 }
 process.on('message', async message => {
@@ -97,7 +97,11 @@ process.on('message', async message => {
       const request={version:2,type:'route',requestId:'input-'+clock,noReply:false,receivedAt:clock,channel:'fixture',endpoint:'input',componentName:'fixture',sessionGroup:arg.group || 'chat'};
       result=await new Promise((resolve,reject)=>{const socket=net.createConnection(path.join(root,'activity-monitor/am.sock'));let text='';socket.on('error',reject);socket.on('connect',()=>socket.write(JSON.stringify(request)+'\n'));socket.on('data',chunk=>text+=chunk);socket.on('end',()=>{try{resolve(JSON.parse(text))}catch(e){reject(e)}})});trace('route',{request,result});
     }
-    else if (op === 'settled') result = [...router.state.activations.values()].map(a=>({settled:a.launchSettled,group:a.group}));
+    else if (op === 'settleSlot') { // Only the occupancy transaction; no scan, so Origin stays untouched.
+      const rows = store.listSlotOccupancy().filter(row => row.sessionGroup === arg.group && row.state === 'running');
+      for (const row of rows) { if (arg.how === 'end') store.recordRunEnd(row.sessionGroup, { runId: row.runId, reason: 'unexpected' }); else store.pruneSlots({ orphans: [{ sessionGroup: row.sessionGroup, runId: row.runId }], minAgeSeconds: 0 }); }
+      result = rows.length;
+    } else if (op === 'settled') result = [...router.state.activations.values()].map(a=>({settled:a.launchSettled,group:a.group}));
     else if (op === 'live') result = await reader.readLiveIdentity(arg.group);
     else if (op === 'runtime') result = db.setSessionRuntimeConfig({sessionGroup:arg.group,runtime:arg.runtime});
     else if (op === 'probe') {
@@ -112,7 +116,7 @@ process.on('message', async message => {
       await observer.pollProbe(probe);result=await pending;trace('probe',{group:arg.group,runId:probe.scene.runId,controlId:probe.controlId,result});
     } else if (op === 'exit') await service.supervisor.health.noteRunExited('claude', arg.runId);
     else if (op === 'add') {
-      const row = db.insertConversation('in', arg.group, 'fixture', 'incoming');
+      const row = db.insertConversation('in', arg.group === 'origin' ? 'system' : arg.group, 'fixture', 'incoming');
       sqlite.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(clock / 1000, row.id); result = row;
     } else if (op === 'fence') result = db.setDrainFence(arg.group, { reason: 'upgrade', runId: 'fixture' });
     else if (op === 'fence-state') result = db.getDrainFence(arg.group);

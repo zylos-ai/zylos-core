@@ -33,16 +33,28 @@ function copyDependency(name, fromPackage, targetModules) {
   }
 }
 
+// Package/deployed module graph boundary: run for CLI packaging or Router imports;
+// skip unrelated notice wording. Official runner and fixture isolate HOME,
+// ZYLOS_DIR, PM2_HOME, short TMPDIR/socket and SQLite; no live tmux/PM2/network.
+// Child commands have deadlines and fixture removal follows their completion.
 test('packed global CLI starts without installed skill dependencies', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-packed-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     !key.toLowerCase().startsWith('npm_') && !['NODE_PATH', 'NODE_OPTIONS', 'ZYLOS_PACKAGE_ROOT'].includes(key)));
   Object.assign(env, { HOME: root, ZYLOS_DIR: path.join(root, 'home-zylos'),
+    PM2_HOME: path.join(root, '.pm2'), ZYLOS_SESSION_POOL_SIZE: '2',
     npm_config_update_notifier: 'false', npm_config_cache: path.join(root, 'npm-cache'), npm_config_userconfig: path.join(root, 'npmrc'),
     npm_config_globalconfig: path.join(root, 'global-npmrc') });
   fs.writeFileSync(env.npm_config_userconfig, '');
   fs.writeFileSync(env.npm_config_globalconfig, '');
+  assert.ok(env.PM2_HOME.startsWith(env.HOME + path.sep));
+  assert.ok(env.ZYLOS_DIR.startsWith(env.HOME + path.sep));
+  // No publication exists in this private root, so the shared reader uses env K.
+  // A fresh publication would take precedence over this fixed fallback.
+  assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'activity-monitor/pool-capacity.json')), false);
+  t.diagnostic(JSON.stringify({ packagedFixture: root, HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
+    PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, TMUX_TMPDIR: env.TMUX_TMPDIR }));
   const packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', root],
     { cwd: repo, env, encoding: 'utf8', timeout: 60000 }));
   assert.deepEqual(packed[0].files.filter(({ path: file }) => file.split('/').includes('node_modules')),
@@ -104,8 +116,11 @@ test('packed global CLI starts without installed skill dependencies', async t =>
         db: {
           recoverOrphanRunning: () => ({ requeued: { ids: [] }, ageExpired: { ids: [] }, retryExhausted: { ids: [] } }),
           listPendingSessionGroups: () => [{ sessionGroup: 'probe', headPriority: 0, headId: 1 }],
+          listPendingContinuations: () => [], listSlotOccupancy: () => [],
+          takeSlot: () => ({ taken: true, prior: null }), releaseSlot: () => ({ released: true }),
           getNextPending: filter => filter?.sessionGroups?.includes('probe') ? { id: 1, session_group: 'probe' } : null,
           expirePending: () => false, getDrainFence: () => null,
+          getOriginNeed: () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null } }),
           resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
           expireTimedOutControls: empty, cleanupControlQueue: empty,
           countNonTerminalControls: () => ({ pending: 0 }),
@@ -116,7 +131,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
         readRuntimeHealth: () => ({ health: 'unavailable' }),
         diagnostics: { diagnostic: (event, fields) => events.push({ event, ...fields }), maintain() {} },
         log() {},
-      }, { poolSize: 2 });
+      });
       try {
         await dispatcher.initialize();
         for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }

@@ -685,3 +685,32 @@ describe('status notice cooldowns', () => {
     assert.equal(mod.getStatusNoticeCooldowns().length, 0);
   });
 });
+
+describe('Origin demand and drain fence API', () => {
+  beforeEach(() => resetTables());
+
+  it('exports an empty read-only Origin demand view', () => {
+    assert.deepEqual(mod.getOriginNeed(1000), {
+      inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null }, continuation: { pending: false, oldestAt: null },
+    });
+  });
+
+  it('allows Origin TTL but rejects Origin eviction without writing a fence', () => {
+    assert.throws(() => mod.setDrainFence('origin', { reason: 'evict', runId: 'origin-run' }), { code: 'FENCE_INVALID' });
+    assert.equal(mod.getDrainFence('origin'), null);
+    mod.setDrainFence('origin', { reason: 'ttl', runId: 'origin-run' });
+    assert.deepEqual(mod.getDrainFence('origin'), {
+      sessionGroup: 'origin', reason: 'ttl', runId: 'origin-run', createdAt: mod.getDrainFence('origin').createdAt,
+    });
+  });
+
+  it('preserves ordinary group TTL and eviction fences', () => {
+    for (const reason of ['ttl', 'evict']) {
+      mod.setDrainFence('telegram_work', { reason, runId: 'group-run' });
+      const fence = mod.getDrainFence('telegram_work');
+      assert.equal(fence.reason, reason);
+      assert.equal(fence.runId, 'group-run');
+      mod.clearDrainFence('telegram_work');
+    }
+  });
+});

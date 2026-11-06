@@ -16,6 +16,7 @@ export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs 
     runtime: 'claude', launchConfig: { runtime: 'claude', mode: 'default' }, ready: true, sessionId: `session-${group}`, ...values });
   function put(group, values) {
     const live = identity(group, values); scene.set(group, live);
+    if (mode === 'multi' && group !== null && group !== 'origin' && live.runId) db.takeSlot(group, { runId: live.runId, k: 100000 });
     if (live.ready) current.set(group, { runId: live.runId, sessionId: live.sessionId, startupControlIds: [], ts: clock });
     return live;
   }
@@ -35,7 +36,7 @@ export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs 
   };
   const recover = db.recoverOrphanRunning;
   db.recoverOrphanRunning = options => { calls.push(['recover']); return recover(options); };
-  const options = { poolSize, readyTimeoutMs };
+  const options = { poolSize: typeof poolSize === 'function' ? poolSize : () => poolSize, readyTimeoutMs };
   let router;
   const create = () => router = createRouter(deps, options);
   const rounds = async (n = 1) => { for (let i = 0; i < n; i++) { router.tick(); await router.idle(); await flush(); } };

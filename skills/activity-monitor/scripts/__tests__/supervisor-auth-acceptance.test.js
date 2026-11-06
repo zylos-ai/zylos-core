@@ -15,11 +15,14 @@ function fixture(t, { mode = 'multi', create = createSupervisor } = {}) {
   const state = { now: 1000000, live: new Map(), fences: new Map(), checks: [], stops: [],
     running: 0, controls: 0, deadlineLess: 0, pending: true, d8Writes: 0 };
   const db = {
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     getModeTransition: () => null, getDrainFence: g => state.fences.get(g) ?? null,
     listDrainFences: () => [...state.fences.values()],
     setDrainFence: (g, value) => { state.d8Writes++; state.fences.set(g, { sessionGroup: g, ...value }); },
     clearDrainFence: g => state.fences.delete(g),
+    recordRunEnd: (g, { clearFence }) => { if (clearFence) state.fences.delete(g); },
     listPendingSessionGroups: () => state.pending ? [{ sessionGroup: group }] : [],
+    listPendingContinuations: () => [],
     countGlobalRunningConversations: () => state.running,
     countRunningConversations: () => state.running,
     countNonTerminalControls: () => ({ running: state.controls, runningWithoutDeadline: state.deadlineLess }),

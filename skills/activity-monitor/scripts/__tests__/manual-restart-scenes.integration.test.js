@@ -12,6 +12,7 @@ import { RestartRequestStore } from '../restart-request-store.js';
 import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
 import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 const Database = createRequire(new URL('../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
+import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
 
 const requestFile = f => path.join(f.root, 'activity-monitor/restart-requests.json');
 async function assertUntouched(m4, f) {
@@ -88,6 +89,9 @@ test('actual supervisor empty Origin conflict and corrupt fail closed before alr
   fs.writeFileSync(requestFile(f), '[]'); await assertUntouched(m4, f); await m4.stop();
 });
 
+// Run after changes to manual completion, wake insertion or fence ordering.
+// Uses private HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, tmux socket and C4 DB;
+// fixture teardown stops its worker/server and removes its temporary resources.
 for (const mode of ['single', 'multi']) test(`${mode} manual restart stops busy Sync-held run despite running control, retains until inflight accounted`, { timeout: 25000 }, async t => {
   await inflight(t, mode);
 });
@@ -109,7 +113,20 @@ async function inflight(t, mode) {
   assert.deepEqual(f.db.prepare('SELECT * FROM control_queue').all(), control);
   f.db.exec("UPDATE conversations SET status='delivered'");
   const done = await m4.command('tick'); assert.deepEqual(done.requests, []); assert.deepEqual(done.fences, []);
-  assert.deepEqual(f.db.prepare('SELECT * FROM control_queue').all(), control);
+  const controlsAfter = f.db.prepare('SELECT * FROM control_queue ORDER BY id').all();
+  if (mode === 'single') assert.deepEqual(controlsAfter, control);
+  else {
+    assert.equal(controlsAfter.length, control.length + 1);
+    assert.deepEqual(controlsAfter.slice(0, control.length), control);
+    const wake = controlsAfter.at(-1);
+    assert.equal(wake.session_group, 'origin'); assert.equal(wake.target_binding, null);
+    assert.equal(wake.priority, 2); assert.equal(wake.status, 'pending');
+    assert.equal(wake.raw_content, MANUAL_WAKE_PROMPT); assert.equal(wake.content, MANUAL_WAKE_PROMPT);
+    const clears = done.events.filter(event => event.event === 'before_fence_clear');
+    assert.equal(clears.length, 1);
+    assert.deepEqual(clears[0].fence, stopped.fences[0], 'manual gate still held when wake is persisted');
+    assert.deepEqual(clears[0].controls, controlsAfter, 'wake must exist before the real fence clear');
+  }
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await m4.stop();
 }
 

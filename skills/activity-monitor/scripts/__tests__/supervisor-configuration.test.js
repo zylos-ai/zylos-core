@@ -15,7 +15,7 @@ const config = { session_mode: 'multi', runtime: 'claude', model: 'opus[1m]',
 const envKeys = ['ZYLOS_SESSION_HOT_TTL_SECONDS', 'ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS', 'ZYLOS_SYNC_MIN_INTERVAL_SECONDS',
   'ZYLOS_SYNC_MAX_INTERVAL_SECONDS', 'ZYLOS_ORIGIN_SYNC_THRESHOLD', 'ZYLOS_SYNC_BATCH_LIMIT'];
 function fromFile(t, environment = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-config-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-config-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.zylos'));
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify(config));

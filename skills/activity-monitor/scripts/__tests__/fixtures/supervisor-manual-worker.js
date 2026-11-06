@@ -12,9 +12,10 @@ async function barrier(name) {
 }
 const scenes = new SupervisorScenes({ env: process.env, connectionOptions: { socketPath, binary }, readMode: () => ({ mode }) });
 const requests = new RestartRequestStore({ file: requestsFile });
-const set = db.setDrainFence, clear = db.clearDrainFence;
+const set = db.setDrainFence, clear = db.clearDrainFence, record = db.recordRunEnd;
 db.setDrainFence = async (...args) => { const value = set(...args); await barrier('after-fence'); return value; };
 db.clearDrainFence = async (...args) => { const value = clear(...args); await barrier('after-clear'); return value; };
+db.recordRunEnd = async (...args) => { const value = record(...args); await barrier('after-clear'); return value; };
 const lifecycle = new SupervisorLifecycle({ db, requests,
   observeGroup: group => scenes.observeGroup(group),
   stop: async scene => { await scenes.stop(scene); await barrier('after-stop'); },

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { setTimeout } from 'node:timers/promises';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateConfigWithLock } from '../../config-lock.js';
@@ -11,10 +12,11 @@ function ledgerEntry(value) {
   return entries.find(entry => entry.value === value);
 }
 
-function waitFor(file, timeoutMs = 10_000) {
+async function waitFor(file, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(file)) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${file}`);
+    await setTimeout(1);
   }
 }
 
@@ -34,7 +36,7 @@ for (let iteration = 0; iteration < iterations; iteration += 1) {
   });
   const committed = ledgerEntry(value);
   if (!committed) throw new Error(`missing commit ledger entry for ${value}`);
-  if (committed.sequence === 1) waitFor(arrivalBarrier);
+  if (committed.sequence === 1) await waitFor(arrivalBarrier);
   fs.writeSync(1, `${JSON.stringify({ value, previous: result.previous.shared, commitSequence: committed.sequence })}\n`);
   if (committed.sequence === 2) fs.writeFileSync(arrivalBarrier, 'second result reported\n');
 }

@@ -56,7 +56,7 @@ setInterval(() => {}, 1000);
     handleExpired: () => assert.fail('fixture has no expired conversation'),
     prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
     diagnostic: (event, fields) => events.push({ event, ...fields }),
-  }, { poolSize: 1, readyTimeoutMs: 10000 });
+  }, { poolSize: () => 1, readyTimeoutMs: 10000 });
   t.after(() => router.stop());
   await router.initialize(); await router.idle();
   for (let n = 0; n < 100; n++) {

@@ -17,7 +17,7 @@ Control messages are stored in the `control_queue` table in `~/zylos/comm-bridge
 Insert a new control message into the queue.
 
 ```bash
-c4-control.js enqueue --content "<text>" [--priority 3] [--block-queue-until-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>] [--no-ack-suffix]
+c4-control.js enqueue --content "<text>" [--priority 3] [--block-queue-until-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>] [--no-ack-suffix] [--group G] [--target-run ID [--expected-runtime RT] [--expected-session ID]] [--json]
 ```
 
 | Option | Description |
@@ -28,6 +28,11 @@ c4-control.js enqueue --content "<text>" [--priority 3] [--block-queue-until-idl
 | `--bypass-state` | Deliver regardless of current state |
 | `--ack-deadline <seconds>` | Seconds from now until the control times out if unacknowledged |
 | `--available-in <seconds>` | Delay before the control becomes eligible for delivery |
+| `--group <G>` | Target session group in multi mode; omit in single mode |
+| `--target-run <ID>` | Bind to the observed running run ID; rejected if the target changed or is not ready |
+| `--expected-runtime <RT>` | With `--target-run`, require the observed runtime to match (for example `claude` or `codex`) |
+| `--expected-session <ID>` | With `--target-run`, also require the observed runtime session ID to match |
+| `--json` | Emit a structured enqueue result, including the binding when present |
 | `--no-ack-suffix` | Do not append `ack via` suffix; dispatcher marks done right after successful submit |
 
 **Output:**
@@ -137,7 +142,5 @@ pending ──► superseded  (replaced by a newer equivalent pending control)
     --block-queue-until-idle --available-in 60
 
 # Enqueue clean slash command (no ack suffix)
-~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js \
-    enqueue --content "/clear" \
-    --priority 1 --block-queue-until-idle --no-ack-suffix
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group "$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run "$ZYLOS_RUN_ID"}
 ```

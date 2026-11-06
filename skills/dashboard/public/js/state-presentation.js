@@ -1,6 +1,7 @@
 export function stateTitleKey(value, mood) {
   if (mood === 'thinking') return 'agent_fleet.thinking';
   const state = String(value || 'UNKNOWN').toUpperCase();
+  if (['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(state)) return `state.${state.toLowerCase()}`;
   if (state === 'BUSY') return 'state.busy_simple';
   if (state === 'STARTING') return 'state.starting';
   if (state === 'IDLE') return 'state.idle';
@@ -19,4 +20,11 @@ export function sessionBlockTitleKey(sessionGroup) {
   if (sessionGroup === 'origin') return 'block.origin';
   if (sessionGroup === null) return 'block.single_session';
   return 'block.unknown_session';
+}
+
+export function originSessionUnavailable(payload) {
+  const state = String(payload?.state || '').toUpperCase();
+  return (payload?.sessionGroup === 'origin' && !payload?.runId)
+    || ['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(state)
+    || (state === 'AUTH_WAIT' && !payload?.runId);
 }

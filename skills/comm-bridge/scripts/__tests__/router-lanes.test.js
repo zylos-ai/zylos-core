@@ -24,7 +24,7 @@ test('control timeout is global even with no lane, and pool waiting preserves pr
   assert.equal(f.db.getControlById(expired.id).status, 'timeout');
   assert.equal(router.state.lanes.has('silent'), false);
   assert.equal(f.row(low.id).status, 'pending'); assert.equal(f.row(high.id).status, 'pending');
-  f.scene.delete('occupied'); await f.rounds(5);
+  f.scene.delete('occupied'); f.db.recordRunEnd('occupied',{runId:'run-occupied',reason:'ttl'}); await f.rounds(5);
   assert.equal(f.calls.find(x => x[0] === 'launch')[1].sessionGroup, 'high');
   assert.equal(f.row(high.id).status, 'delivered'); assert.equal(f.row(low.id).status, 'pending');
 });
@@ -119,12 +119,13 @@ test('expired priority head is reranked against other groups before capacity all
   assert.equal(f.calls.find(x => x[0] === 'launch')[1].sessionGroup, 'b');
 });
 
-test('rejected preflight passes opportunity to another runtime without reserving capacity', async t => {
+test('rejected preflight returns its slot and passes opportunity to another runtime', async t => {
+  const hold=deferred(); t.after(()=>hold.resolve());
   const f = routerFixture(t, {poolSize:1}); const a=f.add('a',{priority:0}), b=f.add('b',{priority:1});
   f.health.set('claude',{health:'unavailable'}); f.db.resolveSessionLaunchConfig=({sessionGroup})=>({runtime:sessionGroup==='b'?'codex':'claude',mode:'default'});
-  const hold=deferred(); f.deps.submit=async request=>{await hold.promise;return {kind:'rejected',sent:true,reply:{...request,ok:false,code:'probe_inflight'}};};
+  f.deps.submit=async request=>{await hold.promise;return {kind:'rejected',sent:true,reply:{...request,ok:false,code:'probe_inflight'}};};
   const router=f.create();await router.initialize();await pump(f);
-  assert.equal(router.availableCapacity(),1); assert.equal(f.row(a.id).status,'pending');
+  assert.equal(router.availableCapacity(),0); assert.equal(f.row(a.id).status,'pending');
   hold.resolve();await router.idle();await flush();await router.idle();await f.rounds(3);
   assert.equal(f.row(b.id).status,'delivered');assert.equal(f.row(a.id).status,'pending');
 });

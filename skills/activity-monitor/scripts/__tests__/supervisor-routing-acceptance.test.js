@@ -22,6 +22,7 @@ async function routingFixture(t, wrongConfig = false) {
   }
   const configReads = [];
   const db = { getModeTransition: () => null, getDrainFence: () => null,
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     listDrainFences: () => [], listPendingSessionGroups: () => [],
     resolveSessionLaunchConfig: input => { configReads.push(input); return { runtime: 'claude', mode: 'default' }; } };
   const scenes = new SupervisorScenes({ env: f.env, connectionOptions: { socketPath: f.socketPath, binary: f.binary },

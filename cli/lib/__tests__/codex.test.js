@@ -6,10 +6,10 @@ import { after, afterEach, beforeEach, describe, it } from 'node:test';
 
 const tmpDirs = [];
 
-// Install a fake `codex` binary BEFORE importing the adapter — CODEX_BIN is
-// captured at module load. The fake mimics the real CLI's quirk: it writes its
-// status line to STDERR and exits 0 in BOTH states. Per-test output is driven
-// by FAKE_CODEX_STATUS so checkAuth()'s glue path can be asserted directly.
+// Install a fake `codex` binary before importing the adapter. Preserve coverage
+// for CLI versions that report logged-out status with exit 0, as well as the
+// usual stderr status line. Per-test output is driven by FAKE_CODEX_STATUS;
+// nonzero-exit parsing is covered by the runtime auth-probe tests.
 // NOTE: kept OUT of tmpDirs — the per-test afterEach drains tmpDirs, which would
 // delete this binary before later tests run. Cleaned once via after() below.
 const fakeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-fakebin-'));
@@ -145,9 +145,8 @@ describe('Codex auth checks', () => {
     assert.equal(result.reason, 'http_probe_network_error');
   });
 
-  // Regression guard: `codex login status` exits 0 even when logged out, so a
-  // non-throwing execFile call must NOT be read as authenticated. This is the
-  // exact false-pass on the runtime-switch / health-probe gate that the PR fixes.
+  // Keep the zero-exit logged-out fallback: a non-throwing execFile call alone
+  // cannot establish authentication.
   it('chatgpt/no-auth: returns not_logged_in when codex login status exits 0 with "Not logged in" on stderr', async () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
     tmpDirs.push(tmpHome);

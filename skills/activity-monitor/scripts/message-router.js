@@ -42,7 +42,7 @@ export class MessageRouter {
   }
   async route(input) {
     if (!validRouteRequest(input)) throw Object.assign(new Error('Invalid route request'), { code: 'invalid_request' });
-    const request = input.version === 1 ? { ...input, sessionGroup: null, coreSide: false } : input;
+    const request = input.version === 1 ? { ...input, sessionGroup: null, coreSide: false, componentName: input.channel ?? null } : input;
     if (await this.getModeTransition()) return this.decision(request, 'unknown', { health: 'unavailable', reason: 'transition_open', decision: 'pending', transitionHold: true });
     const resolution = await this.resolveTargetRuntime(request.sessionGroup);
     const runtime = typeof resolution === 'string' ? resolution : resolution?.runtime;
@@ -83,7 +83,7 @@ export class MessageRouter {
   }
   async authDecision(request, runtime, state) {
     const health = 'auth_failed'; const reason = this.reason(state);
-    if (request.coreSide || (request.noReply && !request.channel)) return this.decision(request, runtime, { health, reason, decision: 'pending' });
+    if (request.coreSide || (request.noReply && !request.componentName)) return this.decision(request, runtime, { health, reason, decision: 'pending' });
     const action = this.checkAuth?.(runtime);
     const result = await this.awaitBudget(Promise.resolve(action ?? { result: 'uncertain', reason: 'authentication check unavailable' }));
     if (result?.result === 'success' || result?.status === 'success') return this.decision(request, runtime, { health, reason, decision: 'pending' });

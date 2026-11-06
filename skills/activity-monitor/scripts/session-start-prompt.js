@@ -82,7 +82,7 @@ function readStdinSource() {
 
 const prompt = [
   'reply to your human partner if they are waiting for your reply,',
-  'then continue your ongoing tasks using the injected core context and C4 context; read the supplied handoff and working-memory paths on demand before resuming work,',
+  'then continue your ongoing tasks using the injected core context and C4 context; read the supplied handoff in full before resuming work, and read working-memory paths on demand,',
   'and do not query c4.db for recent conversations unless explicitly required.'
 ].join(' ');
 

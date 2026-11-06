@@ -9,7 +9,7 @@ import { once, EventEmitter } from 'node:events';
 import { main as monitorMain } from '../monitor.js';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { resolveSessionPoolSize } from '../../../../cli/lib/session-pool-config.js';
+import { resolveSessionPoolBaseline } from '../../../../cli/lib/session-pool-config.js';
 import { startSupervisor } from '../supervisor-main.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
@@ -163,7 +163,10 @@ test('C4 canonical PM2 wrapper invokes the monitor entry even when imported indi
  assert.equal(starts,1);
 });
 
-// : use the actual entry's missing module, without capacity injection.
+// Boundary: actual entry defers eviction when the Core reader is absent.
+// Run for reader loading or capacity fallback changes; skip unrelated lifecycle work.
+// Use isolated HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR via the Node runner,
+// a private am.sock, fixture scenes/database and no live tmux or network.
 test('missing reader logs once across six rounds and defers eviction without config-error spam',{timeout:15000},async t=>{
  const root=prepare(t),w=launch(t,root,{packageRoot:withoutPoolReader(root)});await w.next();
  w.child.send('rounds');const result=await w.next();
@@ -175,7 +178,10 @@ test('missing reader logs once across six rounds and defers eviction without con
  await stop(w);
 });
 
-// integration regression: actual entry loads the available Core reader.
+// Boundary: actual entry loads the Core baseline and publishes fixed capacity.
+// Run for Core reader exports or capacity wiring changes; skip unrelated lifecycle work.
+// Use isolated HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR via the Node runner,
+// a private am.sock, fixture scenes/database and no live tmux or network.
 test('present reader supplies real capacity without a missing-dependency notice',{timeout:15000},async t=>{
  const config={session_mode:'multi',runtime:'claude',session_pool_size:7};
  const root=prepare(t,config);
@@ -185,7 +191,7 @@ test('present reader supplies real capacity without a missing-dependency notice'
  w.child.send('rounds');const result=await w.next();
  const env={...process.env,HOME:root,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:repository};
  assert.equal(result.configuration.capacityUnavailable,false);
- assert.equal(result.configuration.capacity,resolveSessionPoolSize({env,config}));
+ assert.equal(result.configuration.capacity,resolveSessionPoolBaseline({env,config}).k);
  assert.equal(result.logs.filter(row=>row?.dependency==='Session pool configuration reader').length,0);
  await stop(w);
 });
@@ -196,6 +202,7 @@ test('actual Sock rejects requests throughout paused restoration, then admits af
   const held = new Promise(resolve => { release = resolve; });
   const restoring = new Promise(resolve => { entered = resolve; });
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     listPendingSessionGroups: () => [], getControlById: () => null,
     resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };
   const scenes = { observe: async () => { observations++; return []; },
@@ -228,4 +235,34 @@ test('explicit single opens the actual entry with legacy false', {timeout:15000}
   assert.equal(ready.admissionOpen, true); assert.equal(ready.mode, 'single'); assert.equal(ready.legacy, false);
   assert.equal(ready.logs.some(row => row?.phase === 'automatic-migration'), false);
   await stop(worker);
+});
+
+// Integration boundary: real entry, lifecycle loop, reconciliation timer and
+// notification formatting. Run for entry alert wiring; skip unrelated UI work.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR. This case owns
+// its private am.sock and injected scenes/database/sendAlert; no live tmux,
+// runtime, network or external send. Teardown drains the entry and closes Sock.
+test('actual supervisor entry sends the retained-occupancy explanation after sustained authority failure',{timeout:15000},async t=>{
+ const root=prepare(t);let now=2_000_000;const messages=[];
+ const db={getModeTransition:()=>{throw Object.assign(new Error('database read unavailable'),{code:'SQLITE_IOERR'});},
+  listDrainFences:()=>[],getDrainFence:()=>null,listPendingSessionGroups:()=>[],listPendingContinuations:()=>[],
+  listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),getControlById:()=>null,
+  resolveSessionLaunchConfig:()=>({runtime:'claude',mode:'default'})};
+ const scenes={observe:async()=>[],readIdentity:async()=>({present:false}),observeGroup:async()=>({present:false}),
+  listRuns:async()=>[],readRun:async()=>null};
+ const service=await startSupervisor({env:{...process.env,HOME:root,ZYLOS_DIR:root,PM2_HOME:path.join(root,'.pm2')},db,scenes,
+  now:()=>now,readMode:()=>({mode:'multi',keyPresent:true}),readConfig:()=>({session_mode:'multi',runtime:'claude'}),
+  readConfiguration:async()=>({mode:'multi',runtime:'claude',capacity:2}),
+  sendAlert:async(target,message)=>{messages.push({target,message});return true;},
+  legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},log:()=>{},
+  loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ t.after(()=>service.stop());
+ assert.equal(service.server.listening,true);assert.equal(messages.length,0);
+ now+=59000;await service.supervisor.loop.tick();assert.equal(messages.length,0);
+ now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);
+ assert.deepEqual(messages[0].target,{channel:'web-console',endpoint:'console'});
+ assert.match(messages[0].message,/run_ending_reconciliation_failed \(\*\)/);
+ assert.match(messages[0].message,/Occupancy rows remain; groups cannot start until reconciliation recovers\./);
+ now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);
+ await service.stop();assert.equal(service.server.listening,false);
 });

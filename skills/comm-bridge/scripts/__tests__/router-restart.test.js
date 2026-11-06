@@ -6,6 +6,8 @@ import { tmuxNameForGroup } from '../../../../cli/lib/session-group-paths.js';
 
 // Restart-state fixtures: close/reopen the persisted SQLite file and construct
 // a fresh Router. Terminal/READY is injected; this is not a process-crash test.
+// Run for restart/occupancy admission changes; private SQLite plus injected I/O,
+// official isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR, no runtime/tmux/network.
 function persistedRouter(t) {
   const now = 1800000000000;
   const dependencies = { now: () => now, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) };
@@ -57,7 +59,7 @@ function persistedRouter(t) {
       handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
       diagnostic: (event, fields) => events.push({ generation, event, ...fields }),
       alert: (event, fields) => calls.push(['alert', generation, event, fields]),
-    }, { poolSize: 1, readyTimeoutMs: 1000 });
+    }, { poolSize: () => 1, readyTimeoutMs: 1000 });
     return router;
   }
   async function rounds(count) { for (let i = 0; i < count; i++) { router.tick(); await router.idle(); await new Promise(resolve => setImmediate(resolve)); } }
@@ -88,6 +90,14 @@ for (const sceneState of ['absent', 'unready', 'ready']) {
     await Promise.all([second.initialize(), second.initialize()]);
     assert.equal(second.state.activations.size, 0, 'private activation must not survive restart');
     assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 1);
+    if (sceneState === 'absent') {
+      await f.rounds(3);
+      assert.equal(second.availableCapacity(),0);
+      assert.equal(f.calls.some(x=>x[1]===2&&x[0]==='launch'),false,'running occupancy blocks restart before the ending is recorded');
+      assert.equal(f.db.listSlotOccupancy()[0].runId,originalRun);
+      f.db.recordRunEnd('a',{runId:originalRun,reason:'unexpected'});
+      assert.equal(f.db.listSlotOccupancy()[0].state,'held');
+    }
     if (sceneState === 'unready') {
       await f.rounds(3);
       assert.equal(f.row(row.id).status, 'pending'); assert.equal(second.availableCapacity(), 0);
@@ -95,7 +105,10 @@ for (const sceneState of ['absent', 'unready', 'ready']) {
       f.put('a', { runId: originalRun }); expected = f.prompts('a');
     }
     await f.rounds(8);
-    if (sceneState === 'absent') expected = f.calls.find(x => x[0] === 'prompts' && x[1] === 2)[2];
+    if (sceneState === 'absent') {
+      expected = f.calls.find(x => x[0] === 'prompts' && x[1] === 2)[2];
+      assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 0);
+    }
     const deliveries = f.calls.filter(x => x[1] === 2 && ['control', 'conversation'].includes(x[0])).map(x => [x[0], x[2]]);
     assert.deepEqual(deliveries, [['control', expected[0]], ['control', expected[1]], ['conversation', row.id]]);
     assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).retry_count, 1);
