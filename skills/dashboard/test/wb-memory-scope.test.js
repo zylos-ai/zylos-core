@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webcrypto, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
-import { memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, sha256Text, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
+import { memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 
 // Direct product imports and injected DOM/request. Run for memory scope, charts,
@@ -40,7 +39,7 @@ test('memory scopes separate canonical group directories and retain invalid name
   assert.equal(value.root.children.at(-1).children.length, 2, 'input tree remains intact');
   assert.equal(memoryGroupLabel(scope.groups[0], t), 'wb.platform.telegram · dm-1001');
   assert.equal(memoryGroupLabel({ sessionGroup: 'x', displayName: '<img>' }, t), '<img>');
-  assert.equal(memoryGroupLabel({ sessionGroup: 'origin', fallbackName: '系统助手' }, t), 'wb.term.origin');
+  assert.equal(memoryGroupLabel({ sessionGroup: 'origin' }, t), 'wb.term.origin');
   assert.equal(memoryScope(null).groups.length, 0);
 });
 
@@ -108,13 +107,13 @@ test('stale backlog requests cannot populate a different instance or a destroyed
   assert.equal(g.root.children.length, 0);
 });
 
-test('unknown save result reads disk once and uses draft sha without resubmitting', async () => {
-  const text = '草稿\n', sha = createHash('sha256').update(text).digest('hex'); let writes = 0, reads = 0;
-  const result = await saveMemoryOnce({ path: 'state.md', text, sha256: 'old', digest: value => sha256Text(value, webcrypto),
+test('unknown save result reads disk once and compares returned text without resubmitting', async () => {
+  const text = '草稿\n', sha = 'saved-sha'; let writes = 0, reads = 0;
+  const result = await saveMemoryOnce({ path: 'state.md', text, sha256: 'old',
     request: async () => { writes++; throw { code: 'memory_write_unknown' }; },
     readFile: async () => { reads++; return { path: 'state.md', text, sha256: sha }; } });
   assert.equal(result.sha256, sha); assert.equal(writes, 1); assert.equal(reads, 1);
-  await assert.rejects(saveMemoryOnce({ path: 'state.md', text, sha256: 'old', digest: async () => sha,
+  await assert.rejects(saveMemoryOnce({ path: 'state.md', text, sha256: 'old',
     request: async () => { writes++; throw { code: 'memory_write_unknown' }; }, readFile: async () => { reads++; return { path: 'state.md', text: 'old', sha256: 'different' }; } }), error => error.code === 'memory_write_unknown');
   assert.equal(writes, 2); assert.equal(reads, 2);
 });
@@ -127,11 +126,11 @@ test('sync busy preserves the write rejection without a readback and has a speci
 });
 
 
-test('save completion is fenced when the instance, selected file or draft changes', async () => {
+test('save completion is fenced when the instance or selected file changes', async () => {
   const state = { selectedPath: 'state.md', file: {}, draft: 'draft' }, captured = captureMemorySave(state);
   assert.equal(memorySaveCurrent(captured, state), true);
   assert.equal(memorySaveCurrent(captured, { ...state }), false);
-  state.file = {}; assert.equal(memorySaveCurrent(captured, state), false);
+  state.file = {}; assert.equal(memorySaveCurrent(captured, state), true);
   assert.equal(memorySaveTargetCurrent(captured, state), true);
   state.selectedPath = 'identity.md'; assert.equal(memorySaveTargetCurrent(captured, state), false);
   const request = deferred(); let reads = 0, current = true;
@@ -195,22 +194,118 @@ test('a conflict readback cannot update a selection that changed while it was lo
   assert.equal(memorySaveCurrent(captured, state), false);
 });
 
-test('post-save history readback requires the applied file and draft to still be current', async () => {
+test('post-save history readback requires the same applied file while allowing newer typing', async () => {
   const state = { selectedPath: 'state.md', file: {}, draft: 'draft' }, captured = captureMemorySave(state);
   const saved = { path: 'state.md', text: 'saved', sha256: 'new' };
   state.file = saved; state.draft = saved.text;
   const git = deferred();
   assert.equal(memorySaveAppliedCurrent(captured, state, saved), true);
   state.draft = 'new edit'; git.resolve({ commit: null }); await git.promise;
-  assert.equal(memorySaveAppliedCurrent(captured, state, saved), false);
+  assert.equal(memorySaveAppliedCurrent(captured, state, saved), true);
   state.draft = saved.text; state.file = { ...saved };
   assert.equal(memorySaveAppliedCurrent(captured, state, saved), false);
   state.file = saved; state.selectedPath = 'identity.md';
   assert.equal(memorySaveAppliedCurrent(captured, state, saved), false);
 });
 
-test('the references warning starts at the Core warning threshold', () => {
-  const value = tree(); value.root.children.find(file => file.path === 'references.md').size_bytes = 8192;
-  const row = memoryBudgetRows(value, { limits: { 'references.md': 16384 }, warnings: { 'references.md': 8192 } }).find(row => row.path === 'references.md');
-  assert.equal(row.warned, true); assert.equal(row.over, 0);
+test('the references warning follows Core below, at and above the warning threshold', () => {
+  const value = tree();
+  for (const size of [8191, 8192, 8193]) {
+    value.root.children.find(file => file.path === 'references.md').size_bytes = size;
+    const row = memoryBudgetRows(value, { limits: { 'references.md': 16384 }, warnings: { 'references.md': 8192 } }).find(row => row.path === 'references.md');
+    assert.equal(row.warned, size > 8192); assert.equal(row.over, 0);
+  }
+});
+
+
+test('successful save updates the file sha while retaining typing that arrived during the request', async () => {
+  const state = { selectedPath: 'state.md', file: { path: 'state.md', text: 'old', sha256: 'old-sha' }, draft: 'submitted', editing: true, dirty: true };
+  const captured = captureMemorySave(state), pending = deferred(), requests = [];
+  const saving = saveMemoryOnce({ path: 'state.md', text: state.draft, sha256: state.file.sha256,
+    request: async (path, options) => { requests.push(JSON.parse(options.body)); return pending.promise; },
+    isCurrent: () => memorySaveCurrent(captured, state) });
+  state.draft = 'submitted plus newer typing';
+  const saved = { path: 'state.md', text: 'submitted', sha256: 'new-sha' };
+  pending.resolve(saved);
+  assert.equal(applyMemorySave(captured, state, await saving), true);
+  assert.equal(state.file, saved); assert.equal(state.draft, 'submitted plus newer typing');
+  assert.equal(state.editing, true); assert.equal(state.dirty, true);
+  await saveMemoryOnce({ path: 'state.md', text: state.draft, sha256: state.file.sha256,
+    request: async (path, options) => { requests.push(JSON.parse(options.body)); return { path: 'state.md', text: state.draft, sha256: 'next-sha' }; } });
+  assert.equal(requests[1].sha256, 'new-sha');
+  assert.equal(requests[1].text, 'submitted plus newer typing');
+});
+
+test('success without newer typing finishes editing and clears dirty state', () => {
+  const state = { selectedPath: 'state.md', file: {}, draft: 'submitted', editing: true, dirty: true }, captured = captureMemorySave(state);
+  const saved = { path: 'state.md', text: 'submitted', sha256: 'new-sha' };
+  assert.equal(applyMemorySave(captured, state, saved), true);
+  assert.equal(state.file, saved); assert.equal(state.draft, 'submitted'); assert.equal(state.dirty, false); assert.equal(state.editing, false);
+});
+
+test('same-file save failures remain visible when the user types during the request', async () => {
+  for (const code of ['memory_sync_busy', 'memory_lock_timeout', 'memory_write_unknown']) {
+    const state = { selectedPath: 'state.md', file: {}, draft: 'submitted' }, captured = captureMemorySave(state), pending = deferred();
+    let writes = 0, reads = 0;
+    const saving = saveMemoryOnce({ path: 'state.md', text: state.draft, sha256: 'old',
+      request: async () => { writes++; return pending.promise; }, readFile: async () => { reads++; return { path: 'state.md', text: 'still old' }; },
+      isCurrent: () => memorySaveCurrent(captured, state) });
+    state.draft = 'newer draft'; pending.reject({ code });
+    await assert.rejects(saving, error => error.code === code);
+    assert.equal(memorySaveCurrent(captured, state), true);
+    assert.ok(memoryWriteMessage(code, t)); assert.equal(state.draft, 'newer draft');
+    assert.equal(writes, 1); assert.equal(reads, code === 'memory_write_unknown' ? 1 : 0);
+  }
+});
+
+test('unknown save readback requires the submitted path as well as exact Unicode text', async () => {
+  await assert.rejects(saveMemoryOnce({ path: 'state.md', text: '草稿\n', sha256: 'old',
+    request: async () => { throw { code: 'memory_write_unknown' }; },
+    readFile: async () => ({ path: 'other.md', text: '草稿\n' }) }), error => error.code === 'memory_write_unknown');
+});
+
+test('backlog chart names come from the active snapshot even for groups without memory directories', async () => {
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [
+    { sessionGroup: 'openmax:no-memory', displayName: 'Named <group>', count: 3, threshold: 15 },
+    { sessionGroup: 'unknown-namespace:chat', displayName: null, c4: { componentName: 'telegram' }, count: 1, threshold: 15 },
+  ] }) });
+  await f.controller.load();
+  const labels = nodesOfClass(f.chartsRoot, 'wb-memory-chart-label').map(node => node.textContent);
+  assert.equal(labels[0], 'Named <group>'); assert.equal(labels[1], 'wb.platform.telegram · chat');
+  assert.equal(allNodes(f.chartsRoot).some(node => node.tagName === 'GROUP'), false);
+  f.controller.destroy();
+});
+
+test('invalid group directories and files directly under session-groups explain their read-only status', () => {
+  const value = tree(), sessionGroups = value.root.children.find(node => node.path === 'session-groups');
+  sessionGroups.children.push(file('session-groups/direct.md'));
+  assert.equal(memoryWriteAllowed(value, 'session-groups/bad name/notes.md'), false);
+  assert.equal(memoryWriteAllowed(value, 'session-groups/direct.md'), false);
+  assert.equal(memoryWriteAllowed(value, 'session-groups/telegram:dm-1001/handoff.md'), true);
+  assert.equal(memoryWriteAllowed(value, 'identity.md'), true);
+  const document = createDocument(), edit = document.createElement('button'), save = document.createElement('button');
+  document.querySelector = selector => selector === '#memory-edit-btn' ? edit : selector === '#memory-save-btn' ? save : null;
+  let selected = 'session-groups/bad name/notes.md';
+  const f = fixture({ document, getFile: () => ({ path: selected }) }); f.setTree(value); f.controller.render();
+  assert.equal(edit.hidden, true); assert.equal(edit.disabled, true); assert.equal(save.disabled, true);
+  assert.match(f.root.textContent, /wb.memory.invalidGroupFile/);
+  selected = 'session-groups/direct.md'; edit.hidden = false; edit.disabled = false; save.disabled = false;
+  f.controller.render(); assert.equal(edit.hidden, true); assert.equal(save.disabled, true);
+  assert.equal(memoryScope(value).shared.children.find(node => node.path === 'session-groups').children.length, 2);
+  f.controller.destroy();
+});
+
+
+test('reloading the same path during a pending save still updates its sha and preserves newer draft text', async () => {
+  const state = { selectedPath: 'state.md', file: { path: 'state.md', text: 'old', sha256: 'old-sha' }, draft: 'submitted', editing: true, dirty: true };
+  const captured = captureMemorySave(state), pending = deferred();
+  const saving = saveMemoryOnce({ path: 'state.md', text: state.draft, sha256: state.file.sha256,
+    request: () => pending.promise, isCurrent: () => memorySaveCurrent(captured, state) });
+  state.file = { path: 'state.md', text: 'old', sha256: 'old-sha' };
+  state.draft = 'new draft after reopening';
+  const saved = { path: 'state.md', text: 'submitted', sha256: 'saved-sha' };
+  pending.resolve(saved);
+  assert.equal(applyMemorySave(captured, state, await saving), true);
+  assert.equal(state.file.sha256, 'saved-sha'); assert.equal(state.draft, 'new draft after reopening');
+  assert.equal(state.dirty, true); assert.equal(state.editing, true);
 });

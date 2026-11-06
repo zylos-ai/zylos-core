@@ -292,7 +292,7 @@ function isScheduleWrite(method, pathname) {
 }
 
 function needsAdminApiAccess(pathname, method) {
-  // Proxy targets collapse repeated slashes before forwarding to the remote.
+  // Classify repeated-slash aliases under the same memory access policy.
   pathname = pathname.replace(/\/{2,}/g, '/');
   if (pathname === '/api/observer' || pathname.startsWith('/api/observer/')) return true;
   if (pathname.startsWith('/api/actions')) return true;

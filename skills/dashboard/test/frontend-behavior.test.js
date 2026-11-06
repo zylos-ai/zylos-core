@@ -1528,6 +1528,7 @@ test('Observer follows more than eight distinct same-target supersessions to a l
 test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   const index = fs.readFileSync(new URL('../public/index.html', import.meta.url).pathname, 'utf8');
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
+  const memoryScope = fs.readFileSync(new URL('../public/js/wb/memory-scope.js', import.meta.url).pathname, 'utf8');
   const css = fs.readFileSync(new URL('../public/css/style.css', import.meta.url).pathname, 'utf8');
   const en = JSON.parse(fs.readFileSync(new URL('../public/i18n/en.json', import.meta.url).pathname, 'utf8'));
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/zh.json', import.meta.url).pathname, 'utf8'));
@@ -1542,9 +1543,12 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/git\?path=\$\{encoded\}`\)/);
-  assert.match(app, /requestAgentJson\(`\/api\/memory\/file\?path=\$\{encodeURIComponent\(file\.path\)\}`/);
-  assert.match(app, /method: 'PUT'/);
-  assert.match(app, /JSON\.stringify\(\{ text, sha256 \}\)/);
+  assert.match(app, /saveMemoryOnce\(\{ request: requestAgentJson, readFile: fetchAgentJson,/);
+  assert.match(app, /path: file\.path, text, sha256,/);
+  assert.match(app, /if \(!applyMemorySave\(captured, state\.memory, saved\)\) return;/);
+  assert.match(memoryScope, /request\(`\/api\/memory\/file\?path=\$\{encodeURIComponent\(path\)\}`/);
+  assert.match(memoryScope, /method: 'PUT'/);
+  assert.match(memoryScope, /JSON\.stringify\(\{ text, sha256 \}\)/);
   assert.match(app, /zylos\.memoryDraft\.\$\{memoryAgentKey\(\)\}\.\$\{filePath\}/);
   assert.match(app, /state\.memory\.draftTimer = setTimeout\(\(\) => \{/);
   assert.match(app, /\}, 500\);/);

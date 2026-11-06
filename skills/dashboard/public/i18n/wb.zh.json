@@ -284,7 +284,7 @@
   "wb.memory.filter": "按组筛选",
   "wb.memory.allGroups": "全部组",
   "wb.memory.noGroupFiles": "这个组还没有记忆目录。",
-  "wb.memory.invalidGroup": "部分目录的组名不合法，仍归共享。",
+  "wb.memory.invalidGroup": "无效组名的目录和直接放在 session-groups 下的文件仍归共享。Core 无法保存这些文件。",
   "wb.memory.backlog": "待存入消息",
   "wb.memory.syncing": "正在整理",
   "wb.memory.syncUnknown": "整理状态未知",
@@ -294,13 +294,14 @@
   "wb.memory.backlogSource": "来源：各组待存入与记忆整理锁 · 最旧 30 秒",
   "wb.memory.budgets": "常驻文件大小",
   "wb.memory.budgetSource": "来源：文件树大小与 Core 记忆预算",
-  "wb.memory.warnAt": "{size} 起预警",
+  "wb.memory.warnAt": "超过 {size} 起预警",
   "wb.memory.sizeBudget": "大小 {size}，预算 {budget}",
   "wb.memory.overBudget": "超出预算 {size}",
-  "wb.memory.warning": "已达预警阈值",
+  "wb.memory.warning": "超过预警阈值",
   "wb.memory.syncBusy": "记忆整理正在进行，稍后再存。草稿已保留。",
   "wb.memory.lockTimeout": "等待记忆锁超时。草稿已保留。",
   "wb.memory.writeUnavailable": "Core 写入入口缺失，暂时无法保存。草稿已保留。",
   "wb.memory.writeFailed": "记忆保存失败。草稿已保留。",
-  "wb.memory.writeUnknown": "保存结果未知。草稿已保留，请核对文件后再保存。"
+  "wb.memory.writeUnknown": "保存结果未知。草稿已保留，请核对文件后再保存。",
+  "wb.memory.invalidGroupFile": "此文件只读：Core 要求文件位于 session-groups 下的有效组目录中。"
 }

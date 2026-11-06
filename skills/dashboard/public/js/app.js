@@ -4,7 +4,7 @@ import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v
 import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=85';
 import { renderVersion } from './wb/settings-version.js?v=85';
 import { mountWorkbench } from './wb/shell.js?v=85';
-import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from './wb/memory-scope.js?v=85';
+import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave } from './wb/memory-scope.js?v=85';
 import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=85';
 import { mountSchedule } from './wb/schedule.js?v=85';
 import { ObserverHistory } from './observer-history.js?v=2';
@@ -1242,7 +1242,7 @@ async function requestAgentJson(path, options = {}) {
 
 const memoryScopeView = createMemoryScope({
   document, root: $('#memory-scope'), chartsRoot: $('#memory-charts'), t,
-  request: fetchAgentJson, getTree: () => state.memory.tree,
+  request: fetchAgentJson, getTree: () => state.memory.tree, getFile: () => state.memory.file,
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   onChange: () => renderMemory(), onFile: path => openMemoryFile(path).catch(() => {}),
   onGroup: path => state.memory.collapsed.delete(path),
@@ -1672,7 +1672,6 @@ function renderMemory() {
     status.hidden = true;
   }
 
-  memoryScopeView.render();
   tree.innerHTML = state.memory.tree ? renderMemoryTreeNode(memoryScopeView.tree(state.memory.tree)) : `<p class="empty-state">${esc(t('memory.loading'))}</p>`;
   tree.querySelectorAll('.memory-file').forEach((btn) => {
     btn.addEventListener('click', () => openMemoryFile(btn.dataset.path).catch(() => {}));
@@ -1713,6 +1712,7 @@ function renderMemory() {
   }
   renderMemoryContent();
   renderMemoryActions();
+  memoryScopeView.render();
 }
 
 async function loadMemoryTree({ force = false } = {}) {
@@ -1822,14 +1822,8 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
     const saved = await saveMemoryOnce({ request: requestAgentJson, readFile: fetchAgentJson,
       path: file.path, text, sha256, isCurrent: () => memorySaveCurrent(captured, state.memory) });
     if (!saved) return;
-    state.memory.file = saved;
-    state.memory.draft = saved.text;
-    state.memory.dirty = false;
-    state.memory.editing = false;
-    state.memory.conflict = null;
-    state.memory.conflictRetryText = '';
-    state.memory.liveNotice = null;
-    clearMemoryDraft(saved.path);
+    if (!applyMemorySave(captured, state.memory, saved)) return;
+    saveMemoryDraft();
     const git = await fetchAgentJson(`/api/memory/git?path=${encodeURIComponent(saved.path)}`).catch(() => ({ commit: null }));
     if (!memorySaveAppliedCurrent(captured, state.memory, saved)) return;
     state.memory.git = git;
@@ -1840,12 +1834,12 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
       const latest = await fetchAgentJson(`/api/memory/file?path=${encodeURIComponent(file.path)}`).catch(() => null);
       if (!memorySaveCurrent(captured, state.memory)) return;
       if (isCompleteMemoryFile(latest)) {
-        state.memory.conflict = buildMemoryConflict(latest, text, text);
+        state.memory.conflict = buildMemoryConflict(latest, state.memory.draft, state.memory.draft);
         state.memory.liveNotice = latest;
         state.memory.conflictRetryText = '';
       } else {
         state.memory.conflict = null;
-        state.memory.conflictRetryText = String(text || '');
+        state.memory.conflictRetryText = state.memory.draft;
         state.memory.error = 'memory_conflict_latest_failed';
         renderMemory();
         return;

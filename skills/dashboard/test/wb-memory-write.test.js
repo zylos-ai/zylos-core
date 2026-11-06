@@ -8,14 +8,14 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { MemoryBrowser, memoryErrorPayload } from '../src/lib/memory-browser.js';
 import { tmuxNameForGroup } from '../../../cli/lib/session-group-paths.js';
-import { installMemoryScripts, memoryTestEnv } from './fixtures/memory-installation.js';
+import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
 
 const digest = text => createHash('sha256').update(text).digest('hex');
 const group = 'openmax:research';
 const relative = `session-groups/${group}/handoff.md`;
 
 function fixture(t, { execute, env = {} } = {}) {
-  const root = fs.mkdtempSync('/tmp/wbm-');
+  const root = memoryTempRoot('wbm-');
   const childEnv = { ...memoryTestEnv(root), ...env };
   const script = installMemoryScripts(root);
   const memory = path.join(root, 'memory');
@@ -186,28 +186,54 @@ test('the child uses stdin, bounded execution and the configured instance', asyn
   assert.equal(result.sha256, digest(f.args.text));
 });
 
-test('two saves for the same file launch Core serially', async t => {
-  let calls = 0, active = 0, maximum = 0;
-  let releaseFirst;
+test('two saves for the same file launch Core serially', { timeout: 10000 }, async t => {
+  let calls = 0, active = 0, maximum = 0, queued = 0, secondOperationStarted = false;
+  let releaseFirst, firstStarted, secondAtQueue, secondLaunched;
   const firstMayFinish = new Promise(resolve => { releaseFirst = resolve; });
-  let firstStarted;
   const start = new Promise(resolve => { firstStarted = resolve; });
+  const queueEntrance = new Promise(resolve => { secondAtQueue = resolve; });
+  const prematureLaunch = new Promise(resolve => { secondLaunched = resolve; });
   const f = fixture(t, { execute: async () => {
     const call = ++calls;
     maximum = Math.max(maximum, ++active);
     if (call === 1) { firstStarted(); await firstMayFinish; }
+    else secondLaunched();
     fs.writeFileSync(f.file, call === 1 ? 'first' : 'second');
     active--;
     return { stdout: '{"ok":true,"data":{}}' };
   } });
+  // Observe the actual queue entrance after both requests finish validation;
+  // delegate unchanged to the product queue and observe when its work starts.
+  const withWriteLock = f.browser.withWriteLock.bind(f.browser);
+  f.browser.withWriteLock = (real, operation) => {
+    const position = ++queued;
+    const result = withWriteLock(real, () => {
+      if (position === 2) secondOperationStarted = true;
+      return operation();
+    });
+    if (position === 2) secondAtQueue();
+    return result;
+  };
   const first = f.browser.writeFile(relative, f.args);
   await start;
   const second = f.browser.writeFile(relative, { ...f.args, text: 'second' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(calls, 1);
-  releaseFirst();
-  await Promise.all([first, second]);
+  let deadline;
+  try {
+    await Promise.race([
+      queueEntrance,
+      prematureLaunch.then(() => assert.fail('second save bypassed the occupied queue')),
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(Error('second save never reached the queue')), 3000); }),
+    ]);
+    assert.equal(queued, 2);
+    assert.equal(secondOperationStarted, false, 'second validated save must wait for the first');
+    assert.equal(calls, 1);
+  } finally {
+    clearTimeout(deadline);
+    releaseFirst();
+    await Promise.allSettled([first, second]);
+  }
   assert.equal(calls, 2);
+  assert.equal(secondOperationStarted, true);
   assert.equal(maximum, 1);
   assert.equal(fs.readFileSync(f.file, 'utf8'), 'second');
 });

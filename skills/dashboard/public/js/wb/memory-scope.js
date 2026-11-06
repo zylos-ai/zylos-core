@@ -31,7 +31,7 @@ export function memoryBudgetRows(tree, budgets) {
     const warning = path === 'state.md' ? null : budgets?.warnings?.[path] ?? null;
     return [{ path, size: file.size_bytes, limit, warning,
       over: limit == null ? null : Math.max(0, file.size_bytes - limit),
-      warned: warning == null ? null : file.size_bytes >= warning }];
+      warned: warning == null ? null : file.size_bytes > warning }];
   });
 }
 
@@ -44,25 +44,31 @@ export function memoryWriteMessage(code, t) {
   return keys[code] ? t('wb.memory.' + keys[code]) : null;
 }
 
-export async function sha256Text(text, crypto = globalThis.crypto) {
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(hash), value => value.toString(16).padStart(2, '0')).join('');
-}
-
 /** Submit once. An unknown result permits one readback, never a write retry. */
 export function captureMemorySave(memory) {
-  return memory.saving ? null : { memory, file: memory.file, path: memory.selectedPath, draft: memory.draft };
+  return memory.saving ? null : { memory, path: memory.selectedPath, draft: memory.draft };
 }
 export function memorySaveOwnerCurrent(captured, current) { return captured?.memory === current; }
 export function memorySaveTargetCurrent(captured, current) { return memorySaveOwnerCurrent(captured, current) && captured.path === current.selectedPath; }
 export function memorySaveAppliedCurrent(captured, current, saved) {
-  return memorySaveTargetCurrent(captured, current) && current.file === saved && current.draft === saved.text;
+  return memorySaveTargetCurrent(captured, current) && current.file === saved;
 }
-export function memorySaveCurrent(captured, current) {
-  return memorySaveTargetCurrent(captured, current) && captured.file === current.file && captured.draft === current.draft;
+export const memorySaveCurrent = memorySaveTargetCurrent;
+
+export function applyMemorySave(captured, current, saved) {
+  if (!memorySaveCurrent(captured, current)) return false;
+  if (current.draft === captured.draft) current.draft = saved.text;
+  current.file = saved;
+  current.dirty = current.draft !== saved.text;
+  current.editing = current.dirty;
+  current.draftNotice = false;
+  current.conflict = null;
+  current.conflictRetryText = '';
+  current.liveNotice = null;
+  return true;
 }
 
-export async function saveMemoryOnce({ request, readFile, path, text, sha256, digest = sha256Text, isCurrent = () => true }) {
+export async function saveMemoryOnce({ request, readFile, path, text, sha256, isCurrent = () => true }) {
   try {
     const saved = await request(`/api/memory/file?path=${encodeURIComponent(path)}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, sha256 }),
@@ -72,11 +78,17 @@ export async function saveMemoryOnce({ request, readFile, path, text, sha256, di
     if (!isCurrent()) return null;
     if (error.code !== 'memory_write_unknown') throw error;
     const latest = await readFile(`/api/memory/file?path=${encodeURIComponent(path)}`).catch(() => null);
-    const draftSha = await Promise.resolve().then(() => digest(text)).catch(() => null);
     if (!isCurrent()) return null;
-    if (draftSha && latest?.path === path && typeof latest.text === 'string' && latest.sha256 === draftSha) return latest;
+    if (latest?.path === path && latest.text === text) return latest;
     throw error;
   }
+}
+
+export function memoryWriteAllowed(tree, path) {
+  if (typeof path !== 'string') return false;
+  if (!path.startsWith('session-groups/')) return true;
+  const parts = path.split('/');
+  return parts.length >= 3 && (tree?.sessionGroups ?? []).some(group => group.sessionGroup === parts[1]);
 }
 
 const byteSize = value => `${(Number(value) / 1024).toFixed(1)} KiB`;
@@ -84,7 +96,7 @@ const isNumber = value => typeof value === 'number' && Number.isFinite(value) &&
 
 // Browsing is ordinary UI. Progress and file budgets belong to technical details.
 export function createMemoryScope({ document = globalThis.document, root, chartsRoot,
-  t = key => key, request, getTree = () => null, onChange = () => {},
+  t = key => key, request, getTree = () => null, getFile = () => null, onChange = () => {},
   onGroup = () => {}, onFile = () => {}, detail = () => document.documentElement.dataset.detail,
   identity = () => 'local' } = {}) {
   let selected = 'shared', selectedGroup = '', backlog = null, owner = identity(), generation = 0, stopped = false;
@@ -99,6 +111,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     onChange();
   }
   function tree(value) {
+    syncIdentity();
     const partition = memoryScope(value);
     if (selected === 'shared') return partition.shared;
     const groups = selectedGroup ? partition.groups.filter(group => group.sessionGroup === selectedGroup) : partition.groups;
@@ -136,6 +149,13 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       if (selectedGroup && !currentScope().groups.some(group => group.sessionGroup === selectedGroup)) root.append(element(document, 'p', t('wb.memory.noGroupFiles'), 'empty-state'));
     }
     if (currentScope().shared.children.some(node => node.path === 'session-groups')) root.append(element(document, 'p', t('wb.memory.invalidGroup'), 'wb-memory-diagnostic'));
+    const file = getFile();
+    if (file && !memoryWriteAllowed(getTree(), file.path)) {
+      const edit = document.querySelector?.('#memory-edit-btn'), save = document.querySelector?.('#memory-save-btn');
+      if (edit) { edit.hidden = true; edit.disabled = true; }
+      if (save) save.disabled = true;
+      root.append(element(document, 'p', t('wb.memory.invalidGroupFile'), 'wb-memory-diagnostic'));
+    }
     renderCharts();
   }
   function renderCharts() {
@@ -147,7 +167,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     progress.append(element(document, 'h3', t('wb.memory.backlog')));
     if (!backlog) progress.append(element(document, 'p', t('wb.unknown')));
     for (const row of backlog?.groups ?? []) {
-      const meta = (getTree()?.sessionGroups ?? []).find(group => group.sessionGroup === row.sessionGroup) ?? row;
+      const meta = { ...(getTree()?.sessionGroups ?? []).find(group => group.sessionGroup === row.sessionGroup), ...row };
       const item = element(document, 'div', undefined, 'wb-memory-chart-row');
       const name = button(item, memoryGroupLabel(meta, t), () => selectGroup(row.sessionGroup), 'wb-memory-chart-label');
       name.title = row.sessionGroup;

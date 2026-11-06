@@ -284,7 +284,7 @@
   "wb.memory.filter": "Filter by group",
   "wb.memory.allGroups": "All groups",
   "wb.memory.noGroupFiles": "This group has no memory directory yet.",
-  "wb.memory.invalidGroup": "Some directories have an invalid group name and remain in Shared.",
+  "wb.memory.invalidGroup": "Directories with invalid group names and files directly under session-groups remain in Shared. Core cannot save these files.",
   "wb.memory.backlog": "Messages to save",
   "wb.memory.syncing": "Syncing",
   "wb.memory.syncUnknown": "Sync state unknown",
@@ -294,13 +294,14 @@
   "wb.memory.backlogSource": "Source: group backlog and memory sync lock · up to 30 seconds old",
   "wb.memory.budgets": "Always-loaded file sizes",
   "wb.memory.budgetSource": "Source: file tree sizes and Core memory budgets",
-  "wb.memory.warnAt": "Warning starts at {size}",
+  "wb.memory.warnAt": "Warning above {size}",
   "wb.memory.sizeBudget": "{size}, budget {budget}",
   "wb.memory.overBudget": "{size} over budget",
-  "wb.memory.warning": "Warning threshold reached",
+  "wb.memory.warning": "Above warning threshold",
   "wb.memory.syncBusy": "Memory sync is running. Save again after it finishes; your draft is kept.",
   "wb.memory.lockTimeout": "Memory lock wait timed out. Your draft is kept.",
   "wb.memory.writeUnavailable": "Memory saving is unavailable because the Core write entry is missing. Your draft is kept.",
   "wb.memory.writeFailed": "Memory could not be saved. Your draft is kept.",
-  "wb.memory.writeUnknown": "Save result unknown. Your draft is kept; check the file before saving again."
+  "wb.memory.writeUnknown": "Save result unknown. Your draft is kept; check the file before saving again.",
+  "wb.memory.invalidGroupFile": "This file is read-only: Core requires a valid group directory under session-groups."
 }

@@ -7,6 +7,8 @@ import test from 'node:test';
 import { createMemoryBacklog } from '../src/lib/workbench/memory-backlog.js';
 import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
 import { AuthGate } from '../src/lib/auth.js';
+import { MemoryBrowser } from '../src/lib/memory-browser.js';
+import { setupMemoryHttp } from './fixtures/memory-http.js';
 
 const at = Date.UTC(2026, 0, 10, 12);
 const utcText = value => new Date(value).toISOString().slice(0, 19).replace('T', ' ');
@@ -80,7 +82,8 @@ test('one failed group preserves other backlog values and unknown sync status', 
     },
   });
   const { groups } = await get();
-  assert.deepEqual(groups[0], { sessionGroup: 'telegram:a', count: null, firstAt: null, aged: false, syncing: null, threshold: 15, reason: 'backlog_failed' });
+  assert.deepEqual(groups[0], { sessionGroup: 'telegram:a', displayName: null, c4: { componentName: null },
+    count: null, firstAt: null, aged: false, syncing: null, threshold: 15, reason: 'backlog_failed' });
   assert.equal(groups[1].count, 20);
   assert.equal(groups[1].syncing, null);
   assert.equal(groups[1].aged, false);
@@ -104,6 +107,21 @@ test('backlog reads use four workers and preserve snapshot order', async () => {
   assert.equal(maximum, 4);
   assert.equal(called, keys.length);
   assert.deepEqual(result.groups.map(group => group.sessionGroup), keys);
+});
+
+test('active group labels come from the snapshot without requiring memory directories', async () => {
+  const get = createMemoryBacklog({ ...defaults,
+    getSnapshot: async () => ({ rows: [
+      { sessionGroup: 'channel:notes', name: { displayName: 'Research notes', source: 'human' },
+        c4: { componentName: 'feishu', sessionGroupName: 'notes', lastActivityAt: at } },
+      { sessionGroup: 'channel:unnamed', name: null, c4: { componentName: 'telegram' } },
+    ], hasOlder: false }),
+  });
+  const { groups } = await get();
+  assert.equal(groups[0].displayName, 'Research notes');
+  assert.deepEqual(groups[0].c4, { componentName: 'feishu' });
+  assert.equal(groups[1].displayName, null);
+  assert.deepEqual(groups[1].c4, { componentName: 'telegram' });
 });
 
 test('single view null group is never queried and memory adds no cache', async () => {
@@ -191,4 +209,43 @@ test('memory routes require admin locally and through repeated proxy slashes', a
   }
 });
 
-import './fixtures/memory-http.js';
+
+
+// HTTP integration covers route/auth dispatch, private SQLite display names and
+// the shared backlog cache. Run for route/metadata changes; skip UI-only work.
+// setupMemoryHttp owns isolated resources and registers bounded teardown.
+test('memory backlog HTTP route shares the detail cache and enforces administrator access', { timeout: 15000 }, async t => {
+  const { root, engine, request, calls, snapshotReads } = await setupMemoryHttp(t);
+  const denied = await request('/api/workbench/memory/backlog');
+  assert.equal(denied.status, 403);
+  assert.deepEqual(await denied.json(), { error: 'insufficient_scope', required: 'admin' });
+  assert.equal(calls.length, 0);
+  const detail = await request('/api/workbench/groups/origin/backlog', 'admin');
+  assert.equal(detail.status, 200);
+  assert.equal((await detail.json()).count, 7);
+  const before = calls.length;
+  const snapshotBefore = snapshotReads();
+  const response = await request('/api/workbench/memory/backlog', 'admin');
+  assert.equal(response.status, 200);
+  const value = await response.json();
+  assert.equal(value.groups.length, 1);
+  assert.equal(value.groups[0].sessionGroup, 'origin');
+  assert.equal(value.groups[0].count, 7);
+  assert.equal(value.groups[0].syncing, false);
+  assert.equal(value.groups[0].threshold, 50);
+  assert.equal(value.budgets.limits['identity.md'], 16384);
+  assert.equal(calls.length, before, 'memory and group detail must share one backlog reader cache');
+  assert.equal(snapshotReads(), snapshotBefore + 1, 'memory asks the snapshot service to refresh active groups');
+  assert.equal(engine.store.writeGroupDisplayName('telegram:dm-1001', 'Product notes', 'human'), true);
+  const original = await new MemoryBrowser({ zylosDir: root }).tree();
+  const treeResponse = await request('/api/memory/tree', 'admin');
+  assert.equal(treeResponse.status, 200);
+  const scoped = await treeResponse.json();
+  assert.deepEqual(scoped.root, original.root, 'all original tree fields stay identical');
+  assert.deepEqual(Object.keys(scoped).sort(), ['root', 'sessionGroups']);
+  assert.deepEqual(scoped.sessionGroups, [
+    { sessionGroup: 'origin', displayName: null },
+    { sessionGroup: 'telegram:dm-1001', displayName: 'Product notes' },
+  ]);
+  assert.ok(scoped.root.children.find(node => node.path === 'session-groups').children.some(node => node.name === 'bad name'));
+});

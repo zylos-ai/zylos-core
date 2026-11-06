@@ -33,19 +33,22 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog,
   }
   return async function getMemoryBacklog(at = now()) {
     const [snapshot, config, limits] = await Promise.all([getSnapshot(at), thresholds(), budgets()]);
-    const keys = [...new Set(snapshot.rows.map(row => row.sessionGroup).filter(key => key !== null))];
+    const rows = new Map(snapshot.rows.filter(row => row.sessionGroup !== null).map(row => [row.sessionGroup, row]));
+    const keys = [...rows.keys()];
     const groups = new Array(keys.length);
     let cursor = 0;
     async function readNext() {
       while (cursor < keys.length) {
-        const index = cursor++, sessionGroup = keys[index];
+        const index = cursor++, sessionGroup = keys[index], row = rows.get(sessionGroup);
         let backlog;
         try { backlog = await groupBacklog(sessionGroup); }
         catch { backlog = { count: null, firstAt: null, syncing: null, reason: 'backlog_failed' }; }
         const firstAt = backlog.firstAt ?? null, firstMillis = timestampMillis(firstAt);
         const threshold = sessionGroup === 'origin' ? config?.originSyncThreshold : config?.syncThreshold;
         groups[index] = {
-          sessionGroup, count: backlog.count ?? null, firstAt,
+          sessionGroup, displayName: row.name?.displayName ?? null,
+          c4: { componentName: row.c4?.componentName ?? null },
+          count: backlog.count ?? null, firstAt,
           aged: Number.isFinite(firstMillis) && at - firstMillis > SIX_HOURS_MS,
           syncing: backlog.syncing ?? null,
           threshold: Number.isSafeInteger(threshold) && threshold > 0 ? threshold : null,

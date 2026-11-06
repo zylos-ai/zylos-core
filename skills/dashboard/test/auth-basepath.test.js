@@ -4,11 +4,16 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import Database from 'better-sqlite3';
 import { generateApiKey, hashApiKey } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
 import { migrateSchema13 } from './fixtures/schema13.js';
+import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
+import { VersionChecker } from '../src/lib/version-checker.js';
+
+// HTTP/auth fixtures exercise actual product routing, not remote version hosts.
+mock.method(VersionChecker.prototype, 'start', () => {});
 
 function writeConfig(zylosDir, password = 'secret', extra = {}) {
   const configDir = path.join(zylosDir, 'components', 'dashboard');
@@ -450,8 +455,19 @@ test('/api/stream accepts Bearer API session and emits initial fleet_state', asy
   }
 });
 
+// Integration: real auth/routing and Core save, including the 1 MiB boundary.
+// Run when memory transport or auth changes; skip unrelated UI/collector edits.
+// All config/DB/memory is fixture-owned; Core uses a private short tmux socket.
 test('/api/memory is admin-gated and browser sessions can read tree', async () => {
-  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  const zylosDir = memoryTempRoot('wba-');
+  installMemoryScripts(zylosDir);
+  const isolatedEnv = memoryTestEnv(zylosDir);
+  const envKeys = ['HOME', 'ZYLOS_DIR', 'ZYLOS_PACKAGE_ROOT', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'TMUX'];
+  const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]));
+  for (const key of envKeys) {
+    if (isolatedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = isolatedEnv[key];
+  }
   writeConfig(zylosDir, 'secret', { auth: { enabled: true, password: 'secret' } });
   fs.mkdirSync(path.join(zylosDir, 'memory'), { recursive: true });
   fs.writeFileSync(path.join(zylosDir, 'memory', 'identity.md'), '# Identity\n');
@@ -572,11 +588,15 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
     const conflictBody = await conflictResp.json();
     assert.equal(conflictBody.error, 'memory_conflict');
     assert.equal(conflictBody.current.sha256, adminWriteBody.sha256);
-    assert.equal(Object.hasOwn(conflictBody.current, 'text'), false);
+    assert.equal(conflictBody.current.text, '# Identity\nEdited\n');
     assert.equal(fs.readFileSync(path.join(zylosDir, 'memory', 'identity.md'), 'utf8'), '# Identity\nEdited\n');
   } finally {
     await closeServer(server);
     fs.rmSync(zylosDir, { recursive: true, force: true });
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 

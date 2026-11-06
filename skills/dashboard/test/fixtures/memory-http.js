@@ -1,4 +1,3 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -22,7 +21,7 @@ import { MemoryBrowser } from '../../src/lib/memory-browser.js';
 // All child_process/Core inputs are injected; no real CLI, PM2 or tmux/socket is
 // used. The loopback server and each request are bounded; teardown closes every
 // server/database/auth timer and removes only the owned temporary directory.
-test('memory backlog HTTP route shares the detail cache and enforces administrator access', { timeout: 15000 }, async t => {
+export async function setupMemoryHttp(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-detail-http-'));
   const dashboardDir = path.join(root, 'components/dashboard');
   fs.mkdirSync(dashboardDir, { recursive: true });
@@ -144,36 +143,5 @@ test('memory backlog HTTP route shares the detail cache and enforces administrat
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
-  const denied = await request('/api/workbench/memory/backlog');
-  assert.equal(denied.status, 403);
-  assert.deepEqual(await denied.json(), { error: 'insufficient_scope', required: 'admin' });
-  assert.equal(calls.length, 0);
-  const detail = await request('/api/workbench/groups/origin/backlog', 'admin');
-  assert.equal(detail.status, 200);
-  assert.equal((await detail.json()).count, 7);
-  const before = calls.length;
-  const snapshotBefore = snapshotReads;
-  const response = await request('/api/workbench/memory/backlog', 'admin');
-  assert.equal(response.status, 200);
-  const value = await response.json();
-  assert.equal(value.groups.length, 1);
-  assert.equal(value.groups[0].sessionGroup, 'origin');
-  assert.equal(value.groups[0].count, 7);
-  assert.equal(value.groups[0].syncing, false);
-  assert.equal(value.groups[0].threshold, 50);
-  assert.equal(value.budgets.limits['identity.md'], 16384);
-  assert.equal(calls.length, before, 'memory and group detail must share one backlog reader cache');
-  assert.equal(snapshotReads, snapshotBefore + 1, 'memory asks the snapshot service to refresh active groups');
-  assert.equal(engine.store.writeGroupDisplayName('telegram:dm-1001', 'Product notes', 'human'), true);
-  const original = await new MemoryBrowser({ zylosDir: root }).tree();
-  const treeResponse = await request('/api/memory/tree', 'admin');
-  assert.equal(treeResponse.status, 200);
-  const scoped = await treeResponse.json();
-  assert.deepEqual(scoped.root, original.root, 'all original tree fields stay identical');
-  assert.deepEqual(Object.keys(scoped).sort(), ['root', 'sessionGroups']);
-  assert.deepEqual(scoped.sessionGroups, [
-    { sessionGroup: 'origin', displayName: null, fallbackName: '系统助手' },
-    { sessionGroup: 'telegram:dm-1001', displayName: 'Product notes', fallbackName: 'Telegram · dm-1001' },
-  ]);
-  assert.ok(scoped.root.children.find(node => node.path === 'session-groups').children.some(node => node.name === 'bad name'));
-});
+  return { root, engine, request, calls, snapshotReads: () => snapshotReads };
+}

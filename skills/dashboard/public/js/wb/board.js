@@ -1,7 +1,7 @@
-import { element, fallbackName } from './plain-text.js?v=84';
-import { toolLabel, waitText } from './view-mode.js?v=84';
-import { activityStrip } from './activity-strip.js?v=84';
-import { createFetchGuard } from './fetch-guard.js?v=84';
+import { element, fallbackName } from './plain-text.js?v=85';
+import { toolLabel, waitText } from './view-mode.js?v=85';
+import { activityStrip } from './activity-strip.js?v=85';
+import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
   (a.mode === 'default' || (a.model === b.model && a.effort === b.effort));
 export function modelCell(row, t = key => key) {

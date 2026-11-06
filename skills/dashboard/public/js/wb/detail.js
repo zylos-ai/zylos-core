@@ -1,9 +1,9 @@
-import { element, fallbackName } from './plain-text.js?v=84';
-import { olderRow } from './older-row.js?v=84';
-import { renderOverview } from './detail-overview.js?v=84';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=84';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=84';
-import { renderNameEditor } from './name-edit.js?v=84';
+import { element, fallbackName } from './plain-text.js?v=85';
+import { olderRow } from './older-row.js?v=85';
+import { renderOverview } from './detail-overview.js?v=85';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=85';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=85';
+import { renderNameEditor } from './name-edit.js?v=85';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;

@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=84';
+import { element } from './plain-text.js?v=85';
 export function renderAttention(root, snapshot, { error, lastSuccess, now = Date.now(), document = root.ownerDocument, t = key => key, level = 'plain' } = {}) {
   root.replaceChildren();
   if (error) root.append(element(document, 'p', t('wb.readFailed') + (lastSuccess == null ? '' : ` · ${t('wb.lastSuccess', { seconds: Math.max(0, Math.floor((now - lastSuccess) / 1000)) })}`)));

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 export const coreRoot = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -33,4 +34,13 @@ export function memoryTestEnv(zylosDir) {
     fs.mkdirSync(env[key], { recursive: true });
   }
   return env;
+}
+
+/** Prefer runner isolation; only shorten roots when a private tmux socket would
+ * exceed Unix socket limits (104 bytes on macOS). The fallback is still a new,
+ * fixture-owned root with isolated HOME/ZYLOS_DIR/PM2_HOME and explicit cleanup. */
+export function memoryTempRoot(prefix) {
+  const candidate = path.join(os.tmpdir(), prefix);
+  const socket = path.join(candidate + 'XXXXXX', 'm', 'tmux-4294967295', 'default');
+  return fs.mkdtempSync(Buffer.byteLength(socket) < 100 ? candidate : path.join('/tmp', prefix));
 }

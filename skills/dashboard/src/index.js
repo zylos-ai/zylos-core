@@ -54,7 +54,7 @@ import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
 import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
-import { createDisplayNames, validKey, fallbackName } from './lib/workbench/display-names.js';
+import { createDisplayNames, validKey } from './lib/workbench/display-names.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 import { createRuns } from './lib/workbench/runs.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
@@ -1624,8 +1624,7 @@ async function handleMemoryApi(req, res, pathname, url) {
       const groupRoot = tree.root.children.find(node => node.path === 'session-groups' && node.type === 'directory');
       const sessionGroups = (groupRoot?.children ?? [])
         .filter(node => node.type === 'directory' && parseSessionGroup(node.name) !== null)
-        .map(node => ({ sessionGroup: node.name, displayName: names.get(node.name)?.displayName ?? null,
-          fallbackName: fallbackName(node.name) }));
+        .map(node => ({ sessionGroup: node.name, displayName: names.get(node.name)?.displayName ?? null }));
       sendJson(res, 200, { ...tree, sessionGroups });
       return true;
     }

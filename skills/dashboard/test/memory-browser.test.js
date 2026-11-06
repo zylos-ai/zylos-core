@@ -4,11 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { installMemoryScripts, memoryTestEnv } from './fixtures/memory-installation.js';
+import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
 import { MemoryBrowser, memoryErrorPayload, validateMemoryQueryPath } from '../src/lib/memory-browser.js';
 
 function makeZylosDir() {
-  const zylosDir = fs.mkdtempSync('/tmp/wbr-');
+  const zylosDir = memoryTempRoot('wbr-');
   fs.mkdirSync(path.join(zylosDir, 'memory', 'reference'), { recursive: true });
   fs.writeFileSync(path.join(zylosDir, 'memory', 'identity.md'), '# Identity\n');
   fs.writeFileSync(path.join(zylosDir, 'memory', 'reference', 'projects.md'), '# Projects\n');
