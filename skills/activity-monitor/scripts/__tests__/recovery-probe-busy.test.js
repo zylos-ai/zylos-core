@@ -68,7 +68,7 @@ async function terminal(f, pending, status = 'timeout', elapsed = 120000) {
   f.advance(elapsed); pending.row.status = status; await f.observer.tick(); return pending.result;
 }
 
-test('idle ordinary scene precedes busy Origin, including activity without tools', async t => {
+test('idle ordinary scene precedes busy Origin, including activity without tools', { timeout: 5000 }, async t => {
   const f = fixture(t);
   f.add('origin', { state: 'busy', tools: [] });
   const idle = f.add('telegram:z');
@@ -79,15 +79,15 @@ test('idle ordinary scene precedes busy Origin, including activity without tools
   assert.equal(p.row.ackDeadlineAt, f.now() / 1000 + 120);
 });
 
-test('Origin precedes other idle scenes and ordinary groups retain stable order', async t => {
-  for (const origin of [true, false]) await t.test(String(origin), async t => {
-    const f = fixture(t); f.add('telegram:z'); f.add('telegram:a'); if (origin) f.add('origin');
-    const p = await f.prepare(); assert.equal(p.row.sessionGroup, origin ? 'origin' : 'telegram:a');
+test('Origin precedes other idle scenes and ordinary groups retain stable order', { timeout: 5000 }, async t => {
+  for (const origin of [true, false]) await t.test(String(origin), { timeout: 5000 }, async t => {
+    const f = fixture(t); f.add('lark:a'); f.add('feishu:b'); if (origin) f.add('origin');
+    const p = await f.prepare(); assert.equal(p.row.sessionGroup, origin ? 'origin' : 'feishu:b');
   });
 });
 
 for (const health of ['rate_limited', 'unavailable', 'recovering', 'down']) {
-  test(`${health} waits for idle without inserting controls or changing health and association`, async t => {
+  test(`${health} waits for idle without inserting controls or changing health and association`, { timeout: 5000 }, async t => {
     const f = fixture(t); f.setHealth(health);
     const scene = f.add('origin', { state: 'busy', tools: [{ id: 'foreground', name: 'Bash', startedAt: f.now() }] });
     const linked = { sessionGroup: scene.sessionGroup, runId: scene.runId };
@@ -105,14 +105,14 @@ for (const health of ['rate_limited', 'unavailable', 'recovering', 'down']) {
   });
 }
 
-test('activity becoming busy during binding is rechecked before insertion', async t => {
+test('activity becoming busy during binding is rechecked before insertion', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.add('origin');
   f.observer.buildTargetBinding = value => { f.state(scene, { state: 'busy' }); return { runId: value.runId }; };
   const p = await f.prepare(); assert.equal((await p.result).noTarget, true);
   assert.equal(f.controls.length, 0); assert.equal(f.waitAt(), f.now());
 });
 
-test('tools observed after insertion remain evidence after completion and retry uses a fresh heartbeat', async t => {
+test('tools observed after insertion remain evidence after completion and retry uses a fresh heartbeat', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.add('origin');
   f.coordinator.associations.set('claude', { sessionGroup: scene.sessionGroup, runId: scene.runId });
   const first = await f.prepare(), sentAt = f.now();
@@ -129,7 +129,7 @@ test('tools observed after insertion remain evidence after completion and retry 
   assert.equal(f.coordinator.associations.has('claude'), false);
 });
 
-test('waiting after paste retains the earliest runtime waiting time', async t => {
+test('waiting after paste retains the earliest runtime waiting time', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.add('origin', { state: 'busy' });
   await (await f.prepare()).result; const started = f.waitAt();
   f.advance(60000); f.state(scene); const p = await f.prepare();
@@ -137,9 +137,9 @@ test('waiting after paste retains the earliest runtime waiting time', async t =>
   assert.equal((await terminal(f, p)).waiting, true); assert.equal(f.waitAt(), started);
 });
 
-test('only timeout with tools observed within the acknowledgement window defers a result', async t => {
+test('only timeout with tools observed within the acknowledgement window defers a result', { timeout: 5000 }, async t => {
   for (const kind of ['no-tools', 'late-tools', 'early-timeout', 'failed', 'cancelled']) {
-    await t.test(kind, async t => {
+    await t.test(kind, { timeout: 5000 }, async t => {
       const f = fixture(t), scene = f.add('origin'), p = await f.prepare();
       if (kind !== 'no-tools') {
         f.advance(kind === 'late-tools' ? 120001 : 1000);
@@ -154,8 +154,8 @@ test('only timeout with tools observed within the acknowledgement window defers 
   }
 });
 
-test('acknowledgement and error text take priority over the tools waiting marker', async t => {
-  for (const kind of ['done', 'rate', 'auth', 'rate-and-auth']) await t.test(kind, async t => {
+test('acknowledgement and error text take priority over the tools waiting marker', { timeout: 5000 }, async t => {
+  for (const kind of ['done', 'rate', 'auth', 'rate-and-auth']) await t.test(kind, { timeout: 5000 }, async t => {
     const f = fixture(t), scene = f.add('origin'), p = await f.prepare();
     f.state(scene, { tools: [{ id: 'foreground' }] }); await f.observer.tick();
     f.setMatches({ rateLimit: { detected: kind.includes('rate') }, authFailure: { detected: kind.includes('auth') } });
@@ -165,14 +165,14 @@ test('acknowledgement and error text take priority over the tools waiting marker
   });
 });
 
-test('thirty minute fallback keeps idle first and Origin first within busy candidates', async t => {
-  for (const idle of [false, true]) await t.test(String(idle), async t => {
-    const f = fixture(t); f.add('telegram:z', { state: 'busy' });
-    const ordinary = f.add('telegram:a', { state: 'busy' }); f.add('origin', { state: 'busy' });
+test('thirty minute fallback keeps idle first and Origin first within busy candidates', { timeout: 5000 }, async t => {
+  for (const idle of [false, true]) await t.test(String(idle), { timeout: 5000 }, async t => {
+    const f = fixture(t); f.add('lark:a', { state: 'busy' });
+    const ordinary = f.add('feishu:b', { state: 'busy' }); f.add('origin', { state: 'busy' });
     await (await f.prepare()).result; f.advance(WAIT_MS - 1);
     await (await f.prepare()).result; assert.equal(f.controls.length, 0);
     f.advance(1); if (idle) f.state(ordinary);
-    const p = await f.prepare(); assert.equal(p.row.sessionGroup, idle ? 'telegram:a' : 'origin');
+    const p = await f.prepare(); assert.equal(p.row.sessionGroup, idle ? 'feishu:b' : 'origin');
     assert.equal(p.row.ackDeadlineAt, f.now() / 1000 + 120);
     f.state(f.scenes().find(s => s.runId === p.probe.scene.runId), { tools: [{ id: 'foreground' }] });
     await f.observer.tick(); assert.equal((await terminal(f, p)).classification, 'other');
@@ -181,8 +181,8 @@ test('thirty minute fallback keeps idle first and Origin first within busy candi
   });
 });
 
-test('forced busy fallback still classifies rate and authentication without stopping', async t => {
-  for (const kind of ['rate', 'auth']) await t.test(kind, async t => {
+test('forced busy fallback still classifies rate and authentication without stopping', { timeout: 5000 }, async t => {
+  for (const kind of ['rate', 'auth']) await t.test(kind, { timeout: 5000 }, async t => {
     const f = fixture(t); f.add('origin', { tools: [{ id: 'foreground' }] });
     await (await f.prepare()).result; f.advance(WAIT_MS); const p = await f.prepare();
     f.setMatches(kind === 'rate' ? { rateLimit: { detected: true } } : { authFailure: { detected: true } });
@@ -191,7 +191,7 @@ test('forced busy fallback still classifies rate and authentication without stop
   });
 });
 
-test('crossing thirty minutes during an already sent probe does not retroactively force it', async t => {
+test('crossing thirty minutes during an already sent probe does not retroactively force it', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.add('origin', { state: 'busy' });
   await (await f.prepare()).result; const started = f.waitAt();
   f.advance(WAIT_MS - 60000); f.state(scene); const p = await f.prepare();
@@ -200,8 +200,8 @@ test('crossing thirty minutes during an already sent probe does not retroactivel
   assert.equal(f.stops.length, 0);
 });
 
-test('thirty minute fallback does not bypass cooldown, attempt backoff or negative cache', async t => {
-  for (const gate of ['cooldown', 'backoff', 'cache']) await t.test(gate, async t => {
+test('thirty minute fallback does not bypass cooldown, attempt backoff or negative cache', { timeout: 5000 }, async t => {
+  for (const gate of ['cooldown', 'backoff', 'cache']) await t.test(gate, { timeout: 5000 }, async t => {
     const f = fixture(t); f.add('origin', { state: 'busy' });
     await (await f.prepare()).result; const started = f.waitAt(); f.advance(WAIT_MS);
     if (gate === 'cooldown') f.setHealth('rate_limited', { cooldownUntil: f.now() / 1000 + 60 });
@@ -213,8 +213,8 @@ test('thirty minute fallback does not bypass cooldown, attempt backoff or negati
   });
 });
 
-test('stale identities before and after screen capture and stale C4 results preserve waiting and association', async t => {
-  for (const kind of ['before', 'after', 'control']) await t.test(kind, async t => {
+test('stale identities before and after screen capture and stale C4 results preserve waiting and association', { timeout: 5000 }, async t => {
+  for (const kind of ['before', 'after', 'control']) await t.test(kind, { timeout: 5000 }, async t => {
     const f = fixture(t), scene = f.add('origin', { state: 'busy' });
     await (await f.prepare()).result; const started = f.waitAt(); f.state(scene);
     const linked = { sessionGroup: scene.sessionGroup, runId: scene.runId };
@@ -231,8 +231,8 @@ test('stale identities before and after screen capture and stale C4 results pres
   });
 });
 
-test('current structured failure takes priority over waiting and conflicting pane text', async t => {
-  for (const error of ['rate_limit', 'authentication_failed']) await t.test(error, async t => {
+test('current structured failure takes priority over waiting and conflicting pane text', { timeout: 5000 }, async t => {
+  for (const error of ['rate_limit', 'authentication_failed']) await t.test(error, { timeout: 5000 }, async t => {
     const f = fixture(t), scene = f.add('origin'), p = await f.prepare();
     const identity = { runtime: 'claude', session_id: scene.sessionId, claude_pid: 42 };
     f.state(scene, { tools: [{ id: 'foreground' }] }); await f.observer.tick();
@@ -248,7 +248,7 @@ test('current structured failure takes priority over waiting and conflicting pan
   });
 });
 
-test('lost demand starts a fresh wait when a later message arrives after thirty minutes', async t => {
+test('lost demand starts a fresh wait when a later message arrives after thirty minutes', { timeout: 5000 }, async t => {
   const f = fixture(t); f.add('origin', { state: 'busy' });
   await (await f.prepare()).result; const started = f.waitAt();
   await f.reconcile(new Map()); assert.equal(f.waitAt(), undefined);
@@ -257,7 +257,7 @@ test('lost demand starts a fresh wait when a later message arrives after thirty 
   assert.equal(f.controls.length, 0); assert.equal(f.waitAt(), f.now()); assert.notEqual(f.waitAt(), started);
 });
 
-test('structured authentication failure during idle waiting stops further recovery attempts', async t => {
+test('structured authentication failure during idle waiting stops further recovery attempts', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.add('origin', { state: 'busy' });
   await (await f.prepare()).result;
   const identity = { runtime: 'claude', session_id: scene.sessionId, claude_pid: 42 };
@@ -270,9 +270,9 @@ test('structured authentication failure during idle waiting stops further recove
   assert.equal(f.controls.length, 0); assert.equal(f.stops.length, 0);
 });
 
-test('every tick clears waiting on lost demand, healthy state or no qualified ready scene', async t => {
+test('every tick clears waiting on lost demand, healthy state or no qualified ready scene', { timeout: 5000 }, async t => {
   for (const reason of ['demand', 'ok', 'auth_failed', 'gone', 'starting', 'fence', 'global-fence', 'transition']) {
-    await t.test(reason, async t => {
+    await t.test(reason, { timeout: 5000 }, async t => {
       const f = fixture(t), scene = f.add('origin', { state: 'busy' });
       await (await f.prepare()).result; assert.equal(f.waitAt(), f.now());
       // A future budget makes this a not-due tick; reconciliation must still run.
@@ -289,15 +289,28 @@ test('every tick clears waiting on lost demand, healthy state or no qualified re
   }
 });
 
-test('no scene does not start waiting and another runtime cannot supply a target', async t => {
+test('no scene does not start waiting and another runtime cannot supply a target', { timeout: 5000 }, async t => {
   const f = fixture(t); const other = f.add('origin', { state: 'idle' }); other.runtime = 'codex';
   assert.equal((await (await f.prepare()).result).noTarget, true);
   assert.equal(f.controls.length, 0); assert.equal(f.waitAt(), undefined);
 });
 
-test('single recovery and unordered hook verification ignore busy activity and retain baseline deadlines', async t => {
-  for (const kind of ['single', 'hook']) await t.test(kind, async t => {
+test('multi recovery excludes a stopped process without starting idle waiting', { timeout: 5000 }, async t => {
+  for (const state of ['idle', 'busy']) await t.test(state, { timeout: 5000 }, async t => {
+    const f = fixture(t), scene = f.add('origin', { state });
+    scene.processRunning = false;
+    const before = f.bytes();
+    assert.equal((await (await f.prepare()).result).noTarget, true);
+    assert.equal(f.controls.length, 0); assert.equal(f.waitAt(), undefined);
+    assert.equal(f.bytes(), before); assert.equal(f.stops.length, 0);
+  });
+});
+
+test('single recovery and unordered hook verification ignore busy activity and retain baseline deadlines', { timeout: 5000 }, async t => {
+  for (const kind of ['single', 'hook']) for (const processRunning of [true, false]) await t.test(
+    `${kind} with processRunning=${processRunning}`, { timeout: 5000 }, async t => {
     const f = fixture(t), scene = f.add('origin', { tools: [{ id: 'foreground' }] });
+    scene.processRunning = processRunning;
     if (kind === 'single') f.setMode('single');
     const result = kind === 'hook' ? f.observer.requestVerification('claude') : f.observer.requestProbe('claude');
     await Promise.all([...f.observer.preparations]);

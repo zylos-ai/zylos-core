@@ -91,10 +91,11 @@ export class SupervisorHealthObserver {
     if (this.probes.get(probe.runtime) === probe) this.probes.delete(probe.runtime);
     probe.resolve(result);
   }
-  async recoveryScenes(runtime, scenes) {
+  async recoveryScenes(runtime, scenes, { requireRunning = false } = {}) {
     const eligible = [];
     for (const scene of scenes) {
-      if (scene.runtime !== runtime || !scene.runId || scene.ready !== true || scene.present === false || scene.processRunning === false) continue;
+      if (scene.runtime !== runtime || !scene.runId || scene.ready !== true || scene.present === false ||
+          (requireRunning && scene.processRunning === false)) continue;
       if (await this.canAct(scene, {requireReady:true,requireOpen:true})) eligible.push(scene);
     }
     return eligible;
@@ -104,7 +105,7 @@ export class SupervisorHealthObserver {
     for (const runtime of this.recoveryWaits.keys()) {
       const health = this.coordinator.store(runtime).read().health;
       if (!multi || !demand.has(runtime) || health === 'ok' || health === 'auth_failed' ||
-          !(await this.recoveryScenes(runtime, scenes)).length) this.recoveryWaits.delete(runtime);
+          !(await this.recoveryScenes(runtime, scenes, {requireRunning:true})).length) this.recoveryWaits.delete(runtime);
     }
   }
   async prepareProbe(probe) {
@@ -112,7 +113,7 @@ export class SupervisorHealthObserver {
     if (!probe.force && !await this.due(probe.runtime)) return this.finish(probe,{recovered:false});
     const mode = await this.readMode();
     const idleOnly = mode === 'multi' && probe.phase === 'recovery';
-    const scenes = await this.recoveryScenes(probe.runtime, await this.listScenes());
+    const scenes = await this.recoveryScenes(probe.runtime, await this.listScenes(), {requireRunning:idleOnly});
     const candidates = [];
     for (const scene of scenes) candidates.push({scene, idle:idleOnly ? (await this.readState(scene))?.state === 'idle' : true});
     candidates.sort((a,b) => Number(b.idle)-Number(a.idle) ||
