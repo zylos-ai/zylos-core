@@ -143,6 +143,13 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       }
       return read(c => get(c, `SELECT * FROM control_queue WHERE status='pending' AND (available_at IS NULL OR available_at<=?) AND ${sql} AND ${unfenced} ORDER BY priority,created_at,id LIMIT 1`, current, ...args) ?? null);
     },
+    getOriginNeed: (current = seconds()) => read(c => ({
+      inbound: get(c, `SELECT COUNT(*) AS count, MIN(unixepoch(timestamp)) AS oldestAt
+        FROM conversations WHERE direction='in' AND status='pending' AND session_group='origin'`),
+      controls: get(c, `SELECT COUNT(*) AS count, MIN(MAX(created_at, COALESCE(available_at, created_at))) AS oldestAt
+        FROM control_queue WHERE status='pending' AND session_group='origin' AND target_binding IS NULL
+          AND (available_at IS NULL OR available_at<=?)`, current),
+    })),
     claimControl: id => write(c => run(c, `UPDATE control_queue SET status='running',updated_at=? WHERE id=? AND status='pending' AND ${unfenced}`, seconds(), id).changes > 0),
     expirePendingControls: value => {
       const { keepContinuation = false, ...scope } = value ?? {};
@@ -169,7 +176,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     setDrainFence: (group, { reason = null, runId = null } = {}) => write(c => {
       const hasRun = typeof runId === 'string' && runId.length > 0;
       const normal = ['ttl','evict','upgrade','auth','mode_switch','model_config'];
-      const valid = group === '*' ? (reason === null && runId === null) || (reason === 'manual_restart' && hasRun) : !!parseSessionGroup(group) && hasRun && (group === 'origin' ? [...normal.filter(x => !['ttl','evict'].includes(x)), 'manual_restart'].includes(reason) : normal.includes(reason));
+      const valid = group === '*' ? (reason === null && runId === null) || (reason === 'manual_restart' && hasRun) : !!parseSessionGroup(group) && hasRun && (group === 'origin' ? [...normal.filter(x => x !== 'evict'), 'manual_restart'].includes(reason) : normal.includes(reason));
       if (!valid) throw dataError('FENCE_INVALID', 'Invalid fence scope, reason or run');
       run(c, 'INSERT INTO drain_fences(session_group,reason,run_id,created_at) VALUES(?,?,?,?) ON CONFLICT(session_group) DO NOTHING', group, reason, runId, seconds());
     }),

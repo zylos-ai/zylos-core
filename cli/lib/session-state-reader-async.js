@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { openReadStore } from './c4-read-store.js';
+import { zylosRoot } from './session-group-paths.js';
 import { groupRunDir, tmuxNameForGroup, listGroupTmuxSessions } from './session-group-paths.js';
 import { openTmuxConnection } from './runtime/tmux-connection.js';
 import { isIdentityError } from './runtime/tmux-protocol.js';
@@ -53,6 +55,11 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
   async function resolveTargetRuntime(sessionGroup) {
     const live = await readLiveIdentity(sessionGroup);
     if (live.present) return live.runtime;
+    if (!resolveConfig && sessionGroup !== null) {
+      const { store, close } = await openReadStore(zylosRoot(env));
+      try { return store.resolveSessionLaunchConfig({ sessionGroup, sessionMode: 'multi' }).runtime; }
+      finally { close(); }
+    }
     const resolve = resolveConfig || (await import('../../skills/comm-bridge/scripts/c4-db.js')).resolveSessionLaunchConfig;
     if (typeof resolve !== 'function') throw Object.assign(new Error('Session launch configuration resolver is unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
     return (await resolve({ sessionGroup, sessionMode: sessionGroup === null ? 'single' : 'multi' })).runtime;

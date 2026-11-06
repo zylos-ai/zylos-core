@@ -88,6 +88,10 @@ export function createLane(context, group) {
     if (group === null || group === 'origin') {
       state.resident.readySince = null;
       state.resident.absentSince ??= now();
+      if (group === 'origin') {
+        const row = await nextMessage();
+        if (!row && deps.db.getOriginNeed(Math.floor(now() / 1000)).controls.count === 0) return;
+      }
       const delay = Math.min(5 * 2 ** Math.min(state.resident.failures, 4), 60) * 1000;
       if (now() - state.resident.absentSince >= delay) await context.activation.begin(group, null);
       return;

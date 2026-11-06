@@ -6,6 +6,7 @@ import path from 'node:path';
 import { ModeSwitchCoordinator } from '../mode-switch.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { RestartRequestStore, validateRestartRequests } from '../restart-request-store.js';
+import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
 
 const restart = id => ({ version: 1, type: 'restart_all', requestId: id, reason: 'upgrade' });
 const manual = (overrides = {}) => ({ version: 1, type: 'manual_restart', requestId: 'manual', expectedRunId: 'r1', ...overrides });
@@ -16,7 +17,8 @@ function fixture(t) {
   const state = { mode: 'multi', transition: null, fences: new Map(), runs: [{runId:'r1'}, {runId:'r2'}, {runId:'starting'}],
     run: {runId:'r1', ready:true, launchConfig:{runtime:'claude',mode:'default'}}, expected:{runtime:'codex',mode:'default'}, events:[] };
   const db = { getModeTransition: () => state.transition, getDrainFence: g => state.fences.get(g) ?? null,
-    setDrainFence: (g,f) => { if (!state.fences.has(g)) state.fences.set(g,f); } };
+    setDrainFence: (g,f) => { if (!state.fences.has(g)) state.fences.set(g,f); },
+    insertControl: (content, options) => { state.wake = {content, ...options}; } };
   const deps = { store, db, readMode: () => ({mode:state.mode}), listRuns: () => state.runs, readRun: () => state.run,
     resolveLaunchConfig: () => state.expected, preflightReclaim: async () => {}, now: () => 1792000000123, diagnostic: event => state.events.push(event) };
   const admission = new SupervisorAdmission(deps); admission.openEntry();
@@ -76,6 +78,23 @@ test('conflicts precede absent-target result in frozen order', async t => {
   const noTarget=manual(); delete noTarget.expectedRunId;
   assert.equal((await f.admission.handle(noTarget)).result,'already_stopped');
   f.state.run={}; assert.equal((await f.admission.handle(noTarget)).reason,'target_required');
+});
+test('absent Origin writes an unbound wake before replying and enqueue failure leaves no request', async t => {
+  const f = fixture(t); f.state.run = null;
+  for (const expected of [true, false]) {
+    const request = manual(); if (!expected) delete request.expectedRunId;
+    assert.equal((await f.admission.handle(request)).result, 'already_stopped');
+    assert.deepEqual(f.state.wake, {content:MANUAL_WAKE_PROMPT,sessionGroup:'origin',priority:2,appendAckSuffix:false});
+    assert.deepEqual(f.store.read(), []);
+  }
+  f.db.insertControl = () => { throw new Error('write failed'); };
+  assert.equal((await f.admission.handle(manual())).reason, 'wake_failed');
+  assert.deepEqual(f.store.read(), []); assert.equal(fs.existsSync(f.file), false);
+  f.state.mode = 'single';
+  for (const expected of [true, false]) {
+    const request = manual(); if (!expected) delete request.expectedRunId;
+    assert.equal((await f.admission.handle(request)).result, 'already_stopped');
+  }
 });
 test('stale, incomplete and starting identity cannot become manual targets', async t => {
   const f = fixture(t); f.state.run.runId='new';

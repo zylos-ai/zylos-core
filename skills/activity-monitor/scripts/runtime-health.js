@@ -100,7 +100,7 @@ export class RuntimeHealthCoordinator {
     const reject = (code, notBefore) => ({...envelope,ok:false,code,...(notBefore === undefined ? {} : {notBefore})});
     if (request?.version !== 1 || request.type !== 'start_attempt' || !REQUEST.test(request.requestId) ||
         typeof request.runtime !== 'string' || !RUNTIME.test(request.runtime) || !UUID.test(request.runId) ||
-        request.sessionGroup === 'origin' || !parseSessionGroup(request.sessionGroup)) return Promise.resolve(reject('invalid_request'));
+        !parseSessionGroup(request.sessionGroup)) return Promise.resolve(reject('invalid_request'));
     const runtime = request.runtime;
     return this.serial(runtime, async () => {
       if (await this.readMode() !== 'multi' || await this.resolveTargetRuntime(request.sessionGroup) !== runtime) return reject('invalid_request');

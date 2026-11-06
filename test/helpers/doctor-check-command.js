@@ -20,24 +20,45 @@ if (command === 'which') {
   if (args[0] === '--version') console.log('Claude Code 1.0.0');
   else if (args[0] === '-p' && args[1] === 'ping') console.log('pong');
   else if (args[0] === '-p' && args[1].startsWith('You are a Zylos repair agent.')) {
-    console.log('Isolated repair control: fixture intentionally remains unchanged.');
+    if (process.env.DOCTOR_TEST_STATE === 'repair_once') {
+      fs.writeFileSync(path.join(root, 'repaired'), 'done');
+      fs.rmSync(path.join(root, 'session-checked'), { force: true });
+    }
+    console.log('Isolated repair control completed.');
   } else process.exit(2);
+} else if (command === 'codex') {
+  if (args[0] === '--version') console.log('codex-cli 1.0.0');
+  else if (args.join(' ') === 'login status') console.error('Logged in using ChatGPT');
+  else process.exit(2);
 } else if (command === 'pm2') {
   if (args[0] === '--version') console.log('6.0.0');
   else if (args[0] === 'jlist') console.log(JSON.stringify([
     { name: 'activity-monitor', pm2_env: { status: 'online' } },
     ...['worker-a', 'worker-b'].map(name => ({ name,
-      pm2_env: { status: process.env.DOCTOR_TEST_STATE === 'pass' ? 'online' : 'stopped' } })),
+      pm2_env: { status: process.env.DOCTOR_TEST_STATE === 'pass' || (process.env.DOCTOR_TEST_STATE === 'repair_once' && fs.existsSync(path.join(root, 'repaired'))) ? 'online' : 'stopped' } })),
   ]));
   else process.exit(2);
 } else if (command === 'tmux') {
   assert.equal(process.env.DOCTOR_TEST_TMUX_SOCKET, path.join(process.env.TMPDIR, 'tmux.sock'));
   if (args[0] === '-V') console.log('tmux 3.4');
   else if (args.includes('display-message')) {
+    if (process.env.DOCTOR_TEST_ORIGIN === 'unknown_presence' && fs.existsSync(path.join(root, 'session-checked'))) {
+      process.stderr.write('fixture observation unavailable\n');
+      process.exit(2);
+    }
     // No runtime session exists in this fixture: answer as a real tmux with no server.
     process.stderr.write(`no server running on ${process.env.DOCTOR_TEST_TMUX_SOCKET}\n`);
     process.exit(1);
-  } else if (args[0] !== 'has-session') process.exit(2);
+  } else if (args[0] === 'has-session') {
+    if (process.env.DOCTOR_TEST_MODE === 'multi') {
+      if (process.env.DOCTOR_TEST_ORIGIN === 'unknown_presence') fs.writeFileSync(path.join(root, 'session-checked'), 'done');
+      if (process.env.DOCTOR_TEST_ORIGIN === 'need_unreadable') {
+        const db = path.join(process.env.ZYLOS_DIR, 'comm-bridge', 'c4.db');
+        if (fs.existsSync(db)) fs.renameSync(db, `${db}.unreadable`);
+      }
+      process.exit(1);
+    }
+  } else process.exit(2);
 } else if (command === 'curl') {
   console.log(args.includes('-w') ? '200' : '[]');
 } else process.exit(2);

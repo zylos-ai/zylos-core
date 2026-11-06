@@ -15,6 +15,7 @@ function fixture(t, create = createSupervisor) {
   const current = [], pending = [], controls = [], stops = [];
   const runtimeFor = group => group.startsWith('codex:') ? 'codex' : 'claude';
   const db = {
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
     listPendingSessionGroups: () => pending,
     listPendingContinuations: () => [],

@@ -1,10 +1,4 @@
 import fs from 'fs';
-import path from 'path';
-import { createRequire } from 'node:module';
-import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
-import { guardDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
-const coreRequire = createRequire(new URL('../../comm-bridge/package.json', import.meta.url));
-import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { loadCoreModule } from './core-modules.js';
 import { enqueueMachineControl } from './machine-control.js';
 import { durableJson } from './runtime-generation.js';
@@ -46,29 +40,11 @@ export class UsageMonitor {
     return state?.lastCheckedAt ? Math.floor(new Date(state.lastCheckedAt).getTime() / 1000) : 0;
   }
 
-  canRunTask({ claudeState, idleSeconds, currentTime, apiActivity, activeHoursOnly = false }) {
+  canRunTask({ activeHoursOnly = false } = {}) {
     if (this.runtimeId !== 'claude' && this.runtimeId !== 'codex') return false;
-
-    const promptUpdatedAt = apiActivity?.updated_at
-      ? Math.floor(apiActivity.updated_at / 1000) : 0;
-    return shouldStartUsageCheck({
-      runtimeId: this.runtimeId,
-      allowedRuntimeIds: ['claude', 'codex'],
-      claudeState,
-      idleSeconds,
-      currentTime,
-      lastUsageCheckAt: 0,
-      checkInterval: { seconds: this.options.checkIntervalSec, idleGate: this.options.idleGateSec },
-      inPrompt: this.runtimeId === 'claude' ? Boolean(apiActivity?.in_prompt) : false,
-      promptUpdatedAt,
-      localHour: this.options.getLocalHour(),
-      activeHoursStart: activeHoursOnly ? this.options.activeHoursStart : 0,
-      activeHoursEnd: activeHoursOnly ? this.options.activeHoursEnd : 24,
-      pendingQueueCount: this.getPendingWorkCount(),
-      lockBusy: false,
-      backoffUntil: 0,
-      circuitUntil: 0,
-    });
+    if (!activeHoursOnly) return true;
+    const hour = this.options.getLocalHour();
+    return this.options.activeHoursStart <= hour && hour < this.options.activeHoursEnd;
   }
 
   async runMonitor({ currentTime }) {
@@ -217,28 +193,6 @@ export class UsageMonitor {
     } catch (err) {
       this.options.log(`Usage alert: failed to write state (${err.message})`);
     }
-  }
-
-  getPendingWorkCount() {
-    let db;
-    try {
-      assertCoreDatabaseAvailable(this.options.zylosDir);
-      const dbPath = path.join(this.options.zylosDir, 'comm-bridge', 'c4.db');
-      if (!fs.existsSync(dbPath)) {
-        if (['-wal', '-shm', '-journal'].some(suffix => fs.existsSync(dbPath + suffix))) throw new Error('Orphan C4 database sidecar');
-        return 0;
-      }
-      // Usage checks are optional: a missing native dependency must not prevent
-      // the activity monitor (including its guardian) from loading.
-      const Database = coreRequire('better-sqlite3');
-      db = new Database(dbPath, { readonly: true, fileMustExist: true });
-      guardDatabase(db, c4Schema, { readonly: true });
-      return db.prepare("SELECT ((SELECT COUNT(*) FROM control_queue WHERE status='pending') + (SELECT COUNT(*) FROM conversations WHERE direction='in' AND status='pending')) AS count").get().count;
-    } catch (error) {
-      this.options.log?.(`Usage monitor: cannot inspect pending work (${error.message})`);
-      // Fail closed: unknown pending work prevents starting an idle usage check.
-      return Number.POSITIVE_INFINITY;
-    } finally { db?.close(); }
   }
 
   getUsageTier(weeklyPercent) {

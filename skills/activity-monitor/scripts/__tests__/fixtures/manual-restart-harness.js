@@ -9,6 +9,13 @@ import { submit } from '../../../../../cli/lib/am-sock-client.js';
 const worker = fileURLToPath(new URL('./manual-restart-worker.js', import.meta.url));
 export function fixture(t, mode = 'multi', runtime = 'claude') {
   const f = readyTmuxTarget(t, { prefix: 'i2mr-', mode, runtime, runtimeProcess: true });
+  for (const target of [f.root, f.socketPath, f.db.name]) {
+    assert.ok(target.startsWith(process.env.TMPDIR + path.sep), 'manual fixture must stay inside the private test root');
+  }
+  assert.equal(f.env.HOME, f.root); assert.equal(f.env.ZYLOS_DIR, f.root);
+  assert.ok(process.env.PM2_HOME.startsWith(process.env.HOME + path.sep));
+  console.log(JSON.stringify({ manualFixture: f.root, socket: f.socketPath, database: f.db.name,
+    HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME }));
   f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
   if (runtime === 'codex') {
     fs.copyFileSync(path.join(f.root, 'claude'), path.join(f.root, 'codex'));

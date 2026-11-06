@@ -51,3 +51,12 @@ test('CLI session targets actual runtime and rejects unreadable mode without def
   await assert.rejects(() => resolveCliSession({ mode: () => { throw new Error('bad config'); },
     identity: () => assert.fail('bad mode must stop target selection') }), /bad config/);
 });
+
+test('multi absent display retains identity when runtime configuration cannot be read', async () => {
+  const live = { present: false, tmuxName: 'zylos-group-origin' };
+  const result = await resolveCliSession({ env: {}, mode: () => ({ mode: 'multi' }), identity: () => live,
+    resolveRuntime: () => { throw new Error('C4 missing'); }, adapter: () => assert.fail('unknown target has no adapter') });
+  assert.equal(result.live, live); assert.equal(result.runtime, 'unknown'); assert.equal(result.adapter, null);
+  await assert.rejects(resolveCliSession({ mode: () => ({ mode: 'single' }), identity: () => live,
+    resolveRuntime: () => { throw new Error('C4 missing'); } }), /C4 missing/);
+});

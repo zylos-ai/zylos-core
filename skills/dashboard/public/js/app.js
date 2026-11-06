@@ -11,7 +11,7 @@ import {
 } from './response-order.js';
 import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult } from './action-result.js';
-import { pendingDepthValue, sessionBlockTitleKey, stateTitleKey } from './state-presentation.js';
+import { pendingDepthValue, sessionBlockTitleKey, stateTitleKey, originSessionUnavailable } from './state-presentation.js';
 import {
   effortOptionState,
   mergeRuntimeInfo,
@@ -260,6 +260,7 @@ function agentFleetLabels() {
     busy: t('agent_fleet.busy'),
     thinking: t('agent_fleet.thinking'),
     idle: t('agent_fleet.idle'),
+    ...Object.fromEntries(['sleeping', 'waking', 'wake_overdue', 'auth_wait', 'rate_wait', 'reclaiming', 'switching'].map(key => [key, t(`agent_fleet.${key}`)])),
     stuck: t('agent_fleet.stuck'),
     offline: t('agent_fleet.offline'),
     unreachable: t('agent_fleet.unreachable'),
@@ -426,12 +427,22 @@ const prevToolIds = new Set();
 function mascotClass(agentState) {
   const s = normState(agentState);
   if (s === 'BUSY') return 'mascot-busy';
-  if (s === 'IDLE') return 'mascot-idle';
+  if (['IDLE', 'SLEEPING', 'WAKING', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(s)) return 'mascot-idle';
+  if (['AUTH_WAIT', 'WAKE_OVERDUE'].includes(s)) return 'mascot-stuck';
   if (s === 'OFFLINE') return 'mascot-offline';
   if (s === 'WAITING_HUMAN') return 'mascot-waiting';
   if (s === 'POSSIBLY_STUCK') return 'mascot-possibly-stuck';
   if (s === 'STUCK') return 'mascot-stuck';
   return '';
+}
+
+function renderOriginAvailability() {
+  const unavailable = originSessionUnavailable(state.dashboardState);
+  const reason = unavailable ? t('action.origin_not_running') : '';
+  for (const button of document.querySelectorAll('#observer-tab, [data-action="interrupt"], [data-action="chop-chop"]')) {
+    button.disabled = unavailable || remoteIsReadOnly() || Boolean(button.closest('.modal-body-disabled'));
+    button.title = reason;
+  }
 }
 
 function renderState() {
@@ -461,6 +472,7 @@ function renderState() {
 
   const tools = p?.running_tools || [];
 
+  renderOriginAvailability();
   renderToolFeed(tools, p);
   renderSubagents(p);
   renderAssistantMessage(p);
@@ -573,7 +585,8 @@ function renderToolFeed(tools, p) {
     fallback.hidden = true;
   } else {
     fallback.hidden = false;
-    if (s === 'OFFLINE') fallback.textContent = t('activity.offline');
+    if (['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(s)) fallback.textContent = t(`activity.${s.toLowerCase()}`);
+    else if (s === 'OFFLINE') fallback.textContent = t('activity.offline');
     else if (s === 'WAITING_HUMAN') fallback.textContent = t('activity.waiting');
     else fallback.textContent = p?.reason || t('value.unavailable');
   }
@@ -4257,6 +4270,7 @@ async function openActionsModal() {
   const modal = createActionsModal();
   modal.hidden = false;
   refreshModeStatus();
+  renderOriginAvailability();
   clearInterval(modeStatusTimer);
   modeStatusTimer = setInterval(refreshModeStatus, 2000);
 
@@ -4408,6 +4422,7 @@ function setModalBodyDisabled(disabled) {
   if (!body) return;
   body.classList.toggle('modal-body-disabled', disabled);
   body.querySelectorAll('button, select, input').forEach(el => { el.disabled = disabled; });
+  if (!disabled) renderOriginAvailability();
 }
 
 function showConfirm(text) {
@@ -4439,6 +4454,7 @@ function showConfirm(text) {
 
 async function execAction(action, body) {
   if (remoteIsReadOnly()) return false;
+  if (['interrupt', 'chop-chop'].includes(action) && originSessionUnavailable(state.dashboardState)) return false;
   if (['interrupt', 'chop-chop', 'restart-session'].includes(action)) {
     const shown = state.dashboardState;
     body = { ...body, sessionGroup: shown?.sessionGroup, runId: shown?.runId, sessionId: shown?.sessionId };

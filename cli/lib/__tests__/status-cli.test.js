@@ -12,9 +12,9 @@ const absent = { identity: { present: false }, status: { valid: false, reason: '
 const live = (ready = true, reason = null) => ({ identity: { present: true, ready, runtime: 'codex', runId: 'run', sessionId: ready ? 'session' : null },
   status: { valid: ready && !reason, reason, sampledAt: reason === 'starting' ? null : 1000, value: { state: 'idle', idle_seconds: 4 } } });
 const fixture = (overrides = {}) => ({ mode: () => ({ mode: 'multi' }), list: async () => [{ sessionGroup: 'b' }, { sessionGroup: 'a' }, { sessionGroup: 'origin' }],
-  session: async () => live(), health: () => ({ missing: true }), now: () => 2000, resolveRoot: () => {}, ...overrides });
+  session: async () => live(), health: () => ({ missing: true }), now: () => 2000, facts: async () => ({ originNeed: { inbound: 0, controls: 0, oldestAt: null } }), resolveRoot: () => {}, ...overrides });
 
-test('review P1: real text status uses the default PM2 collector without crashing', { timeout: 10000 }, t => {
+test('real text status uses the default PM2 collector without crashing', { timeout: 10000 }, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'status-text-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const zylos = path.join(root, 'zylos');
@@ -45,7 +45,7 @@ test('single/null uses only null reader and preserves absent/running states', as
   }
 });
 
-test('review P2: text status retains PM2 and disk while JSON never queries host extras', async () => {
+test('text status retains PM2 and disk while JSON never queries host extras', async () => {
   const original = console.log, previousExit = process.exitCode;
   const lines = []; console.log = line => lines.push(line);
   try {
@@ -100,4 +100,47 @@ test('CLI emits one JSON line for invalid args, reader load failure, and success
       if (code) { assert.equal(result.error.code, code); assert.deepEqual(result.error.persisted, []); assert.equal('data' in result, false); }
     }
   } finally { console.log = log; process.exitCode = previousExit; }
+});
+
+test('status adds only the projected Origin need in multi and null in single', async () => {
+  let seconds;
+  const projection = { inbound: 2, controls: 1, oldestAt: 1 };
+  const multi = await collectStatus(fixture({ facts: ({ nowSec }) => { seconds = nowSec; return { originNeed: projection, transitionOpen: true, fenced: true }; } }));
+  assert.equal(seconds, 2);
+  assert.deepEqual(multi.originNeed, projection);
+  assert.equal('transitionOpen' in multi, false);
+  const single = await collectStatus(fixture({ mode: () => ({ mode: 'single' }), facts: () => assert.fail('single must not read C4') }));
+  assert.equal(single.originNeed, null);
+});
+
+test('status JSON preserves successful envelope and observed presence on a failed need read', async () => {
+  const log = console.log;
+  const lines = []; console.log = line => lines.push(line);
+  try {
+    const result = await showStatus(['--json'], { collect: () => collectStatus(fixture({ session: () => absent,
+      facts: () => ({ originNeed: { error: { code: 'READ_FAILED', message: 'locked' } } }) })),
+      resolveRuntime: () => assert.fail('JSON does not resolve display-only target runtime') });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.origin.presence, 'not_running');
+    assert.deepEqual(result.data.originNeed, { error: { code: 'READ_FAILED', message: 'locked' } });
+    assert.equal('state' in result.data.origin, false);
+    assert.deepEqual(JSON.parse(lines[0]), result);
+  } finally { console.log = log; }
+});
+
+for (const [need, health, pattern] of [
+  [{ inbound: 0, controls: 0, oldestAt: null }, {}, /Origin is asleep/],
+  [{ inbound: 0, controls: 1, oldestAt: 999 }, {}, /Origin is waking up/],
+  [{ inbound: 1, controls: 0, oldestAt: 600 }, {}, /over 5 minutes/],
+  [{ inbound: 1, controls: 0, oldestAt: 600 }, { health: 'auth_failed' }, /codex authentication/],
+  [{ inbound: 1, controls: 0, oldestAt: 600 }, { health: 'rate_limited' }, /codex rate limit/],
+]) test(`text status interprets Origin demand ${JSON.stringify(need)} ${health.health ?? 'healthy'}`, async () => {
+  const log = console.log;
+  const lines = []; console.log = line => lines.push(line);
+  try {
+    await showStatus([], { collect: () => collectStatus(fixture({ session: () => absent, now: () => 1_000_000,
+      health: runtime => runtime === 'codex' ? health : { missing: true }, facts: () => ({ originNeed: need }) })),
+      host: () => ({ services: [], disk: null }), resolveRuntime: async group => { assert.equal(group, 'origin'); return 'codex'; } });
+    assert.match(lines.join('\n'), pattern);
+  } finally { console.log = log; }
 });

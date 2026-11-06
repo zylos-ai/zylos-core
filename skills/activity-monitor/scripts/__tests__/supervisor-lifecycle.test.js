@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SupervisorLifecycle, evictionDemand } from '../supervisor-lifecycle.js';
+import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
+import { createDelivery } from '../../../comm-bridge/scripts/router/delivery.js';
+import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
 
 const scene = (sessionGroup = 'a', extra = {}) => ({ sessionGroup, present: true, ready: true,
   runId: `run-${sessionGroup}`, runtime: 'claude', sessionId: 'session-1', createdAt: 0,
@@ -41,10 +44,11 @@ function fixture(Class = SupervisorLifecycle) {
     stop: s => { f.stops.push(s.runId); f.scenes = f.scenes.filter(x => x.runId !== s.runId); },
     intentionalStop: (group, runId) => { f.forgotten.push([group, runId]); },
     readSyncMarker: args => { f.markerReads.push(args); return f.marker; },
+    groupRunDir: group => `/isolated/${group}`,
     requests: { read: () => f.requests, remove: id => { f.requests = f.requests.filter(r => r.requestId !== id); } },
     bindTarget: s => ({ expectedRunId: s.runId }),
     diagnostic: e => f.events.push(e),
-    prompts: { PRE_RECLAIM_SYNC_PROMPT: 'prepare', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
+    prompts: { PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
       ROTATION_PROMPT: () => 'rotate', CONFIG_RECLAIM_PROMPT: () => 'config', SYNC_BACKLOG_ALERT: reader => `alert:${reader}` },
   };
   f.lifecycle = new Class(f.deps, { now: () => f.now });
@@ -183,13 +187,96 @@ test('TTL preparation accepts terminal outcomes only after idle and same-run che
   await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = 'done'; f.scenes[0].state = 'busy';
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
 });
-test('TTL excludes Origin and starting runs; TTL still must be expired at completion', async () => {
+test('TTL excludes starting runs; TTL still must be expired at completion', async () => {
   const f = fixture();
-  for (const s of [scene('origin'), scene('a', { ready: false })]) { f.scenes = [s]; await f.lifecycle.checkTtl(s, f.context); }
+  f.scenes = [scene('a', { ready: false })]; await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.controls.length, 0); assert.equal(f.fences.size, 0);
   f.scenes = [scene()]; f.unsummarized = 1; await f.lifecycle.checkTtl(f.scenes[0], f.context);
   f.controls[0].status = 'done'; f.context.configuration.hotTtlSeconds = 3000;
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
+});
+test('Origin idle TTL fences and reclaims without writing a wake control; single has no TTL', async () => {
+  const f = fixture(); f.scenes = [scene('origin')];
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const fence = f.fences.get('origin');
+  assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'run-origin');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+  assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.controls.length, 0); assert.equal(f.fences.size, 0);
+  const single = fixture(); single.context.configuration.mode = 'single'; single.scenes = [scene(null)];
+  await single.lifecycle.checkTtl(single.scenes[0], single.context);
+  assert.equal(await single.lifecycle.beginReclaim(single.scenes[0], 'ttl', single.context), false);
+  assert.equal(single.controls.length, 0); assert.equal(single.fences.size, 0);
+});
+test('Origin TTL waits every preparation control and binds both Sync kinds to the same run', async () => {
+  for (const summarized of [0, 2]) {
+    const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = summarized;
+    f.backlog = { total: 1, groups: [{ count: 1, pendingCheckpoints: 0 }] };
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.deepEqual(f.controls.map(control => control.content), summarized ? ['prepare', 'prepare origin'] : ['prepare origin']);
+    for (const control of f.controls) {
+      assert.equal(control.targetBinding.expectedRunId, 'run-origin');
+      assert.equal(control.sessionGroup, 'origin'); assert.equal(control.requireIdle, true);
+      assert.equal(control.appendAckSuffix, true); assert.equal(control.ackDeadlineAt, Math.floor((f.now + 300000) / 1000));
+    }
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
+    f.controls[0].status = 'done';
+    if (summarized) { await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0); f.controls[1].status = 'timeout'; }
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.fences.get('origin')?.reason, 'ttl');
+  }
+});
+test('Origin pending checkpoints alone require pre-reclaim Origin Sync', async () => {
+  const f = fixture(); f.scenes = [scene('origin')];
+  f.backlog = { total: 0, groups: [{ count: 0, pendingCheckpoints: 1 }] };
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.deepEqual(f.controls.map(control => control.content), ['prepare origin']); assert.equal(f.fences.size, 0);
+});
+test('partial Origin TTL preparation retries remaining Sync after all saved controls terminate', async () => {
+  const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = 1;
+  f.backlog = { total: 1, groups: [{ count: 1 }] };
+  let binds = 0;
+  f.deps.bindTarget = current => {
+    if (++binds === 2) throw Object.assign(new Error('not ready'), { code: 'TARGET_NOT_READY' });
+    return { expectedRunId: current.runId };
+  };
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.deepEqual(f.controls.map(control => control.content), ['prepare']);
+  assert.equal(f.lifecycle.ttlPreparation.get('origin').partial, true);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0); assert.equal(binds, 2);
+  f.controls[0].status = 'done'; f.unsummarized = 0;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.size, 0); assert.equal(f.lifecycle.ttlPreparation.has('origin'), false);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.deepEqual(f.controls.map(control => control.content), ['prepare', 'prepare origin']);
+  assert.equal(f.lifecycle.ttlPreparation.get('origin').partial, false);
+  f.controls[1].status = 'done';
+  await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.get('origin')?.reason, 'ttl');
+});
+test('pre-reclaim database failure leaves preparation unsaved and retries from current backlog', async () => {
+  const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = 1;
+  f.backlog = { total: 1, groups: [{ count: 1 }] };
+  const insert = f.db.insertControl;
+  f.db.insertControl = (content, options) => { if (content === 'prepare origin') throw new Error('database unavailable'); return insert(content, options); };
+  await assert.rejects(f.lifecycle.checkTtl(f.scenes[0], f.context), /database unavailable/);
+  assert.equal(f.controls.length, 1); assert.equal(f.lifecycle.ttlPreparation.has('origin'), false); assert.equal(f.fences.size, 0);
+});
+test('Origin Sync ownership and outgoing activity cancel TTL reclamation', async () => {
+  for (const change of ['marker', 'outbound', 'replacement']) {
+    const f = fixture(); f.scenes = [scene('origin')]; f.backlog = { total: 1, groups: [{ count: 1 }] };
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = 'done';
+    if (change === 'marker') f.deps.readSyncMarker = ({ kind }) => ({ held: kind === 'origin', stale: false });
+    if (change === 'outbound') { f.now++; f.lastActivity = f.now; }
+    if (change === 'replacement') f.scenes[0].runId = 'replacement';
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.fences.size, 0); assert.equal(f.lifecycle.ttlPreparation.has('origin'), false); assert.deepEqual(f.stops, []);
+  }
+});
+test('Origin never participates in eviction candidates or in-flight capacity discount', async () => {
+  const f = fixture(); f.scenes = [scene('origin')]; f.pending = [{ sessionGroup: 'waiting' }];
+  assert.equal(await f.lifecycle.beginReclaim(f.scenes[0], 'evict', f.context), false);
+  const counts = evictionDemand([], f.pending, [{ sessionGroup: 'origin', reason: 'ttl' }], 1);
+  assert.deepEqual(counts, { waiting: 1, free: 1, inflight: 0, need: 0 });
+  assert.equal((await f.lifecycle.checkEviction(f.scenes, f.context)).need, 0); assert.equal(f.fences.size, 0);
 });
 // Session activity protects working idle gaps before preparation; completed
 // preparation ignores its own Sync activity. Run for TTL/activity changes;
@@ -274,7 +361,7 @@ test('capacity eviction leaves new groups queued when every idle session is rece
 });
 test('capacity eviction still counts recent session activity during TTL preparation', async () => {
   const f = fixture(); f.scenes[0].lastActivityAt = f.now - 4000;
-  f.lifecycle.ttlPreparation.set('a', { runId: 'run-a', at: f.now - 5000, controlId: 1 });
+  f.lifecycle.ttlPreparation.set('a', { runId: 'run-a', at: f.now - 5000, controlIds: [1], partial: false });
   f.pending = [{ sessionGroup: 'waiting' }];
   const result = await f.lifecycle.checkEviction(f.scenes, f.context);
   assert.equal(result.selected, 0); assert.equal(f.fences.size, 0);
@@ -363,6 +450,67 @@ test('Origin checkpoint-only backlog uses longest wait, never new-run or context
   f.now += 23_000_000; await f.lifecycle.checkSync(f.scenes, f.context);
   assert.ok(f.controls.every(c => !c.content.startsWith('alert:')));
 });
+test('absent Origin Sync is unbound and obeys its minimum interval', async () => {
+  const f = fixture(); f.scenes = [];
+  f.backlog = { total: 51, groups: [{ count: 51, firstAt: f.now - 1 }] };
+  f.deps.observeGroup = () => { throw new Error('Origin Sync must not require a live scene'); };
+  await f.lifecycle.checkSync(f.scenes, f.context);
+  assert.deepEqual(f.markerReads, [{ runDir: '/isolated/origin', kind: 'origin', currentRunId: null }]);
+  assert.deepEqual(f.controls.map(({ content, sessionGroup, priority, appendAckSuffix, targetBinding }) =>
+    ({ content, sessionGroup, priority, appendAckSuffix, targetBinding })), [
+    { content: 'origin sync', sessionGroup: 'origin', priority: 2, appendAckSuffix: false, targetBinding: undefined },
+  ]);
+  f.now += 599999; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 1);
+  f.now += 60001; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 2);
+});
+test('Origin Sync gates skip backlog reads and recheck before writing', async () => {
+  for (const gate of ['origin', '*', 'transition', 'manual']) {
+    const f = fixture(); f.scenes = [];
+    if (gate === 'transition') f.transition = { phase: 'cutover' };
+    else if (gate === 'manual') f.requests = [{ reason: 'manual_restart' }];
+    else f.fence('ttl', gate);
+    f.db.getOriginSyncBacklog = () => { throw new Error('fenced Origin must not read backlog'); };
+    await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 0);
+  }
+  const f = fixture(); f.scenes = []; f.backlog = { total: 51, groups: [] };
+  f.deps.readSyncMarker = () => { f.fence('ttl', 'origin'); return { held: false, stale: false }; };
+  await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 0);
+});
+test('Origin Sync blocks current ownership and accepts a stale marker', async () => {
+  const f = fixture(); f.scenes = [scene('origin')];
+  f.backlog = { total: 51, groups: [{ count: 51, firstAt: f.now - 1 }] };
+  f.marker = { held: true, stale: false };
+  await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 0);
+  assert.deepEqual(f.markerReads, [{ runDir: '/isolated/origin', kind: 'origin', currentRunId: 'run-origin' }]);
+  f.now += 60000; f.marker.stale = true;
+  await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls[0].content, 'origin sync');
+});
+test('absent Origin lag alert is unbound and repeats only after six hours', async () => {
+  const f = fixture(); f.scenes = []; f.now = 50_000_000;
+  f.backlog = { total: 1, groups: [{ count: 1, firstAt: 1 }] };
+  const alerts = () => f.controls.filter(control => control.content === 'alert:origin');
+  await f.lifecycle.checkSync(f.scenes, f.context);
+  assert.equal(alerts().length, 1); assert.equal(alerts()[0].sessionGroup, 'origin');
+  assert.equal(alerts()[0].targetBinding, undefined); assert.equal(alerts()[0].appendAckSuffix, false);
+  f.now += 21_599_999; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(alerts().length, 1);
+  f.now += 60000; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(alerts().length, 2);
+});
+test('only present ready group readers produce their Sync and backlog alert', async () => {
+  for (const absent of [{ present: false }, { ready: false }]) {
+    const f = fixture(); f.now = 50_000_000; f.unsummarized = 801; f.scenes = [scene('a', absent)];
+    f.db.getOriginSyncBacklog = () => ({ total: 0, groups: [] });
+    const read = f.db.getUnsummarizedRange;
+    f.db.getUnsummarizedRange = () => { throw new Error('absent reader must not be queried'); };
+    await f.lifecycle.checkSync(f.scenes, f.context); assert.deepEqual(f.controls, []);
+    f.db.getUnsummarizedRange = read; f.scenes = [scene('a')]; f.now += 60000;
+    await f.lifecycle.checkSync(f.scenes, f.context);
+    const alert = f.controls.find(control => control.content === 'alert:a');
+    assert.equal(alert.sessionGroup, 'origin'); assert.equal(alert.targetBinding, undefined);
+    assert.ok(f.controls.some(control => control.content === 'group sync' && control.sessionGroup === 'a'));
+    f.now += 600000; await f.lifecycle.checkSync(f.scenes, f.context);
+    assert.equal(f.controls.filter(control => control.content === 'alert:a').length, 1);
+  }
+});
 test('backlog alert routes to Origin, dedupes six hours, and holds during manual restart', async () => {
   const f = fixture(); f.unsummarized = 801; f.requests = [{ reason: 'manual_restart' }];
   await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.filter(c => c.content.startsWith('alert:')).length, 0);
@@ -394,6 +542,46 @@ test('manual stops requested Origin run immediately then waits only real convers
   f.scenes = [scene('origin', { runId: 'replacement' })]; f.conversations = 0;
   f.lifecycle = new SupervisorLifecycle(f.deps, { now: () => f.now });
   await f.lifecycle.advanceManual(f.context); assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0);
+});
+test('manual restart writes an unbound wake before clearing its fence and request', async () => {
+  const f = fixture(); f.scenes = [scene('origin')];
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
+  const insert = f.db.insertControl, record = f.db.recordRunEnd, remove = f.deps.requests.remove, order = [];
+  f.db.insertControl = (content, options) => {
+    assert.ok(f.fences.has('origin')); assert.equal(f.requests.length, 1);
+    assert.equal(f.conversations, 0); assert.deepEqual(f.stops, ['run-origin']);
+    order.push('wake'); return insert(content, options);
+  };
+  f.db.recordRunEnd = (group, options) => { order.push('clear'); return record(group, options); };
+  f.deps.requests.remove = id => { order.push('remove'); return remove(id); };
+  await f.lifecycle.advanceManual(f.context);
+  assert.deepEqual(order, ['wake', 'clear', 'remove']);
+  assert.deepEqual(f.controls, [{ id: 1, content: MANUAL_WAKE_PROMPT, sessionGroup: 'origin', priority: 2, appendAckSuffix: false, status: 'pending' }]);
+});
+test('manual wake failure retains the request and fence, alerts once and retries', async () => {
+  const f = fixture(); f.scenes = [scene('origin')];
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
+  const insert = f.db.insertControl;
+  f.db.insertControl = () => { throw new Error('wake unavailable'); };
+  for (let round = 0; round < 2; round++) {
+    await assert.rejects(f.lifecycle.advanceManual(f.context), /wake unavailable/);
+    assert.equal(f.fences.get('origin').reason, 'manual_restart'); assert.equal(f.requests.length, 1);
+    assert.equal(f.controls.length, 0); assert.equal(f.events.some(event => event.event === 'manual_restart_done'), false);
+  }
+  assert.equal(f.events.filter(event => event.event === 'manual_restart_blocked').length, 1);
+  assert.deepEqual(f.stops, ['run-origin']);
+  f.db.insertControl = insert; await f.lifecycle.advanceManual(f.context);
+  assert.equal(f.controls[0].content, MANUAL_WAKE_PROMPT); assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0);
+});
+test('single manual restart completes with no Origin wake', async () => {
+  for (const present of [false, true]) {
+    const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = present ? [scene(null)] : [];
+    f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'single', expectedRunId: 'run-null' }];
+    f.db.insertControl = () => { throw new Error('single restart must not enqueue a wake'); };
+    await f.lifecycle.advanceManual(f.context);
+    assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0); assert.deepEqual(f.controls, []);
+    assert.deepEqual(f.stops, present ? ['run-null'] : []);
+  }
 });
 test('manual crash after clear removes request without recreating fence or selecting replacement', async () => {
   const f = fixture(); f.scenes = [scene('origin', { runId: 'replacement' })];
@@ -693,6 +881,93 @@ test('LRU selects the oldest activity among multiple eligible idle groups regard
     assert.equal(f.fences.get('oldest').runId, 'run-oldest');
     assert.deepEqual(f.stops, []);
   }
+});
+
+
+test('rotation binds ordinary, Origin and single prompts to the observed run', async () => {
+  for (const [mode, group] of [['multi', 'a'], ['multi', 'origin'], ['single', null]]) {
+    const f = fixture();
+    f.context.configuration.mode = mode;
+    f.scenes = [scene(group, { usagePercent: 90 })];
+    await f.lifecycle.checkRotation(f.scenes[0], f.context);
+    assert.equal(f.controls.length, 1);
+    assert.equal(f.controls[0].sessionGroup, group);
+    assert.equal(f.controls[0].targetBinding.expectedRunId, f.scenes[0].runId);
+  }
+});
+
+test('rejected runtime bindings leave rotation and TTL retryable on the next round', async () => {
+  for (const method of ['checkRotation', 'checkTtl']) {
+    const f = fixture(), reported = [];
+    f.unsummarized = 2; f.scenes[0].usagePercent = 90;
+    f.deps.reportError = cause => reported.push(cause.code);
+    f.deps.bindTarget = () => { throw Object.assign(new Error('not ready'), { code: 'TARGET_NOT_READY' }); };
+    await f.lifecycle.each(f.scenes, s => f.lifecycle[method](s, f.context));
+    assert.equal(f.controls.length, 0);
+    assert.equal(f.lifecycle.rotationSent.size, 0);
+    assert.equal(f.lifecycle.ttlPreparation.size, 0);
+    assert.deepEqual(reported, []);
+    f.deps.bindTarget = s => ({ expectedRunId: s.runId });
+    await f.lifecycle.each(f.scenes, s => f.lifecycle[method](s, f.context));
+    assert.equal(f.controls.length, 1);
+    assert.equal(f.controls[0].targetBinding.expectedRunId, f.scenes[0].runId);
+  }
+});
+
+test('binding infrastructure errors reach the lifecycle error reporter without enqueueing', async () => {
+  for (const method of ['checkRotation', 'checkTtl']) {
+    const f = fixture(), reported = [];
+    f.unsummarized = 2; f.scenes[0].usagePercent = 90;
+    f.deps.reportError = cause => reported.push(cause.code);
+    f.deps.bindTarget = () => { throw Object.assign(new Error('tmux unavailable'), { code: 'TMUX_UNAVAILABLE' }); };
+    await f.lifecycle.each(f.scenes, s => f.lifecycle[method](s, f.context));
+    assert.equal(f.controls.length, 0);
+    assert.deepEqual(reported, ['TMUX_UNAVAILABLE']);
+    assert.equal(f.lifecycle.rotationSent.size, 0);
+    assert.equal(f.lifecycle.ttlPreparation.size, 0);
+  }
+});
+
+// Boundary: real lifecycle producer, C4 persistence and delivery identity guard;
+// tmux is stubbed. Run for rotation/TTL binding changes; unrelated machine tasks may skip.
+test('persisted lifecycle prompts reject replacement runs and never count as Origin demand', async t => {
+  for (const producer of ['ttl', 'rotation']) await t.test(producer, async t => {
+    const c4 = c4Fixture(t), f = fixture();
+    const group = producer === 'ttl' ? 'a' : 'origin';
+    f.scenes = [scene(group, { usagePercent: 90 })]; f.unsummarized = 2;
+    const tmuxTarget = { serverGeneration: '1:1', sessionId: '$1', paneId: '%1' };
+    f.deps.bindTarget = s => ({ expectedRunId: s.runId, tmuxTarget });
+    f.db.insertControl = (...args) => c4.store.insertControl(...args);
+    f.db.getControlById = id => c4.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
+    await f.lifecycle[producer === 'ttl' ? 'checkTtl' : 'checkRotation'](f.scenes[0], f.context);
+    const row = c4.db.prepare('SELECT * FROM control_queue').get();
+    assert.equal(JSON.parse(row.target_binding).expectedRunId, f.scenes[0].runId);
+    assert.equal(c4.store.getOriginNeed().controls.count, 0);
+    assert.equal(c4.store.claimControl(row.id), true);
+    let sends = 0;
+    const delivery = createDelivery({
+      db: c4.store, getSessionMode: () => 'multi',
+      openTmuxConnection: async () => ({ close() {} }),
+      resolveSessionTarget: async () => ({ ...tmuxTarget, ready: true, runtime: 'claude', runId: 'replacement' }),
+      getSessionAdapter: () => ({ sendText: () => { sends++; } }),
+    }, { periodicEnabled: false });
+    await delivery.deliverControl(row); await delivery.stop();
+    assert.equal(sends, 0);
+    const ended = f.db.getControlById(row.id);
+    assert.equal(ended.status, 'timeout'); assert.equal(ended.last_error, 'STALE_TARGET');
+    if (producer === 'ttl') {
+      f.scenes[0] = scene(group, { runId: 'replacement', createdAt: f.now });
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      assert.equal(f.lifecycle.ttlPreparation.size, 0);
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      assert.equal(c4.db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 1);
+      assert.equal(f.fences.size, 0);
+      f.now += 1_800_001;
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      assert.equal(c4.db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 2);
+      assert.equal(f.lifecycle.ttlPreparation.get(group).runId, 'replacement');
+    }
+  });
 });
 
 test('completed fenced reclaims record each reason while cancelled and single paths do not', async () => {
