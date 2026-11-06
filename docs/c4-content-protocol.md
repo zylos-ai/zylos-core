@@ -47,7 +47,7 @@ All fields below are case-sensitive. Unknown envelope fields are rejected. IDs f
 | `questionSummary` | Required on questions and answers, nonempty max 500 code points. Generated/persisted as below; answer reads it from saved question, never trusts a client's replacement summary. |
 | `interrupt` | Question only: `{blockId,reason,otherInput?}`. `reason` = `confirmation` for confirmation, otherwise `input_required`; `otherInput` boolean defaults true. Must reference an open interactive block. Present together with `interruptId` and `questionSummary`, or all absent. No runtime step/stream state is invented. |
 | `action` | Answer only: original ChatWeave ActionRequest (below). |
-| `metadata` | Message: optional opaque object. Answer: exactly `{zylos:{answerId}}`, where answerId equals `action.id`. Not rendered/projected. Control: absent. |
+| `metadata` | Message: optional opaque object, maximum depth 6 including the metadata root (same counting as block data); deeper values are invalid_envelope. Answer: exactly `{zylos:{answerId}}`, where answerId equals `action.id`. Not rendered/projected. Control: absent. |
 | `control` | Control only: explicit host lifecycle record described below. |
 
 C4 row ID locates authoritative storage; messageId locates a display message; interruptId locates a question; action.id/answerId identifies one accepted user intent. The fixed answer ID path is **`metadata.zylos.answerId`**. Reconciliation parses the envelope at this path after scoping rows by original group, channel and inbound direction, never full-text contains. No new C4 columns.

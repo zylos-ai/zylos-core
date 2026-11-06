@@ -146,3 +146,159 @@ test('schema rejects malformed charts destructive actions and ambiguous question
   single.blocks.pop(); single.interrupt.blockId = 'missing';
   assert.equal(parseC4Content(encode(single)).kind, 'invalid');
 });
+
+test('parse reasons preserve precedence at byte JSON suffix and schema boundaries', () => {
+  assert.deepEqual(parseC4Content(CONTENT_PREFIX + '{' + 'x'.repeat(MAX_CONTENT_BYTES)),
+    { kind: 'invalid', reason: 'content_too_large' });
+  const invalidEnvelope = { ...fixtures.valid[0].envelope, version: 2 };
+  assert.deepEqual(parseC4Content(encode(invalidEnvelope) + 'garbage'), { kind: 'invalid', reason: 'invalid_suffix' });
+  assert.deepEqual(parseC4Content(encode(invalidEnvelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+});
+
+test('message answer metadata and control reject unknown fields', () => {
+  const message = structuredClone(fixtures.valid.find(row => row.name === 'markdown').envelope);
+  message.extra = true;
+  assert.deepEqual(parseC4Content(encode(message)), { kind: 'invalid', reason: 'invalid_envelope' });
+  const answer = structuredClone(fixtures.valid.find(row => row.name === 'answer_cancel').envelope);
+  answer.metadata.extra = true;
+  assert.deepEqual(parseC4Content(encode(answer)), { kind: 'invalid', reason: 'invalid_envelope' });
+  const control = structuredClone(fixtures.valid.find(row => row.name === 'stop').envelope);
+  control.control.extra = true;
+  assert.deepEqual(parseC4Content(encode(control)), { kind: 'invalid', reason: 'invalid_envelope' });
+});
+
+test('suppression suffix requires nonempty fields and permits intervening JSON whitespace', () => {
+  const raw = fixtures.valid[0].content;
+  const header = '\n\n[C4] Status notification suppressed by cooldown while health=';
+  assert.deepEqual(parseC4Content(raw + header + ' reason=quota.'), { kind: 'invalid', reason: 'invalid_suffix' });
+  assert.deepEqual(parseC4Content(raw + header + 'unavailable reason=.'), { kind: 'invalid', reason: 'invalid_suffix' });
+  assert.equal(parseC4Content(raw + ' \t\r\n' + header + 'temporarily unavailable reason=quota exceeded.').kind, 'envelope');
+});
+
+test('suppression scanning stays bounded on a maximum-sized repetitive tail', t => {
+  const start = CONTENT_PREFIX + '{}' + '\n\n[C4] Status notification suppressed by cooldown while health=';
+  const length = MAX_CONTENT_BYTES - Buffer.byteLength(start);
+  const tail = ' reason='.repeat(Math.ceil(length / ' reason='.length)).slice(0, length);
+  const content = start + tail;
+  assert.equal(Buffer.byteLength(content), MAX_CONTENT_BYTES);
+  const before = performance.now();
+  const result = parseC4Content(content);
+  const elapsed = performance.now() - before;
+  assert.deepEqual(result, { kind: 'invalid', reason: 'invalid_suffix' });
+  assert.ok(elapsed < 200, `maximum repetitive tail took ${elapsed.toFixed(2)}ms`);
+  t.diagnostic(`maximum repetitive tail: ${elapsed.toFixed(3)}ms`);
+});
+
+test('question reasons match their block type and referenced blocks must remain open', () => {
+  for (const [name, reason] of [['single', 'confirmation'], ['confirmation', 'input_required']]) {
+    const question = structuredClone(fixtures.valid.find(row => row.name === name).envelope);
+    question.interrupt.reason = reason;
+    assert.deepEqual(parseC4Content(encode(question)), { kind: 'invalid', reason: 'invalid_envelope' });
+  }
+  const question = structuredClone(fixtures.valid.find(row => row.name === 'single').envelope);
+  question.blocks[0].data.state = { status: 'expired' };
+  assert.deepEqual(parseC4Content(encode(question)), { kind: 'invalid', reason: 'invalid_envelope' });
+});
+
+test('multiple choice enforces both saved lower and upper selection bounds', () => {
+  const fixture = fixtures.actions.find(row => row.name === 'multiple_select');
+  const question = structuredClone(fixture.question), action = structuredClone(fixture.action);
+  question.blocks[0].data.maxSelect = 1;
+  assert.equal(validateAnswer(action, question), false);
+  question.blocks[0].data.maxSelect = 3;
+  question.blocks[0].data.minSelect = 2;
+  action.payload.selected = ['a'];
+  assert.equal(validateAnswer(action, question), false);
+  action.payload.selected = ['a', 'b'];
+  assert.equal(validateAnswer(action, question), true);
+});
+
+test('block counts and fallback Unicode limits include their exact maximum', () => {
+  const envelope = structuredClone(fixtures.valid[0].envelope);
+  envelope.blocks = Array.from({ length: 64 }, (_, index) => ({ id: `block${index}`, type: 'markdown', schemaVersion: 1, data: { text: '' } }));
+  assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
+  envelope.blocks.push({ id: 'block64', type: 'markdown', schemaVersion: 1, data: { text: '' } });
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+  envelope.blocks = [];
+  envelope.fallbackText = '😀'.repeat(16000);
+  assert.ok(Buffer.byteLength(encode(envelope)) < MAX_CONTENT_BYTES);
+  assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
+  envelope.fallbackText += '😀';
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+});
+
+test('markdown UTF8 limit rejects the first multibyte character beyond its bound', () => {
+  const envelope = structuredClone(fixtures.valid[0].envelope);
+  envelope.blocks[0].data.text = '中'.repeat(10922) + 'aa';
+  assert.equal(Buffer.byteLength(envelope.blocks[0].data.text), 32768);
+  assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
+  envelope.blocks[0].data.text = '中'.repeat(10923);
+  assert.equal(Buffer.byteLength(envelope.blocks[0].data.text), 32769);
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+});
+
+const nestedObject = depth => {
+  let value = 'leaf';
+  for (let level = 1; level < depth; level++) value = { nested: value };
+  return value;
+};
+test('block data accepts depth six and rejects depth seven', () => {
+  const envelope = structuredClone(fixtures.valid[0].envelope);
+  const block = structuredClone(fixtures.valid.find(row => row.name === 'form').envelope.blocks[0]);
+  block.data.state = { status: 'resolved', resolvedAt: '2026-11-07T00:00:00Z', values: { value: nestedObject(3) } };
+  envelope.blocks = [block];
+  assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
+  block.data.state.values.value = nestedObject(4);
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+});
+
+test('a single block accepts five thousand JSON nodes but rejects the next node', () => {
+  const envelope = structuredClone(fixtures.valid[0].envelope);
+  const block = { id: 'text', type: 'markdown', schemaVersion: 1, data: { text: 'x' }, metadata: { host: { nodes: Array(4991).fill(null) } } };
+  const nodeCount = value => 1 + (value !== null && typeof value === 'object' ? Object.values(value).reduce((sum, child) => sum + nodeCount(child), 0) : 0);
+  assert.equal(nodeCount(block), 5000);
+  envelope.blocks = [block];
+  assert.ok(Buffer.byteLength(encode(envelope)) < MAX_CONTENT_BYTES);
+  assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
+  block.metadata.host.nodes.push(null);
+  assert.equal(nodeCount(block), 5001);
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+});
+
+test('hook context rejects empty values and delivery distinguishes null from missing', () => {
+  const hook = structuredClone(fixtures.hookInputs[0].value);
+  hook.context.runtime = '';
+  assert.equal(validateHookInput(hook), false);
+  const delivery = structuredClone(fixtures.delivery[0]);
+  delivery.packet.endpoint_id = null;
+  delivery.row.endpoint_id = null;
+  assert.equal(validateDeliveryPacket(delivery.packet, delivery.row), true);
+  delete delivery.row.endpoint_id;
+  assert.equal(validateDeliveryPacket(delivery.packet, delivery.row), false);
+});
+
+test('optional constructor form field is absent unless the payload owns it', () => {
+  const fixture = fixtures.actions.find(row => row.name === 'form_submit');
+  const question = structuredClone(fixture.question), action = structuredClone(fixture.action);
+  question.blocks[0].data.fields.push({ key: 'constructor', label: 'Constructor', type: 'text' });
+  assert.equal(validateAnswer(action, question), true);
+  action.payload.values.constructor = 'provided';
+  assert.equal(validateAnswer(action, question), true);
+  action.payload.values.constructor = 123;
+  assert.equal(validateAnswer(action, question), false);
+});
+
+test('message metadata accepts depth six and rejects depth seven and deeply nested arrays', () => {
+  const envelope = structuredClone(fixtures.valid[0].envelope);
+  envelope.metadata = nestedObject(6);
+  const accepted = parseC4Content(encode(envelope));
+  assert.equal(accepted.kind, 'envelope');
+  assert.doesNotThrow(() => JSON.stringify(accepted.envelope));
+  assert.doesNotThrow(() => structuredClone(accepted.envelope));
+  envelope.metadata = nestedObject(7);
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+  const prefix = CONTENT_PREFIX + '{"version":1,"kind":"message","messageId":"deep_metadata","fallbackText":"text","blocks":[],"metadata":{"nested":';
+  const deep = prefix + '['.repeat(32000) + '0' + ']'.repeat(32000) + '}}';
+  assert.ok(Buffer.byteLength(deep) < MAX_CONTENT_BYTES);
+  assert.deepEqual(parseC4Content(deep), { kind: 'invalid', reason: 'invalid_envelope' });
+});

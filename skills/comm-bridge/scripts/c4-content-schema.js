@@ -130,6 +130,17 @@ function dataLimits(value) {
   }
   return byteLength(JSON.stringify(value)) <= 65536;
 }
+function withinMetadataDepth(value) {
+  const stack = [{ value, depth: 1 }];
+  while (stack.length) {
+    const item = stack.pop();
+    if (item.depth > 6) return false;
+    if (object(item.value) || Array.isArray(item.value)) {
+      for (const child of Object.values(item.value)) stack.push({ value: child, depth: item.depth + 1 });
+    }
+  }
+  return true;
+}
 function boundedBlockNodes(block) {
   const queue = [block]; let nodes = 0;
   while (queue.length) {
@@ -165,7 +176,7 @@ function validEnvelope(envelope) {
     if (!keys(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'blocks'], ['metadata', 'interruptId', 'questionSummary', 'interrupt'])
       || !Array.isArray(envelope.blocks) || envelope.blocks.length > 64 || !envelope.blocks.every(validBlock)
       || new Set(envelope.blocks.map(block => block.id)).size !== envelope.blocks.length
-      || (own(envelope, 'metadata') && !object(envelope.metadata))) return false;
+      || (own(envelope, 'metadata') && (!object(envelope.metadata) || !withinMetadataDepth(envelope.metadata)))) return false;
     const questionKeys = ['interruptId', 'questionSummary', 'interrupt'];
     if (questionKeys.every(key => !own(envelope, key))) return true;
     if (!questionKeys.every(key => own(envelope, key)) || !id(envelope.interruptId) || !string(envelope.questionSummary, 1, 500)
@@ -227,8 +238,12 @@ export function parseC4Content(content) {
     try { envelope = JSON.parse(content.slice(start, end)); }
     catch { return { kind: 'invalid', reason: 'invalid_json' }; }
     const tail = content.slice(end);
-    const suffixMatch = /^[ \t\r\n]*(\n\n\[C4\] Status notification suppressed by cooldown while health=[^\n]+ reason=[^\n]+\.)[ \t\r\n]*$/.exec(tail);
-    if (!whitespace.test(tail) && !suffixMatch) return { kind: 'invalid', reason: 'invalid_suffix' };
+    const suffixMatch = /^[ \t\r\n]*(\n\n\[C4\] Status notification suppressed by cooldown while health=([^\n]*)\.)[ \t\r\n]*$/.exec(tail);
+    if (!whitespace.test(tail)) {
+      const fields = suffixMatch?.[2];
+      const separator = fields?.indexOf(' reason=', 1) ?? -1;
+      if (separator < 1 || separator + ' reason='.length >= fields.length) return { kind: 'invalid', reason: 'invalid_suffix' };
+    }
     if (!validEnvelope(envelope)) return { kind: 'invalid', reason: 'invalid_envelope' };
     return { kind: 'envelope', envelope, suffix: suffixMatch?.[1] ?? '' };
   } catch { return { kind: 'invalid', reason: 'invalid_envelope' }; }
@@ -262,7 +277,7 @@ export function validateAnswer(action, questionEnvelope) {
     }
     if (block.type === 'confirmation') return ['confirm', 'cancel'].includes(payload.outcome);
     if (block.type === 'form_intent') return Object.keys(payload.values).every(key => data.fields.some(field => field.key === key))
-      && data.fields.every(field => validFieldValue(field, payload.values[field.key]));
+      && data.fields.every(field => validFieldValue(field, own(payload.values, field.key) ? payload.values[field.key] : undefined));
     return false;
   } catch { return false; }
 }
