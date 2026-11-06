@@ -1,11 +1,12 @@
-import { createViewMode, observerNavEntry } from './view-mode.js?v=85';
-import { boardController, renderBoard } from './board.js?v=85';
-import { createBoardSearch } from './board-search.js?v=85';
-import { instanceStrip } from './instance-strip.js?v=85';
-import { renderAttention } from './attention-bar.js?v=85';
-import { createGroupDetail } from './detail.js?v=85';
-import { loadNamePrompt, renderAutoName } from './auto-name.js?v=85';
-import { element } from './plain-text.js?v=85';
+import { createViewMode, observerNavEntry } from './view-mode.js?v=87';
+import { boardController, renderBoard } from './board.js?v=87';
+import { createBoardSearch } from './board-search.js?v=87';
+import { instanceStrip } from './instance-strip.js?v=87';
+import { renderAttention } from './attention-bar.js?v=87';
+import { createGroupDetail } from './detail.js?v=87';
+import { loadNamePrompt, renderAutoName } from './auto-name.js?v=87';
+import { createHostPanel } from './host-panel.js?v=87';
+import { element } from './plain-text.js?v=87';
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
   endpoint = path => path, identity = () => endpoint('/api/workbench/groups'), openSettings = () => {},
@@ -13,13 +14,13 @@ export function mountWorkbench({ document = globalThis.document, window = global
   writable = () => true, onMemory = () => {},
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
   const board = document.querySelector('#wb-board');
-  if (!board) return { openGroup: async () => {}, destroy() {} };
+  if (!board) return { openGroup: async () => {}, setViewDetail() {}, destroy() {} };
   const mode = createViewMode({ storage, document });
   const searchInput = document.querySelector('#wb-search');
   const rangeInput = document.querySelector('#wb-range');
   const toggle = document.querySelector('#wb-detail-toggle');
   const nav = document.querySelector('#observer-tab');
-  let groupDetail = null, nameRequest = null;
+  let groupDetail = null, hostPanel = null, nameRequest = null;
   const nameButton = document.querySelector('#wb-auto-name');
   const nameDialog = document.querySelector('#wb-auto-name-dialog');
   let snapshot = null, searchRows = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
@@ -57,7 +58,8 @@ export function mountWorkbench({ document = globalThis.document, window = global
   function redraw() {
     syncNav();
     groupDetail?.setViewDetail();
-    document.querySelector('#wb-side')?.setAttribute('aria-label', t('wb.detail.title'));
+    hostPanel?.setViewDetail();
+    if (!hostPanel?.active) document.querySelector('#wb-side')?.setAttribute('aria-label', t('wb.detail.title'));
     if (nameButton) {
       nameButton.textContent = t('wb.name.auto');
       nameButton.disabled = !writable();
@@ -81,13 +83,13 @@ export function mountWorkbench({ document = globalThis.document, window = global
       attention.append(element(document, 'p', t('wb.transition') + ' · ' + transition.phase, 'wb-transition'));
     }
     if (!snapshot) return;
-    instanceStrip(document.querySelector('#wb-instance'), snapshot, { document, t, cost, level: mode.detailLevel() });
+    instanceStrip(document.querySelector('#wb-instance'), snapshot, { document, t, costSummary: cost, onHost: () => hostPanel.open(), level: mode.detailLevel() });
     const fresh = new Map(snapshot.rows.map(row => [row.sessionGroup, row]));
     const rows = searchRows?.map(row => fresh.get(row.sessionGroup) ?? row) ?? snapshot.rows;
     renderBoard(board, snapshot, {
       rows, query: search.query(), activity, document, t, level: mode.detailLevel(),
       onSearch: () => searchInput.focus(),
-      onSelect: row => groupDetail?.open(row, snapshot),
+      onSelect: row => { hostPanel.close(); return groupDetail?.open(row, snapshot); },
     });
   }
   const search = createBoardSearch({
@@ -109,6 +111,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     if (owner === identity()) return false;
     owner = identity();
     groupDetail?.close();
+    hostPanel?.close();
     nameRequest?.abort();
     if (nameDialog) { nameDialog.hidden = true; nameDialog.replaceChildren(); }
     controller.invalidate();
@@ -138,6 +141,8 @@ export function mountWorkbench({ document = globalThis.document, window = global
     detail: () => mode.detailLevel(), isVisible: visible, onMemory,
     onRename: () => controller.refresh(),
   });
+  hostPanel = createHostPanel({ root: document.querySelector('#wb-side'), document, t, read, identity,
+    detail: () => mode.detailLevel(), onOpen: () => groupDetail.close() });
   const autoName = async () => {
     if (!writable() || !nameDialog) return;
     nameRequest?.abort();
@@ -168,12 +173,12 @@ export function mountWorkbench({ document = globalThis.document, window = global
     visible,
     fetchSnapshot: async () => {
       const [groups, expense] = await Promise.allSettled([
-        read('/api/workbench/groups'), read('/api/metrics/aggregate?metric=cost&period=today'),
+        read('/api/workbench/groups'), read('/api/workbench/usage?summary=cost'),
       ]);
       if (groups.status !== 'fulfilled') throw groups.reason;
       return {
         snapshot: groups.value,
-        cost: expense.status === 'fulfilled' ? expense.value.value : null,
+        cost: expense.status === 'fulfilled' ? expense.value.costSummary : null,
       };
     },
     onSnapshot: value => {
@@ -221,6 +226,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   };
   const visibility = () => {
     if (document.visibilityState === 'visible') controller.refresh();
+    else hostPanel.close();
   };
   const observerClick = event => {
     const entry = observerEntry();
@@ -245,6 +251,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     const active = visible();
     syncNav();
     if (active && (changed || !previousVisible)) controller.refresh();
+    if (!active) hostPanel.close();
     previousVisible = active;
   }) : null;
   if (nav) observer?.observe(nav, { attributes: true, attributeFilter: ['hidden'] });
@@ -261,6 +268,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     stopped = true;
     controller.stop();
     groupDetail.destroy();
+    hostPanel.destroy();
     nameRequest?.abort();
     nameButton?.removeEventListener('click', autoName);
     clearInterval(modeTimer);
@@ -277,9 +285,11 @@ export function mountWorkbench({ document = globalThis.document, window = global
     window.removeEventListener('popstate', visibility);
   }
   return {
+    setViewDetail: redraw,
     openGroup(key) {
       if (stopped) return Promise.resolve();
       resetOwner();
+      hostPanel.close();
       return groupDetail.open(key, snapshot ?? { rows: [], listKnown: false });
     },
     destroy,

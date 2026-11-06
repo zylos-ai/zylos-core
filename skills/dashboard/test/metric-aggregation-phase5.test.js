@@ -341,7 +341,8 @@ for (const runtime of ['claude', 'codex']) test(`MetricResolver uses current ${r
   let account = { runtime, value: { [five]: makeWindow(73, future), [seven]: makeWindow(21, future) } };
   const resolver = new MetricResolver({ latestMetric() { assert.fail('account limits must not query historical metrics'); } },
     { statusline: { getAccountUsage: () => account } }, { runtime: runtime === 'claude' ? 'codex' : 'claude' });
-  for (const [metric, expected] of [['rate_limit', 73], ['rate_limit_7d', 21]]) {
+  assert.equal(resolver.resolve('rate_limit').fallback_reason, 'Unknown metric: rate_limit');
+  for (const [metric, expected] of [['rate_limit_7d', 21]]) {
     const result = resolver.resolve(metric);
     assert.equal(result.value, expected);
     assert.equal(result.runtime, runtime, 'live reader runtime wins over baseline config');

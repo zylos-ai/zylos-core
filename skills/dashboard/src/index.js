@@ -33,7 +33,7 @@ import { ConversationCollector } from './lib/collectors/conversation-collector.j
 import { UsageTranscripts } from './lib/collectors/usage-transcripts.js';
 import { CodexRolloutCollector } from './lib/collectors/codex-rollout-collector.js';
 import { StateEngine } from './lib/state-engine.js';
-import { MetricResolver, rateLimitWindowExpired } from './lib/metric-resolver.js';
+import { MetricResolver } from './lib/metric-resolver.js';
 import { resolveAggregateValue } from './lib/metric-aggregate.js';
 import { runMetricMaintenance } from './lib/metric-maintenance.js';
 import { EventLoopMonitor } from './lib/event-loop-monitor.js';
@@ -61,6 +61,9 @@ import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
 import { createMemoryBacklog } from './lib/workbench/memory-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
+import { usageSeries } from './lib/workbench/usage-series.js';
+import { hostSeries } from './lib/workbench/host-series.js';
+import { costRows, costSummary, usageBounds } from './lib/workbench/cost-query.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
 import { searchTerm } from './lib/workbench/group-search.js';
 import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-snapshot.js';
@@ -454,23 +457,6 @@ const scheduleReader = createScheduleRead({ zylosDir: config.zylosDir, scheduleT
   getSnapshot: () => workbench.getSnapshot() });
 const scheduleWriter = createScheduleWrite({ zylosDir: config.zylosDir, scheduleTz });
 
-// Rate-limit metric values arrive either as a plain number or as an object
-// keyed by window (same variants the single-agent page handles).
-function rateLimitPct(metricName) {
-  try {
-    const resolved = metricResolver.resolve(metricName);
-    const v = resolved.value;
-    if (v == null) return null;
-    if (rateLimitWindowExpired(resolved.dimensions, metricName)) return null;
-    const n = typeof v === 'object'
-      ? Number(v['5h'] ?? v.five_hour ?? v.short ?? v['7d'] ?? v.seven_day ?? v.value)
-      : Number(v);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
-}
-
 function buildApiStatePayload() {
   const stateData = coreState.getState();
   // Include the agent's deterministic identity color/hue so the single-agent
@@ -483,7 +469,6 @@ function buildApiStatePayload() {
   const usageObservation = coreState.getUsageObservation();
   const usage = usageObservation.valid ? usageObservation.value : null;
   stateData.context_pct = usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null);
-  stateData.rate_limit_pct = coreState.accountUsage?.five_hour?.used_percentage ?? coreState.accountUsage?.fiveHour?.usedPercentage ?? null;
   stateData.rate_limit_7d_pct = coreState.accountUsage?.seven_day?.used_percentage ?? coreState.accountUsage?.sevenDay?.usedPercentage ?? null;
   Object.assign(stateData, getCostTiers());
   return stateData;
@@ -1073,8 +1058,8 @@ function periodBounds(period, tz, stateEngine) {
     return sessionId ? { sessionId, until: now } : null;
   }
   if (period === 'today') return dayBoundariesUTC(tz);
-  if (period === '7d') return dayBoundariesUTC(tz, 7);
-  if (period === '30d') return dayBoundariesUTC(tz, 30);
+  if (period === '7d') return usageBounds({ range: '7d', tz });
+  if (period === '30d') return usageBounds({ range: '30d', tz });
   return undefined;
 }
 
@@ -1170,6 +1155,20 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/workbench/usage' || pathname === '/api/workbench/host') {
+    try {
+      const range = url.searchParams.get('range') || undefined;
+      const data = pathname.endsWith('/usage')
+        ? url.searchParams.get('summary') === 'cost'
+          ? { costSummary: costSummary(store, { tz: process.env.TZ }) }
+          : usageSeries(store, c4Reader, { range, tz: process.env.TZ,
+            since: url.searchParams.get('since'), until: url.searchParams.get('until') })
+        : hostSeries(store, { range, pm2Data: pm2Collector.getLatestPM2Data() });
+      sendJson(res, 200, data);
+    } catch (error) { workbenchFailure(res, error); }
+    return true;
+  }
+
   if (pathname === '/api/workbench/name-prompt') {
     try {
       const todo = await displayNames.listNames({ unnamed: true, activeSinceMs: 3 * 86400000 });
@@ -1188,17 +1187,15 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/workbench/pricing') {
     try {
-      const since = new Date(Date.now() - 7 * 86400000).toISOString();
-      const models = store.db.prepare(`SELECT runtime, json_extract(dimensions, '$.model') AS model,
-        SUM(json_extract(dimensions, '$.cost')) AS cost FROM metric_points
-        WHERE metric_name='usage_event' AND timestamp >= ?
-        GROUP BY runtime, model`).all(since);
+      const bounds = usageBounds({ range: '7d', tz: process.env.TZ });
+      const models = costRows(store, { ...bounds, bucket: 'total', byModel: true })
+        .map(({ runtime, model, value }) => ({ runtime, model, cost: value }));
       const unmatched = store.db.prepare(`SELECT runtime, json_extract(dimensions, '$.model') AS model,
         SUM(COALESCE(json_extract(dimensions, '$.total_input'), 0) + COALESCE(json_extract(dimensions, '$.output'), 0)) AS tokens
-        FROM metric_points WHERE metric_name='usage_event' AND timestamp >= ?
+        FROM metric_points WHERE metric_name='usage_event' AND timestamp BETWEEN ? AND ?
         AND json_extract(dimensions, '$.cost') IS NULL
         AND (COALESCE(json_extract(dimensions, '$.total_input'), 0) > 0 OR COALESCE(json_extract(dimensions, '$.output'), 0) > 0)
-        GROUP BY runtime, model`).all(since);
+        GROUP BY runtime, model`).all(bounds.since, bounds.until);
       sendJson(res, 200, { models, unmatched });
     } catch { sendJson(res, 500, { error: 'pricing_unreadable' }); }
     return true;
@@ -1338,11 +1335,15 @@ async function handleApi(req, res, pathname, url) {
       return true;
     }
     let result;
-    if (['context_pct', 'rate_limit', 'rate_limit_7d'].includes(metricName)) {
+    if (metricName === 'rate_limit') {
+      sendJson(res, 404, { error: 'unknown_metric' });
+      return true;
+    }
+    if (['context_pct', 'rate_limit_7d'].includes(metricName)) {
       await coreState.refresh();
       const current = buildApiStatePayload();
       const usage = coreState.getUsageObservation();
-      const value = current[{ context_pct: 'context_pct', rate_limit: 'rate_limit_pct', rate_limit_7d: 'rate_limit_7d_pct' }[metricName]];
+      const value = current[{ context_pct: 'context_pct', rate_limit_7d: 'rate_limit_7d_pct' }[metricName]];
       result = { value, selected_source: 'core-session-reader', freshness: usage.sampledAt ? (Date.now() - usage.sampledAt) / 1000 : null, confidence: value === null ? 'none' : 'actual', alternatives: [], fallback_reason: value === null ? usage.reason || 'missing' : null };
     } else result = metricResolver.resolve(metricName);
     sendJson(res, 200, result);

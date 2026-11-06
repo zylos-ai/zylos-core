@@ -87,7 +87,7 @@ test('Codex duplicate usage fills only empty group attribution and retains charg
   assert.equal(row.dimensions.cost, 0.5);
 });
 
-function collectRateLimitDimensions(rateLimits, expectedWritten = 1) {
+function collectRateLimitDimensions(rateLimits, expectedWritten = 1, info = { model_context_window: 200000 }) {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-rate-limits.jsonl');
   const lines = [
@@ -102,7 +102,7 @@ function collectRateLimitDimensions(rateLimits, expectedWritten = 1) {
       payload: {
         type: 'token_count',
         rate_limits: rateLimits,
-        info: { model_context_window: 200000 }
+        info
       }
     }
   ];
@@ -226,7 +226,7 @@ test('CodexRolloutCollector ingests rollout fixture metrics from hook-derived pa
   assert.equal(tokens[0].dimensions.uncached_input, 9000);
   assert.equal(tokens[0].dimensions.runtime_semantics, 'openai_input_includes_cached');
   assert.equal(tokens[0].dimensions.context_pct, 6);
-  assert.equal(tokens[0].dimensions.rate_limit, 37.5);
+  assert.equal(tokens[0].dimensions.rate_limit, undefined);
   assert.equal(tokens[0].dimensions.rate_limit_7d, 12.25);
   const fixtureLines = fixtureText.split('\n');
   const tokenOffset = Buffer.byteLength(`${fixtureLines[0]}\n${fixtureLines[1]}\n`, 'utf8');
@@ -290,16 +290,12 @@ test('CodexRolloutCollector routes a primary-only seven-day limit by window dura
   assert.equal(dimensions.rate_limit_7d_resets_at, 1780083600);
 });
 
-test('CodexRolloutCollector routes a primary-only five-hour limit by window duration', () => {
+test('CodexRolloutCollector ignores a primary-only five-hour limit', () => {
   const dimensions = collectRateLimitDimensions({
     primary: { used_percent: 37.5, window_minutes: 300, resets_at: 1779516000 }
-  });
+  }, 0, {});
 
-  assert.equal(dimensions.rate_limit, 37.5);
-  assert.equal(dimensions.rate_limit_window_minutes, 300);
-  assert.equal(dimensions.rate_limit_resets_at, 1779516000);
-  assert.equal(dimensions.rate_limit_7d, undefined);
-  assert.equal(dimensions.rate_limit_7d_resets_at, undefined);
+  assert.equal(dimensions, null);
 });
 
 test('CodexRolloutCollector ignores primary and secondary roles when routing limits', () => {
@@ -308,8 +304,8 @@ test('CodexRolloutCollector ignores primary and secondary roles when routing lim
     secondary: { used_percent: 37.5, window_minutes: 300, resets_at: 1779516000 }
   });
 
-  assert.equal(dimensions.rate_limit, 37.5);
-  assert.equal(dimensions.rate_limit_window_minutes, 300);
+  assert.equal(dimensions.rate_limit, undefined);
+  assert.equal(dimensions.rate_limit_window_minutes, undefined);
   assert.equal(dimensions.rate_limit_7d, 12.25);
   assert.equal(dimensions.rate_limit_7d_window_minutes, 10080);
 });
@@ -826,7 +822,8 @@ test('MetricResolver does not fall back to historical rollout account data', () 
 
   assert.equal(rate.value, null);
   assert.equal(rate.selected_source, null);
-  assert.equal(rate.dimensions.rate_limit_resets_at, null);
+  assert.equal(rate.dimensions, undefined);
+  assert.equal(rate.fallback_reason, 'Unknown metric: rate_limit');
 
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });

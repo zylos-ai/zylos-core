@@ -79,11 +79,6 @@ function extractMetrics(data) {
     dimensions.session_cost = data.cost.total_cost_usd;
   }
 
-  if (data.rate_limits?.five_hour?.used_percentage != null) {
-    dimensions.rate_limit = data.rate_limits.five_hour.used_percentage;
-    if (data.rate_limits.five_hour.resets_at != null) dimensions.rate_limit_resets_at = data.rate_limits.five_hour.resets_at;
-  }
-
   if (data.rate_limits?.seven_day?.used_percentage != null) {
     dimensions.rate_limit_7d = data.rate_limits.seven_day.used_percentage;
     if (data.rate_limits.seven_day.resets_at != null) dimensions.rate_limit_7d_resets_at = data.rate_limits.seven_day.resets_at;

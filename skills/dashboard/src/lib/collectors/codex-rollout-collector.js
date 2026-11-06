@@ -384,7 +384,7 @@ export class CodexRolloutCollector {
     }
 
     const hasUsage = totalInput > 0 || tokenDims.output > 0 || tokenDims.reasoning > 0;
-    const hasCapacity = tokenDims.context_pct != null || tokenDims.rate_limit != null || tokenDims.rate_limit_7d != null;
+    const hasCapacity = tokenDims.context_pct != null || tokenDims.rate_limit_7d != null;
     if (!hasUsage && !hasCapacity) return 0;
 
     return this._insertUsageEventOnce({
@@ -396,30 +396,6 @@ export class CodexRolloutCollector {
       metric_value: totalInput,
       dimensions: tokenDims,
       source: 'jsonl_usage',
-      confidence: 'actual'
-    });
-  }
-
-  _ingestRateLimit(limit, metricName, timestamp, mapping, position = {}) {
-    if (!limit || typeof limit !== 'object') return 0;
-    const value = numberOrNull(limit.percent_used ?? limit.usage_pct ?? limit.used_percent);
-    if (value == null) return 0;
-    const eventId = rolloutPositionId(metricName, mapping, position);
-    return this._insertMetricOnce({
-      timestamp,
-      runtime: 'codex',
-      session_id: mapping.session_id,
-      session_group: mapping.session_group ?? null,
-      metric_name: metricName,
-      metric_value: value,
-      dimensions: {
-        event_id: eventId,
-        window_minutes: limit.window_minutes ?? null,
-        resets_at: limit.resets_at ?? null,
-        rollout_offset: position.byteOffset ?? null,
-        rollout_line: position.lineIndex ?? null
-      },
-      source: 'rollout',
       confidence: 'actual'
     });
   }
@@ -988,11 +964,7 @@ function applyRateLimitDimensions(dimensions, rateLimits) {
     const rate = rateLimitDimensions(limit);
     if (!rate) continue;
 
-    if (Number(rate.window_minutes) === 300) {
-      dimensions.rate_limit = rate.value;
-      dimensions.rate_limit_window_minutes = rate.window_minutes;
-      dimensions.rate_limit_resets_at = rate.resets_at;
-    } else if (Number(rate.window_minutes) === 10080) {
+    if (Number(rate.window_minutes) === 10080) {
       dimensions.rate_limit_7d = rate.value;
       dimensions.rate_limit_7d_window_minutes = rate.window_minutes;
       dimensions.rate_limit_7d_resets_at = rate.resets_at;

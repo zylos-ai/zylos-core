@@ -1,16 +1,17 @@
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=85';
-import { createPricingPanel } from './wb/settings-pricing.js?v=85';
-import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=85';
-import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=85';
-import { renderVersion } from './wb/settings-version.js?v=85';
-import { mountWorkbench } from './wb/shell.js?v=85';
-import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=86';
-import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=85';
-import { mountSchedule } from './wb/schedule.js?v=85';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=87';
+import { createPricingPanel } from './wb/settings-pricing.js?v=87';
+import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=87';
+import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=87';
+import { renderVersion } from './wb/settings-version.js?v=87';
+import { mountWorkbench } from './wb/shell.js?v=87';
+import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=87';
+import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=87';
+import { mountSchedule } from './wb/schedule.js?v=87';
+import { createUsagePage } from './wb/usage.js?v=87';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { pct, resolveCpuDisplay } from './gauge-utils.js';
-import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=85';
+import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
 import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import {
@@ -162,6 +163,8 @@ function initTheme(theme) {
   stopTheme?.();
   stopTheme = observeTheme(selected, value => {
     document.documentElement.dataset.theme = value;
+    usagePage?.setViewDetail();
+    workbench?.setViewDetail();
   });
   try { localStorage.setItem(THEME_KEY, selected); } catch {}
   const button = document.querySelector('#wb-theme-toggle');
@@ -2510,6 +2513,11 @@ function scheduleSseReconnect() {
 }
 
 // ─── Tabs ───
+let usagePage = null, workbench = null;
+function refreshUsage() {
+  if (activeTabName() === 'trends' && !$('#agent-detail')?.hidden) return usagePage?.open();
+  usagePage?.close();
+}
 function initTabs() {
   const activateTab = (name, push = false) => {
     if (name === 'usage') name = 'trends';
@@ -2526,7 +2534,7 @@ function initTabs() {
     });
     syncMemoryPinned();
     if (name === 'settings') refreshSettingsPage();
-    if (name === 'trends') refreshCharts();
+    refreshUsage();
     if (name === 'memory') loadMemoryTree().catch(() => {});
     if (name === 'observer') {
       openObserver().catch(() => {});
@@ -2689,6 +2697,7 @@ function applyFleetMode(fleet) {
 // Clear all per-agent data and incremental DOM so two agents' panels never
 // mix while switching the detail view between self and a remote agent.
 function resetAgentData() {
+  usagePage?.close();
   closeObserver({ release: true }).catch(() => {});
   if (state.observer.history) {
     state.observer.history.session = null;
@@ -2752,7 +2761,7 @@ function enterRemoteAgent(name, { push = true } = {}) {
   if (push) window.history.pushState({ remoteAgent: name }, '', api(`${remotePrefix()}/`));
   return Promise.allSettled([refreshAll(), refreshObserverStatus({ quiet: true })]).then(() => {
     if (observerTargetKey() !== targetKey) return;
-    if (activeTabName() === 'trends') refreshCharts();
+    if (activeTabName() === 'trends') refreshUsage();
   });
 }
 
@@ -2809,6 +2818,7 @@ function initLocaleToggle() {
     renderAll();
     refreshCharts();
     refreshSettingsPage();
+    usagePage?.setViewDetail();
   });
 }
 
@@ -4572,7 +4582,11 @@ try {
 await refreshAll();
 startTimers();
 
-const workbench = mountWorkbench({
+usagePage = createUsagePage({ root: document.querySelector('#wb-usage'), t,
+  identity: () => observerTargetKey(), detail: () => document.documentElement.dataset.detail ?? 'plain',
+  read: async path => { const response = await fetch(api(agentPath(path))); if (!response.ok) throw Error('read_failed'); return response.json(); },
+});
+workbench = mountWorkbench({
   t,
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
@@ -4594,7 +4608,6 @@ export function openWorkbenchGroup(key) {
 }
 settingsPage?.detail(document.documentElement.dataset.detail);
 refreshSettingsVersion();
-window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); });
 const stopSchedule = mountSchedule({
   t,
   locale: getLocale,
@@ -4604,3 +4617,11 @@ const stopSchedule = mountSchedule({
   onOpenGroup: openWorkbenchGroup,
 });
 window.addEventListener('pagehide', stopSchedule);
+const usageDetailChange = () => usagePage.setViewDetail();
+document.querySelector('#wb-detail-toggle')?.addEventListener('change', usageDetailChange);
+document.addEventListener('dashboard-locale-change', usageDetailChange);
+refreshUsage();
+window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); usagePage.destroy();
+  document.querySelector('#wb-detail-toggle')?.removeEventListener('change', usageDetailChange);
+  document.removeEventListener('dashboard-locale-change', usageDetailChange);
+});

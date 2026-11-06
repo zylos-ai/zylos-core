@@ -7,14 +7,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="__ASSET_ROOT__/css/style.css?v=58">
+<link rel="stylesheet" href="__ASSET_ROOT__/css/style.css?v=59">
 <link rel="stylesheet" href="__ASSET_ROOT__/themes/light.css?v=2">
 <link rel="stylesheet" href="__ASSET_ROOT__/themes/dark.css?v=1">
 <link rel="stylesheet" href="__ASSET_ROOT__/css/wb.css?v=4">
 <script src="__ASSET_ROOT__/vendor/chart.umd.js"></script>
 <script src="__ASSET_ROOT__/js/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="__ASSET_ROOT__/js/markdown-it.min.js"></script>
-<script type="module" src="__ASSET_ROOT__/js/app.js?v=86"></script>
+<script type="module" src="__ASSET_ROOT__/js/app.js?v=87"></script>
 <style>
 #tab-settings { overflow-wrap:anywhere; }
 #tab-settings .modal-body { padding:0; }
@@ -395,7 +395,8 @@
   </section>
 
   <section class="tab-panel" id="tab-trends" hidden>
-    <div class="trends-layout">
+    <div id="wb-usage"></div>
+    <div class="trends-layout" hidden style="display:none">
       <div class="trends-controls">
         <div class="range-buttons">
           <button class="range-btn active" data-range="24h" data-i18n="trends.24h_short">24h</button>

@@ -141,15 +141,14 @@ export class MetricResolver {
   }
 
   resolve(metricName) {
-    if (metricName === 'rate_limit' || metricName === 'rate_limit_7d') {
+    if (metricName === 'rate_limit_7d') {
       const account = this.collectors.statusline?.getAccountUsage?.();
-      const weekly = metricName === 'rate_limit_7d';
       const window = account?.runtime === 'claude'
-        ? account.value?.[weekly ? 'seven_day' : 'five_hour']
-        : account?.value?.[weekly ? 'sevenDay' : 'fiveHour'];
+        ? account.value?.seven_day
+        : account?.value?.sevenDay;
       const value = account?.runtime === 'claude' ? window?.used_percentage : window?.usedPercentage;
       const resetsAt = account?.runtime === 'claude' ? window?.resets_at : window?.resetsAt;
-      const dimensions = { [weekly ? 'rate_limit_7d_resets_at' : 'rate_limit_resets_at']: resetsAt ?? null };
+      const dimensions = { rate_limit_7d_resets_at: resetsAt ?? null };
       const valid = Number.isFinite(value) && !rateLimitWindowExpired(dimensions, metricName);
       return { value: valid ? value : null, dimensions, selected_source: valid ? 'core_account_usage' : null,
         runtime: account?.runtime ?? null, freshness: null, confidence: valid ? 'actual' : 'none', alternatives: [],

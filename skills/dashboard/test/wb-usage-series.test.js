@@ -1,0 +1,130 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { usageBounds, usageSeries } from '../src/lib/workbench/usage-series.js';
+import { costRows, costSummary, summarizeCosts, usageIntervals } from '../src/lib/workbench/cost-query.js';
+import { usageFixture } from './fixtures/usage-store.js';
+
+// SQLite integration: real Store and private readonly C4Reader, owned fixture
+// roots only. Run for cost/range/bucket/query changes; skip presentation changes.
+// The runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/tmux namespace. No child,
+// daemon or network is started. Fixture closes every DB before removing files.
+test('usage combines both runtimes and legacy costs while tokens use dimensions', t => {
+  const f = usageFixture(t), now = new Date('2026-11-06T04:00:00.000Z');
+  for (let day = 1; day <= 6; day++) {
+    const timestamp = `2026-11-0${day}T01:00:00.000Z`;
+    f.metric(timestamp, 'claude', { total_input: 100, output: 20, cache_read: 80, cost: 1, projects: ['alpha'] });
+    f.metric(timestamp, 'codex', { total_input: 200, output: 30, cost: 2, projects: ['beta'] });
+  }
+  f.metric('2026-10-31T01:00:00.000Z', 'claude', { total_input: 100, output: 20, cache_read: 80, cost: 1, projects: ['alpha'] });
+  f.metric('2026-10-31T01:00:00.000Z', 'codex', { total_input: 200, output: 30, cost: 2, projects: ['beta'] });
+  f.metric('2026-11-06T02:00:00.000Z', 'claude', {}, 'api_request_cost', 5);
+  f.event('2026-11-06T01:00:00.000Z', 'rotate_done');
+  const result = usageSeries(f.store, f.reader, { range: '7d', tz: 'Asia/Singapore', now });
+  assert.equal(result.scope, 'all_groups');
+  assert.equal(result.totals.cost, 26);
+  assert.deepEqual(result.totals.costByRuntime, { claude: 12, codex: 14 });
+  assert.equal(result.totals.tokens, 2450);
+  assert.equal(result.totals.rotations, 1);
+  assert.equal(result.totals.cost, f.store.aggregateCost(result));
+  assert.equal(summarizeCosts(costRows(f.store, result)).total, result.totals.cost);
+  const summary = costSummary(f.store, { tz: result.tz, now });
+  assert.equal(summary.today.total, 8);
+  assert.equal(summary.sevenDay.total, result.totals.cost);
+  assert.equal(result.costSummary.today.total, summary.today.total);
+  assert.equal(result.costSummary.sevenDay.total, summary.sevenDay.total);
+  assert.equal(summary.daily.reduce((sum, row) => sum + row.total, 0), summary.sevenDay.total);
+  assert.equal(result.projects.items[0].name, 'beta');
+  assert.equal(result.projects.items[0].outputTokens, 210);
+  assert.equal(f.store.queryMetrics({ name: 'account_quota' }).length, 0);
+});
+
+test('usage month and custom bounds use natural timezone days and reject invalid ranges', () => {
+  const now = new Date('2026-11-06T04:00:00.000Z');
+  const month = usageBounds({ range: 'month', tz: 'Asia/Singapore', now });
+  assert.equal(month.since, '2026-10-31T16:00:00.000Z');
+  assert.equal(month.until, now.toISOString());
+  assert.equal(usageBounds({ tz: 'unknown-zone', now }).tzFallback, true);
+  assert.equal(usageBounds({ tz: 'unknown-zone', now }).tz, 'UTC');
+  for (const range of [{ range: 'custom', since: now.toISOString(), until: now.toISOString() },
+    { range: 'custom', since: 'bad', until: now.toISOString() }, { range: 'bad' }]) {
+    assert.throws(() => usageBounds(range), { code: 'invalid_range', statusCode: 400 });
+  }
+});
+
+// Same private Store/C4 fixture; run for shared timezone fallback changes.
+test('summary and full usage label missing or invalid timezones as UTC fallback', t => {
+  const f = usageFixture(t), now = new Date('2026-11-06T04:00:00.000Z');
+  f.metric('2026-11-06T01:00:00.000Z', 'claude', { cost: 3 });
+  for (const tz of [undefined, 'unknown-zone']) {
+    const summary = costSummary(f.store, { tz, now });
+    const usage = usageSeries(f.store, f.reader, { tz, now });
+    assert.equal(summary.tz, 'UTC');
+    assert.equal(summary.tzFallback, true);
+    assert.equal(usage.tz, summary.tz);
+    assert.equal(usage.tzFallback, summary.tzFallback);
+    assert.deepEqual(usage.costSummary, summary);
+    assert.equal(usage.totals.cost, summary.sevenDay.total);
+  }
+});
+
+// Same private SQLite fixture; run when shared cost boundaries change. Cross
+// midnight/month observations prove each seven-day total equals seven bars.
+test('seven-day costs keep seven natural days across midnight and month boundaries', t => {
+  const f = usageFixture(t);
+  for (let day = 24; day <= 31; day++) f.metric(`2026-10-${day}T17:00:00.000Z`, 'claude', { cost: 1 });
+  for (const instant of ['2026-10-31T15:59:00.000Z', '2026-10-31T16:01:00.000Z', '2026-11-01T16:01:00.000Z']) {
+    const now = new Date(instant), bounds = usageBounds({ tz: 'Asia/Singapore', now });
+    const result = usageSeries(f.store, f.reader, { tz: 'Asia/Singapore', now });
+    const summary = costSummary(f.store, { tz: 'Asia/Singapore', now });
+    assert.equal(result.buckets.length, 7);
+    assert.equal(summary.daily.length, 7);
+    assert.equal(summary.sevenDay.total, result.totals.cost);
+    assert.equal(summary.daily.reduce((sum, row) => sum + row.total, 0), result.totals.cost);
+    assert.equal(result.totals.cost, f.store.aggregateCost(bounds) ?? 0);
+    assert.equal(usageIntervals(usageBounds({ range: '24h', tz: 'Asia/Singapore', now })).length, 24);
+    assert.equal(usageIntervals(usageBounds({ range: '30d', tz: 'Asia/Singapore', now })).length, 30);
+  }
+});
+
+// Same isolated SQLite boundary; run when natural-day message aggregation or
+// timestamp precision changes. No live C4 access; all messages are fixture rows.
+test('messages use exact contiguous natural days with dense ISO bucket identities', t => {
+  const f = usageFixture(t);
+  const since = '2026-11-01T18:29:00.000Z', until = '2026-11-02T18:31:00.000Z';
+  for (const [timestamp, direction] of [
+    ['2026-11-01T18:29:59.000Z', 'in'], ['2026-11-01T18:30:00.000Z', 'out'],
+    ['2026-11-02T18:29:59.000Z', 'in'], ['2026-11-02T18:30:00.000Z', 'out']
+  ]) f.message(timestamp, direction);
+  const calls = [], reader = { getMessageSeries(options) { calls.push(options); return f.reader.getMessageSeries(options); } };
+  const result = usageSeries(f.store, reader, { range: 'custom', since, until, tz: 'Asia/Kolkata' });
+  assert.equal(result.buckets.length, 3);
+  assert.equal(result.buckets[0], '2026-10-31T18:30:00.000Z');
+  assert.deepEqual(result.messages.map(row => [row.in, row.out]), [[1, 0], [1, 1], [0, 1]]);
+  assert.deepEqual(result.totals.messages, { in: 2, out: 2 });
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(call => call.bucketSeconds === 3600));
+  for (let index = 1; index < calls.length; index++) {
+    assert.equal(new Date(calls[index].since) - new Date(calls[index - 1].until), 1);
+  }
+});
+
+test('calendar intervals follow DST and extreme timezone local midnights', () => {
+  const intervals = usageIntervals({ since: '2026-10-31T04:00:00.000Z', until: '2026-11-02T04:59:59.999Z', tz: 'America/New_York' });
+  assert.equal(intervals.length, 2);
+  assert.equal(new Date(intervals[1].until) - new Date(intervals[1].since) + 1, 25 * 3600000);
+  assert.equal(usageIntervals({ since: '2026-11-01T10:00:00.000Z', until: '2026-11-02T09:59:59.999Z', tz: 'Pacific/Kiritimati' })[0].at,
+    '2026-11-01T10:00:00.000Z');
+});
+
+// Same private Store fixture; run for event query/ranking changes, skip UI-only.
+test('tool ranking keeps the top ten in stable order and totals include all tools', t => {
+  const f = usageFixture(t), timestamp = '2026-11-06T01:00:00.000Z';
+  for (let index = 0; index < 12; index++) f.event(timestamp, 'post_tool_use', { tool_name: `tool-${String(index).padStart(2, '0')}` });
+  f.event(timestamp, 'post_tool_use', { tool_name: 'tool-11' });
+  const result = usageSeries(f.store, f.reader, { tz: 'UTC', now: new Date('2026-11-06T04:00:00.000Z') });
+  assert.equal(result.totals.tools, 13);
+  assert.equal(result.tools.length, 10);
+  assert.deepEqual(result.tools[0], { name: 'tool-11', count: 2 });
+  assert.equal(result.tools[1].name, 'tool-00');
+  assert.equal(result.tools[9].name, 'tool-08');
+});
