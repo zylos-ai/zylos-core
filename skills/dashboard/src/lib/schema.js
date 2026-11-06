@@ -393,7 +393,7 @@ export function migrateDatabase(db) {
     if (currentVersion < 23) {
       db.transaction(() => {
         db.exec(`
-          CREATE TABLE chat_questions (
+          CREATE TABLE IF NOT EXISTS chat_questions (
             c4_id TEXT PRIMARY KEY NOT NULL,
             session_group TEXT NOT NULL,
             endpoint_id TEXT,

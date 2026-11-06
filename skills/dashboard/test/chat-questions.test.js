@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { parseC4Content, CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { projectC4Content } from '../../comm-bridge/scripts/c4-content-projection.js';
 import { setupChannelFixture, deliveryPacket } from './helpers/channel-fixture.js';
@@ -8,6 +9,7 @@ import { setupChannelFixture, deliveryPacket } from './helpers/channel-fixture.j
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const contentFor = name => fixtures.valid.find(item => item.name === name).content;
 const question = (f, id) => f.dashboardDb.prepare('SELECT * FROM chat_questions WHERE c4_id=?').get(String(id));
+const assertStoredWarning = result => assert.match(result.stderr, /already stored in C4 and visible read-only in Dashboard\. Do not resend/);
 const noQuestions = f => assert.equal(f.count('chat_questions', f.dashboardDb), 0);
 
 // Boundary: actual hook -> committed C4 -> receiver -> real Dashboard Store.
@@ -78,6 +80,8 @@ test('Registration failure can be repaired by the same C4 reference without rese
   f.dashboardDb.exec("CREATE TRIGGER fail_question BEFORE INSERT ON chat_questions BEGIN SELECT RAISE(ABORT,'fixture registration failure'); END");
   const result = f.send(contentFor('single'));
   assert.notEqual(result.status, 0); assert.match(result.stderr, /QUESTION_REGISTRATION_FAILED/);
+  assert.match(result.stderr, /repair must use the existing C4 reference/);
+  assertStoredWarning(result);
   assert.equal(f.count('conversations'), 1); noQuestions(f);
   const row = f.c4Db.prepare('SELECT * FROM conversations').get();
   f.dashboardDb.exec('DROP TRIGGER fail_question');
@@ -91,7 +95,8 @@ test('Registration failure can be repaired by the same C4 reference without rese
 test('A malformed stored envelope is rejected without registering a question', t => {
   const f = setupChannelFixture(t), row = f.insert(contentFor('single') + ' unknown trailing prose');
   const result = f.receive(deliveryPacket(row));
-  assert.notEqual(result.status, 0); assert.match(result.stderr, /INVALID_CONTENT/); noQuestions(f);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /INVALID_CONTENT/);
+  assert.match(result.stderr, /Invalid Dashboard content/); assertStoredWarning(result); noQuestions(f);
 });
 
 // Boundary: shared Node/Web parser used by consumers ignores only the Core suffix.
@@ -116,7 +121,7 @@ test('Suppressed annotation preserves question summary references and answer ide
   assert.equal(f.count('chat_questions', f.dashboardDb), 1);
 });
 
-// Boundary: Q must uniquely address a question by group + interruptId.
+// Boundary: question identity is unique by group + interruptId.
 // Run on question identity/conflict handling; UI-only edits may skip.
 test('Another C4 row cannot reuse a question reference within the same group', t => {
   const f = setupChannelFixture(t), first = f.insert(contentFor('single'));
@@ -124,6 +129,7 @@ test('Another C4 row cannot reuse a question reference within the same group', t
   f.dashboardDb.prepare("UPDATE chat_questions SET status='answered' WHERE c4_id=?").run(String(first.id));
   const duplicate = f.insert(contentFor('single')), result = f.receive(deliveryPacket(duplicate));
   assert.notEqual(result.status, 0); assert.match(result.stderr, /QUESTION_REFERENCE_CONFLICT.*another C4 row/);
+  assertStoredWarning(result);
   assert.equal(f.count('chat_questions', f.dashboardDb), 1);
   assert.equal(question(f, first.id).status, 'answered'); assert.equal(question(f, duplicate.id), undefined);
   f.insert('seed other group', { direction: 'in', endpoint: 'other', group: 'other' });
@@ -147,4 +153,42 @@ test('Non-question messages and control envelopes do not change an existing ques
   }
   assert.equal(f.send('additional ordinary text').status, 0);
   assert.equal(question(f, row.id).status, 'paused');
+});
+
+// Boundary: only the interrupt-target block supplies saved answer constraints.
+// Run on block selection/registration changes; UI-only edits may skip.
+test('A multi-block question saves the interrupt target rather than the first block', t => {
+  const f = setupChannelFixture(t), envelope = structuredClone(parseC4Content(contentFor('single')).envelope);
+  envelope.blocks.unshift({ id: 'intro_block', type: 'markdown', schemaVersion: 1, data: { text: 'Context only' } });
+  const content = CONTENT_PREFIX + JSON.stringify(envelope);
+  assert.equal(parseC4Content(content).kind, 'envelope');
+  const result = f.send(content);
+  assert.equal(result.status, 0, result.stderr);
+  const row = f.c4Db.prepare('SELECT * FROM conversations').get(), saved = question(f, row.id);
+  assert.equal(JSON.parse(saved.constraints).block.id, envelope.interrupt.blockId);
+  assert.notEqual(JSON.parse(saved.constraints).block.id, envelope.blocks[0].id);
+});
+
+// Boundary: delivery cannot create a missing Dashboard database as a side effect.
+// Run on Store/path/existence handling changes; UI-only edits may skip.
+test('A missing Dashboard database fails registration without creating a replacement', t => {
+  const f = setupChannelFixture(t), row = f.insert(contentFor('single'));
+  f.dashboardStore.close();
+  fs.unlinkSync(f.dashboardPath);
+  const result = f.receive(deliveryPacket(row));
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /QUESTION_REGISTRATION_FAILED/); assertStoredWarning(result);
+  assert.equal(fs.existsSync(f.dashboardPath), false);
+  assert.equal(f.count('conversations'), 1);
+});
+
+// Boundary: explicit instance paths override the HOME-based default for both stores.
+// Run on path resolution changes; UI-only edits may skip.
+test('Question delivery uses ZYLOS_DIR when it differs from the HOME default', t => {
+  const f = setupChannelFixture(t);
+  assert.notEqual(f.env.ZYLOS_DIR, path.join(f.env.HOME, 'zylos'));
+  const result = f.send(contentFor('single'));
+  assert.equal(result.status, 0, result.stderr);
+  const row = f.c4Db.prepare('SELECT * FROM conversations').get();
+  assert.equal(question(f, row.id).question_summary, parseC4Content(row.content).envelope.questionSummary);
+  assert.equal(fs.existsSync(path.join(f.env.HOME, 'zylos')), false);
 });

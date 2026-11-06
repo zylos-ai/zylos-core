@@ -32,6 +32,6 @@ export function registerQuestion(row, { env = process.env } = {}) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       throw Object.assign(new Error('This question reference belongs to another C4 row.'), { code: 'QUESTION_REFERENCE_CONFLICT' });
     }
-    throw Object.assign(new Error('Dashboard question registration failed; retry this C4 reference without resending.'), { code: 'QUESTION_REGISTRATION_FAILED' });
+    throw Object.assign(new Error('Dashboard question registration failed; repair must use the existing C4 reference without resending.'), { code: 'QUESTION_REGISTRATION_FAILED' });
   } finally { store?.close(); }
 }

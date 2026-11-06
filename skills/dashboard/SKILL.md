@@ -86,8 +86,10 @@ original group, C4 reference, question summary, constraints and paused state.
 Repeated delivery of the same C4 reference preserves the existing record and
 its current state. A different C4 row reusing the same group and interrupt ID
 fails registration; its content remains stored and read-only, and does not
-replace the original question. If registration fails, repair by delivering the
-same stored C4 reference again; do not resend the message to create another out.
+replace the original question. If registration fails, the message is already stored in C4 and remains visible
+as read-only content. Do not resend it. Repair must use the same C4 reference;
+this release does not provide a product entry point for that repair. The repair
+entry point belongs to subsequent work.
 Answers, stop/replace control envelopes and noninteractive messages do not
 register or change questions in this channel receiver. Answering and lifecycle
 controls are separate capabilities.

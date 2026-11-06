@@ -19,12 +19,12 @@ const observer = new URL('./channel-delivery-observer.js', import.meta.url).href
 export function setupChannelFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-channel-'));
   let c4Db, dashboardStore;
-  t.after(() => { dashboardStore?.close(); c4Db?.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const home = path.join(root, 'h'), zylos = path.join(home, 'zylos');
+  t.after(() => { if (dashboardStore?.db.open) dashboardStore.close(); c4Db?.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const home = path.join(root, 'h'), zylos = path.join(root, 'instance');
   const skills = path.join(zylos, '.claude/skills'), tmp = path.join(root, 'tmp'), bin = path.join(root, 'bin');
   const dataDir = path.join(zylos, 'components/dashboard');
   const c4Path = path.join(zylos, 'comm-bridge/c4.db'), dashboardPath = path.join(dataDir, 'dashboard.db');
-  for (const directory of [skills, tmp, bin, dataDir, path.dirname(c4Path), path.join(zylos, '.zylos')]) fs.mkdirSync(directory, { recursive: true });
+  for (const directory of [home, skills, tmp, bin, dataDir, path.dirname(c4Path), path.join(zylos, '.zylos')]) fs.mkdirSync(directory, { recursive: true });
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({ runtime: 'codex', session_mode: 'multi' }));
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'pm2'), TMPDIR: tmp,
@@ -34,6 +34,7 @@ export function setupChannelFixture(t) {
   for (const key of Object.keys(env)) if (key === 'TMUX' || /TOKEN|SECRET|PASSWORD|API_KEY/.test(key)
     || ['ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID'].includes(key)) delete env[key];
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'ZYLOS_DATA_DIR']) assert.ok(env[key].startsWith(root + path.sep), key);
+  assert.notEqual(zylos, path.join(home, 'zylos'));
   for (const filename of [c4Path, dashboardPath]) assert.ok(filename.startsWith(root + path.sep));
   assert.deepEqual(fs.readdirSync(bin), ['node']);
   console.log('Chat isolation:', JSON.stringify({ ...Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'ZYLOS_DATA_DIR', 'PATH'].map(key => [key, env[key]])), c4Path, dashboardPath, tmux: 'not spawned' }));
