@@ -10,7 +10,7 @@ import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-colle
 import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
 
 const DAY = 86400000;
-function fixture(t, snapshot = { rows: [] }) {
+function fixture(t, snapshot = { listKnown: true, rows: [] }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'transcripts-'));
   const store = new Store(path.join(root, 'dashboard.db'));
   let clock = Date.parse('2026-11-06T12:00:00Z');
@@ -59,6 +59,9 @@ test('legacy discovery adopts saved file offsets and yields to explicit Claude s
   const other = fixture(t), explicit = other.file('explicit');
   fs.mkdirSync(path.join(other.root, 'activity-monitor'), { recursive: true });
   fs.writeFileSync(path.join(other.root, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: id }));
+  const otherDir = path.join(other.root, '.claude', 'projects', claudeProjectSlug(other.root));
+  fs.mkdirSync(otherDir, { recursive: true });
+  fs.writeFileSync(path.join(otherDir, `${id}.jsonl`), '{}\n');
   other.start(explicit, 'A'); other.inventory.discover();
   assert.equal(other.store.activeUsageTranscripts().length, 1);
 });
@@ -109,7 +112,7 @@ test('missing files recover without losing attribution or cursor and ended files
 });
 
 test('current runs remain active and unavailable snapshots suppress finishing and summaries', async t => {
-  for (const snapshot of [{ rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] }, new Error('offline')]) {
+  for (const snapshot of [{ listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] }, new Error('offline')]) {
     const f = fixture(t, snapshot), p = f.file('current'); f.start(p, 'origin');
     fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
     await f.inventory.collect('claude', (row, current) => {
@@ -147,7 +150,7 @@ test('overlapping polls share their pending runtime pass', async t => {
   let release;
   const ready = new Promise(resolve => { release = resolve; });
   const f = fixture(t), p = f.file('pending'); f.start(p, 'A');
-  f.inventory.getSnapshot = async () => { await ready; return { rows: [] }; };
+  f.inventory.getSnapshot = async () => { await ready; return { listKnown: true, rows: [] }; };
   let reads = 0;
   const collect = () => f.inventory.collect('claude', () => { reads++; return { written: 1, byteOffset: 0 }; });
   const first = collect();
@@ -188,7 +191,8 @@ test('saved offsets skip historical requests and resume after a missing file ret
   assert.equal(rows.find(row => row.dimensions.request_id === 'new').session_group, 'A');
   assert.equal(f.store.getUsageTranscript(p).byte_offset, fs.statSync(p).size);
   const health = f.store.db.prepare("SELECT status FROM source_health WHERE name='conversation_reader' AND signal_type='collector_liveness'").get();
-  assert.equal(health.status, 'healthy');
+  assert.equal(health, undefined);
+  assert.equal(collector._offsets.size, 0);
 });
 
 test('historical groups cause no transcript file accesses', async t => {
@@ -217,7 +221,7 @@ test('historical groups cause no transcript file accesses', async t => {
 });
 
 test('Codex runtime metadata clears when the Origin run changes or its file disappears', async t => {
-  const snapshot = { rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
+  const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
   const f = fixture(t, snapshot), p = f.file('origin-codex');
   fs.writeFileSync(p, JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.3-codex' } }) + '\n');
   fs.utimesSync(p, new Date(f.now()), new Date(f.now()));
@@ -225,14 +229,151 @@ test('Codex runtime metadata clears when the Origin run changes or its file disa
   const collector = new CodexRolloutCollector(f.store, { zylosDir: f.root }, { transcripts: f.inventory });
   await collector.collect();
   assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
+  f.advance(60000);
   snapshot.rows[0].live.runId = 'replacement';
   await collector.collect();
   assert.equal(collector.getRuntimeInfo().session_id, null);
   assert.equal(collector.getRuntimeInfo().model_id, undefined);
+  f.advance(60000);
   snapshot.rows[0].live.runId = 'run-origin';
   await collector.collect();
   assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
   fs.unlinkSync(p); await collector.collect();
   assert.equal(collector.getRuntimeInfo().session_id, null);
   assert.equal(collector.getRuntimeInfo().model_id, undefined);
+});
+
+test('failed snapshots retain established Codex runtime facts until current evidence returns', async t => {
+  const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
+  const f = fixture(t, snapshot), p = f.file('origin-metadata');
+  fs.writeFileSync(p, [
+    { type: 'session_meta', payload: { cli_version: '1.0.0' } },
+    { type: 'turn_context', payload: { model: 'gpt-5.3-codex', effort: 'high', service_tier: 'priority' } },
+  ].map(event => JSON.stringify(event)).join('\n') + '\n');
+  f.start(p, 'origin', 'codex');
+  const collector = new CodexRolloutCollector(f.store, { zylosDir: f.root }, { transcripts: f.inventory });
+  await collector.collect();
+  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
+  assert.equal(collector.getRuntimeInfo().cli_version, '1.0.0');
+  f.inventory.getSnapshot = async () => { throw new Error('status unavailable'); };
+  f.advance(60000);
+  await collector.collect();
+  assert.equal(f.inventory.snapshot, null);
+  const retained = collector.getRuntimeInfo();
+  assert.equal(retained.session_id, 'session-origin');
+  assert.equal(retained.model_id, 'gpt-5.3-codex');
+  assert.equal(retained.reasoning_effort, 'high');
+  assert.equal(retained.service_tier, 'priority');
+  assert.equal(retained.cli_version, '1.0.0');
+  f.inventory.getSnapshot = async () => snapshot;
+  snapshot.rows[0].live.runId = 'replacement';
+  f.advance(5000);
+  await collector.collect();
+  assert.equal(collector.getRuntimeInfo().model_id, undefined);
+  assert.equal(collector.getRuntimeInfo().session_id, null);
+});
+
+test('valid current-run snapshots are reused for twelve polls and refreshed after a minute', async t => {
+  const f = fixture(t), p = f.file('snapshot-cache'); f.start(p, 'origin');
+  let calls = 0;
+  f.inventory.getSnapshot = async () => { calls++; return { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] }; };
+  for (let i = 0; i < 12; i++) {
+    await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
+    await f.inventory.collect('codex', () => assert.fail('no Codex file'));
+    f.advance(5000);
+  }
+  assert.equal(calls, 1);
+  await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
+  assert.equal(calls, 2);
+});
+
+test('incomplete and failed status snapshots suppress finishing and current attribution without caching', async t => {
+  for (const snapshot of [
+    { listKnown: false, reason: 'group_list_failed', rows: [{ sessionGroup: 'origin', live: null }] },
+    { rows: [] },
+    { listKnown: true, sources: { status: { ok: false } }, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] },
+  ]) {
+    const f = fixture(t, snapshot), p = f.file('incomplete'); f.start(p, 'origin');
+    fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
+    let calls = 0;
+    f.inventory.getSnapshot = async () => { calls++; return snapshot; };
+    for (let i = 0; i < 2; i++) {
+      await f.inventory.collect('claude', (row, current) => {
+        assert.equal(current, false); return { byteOffset: 0 };
+      });
+      f.advance(5000);
+    }
+    assert.equal(calls, 2);
+    assert.equal(f.store.getUsageTranscript(p).status, 'active');
+    assert.equal(f.inventory.snapshot, null);
+  }
+});
+
+test('files with unread bytes remain active until the recorded cursor reaches their end', async t => {
+  const f = fixture(t), p = f.file('backlog'); f.start(p, 'B', 'codex');
+  fs.writeFileSync(p, 'x'.repeat(300000));
+  fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
+  await f.inventory.collect('codex', () => ({ byteOffset: 256000 }));
+  assert.equal(f.store.getUsageTranscript(p).status, 'active');
+  assert.equal(f.store.getUsageTranscript(p).byte_offset, 256000);
+  await f.inventory.collect('codex', row => {
+    assert.equal(row.byte_offset, 256000); return { byteOffset: 300000 };
+  });
+  assert.equal(f.store.getUsageTranscript(p).status, 'finished');
+});
+
+test('bounded Codex replay keeps an old transcript active until its final request is read', async t => {
+  const f = fixture(t), p = f.file('bounded-backlog');
+  const event = id => ({ type: 'event_msg', payload: { type: 'token_count', info: {
+    id, model: 'gpt-5.3-codex', last_token_usage: { input_tokens: 10, output_tokens: 2 },
+  } } });
+  fs.writeFileSync(p, ['first', 'second'].map(id => JSON.stringify(event(id))).join('\n') + '\n');
+  fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
+  f.start(p, 'B', 'codex');
+  const collector = new CodexRolloutCollector(f.store, { zylosDir: f.root, codexRolloutMaxLinesPerCollect: 1 }, { transcripts: f.inventory });
+  await collector.collect();
+  const partial = f.store.getUsageTranscript(p);
+  assert.equal(partial.status, 'active');
+  assert.ok(partial.byte_offset > 0 && partial.byte_offset < fs.statSync(p).size);
+  assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 1);
+  await collector.collect();
+  assert.equal(f.store.getUsageTranscript(p).status, 'finished');
+  assert.equal(f.store.getUsageTranscript(p).byte_offset, fs.statSync(p).size);
+  assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 2);
+});
+
+test('Codex path discovery retains the latest session across repeated discoveries', t => {
+  const f = fixture(t), older = f.file('codex-older'), newer = f.file('codex-newer');
+  f.start(older, 'older', 'codex', f.now() - 10000);
+  f.start(newer, 'newer', 'codex');
+  f.inventory.discover();
+  assert.equal(f.store.latestCodexRolloutPath().transcript_path, newer);
+  const upserts = [];
+  const original = f.store.upsertCodexRolloutPath.bind(f.store);
+  t.mock.method(f.store, 'upsertCodexRolloutPath', mapping => { upserts.push(mapping); return original(mapping); });
+  f.advance(60000); f.inventory.discover();
+  assert.equal(upserts.length, 0);
+  assert.equal(f.store.latestCodexRolloutPath().transcript_path, newer);
+});
+
+test('legacy statusline rotation discovers the new file and only it is current Origin', async t => {
+  const f = fixture(t), statusDir = path.join(f.root, 'activity-monitor');
+  const projectDir = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root));
+  fs.mkdirSync(statusDir, { recursive: true }); fs.mkdirSync(projectDir, { recursive: true });
+  const status = path.join(statusDir, 'statusline.json');
+  fs.writeFileSync(path.join(projectDir, 'legacy-first.jsonl'), '{}\n');
+  fs.writeFileSync(status, JSON.stringify({ session_id: 'legacy-first' }));
+  const current = [];
+  await f.inventory.collect('claude', (row, originCurrent) => {
+    assert.equal(originCurrent, true); return { byteOffset: 0 };
+  });
+  fs.writeFileSync(path.join(projectDir, 'legacy-next.jsonl'), '{}\n');
+  fs.writeFileSync(status, JSON.stringify({ session_id: 'legacy-next' }));
+  f.advance(60000);
+  await f.inventory.collect('claude', (row, originCurrent) => {
+    current.push([row.session_id, originCurrent]); return { byteOffset: 0 };
+  });
+  assert.equal(f.store.activeUsageTranscripts().length, 2);
+  assert.equal(current.find(([id]) => id === 'legacy-first')[1], false);
+  assert.equal(current.find(([id]) => id === 'legacy-next')[1], true);
 });

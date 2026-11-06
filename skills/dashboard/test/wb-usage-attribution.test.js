@@ -22,7 +22,7 @@ const timestamp = new Date(at).toISOString();
 // Local SQLite/files only; snapshots are injected and no runtime services start.
 // Run when collection, pricing, deduplication or attribution changes; UI-only
 // changes may skip these cases.
-function fixture(t, getSnapshot = async () => ({ rows: [{ sessionGroup: 'origin', live: { runId: 'origin-run' } }] })) {
+function fixture(t, getSnapshot = async () => ({ listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'origin-run' } }] })) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-attribution-'));
   const store = new Store(path.join(dir, 'dashboard.db'));
   t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -115,7 +115,7 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
   let snapshots = 0;
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     workbenchResponse,
-    createGroupSnapshot: () => ({ getSnapshot: async () => { snapshots++; return { rows: [] }; } }),
+    createGroupSnapshot: () => ({ getSnapshot: async () => { snapshots++; return { listKnown: true, rows: [] }; } }),
   } });
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
@@ -240,17 +240,74 @@ test('Codex subagent lifecycle and tools retain the parent group and run', async
 });
 
 test('assistant summaries are limited to the current Origin run', async t => {
-  const f = fixture(t);
+  const f = fixture(t, async () => ({ listKnown: true, rows: [
+    { sessionGroup: 'origin', live: { runId: 'origin-run' } },
+    { sessionGroup: 'A', live: { runId: 'A-run' } },
+    { sessionGroup: 'B', live: { runId: 'B-run' } },
+  ] }));
   f.add('claude', 'origin', 'current', [claudeRequest('current', 'current')], 'origin-run');
   f.add('claude', 'origin', 'old', [claudeRequest('old', 'old')], 'old-run');
   f.add('claude', 'A', 'other', [claudeRequest('other', 'other')]);
+  f.add('claude', 'B', 'also-current', [claudeRequest('also-current', 'also-current')]);
   await f.claude.collect();
-  assert.equal(usage(f.store).length, 3);
+  assert.equal(usage(f.store).length, 4);
   const summaries = f.store.queryEvents({ types: ['assistant_message'] });
   assert.equal(summaries.length, 1);
   assert.equal(summaries[0].session_id, 'current');
   assert.equal(summaries[0].session_group, 'origin');
   assert.equal(summaries[0].run_id, 'origin-run');
+  const health = f.store.db.prepare("SELECT extra FROM source_health WHERE name='conversation_reader' AND signal_type='collector_liveness'").get();
+  assert.equal(JSON.parse(health.extra).messages_ingested, 1);
+  assert.equal(f.claude._offsets.size, 0);
+});
+
+test('failed usage writes preserve durable cursors and retry the unread request', async t => {
+  for (const runtime of ['claude', 'codex']) {
+    const f = fixture(t);
+    const request = id => runtime === 'claude' ? claudeRequest(id, `${runtime}-session`) : codexRequest(id);
+    const file = f.add(runtime, 'origin', `${runtime}-session`, [request('first')], 'origin-run');
+    const collector = runtime === 'claude' ? f.claude : f.codex;
+    await collector.collect();
+    const offset = f.store.getUsageTranscript(file).byte_offset;
+    assert.ok(offset > 0);
+    fs.appendFileSync(file, JSON.stringify(request('retry')) + '\n');
+    const writeMethod = runtime === 'codex' ? 'insertMetricOnce' : 'insertMetric';
+    const failingWrite = t.mock.method(f.store, writeMethod, () => { throw new Error('usage write failed'); });
+    await assert.rejects(collector.collect(), /usage write failed/, `${runtime} must propagate the failed write`);
+    assert.equal(f.store.getUsageTranscript(file).byte_offset, offset);
+    assert.equal(f.store.getUsageTranscript(file).status, 'active');
+    assert.equal(usage(f.store).length, 1);
+    if (runtime === 'codex') assert.equal(f.store.getCodexRolloutCursor(file).byte_offset, offset);
+    else assert.equal(collector._offsets.size, 0);
+    failingWrite.mock.restore();
+    await collector.collect();
+    assert.equal(usage(f.store).length, 2);
+    assert.equal(f.store.getUsageTranscript(file).byte_offset, fs.statSync(file).size);
+    if (runtime === 'codex') assert.equal(f.store.getCodexRolloutCursor(file).byte_offset, fs.statSync(file).size);
+    else assert.equal(collector._offsets.size, 0);
+  }
+});
+
+test('idle Codex groups cannot overwrite the current Origin collector health', async t => {
+  const f = fixture(t, async () => ({ listKnown: true, rows: [
+    { sessionGroup: 'origin', live: { runId: 'origin-run' } },
+    { sessionGroup: 'A', live: { runId: 'A-run' } },
+  ] }));
+  const origin = f.add('codex', 'origin', 'a-origin', [codexRequest('origin-first')], 'origin-run');
+  const idle = f.add('codex', 'A', 'z-idle', [codexRequest('idle-first')]);
+  await f.codex.collect();
+  fs.appendFileSync(origin, JSON.stringify(codexRequest('origin-next')) + '\n');
+  const visited = [];
+  const original = f.codex.collectMapping.bind(f.codex);
+  t.mock.method(f.codex, 'collectMapping', mapping => { visited.push(mapping.transcript_path); return original(mapping); });
+  await f.codex.collect();
+  assert.equal(visited.length, 2);
+  assert.equal(visited[0], origin);
+  assert.equal(visited[1], idle);
+  const health = f.store.db.prepare("SELECT status, extra FROM source_health WHERE name='codex_rollout' AND signal_type='collector_liveness'").get();
+  assert.equal(health.status, 'healthy');
+  assert.equal(JSON.parse(health.extra).transcript_path, origin);
+  assert.equal(usage(f.store).length, 3);
 });
 
 test('unreadable snapshots still allow usage without publishing assistant summaries', async t => {

@@ -121,26 +121,33 @@ export class ConversationCollector {
   }
 
   async collect() {
+    let messages = 0;
     const written = await this.transcripts.collect('claude', (mapping, originCurrent) => {
       const file = mapping.transcript_path;
       this._offsets.set(file, mapping.byte_offset);
       this._seenUuids.clear();
-      const written = this._collectFile(file, {
+      try {
+        const written = this._collectFile(file, {
         sessionId: mapping.session_id, group: mapping.session_group, runId: mapping.run_id,
         agentId: mapping.parent_path ? path.basename(file, '.jsonl').replace(/^agent-/, '') : null,
         usageOnly: Boolean(mapping.parent_path) || !originCurrent,
-      });
-      return { written, byteOffset: this._offsets.get(file) };
+        });
+        messages += this._lastFileMessages;
+        return { written, byteOffset: this._offsets.get(file) };
+      } finally {
+        this._offsets.delete(file);
+      }
     });
-    if (written > 0) {
+    if (messages > 0) {
       this.store.upsertSourceHealth('conversation_reader', 'collector_liveness', 'healthy', {
-        last_success: new Date().toISOString(), messages_ingested: written,
+        last_success: new Date().toISOString(), messages_ingested: messages,
       });
     }
     return written;
   }
 
   _collectFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false, group = null, runId = null } = {}) {
+    this._lastFileMessages = 0;
     const startOffset = this._offsets.get(jsonlPath) || 0;
 
     let stat;
@@ -256,6 +263,7 @@ export class ConversationCollector {
             this._onEvent({ ...event, metadata: JSON.parse(event.metadata) });
           }
           written++;
+          this._lastFileMessages++;
         }
       } catch (err) {
         if (!err.message?.includes('UNIQUE constraint')) {

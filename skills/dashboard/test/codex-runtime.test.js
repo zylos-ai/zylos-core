@@ -47,7 +47,9 @@ test('Codex collection visits every supplied mapping and preserves group attribu
     })).join('\n') + '\n');
     return { transcript_path: transcriptPath, session_id: `${group}-session`, session_group: group, run_id: `${group}-run` };
   });
-  const transcripts = { snapshot: {}, isOriginCurrent: row => row.session_group === 'origin', async collect(runtime, callback) {
+  const transcripts = { snapshot: { listKnown: true },
+    currentOriginMapping: runtime => runtime === 'codex' ? mappings[0] : null,
+    isOriginCurrent: row => row.session_group === 'origin', async collect(runtime, callback) {
     assert.equal(runtime, 'codex');
     let written = 0;
     for (const mapping of mappings) written += (await callback(mapping, mapping.session_group === 'origin')).written;
@@ -580,11 +582,6 @@ test('CodexRolloutCollector does not carry cli_version across active session cha
     transcriptPath: rolloutBPath,
     lastEventAt: '2026-05-23T01:01:00.000Z'
   });
-  store.db.prepare(`
-    UPDATE codex_rollout_paths
-    SET updated_at = '2099-05-23 01:01:00'
-    WHERE session_id = 'codex-session-b'
-  `).run();
   collectMapping(collector);
 
   assert.equal(collector.getRuntimeInfo().session_id, 'codex-session-b');

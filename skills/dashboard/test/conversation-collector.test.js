@@ -253,10 +253,10 @@ test('offset persistence prevents duplication on restart', async t => {
   fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
   fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: 'test-session-123' }));
   fs.writeFileSync(jsonlPath, makeJsonlLine('uuid-4') + '\n');
-  await new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) }).collect();
+  await new ConversationCollector(store, config, { getSnapshot: async () => ({ listKnown: true, rows: [] }) }).collect();
   assert.equal(store.getUsageTranscript(jsonlPath).byte_offset, fs.statSync(jsonlPath).size);
   store.close(); store = new Store(path.join(tmpDir, 'dashboard.db'));
-  const collector = new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) });
+  const collector = new ConversationCollector(store, config, { getSnapshot: async () => ({ listKnown: true, rows: [] }) });
   const original = collector._collectFile.bind(collector);
   t.mock.method(collector, '_collectFile', (file, options) => {
     assert.equal(collector._offsets.get(file), fs.statSync(file).size);
@@ -504,11 +504,11 @@ test('per-file offsets survive a restart', async t => {
   fs.mkdirSync(subDir, { recursive: true });
   fs.writeFileSync(path.join(subDir, 'agent-xyz.jsonl'), makeJsonlLine('s1', { requestId: 'req_sub1' }) + '\n');
 
-  await new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) }).collect();
+  await new ConversationCollector(store, config, { getSnapshot: async () => ({ listKnown: true, rows: [] }) }).collect();
   assert.equal(store.activeUsageTranscripts().length, 2);
   for (const row of store.activeUsageTranscripts()) assert.equal(row.byte_offset, fs.statSync(row.transcript_path).size);
   store.close(); store = new Store(path.join(tmpDir, 'dashboard.db'));
-  const collector = new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) });
+  const collector = new ConversationCollector(store, config, { getSnapshot: async () => ({ listKnown: true, rows: [] }) });
   const original = collector._collectFile.bind(collector);
   t.mock.method(collector, '_collectFile', (file, options) => {
     assert.equal(collector._offsets.get(file), fs.statSync(file).size); return original(file, options);
@@ -530,7 +530,7 @@ test('discovers a legacy session from the statusline without a state engine', as
   );
 
   fs.writeFileSync(jsonlPath, makeJsonlLine('u1', { requestId: 'req_fallback' }) + '\n');
-  await new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) }).collect();
+  await new ConversationCollector(store, config, { getSnapshot: async () => ({ listKnown: true, rows: [] }) }).collect();
   const rows = store.db.prepare("SELECT session_id FROM metric_points WHERE metric_name='usage_event'").all();
   assert.equal(rows.length, 1); assert.equal(rows[0].session_id, 'test-session-123');
 });
@@ -551,7 +551,7 @@ test('explicit transcript discovery takes precedence over the legacy statusline'
   store.insertEvent({ id: 'start', ingest_id: 'start', timestamp: new Date().toISOString(), runtime: 'claude',
     session_id: 'test-session-123', session_group: 'origin', run_id: 'current', event_type: 'session_start',
     category: 'session', source: 'core-log', metadata: { transcript_path: jsonlPath } });
-  await new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) }).collect();
+  await new ConversationCollector(store, config, { getSnapshot: async () => ({ listKnown: true, rows: [] }) }).collect();
   const rows = store.db.prepare("SELECT session_id FROM metric_points WHERE metric_name='usage_event'").all();
   assert.equal(rows.length, 1); assert.equal(rows[0].session_id, 'test-session-123');
   assert.equal(store.activeUsageTranscripts().length, 1);

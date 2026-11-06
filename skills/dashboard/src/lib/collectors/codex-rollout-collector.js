@@ -38,11 +38,7 @@ export class CodexRolloutCollector {
       const written = this.collectMapping({ ...mapping, isOriginCurrent });
       return { written, byteOffset: this.store.getCodexRolloutCursor(mapping.transcript_path)?.byte_offset ?? 0 };
     });
-    if (this._runtimeMapping && (!this._transcripts.isOriginCurrent(this._runtimeMapping, this._transcripts.snapshot) ||
-        this.store.getUsageTranscript(this._runtimeMapping.transcript_path)?.status !== 'active')) {
-      this._runtimeMapping = null;
-      this._clearRuntimeInfo();
-    }
+    this._checkRuntimeMapping();
     return written;
   }
 
@@ -51,7 +47,7 @@ export class CodexRolloutCollector {
 
     if (!mapping?.transcript_path) {
       if (mapping?.isOriginCurrent) this._clearRuntimeInfo();
-      this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', 'unavailable', {
+      this._updateLiveness(mapping, 'unavailable', {
         reason: 'no_hook_transcript_path',
         last_checked: now
       });
@@ -63,7 +59,7 @@ export class CodexRolloutCollector {
       stat = fs.statSync(mapping.transcript_path);
     } catch (err) {
       if (mapping.isOriginCurrent) this._clearRuntimeInfo(mapping.session_id);
-      this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', 'unavailable', {
+      this._updateLiveness(mapping, 'unavailable', {
         reason: 'rollout_unreadable',
         error: err.code || err.message,
         transcript_path: mapping.transcript_path,
@@ -90,7 +86,7 @@ export class CodexRolloutCollector {
 
     if (stat.size === offset) {
       const backfilled = offset > 0 ? this._backfillRateLimits(mapping, sessionMeta) : 0;
-      this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', 'stale', {
+      this._updateLiveness(mapping, 'stale', {
         transcript_path: mapping.transcript_path,
         session_id: mapping.session_id,
         byte_offset: offset,
@@ -129,7 +125,7 @@ export class CodexRolloutCollector {
           byteOffset: skippedTo,
           sessionId: mapping.session_id
         });
-        this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', 'healthy', {
+        this._updateLiveness(mapping, 'healthy', {
           reason: 'oversized_line_skipped',
           transcript_path: mapping.transcript_path,
           session_id: mapping.session_id,
@@ -148,7 +144,7 @@ export class CodexRolloutCollector {
         });
         return 0;
       }
-      this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', 'stale', {
+      this._updateLiveness(mapping, 'stale', {
         reason: 'partial_line',
         transcript_path: mapping.transcript_path,
         session_id: mapping.session_id,
@@ -195,7 +191,7 @@ export class CodexRolloutCollector {
       sessionId: mapping.session_id
     });
 
-    this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', 'healthy', {
+    this._updateLiveness(mapping, 'healthy', {
       transcript_path: mapping.transcript_path,
       session_id: mapping.session_id,
       byte_offset: currentOffset,
@@ -259,7 +255,31 @@ export class CodexRolloutCollector {
   }
 
   getRuntimeInfo() {
+    this._checkRuntimeMapping();
     return this._runtimeInfo;
+  }
+
+  _checkRuntimeMapping() {
+    // Unavailable snapshots carry no evidence that the current session changed.
+    if (!this._transcripts.snapshot) return;
+    const current = this._transcripts.currentOriginMapping('codex');
+    let readable = false;
+    try { readable = !!current && fs.statSync(current.transcript_path).isFile(); } catch { /* Missing current transcript. */ }
+    if (!readable || (this._runtimeMapping && (current.session_id !== this._runtimeMapping.session_id ||
+        current.transcript_path !== this._runtimeMapping.transcript_path))) {
+      this._runtimeMapping = null;
+      this._clearRuntimeInfo(current?.session_id);
+      if (!readable) this._updateLiveness(null, 'unavailable', {
+        reason: current ? 'rollout_unreadable' : 'no_hook_transcript_path',
+        last_checked: new Date().toISOString()
+      });
+    }
+  }
+
+  _updateLiveness(mapping, status, extra) {
+    if (mapping?.isOriginCurrent || !mapping) {
+      this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', status, extra);
+    }
   }
 
   _ingestEvent(event, mapping, sessionMeta = {}, position = {}) {
@@ -512,14 +532,14 @@ export class CodexRolloutCollector {
     const name = item.name || payload.name || null;
     const callId = item.call_id || payload.call_id || null;
     if (!name && !callId) return 0;
-    const normalizedName = normalizeToolName(name || this._toolNameByCallId.get(JSON.stringify([mapping.session_id, callId])));
+    const normalizedName = normalizeToolName(name || this._toolNameByCallId.get(callId));
     const isOutput = item.type === 'function_call_output' || item.type === 'custom_tool_call_output';
     const toolArgs = parseToolArgs(item.arguments || item.input || payload.arguments || payload.input);
 
-    if (callId && !isOutput && name) this._toolNameByCallId.set(JSON.stringify([mapping.session_id, callId]), name);
+    if (callId && !isOutput && name) this._toolNameByCallId.set(callId, name);
 
     if (!isOutput && normalizedName === 'spawn_agent' && callId) {
-      this._subagentSpawnByCallId.set(JSON.stringify([mapping.session_id, callId]), {
+      this._subagentSpawnByCallId.set(callId, {
         agent_type: toolArgs.agent_type || 'default',
         description: this._sanitizer.safeSummary(toolArgs.message, 200)
       });
@@ -528,9 +548,9 @@ export class CodexRolloutCollector {
     const positionId = rolloutPositionId('response_item', mapping, position);
     const eventKey = callId || positionId;
     const summary = isOutput
-      ? this._toolSummaryByCallId.get(JSON.stringify([mapping.session_id, callId])) || 'Tool completed'
+      ? this._toolSummaryByCallId.get(callId) || 'Tool completed'
       : this._summarizeToolCall(name, item.arguments || item.input || payload.arguments || payload.input);
-    if (callId && !isOutput) this._toolSummaryByCallId.set(JSON.stringify([mapping.session_id, callId]), summary);
+    if (callId && !isOutput) this._toolSummaryByCallId.set(callId, summary);
 
     const ingestId = `codex-rollout-${mapping.session_id || 'unknown'}-${eventKey}-${item.type}`;
     let written = 0;
@@ -578,9 +598,9 @@ export class CodexRolloutCollector {
       const parsed = parseToolArgs(output);
       const agentId = agentIdFromObject(parsed);
       if (!agentId) return 0;
-      const spawn = this._subagentSpawnByCallId.get(JSON.stringify([mapping.session_id, callId])) || {};
+      const spawn = this._subagentSpawnByCallId.get(callId) || {};
       const ingestId = `codex-subagent-start-${mapping.session_id || 'unknown'}-${agentId}`;
-      this._subagentStartedAt.set(JSON.stringify([mapping.session_id, agentId]), timestamp);
+      this._subagentStartedAt.set(agentId, timestamp);
       const result = this._insertEvent({
         id: stableEventId(ingestId),
         ingest_id: ingestId,
@@ -612,7 +632,7 @@ export class CodexRolloutCollector {
 
     if (toolName === 'wait_agent') {
       const parsed = parseToolArgs(output);
-      const wait = this._subagentWaitByCallId.get(JSON.stringify([mapping.session_id, callId])) || null;
+      const wait = this._subagentWaitByCallId.get(callId) || null;
       let written = 0;
       for (const status of waitAgentStatuses(parsed, wait?.targets || [])) {
         const waitLatencyMs = wait ? elapsedMs(wait.startedAt, timestamp) : null;
@@ -658,7 +678,7 @@ export class CodexRolloutCollector {
       const targets = subagentTargetsFromArgs(args);
       let written = 0;
       if (callId) {
-        this._subagentWaitByCallId.set(JSON.stringify([mapping.session_id, callId]), {
+        this._subagentWaitByCallId.set(callId, {
           startedAt: timestamp,
           targets,
           timeoutMs: numberOrNull(args.timeout_ms ?? args.timeoutMs)
@@ -719,7 +739,7 @@ export class CodexRolloutCollector {
   _insertSubagentStop(agentId, timestamp, mapping, sourceTool, position = {}, completionSummary = null, opts = {}) {
     const ingestId = `codex-subagent-stop-${mapping.session_id || 'unknown'}-${agentId}`;
     const summary = completionSummary ? `Subagent completed: ${completionSummary}` : 'Subagent completed';
-    const durationMs = elapsedMs(this._subagentStartedAt.get(JSON.stringify([mapping.session_id, agentId])), timestamp);
+    const durationMs = elapsedMs(this._subagentStartedAt.get(agentId), timestamp);
     const result = this._insertEvent({
       id: stableEventId(ingestId),
       ingest_id: ingestId,
@@ -745,7 +765,7 @@ export class CodexRolloutCollector {
       source: 'rollout',
       confidence: 'actual'
     });
-    if (result?.inserted) this._subagentStartedAt.delete(JSON.stringify([mapping.session_id, agentId]));
+    if (result?.inserted) this._subagentStartedAt.delete(agentId);
     return result?.inserted ? 1 : 0;
   }
 

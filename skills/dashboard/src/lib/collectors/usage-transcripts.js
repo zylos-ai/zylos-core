@@ -14,6 +14,8 @@ export class UsageTranscripts {
     this._round = null;
     this._pending = new Map();
     this.snapshot = null;
+    this._snapshotAt = null;
+    this._legacySessionId = null;
   }
 
   discover(at = this.now()) {
@@ -33,26 +35,28 @@ export class UsageTranscripts {
       if (!['claude', 'codex'].includes(row.runtime) || !row.session_id ||
           typeof row.transcript_path !== 'string' || !path.isAbsolute(row.transcript_path) ||
           !row.transcript_path.endsWith('.jsonl')) continue;
-      insert(row);
-      if (row.runtime === 'codex') {
+      const inserted = insert(row);
+      if (row.runtime === 'codex' && inserted.changes === 1) {
         const first = this.store.getUsageTranscript(row.transcript_path);
         this.store.upsertCodexRolloutPath({ sessionId: first.session_id,
           transcriptPath: first.transcript_path, lastEventAt: row.timestamp });
       }
     }
     let mains = this.store.claudeMainTranscripts();
-    if (mains.length === 0) {
-      try {
-        const zylosDir = this.config.zylosDir || path.join(process.env.HOME, 'zylos');
-        const status = JSON.parse(fs.readFileSync(path.join(zylosDir, 'activity-monitor', 'statusline.json'), 'utf8'));
-        if (status.session_id) {
+    this._legacySessionId = null;
+    try {
+      const zylosDir = this.config.zylosDir || path.join(process.env.HOME, 'zylos');
+      const status = JSON.parse(fs.readFileSync(path.join(zylosDir, 'activity-monitor', 'statusline.json'), 'utf8'));
+      if (status.session_id && !mains.some(main => main.run_id != null || main.session_group != null)) {
+        this._legacySessionId = status.session_id;
+        if (!mains.some(main => main.session_id === status.session_id)) {
           const file = path.join(this.config.homeDir || process.env.HOME, '.claude', 'projects',
             claudeProjectSlug(zylosDir), `${status.session_id}.jsonl`);
           if (fs.existsSync(file)) insert({ transcript_path: file, runtime: 'claude', session_id: status.session_id });
         }
-      } catch { /* Legacy sessions may have no statusline. */ }
-      mains = this.store.claudeMainTranscripts();
-    }
+      }
+    } catch { /* Legacy sessions may have no statusline. */ }
+    mains = this.store.claudeMainTranscripts();
     for (const main of mains) {
       const dir = path.join(path.dirname(main.transcript_path), main.session_id, 'subagents');
       let names;
@@ -72,10 +76,13 @@ export class UsageTranscripts {
   }
 
   isOriginCurrent(row, snapshot) {
-    if (!snapshot || !['origin', null].includes(row.session_group)) return false;
+    if (!snapshot || snapshot.listKnown !== true || !['origin', null].includes(row.session_group)) return false;
     const current = this._currentRun(row, snapshot);
+    if (row.runtime === 'codex' && row.run_id != null && row.run_id === current) {
+      return this.store.currentOriginTranscript('codex', current)?.transcript_path === row.transcript_path;
+    }
     return (row.run_id != null && row.run_id === current) ||
-      (row.run_id == null && row.session_group == null);
+      (row.run_id == null && row.session_group == null && row.session_id === this._legacySessionId);
   }
 
   _currentRun(row, snapshot) {
@@ -83,14 +90,24 @@ export class UsageTranscripts {
     return snapshot.rows?.find(item => (item.sessionGroup ?? 'origin') === group)?.live?.runId ?? null;
   }
 
+  currentOriginMapping(runtime) {
+    if (!this.snapshot) return null;
+    const runId = this._currentRun({ session_group: 'origin' }, this.snapshot);
+    return runId == null ? null : this.store.currentOriginTranscript(runtime, runId);
+  }
+
   async _newRound(at) {
     if (this._lastDiscovery == null || at - this._lastDiscovery >= 60000 || at < this._lastDiscovery) this.discover(at);
-    let snapshot = null;
-    try {
-      snapshot = await this.getSnapshot?.(at) ?? null;
-      if (snapshot?.sources?.status?.ok === false) snapshot = null;
-    } catch { /* Failed snapshots cannot authorize current-session events or finishing. */ }
-    this.snapshot = snapshot;
+    let snapshot = this.snapshot;
+    if (this._snapshotAt == null || at < this._snapshotAt || at - this._snapshotAt >= 60000) {
+      snapshot = null;
+      try {
+        const candidate = await this.getSnapshot?.(at) ?? null;
+        if (candidate?.listKnown === true && candidate.sources?.status?.ok !== false) snapshot = candidate;
+      } catch { /* Failed snapshots cannot authorize current-session events or finishing. */ }
+      this.snapshot = snapshot;
+      this._snapshotAt = snapshot ? at : null;
+    }
     return { at, snapshot, rows: this.store.activeUsageTranscripts(50) };
   }
 
@@ -122,7 +139,7 @@ export class UsageTranscripts {
           written += result?.written ?? 0;
         }
         const stat = fs.statSync(row.transcript_path);
-        if (snapshot && stat.size === offset && stat.mtimeMs < at - 30 * 60000 &&
+        if (snapshot?.listKnown === true && stat.size === offset && stat.mtimeMs < at - 30 * 60000 &&
             row.run_id !== this._currentRun(row, snapshot)) status = 'finished';
       } catch (error) {
         if (error.code === 'ENOENT') status = 'missing';

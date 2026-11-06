@@ -43,6 +43,10 @@ export class Store {
     `);
     this._getUsageTranscript = this.db.prepare('SELECT * FROM usage_transcripts WHERE transcript_path = ?');
     this._activeUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' ORDER BY updated_at, transcript_path LIMIT ?");
+    this._currentOriginTranscript = this.db.prepare(`SELECT * FROM usage_transcripts
+      WHERE status = 'active' AND runtime = ? AND run_id = ?
+        AND (session_group = 'origin' OR session_group IS NULL) AND parent_path IS NULL
+      ORDER BY rowid DESC LIMIT 1`);
     this._claudeMainTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' AND runtime = 'claude' AND parent_path IS NULL");
     this._missingUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'missing'");
     this._restoreUsageTranscript = this.db.prepare("UPDATE usage_transcripts SET status = 'active' WHERE transcript_path = ? AND status = 'missing'");
@@ -249,7 +253,7 @@ export class Store {
     this._latestCodexRolloutPath = this.db.prepare(`
       SELECT * FROM codex_rollout_paths
       WHERE runtime = @runtime
-      ORDER BY updated_at DESC
+      ORDER BY last_event_at DESC, updated_at DESC, rowid DESC
       LIMIT 1
     `);
 
@@ -760,6 +764,7 @@ export class Store {
 
   getUsageTranscript(file) { return this._getUsageTranscript.get(file) ?? null; }
   activeUsageTranscripts(limit = 50) { return this._activeUsageTranscripts.all(limit); }
+  currentOriginTranscript(runtime, runId) { return this._currentOriginTranscript.get(runtime, runId) ?? null; }
   claudeMainTranscripts() { return this._claudeMainTranscripts.all(); }
   missingUsageTranscripts() { return this._missingUsageTranscripts.all(); }
   restoreUsageTranscript(file) { return this._restoreUsageTranscript.run(file); }
