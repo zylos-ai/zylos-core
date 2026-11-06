@@ -501,6 +501,7 @@ html[data-detail=plain] #observer-tab {
   display: grid;
   grid-template-columns: minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) auto minmax(0,1fr);
   gap: 8px;
+  cursor: pointer;
   align-items: center;
   padding: 6px 8px;
   text-align: left;

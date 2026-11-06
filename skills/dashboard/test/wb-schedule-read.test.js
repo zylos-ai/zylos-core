@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createScheduleRead, scheduleReadResponse } from '../src/lib/workbench/schedule-read.js';
-import { createScheduleTz } from '../src/lib/workbench/schedule-tz.js';
+import { createScheduleTz, localToOffsetIso } from '../src/lib/workbench/schedule-tz.js';
 import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 
@@ -120,6 +120,9 @@ test('schedule read reports counts, sections, recent results and last error from
   const byId = new Map(page.tasks.map(task => [task.id, task]));
   assert.equal(byId.get(ids.completed).status, 'completed');
   assert.equal(page.tasks.filter(task => task.status === 'completed' && task.type === 'one-time').length, 40);
+  const failedRecurring = page.tasks.filter(task => task.type === 'recurring' && task.status === 'failed');
+  assert.equal(failedRecurring.length, 2);
+  assert.equal(failedRecurring.every(task => task.reenable === false), true);
   const history = byId.get(ids.recurring).recent;
   assert.equal(history.length, 12);
   assert.deepEqual(history.map(run => run.executedAt), Array.from({ length: 12 }, (_, i) => NOW - (12 - i) * DAY / 3));
@@ -196,10 +199,29 @@ test('schedule time zone comes from the same installation .env or is reported un
   assert.deepEqual(page.daily7d.days.find(day => day.date === '2027-01-14'), { date: '2027-01-14', success: 1, timeout: 0, failed: 0 });
   assert.deepEqual(await mismatch.preview({ kind: 'at', value: '2027-02-01T09:30' }), { valid: false, error: 'tz_unavailable' });
 
+  // Without ZYLOS_DIR the scheduler reads <home>/zylos; it must be this installation.
+  const elsewhere = path.join(f.root, 'elsewhere-home');
+  fs.mkdirSync(path.join(elsewhere, 'zylos'), { recursive: true });
+  assert.deepEqual(await createScheduleTz({ zylosDir: f.zylosDir, env: {}, home: elsewhere,
+    tzModule: `${TZ_URL}?case=${++importCase}` })(), { tz: null, reason: 'tz_unavailable' });
+  assert.deepEqual(await createScheduleTz({ zylosDir: f.zylosDir, env: {}, home: f.home,
+    tzModule: `${TZ_URL}?case=${++importCase}` })(), { tz: 'Asia/Singapore' });
+
   fs.writeFileSync(path.join(f.zylosDir, '.env'), 'TZ=Not/AZone\n');
   const invalid = await f.reader().read();
   assert.equal(invalid.tz, null);
   assert.equal(invalid.tzReason, 'tz_unavailable');
+});
+
+test('local form times convert with the offset in effect at that moment', () => {
+  // US daylight saving starts at 02:00 on 2027-03-14.
+  assert.deepEqual(localToOffsetIso('2027-03-14T05:00', 'America/New_York'),
+    { iso: '2027-03-14T05:00:00-04:00', epoch: Date.parse('2027-03-14T09:00:00Z') / 1000 });
+  assert.deepEqual(localToOffsetIso('2027-03-14T01:30', 'America/New_York'),
+    { iso: '2027-03-14T01:30:00-05:00', epoch: Date.parse('2027-03-14T06:30:00Z') / 1000 });
+  assert.deepEqual(localToOffsetIso('2027-11-07T12:00', 'America/New_York'),
+    { iso: '2027-11-07T12:00:00-05:00', epoch: Date.parse('2027-11-07T17:00:00Z') / 1000 });
+  assert.equal(localToOffsetIso('2027-03-14 05:00', 'America/New_York'), null);
 });
 
 test('schedule preview validates cron, interval and re-enable times', async t => {

@@ -74,12 +74,15 @@ test('form arguments never carry delivery options for any form input', () => {
     { tz: 'Asia/Singapore' }), ['add', 'Say hi', '--name', 'Daily', '--at', '2030-01-01T09:00:00+08:00']);
   assert.deepEqual(formToArgs({ prompt: 'p', requireIdle: false, schedule: { kind: 'every', value: '1h' } }, { id: 'task-1' }),
     ['update', 'task-1', '--prompt', 'p', '--every', '1h', '--no-block-queue-until-idle']);
-  for (const form of [{ prompt: '--reply-channel', schedule: { kind: 'every', value: '1h' } },
-    { prompt: 'x', name: '--reply-endpoint', schedule: { kind: 'every', value: '1h' } },
-    { prompt: 'x', priority: '--clear-reply', schedule: { kind: 'every', value: '1h' } },
-    { prompt: 'x', schedule: { kind: 'cron', value: '--clear-session-group' } }]) {
-    assert.throws(() => formToArgs(form, {}), error => error.formCode === 'invalid_form');
-  }
+  // Only the positional content of a new task can be read as an option by the CLI.
+  assert.throws(() => formToArgs({ prompt: '--- weekly report ---', schedule: { kind: 'every', value: '1h' } }, {}),
+    error => error.formCode === 'invalid_form');
+  assert.throws(() => formToArgs({ prompt: 'x', priority: '--clear-reply', schedule: { kind: 'every', value: '1h' } }, {}),
+    error => error.formCode === 'invalid_form');
+  assert.deepEqual(formToArgs({ prompt: 'x', name: '--- weekly ---', schedule: { kind: 'cron', value: '--x' } }, {}),
+    ['add', 'x', '--name', '--- weekly ---', '--cron', '--x']);
+  assert.deepEqual(formToArgs({ prompt: '--reply-channel', schedule: { kind: 'every', value: '--every' } }, { id: 'task-1' }),
+    ['update', 'task-1', '--prompt', '--reply-channel', '--every', '--every']);
   assert.throws(() => formToArgs({ prompt: 'x', schedule: { kind: 'at', value: '2030-01-01T09:00' } }, {}),
     error => error.formCode === 'tz_unavailable');
 });
@@ -124,6 +127,17 @@ test('scheduler writes report done or the scheduler rejection text', async conte
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 0);
   assert.ok(statements.some(item => item.readonly));
   assert.equal(statements.filter(item => /^\s*(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\b/i.test(item.sql)).length, 0);
+  const dashed = await d.write('POST', '/api/workbench/schedule', { name: '--- weekly ---', prompt: 'Weekly',
+    schedule: { kind: 'every', value: '1h' } });
+  const dashedId = dashed.body.data.task.id;
+  assert.equal((await d.write('PUT', `/api/workbench/schedule/${dashedId}`, { prompt: '--reply-channel' })).body.result, 'done');
+  const stored = db.prepare('SELECT name, prompt, reply_channel, session_component FROM tasks WHERE id=?').get(dashedId);
+  assert.deepEqual({ ...stored }, { name: '--- weekly ---', prompt: '--reply-channel', reply_channel: null, session_component: null });
+  const positional = await d.write('POST', '/api/workbench/schedule', { name: 'Weekly', prompt: '--- weekly report ---',
+    schedule: { kind: 'every', value: '1h' } });
+  assert.deepEqual({ status: positional.status, result: positional.body.result, code: positional.body.code },
+    { status: 400, result: 'rejected', code: 'invalid_form' });
+  assert.match(writeMessage(positional.body, t), /^表单内容不合规/);
   assert.equal((await d.write('POST', '/api/workbench/schedule/--json/pause')).body.code, 'invalid_task');
   assert.equal(await d.write('PATCH', '/api/workbench/schedule/task-1'), null);
 });

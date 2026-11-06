@@ -86,13 +86,23 @@ export function groupTasks(tasks, { status = 'all', target = 'all', query = '', 
   }).filter(section => section.tasks.length);
 }
 
+const EXPLAINED = new Set(['RESCHEDULE_NOT_FUTURE', 'TASK_WRONG_STATUS', 'tz_unavailable', 'invalid_time', 'invalid_form',
+  'invalid_task', 'invalid_json', 'payload_too_large', 'insufficient_scope', 'read_only_proxy', 'unauthorized']);
+const REFUSED = new Set(['invalid_json', 'payload_too_large', 'insufficient_scope', 'read_only_proxy', 'unauthorized']);
+
+/** Turns an HTTP reply into a write outcome; a definite refusal without an envelope is still rejected. */
+export function writeOutcome(status, value) {
+  if (value?.result) return value;
+  if (status >= 400 && status < 500 && REFUSED.has(value?.error)) return { result: 'rejected', code: value.error, message: '' };
+  return { result: 'unknown', reason: value?.error ?? 'request_failed' };
+}
+
 /** Write result to show in the form; anything without a scheduler envelope is "unknown". */
 export function writeMessage(outcome, t = key => key) {
   if (outcome?.result === 'done') return null;
   if (outcome?.result === 'rejected') {
-    const hint = ['RESCHEDULE_NOT_FUTURE', 'TASK_WRONG_STATUS', 'tz_unavailable', 'invalid_time'].includes(outcome.code)
-      ? t('wb.schedule.error.' + outcome.code) + ' · ' : '';
-    return hint + (outcome.message || outcome.code);
+    const hint = EXPLAINED.has(outcome.code) ? t('wb.schedule.error.' + outcome.code) : null;
+    return [hint, outcome.message].filter(Boolean).join(' · ') || outcome.code;
   }
   return t('wb.schedule.unknownResult');
 }
@@ -199,7 +209,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       const value = await response.json().catch(() => null);
-      outcome = value?.result ? value : { result: 'unknown', reason: value?.error ?? 'request_failed' };
+      outcome = writeOutcome(response.status, value);
     } catch {
       outcome = { result: 'unknown', reason: 'request_failed' };
     }
@@ -334,7 +344,16 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     }, 'wb-sched-target');
   }
   function renderRow(task) {
-    const row = button(document, undefined, () => select(task.id), 'wb-sched-row' + (task.id === selected ? ' active' : ''));
+    // A row holds the target-group button, so it is not a button itself.
+    const row = element(document, 'div', undefined, 'wb-sched-row' + (task.id === selected ? ' active' : ''));
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.addEventListener('click', () => select(task.id));
+    row.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault?.();
+      select(task.id);
+    });
     const name = element(document, 'span', task.name, 'wb-sched-name');
     name.append(element(document, 'small', firstSentence(task.prompt)));
     const rule = element(document, 'span', scheduleText(task, { t, locale: locale() }), 'wb-sched-rule');
@@ -422,6 +441,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const rule = element(document, 'p', scheduleText(task, { t, locale: locale() }));
     if (level() === 'technical' && task.cron) rule.append(element(document, 'small', ' ' + task.cron));
     panel.append(rule, element(document, 'p', deliveryLine(task, { t, level: level(), locale: locale() }), 'wb-sched-delivery'));
+    panel.append(element(document, 'p', t(task.requireIdle ? 'wb.schedule.requireIdle.yes' : 'wb.schedule.requireIdle.no'),
+      'wb-sched-idle'));
     const upcoming = task.nextRuns?.unavailable ? t('wb.schedule.noPreview')
       : (task.nextRuns?.runs ?? []).slice(0, 5).map(time).join(' · ') || '—';
     panel.append(element(document, 'p', t('wb.schedule.next5') + ' · ' + upcoming));

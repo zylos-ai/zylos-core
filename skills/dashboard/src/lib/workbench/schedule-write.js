@@ -46,8 +46,6 @@ export function createSchedulerCli({ zylosDir, execute = execFile, env = process
 const text = (value, field) => {
   if (value === undefined || value === null) return '';
   if (typeof value !== 'string') throw formError('invalid_form', `${field} must be text`);
-  // The CLI reads any token starting with "--" as an option, never as a value.
-  if (value.startsWith('--')) throw formError('invalid_form', `${field} cannot start with "--"`);
   return value;
 };
 
@@ -59,6 +57,9 @@ export function formToArgs(form, { id = null, tz = null } = {}) {
   if (!form || typeof form !== 'object' || Array.isArray(form)) throw formError('invalid_form', 'Form must be an object');
   const name = text(form.name, 'name');
   const prompt = text(form.prompt, 'prompt');
+  // `add` takes the content as a positional argument, which the CLI reads as an
+  // option when it starts with "--". Values after a flag are always values.
+  if (id === null && prompt.startsWith('--')) throw formError('invalid_form', 'New task content cannot start with "--"');
   const args = id === null ? ['add', prompt] : ['update', id];
   if (name) args.push('--name', name);
   if (id !== null && prompt) args.push('--prompt', prompt);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deliveryLine, groupTasks, mountSchedule, targetLabel, writeMessage } from '../public/js/wb/schedule.js';
+import { deliveryLine, groupTasks, mountSchedule, targetLabel, writeMessage, writeOutcome } from '../public/js/wb/schedule.js';
 import { createForm, createPreviewer, formPayload, initialForm, saveAllowed } from '../public/js/wb/schedule-form.js';
 import { allNodes, createDocument, deferred, tick } from './fixtures/workbench-dom.js';
 import { packTranslator } from './fixtures/schedule-env.js';
@@ -49,6 +49,19 @@ test('list sections order enabled tasks by next run and keep expired and complet
   assert.deepEqual(groupTasks(tasks, { t, query: 'BUSY' })[0].tasks.map(item => item.id), ['busy']);
   assert.equal(writeMessage({ result: 'unknown', reason: 'scheduler_cli_failed' }, t), '结果未知，已重新读取当前状态');
   assert.equal(writeMessage({ result: 'rejected', code: 'INVALID_ARGS', message: 'Priority must be 1-3' }, t), 'Priority must be 1-3');
+  // Definite refusals without a scheduler envelope are rejections, not unknown results.
+  for (const [status, error, text] of [[413, 'payload_too_large', '内容太长，未保存'], [400, 'invalid_json', '请求格式错误，未保存'],
+    [403, 'insufficient_scope', '当前密钥只读，不能修改定时任务'], [403, 'read_only_proxy', '经代理访问这台 agent 时不允许这项修改'],
+    [401, 'unauthorized', '登录已失效，请重新登录']]) {
+    const outcome = writeOutcome(status, { error });
+    assert.deepEqual(outcome, { result: 'rejected', code: error, message: '' });
+    assert.equal(writeMessage(outcome, t), text);
+  }
+  for (const [status, value] of [[500, { error: 'internal_error' }], [502, { result: 'unknown', reason: 'scheduler_cli_failed' }], [200, null]]) {
+    assert.equal(writeOutcome(status, value).result, 'unknown');
+  }
+  assert.match(writeMessage({ result: 'rejected', code: 'invalid_form', message: 'New task content cannot start with "--"' }, t),
+    /^表单内容不合规（新建任务的内容不能以 -- 开头） · /);
 });
 
 test('the shared form has no delivery fields and saving follows the preview', () => {
@@ -261,4 +274,45 @@ test('read-only agents get no write entry points and target groups open the over
   buttons(h.root, 'Telegram · dm-1001')[0].dispatch('click', { stopPropagation() {} });
   assert.deepEqual(h.opened, ['telegram:dm-1001']);
   assert.equal(h.calls.some(call => call.method !== 'GET'), false);
+});
+
+test('schedule page shows an unknown time zone, unavailable previews and the idle setting', async context => {
+  const broken = task({ id: 'task-cron', name: 'Broken rule', cron: 'bad', requireIdle: true,
+    nextRuns: { unavailable: true, reason: 'cron_preview_unavailable' } });
+  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
+    : { ...page([broken]), tz: null, tzReason: 'tz_unavailable', daily7d: { tz: 'UTC', utcFallback: true, days: [] } });
+  await tick();
+  assert.match(textOf(h.root), /时区未知 · 时间按 UTC 显示/);
+  const row = allNodes(h.root).find(node => node.classList.contains('wb-sched-row'));
+  assert.equal(row.children.find(node => node.classList.contains('wb-sched-next')).textContent, '无法预览');
+  assert.equal(allNodes(h.root).some(node => node.classList.contains('wb-sched-dot')), false);
+  row.dispatch('click');
+  await tick();
+  assert.match(textOf(h.root), /接下来 5 次 · 无法预览/);
+  assert.match(textOf(h.root), /等空闲再跑：是/);
+});
+
+test('a refused write explains the refusal and rows never nest buttons', async context => {
+  const group = { kind: 'group', sessionGroup: 'telegram:dm-1001', componentName: 'telegram', displayName: null };
+  const h = harness(context, (path, options) => {
+    if (options.method === 'PUT') return { ok: false, status: 413, json: async () => ({ error: 'payload_too_large' }) };
+    return path.includes('/history') ? { rows: [], next: null } : page([task({ target: group })]);
+  });
+  await tick();
+  const row = allNodes(h.root).find(node => node.classList.contains('wb-sched-row'));
+  assert.notEqual(row.tagName, 'BUTTON');
+  assert.equal(row.attributes.role, 'button');
+  assert.equal(allNodes(row).filter(node => node.tagName === 'BUTTON').length, 1);
+  row.dispatch('keydown', { key: 'Enter', preventDefault() {} });
+  await tick();
+  assert.match(textOf(h.root), /等空闲再跑：否/);
+  buttons(h.root, '编辑')[0].dispatch('click');
+  const form = allNodes(h.root).find(node => node.tagName === 'FORM');
+  const before = h.reads();
+  form.dispatch('submit', { preventDefault() {} });
+  await tick();
+  await tick();
+  assert.equal(h.reads(), before + 1);
+  assert.match(textOf(form), /内容太长，未保存/);
+  assert.equal(textOf(form).includes('结果未知'), false);
 });
