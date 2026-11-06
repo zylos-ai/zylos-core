@@ -177,6 +177,11 @@ test('message counts distinguish unreadable and zero in both locales and detail 
       const empty = fixture();
       renderUsage(empty.root, { ...value, messagesReason: null, messages: value.buckets.map(at => ({ at, in: 0, out: 0 })),
         totals: { ...value.totals, messages: { in: 0, out: 0 } } }, { ...empty, t, level });
+      const emptyTotals = allNodes(empty.root).find(node => node.classList.contains('wb-usage-totals'));
+      for (const key of ['wb.usage.received', 'wb.usage.sent']) {
+        const box = emptyTotals.children.find(node => node.children[0].textContent === t(key));
+        assert.equal(box.children[1].textContent, '0');
+      }
       const messageChart = empty.configs[1];
       assert.deepEqual(messageChart.data.datasets.map(row => row.data), [[0, 0], [-0, -0]]);
     }
