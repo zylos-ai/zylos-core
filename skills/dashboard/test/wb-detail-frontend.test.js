@@ -725,3 +725,42 @@ test('a stale aborted refresh cannot report a read failure on the replacement ru
   assert.equal(f.controller.state.error, null);
   f.controller.destroy();
 });
+
+
+test('switching runs aborts a hanging subagent read so the shared refresh can finish', { timeout: 2000 }, async () => {
+  let current = row('a'), holdOld = false, oldSignal, releaseOld;
+  const f = detailFixture(async (path, options) => {
+    const url = new URL(path, 'http://fixture');
+    if (url.searchParams.get('types') === 'subagent_start,subagent_stop' && holdOld &&
+        url.searchParams.get('run_id') === 'run-a') {
+      oldSignal = options.signal;
+      return new Promise((resolve, reject) => {
+        releaseOld = resolve;
+        oldSignal.addEventListener('abort', () => reject(Object.assign(new Error('This operation was aborted'),
+          { name: 'AbortError' })), { once: true });
+      });
+    }
+    if (url.pathname.endsWith('/runs')) return response({ runs: [run(current.live.runId)], totalRuns: 1, totalEvents: 0 });
+    return response(defaultRead(path));
+  });
+  let pending, switching;
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    holdOld = true;
+    pending = f.controller.refresh();
+    assert.ok(oldSignal, 'the old run read is hanging without any server response');
+    current = row('a', { live: { runId: 'run-b', sessionId: 'session-b' } });
+    switching = f.controller.updateSnapshot({ rows: [current], listKnown: true });
+    assert.equal(oldSignal.aborted, true, 'run selection immediately cancels the old transport');
+    await Promise.all([pending, switching]);
+    assert.equal(f.controller.state.row.live.runId, 'run-b');
+    assert.equal(f.controller.state.error, null);
+    assert.doesNotMatch(f.root.textContent, /This operation was aborted|wb.readFailed/);
+    // Both refresh promises completed while the old server response remained
+    // unresolved; cancellation alone must release the shared refresh.
+  } finally {
+    releaseOld?.(response({ events: [] }));
+    f.controller.destroy();
+    await Promise.allSettled([pending, switching].filter(Boolean));
+  }
+});

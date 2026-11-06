@@ -285,7 +285,10 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const previousRun = state.row.live?.runId;
       if (!state.historical) state.row = snapshot.rows?.find(row => row.sessionGroup === state.row.sessionGroup) ??
         olderRow(state.row.sessionGroup, { name: state.row.name, listKnown: snapshot.listKnown });
-      if (previousRun !== state.row.live?.runId) timeline.close();
+      if (previousRun !== state.row.live?.runId) {
+        resetSubagents();
+        timeline.close();
+      }
       draw();
       await refresh();
     },
