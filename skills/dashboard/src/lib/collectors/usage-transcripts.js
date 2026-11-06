@@ -140,7 +140,8 @@ export class UsageTranscripts {
           written += result?.written ?? 0;
         }
         const stat = fs.statSync(row.transcript_path);
-        const ended = snapshot && (row.run_id == null && row.session_group == null
+        const ended = snapshot && (row.runtime === 'claude' && row.run_id == null &&
+          row.session_group == null && this._legacySessionId != null
           ? row.session_id !== this._legacySessionId : row.run_id !== this._currentRun(row, snapshot));
         if (snapshot && stat.size === offset && stat.mtimeMs < at - 30 * 60000 && ended) status = 'finished';
       } catch (error) {

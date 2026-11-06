@@ -463,3 +463,48 @@ test('rotated legacy sessions finish after idle EOF while the current legacy rem
   assert.equal(f.store.getUsageTranscript(first), null);
   assert.equal(f.store.getUsageTranscript(next).status, 'active');
 });
+
+for (const [runtime, statusline, title] of [
+  ['codex', 'other', 'legacy Codex stays collectible with an unrelated Claude statusline'],
+  ['codex', 'absent', 'legacy Codex stays collectible without a Claude statusline'],
+  ['claude', 'absent', 'legacy Claude stays collectible without a statusline'],
+  ['claude', 'invalid', 'legacy Claude stays collectible when the statusline cannot be parsed'],
+]) {
+  test(title, async t => {
+    const f = fixture(t, { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: null } }] });
+    const file = f.file('legacy-current');
+    if (statusline !== 'absent') {
+      fs.mkdirSync(path.join(f.root, 'activity-monitor'), { recursive: true });
+      fs.writeFileSync(path.join(f.root, 'activity-monitor', 'statusline.json'), statusline === 'other'
+        ? JSON.stringify({ session_id: 'unrelated-claude' }) : '{');
+    }
+    f.store.insertUsageTranscript({ transcript_path: file, runtime, session_id: 'legacy-current' },
+      new Date(f.now()).toISOString());
+    const request = id => runtime === 'claude'
+      ? { type: 'assistant', requestId: id, uuid: id, sessionId: 'legacy-current',
+        timestamp: new Date(f.now()).toISOString(), message: { model: 'claude-example', content: [],
+          usage: { input_tokens: 10, output_tokens: 2 } } }
+      : { type: 'event_msg', timestamp: new Date(f.now()).toISOString(), payload: { type: 'token_count',
+        info: { id, model: 'gpt-5.3-codex', last_token_usage: { input_tokens: 10, output_tokens: 2 } } } };
+    const append = id => {
+      fs.appendFileSync(file, JSON.stringify(request(id)) + '\n');
+      fs.utimesSync(file, new Date(f.now()), new Date(f.now()));
+    };
+    const Collector = runtime === 'claude' ? ConversationCollector : CodexRolloutCollector;
+    const collector = new Collector(f.store, { homeDir: f.root, zylosDir: f.root }, { transcripts: f.inventory });
+    append('before-idle');
+    await collector.collect();
+    assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 1);
+    assert.equal(f.store.getUsageTranscript(file).byte_offset, fs.statSync(file).size);
+    f.advance(40 * 60000);
+    await collector.collect();
+    assert.equal(f.store.getUsageTranscript(file).status, 'active');
+    append('after-idle');
+    await collector.collect();
+    assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 2);
+    assert.equal(f.store.getUsageTranscript(file).status, 'active');
+    assert.equal(f.store.getUsageTranscript(file).byte_offset, fs.statSync(file).size);
+    await collector.collect();
+    assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 2);
+  });
+}
