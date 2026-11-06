@@ -1,6 +1,6 @@
-import { element } from './plain-text.js?v=83';
+import { element } from './plain-text.js?v=85';
 
-// Both views. The upgrade button is the original generated action node.
+// Technical detail view. The upgrade button is the original generated action node.
 export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, onHint = () => {} } = {}) {
   root.replaceChildren(element(document, 'h3', t('wb.settings.version')));
   const ri = info ?? {};

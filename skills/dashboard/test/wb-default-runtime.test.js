@@ -35,6 +35,38 @@ test('explicit Codex model changes project config while keeping Claude bytes', a
   assert.equal(fs.readFileSync(claude, 'utf8'), before);
 });
 
+test('explicit Claude model saves the default without requesting a restart', async t => {
+  const { claude, codex, config } = fixture(t), before = fs.readFileSync(codex, 'utf8');
+  const result = await handleAction('switch-model', { runtime: 'claude', model: 'sonnet' }, config);
+  assert.equal(result.ok, true);
+  assert.equal(result.runtime, 'claude');
+  assert.equal(result.requires_restart, false);
+  assert.equal(result.messageParams.runtime, 'claude');
+  assert.equal(JSON.parse(fs.readFileSync(claude)).model, 'sonnet');
+  assert.equal(fs.readFileSync(codex, 'utf8'), before);
+});
+
+test('empty configured and environment runtimes retain legacy Claude model and effort writes', async t => {
+  // Own the action cache so identical legacy payloads in other fixtures do not collide.
+  const { handleAction: dispatch } = await import('../src/lib/actions.js?empty-runtime-defaults');
+  const { claude, codex, config } = fixture(t), before = fs.readFileSync(codex, 'utf8');
+  const previous = process.env.ZYLOS_RUNTIME;
+  t.after(() => { if (previous === undefined) delete process.env.ZYLOS_RUNTIME; else process.env.ZYLOS_RUNTIME = previous; });
+  config.runtime = ''; process.env.ZYLOS_RUNTIME = '';
+  const model = await dispatch('switch-model', { model: 'sonnet' }, config);
+  const effort = await dispatch('switch-effort', { effort: 'high' }, config);
+  assert.equal(model.ok, true);
+  assert.equal(effort.ok, true);
+  assert.equal(model.runtime, 'claude');
+  assert.equal(effort.runtime, 'claude');
+  assert.equal(model.requires_restart, true);
+  assert.equal(effort.requires_restart, true);
+  const saved = JSON.parse(fs.readFileSync(claude));
+  assert.equal(saved.model, 'sonnet');
+  assert.equal(saved.effortLevel, 'high');
+  assert.equal(fs.readFileSync(codex, 'utf8'), before);
+});
+
 test('absent runtime retains active Claude behavior and unrelated settings', async t => {
   const { claude, codex, config } = fixture(t), before = fs.readFileSync(codex, 'utf8');
   const result = await handleAction('switch-model', { model: 'sonnet' }, config);

@@ -69,6 +69,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
       multiAgent: true,
       observer: { generation: 0, statusGeneration: 0, statusRequest: null }
     },
+    settingsLoader: { invalidate() {} },
     settingsModal: { querySelector: (selector) => settings[selector], querySelectorAll: () => buttons },
     $: (selector) => elements[selector],
     document: {
@@ -466,7 +467,7 @@ test('fleet ↔ agent view transition is wired with a graceful fallback', () => 
   // Graceful fallback: reduced motion / missing stack / already-active → instant swap.
   assert.match(app, /prefersReducedMotion\(\)/);
   // First-load deliberately dwells on the single-agent page, then zooms to the wall.
-  assert.match(app, /setTimeout\(\(\) => showFleetView\(\{ animate: true \}\), \d+\)/);
+  assert.match(app, /setTimeout\(\(\) => \{[\s\S]*?if \(tabForPath\(window\.location\.pathname\) !== 'settings'\) showFleetView\(\{ animate: true \}\);[\s\S]*?\}, 380\)/);
   // CSS defines the stack and the zoom enter/leave states.
   assert.match(css, /\.view-stack\s*\{\s*display:\s*grid/);
   assert.match(css, /\.app-view\.v-enter/);
@@ -915,7 +916,8 @@ test('Observer UI is optional, read-only, agent-routed, and releases leases on e
   assert.match(app, /window\.addEventListener\('pagehide',[\s\S]+closeObserver/);
   assert.match(app, /state\.remoteAgent \? api\(`\$\{remotePrefix\(\)\}\$\{path\}`\) : api\(path\)/);
   assert.match(app, /const refreshed = await refreshObserverStatus\(\{ quiet: true \}\);/);
-  assert.ok(app.indexOf('await refreshObserverStatus({ quiet: true });\ninitTabs();') > -1);
+  assert.ok(app.indexOf('await refreshObserverStatus({ quiet: true });') < app.lastIndexOf('initTabs();'));
+  assert.ok(app.indexOf('await refreshObserverStatus({ quiet: true });') > -1);
   assert.match(css, /\.observer-frame-shell/);
   for (const pack of [en, zh]) {
     assert.equal(typeof pack['tab.observer'], 'string');
@@ -1534,8 +1536,8 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
-  assert.match(index, /app\.js\?v=84/);
-  assert.match(index, /style\.css\?v=57/);
+  assert.match(index, /app\.js\?v=85/);
+  assert.match(index, /style\.css\?v=58/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
@@ -1602,7 +1604,7 @@ test('fleet management entry stays local and its controls are retained in settin
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
-  assert.match(index, /app\.js\?v=84/);
+  assert.match(index, /app\.js\?v=85/);
   assert.match(index, /<path d="M12 8V4H8"/);
   assert.match(index, /<rect width="16" height="12" x="4" y="8" rx="2"/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
@@ -1626,7 +1628,7 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /fleetManageStatus\(fleetManageError\(data\.error \|\| 'unreachable'/);
   const render = app.slice(app.indexOf('function renderAll('), app.indexOf('// ─── Data fetching'));
   assert.doesNotMatch(render, /fleetManageModal\.remove\(\)/);
-  assert.match(app, /settingsModal = root; fleetManageModal = root; actionsModal = root/);
+  assert.match(app, /settingsModal = root; fleetManageModal = root; actionsModal = settingsPage\.actionsScope/);
   assert.match(app, /composeSettings\(root, \{ settings: oldSettings, fleet: oldFleet, actions: oldActions/);
   assert.match(app, /function renderFleetManage\(data, draft = null\)/);
   assert.match(app, /if \(!draft\) selfInput\.value = data\?\.self\?\.name \|\| viewedAgentName\(\);/);
@@ -1742,7 +1744,7 @@ test('i18n loader survives flaky pack fetches (#208)', async () => {
   assert.match(i18n, /renderI18n\(\);[\s\S]*?\} catch \{/);
 
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /from '\.\/i18n\.js\?v=84'/);
+  assert.match(app, /from '\.\/i18n\.js\?v=85'/);
 });
 
 test('overlapping initI18n calls: stale slow request cannot overwrite the newer locale (#211 review)', async () => {

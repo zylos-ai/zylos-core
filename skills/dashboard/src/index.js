@@ -404,8 +404,7 @@ async function runtimeOverridesPage(params) {
     const data = envelope?.data;
     if (envelope?.ok !== true || !Array.isArray(data?.runtime) ||
         data.runtime.some(row => !row || typeof row.sessionGroup !== 'string' || !['claude', 'codex'].includes(row.runtime)) ||
-        (data.nextAfter != null && typeof data.nextAfter !== 'string') ||
-        (!args.includes('--group') && data.runtime.length > 100)) throw Error('override_list_failed');
+        (data.nextAfter != null && typeof data.nextAfter !== 'string')) throw Error('override_list_failed');
     return data;
   }
   const hasQuery = params.has('q');

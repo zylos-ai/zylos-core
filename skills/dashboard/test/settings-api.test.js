@@ -16,6 +16,7 @@ import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
 
 const fetch = (url, options = {}) => globalThis.fetch(url, { ...options, signal: AbortSignal.timeout(3000) });
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
+import { StatuslineCollector } from '../src/lib/collectors/statusline-collector.js';
 import {
   DEFAULT_CODEX_MODEL_PRICES,
   DEFAULT_CODEX_PRIORITY_MODEL_PRICES,
@@ -73,7 +74,7 @@ function parseConfigFile(configPath) {
 async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-server-'));
   const previous = process.env.ZYLOS_DIR;
-  let server, engine, ownedStore, reader, mutations = 0, closed = false;
+  let server, engine, ownedStore, reader, statusline, mutations = 0, closed = false;
   const timers = [], originalInterval = globalThis.setInterval;
   const close = async () => {
     if (closed) return;
@@ -116,6 +117,9 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
   t.mock.module('../src/lib/state-engine.js', { namedExports: {
     StateEngine: class extends StateEngine { constructor(...args) { super(...args); engine = this; } },
   } });
+  t.mock.module('../src/lib/collectors/statusline-collector.js', { namedExports: {
+    StatuslineCollector: class extends StatuslineCollector { constructor(...args) { super(...args); statusline = this; } },
+  } });
   t.mock.module('../src/lib/config-mutation.js', { namedExports: {
     mutateConfig: (...args) => { mutations++; return mutateConfig(...args); },
   } });
@@ -131,7 +135,7 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   assert.equal(server.address().address, '127.0.0.1');
   assert.ok(engine.store.db.name.startsWith(dir + path.sep));
-  return { dir, configPath, store: engine.store, config: engine._config,
+  return { dir, configPath, store: engine.store, config: engine._config, statusline,
     mutations: () => mutations, origin: `http://127.0.0.1:${server.address().port}`, close };
 }
 
@@ -614,6 +618,14 @@ test('explicit runtime metadata reads saved defaults for active and inactive run
   fs.mkdirSync(path.join(server.dir, '.codex'), { recursive: true });
   fs.writeFileSync(path.join(server.dir, '.claude/settings.json'), JSON.stringify({ model: 'opus', effortLevel: 'low' }));
   fs.writeFileSync(path.join(server.dir, '.codex/config.toml'), 'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n');
+  t.mock.method(server.statusline, '_read', async () => ({
+    identity: { runtime: 'claude', runId: 'running', sessionId: 'running-session' },
+    usage: { valid: true, sampledAt: Date.now(), value: {
+      model: { id: 'opus' }, effort: { level: 'high' }
+    } }
+  }));
+  await server.statusline.collect();
+  assert.equal(server.statusline.getRuntimeInfo().effort, 'high');
   for (const [runtime, effort] of [['claude', 'low'], ['codex', 'high']]) {
     const response = await fetch(server.origin + '/api/actions/meta?runtime=' + runtime);
     assert.equal(response.status, 200);
@@ -623,7 +635,9 @@ test('explicit runtime metadata reads saved defaults for active and inactive run
     assert.equal(meta.runtime_cli, runtime);
   }
   assert.equal((await fetch(server.origin + '/api/actions/meta?runtime=foo')).status, 400);
-  assert.equal((await fetch(server.origin + '/api/actions/meta')).status, 200);
+  const legacy = await fetch(server.origin + '/api/actions/meta');
+  assert.equal(legacy.status, 200);
+  assert.equal((await legacy.json()).current_effort, 'high');
 });
 
 // HTTP integration via makeSettingsServer: actual route/config persistence;
@@ -636,6 +650,9 @@ test('override pages support read credentials and preserve bounded CLI arguments
     return { ok: true, data: { runtimeTotal: 100000, runtime: [{ sessionGroup: 'chat:AbC', runtime: 'codex' }], nextAfter: 'chat:AbC' } };
   });
   server.store.insertApiKey({ name: 'read-fixture', keyHash: hashApiKey('zylos_ak_fixture'), scope: 'read' });
+  const previousGroup = process.env.ZYLOS_SESSION_GROUP;
+  t.after(() => { if (previousGroup === undefined) delete process.env.ZYLOS_SESSION_GROUP; else process.env.ZYLOS_SESSION_GROUP = previousGroup; });
+  process.env.ZYLOS_SESSION_GROUP = 'fixture:unrelated-group';
   const token = exchangeApiKeyForToken('zylos_ak_fixture').token;
   const headers = { Authorization: `Bearer ${token}` };
   assert.equal((await fetch(server.origin + '/api/workbench/runtime-overrides')).status, 401);
@@ -733,8 +750,8 @@ test('pricing usage aggregates dimension tokens and preserves old costs after pr
     ['codex', { model: 'gpt-reserve', total_input: 1000000 }],
     ['codex', { model: 'gpt-reserve', output: 400000 }],
     ['codex', { model: 'old-unmatched', total_input: 2 }, old],
-    ['claude', { model: 'claude-opus-4', cost: 3 }],
-    ['codex', { model: 'gpt-6-astra', cost: 5 }],
+    ['claude', { model: 'claude-opus-4', cost: 3, total_input: 700, output: 300 }],
+    ['codex', { model: 'gpt-6-astra', cost: 5, total_input: 900, output: 100 }],
     ['codex', { model: 'empty' }],
   ]) insert.run(timestamp, runtime, JSON.stringify(dimensions));
   const usage = await (await fetch(server.origin + '/api/workbench/pricing')).json();

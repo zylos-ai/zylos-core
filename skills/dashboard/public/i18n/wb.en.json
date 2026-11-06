@@ -276,5 +276,6 @@
   "wb.settings.theme.system": "Follow system",
   "wb.settings.latency": "Recent probe latency; empty slots indicate failed probes",
   "wb.settings.observerNote": "Observe by group: connect to one group at a time; switching groups disconnects and reconnects",
-  "wb.settings.fleetNameNote": "Instance name ≠ group display name"
+  "wb.settings.fleetNameNote": "Instance name ≠ group display name",
+  "wb.detail.loadMore": "Load more"
 }

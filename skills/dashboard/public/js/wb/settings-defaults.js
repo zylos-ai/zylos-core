@@ -1,5 +1,5 @@
 import { effortOptionState } from '../runtime-ui.js';
-import { element, fallbackName } from './plain-text.js?v=83';
+import { element, fallbackName } from './plain-text.js?v=85';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {

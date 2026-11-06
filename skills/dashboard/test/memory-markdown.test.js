@@ -99,8 +99,8 @@ test('index.html loads markdown-it before app.js and bumps cache versions', () =
   const appIdx = html.indexOf('js/app.js?v=');
   assert.ok(mdIdx > -1, 'markdown-it script tag present');
   assert.ok(mdIdx < appIdx, 'markdown-it loads before app.js');
-  assert.match(html, /app\.js\?v=84/);
-  assert.match(html, /style\.css\?v=57/);
+  assert.match(html, /app\.js\?v=85/);
+  assert.match(html, /style\.css\?v=58/);
 });
 
 test('stylesheet covers the newly rendered elements', () => {

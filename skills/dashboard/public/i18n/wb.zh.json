@@ -276,5 +276,6 @@
   "wb.settings.theme.system": "跟随系统",
   "wb.settings.latency": "最近探测时延；空位表示探测失败",
   "wb.settings.observerNote": "按组观察：同一时间只连一个组，换组会断开重连",
-  "wb.settings.fleetNameNote": "本机名 ≠ 组显示名"
+  "wb.settings.fleetNameNote": "本机名 ≠ 组显示名",
+  "wb.detail.loadMore": "加载更多"
 }

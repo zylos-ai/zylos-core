@@ -1,9 +1,10 @@
-import { element } from './plain-text.js?v=83';
+import { element } from './plain-text.js?v=85';
 
 export function mountThemeControl(root, { document = root.ownerDocument, t = key => key, value = 'light', onChange }) {
-  const label = element(document, 'label', t('wb.theme'));
+  const label = element(document, 'label');
+  const text = element(document, 'span', t('wb.theme')); text.dataset.i18n = 'wb.theme'; label.append(text);
   const select = element(document, 'select'); select.id = 'settings-theme'; select.className = 'action-select';
-  for (const theme of ['light', 'dark', 'system']) { const option = element(document, 'option', t('wb.settings.theme.' + theme)); option.value = theme; select.append(option); }
+  for (const theme of ['light', 'dark', 'system']) { const option = element(document, 'option', t('wb.settings.theme.' + theme)); option.dataset.i18n = 'wb.settings.theme.' + theme; option.value = theme; select.append(option); }
   select.value = value; select.addEventListener('change', () => onChange(select.value)); label.append(select); root.append(label); return select;
 }
 // Technical view only: a failure occupies an empty slot, not a zero millisecond bar.

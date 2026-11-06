@@ -114,7 +114,8 @@ test('two pricing tabs retain hidden builtins, custom deletion, premium rates an
 
 test('invalid custom price row blocks the entire two-runtime save and unmatched Add price selects its runtime', async () => {
   const fixture = priceFixture(), writes = [];
-  const panel = createPricingPanel({ ...fixture, usage: { models: [], unmatched: [{ runtime: 'codex', model: 'gpt-reserve', tokens: 1400000 }] }, t, write: async body => writes.push(body) });
+  const panel = createPricingPanel({ ...fixture, usage: { models: [], unmatched: [{ runtime: 'codex', model: 'gpt-reserve', tokens: 1400000 }] }, t, formatTokens: value => (value / 1e6).toFixed(1) + 'M', write: async body => writes.push(body) });
+  assert.match(fixture.root.textContent, /1\.4M/);
   const add = fixture.root.querySelectorAll('button').find(button => button.textContent === 'wb.settings.addPrice'); await add.dispatch('click');
   assert.equal(panel.runtime(), 'codex'); assert.ok(fixture.base.children.some(row => row.dataset.prefix === 'gpt-reserve'));
   appendPriceRow(fixture.base, '', fixture.rate, false, fixture); await panel.save(); assert.equal(writes.length, 0); assert.equal(fixture.root.querySelector('#settings-status').textContent, 'model_prefix_required'); panel.destroy();
@@ -132,6 +133,11 @@ test('settings composition moves actual control nodes and preserves their listen
   const moved = []; let movedCalls = 0;
   for (const [source, tag, id] of [[settings, 'section', 'settings-model-pricing-group'], [settings, 'section', 'observer-settings-group'], [actions, 'section', 'action-status'], [actions, 'section', 'action-confirm']]) { const control = node(document, tag, id); source.append(control); control.addEventListener('click', () => movedCalls++); moved.push(control); }
   const modeField = node(document, 'div'); modeField.className = 'action-field'; const mode = node(document, 'select', 'action-mode'); modeField.append(mode); actions.append(modeField); let calls = 0; mode.addEventListener('change', () => calls++);
+  const thresholdField = node(document, 'div'); thresholdField.className = 'action-field';
+  const threshold = node(document, 'input', 'action-threshold'), apply = node(document, 'button', 'action-threshold-apply');
+  thresholdField.append(threshold, apply); actions.append(thresholdField);
+  const upgrade = node(document, 'button'); upgrade.dataset.action = 'upgrade-cc'; actions.append(upgrade);
+  const priceInput = node(document, 'input', 'price-input'); settings.querySelector('#settings-model-pricing-group').append(priceInput);
   for (const name of ['fleet', 'keys']) { const panel = node(document, 'section'); panel.className = 'manage-panel'; panel.dataset.panel = name; panel.hidden = true; panel.addEventListener('click', () => movedCalls++); fleet.append(panel); }
   const locale = node(document, 'button', 'locale-toggle');
   const page = composeSettings(root, { settings, fleet, actions, controls: [locale], document, t });
@@ -140,9 +146,48 @@ test('settings composition moves actual control nodes and preserves their listen
   page.select('pricing'); assert.equal(page.sections.pricing.hidden, false); assert.equal(page.sections.defaults.hidden, true);
   page.detail('technical'); page.select('observer'); page.detail('plain'); assert.equal(page.sections.observer.hidden, true); assert.equal(page.sections.defaults.hidden, false);
   assert.equal(root.querySelector('#action-confirm').closest('.modal-body'), null);
+  const actionBody = page.actionsScope.querySelector('.modal-body');
+  assert.equal(mode.closest('.modal-body'), actionBody); assert.equal(threshold.closest('.modal-body'), actionBody); assert.equal(apply.closest('.modal-body'), actionBody);
+  assert.deepEqual(actionBody.querySelectorAll('button, select, input'), [mode, threshold, apply]);
+  assert.equal(priceInput.closest('.modal-body'), null); assert.equal(upgrade.closest('.modal-body'), null);
+  assert.equal(page.sections.ui.querySelector('[data-action="upgrade-cc"]'), upgrade);
+  page.select('ui'); assert.equal(page.sections.ui.hidden, false); assert.equal(root.querySelector('#action-confirm').parentElement, page.actionsScope);
   await page.sections.observer.querySelector('#observer-settings-group').dispatch('click');
   await page.sections.fleet.querySelector('.manage-panel').dispatch('click');
   await page.sections.keys.querySelector('.manage-panel').dispatch('click'); assert.equal(movedCalls, 3);
+});
+
+test('settings relabel updates navigation without replacing controls or changing the selected section', async () => {
+  const document = documentFixture(), root = document.createElement('div');
+  const settings = document.createElement('div'), fleet = document.createElement('div'), actions = document.createElement('div');
+  const localeControl = node(document, 'button', 'locale-toggle');
+  let locale = 'en', calls = 0;
+  localeControl.addEventListener('click', () => calls++);
+  const page = composeSettings(root, { settings, fleet, actions, controls: [localeControl], document, t: key => locale + ':' + key });
+  page.select('ui');
+  const nav = root.querySelector('nav'), buttons = nav.querySelectorAll('button');
+  const headings = settingsSections.map(name => page.sections[name].querySelector('h2'));
+  for (const nextLocale of ['zh', 'en']) {
+    locale = nextLocale;
+    page.relabel();
+    assert.equal(root.querySelector('nav'), nav);
+    assert.equal(nav.getAttribute('aria-label'), locale + ':wb.settings');
+    for (const [index, name] of settingsSections.entries()) {
+      const button = nav.querySelectorAll('button')[index];
+      assert.equal(button, buttons[index]);
+      assert.equal(button.textContent, locale + ':wb.settings.section.' + name);
+      assert.equal(button.getAttribute('aria-current'), String(name === 'ui'));
+      assert.equal(page.sections[name].querySelector('h2'), headings[index]);
+      assert.equal(headings[index].textContent, locale + ':wb.settings.section.' + name);
+      assert.equal(page.sections[name].hidden, name !== 'ui');
+    }
+    assert.equal(page.sections.ui.querySelector('#locale-toggle'), localeControl);
+    await localeControl.dispatch('click');
+  }
+  assert.equal(calls, 2);
+  await buttons[1].dispatch('click');
+  assert.equal(page.sections.pricing.hidden, false);
+  assert.equal(page.sections.ui.hidden, true);
 });
 
 test('version panel reuses upgrade control, labels Codex and retains readonly reason and non-action core hint', async () => {
@@ -160,12 +205,12 @@ test('theme control exposes follow system and forwards the selected value', asyn
 test('removed header entry selectors have no startup bindings and account controls live on the settings page', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8'), html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   for (const selector of ['info-bar', 'actions-btn', 'settings-btn', 'zylos-update-hint', 'info-bar-update', 'info-bar-text', 'info-bar-buttons']) {
-    assert.equal(app.includes('#' + selector), false, 'obsolete selector ' + selector);
+    assert.doesNotMatch(app, new RegExp('(?<![\\w-])' + selector + '(?![\\w-])'), 'obsolete selector ' + selector);
     assert.equal(html.includes('id="' + selector + '"'), false, 'obsolete node ' + selector);
   }
   const header = html.slice(html.indexOf('<header'), html.indexOf('</header>'));
   for (const id of ['locale-toggle', 'fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
-  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=83/); assert.match(html, /style\.css\?v=57/);
+  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=85/); assert.match(html, /style\.css\?v=58/);
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());
 });
@@ -180,4 +225,34 @@ test('settings draft reset clears target-specific controls and disables writes u
 test('failed pricing summary is unknown while a successful empty response is zero', () => {
   const failed = priceFixture(); const bad = createPricingPanel({ ...failed, usage: null, write: async () => {}, t }); assert.match(failed.root.textContent, /wb.unknown/); assert.doesNotMatch(failed.root.textContent, /\$0.0000/); bad.destroy();
   const empty = priceFixture(); const good = createPricingPanel({ ...empty, usage: { models: [], unmatched: [] }, write: async () => {}, t }); assert.match(empty.root.textContent, /\$0.0000/); good.destroy();
+});
+
+test('default followers include starting and exclude absent or unknown presence per runtime override', () => {
+  const data=snapshot(); data.rows.push(
+    {sessionGroup:'starting',presence:'starting',target:{runtime:'claude'}},
+    {sessionGroup:'gone',presence:'not_running',target:{runtime:'claude'}},
+    {sessionGroup:'unknown',presence:'unknown',target:{runtime:'claude'}});
+  data.overrides.model.push({sessionGroup:'starting',runtime:'codex'});
+  assert.deepEqual(defaultGroups(data).followers.map(r=>r.sessionGroup),['origin','b','c','starting']);
+  assert.deepEqual(modelFollowers(data,'claude').map(r=>r.sessionGroup),['origin','c','starting']);
+});
+test('clearing pending override debounce cancels the request after 300 milliseconds', context => {
+  context.mock.timers.enable({apis:['setTimeout']}); let calls=0;const changes=[];
+  const search=createOverrideSearch({read:async()=>{calls++;return{};},onChange:value=>changes.push(value)});
+  search.input('pending');search.input('');context.mock.timers.tick(300);assert.equal(calls,0);assert.equal(changes.at(-1),null);search.destroy();
+});
+test('unknown override count retains search and failed search preserves the flat list', async context => {
+  context.mock.timers.enable({apis:['setTimeout']});
+  const document=documentFixture(),root=document.createElement('div');const panel=renderDefaults(root,{snapshot:snapshot(),page:null,document,t,read:async()=>{throw Error('502');}});
+  const input=root.querySelector('#settings-overrides-search');assert.ok(input);
+  const flat=root.querySelectorAll('button').find(n=>n.textContent==='Name a').parentElement;
+  input.value='gone';await input.dispatch('input');context.mock.timers.tick(300);await tick();
+  assert.equal(flat.hidden,false);assert.ok(flat.textContent.includes('Name a'));assert.ok(root.textContent.includes('wb.readFailed'));panel.destroy();
+});
+test('literal settings translation keys used by modules exist in a language pack', () => {
+  const packs=['en','zh'].map(lang=>({...JSON.parse(fs.readFileSync(new URL('../public/i18n/'+lang+'.json',import.meta.url))),...JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.'+lang+'.json',import.meta.url)))}));
+  for(const file of ['settings','settings-defaults','settings-pricing','settings-ui','settings-version']){
+    const source=fs.readFileSync(new URL('../public/js/wb/'+file+'.js',import.meta.url),'utf8');
+    for(const match of source.matchAll(/\bt\('([^']+)'\)/g))for(const pack of packs)assert.ok(Object.hasOwn(pack,match[1]),file+': '+match[1]);
+  }
 });

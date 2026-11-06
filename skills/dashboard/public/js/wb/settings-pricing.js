@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=83';
+import { element } from './plain-text.js?v=85';
 import { priceWithEditedBaseRates } from '../pricing-form.js';
 
 const fields = ['input', 'output', 'cacheRead', 'cacheCreation'];
@@ -44,7 +44,7 @@ export function visiblePricePrefixes(payload, costs = [], expanded = false) {
 }
 
 export function createPricingPanel({ root, host, snapshot, data, usage = {}, document = root.ownerDocument,
-  t = key => key, writable = () => true, write, onRuntime = () => {} }) {
+  t = key => key, formatTokens = value => Number(value).toLocaleString(), writable = () => true, write, onRuntime = () => {} }) {
   let runtime = data.active === 'codex' ? 'codex' : 'claude', expanded = false, stopped = false;
   const drafts = structuredClone(data.runtimes), usedModels = usage?.models ?? [];
   let renderedPrefixes = new Set();
@@ -101,7 +101,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
     const previous = root.querySelector('[data-price-costs]'); previous?.remove(); bars.dataset.priceCosts = ''; root.append(bars);
     unmatched.replaceChildren();
     for (const item of usage?.unmatched ?? []) {
-      const line = element(document, 'p', t('wb.settings.unmatched', { model: item.model ?? t('wb.unknown'), tokens: Number(item.tokens ?? 0).toLocaleString() }));
+      const line = element(document, 'p', t('wb.settings.unmatched', { model: item.model ?? t('wb.unknown'), tokens: formatTokens(item.tokens ?? 0) }));
       const add = element(document, 'button', t('wb.settings.addPrice'), 'action-btn action-btn-sm'); add.type = 'button'; add.disabled = !writable();
       add.addEventListener('click', () => {
         try {

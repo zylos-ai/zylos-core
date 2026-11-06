@@ -140,7 +140,7 @@ async function switchModel(reqId, body, config, zylosDir) {
     return { ok: false, error: 'invalid_model', message: 'model is required', messageKey: 'result.invalid_model' };
   }
 
-  const runtime = body?.runtime ?? config.runtime ?? process.env.ZYLOS_RUNTIME ?? 'claude';
+  const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || 'claude');
 
   if (runtime === 'claude') {
     const settings = readSettings(zylosDir);
@@ -181,7 +181,7 @@ async function switchEffort(reqId, body, config, zylosDir) {
     return { ok: false, error: 'INVALID_RUNTIME' };
   }
   const effort = body?.effort;
-  const runtime = body?.runtime ?? config.runtime ?? process.env.ZYLOS_RUNTIME ?? 'claude';
+  const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || 'claude');
 
   if (runtime === 'claude') {
     const settings = readSettings(zylosDir);

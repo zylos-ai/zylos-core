@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=83';
+import { element } from './plain-text.js?v=85';
 
 export const settingsSections = ['defaults', 'pricing', 'keys', 'observer', 'fleet', 'ui'];
 // Both views: reuse the actual control nodes so their original listeners survive.
@@ -7,7 +7,7 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   const layout = element(document, 'div'); layout.style.display = 'flex'; layout.style.flexWrap = 'wrap'; layout.style.gap = '20px';
   const nav = element(document, 'nav'); nav.setAttribute('aria-label', t('wb.settings'));
   nav.style.display = 'flex'; nav.style.flexWrap = 'wrap'; nav.style.alignContent = 'start'; nav.style.gap = '8px';
-  const body = element(document, 'div', undefined, 'modal-body'); body.style.flex = '1 1 360px'; body.style.minWidth = '0'; body.style.maxHeight = 'none';
+  const body = element(document, 'div'); body.style.flex = '1 1 360px'; body.style.minWidth = '0'; body.style.maxHeight = 'none';
   const sections = {}, buttons = {};
   for (const name of settingsSections) {
     const section = element(document, 'section', undefined, 'wb-card'); section.id = 'settings-section-' + name;
@@ -20,22 +20,32 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   move(settings, '#observer-settings-group', sections.observer);
   for (const [panel, name] of [['fleet', 'fleet'], ['keys', 'keys']]) { const node = move(fleet, `.manage-panel[data-panel="${panel}"]`, sections[name]); if (node) node.hidden = false; }
   move(fleet, '#fleet-manage-status', root);
+  const actionsScope = root;
+  const actionBody = element(document, 'div', undefined, 'modal-body'); sections.defaults.append(actionBody);
   // Keep mode/threshold listeners attached to their generated controls.
   for (const selector of ['#action-mode', '#action-threshold']) {
-    const control = actions.querySelector(selector); if (control) sections.defaults.append(control.closest('.action-field'));
+    const control = actions.querySelector(selector); if (control) actionBody.append(control.closest('.action-field'));
   }
-  for (const selector of ['#action-mode-status', '#action-instance-status', '#action-restart-status']) move(actions, selector, sections.defaults);
+  for (const selector of ['#action-mode-status', '#action-instance-status', '#action-restart-status']) move(actions, selector, actionBody);
   move(actions, '[data-action="upgrade-cc"]', sections.ui);
   for (const node of controls) if (node) sections.ui.append(node);
   layout.append(nav, body); root.append(layout);
-  for (const selector of ['#action-status', '#action-confirm']) move(actions, selector, root);
+  for (const selector of ['#action-status', '#action-confirm']) move(actions, selector, actionsScope);
   function select(name) {
     if (!sections[name]) name = 'defaults';
     for (const key of settingsSections) { sections[key].hidden = key !== name; buttons[key].setAttribute('aria-current', String(key === name)); }
   }
   function detail(level) { const hidden = level !== 'technical'; buttons.observer.hidden = hidden; if (hidden && !sections.observer.hidden) select('defaults'); }
+  function relabel() {
+    nav.setAttribute('aria-label', t('wb.settings'));
+    for (const name of settingsSections) {
+      const label = t('wb.settings.section.' + name);
+      sections[name].querySelector('h2').textContent = label;
+      buttons[name].textContent = label;
+    }
+  }
   select('defaults'); detail(document.documentElement?.dataset.detail);
-  return { sections, select, detail };
+  return { sections, select, detail, relabel, actionsScope };
 }
 
 // One snapshot and one first batch per open; search owns subsequent user requests.

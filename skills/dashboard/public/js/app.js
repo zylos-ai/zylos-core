@@ -1,15 +1,15 @@
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=83';
-import { createPricingPanel } from './wb/settings-pricing.js?v=83';
-import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=83';
-import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=83';
-import { renderVersion } from './wb/settings-version.js?v=83';
-import { mountWorkbench } from './wb/shell.js?v=84';
-import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=84';
-import { mountSchedule } from './wb/schedule.js?v=84';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=85';
+import { createPricingPanel } from './wb/settings-pricing.js?v=85';
+import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=85';
+import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=85';
+import { renderVersion } from './wb/settings-version.js?v=85';
+import { mountWorkbench } from './wb/shell.js?v=85';
+import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=85';
+import { mountSchedule } from './wb/schedule.js?v=85';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { pct, resolveCpuDisplay } from './gauge-utils.js';
-import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=84';
+import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=85';
 import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import {
@@ -1174,7 +1174,8 @@ function renderFleet() {
 function renderConnection(mode) {
   const pill = $('#connection-status');
   pill.dataset.state = mode;
-  pill.textContent = t(`status.${mode}`);
+  pill.dataset.i18n = `status.${mode}`;
+  pill.textContent = t(pill.dataset.i18n);
 }
 
 function renderAll() {
@@ -1182,6 +1183,7 @@ function renderAll() {
   state.observer.history?.refreshLabels();
   initFleetManageButton();
   if (settingsPage) {
+    settingsPage.relabel();
     settingsPage.detail(document.documentElement.dataset.detail);
     refreshSettingsVersion();
   }
@@ -2790,7 +2792,8 @@ function initFleetMode() {
 function initLocaleToggle() {
   $('#locale-toggle').addEventListener('click', async () => {
     await initI18n(getLocale() === 'zh' ? 'en' : 'zh');
-    window.location.reload();
+    renderAll();
+    refreshSettingsPage();
   });
 }
 
@@ -3139,72 +3142,72 @@ function createFleetManageModal() {
   <div class="modal-body">
     <div class="manage-panel" data-panel="fleet">
       <section class="manage-section">
-        <span class="action-group-label">${esc(t('fleet_manage.local_agent'))}</span>
+        <span class="action-group-label" data-i18n="fleet_manage.local_agent">${esc(t('fleet_manage.local_agent'))}</span>
         <div class="fleet-self-row">
           <input class="action-input" id="fleet-self-name" type="text" autocomplete="off" />
-          <button class="action-btn action-btn-sm" id="fleet-rename-save" type="button">${esc(t('btn.save'))}</button>
+          <button class="action-btn action-btn-sm" id="fleet-rename-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
         </div>
-        <small class="fleet-help">${esc(t('fleet_manage.rename_hint'))}</small>
+        <small class="fleet-help" data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</small>
       </section>
       <section class="manage-section">
-        <span class="action-group-label">${esc(t('fleet_manage.remote_agents'))}</span>
+        <span class="action-group-label" data-i18n="fleet_manage.remote_agents">${esc(t('fleet_manage.remote_agents'))}</span>
         <div class="fleet-agent-list" id="fleet-agent-list"></div>
       </section>
       <section class="manage-section">
-        <span class="action-group-label">${esc(t('fleet_manage.add_agent'))}</span>
-        <small class="fleet-help">${esc(t('fleet_manage.add_key_hint'))}</small>
+        <span class="action-group-label" data-i18n="fleet_manage.add_agent">${esc(t('fleet_manage.add_agent'))}</span>
+        <small class="fleet-help" data-i18n="fleet_manage.add_key_hint">${esc(t('fleet_manage.add_key_hint'))}</small>
         <div class="action-field">
-          <label class="action-field-label" for="fleet-add-name">${esc(t('fleet_manage.name'))}</label>
+          <label class="action-field-label" for="fleet-add-name" data-i18n="fleet_manage.name">${esc(t('fleet_manage.name'))}</label>
           <input class="action-input" id="fleet-add-name" type="text" autocomplete="off" placeholder="zylos01" />
         </div>
         <div class="action-field">
-          <label class="action-field-label" for="fleet-add-url">${esc(t('fleet_manage.base_url'))}</label>
+          <label class="action-field-label" for="fleet-add-url" data-i18n="fleet_manage.base_url">${esc(t('fleet_manage.base_url'))}</label>
           <input class="action-input" id="fleet-add-url" type="url" autocomplete="off" placeholder="https://agent.example/dashboard" />
         </div>
         <div class="action-field">
-          <label class="action-field-label" for="fleet-add-key">${esc(t('fleet_manage.read_key'))}</label>
+          <label class="action-field-label" for="fleet-add-key" data-i18n="fleet_manage.read_key">${esc(t('fleet_manage.read_key'))}</label>
           <input class="action-input" id="fleet-add-key" type="password" autocomplete="off" />
         </div>
         <div class="action-row">
-          <button class="action-btn" id="fleet-test" type="button">${esc(t('fleet_manage.test'))}</button>
-          <button class="action-btn action-btn-primary" id="fleet-add-save" type="button">${esc(t('fleet_manage.save_agent'))}</button>
+          <button class="action-btn" id="fleet-test" type="button" data-i18n="fleet_manage.test">${esc(t('fleet_manage.test'))}</button>
+          <button class="action-btn action-btn-primary" id="fleet-add-save" type="button" data-i18n="fleet_manage.save_agent">${esc(t('fleet_manage.save_agent'))}</button>
         </div>
       </section>
     </div>
     <div class="manage-panel" data-panel="keys" hidden>
       <section class="manage-section">
-        <span class="action-group-label">${esc(t('fleet_manage.api_keys'))}</span>
-        <small class="fleet-help">${esc(t('fleet_manage.keys_hint'))}</small>
+        <span class="action-group-label" data-i18n="fleet_manage.api_keys">${esc(t('fleet_manage.api_keys'))}</span>
+        <small class="fleet-help" data-i18n="fleet_manage.keys_hint">${esc(t('fleet_manage.keys_hint'))}</small>
         <div class="action-field">
-          <label class="action-field-label" for="api-base-url">${esc(t('fleet_manage.base_url'))}</label>
+          <label class="action-field-label" for="api-base-url" data-i18n="fleet_manage.base_url">${esc(t('fleet_manage.base_url'))}</label>
           <div class="api-key-copy-row">
             <input class="action-input api-base-url" id="api-base-url" type="text" readonly value="${esc(dashboardBaseUrl())}" />
-            <button class="action-btn action-btn-sm" id="api-base-url-copy" type="button">${esc(t('fleet_manage.copy_key'))}</button>
+            <button class="action-btn action-btn-sm" id="api-base-url-copy" type="button" data-i18n="fleet_manage.copy_key">${esc(t('fleet_manage.copy_key'))}</button>
           </div>
         </div>
-        <small class="fleet-help">${esc(t('fleet_manage.base_url_hint'))}</small>
+        <small class="fleet-help" data-i18n="fleet_manage.base_url_hint">${esc(t('fleet_manage.base_url_hint'))}</small>
         <div class="action-row">
-          <button class="action-btn action-btn-sm" id="api-key-purge-revoked" type="button" hidden>${esc(t('fleet_manage.purge_revoked'))}</button>
+          <button class="action-btn action-btn-sm" id="api-key-purge-revoked" type="button" hidden data-i18n="fleet_manage.purge_revoked">${esc(t('fleet_manage.purge_revoked'))}</button>
         </div>
         <div class="fleet-agent-list" id="api-key-list"></div>
       </section>
       <section class="manage-section">
-        <span class="action-group-label">${esc(t('fleet_manage.create_key'))}</span>
+        <span class="action-group-label" data-i18n="fleet_manage.create_key">${esc(t('fleet_manage.create_key'))}</span>
         <div class="action-field">
-          <label class="action-field-label" for="api-key-name">${esc(t('fleet_manage.name'))}</label>
+          <label class="action-field-label" for="api-key-name" data-i18n="fleet_manage.name">${esc(t('fleet_manage.name'))}</label>
           <input class="action-input" id="api-key-name" type="text" autocomplete="off" placeholder="producer-read" />
         </div>
         <div class="action-field">
-          <label class="action-field-label" for="api-key-scope">${esc(t('fleet_manage.scope'))}</label>
+          <label class="action-field-label" for="api-key-scope" data-i18n="fleet_manage.scope">${esc(t('fleet_manage.scope'))}</label>
           <select class="action-select" id="api-key-scope">
-            <option value="read">${esc(t('fleet_manage.scope_read'))}</option>
-            <option value="admin">${esc(t('fleet_manage.scope_admin'))}</option>
+            <option value="read" data-i18n="fleet_manage.scope_read">${esc(t('fleet_manage.scope_read'))}</option>
+            <option value="admin" data-i18n="fleet_manage.scope_admin">${esc(t('fleet_manage.scope_admin'))}</option>
           </select>
         </div>
-        <small class="fleet-help api-key-admin-warning" id="api-key-admin-warning" hidden>${esc(t('fleet_manage.admin_key_warning'))}</small>
+        <small class="fleet-help api-key-admin-warning" id="api-key-admin-warning" hidden data-i18n="fleet_manage.admin_key_warning">${esc(t('fleet_manage.admin_key_warning'))}</small>
         <div class="api-key-created" id="api-key-created" hidden></div>
         <div class="action-row">
-          <button class="action-btn action-btn-primary" id="api-key-create" type="button">${esc(t('fleet_manage.create_key_button'))}</button>
+          <button class="action-btn action-btn-primary" id="api-key-create" type="button" data-i18n="fleet_manage.create_key_button">${esc(t('fleet_manage.create_key_button'))}</button>
         </div>
       </section>
     </div>
@@ -3620,59 +3623,59 @@ function createSettingsModal() {
   </div>
   <div class="modal-body">
     <div class="action-group" id="settings-model-pricing-group">
-      <span class="action-group-label" id="settings-pricing-label">${esc(t('settings.model_pricing'))}
+      <span class="action-group-label" id="settings-pricing-label"><span data-i18n="settings.model_pricing">${esc(t('settings.model_pricing'))}</span>
         <button class="tip-btn tip-btn-inline" id="pricing-tip" type="button" aria-label="Pricing info">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
         <div class="tip-popover" id="pricing-popover" hidden>
-          <p>${t('tip.pricing')}</p>
-          <p>${esc(t('settings.base_rates_note'))}</p>
+          <p data-i18n="tip.pricing">${t('tip.pricing')}</p>
+          <p data-i18n="settings.base_rates_note">${esc(t('settings.base_rates_note'))}</p>
         </div>
       </span>
       <div class="settings-table-scroll">
       <table class="settings-price-table" id="settings-price-table">
         <thead>
-          <tr><th>${esc(t('settings.col_prefix'))}</th><th>${esc(t('settings.col_input'))}</th><th>${esc(t('settings.col_output'))}</th><th>${esc(t('settings.col_cache_read'))}</th><th>${esc(t('settings.col_cache_write'))}</th><th></th></tr>
+          <tr><th data-i18n="settings.col_prefix">${esc(t('settings.col_prefix'))}</th><th data-i18n="settings.col_input">${esc(t('settings.col_input'))}</th><th data-i18n="settings.col_output">${esc(t('settings.col_output'))}</th><th data-i18n="settings.col_cache_read">${esc(t('settings.col_cache_read'))}</th><th data-i18n="settings.col_cache_write">${esc(t('settings.col_cache_write'))}</th><th></th></tr>
         </thead>
         <tbody id="settings-price-rows"></tbody>
       </table>
       </div>
-      <button class="action-btn action-btn-sm" id="settings-add-model" type="button">${esc(t('btn.add_model'))}</button>
+      <button class="action-btn action-btn-sm" id="settings-add-model" type="button" data-i18n="btn.add_model">${esc(t('btn.add_model'))}</button>
     </div>
     <div class="action-group" id="settings-priority-pricing-group" hidden>
-      <span class="action-group-label">${esc(t('settings.priority_model_pricing'))}</span>
+      <span class="action-group-label" data-i18n="settings.priority_model_pricing">${esc(t('settings.priority_model_pricing'))}</span>
       <div class="settings-table-scroll">
       <table class="settings-price-table" id="settings-priority-price-table">
         <thead>
-          <tr><th>${esc(t('settings.col_prefix'))}</th><th>${esc(t('settings.col_input'))}</th><th>${esc(t('settings.col_output'))}</th><th>${esc(t('settings.col_cache_read'))}</th><th>${esc(t('settings.col_cache_write'))}</th><th></th></tr>
+          <tr><th data-i18n="settings.col_prefix">${esc(t('settings.col_prefix'))}</th><th data-i18n="settings.col_input">${esc(t('settings.col_input'))}</th><th data-i18n="settings.col_output">${esc(t('settings.col_output'))}</th><th data-i18n="settings.col_cache_read">${esc(t('settings.col_cache_read'))}</th><th data-i18n="settings.col_cache_write">${esc(t('settings.col_cache_write'))}</th><th></th></tr>
         </thead>
         <tbody id="settings-priority-price-rows"></tbody>
       </table>
       </div>
-      <button class="action-btn action-btn-sm" id="settings-add-priority-model" type="button">${esc(t('btn.add_model'))}</button>
+      <button class="action-btn action-btn-sm" id="settings-add-priority-model" type="button" data-i18n="btn.add_model">${esc(t('btn.add_model'))}</button>
     </div>
     <div class="action-group" id="settings-fast-mode-group">
-      <span class="action-group-label">${esc(t('settings.fast_mode'))}</span>
+      <span class="action-group-label" data-i18n="settings.fast_mode">${esc(t('settings.fast_mode'))}</span>
       <div class="action-field">
-        <label class="action-field-label">${esc(t('settings.fast_override'))}</label>
+        <label class="action-field-label" data-i18n="settings.fast_override">${esc(t('settings.fast_override'))}</label>
         <div class="action-threshold-wrap">
           <input id="settings-fast-multiplier" class="action-input action-threshold-input" type="number" min="0.1" step="0.1" />
           <span class="action-threshold-unit">x</span>
         </div>
       </div>
-      <p class="modal-status">${esc(t('settings.fast_defaults_note'))}</p>
+      <p class="modal-status" data-i18n="settings.fast_defaults_note">${esc(t('settings.fast_defaults_note'))}</p>
     </div>
     <div class="action-group observer-settings" id="observer-settings-group">
-      <span class="action-group-label">${esc(t('observer.settings_title'))}</span>
-      <p class="fleet-help">${esc(t('observer.settings_help'))}</p>
+      <span class="action-group-label" data-i18n="observer.settings_title">${esc(t('observer.settings_title'))}</span>
+      <p class="fleet-help" data-i18n="observer.settings_help">${esc(t('observer.settings_help'))}</p>
       <div class="observer-settings-state">
         <strong id="observer-settings-state">${esc(t('status.loading'))}</strong>
         <span id="observer-settings-platform"></span>
       </div>
       <p class="modal-status" id="observer-settings-recovery" hidden></p>
       <div class="action-row observer-settings-actions">
-        <button class="action-btn action-btn-primary" id="observer-install" type="button">${esc(t('observer.install_enable'))}</button>
-        <button class="action-btn" id="observer-enable" type="button">${esc(t('observer.enable'))}</button>
+        <button class="action-btn action-btn-primary" id="observer-install" type="button" data-i18n="observer.install_enable">${esc(t('observer.install_enable'))}</button>
+        <button class="action-btn" id="observer-enable" type="button" data-i18n="observer.enable">${esc(t('observer.enable'))}</button>
         <button class="action-btn" id="observer-disable" type="button">${esc(t('observer.disable'))}</button>
         <button class="action-btn" id="observer-uninstall" type="button">${esc(t('observer.uninstall'))}</button>
       </div>
@@ -3682,8 +3685,8 @@ function createSettingsModal() {
   <div class="modal-status" id="settings-readonly-note" hidden></div>
   <div class="modal-status" id="settings-status" hidden></div>
   <div class="settings-footer">
-    <button class="action-btn" id="settings-cancel" type="button">${esc(t('btn.cancel'))}</button>
-    <button class="action-btn action-btn-primary" id="settings-save" type="button">${esc(t('btn.save'))}</button>
+    <button class="action-btn" id="settings-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button>
+    <button class="action-btn action-btn-primary" id="settings-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
   </div>
 </div>`;
   document.body.appendChild(overlay);
@@ -3896,13 +3899,13 @@ function initSettingsPage() {
   });
   settingsPage = composeSettings(root, { settings: oldSettings, fleet: oldFleet, actions: oldActions, controls, t });
   oldSettings.remove(); oldFleet.remove(); oldActions.remove();
-  settingsModal = root; fleetManageModal = root; actionsModal = root;
+  settingsModal = root; fleetManageModal = root; actionsModal = settingsPage.actionsScope;
   settingsUpgrade = root.querySelector('[data-action="upgrade-cc"]');
   settingsVersionRoot = document.createElement('section'); settingsVersionRoot.id = 'settings-version'; settingsPage.sections.ui.append(settingsVersionRoot);
   let theme = 'light'; try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
   mountThemeControl(settingsPage.sections.ui, { t, value: theme, onChange: initTheme });
-  const observerNote = document.createElement('p'); observerNote.textContent = t('wb.settings.observerNote'); settingsPage.sections.observer.prepend(observerNote);
-  const fleetNote = document.createElement('p'); fleetNote.textContent = t('wb.settings.fleetNameNote'); settingsPage.sections.fleet.prepend(fleetNote);
+  const observerNote = document.createElement('p'); observerNote.dataset.i18n = 'wb.settings.observerNote'; observerNote.textContent = t('wb.settings.observerNote'); settingsPage.sections.observer.prepend(observerNote);
+  const fleetNote = document.createElement('p'); fleetNote.dataset.i18n = 'wb.settings.fleetNameNote'; fleetNote.textContent = t('wb.settings.fleetNameNote'); settingsPage.sections.fleet.prepend(fleetNote);
   const defaults = document.createElement('div'); defaults.id = 'settings-defaults'; settingsPage.sections.defaults.prepend(defaults);
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
@@ -3913,7 +3916,7 @@ function initSettingsPage() {
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
-        data: value.prices, usage: value.usage, t, writable: () => !remoteIsReadOnly(),
+        data: value.prices, usage: value.usage, t, formatTokens: tok, writable: () => !remoteIsReadOnly(),
         write: body => requestAgentJson('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
     } else { const status = root.querySelector('#settings-status'); status.hidden = false; status.textContent = t('wb.readFailed'); }
     const active = value.prices?.active ?? value.snapshot?.baselineRuntime;
@@ -3923,6 +3926,7 @@ function initSettingsPage() {
   } });
   $('#wb-detail-toggle').addEventListener('change', () => {
     settingsPage.detail($('#wb-detail-toggle').checked ? 'technical' : 'plain');
+    settingsVersionRoot.hidden = !$('#wb-detail-toggle').checked;
     root.querySelectorAll('[data-settings-latency]').forEach(node => { node.hidden = !$('#wb-detail-toggle').checked; });
   });
   refreshSettingsVersion();
@@ -3930,6 +3934,7 @@ function initSettingsPage() {
 
 function refreshSettingsVersion() {
   if (!settingsVersionRoot) return;
+  settingsVersionRoot.hidden = document.documentElement.dataset.detail !== 'technical';
   renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
 }
 function refreshSettingsLocks() {
@@ -3943,7 +3948,7 @@ function refreshSettingsLocks() {
 async function executeSettingsAction(action, body) {
   settingsActionDescription = action === 'switch-runtime' ? runtimeConfirmation(settingsSnapshot, t) : '';
   try { return await execAction(action, body); }
-  finally { settingsActionDescription = ''; if (!countdownTimer) refreshSettingsLocks(); }
+  finally { settingsActionDescription = ''; }
 }
 function refreshSettingsPage() {
   closeSettingsModal();
@@ -4000,7 +4005,7 @@ function createActionsModal() {
     </div>
     <div class="action-group">
       <span class="action-group-label">${esc(t('actions.configuration'))}</span>
-      <div class="action-field"><label class="action-field-label">${esc(t('actions.session_mode'))}</label><select id="action-mode" class="action-select"><option value="single">single</option><option value="multi">multi</option></select></div>
+      <div class="action-field"><label class="action-field-label" data-i18n="actions.session_mode">${esc(t('actions.session_mode'))}</label><select id="action-mode" class="action-select"><option value="single">single</option><option value="multi">multi</option></select></div>
       <p id="action-mode-status" class="modal-status" style="overflow-wrap:anywhere"></p>
       <p id="action-instance-status" class="modal-status" style="overflow-wrap:anywhere"></p>
       <p id="action-restart-status" class="modal-status" style="overflow-wrap:anywhere"></p>
@@ -4024,17 +4029,17 @@ function createActionsModal() {
         <select id="action-effort" class="action-select"></select>
       </div>
       <div class="action-field">
-        <label class="action-field-label">${esc(t('actions.threshold'))}</label>
+        <label class="action-field-label" data-i18n="actions.threshold">${esc(t('actions.threshold'))}</label>
         <button class="tip-btn tip-btn-inline" id="threshold-tip" type="button" aria-label="Threshold info">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
         <div class="tip-popover" id="threshold-popover" hidden>
-          <p>${t('tip.threshold')}</p>
+          <p data-i18n="tip.threshold">${t('tip.threshold')}</p>
         </div>
         <div class="action-threshold-wrap">
           <input id="action-threshold" class="action-input action-threshold-input" type="number" min="10" max="95" step="5" />
           <span class="action-threshold-unit">%</span>
-          <button class="action-btn action-btn-sm" id="action-threshold-apply" type="button">${esc(t('btn.apply'))}</button>
+          <button class="action-btn action-btn-sm" id="action-threshold-apply" type="button" data-i18n="btn.apply">${esc(t('btn.apply'))}</button>
         </div>
       </div>
     </div>
@@ -4051,8 +4056,8 @@ function createActionsModal() {
   <div class="modal-confirm" id="action-confirm" hidden>
     <p id="action-confirm-text"></p>
     <div class="modal-confirm-buttons">
-      <button class="action-btn" id="action-confirm-cancel" type="button">${esc(t('btn.cancel'))}</button>
-      <button class="action-btn danger" id="action-confirm-ok" type="button">${esc(t('btn.confirm'))}</button>
+      <button class="action-btn" id="action-confirm-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button>
+      <button class="action-btn danger" id="action-confirm-ok" type="button" data-i18n="btn.confirm">${esc(t('btn.confirm'))}</button>
     </div>
   </div>
 </div>`;
@@ -4371,7 +4376,6 @@ function showConfirm(text) {
       pendingConfirmCancel = null;
       box.hidden = true;
       setModalBodyDisabled(false);
-      refreshSettingsLocks();
       okBtn.removeEventListener('click', onOk);
       cancelBtn.removeEventListener('click', onCancel);
     }
@@ -4570,6 +4574,7 @@ export function openWorkbenchGroup(key) {
   return workbench.openGroup(key);
 }
 settingsPage?.detail(document.documentElement.dataset.detail);
+refreshSettingsVersion();
 window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); });
 const stopSchedule = mountSchedule({
   t,
