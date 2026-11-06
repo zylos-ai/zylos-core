@@ -22,6 +22,29 @@ function makeZylosDir() {
   return zylosDir;
 }
 
+test('memory tree hides Core in-flight memory write and sync temp files but keeps other .tmp files', async () => {
+  const zylosDir = makeZylosDir();
+  try {
+    const memory = path.join(zylosDir, 'memory');
+    fs.mkdirSync(path.join(memory, 'session-groups', 's8test:a'), { recursive: true });
+    const hidden = ['session-groups/s8test:a/state.md.c0ce700b83f43466a5523a73fad66cbb.tmp', 'state.md.sync-token.tmp',
+      '.identity.md.0123456789abcdef01234567.tmp', 'reference/.projects.md.fedcba9876543210fedcba98.tmp',
+      'reference/.projects.md.0123456789abcdef0123456789abcdef.tmp'];
+    const kept = ['notes.tmp', '.identity.md.0123.tmp', 'reference/.projects.md.0123456789ABCDEF01234567.tmp',
+      'reference/projects.md.0123456789abcdef01234567.tmp', 'identity.md.c0ce700b83f43466a5523a73fad66cbb.tmp', 'state.md.a.b.tmp'];
+    for (const rel of [...hidden, ...kept]) fs.writeFileSync(path.join(memory, rel), 'x');
+    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
+    const paths = [];
+    const walk = nodes => { for (const node of nodes) { paths.push(node.path); if (node.children) walk(node.children); } };
+    walk((await browser.tree()).root.children);
+    for (const rel of hidden) assert.equal(paths.includes(rel), false, rel);
+    for (const rel of kept) assert.equal(paths.includes(rel), true, rel);
+    assert.equal(paths.includes('identity.md'), true);
+  } finally {
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
 test('memory tree returns navigation metadata without hashes or symlinks', async () => {
   const zylosDir = makeZylosDir();
   try {

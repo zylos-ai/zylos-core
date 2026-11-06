@@ -1,7 +1,7 @@
 import { element } from './plain-text.js?v=85';
-import { modelCell, pendingModel } from './board.js?v=85';
-import { toolLabel, waitText } from './view-mode.js?v=85';
-import { timeValue } from './detail-timeline.js?v=85';
+import { modelCell, pendingModel } from './board.js?v=89';
+import { techOnly, toolLabel, waitText } from './view-mode.js?v=89';
+import { displayTime, eventLabel, timeValue } from './event-labels.js?v=89';
 
 export function activeSubagents(events, runId) {
   const agents = new Map();
@@ -53,12 +53,14 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     (level === 'technical' && tool.detail ? ' · ' + tool.detail : ''), 'wb-detail-tool'));
   if (row.wait) now.append(element(document, 'p', waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t)));
   if (!(row.tools?.length) && !row.wait) now.append(element(document, 'p', t('wb.state.' + (row.state?.kind ?? 'unknown'))));
-  const evidence = detailEvidence(row, snapshot);
-  const details = element(document, 'details', undefined, 'wb-detail-evidence');
-  details.open = false;
-  details.append(element(document, 'summary', t('wb.detail.evidence') + ' · ' + evidence.headline));
-  if (level === 'technical') for (const item of evidence.samples) details.append(element(document, 'p', [item.source, item.value, item.at].filter(value => value != null).join(' · ')));
-  now.append(details);
+  if (level === 'technical' && techOnly('evidence')) {
+    const evidence = detailEvidence(row, snapshot);
+    const details = element(document, 'details', undefined, 'wb-detail-evidence');
+    details.open = false;
+    details.append(element(document, 'summary', t('wb.detail.evidence') + ' · ' + evidence.headline));
+    for (const item of evidence.samples) details.append(element(document, 'p', [item.source, item.value, item.at].filter(value => value != null).join(' · ')));
+    now.append(details);
+  }
   const runId = row.live?.runId;
   for (const agent of activeSubagents(data.currentEvents ?? [], runId)) now.append(element(document, 'p', t('wb.detail.subagent') + ' · ' + agent.name));
   if (level === 'technical') {
@@ -67,7 +69,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     now.append(numbers);
   }
   const recent = section('wb.detail.recent', 'wb-detail-recent');
-  for (const event of data.recent ?? []) recent.append(element(document, 'p', [event.timestamp, event.event_type].filter(Boolean).join(' · ')));
+  for (const event of data.recent ?? []) recent.append(element(document, 'p', [displayTime(event.timestamp, level), eventLabel(event, level, t)].filter(Boolean).join(' · ')));
   const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: data.totalEvents ?? 0, runs: data.totalRuns ?? 0 }));
   timeline.type = 'button'; timeline.addEventListener('click', onTimeline); recent.append(timeline);
   const memory = section('wb.detail.memory', 'wb-detail-memory');

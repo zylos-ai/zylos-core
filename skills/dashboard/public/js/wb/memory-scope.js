@@ -76,16 +76,21 @@ export function applyMemorySave(captured, current, saved) {
   return true;
 }
 
+// Re-rendering rebuilds the textarea. Keep its selection and scroll position;
+// focus returns only when the editor had it. Selection is restored first
+// because setting it can scroll the caret into view.
 export function renderMemoryPreservingEditor(render, document) {
   const editor = document.querySelector('#memory-editor');
   const focused = editor && document.activeElement === editor;
-  const selection = focused ? [editor.selectionStart, editor.selectionEnd, editor.selectionDirection] : null;
+  const selection = editor ? [editor.selectionStart, editor.selectionEnd, editor.selectionDirection] : null;
+  const scroll = editor ? [editor.scrollTop, editor.scrollLeft] : null;
   render();
-  if (focused) {
-    const replacement = document.querySelector('#memory-editor');
-    replacement?.focus();
-    if (Number.isInteger(selection[0]) && Number.isInteger(selection[1])) replacement?.setSelectionRange(selection[0], selection[1], selection[2]);
-  }
+  const replacement = editor ? document.querySelector('#memory-editor') : null;
+  if (!replacement) return;
+  if (focused) replacement.focus?.();
+  if (Number.isInteger(selection[0]) && Number.isInteger(selection[1])) replacement.setSelectionRange?.(selection[0], selection[1], selection[2]);
+  if (Number.isFinite(scroll[0])) replacement.scrollTop = scroll[0];
+  if (Number.isFinite(scroll[1])) replacement.scrollLeft = scroll[1];
 }
 
 export async function saveMemoryOnce({ request, readFile, path, text, sha256, isCurrent = () => true }) {

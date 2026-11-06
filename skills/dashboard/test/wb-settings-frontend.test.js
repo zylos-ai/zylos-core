@@ -202,6 +202,13 @@ test('theme control exposes follow system and forwards the selected value', asyn
   const select = mountThemeControl(root, { document, t, value: 'system', onChange: next => value = next }); assert.equal(select.value, 'system'); assert.equal(select.children.length, 3); select.value = 'dark'; await select.dispatch('change'); assert.equal(value, 'dark');
 });
 
+test('settings instance status follows the current detail level', () => {
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const calls = app.match(/instanceStatusText\([^;]*\)/g) ?? [];
+  assert.deepEqual(calls, ["instanceStatusText(data, document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain', t)"]);
+  assert.doesNotMatch(app, /t\('actions\.instance_status'/, 'the raw template is used only through instanceStatusText');
+});
+
 test('removed header entry selectors have no startup bindings and account controls live on the settings page', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8'), html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   for (const selector of ['info-bar', 'actions-btn', 'settings-btn', 'zylos-update-hint', 'info-bar-update', 'info-bar-text', 'info-bar-buttons']) {
@@ -210,7 +217,7 @@ test('removed header entry selectors have no startup bindings and account contro
   }
   const header = html.slice(html.indexOf('<header'), html.indexOf('</header>'));
   for (const id of ['locale-toggle', 'fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
-  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=88/); assert.match(html, /style\.css\?v=60/);
+  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=89/); assert.match(html, /style\.css\?v=60/);
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());
 });

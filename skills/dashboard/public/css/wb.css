@@ -645,3 +645,7 @@ html[data-detail=plain] #observer-tab {
 .wb-memory-threshold { position: absolute; top: -3px; bottom: -3px; border-left: 2px solid var(--text); }
 .wb-memory-sync, .wb-memory-source { font-size: 11px; color: var(--text-dim); }
 .wb-memory-source { margin-top: 8px; line-height: 1.5; }
+.wb-attention-item { margin: 4px 0; padding-left: 8px; border-left: 3px solid var(--border,#ddd); }
+.wb-attention-problem { color: var(--state-stuck, #c54141); border-left-color: var(--state-stuck, #c54141); }
+.wb-attention-reminder { color: var(--text-dim); }
+.wb-attention-reminder::before { content: "\23F1\FE0E\20"; }

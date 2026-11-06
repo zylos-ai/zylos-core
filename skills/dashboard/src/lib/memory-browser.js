@@ -5,6 +5,12 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { createMemoryWriter } from './workbench/memory-write.js';
 
+// Core stages in-flight memory writes beside the target under three names:
+// Memory Sync state drafts (zylos-memory/scripts/sync-files.js),
+// memory-write.js saves (24 hex) and self-write.js writes (32 hex).
+const MEMORY_WRITE_TEMP = [/^state\.md\.[^.]+\.tmp$/, /^\..+\.[0-9a-f]{24}\.tmp$/, /^\..+\.[0-9a-f]{32}\.tmp$/];
+const isMemoryWriteTemp = name => MEMORY_WRITE_TEMP.some(pattern => pattern.test(name));
+
 const execFileAsync = promisify(execFile);
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const TEXT_EXTENSIONS = new Set([
@@ -192,7 +198,7 @@ export class MemoryBrowser {
           mtime: isoMtime(stat),
           children: await this.walkDirectory(full, rel)
         });
-      } else if (stat.isFile()) {
+      } else if (stat.isFile() && !isMemoryWriteTemp(entry.name)) {
         nodes.push({
           path: rel,
           name: entry.name,

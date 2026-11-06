@@ -7,6 +7,7 @@ import { createTimelineLoader, attributeMessages, renderTimeline } from '../publ
 import { createGroupConfig, fetchJson, runningText, validConfigChange } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
+import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
 
 // Direct product imports with injected DOM, fetch, clock, timers, clipboard and
 // confirmation. Run for detail rendering, request ownership or form changes;
@@ -110,6 +111,62 @@ test('timeline pages current events, loads three older runs lazily, filters expa
   assert.equal(loader.state.totalRuns, 5);
   assert.equal(new URL(calls.find(path => path.includes('before=')), 'http://fixture').searchParams.get('before'), runs[2].startAt);
   loader.close();
+});
+
+test('event, end reason and time labels are plain words in plain view and raw values in technical detail', () => {
+  assert.equal(eventLabel({ event_type: 'reclaim_done' }, 'plain', t), 'wb.event.reclaim_done');
+  assert.equal(eventLabel({ event_type: 'wait_health' }, 'plain', t), 'wb.event.wait_health');
+  assert.equal(eventLabel({ event_type: 'assistant_message', category: 'assistant' }, 'plain', t), 'wb.event.assistant_message');
+  assert.equal(eventLabel({ event_type: 'runtime_health:recovered', category: 'runtime_health' }, 'plain', t), 'wb.event.category.runtime_health');
+  assert.equal(eventLabel({ event_type: 'pool_sample', category: 'diagnostic' }, 'plain', t), 'wb.event.category.diagnostic');
+  assert.equal(eventLabel({ event_type: 'custom_code', category: 'made_up' }, 'plain', t), 'wb.event.other');
+  assert.equal(eventLabel({ event_type: 'reclaim_done' }, 'technical', t), 'reclaim_done');
+  assert.equal(endReasonLabel('manual_restart', 'plain', t), 'wb.endReason.manual_restart');
+  assert.equal(endReasonLabel('ttl', 'plain', t), 'wb.endReason.ttl');
+  assert.equal(endReasonLabel('surprise', 'plain', t), 'wb.endReason.ended');
+  assert.equal(endReasonLabel('ttl', 'technical', t), 'ttl');
+  const iso = '2026-11-06T10:20:30.000Z';
+  assert.equal(displayTime(iso, 'technical'), iso);
+  assert.equal(displayTime(iso, 'plain', 'en-US'), new Date(iso).toLocaleString('en-US'));
+  assert.equal(displayTime('2026-11-06 10:20:30', 'plain', 'en-US'), new Date(iso).toLocaleString('en-US'));
+});
+
+test('overview recent activity and evidence are plain in plain view and raw only in technical detail', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const iso = '2026-11-06T10:20:30.000Z';
+  const data = { recent: [{ timestamp: iso, event_type: 'wait_health' }, { timestamp: iso, event_type: 'reclaim_done' }] };
+  const current = row('a', { state: { kind: 'idle' } });
+  renderOverview(root, current, data, { document, t, level: 'plain' });
+  const recent = root.children[1].textContent;
+  assert.match(recent, /wb\.event\.wait_health/); assert.match(recent, /wb\.event\.reclaim_done/);
+  assert.doesNotMatch(recent, /wait_health ·|reclaim_done$|T10:20:30/);
+  assert.ok(recent.includes(new Date(iso).toLocaleString()));
+  assert.equal(allNodes(root).some(node => node.tagName === 'DETAILS'), false);
+  assert.doesNotMatch(root.textContent, /no_rule|wb\.detail\.evidence/);
+  renderOverview(root, current, data, { document, t, level: 'technical' });
+  assert.match(root.children[1].textContent, new RegExp(`${iso} · wait_health`));
+  assert.match(root.children[1].textContent, new RegExp(`${iso} · reclaim_done`));
+  assert.match(root.textContent, /wb\.detail\.evidence · no_rule/);
+});
+
+test('timeline run rows, events and messages hide run ids and raw codes in plain view', () => {
+  const start = '2026-11-06T10:00:00.000Z', end = '2026-11-06T11:00:00.000Z', at = '2026-11-06T10:30:00.000Z';
+  const loader = { state: { runs: [{ runId: 'run-0123456789abcdef', startAt: start, endAt: end, endReason: 'manual_restart', n: 2 }],
+    expanded: new Set(['run-0123456789abcdef']), events: new Map([['run-0123456789abcdef', [{ timestamp: at, event_type: 'reclaim_done' }]]]),
+    messages: new Map([['run-0123456789abcdef', [{ timestamp: at, direction: 'in' }]]]), between: [{ timestamp: at, direction: 'out' }],
+    filter: 'all', totalRuns: 1 }, setFilter() {}, collapse() {} };
+  const document = createDocument(), root = document.createElement('div');
+  renderTimeline(root, loader, { document, t, level: 'plain' });
+  const toggle = allNodes(root).find(node => node.attributes?.['aria-expanded'] != null).textContent;
+  assert.equal(toggle, [new Date(start).toLocaleString(), new Date(end).toLocaleString(), 'wb.endReason.manual_restart', 2].join(' · '));
+  const event = allNodes(root).find(node => node.className === 'wb-timeline-event').textContent;
+  assert.equal(event, new Date(at).toLocaleString() + ' · wb.event.reclaim_done');
+  assert.doesNotMatch(root.textContent, /run-0123456789abcdef|· reclaim_done|T10:30:00|· manual_restart/);
+  assert.ok(allNodes(root).find(node => node.className === 'wb-timeline-message').textContent.startsWith(new Date(at).toLocaleString()));
+  renderTimeline(root, loader, { document, t, level: 'technical' });
+  assert.match(root.textContent, new RegExp(`run-0123456789abcdef · ${start} · ${end} · manual_restart · 2`));
+  assert.match(root.textContent, new RegExp(`${at} · reclaim_done`));
+  assert.match(root.textContent, new RegExp(`${at} · wb.timeline.received`));
 });
 
 test('message attribution projects only direction metadata and leaves gaps between runs', () => {
@@ -578,7 +635,7 @@ test('an active timeline discards the previous run and reads the replacement run
         event_type: url.searchParams.get('run_id') === 'run-a' ? 'old_run_event' : 'new_run_event' }] });
     }
     return response(defaultRead(path));
-  });
+  }, { detail: 'technical' });
   await f.controller.open(current, { rows: [current], listKnown: true });
   await f.controller.selectTab('timeline');
   assert.match(f.root.textContent, /old_run_event/);

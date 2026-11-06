@@ -353,6 +353,21 @@ test('saved metadata updates tree sizes without reopening the editor and preserv
   assert.equal(state.file, saved); assert.equal(state.editing, true); assert.equal(state.dirty, true); assert.equal(state.draftNotice, false);
 });
 
+test('a rejected save re-render restores the editor scroll position and selection', () => {
+  const fresh = () => ({ scrollTop: 0, scrollLeft: 0, focused: false, focus() { this.focused = true; },
+    setSelectionRange(start, end, direction) { this.selection = [start, end, direction]; this.scrollTop = 0; } });
+  for (const focused of [true, false]) {
+    let editor = { scrollTop: 2124, scrollLeft: 7, selectionStart: 40, selectionEnd: 52, selectionDirection: 'backward' };
+    const document = { activeElement: focused ? editor : null, querySelector: () => editor };
+    renderMemoryPreservingEditor(() => { editor = fresh(); }, document);
+    assert.equal(editor.scrollTop, 2124); assert.equal(editor.scrollLeft, 7);
+    assert.deepEqual(editor.selection, [40, 52, 'backward']); assert.equal(editor.focused, focused);
+  }
+  let renders = 0;
+  renderMemoryPreservingEditor(() => { renders++; }, { activeElement: null, querySelector: () => null });
+  assert.equal(renders, 1, 'a view without an editor renders normally');
+});
+
 test('repeated action renders keep invalid group drafts read-only', () => {
   const value = tree(), edit = {}, save = {};
   for (const path of ['session-groups/bad name/notes.md', 'session-groups/direct.md']) {

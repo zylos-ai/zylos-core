@@ -1,3 +1,4 @@
+import { recoveryTime } from './cooldown.js?v=89';
 const KEY = 'zylos-dashboard-detail-level';
 export const technicalKeys = new Set([
   'groupKey', 'runId', 'errorCode', 'queue', 'context', 'modelColumn', 'evidence',
@@ -82,17 +83,25 @@ export function observerNavEntry(status, level, t) {
   return { label: t ? t(key) : fallback[key], target: installed && enabled ? 'observer' : 'settings' };
 }
 export const wbWritable = remoteIsReadOnly => !remoteIsReadOnly();
-export function waitText(wait, level = 'plain', t) {
+const originStates = new Set(['running', 'starting', 'not_running', 'busy', 'idle', 'waiting', 'stopped', 'error']);
+export function instanceStatusText(data = {}, level = 'plain', t = key => key) {
+  const state = data.origin?.status?.state || data.origin?.presence;
+  if (level === 'technical') return t('actions.instance_status', { view: data.view || t('value.unknown'),
+    mode: data.sessionMode || t('value.unknown'), origin: state || t('value.unknown') });
+  return t('wb.term.origin') + ' · ' + t('wb.state.' + (originStates.has(state) ? state : 'unknown'));
+}
+export function waitText(wait, level = 'plain', t, now = Date.now()) {
   if (!wait) return '';
   const reason = wait.kind ?? wait.reason ?? 'unknown';
-  const until = wait.cooldownUntil == null ? '' : new Date(wait.cooldownUntil * 1000).toLocaleTimeString();
+  const at = recoveryTime(wait.cooldownUntil, now);
+  const until = at === null ? '' : new Date(at).toLocaleTimeString();
   if (level === 'technical') return [reason, wait.reasonCode ?? wait.reason, until].filter(Boolean).join(' · ');
   if (t) {
-    return t('wb.wait.' + (['rate_wait', 'auth_wait', 'queued', 'starting', 'fenced', 'start_failed'].includes(reason)
-      ? reason : 'unknown'), { time: until, count: wait.pendingCount ?? '—' });
+    const key = ['rate_wait', 'auth_wait', 'queued', 'starting', 'fenced', 'start_failed'].includes(reason) ? reason : 'unknown';
+    return t('wb.wait.' + key + (key === 'rate_wait' && !until ? '_unknown' : ''), { time: until, count: wait.pendingCount ?? '—' });
   }
   return reason === 'rate_wait'
-    ? `额度已用完，${until || '额度恢复后'}恢复。消息会自动处理，不需要操作。`
+    ? `额度已用完，${until ? until + ' 恢复' : '恢复时间未知'}。消息会自动处理，不需要操作。`
     : reason === 'queued'
       ? '正在排队，空出位置后自动处理，不需要操作。'
       : '正在等待，条件满足后自动继续。';

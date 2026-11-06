@@ -1,4 +1,7 @@
 import { element } from './plain-text.js?v=85';
+import { displayTime, endReasonLabel, eventLabel, timeValue } from './event-labels.js?v=89';
+
+export { timeValue };
 
 export const timelineTypes = {
   all: null,
@@ -6,12 +9,6 @@ export const timelineTypes = {
   tools: ['pre_tool_use', 'post_tool_use', 'post_tool_failure'],
   lifecycle: ['session_start', 'session_end', 'reclaim_done', 'crash_detected', 'rotate_done', 'activate_new', 'start_always', 'activate_failed', 'activate_timeout'],
 };
-
-export function timeValue(value) {
-  if (typeof value === 'number') return value < 100000000000 ? value * 1000 : value;
-  if (typeof value !== 'string') return NaN;
-  return Date.parse(/Z$|[+-]\d\d:\d\d$/.test(value) ? value : value.replace(' ', 'T') + 'Z');
-}
 
 export function attributeMessages(messages, runs) {
   const attributed = new Map(runs.map(run => [run.runId, []]));
@@ -202,7 +199,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
 
 const scrollListeners = new WeakMap();
 
-export function renderTimeline(root, loader, { document = root.ownerDocument, t = key => key } = {}) {
+export function renderTimeline(root, loader, { document = root.ownerDocument, t = key => key, level = 'plain' } = {}) {
   const scrollTop = root.scrollTop ?? 0;
   const { state } = loader;
   root.replaceChildren();
@@ -219,17 +216,18 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
   for (const run of current) {
     const section = element(document, 'section', undefined, 'wb-timeline-run');
     section.dataset.runId = run.runId;
-    const toggle = element(document, 'button', [run.runId, run.startAt, run.endAt, run.endReason, run.n].filter(value => value != null).join(' · '));
+    const toggle = element(document, 'button', [level === 'technical' ? run.runId : null, displayTime(run.startAt, level), displayTime(run.endAt, level),
+      endReasonLabel(run.endReason, level, t), run.n].filter(value => value != null).join(' · '));
     toggle.type = 'button';
     toggle.setAttribute('aria-expanded', String(state.expanded.has(run.runId)));
     toggle.addEventListener('click', () => state.expanded.has(run.runId) ? loader.collapse(run.runId) : loader.expand(run.runId));
     section.append(toggle);
     if (state.expanded.has(run.runId)) {
       if (state.filter !== 'messages') for (const event of state.events.get(run.runId) ?? []) {
-        section.append(element(document, 'p', [event.timestamp, event.event_type].filter(Boolean).join(' · '), 'wb-timeline-event'));
+        section.append(element(document, 'p', [displayTime(event.timestamp, level), eventLabel(event, level, t)].filter(Boolean).join(' · '), 'wb-timeline-event'));
       }
       if (['all', 'messages'].includes(state.filter)) for (const message of state.messages.get(run.runId) ?? []) {
-        section.append(element(document, 'p', `${message.timestamp} · ${t(message.direction === 'in' ? 'wb.timeline.received' : 'wb.timeline.replied')}`, 'wb-timeline-message'));
+        section.append(element(document, 'p', `${displayTime(message.timestamp, level)} · ${t(message.direction === 'in' ? 'wb.timeline.received' : 'wb.timeline.replied')}`, 'wb-timeline-message'));
       }
     }
     root.append(section);
@@ -237,7 +235,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
   if (state.between.length && ['all', 'messages'].includes(state.filter)) {
     const between = element(document, 'section', undefined, 'wb-timeline-between');
     between.append(element(document, 'h4', t('wb.timeline.between')));
-    for (const message of state.between) between.append(element(document, 'p', `${message.timestamp} · ${t(message.direction === 'in' ? 'wb.timeline.received' : 'wb.timeline.replied')}`));
+    for (const message of state.between) between.append(element(document, 'p', `${displayTime(message.timestamp, level)} · ${t(message.direction === 'in' ? 'wb.timeline.received' : 'wb.timeline.replied')}`));
     root.append(between);
   }
   if (state.unattributed) root.append(element(document, 'p', t('wb.timeline.unattributed', { count: state.unattributed })));

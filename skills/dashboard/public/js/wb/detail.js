@@ -1,7 +1,7 @@
 import { element, fallbackName } from './plain-text.js?v=85';
 import { olderRow } from './older-row.js?v=85';
-import { renderOverview } from './detail-overview.js?v=85';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=85';
+import { renderOverview } from './detail-overview.js?v=89';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=89';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=85';
 import { renderNameEditor } from './name-edit.js?v=85';
 
@@ -129,7 +129,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (state.configOpen) renderGroupConfig(sections.config, config, { document, t, writable: getWritable() });
     } else {
       body.classList.add('wb-detail-timeline');
-      renderTimeline(body, timeline, { document, t });
+      renderTimeline(body, timeline, { document, t, level: getLevel() });
     }
     if (state.nameOpen) {
       const editor = element(document, 'div', undefined, 'wb-name-editor');
