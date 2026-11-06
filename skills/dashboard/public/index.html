@@ -10,11 +10,11 @@
 <link rel="stylesheet" href="__ASSET_ROOT__/css/style.css?v=59">
 <link rel="stylesheet" href="__ASSET_ROOT__/themes/light.css?v=2">
 <link rel="stylesheet" href="__ASSET_ROOT__/themes/dark.css?v=1">
-<link rel="stylesheet" href="__ASSET_ROOT__/css/wb.css?v=4">
+<link rel="stylesheet" href="__ASSET_ROOT__/css/wb.css?v=5">
 <script src="__ASSET_ROOT__/vendor/chart.umd.js"></script>
 <script src="__ASSET_ROOT__/js/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="__ASSET_ROOT__/js/markdown-it.min.js"></script>
-<script type="module" src="__ASSET_ROOT__/js/app.js?v=87"></script>
+<script type="module" src="__ASSET_ROOT__/js/app.js?v=88"></script>
 <style>
 #tab-settings { overflow-wrap:anywhere; }
 #tab-settings .modal-body { padding:0; }
@@ -68,6 +68,7 @@
 
 <nav class="tab-bar" aria-label="Dashboard sections">
   <button class="tab active" type="button" data-tab="overview" data-i18n="tab.overview">Overview</button>
+  <button class="tab" type="button" data-tab="chat" data-i18n="chat.title">Conversations</button>
   <button class="tab" type="button" data-tab="memory" data-i18n="tab.memory">Memory</button>
   <button class="tab" id="observer-tab" type="button" data-tab="observer" data-i18n="tab.observer" hidden>Observer</button>
   <button class="tab" type="button" data-tab="trends" data-i18n="wb.nav.usage">Trends</button>
@@ -392,6 +393,10 @@
     <div class="observer-frame-shell">
       <iframe id="observer-frame" title="Read-only terminal observer" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
     </div>
+  </section>
+
+  <section class="tab-panel" id="tab-chat" hidden>
+    <div id="wb-chat"></div>
   </section>
 
   <section class="tab-panel" id="tab-trends" hidden>

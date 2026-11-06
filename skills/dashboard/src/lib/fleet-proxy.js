@@ -290,7 +290,7 @@ export class FleetProxy {
       return true;
     }
 
-    if (['/', '/index.html', '/trends', '/memory', '/observer', '/schedule', '/usage', '/settings'].includes(suffix)) {
+    if (['/', '/index.html', '/trends', '/memory', '/observer', '/schedule', '/usage', '/settings', '/chat'].includes(suffix)) {
       // Include the reverse-proxy base path (X-Forwarded-Prefix, e.g. /dashboard)
       // so the browser requests assets/API under it. Caddy forwards everything
       // under /dashboard/* and strips the prefix before this handler runs, so

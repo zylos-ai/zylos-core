@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createViewMode, technicalKeys, techOnly, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, wbWritable } from '../public/js/wb/view-mode.js';
+import { createViewMode, technicalKeys, techOnly, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, wbWritable, tabForPath } from '../public/js/wb/view-mode.js';
 import { createDocument, storage } from './fixtures/workbench-dom.js';
 
 test('view level tolerates inaccessible storage and redraws without data requests', context => {
@@ -40,4 +40,13 @@ test('observer navigation follows detail, installation and enabled status', () =
   assert.match(observerNavEntry({ installed: false }, 'technical').label, /去设置安装/);
   assert.equal(observerNavEntry({ installed: true, enabled: false }, 'technical').target, 'settings');
   assert.equal(wbWritable(() => true), false); assert.equal(wbWritable(() => false), true);
+});
+
+test('conversation navigation maps direct and fleet URLs without changing existing destinations', () => {
+  for (const prefix of ['', '/dashboard', '/fleet/Remote', '/dashboard/fleet/Remote']) {
+    assert.equal(tabForPath(prefix + '/chat'), 'chat');
+    assert.equal(tabForPath(prefix + '/'), 'overview');
+    assert.equal(tabForPath(prefix + '/schedule'), 'schedule');
+    assert.equal(tabForPath(prefix + '/usage'), 'trends');
+  }
 });

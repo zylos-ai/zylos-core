@@ -124,6 +124,8 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     refreshCharts() {},
     usagePage: { open() {}, close() {}, setViewDetail() {} },
     refreshUsage() {},
+    refreshChat() {},
+    chatPage: { close() {} },
     loadMemoryTree: async () => {},
     syncMemoryPinned() {},
     resetMemoryState() {},
@@ -469,7 +471,7 @@ test('fleet ↔ agent view transition is wired with a graceful fallback', () => 
   // Graceful fallback: reduced motion / missing stack / already-active → instant swap.
   assert.match(app, /prefersReducedMotion\(\)/);
   // First-load deliberately dwells on the single-agent page, then zooms to the wall.
-  assert.match(app, /setTimeout\(\(\) => \{[\s\S]*?if \(tabForPath\(window\.location\.pathname\) !== 'settings'\) showFleetView\(\{ animate: true \}\);[\s\S]*?\}, 380\)/);
+  assert.match(app, /setTimeout\(\(\) => \{[\s\S]*?if \(!\['settings', 'chat'\]\.includes\(tabForPath\(window\.location\.pathname\)\)\) showFleetView\(\{ animate: true \}\);[\s\S]*?\}, 380\)/);
   // CSS defines the stack and the zoom enter/leave states.
   assert.match(css, /\.view-stack\s*\{\s*display:\s*grid/);
   assert.match(css, /\.app-view\.v-enter/);

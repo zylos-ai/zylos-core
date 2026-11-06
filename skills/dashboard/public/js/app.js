@@ -3,10 +3,11 @@ import { createPricingPanel } from './wb/settings-pricing.js?v=87';
 import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=87';
 import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=87';
 import { renderVersion } from './wb/settings-version.js?v=87';
+import { mountChat } from './wb/chat.js?v=88';
 import { mountChatSettings } from './wb/chat-settings.js?v=87';
 import { mountWorkbench } from './wb/shell.js?v=87';
 import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=87';
-import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=85';
+import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=88';
 import { mountSchedule } from './wb/schedule.js?v=87';
 import { createUsagePage } from './wb/usage.js?v=87';
 import { ObserverHistory } from './observer-history.js?v=2';
@@ -2362,6 +2363,7 @@ function showFleetView(opts = {}) {
   if (opts.navigation !== false) state.navigationGeneration += 1;
   closeObserver({ release: true }).catch(() => {});
   state.fleetViewActive = true;
+  refreshChat();
   syncMemoryPinned();
   refreshFleet().catch(() => {});
   transitionView('fleet', opts);
@@ -2372,6 +2374,7 @@ function showAgentDetail(opts = {}) {
   if (opts.navigation !== false) state.navigationGeneration += 1;
   state.fleetViewActive = false;
   transitionView('agent', opts);
+  refreshChat();
   clearFleetFallback();
   syncMemoryPinned();
 }
@@ -2514,7 +2517,11 @@ function scheduleSseReconnect() {
 }
 
 // ─── Tabs ───
-let usagePage = null, workbench = null;
+let usagePage = null, workbench = null, chatPage = null;
+function refreshChat() {
+  if (activeTabName() === 'chat' && !state.fleetViewActive && document.visibilityState !== 'hidden') return chatPage?.open();
+  chatPage?.close();
+}
 function refreshUsage() {
   if (activeTabName() === 'trends' && !$('#agent-detail')?.hidden) return usagePage?.open();
   usagePage?.close();
@@ -2536,6 +2543,7 @@ function initTabs() {
     syncMemoryPinned();
     if (name === 'settings') refreshSettingsPage();
     refreshUsage();
+    refreshChat();
     if (name === 'memory') loadMemoryTree().catch(() => {});
     if (name === 'observer') {
       openObserver().catch(() => {});
@@ -2559,7 +2567,7 @@ function initTabs() {
     // standalone remote document (REMOTE_AGENT) keeps plain tab routing.
     try {
       if (!REMOTE_AGENT) {
-        const m = path.match(/\/fleet\/([^/]+)\/?(?:trends|usage|schedule|settings|memory|observer)?$/);
+        const m = path.match(/\/fleet\/([^/]+)\/?(?:trends|usage|schedule|settings|memory|observer|chat)?$/);
         if (m) {
           await enterRemoteAgent(decodeURIComponent(m[1]), { push: false });
         } else if (state.remoteAgent) {
@@ -2577,6 +2585,7 @@ function initTabs() {
   });
   document.addEventListener('visibilitychange', () => {
     syncFleetSubscription();
+    refreshChat();
     // A backgrounded tab freezes SSE and the poll timers, so on return the
     // page may paint a pre-freeze frame (e.g. a rate-limit window that has
     // since reset) until the 10-30s fallbacks fire. Refetch now instead (#247).
@@ -2681,7 +2690,7 @@ function applyFleetMode(fleet) {
   if (fleetView) fleetView.hidden = true;
   if (agentDetail) agentDetail.hidden = false;
   syncFleetSubscription();
-  if (tabForPath(window.location.pathname) === 'settings') {
+  if (['settings', 'chat'].includes(tabForPath(window.location.pathname))) {
     state.fleetModeInitialized = true;
     return;
   }
@@ -2689,7 +2698,7 @@ function applyFleetMode(fleet) {
     showFleetView({ animate: false });
   } else {
     setTimeout(() => {
-      if (tabForPath(window.location.pathname) !== 'settings') showFleetView({ animate: true });
+      if (!['settings', 'chat'].includes(tabForPath(window.location.pathname))) showFleetView({ animate: true });
     }, 380);
   }
   state.fleetModeInitialized = true;
@@ -2698,6 +2707,7 @@ function applyFleetMode(fleet) {
 // Clear all per-agent data and incremental DOM so two agents' panels never
 // mix while switching the detail view between self and a remote agent.
 function resetAgentData() {
+  chatPage?.close();
   usagePage?.close();
   closeObserver({ release: true }).catch(() => {});
   if (state.observer.history) {
@@ -2763,6 +2773,7 @@ function enterRemoteAgent(name, { push = true } = {}) {
   return Promise.allSettled([refreshAll(), refreshObserverStatus({ quiet: true })]).then(() => {
     if (observerTargetKey() !== targetKey) return;
     if (activeTabName() === 'trends') refreshUsage();
+    refreshChat();
   });
 }
 
@@ -4626,11 +4637,19 @@ const stopSchedule = mountSchedule({
   onOpenGroup: openWorkbenchGroup,
 });
 window.addEventListener('pagehide', stopSchedule);
+chatPage = mountChat({ root: document.querySelector('#wb-chat'), t,
+  endpoint: path => api(agentPath(path)),
+  identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
+});
+const chatLocaleChange = () => chatPage.redraw();
+document.addEventListener('dashboard-locale-change', chatLocaleChange);
 const usageDetailChange = () => usagePage.setViewDetail();
 document.querySelector('#wb-detail-toggle')?.addEventListener('change', usageDetailChange);
 document.addEventListener('dashboard-locale-change', usageDetailChange);
 refreshUsage();
-window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); usagePage.destroy();
+refreshChat();
+window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); usagePage.destroy(); chatPage.destroy();
+  document.removeEventListener('dashboard-locale-change', chatLocaleChange);
   document.querySelector('#wb-detail-toggle')?.removeEventListener('change', usageDetailChange);
   document.removeEventListener('dashboard-locale-change', usageDetailChange);
 });

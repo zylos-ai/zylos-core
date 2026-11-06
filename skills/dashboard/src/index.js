@@ -1866,7 +1866,7 @@ export function createServer() {
       return;
     }
 
-    if (['/', '/index.html', '/trends', '/memory', '/observer', '/schedule', '/usage', '/settings'].includes(pathname)) {
+    if (['/', '/index.html', '/trends', '/memory', '/observer', '/schedule', '/usage', '/settings', '/chat'].includes(pathname)) {
       renderIndex(req, res);
       return;
     }
