@@ -1,10 +1,10 @@
-import { mountWorkbench } from './wb/shell.js?v=83';
-import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=83';
-import { mountSchedule } from './wb/schedule.js?v=83';
+import { mountWorkbench } from './wb/shell.js?v=84';
+import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=84';
+import { mountSchedule } from './wb/schedule.js?v=84';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { pct, resolveCpuDisplay } from './gauge-utils.js';
-import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=83';
+import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=84';
 import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import { priceWithEditedBaseRates } from './pricing-form.js';

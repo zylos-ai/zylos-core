@@ -1,9 +1,9 @@
-import { element, fallbackName } from './plain-text.js?v=83';
-import { olderRow } from './older-row.js?v=83';
-import { renderOverview } from './detail-overview.js?v=83';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=83';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=83';
-import { renderNameEditor } from './name-edit.js?v=83';
+import { element, fallbackName } from './plain-text.js?v=84';
+import { olderRow } from './older-row.js?v=84';
+import { renderOverview } from './detail-overview.js?v=84';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=84';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=84';
+import { renderNameEditor } from './name-edit.js?v=84';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -107,7 +107,8 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const platform = row.sessionGroup == null ? t('wb.single') : row.sessionGroup === 'origin' ? t('wb.term.origin')
       : fallbackName({ ...row, sessionGroup: platformKey, name: null }, t);
     const meta = getLevel() === 'technical'
-      ? [row.sessionGroup ?? 'origin', row.live?.runId, formatStartedAt(row.createdAt, document.documentElement?.lang), row.launchConfig?.runtime, row.launchConfig?.model, row.launchConfig?.effort].filter(value => value != null).join(' · ')
+      ? [row.sessionGroup ?? 'origin', row.live?.runId, formatStartedAt(row.createdAt, document.documentElement?.lang), ...(row.launchConfig ? [row.launchConfig.runtime, row.launchConfig.model, row.launchConfig.effort]
+        : row.target?.reason === 'launch_config_unreadable' ? [row.target.runtime, t('wb.detail.launchConfigUnreadable')] : [])].filter(value => value != null).join(' · ')
       : platform + ' · ' + (row.createdAt == null ? t('wb.unknown') : t('wb.detail.continuous', { minutes: uptime }));
     const tabs = element(document, 'nav', undefined, 'wb-detail-tabs');
     for (const tab of ['overview', 'timeline']) {

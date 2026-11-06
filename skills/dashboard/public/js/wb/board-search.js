@@ -1,4 +1,4 @@
-import { createFetchGuard } from './fetch-guard.js?v=83';
+import { createFetchGuard } from './fetch-guard.js?v=84';
 
 export function createBoardSearch({ fetchRows, onRows, onClear, onError,
   setTimer = setTimeout, clearTimer = clearTimeout }) {

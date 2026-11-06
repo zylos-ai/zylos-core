@@ -1,7 +1,7 @@
-import { element, fallbackName } from './plain-text.js?v=83';
-import { createFetchGuard } from './fetch-guard.js?v=83';
-import { cronText } from './cron-text.js?v=83';
-import { createForm, createPreviewer, formPayload, initialForm, intervalText, previewPath } from './schedule-form.js?v=83';
+import { element, fallbackName } from './plain-text.js?v=84';
+import { createFetchGuard } from './fetch-guard.js?v=84';
+import { cronText } from './cron-text.js?v=84';
+import { createForm, createPreviewer, formPayload, initialForm, intervalText, previewPath } from './schedule-form.js?v=84';
 
 const ENABLED = new Set(['pending', 'running']);
 const SECTIONS = [

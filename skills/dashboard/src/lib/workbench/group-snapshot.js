@@ -107,8 +107,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       const selectedRuntime = ov.ok ? ov.data.runtime.find(item => item.sessionGroup === row.sessionGroup)?.runtime ?? ov.data.baseline.runtime : null;
       const selectedModel = ov.ok ? ov.data.model.find(item => item.sessionGroup === row.sessionGroup && item.runtime === selectedRuntime) : null;
       row.target = ['running', 'starting'].includes(row.presence)
-        ? { runtime: observation?.identity.runtime ?? row.live?.runtime ?? null, model: row.launchConfig?.mode === 'override'
-          ? { model: row.launchConfig.model, effort: row.launchConfig.effort } : 'default' }
+        ? { runtime: observation?.identity.runtime ?? row.live?.runtime ?? null, model: !row.launchConfig ? null : row.launchConfig.mode === 'override'
+          ? { model: row.launchConfig.model, effort: row.launchConfig.effort } : 'default',
+          ...(row.launchConfig ? {} : { reason: 'launch_config_unreadable' }) }
         : ov.ok ? { runtime: selectedRuntime, model: selectedModel ? { model: selectedModel.model, effort: selectedModel.effort } : 'default' }
           : { runtime: null, reason: 'override_list_failed' };
       if (status?.view === 'single') row.target.onlyMulti = true;

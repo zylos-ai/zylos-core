@@ -1,7 +1,7 @@
-import { element } from './plain-text.js?v=83';
-import { modelCell, pendingModel } from './board.js?v=83';
-import { toolLabel, waitText } from './view-mode.js?v=83';
-import { timeValue } from './detail-timeline.js?v=83';
+import { element } from './plain-text.js?v=84';
+import { modelCell, pendingModel } from './board.js?v=84';
+import { toolLabel, waitText } from './view-mode.js?v=84';
+import { timeValue } from './detail-timeline.js?v=84';
 
 export function activeSubagents(events, runId) {
   const agents = new Map();
@@ -75,11 +75,11 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   link.type = 'button'; link.addEventListener('click', onMemory); memory.append(link);
   if (data.backlog?.syncing === true) memory.append(element(document, 'p', t('wb.detail.syncing')));
   const config = section('wb.detail.config', 'wb-detail-config');
-  config.append(element(document, 'p', modelCell(row)));
+  config.append(element(document, 'p', modelCell(row, t)));
   if (pendingModel(row)) {
     const desired = row.desired;
     config.append(element(document, 'p', t('wb.pending') + ' · ' + [desired?.runtime, desired?.model, desired?.effort].filter(Boolean).join(' · '), 'wb-config-pending'),
-      element(document, 'p', t('wb.config.running') + ' · ' + modelCell(row)));
+      element(document, 'p', t('wb.config.running') + ' · ' + modelCell(row, t)));
   }
   const edit = element(document, 'button', t('wb.detail.modify')); edit.type = 'button'; edit.addEventListener('click', onConfig); config.append(edit);
   return { config, now, recent, memory };

@@ -1,5 +1,5 @@
-import { element } from './plain-text.js?v=83';
-import { createFetchGuard } from './fetch-guard.js?v=83';
+import { element } from './plain-text.js?v=84';
+import { createFetchGuard } from './fetch-guard.js?v=84';
 
 const pad = value => String(value).padStart(2, '0');
 

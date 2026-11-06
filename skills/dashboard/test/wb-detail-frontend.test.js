@@ -267,6 +267,23 @@ test('single detail filters NULL events but sends actions through the Origin rou
 });
 
 
+test('technical detail header names an unreadable launch configuration instead of hiding the model', async () => {
+  const current = row('telegram:a', { launchConfig: null, target: { runtime: 'codex', model: null, reason: 'launch_config_unreadable' } });
+  const f = detailFixture(async path => response(defaultRead(path)), { detail: () => 'technical' });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const meta = allNodes(f.root).find(node => node.classList.contains('wb-detail-meta'));
+  assert.match(meta.textContent, / · codex · wb\.detail\.launchConfigUnreadable$/);
+  const config = allNodes(f.root).find(node => node.classList.contains('wb-detail-config'));
+  assert.match(config.textContent, /codex · wb\.unknown/);
+  f.controller.destroy();
+  const readable = row('telegram:b');
+  const g = detailFixture(async path => response(defaultRead(path)), { detail: () => 'technical' });
+  await g.controller.open(readable, { rows: [readable], listKnown: true });
+  const readableMeta = allNodes(g.root).find(node => node.classList.contains('wb-detail-meta')).textContent;
+  assert.match(readableMeta, / · claude$/); assert.doesNotMatch(readableMeta, /launchConfigUnreadable/);
+  g.controller.destroy();
+});
+
 test('plain detail header reports platform and uptime from run creation rather than state duration', async () => {
   const current = row('telegram:private-id', { createdAt: 1000, duration: 5 });
   const f = detailFixture(async path => response(defaultRead(path)), { now: () => 1120000 });

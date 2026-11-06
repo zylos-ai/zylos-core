@@ -99,6 +99,7 @@
   "wb.detail.fullTimeline": "Full timeline ({events} events, {runs} runs)",
   "wb.detail.memoryLink": "{count} to save · This group’s memory",
   "wb.detail.syncing": "Memory sync in progress",
+  "wb.detail.launchConfigUnreadable": "Launch configuration unreadable",
   "wb.config.single": "Saved; applies only in multi mode. Single mode uses native settings.",
   "wb.config.otherRuntime": "This model pair belongs to another runtime. It is retained for when this group switches back.",
   "wb.config.unknown": "Cannot confirm ({reason})",

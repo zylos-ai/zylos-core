@@ -61,6 +61,19 @@ test('model text and pending comparison use launch identity, desired config and 
   value.target.onlyMulti = true; assert.equal(pendingModel(value), false);
   assert.equal(modelCell({ presence: 'not_running', target: null }), '—');
 });
+test('running group without a readable launch configuration shows an unknown model, not the default', () => {
+  const unreadable = { ...row('a'), launchConfig: null, desired: { runtime: 'claude', mode: 'default' },
+    target: { runtime: 'claude', model: null, reason: 'launch_config_unreadable' } };
+  assert.equal(modelCell(unreadable, t), 'claude · wb.unknown');
+  assert.equal(modelCell({ ...unreadable, presence: 'starting' }, t), 'claude · wb.unknown');
+  assert.equal(modelCell({ ...unreadable, target: { ...unreadable.target, runtime: 'unknown' } }, t), 'unknown · wb.unknown');
+  assert.equal(modelCell(row('b'), t), 'claude · default');
+  assert.equal(modelCell({ ...row('c'), presence: 'not_running', launchConfig: null, target: { runtime: 'codex', model: { model: 'gpt', effort: 'low' } } }, t), 'codex · gpt · low');
+  assert.equal(pendingModel(unreadable), false); assert.equal(pendingModel({ ...unreadable, fence: { reason: 'model_config' } }), true);
+  const document = createDocument();
+  const cell = allNodes(renderRow(unreadable, { document, level: 'technical', t })).find(node => node.classList.contains('wb-model'));
+  assert.equal(cell.textContent, 'claude · wb.unknown');
+});
 test('activity renders real string cells and timestamps, with unknown inbound distinguished', () => {
   const document = createDocument();
   for (const [size, seconds] of [[60, 60], [72, 300]]) {

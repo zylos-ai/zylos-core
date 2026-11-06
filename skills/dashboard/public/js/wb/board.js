@@ -1,10 +1,13 @@
-import { element, fallbackName } from './plain-text.js?v=83';
-import { toolLabel, waitText } from './view-mode.js?v=83';
-import { activityStrip } from './activity-strip.js?v=83';
-import { createFetchGuard } from './fetch-guard.js?v=83';
+import { element, fallbackName } from './plain-text.js?v=84';
+import { toolLabel, waitText } from './view-mode.js?v=84';
+import { activityStrip } from './activity-strip.js?v=84';
+import { createFetchGuard } from './fetch-guard.js?v=84';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
   (a.mode === 'default' || (a.model === b.model && a.effort === b.effort));
-export function modelCell(row) {
+export function modelCell(row, t = key => key) {
+  if (['running', 'starting'].includes(row.presence) && !row.launchConfig && row.target?.reason === 'launch_config_unreadable') {
+    return [row.target.runtime, t('wb.unknown')].filter(Boolean).join(' · ');
+  }
   const value = ['running', 'starting'].includes(row.presence) && row.launchConfig ? row.launchConfig : row.target?.runtime ? row.target : null;
   return value ? [value.runtime, typeof value.model === 'object' ? value.model?.model : value.model ?? value.mode,
     value.effort ?? value.model?.effort].filter(Boolean).join(' · ') : '—';
@@ -34,7 +37,7 @@ export function renderRow(row, { document, level = 'plain', activity, single = f
     const context = element(document, 'span', row.contextPct == null ? t('wb.unknown') : `${Math.round(row.contextPct)}%`, 'wb-context');
     if (row.contextPct != null) { context.classList.add('wb-context-ring'); context.style.setProperty('--context', `${Math.max(0, Math.min(100, row.contextPct))}%`); }
     else context.title = row.contextReason ?? '';
-    root.append(context, element(document, 'span', modelCell(row) + (!single && pendingModel(row) ? ` · ${t('wb.pending')}` : ''), 'wb-model'));
+    root.append(context, element(document, 'span', modelCell(row, t) + (!single && pendingModel(row) ? ` · ${t('wb.pending')}` : ''), 'wb-model'));
   }
   root.addEventListener('click', () => onSelect(row));
   return root;

@@ -500,6 +500,24 @@ test('live and stopped targets project one model descriptor shape', async t => {
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'telegram:g0').target.model, 'default');
 });
 
+// Integration: a running group whose launch configuration cannot be read carries an
+// unknown model with a reason instead of the default. Run for launch/override
+// projection changes; skip rendering-only edits. Temporary root and injected
+// read-only sources; fixture cleanup.
+test('running group without a readable launch configuration reports an unknown model', async t => {
+  const f = fixture(t, { count: 4 });
+  f.live.get('telegram:g0').identity.launchConfig = null;
+  f.live.get('telegram:g1').identity.launchConfig = null; f.live.get('telegram:g1').identity.runtime = 'unknown';
+  f.live.delete('telegram:g2');
+  const rows = new Map((await f.service.getSnapshot()).rows.map(row => [row.sessionGroup, row]));
+  assert.deepEqual(rows.get('telegram:g0').target, { runtime: 'claude', model: null, reason: 'launch_config_unreadable' });
+  assert.deepEqual(rows.get('telegram:g1').target, { runtime: 'unknown', model: null, reason: 'launch_config_unreadable' });
+  assert.equal(rows.get('telegram:g0').desired.mode, 'default');
+  assert.deepEqual(rows.get('telegram:g3').target, { runtime: 'claude', model: 'default' });
+  assert.equal(rows.get('telegram:g2').presence, 'not_running');
+  assert.deepEqual(rows.get('telegram:g2').target, { runtime: 'claude', model: 'default' });
+});
+
 // Integration: exact boolean envelope acceptance must fail only its own source.
 // Run for Core CLI response changes; skip rendering-only edits. CLI execution is
 // injected, never spawns; isolated temporary root and fixture lifecycle cleanup.

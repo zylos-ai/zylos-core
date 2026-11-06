@@ -99,6 +99,7 @@
   "wb.detail.fullTimeline": "完整时间线（{events} 条，{runs} 段运行）",
   "wb.detail.memoryLink": "待存入 {count} 条 · 这个组的记忆",
   "wb.detail.syncing": "记忆整理中",
+  "wb.detail.launchConfigUnreadable": "读不到启动配置",
   "wb.config.single": "已保存，仅 multi 生效；single 使用原生设置",
   "wb.config.otherRuntime": "这对模型属于非本组目标 runtime；仍保留，切回时使用",
   "wb.config.unknown": "无法确认（{reason}）",
