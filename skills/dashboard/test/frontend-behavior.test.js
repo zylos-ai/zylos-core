@@ -2176,7 +2176,7 @@ function workbenchHarness(context, read, options = {}) {
   const makeSnapshot = workbenchSnapshot;
   const fallback = path => path.includes('/api/workbench/groups') ? makeSnapshot() :
     path.includes('/api/workbench/activity') ? { start: 0, cellSeconds: 60, groups: { a: { cells: Array(60).fill('none'), inbound: [] } } } : {};
-  const stop = mountWorkbench({ document, window, storage: saved, t: key => key,
+  const mounted = mountWorkbench({ document, window, storage: saved, t: key => key,
     identity: () => owner, endpoint: path => owner === 'local' ? path : '/fleet/' + owner + path,
     observerStatus: options.observerStatus ?? (() => null), observerAvailable: options.observerAvailable ?? (() => true),
     openSettings: options.openSettings ?? (() => {}),
@@ -2187,8 +2187,9 @@ function workbenchHarness(context, read, options = {}) {
       const value = read ? await read(path, fallback) : fallback(path);
       return value?.json ? value : { ok: true, json: async () => value };
     } });
+  const stop = () => mounted.destroy();
   context.after(stop);
-  return { document, nodes, saved, calls, listeners, windowListeners, intervals, timeouts, stop, makeSnapshot,
+  return { document, nodes, saved, calls, listeners, windowListeners, intervals, timeouts, stop, openGroup: key => mounted.openGroup(key), makeSnapshot,
     poll: delay => { const timer = [...intervals.values()].find(timer => timer.delay === delay); assert.ok(timer, 'expected polling timer'); return timer.handler(); },
     debounce: async () => { const job = [...timeouts.entries()].find(([, timer]) => timer.delay === 300); assert.ok(job, 'search debounce exists'); timeouts.delete(job[0]); await job[1].handler(); },
     setOwner: value => { owner = value; },
@@ -2418,4 +2419,33 @@ test('workbench shell gates automatic naming and discards an old agent prompt', 
   assert.equal(dialog.hidden, true);
   assert.equal(dialog.textContent, '');
   assert.equal(requests.some(item => item.options?.method === 'POST'), false);
+});
+
+// Programmatic group selection uses the real mounted shell/detail/olderRow;
+// run for cross-page selection wiring, skip backend-only changes. The harness
+// owns DOM, fetch, timers and observers; no live processes/DB/network are used.
+test('workbench shell opens a key outside the snapshot and requests only that group', async context => {
+  const key = 'telegram:historic-room';
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path.includes('/runs')) return { runs: [], totalRuns: 0, totalEvents: 0, unattributed: 0 };
+    if (path.includes('/backlog')) return { count: 0, firstAt: null, syncing: false };
+    if (path.startsWith('/api/timeline')) return { events: [] };
+    return fallback(path);
+  });
+  await wbTick(); await wbTick();
+  h.calls.length = 0;
+  await h.openGroup(key);
+  assert.equal(h.nodes.get('#wb-side').hidden, false);
+  assert.match(h.nodes.get('#wb-side').textContent, /wb\.platform\.telegram · historic-room/);
+  assert.equal(h.calls.length, 3);
+  for (const path of h.calls) {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname === '/api/timeline') {
+      assert.equal(url.searchParams.get('session_group'), key);
+      assert.equal(url.searchParams.has('run_id'), false);
+    } else assert.ok(url.pathname.startsWith('/api/workbench/groups/' + encodeURIComponent(key) + '/'));
+  }
+  h.stop(); h.calls.length = 0;
+  await h.openGroup('telegram:after-unmount');
+  assert.equal(h.calls.length, 0);
 });

@@ -13,7 +13,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   writable = () => true, onMemory = () => {},
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
   const board = document.querySelector('#wb-board');
-  if (!board) return () => {};
+  if (!board) return { openGroup: async () => {}, destroy() {} };
   const mode = createViewMode({ storage, document });
   const searchInput = document.querySelector('#wb-search');
   const rangeInput = document.querySelector('#wb-range');
@@ -257,7 +257,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   controller.start();
   refreshMode();
   const modeTimer = setInterval(refreshMode, 60000);
-  return () => {
+  function destroy() {
     stopped = true;
     controller.stop();
     groupDetail.destroy();
@@ -275,5 +275,13 @@ export function mountWorkbench({ document = globalThis.document, window = global
     document.removeEventListener('visibilitychange', visibility);
     document.removeEventListener('dashboard-locale-change', localeChange);
     window.removeEventListener('popstate', visibility);
+  }
+  return {
+    openGroup(key) {
+      if (stopped) return Promise.resolve();
+      resetOwner();
+      return groupDetail.open(key, snapshot ?? { rows: [], listKnown: false });
+    },
+    destroy,
   };
 }

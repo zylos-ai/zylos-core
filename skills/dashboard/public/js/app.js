@@ -4650,7 +4650,7 @@ try {
 await refreshAll();
 startTimers();
 
-const stopWorkbench = mountWorkbench({
+const workbench = mountWorkbench({
   t,
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
@@ -4663,4 +4663,8 @@ const stopWorkbench = mountWorkbench({
   observerStatus: () => state.observer.status,
   observerAvailable: status => !remoteIsReadOnly() && !observerRecoveryReason(status),
 });
-window.addEventListener('pagehide', stopWorkbench);
+export function openWorkbenchGroup(key) {
+  document.querySelector('.tab[data-tab="overview"]')?.click();
+  return workbench.openGroup(key);
+}
+window.addEventListener('pagehide', () => workbench.destroy());
