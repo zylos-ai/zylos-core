@@ -1537,7 +1537,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
-  assert.match(index, /app\.js\?v=85/);
+  assert.match(index, /app\.js\?v=86/);
   assert.match(index, /style\.css\?v=58/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
@@ -1546,6 +1546,11 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(app, /saveMemoryOnce\(\{ request: requestAgentJson, readFile: fetchAgentJson,/);
   assert.match(app, /path: file\.path, text, sha256,/);
   assert.match(app, /if \(!applyMemorySave\(captured, state\.memory, saved\)\) return;/);
+  const memoryActions = app.slice(app.indexOf('function renderMemoryActions()'), app.indexOf('function renderMemory()'));
+  assert.match(memoryActions, /applyMemoryWriteAccess\(editBtn, saveBtn, state\.memory\.tree, file\?\.path\)/);
+  const memorySave = app.slice(app.indexOf('async function saveMemoryDraftToServer('), app.indexOf('async function resolveMemoryConflict('));
+  assert.doesNotMatch(memorySave, /loadMemoryTree\(/);
+  assert.match(memorySave, /renderMemoryPreservingEditor\(renderMemory, document\)/);
   assert.match(memoryScope, /request\(`\/api\/memory\/file\?path=\$\{encodeURIComponent\(path\)\}`/);
   assert.match(memoryScope, /method: 'PUT'/);
   assert.match(memoryScope, /JSON\.stringify\(\{ text, sha256 \}\)/);
@@ -1608,7 +1613,7 @@ test('fleet management entry stays local and its controls are retained in settin
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
-  assert.match(index, /app\.js\?v=85/);
+  assert.match(index, /app\.js\?v=86/);
   assert.match(index, /<path d="M12 8V4H8"/);
   assert.match(index, /<rect width="16" height="12" x="4" y="8" rx="2"/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);

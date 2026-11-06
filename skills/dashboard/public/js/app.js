@@ -4,7 +4,7 @@ import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v
 import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=85';
 import { renderVersion } from './wb/settings-version.js?v=85';
 import { mountWorkbench } from './wb/shell.js?v=85';
-import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave } from './wb/memory-scope.js?v=85';
+import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=86';
 import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=85';
 import { mountSchedule } from './wb/schedule.js?v=85';
 import { ObserverHistory } from './observer-history.js?v=2';
@@ -1626,6 +1626,7 @@ function renderMemoryActions() {
     resetBtn.hidden = !editing;
     resetBtn.disabled = state.memory.saving;
   }
+  applyMemoryWriteAccess(editBtn, saveBtn, state.memory.tree, file?.path);
   $('#memory-rendered-btn')?.toggleAttribute('disabled', editing);
   $('#memory-raw-btn')?.toggleAttribute('disabled', editing);
 }
@@ -1827,7 +1828,6 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
     const git = await fetchAgentJson(`/api/memory/git?path=${encodeURIComponent(saved.path)}`).catch(() => ({ commit: null }));
     if (!memorySaveAppliedCurrent(captured, state.memory, saved)) return;
     state.memory.git = git;
-    await loadMemoryTree({ force: true });
   } catch (err) {
     if (!memorySaveCurrent(captured, state.memory)) return;
     if (err.code === 'memory_conflict') {
@@ -1841,16 +1841,16 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
         state.memory.conflict = null;
         state.memory.conflictRetryText = state.memory.draft;
         state.memory.error = 'memory_conflict_latest_failed';
-        renderMemory();
+        renderMemoryPreservingEditor(renderMemory, document);
         return;
       }
     }
     state.memory.error = err.code || 'memory_browser_failed';
-    renderMemory();
+    renderMemoryPreservingEditor(renderMemory, document);
   } finally {
     if (memorySaveOwnerCurrent(captured, state.memory)) {
       state.memory.saving = false;
-      renderMemory();
+      renderMemoryPreservingEditor(renderMemory, document);
     }
   }
 }

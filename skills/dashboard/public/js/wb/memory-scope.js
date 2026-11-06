@@ -46,14 +46,16 @@ export function memoryWriteMessage(code, t) {
 
 /** Submit once. An unknown result permits one readback, never a write retry. */
 export function captureMemorySave(memory) {
-  return memory.saving ? null : { memory, path: memory.selectedPath, draft: memory.draft };
+  return memory.saving ? null : { memory, file: memory.file, path: memory.selectedPath, draft: memory.draft };
 }
 export function memorySaveOwnerCurrent(captured, current) { return captured?.memory === current; }
 export function memorySaveTargetCurrent(captured, current) { return memorySaveOwnerCurrent(captured, current) && captured.path === current.selectedPath; }
 export function memorySaveAppliedCurrent(captured, current, saved) {
   return memorySaveTargetCurrent(captured, current) && current.file === saved;
 }
-export const memorySaveCurrent = memorySaveTargetCurrent;
+export function memorySaveCurrent(captured, current) {
+  return memorySaveTargetCurrent(captured, current) && captured.file === current.file;
+}
 
 export function applyMemorySave(captured, current, saved) {
   if (!memorySaveCurrent(captured, current)) return false;
@@ -65,7 +67,25 @@ export function applyMemorySave(captured, current, saved) {
   current.conflict = null;
   current.conflictRetryText = '';
   current.liveNotice = null;
+  function updateFile(node) {
+    if (!node) return;
+    if (node.type === 'file' && node.path === saved.path) Object.assign(node, { size_bytes: saved.size_bytes, mtime: saved.mtime });
+    else for (const child of node.children ?? []) updateFile(child);
+  }
+  updateFile(current.tree?.root);
   return true;
+}
+
+export function renderMemoryPreservingEditor(render, document) {
+  const editor = document.querySelector('#memory-editor');
+  const focused = editor && document.activeElement === editor;
+  const selection = focused ? [editor.selectionStart, editor.selectionEnd, editor.selectionDirection] : null;
+  render();
+  if (focused) {
+    const replacement = document.querySelector('#memory-editor');
+    replacement?.focus();
+    if (Number.isInteger(selection[0]) && Number.isInteger(selection[1])) replacement?.setSelectionRange(selection[0], selection[1], selection[2]);
+  }
 }
 
 export async function saveMemoryOnce({ request, readFile, path, text, sha256, isCurrent = () => true }) {
@@ -89,6 +109,12 @@ export function memoryWriteAllowed(tree, path) {
   if (!path.startsWith('session-groups/')) return true;
   const parts = path.split('/');
   return parts.length >= 3 && (tree?.sessionGroups ?? []).some(group => group.sessionGroup === parts[1]);
+}
+
+export function applyMemoryWriteAccess(edit, save, tree, path) {
+  if (memoryWriteAllowed(tree, path)) return;
+  if (edit) { edit.hidden = true; edit.disabled = true; }
+  if (save) save.disabled = true;
 }
 
 const byteSize = value => `${(Number(value) / 1024).toFixed(1)} KiB`;
@@ -151,9 +177,6 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     if (currentScope().shared.children.some(node => node.path === 'session-groups')) root.append(element(document, 'p', t('wb.memory.invalidGroup'), 'wb-memory-diagnostic'));
     const file = getFile();
     if (file && !memoryWriteAllowed(getTree(), file.path)) {
-      const edit = document.querySelector?.('#memory-edit-btn'), save = document.querySelector?.('#memory-save-btn');
-      if (edit) { edit.hidden = true; edit.disabled = true; }
-      if (save) save.disabled = true;
       root.append(element(document, 'p', t('wb.memory.invalidGroupFile'), 'wb-memory-diagnostic'));
     }
     renderCharts();

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
-import { memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
+import { memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 
 // Direct product imports and injected DOM/request. Run for memory scope, charts,
@@ -130,7 +130,7 @@ test('save completion is fenced when the instance or selected file changes', asy
   const state = { selectedPath: 'state.md', file: {}, draft: 'draft' }, captured = captureMemorySave(state);
   assert.equal(memorySaveCurrent(captured, state), true);
   assert.equal(memorySaveCurrent(captured, { ...state }), false);
-  state.file = {}; assert.equal(memorySaveCurrent(captured, state), true);
+  state.file = {}; assert.equal(memorySaveCurrent(captured, state), false);
   assert.equal(memorySaveTargetCurrent(captured, state), true);
   state.selectedPath = 'identity.md'; assert.equal(memorySaveTargetCurrent(captured, state), false);
   const request = deferred(); let reads = 0, current = true;
@@ -287,25 +287,82 @@ test('invalid group directories and files directly under session-groups explain 
   document.querySelector = selector => selector === '#memory-edit-btn' ? edit : selector === '#memory-save-btn' ? save : null;
   let selected = 'session-groups/bad name/notes.md';
   const f = fixture({ document, getFile: () => ({ path: selected }) }); f.setTree(value); f.controller.render();
+  applyMemoryWriteAccess(edit, save, value, selected);
   assert.equal(edit.hidden, true); assert.equal(edit.disabled, true); assert.equal(save.disabled, true);
   assert.match(f.root.textContent, /wb.memory.invalidGroupFile/);
   selected = 'session-groups/direct.md'; edit.hidden = false; edit.disabled = false; save.disabled = false;
-  f.controller.render(); assert.equal(edit.hidden, true); assert.equal(save.disabled, true);
+  f.controller.render(); applyMemoryWriteAccess(edit, save, value, selected); assert.equal(edit.hidden, true); assert.equal(save.disabled, true);
   assert.equal(memoryScope(value).shared.children.find(node => node.path === 'session-groups').children.length, 2);
   f.controller.destroy();
 });
 
 
-test('reloading the same path during a pending save still updates its sha and preserves newer draft text', async () => {
+test('success arriving during a same-path reload is discarded without applying or persisting an empty draft', async () => {
   const state = { selectedPath: 'state.md', file: { path: 'state.md', text: 'old', sha256: 'old-sha' }, draft: 'submitted', editing: true, dirty: true };
+  const captured = captureMemorySave(state), pending = deferred(), persisted = [];
+  const saving = saveMemoryOnce({ path: 'state.md', text: state.draft, sha256: state.file.sha256,
+    request: () => pending.promise, isCurrent: () => memorySaveCurrent(captured, state) });
+  state.file = null; state.draft = ''; state.editing = false; state.dirty = false;
+  const saved = { path: 'state.md', text: 'submitted', sha256: 'saved-sha' };
+  pending.resolve(saved);
+  const result = await saving;
+  if (result && applyMemorySave(captured, state, result)) persisted.push(state.draft);
+  assert.equal(result, null); assert.equal(state.file, null); assert.equal(state.draft, '');
+  assert.equal(persisted.length, 0); assert.equal(state.dirty, false); assert.equal(state.editing, false);
+  state.file = { path: 'state.md', text: 'submitted', sha256: 'saved-sha' }; state.draft = 'reloaded current draft';
+  assert.equal(applyMemorySave(captured, state, saved), false);
+  assert.equal(state.draft, 'reloaded current draft');
+});
+
+test('conflict arriving during a same-path reload cannot create an empty mine version', async () => {
+  const state = { selectedPath: 'state.md', file: { path: 'state.md', sha256: 'old' }, draft: 'submitted', conflict: null };
   const captured = captureMemorySave(state), pending = deferred();
   const saving = saveMemoryOnce({ path: 'state.md', text: state.draft, sha256: state.file.sha256,
     request: () => pending.promise, isCurrent: () => memorySaveCurrent(captured, state) });
-  state.file = { path: 'state.md', text: 'old', sha256: 'old-sha' };
-  state.draft = 'new draft after reopening';
-  const saved = { path: 'state.md', text: 'submitted', sha256: 'saved-sha' };
-  pending.resolve(saved);
-  assert.equal(applyMemorySave(captured, state, await saving), true);
-  assert.equal(state.file.sha256, 'saved-sha'); assert.equal(state.draft, 'new draft after reopening');
-  assert.equal(state.dirty, true); assert.equal(state.editing, true);
+  state.file = null; state.draft = '';
+  pending.reject({ code: 'memory_conflict', current: { path: 'state.md', text: 'updated on disk' } });
+  assert.equal(await saving, null); assert.equal(state.conflict, null); assert.equal(state.draft, '');
+});
+
+test('a conflict latest-version readback is fenced while the same path reloads', async () => {
+  const state = { selectedPath: 'state.md', file: { path: 'state.md' }, draft: 'submitted', conflict: null };
+  const captured = captureMemorySave(state), latest = deferred();
+  await assert.rejects(saveMemoryOnce({ path: 'state.md', text: state.draft, sha256: 'old',
+    request: async () => { throw { code: 'memory_conflict' }; }, isCurrent: () => memorySaveCurrent(captured, state) }), error => error.code === 'memory_conflict');
+  state.file = null; state.draft = '';
+  latest.resolve({ path: 'state.md', text: 'latest' }); await latest.promise;
+  assert.equal(memorySaveCurrent(captured, state), false); assert.equal(state.conflict, null);
+});
+
+test('saved metadata updates tree sizes without reopening the editor and preserves typed selection during rendering', () => {
+  const value = tree(), state = { selectedPath: 'identity.md', file: { path: 'identity.md', sha256: 'old' }, draft: 'submitted', editing: true, dirty: true, tree: value };
+  const captured = captureMemorySave(state); state.draft = 'submitted plus newer typing';
+  const saved = { path: 'identity.md', text: 'submitted', sha256: 'new', size_bytes: 9, mtime: 'saved-time' };
+  assert.equal(applyMemorySave(captured, state, saved), true);
+  const node = value.root.children.find(node => node.path === 'identity.md');
+  assert.equal(node.size_bytes, 9); assert.equal(node.mtime, 'saved-time');
+  assert.equal(Object.hasOwn(node, 'text'), false); assert.equal(Object.hasOwn(node, 'sha256'), false);
+  let editor = { value: state.draft, selectionStart: 13, selectionEnd: 18, selectionDirection: 'forward' }, renders = 0;
+  const document = { activeElement: editor, querySelector: () => editor };
+  renderMemoryPreservingEditor(() => {
+    renders++;
+    editor = { value: state.draft, focus() { document.activeElement = this; }, setSelectionRange(start, end, direction) { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; } };
+  }, document);
+  assert.equal(renders, 1); assert.equal(document.activeElement, editor);
+  assert.equal(editor.value, 'submitted plus newer typing'); assert.equal(editor.selectionStart, 13); assert.equal(editor.selectionEnd, 18);
+  assert.equal(state.file, saved); assert.equal(state.editing, true); assert.equal(state.dirty, true); assert.equal(state.draftNotice, false);
+});
+
+test('repeated action renders keep invalid group drafts read-only', () => {
+  const value = tree(), edit = {}, save = {};
+  for (const path of ['session-groups/bad name/notes.md', 'session-groups/direct.md']) {
+    for (let render = 0; render < 3; render++) {
+      Object.assign(edit, { hidden: false, disabled: false }); Object.assign(save, { disabled: false });
+      applyMemoryWriteAccess(edit, save, value, path);
+      assert.equal(edit.hidden, true); assert.equal(edit.disabled, true); assert.equal(save.disabled, true);
+    }
+  }
+  Object.assign(edit, { hidden: false, disabled: false }); save.disabled = true;
+  applyMemoryWriteAccess(edit, save, value, 'identity.md');
+  assert.equal(edit.hidden, false); assert.equal(edit.disabled, false); assert.equal(save.disabled, true, 'ordinary pending/clean restrictions remain in force');
 });
