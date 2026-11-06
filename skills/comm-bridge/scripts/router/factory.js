@@ -6,7 +6,7 @@ const { readRuntimeHealth } = await loadCoreModule('session-state-reader.js');
 const { readReadyIdentity } = await loadCoreModule('runtime/session-target.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { listGroupTmuxSessions } = await loadCoreModule('session-group-paths.js');
-const { resolveSessionPoolBaseline } = await loadCoreModule('session-pool-config.js');
+const { readPoolCapacity } = await loadCoreModule('session-pool-config.js');
 import { createRouter } from './scheduler.js';
 import { createDelivery } from './delivery.js';
 import { formatConversation } from './format.js';
@@ -38,8 +38,8 @@ export function createDispatcher(overrides = {}, options = {}) {
   const diagnostic = overrides.diagnostic ?? diagnostics.diagnostic;
   const reader = createSessionReader({ env, connectionOptions: tmux });
   const lifecycle = createLifecycleProviders({ env, tmux, diagnostic, log });
-  const config = (overrides.readZylosConfigStrict ?? readZylosConfigStrict)();
-  const poolSize = options.poolSize ?? resolveSessionPoolBaseline({ env, config: config.state === 'ok' ? config.config : {} }).k;
+  const now = overrides.now ?? Date.now;
+  const poolSize = () => readPoolCapacity({ env, now: now() }).k;
   const readConfig = () => {
     try { const value = (overrides.readZylosConfigStrict ?? readZylosConfigStrict)(); return value.state === 'ok' ? value.config : {}; }
     catch { return {}; }

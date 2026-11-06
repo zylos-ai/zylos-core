@@ -78,7 +78,7 @@ setInterval(()=>{},1000);
     prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
     diagnostic: (event, fields) => events.push({ event, ...fields }),
   };
-  router = createRouter(deps, { poolSize: 2, readyTimeoutMs: 10000 });
+  router = createRouter(deps, { poolSize: () => 2, readyTimeoutMs: 10000 });
   async function run() {
     await router.initialize(); await router.idle();
     // Advance the resident's five-second absence gate without pretending this

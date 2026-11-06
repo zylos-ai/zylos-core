@@ -30,10 +30,7 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   const sends = [], logs = [];
   const adapter = f.deps.getSessionAdapter;
   const dependencies = { ...f.deps,
-    readZylosConfigStrict: (() => { let initial = true; return () => {
-      if (initial) { initial = false; return { state: 'ok', config: {} }; }
-      return readConfig();
-    }; })(),
+    readZylosConfigStrict: readConfig,
     diagnostics: { diagnostic: f.deps.diagnostic, maintain() {} },
     log: message => logs.push(message),
     sendAlert: async (target, message) => { sends.push({ target, message }); return send(target, message, sends.length); },
@@ -43,7 +40,8 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
     } }),
   };
   delete dependencies.alert;
-  const dispatcher = createDispatcher(dependencies, { ...f.options, delivery: { periodicEnabled: false } });
+  const { poolSize, ...options } = f.options;
+  const dispatcher = createDispatcher(dependencies, { ...options, delivery: { periodicEnabled: false } });
   t.after(async () => { await dispatcher.stop(); });
   async function rounds(n = 3) {
     for (let i = 0; i < n; i++) { dispatcher.tick(); await dispatcher.idle(); await flush(); }
@@ -62,11 +60,6 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   return { ...f, dispatcher, sends, logs, rounds, failAfter, fiveFailures };
 }
 
-test('dispatcher preserves startup configuration read errors', () => {
-  assert.throws(() => createDispatcher({ readZylosConfigStrict: () => { throw Error('startup configuration unavailable'); } }),
-    /startup configuration unavailable/);
-});
-
 // Other-event boundary: run for factory alert routing changes; skip unrelated copy.
 // The real startup path uses isolated HOME/ZYLOS_DIR/PM2_HOME and an in-memory DB;
 // mode/config and send I/O are injected, with no live runtime or communication.
@@ -81,7 +74,8 @@ test('dispatcher logs unreadable session configuration without notifying the own
     sendAlert: async (target, message) => { sends.push({ target, message }); return true; },
   };
   delete dependencies.alert;
-  const dispatcher = createDispatcher(dependencies, { ...f.options, delivery: { periodicEnabled: false } });
+  const { poolSize, ...options } = f.options;
+  const dispatcher = createDispatcher(dependencies, { ...options, delivery: { periodicEnabled: false } });
   t.after(() => dispatcher.stop());
   await dispatcher.initialize();
   assert.equal(dispatcher.state.inert, true);

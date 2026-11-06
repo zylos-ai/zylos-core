@@ -36,7 +36,7 @@ export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs 
   };
   const recover = db.recoverOrphanRunning;
   db.recoverOrphanRunning = options => { calls.push(['recover']); return recover(options); };
-  const options = { poolSize, readyTimeoutMs };
+  const options = { poolSize: typeof poolSize === 'function' ? poolSize : () => poolSize, readyTimeoutMs };
   let router;
   const create = () => router = createRouter(deps, options);
   const rounds = async (n = 1) => { for (let i = 0; i < n; i++) { router.tick(); await router.idle(); await flush(); } };

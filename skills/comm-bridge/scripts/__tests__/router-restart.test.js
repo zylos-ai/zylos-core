@@ -59,7 +59,7 @@ function persistedRouter(t) {
       handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
       diagnostic: (event, fields) => events.push({ generation, event, ...fields }),
       alert: (event, fields) => calls.push(['alert', generation, event, fields]),
-    }, { poolSize: 1, readyTimeoutMs: 1000 });
+    }, { poolSize: () => 1, readyTimeoutMs: 1000 });
     return router;
   }
   async function rounds(count) { for (let i = 0; i < count; i++) { router.tick(); await router.idle(); await new Promise(resolve => setImmediate(resolve)); } }

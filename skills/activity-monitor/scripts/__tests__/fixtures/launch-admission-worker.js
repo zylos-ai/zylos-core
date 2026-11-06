@@ -76,7 +76,7 @@ if (role === 'm4') {
     deliverConversation: async (row, live) => db.markDelivered(row.id, { sessionId: live.sessionId }),
     handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
     diagnostic: (event, fields) => trace('diagnostic', { event, ...fields }), log: value => trace('log', { value }),
-  }, { poolSize: 4, readyTimeoutMs: 10000 });
+  }, { poolSize: () => 4, readyTimeoutMs: 10000 });
   await router.initialize();
 }
 process.on('message', async message => {

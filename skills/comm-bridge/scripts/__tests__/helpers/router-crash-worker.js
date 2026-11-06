@@ -71,7 +71,7 @@ router = createRouter({ db, now: () => now,
   },
   handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   diagnostic: (event, fields) => record(event, fields), alert: (event, fields) => record('alert', { alert: event, ...fields }),
-}, { poolSize: 1, readyTimeoutMs: 1000, pollIntervalMs: 5 });
+}, { poolSize: () => 1, readyTimeoutMs: 1000, pollIntervalMs: 5 });
 await router.initialize();
 if (phase === 'restart') {
   process.send({ initialized: true });
