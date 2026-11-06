@@ -66,6 +66,15 @@ test('proxy refuses disabled local authentication before calling an enabled remo
     assert.equal(JSON.parse(result.text).error, 'admin_required');
     assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
   }
+  for (const identity of ['none', 'cookie']) {
+    for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+      for (const path of ['/api/chat/conversations', '/api/chat/conversations/', '/api/chat/future']) {
+        const result = await f.request({ method, path }, { fleet: true, identity });
+        assert.equal(result.status, 403, `${identity} ${method} ${path}`);
+        assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+      }
+    }
+  }
   assert.equal((await f.request(chatRoutes[0], { identity: 'admin' })).status, 200);
   assert.equal(f.counts.reads, 1);
   assert.equal(f.counts.upstream, 0);
