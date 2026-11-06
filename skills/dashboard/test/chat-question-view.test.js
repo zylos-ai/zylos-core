@@ -203,7 +203,7 @@ test('full mounted page posts an answer, then exposes an enabled explicit retry 
   page.destroy();
 });
 
-test('unknown answer can only retry the same action after manual refresh confirms the question remains paused', async () => {
+test('unknown answer cannot infer retry permission from a paused question after manual refresh', async () => {
   const { mountChat } = await import('../public/js/wb/chat.js');
   const base = fixture({ type: 'confirmation' });
   const document = createDocument(), root = document.createElement('div'), posts = [];
@@ -229,13 +229,11 @@ test('unknown answer can only retry the same action after manual refresh confirm
   const before = questionReads;
   find('refresh').dispatch('click'); await tick(); await tick();
   assert.ok(questionReads > before); assert.equal(posts.length, 1);
-  const retry = find('retryAnswer'); assert.ok(retry); assert.equal(retry.disabled, false);
+  assert.equal(find('retryAnswer'), undefined);
   assert.equal(find('confirmAnswer'), undefined); assert.equal(find('cancelAnswer'), undefined); assert.equal(find('answerOther'), undefined);
   const card = allNodes(root).find(node => node.className === 'chat-question');
   assert.equal(allNodes(card).some(node => ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName)), false);
-  retry.dispatch('click'); await tick(); await tick();
-  assert.equal(posts.length, 2); assert.equal(posts[1].retry, true); assert.deepEqual(posts[1].action, posts[0].action);
-  assert.equal(posts[1].interruptId, posts[0].interruptId);
+  assert.equal(posts.length, 1);
   page.destroy();
 });
 

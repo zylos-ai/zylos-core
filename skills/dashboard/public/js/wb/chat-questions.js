@@ -64,8 +64,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     void submit(action);
   };
   const retryAccepted = lifecycle === 'answered' && question.answer_id === formState.action?.id && receipt?.retryAllowed === true;
-  const retryReconciled = lifecycle === 'paused' && !question.answer_id && formState.reconciledPaused === true;
-  if (writable && formState.action && validateAnswer(formState.action, envelope) && (retryAccepted || retryReconciled)) {
+  if (writable && formState.action && validateAnswer(formState.action, envelope) && retryAccepted) {
     root.append(button(t('chat.retry'), () => { void submit(formState.action, true); }, 'retryAnswer'), status);
     return root;
   }

@@ -110,7 +110,6 @@ export function createChatState({ request, identity = null, onChange } = {}) {
         const form = current.questionForms.get(formKey);
         if (form && !form.sending) {
           form.receipt = row.delivery ?? null;
-          form.reconciledPaused = form.locked === true && !!form.action && row.status === 'paused' && !row.answer_id;
           // Restore only the server's saved action, never reconstruct an intent
           // from displayed text or labels after a page reload.
           if (row.status === 'answered' && row.action?.id === row.answer_id && !row.actionError) {
@@ -131,13 +130,13 @@ export function createChatState({ request, identity = null, onChange } = {}) {
     const form = current.questionForms.get(formKey);
     if (!form || form.sending || (form.locked && !retry) || !action || (question.status !== 'paused' &&
         !(question.status === 'answered' && retry && question.answer_id === action.id))) return;
-    if (retry && (form.action?.id !== action.id || !(form.receipt?.retryAllowed === true || (question.status === 'paused' && form.reconciledPaused === true)))) return;
+    if (retry && (question.status !== 'answered' || form.action?.id !== action.id || form.receipt?.retryAllowed !== true)) return;
     if (!retry && question.status !== 'paused') return;
     const e = epoch, id = selectedId, sendIdentity = openedIdentity;
     const submitted = JSON.parse(JSON.stringify(action));
     // Freeze the accepted intent across network errors and explicit retries.
     if (form.action && JSON.stringify(form.action) !== JSON.stringify(submitted)) return;
-    form.action = submitted; form.sending = true; form.error = null; form.reconciledPaused = false; current.error = null;
+    form.action = submitted; form.sending = true; form.error = null; current.error = null;
     current.questionVersion++; current.questionsLoading = false; emit();
     try {
       const result = await request(`${pathFor(id)}/answers`, { method: 'POST', body: { interruptId, action: submitted, ...(retry ? { retry: true } : {}) } });
