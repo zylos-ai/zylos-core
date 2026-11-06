@@ -399,6 +399,7 @@ test('activity uses separate thirty-second range caches and reads every active-g
   const f = fixture(t), filters = [], normal = f.store.queryEvents;
   f.store.queryEvents = filter => {
     if (!filter.types.includes('session_start')) return normal(filter);
+    if (filter.runId) return [];
     filters.push(filter);
     assert.ok(['origin', 'telegram:g0'].includes(filter.sessionGroup));
     assert.equal(filter.limit, 1000);
@@ -567,6 +568,179 @@ test('inbound read failures preserve cells, expose a source reason and remain un
   assert.ok(recovered.groups['telegram:g0']);
   assert.equal(Object.hasOwn(recovered, 'inboundError'), false);
   await assert.rejects(workbenchResponse(f.service, '/api/workbench/activity', new URLSearchParams()), { code: 'invalid_range', statusCode: 400 });
+});
+
+// Integration: real Store queries plus snapshot-to-bucket projection. Run for
+// activity lookback/display changes; skip rendering-only changes. Owned temporary
+// SQLite/root, injected Core/CLI; no network, tmux, PM2 or children. Fixture closes
+// the DB before removing its root.
+for (const [type, metadata, closes] of [
+  ['user_prompt_submit', {}, false], ['pre_tool_use', { tool_use_id: 'long' }, false],
+  ['subagent_start', { agent_id: 'child' }, false], ['pre_tool_use', { tool_use_id: 'long' }, true],
+  ['user_prompt_submit', {}, true],
+]) test(`activity recovers pre-window ${type} with closed=${closes} from capped lookups`, async t => {
+  const f = fixture(t), store = new Store(path.join(f.root, 'dashboard.db'));
+  f.addCleanup(() => store.close());
+  const minute = 60000, start = Math.floor(f.now() / minute) * minute - 59 * minute;
+  const runStart = start - 20 * minute, filters = [];
+  f.live.get('telegram:g0').identity.createdAt = runStart / 1000;
+  const add = (id, event_type, at, run_id, metadata = {}) => store.insertEvent({ id, ingest_id: id,
+    timestamp: new Date(at).toISOString(), runtime: 'claude', session_group: 'telegram:g0', run_id,
+    event_type, category: 'activity', metadata });
+  // A long unrelated history must never be returned by lookback queries.
+  store.db.transaction(() => {
+    for (let i = 0; i < 2500; i++) add(`old-${i}`, 'user_prompt_submit', runStart - (2501 - i) * minute, `old-run-${i}`);
+    add('run-start', 'session_start', runStart, 'run-telegram:g0');
+    add('open', type, runStart + minute, 'run-telegram:g0', metadata);
+    if (closes) add('close', type === 'pre_tool_use' ? 'post_tool_use' : 'stop',
+      type === 'pre_tool_use' ? start + 10 * minute : start - minute, 'run-telegram:g0', metadata);
+  })();
+  let lookedBack = 0;
+  f.store.queryEvents = filter => {
+    const rows = store.queryEvents(filter);
+    if (filter.until && Date.parse(filter.until) < start) {
+      filters.push(filter);
+      assert.equal(filter.runId, 'run-telegram:g0');
+      assert.equal(filter.sessionGroup, 'telegram:g0');
+      assert.ok(rows.length <= filter.limit);
+      assert.equal(filter.order, 'desc');
+      assert.equal(filter.offset, undefined);
+      assert.equal(filter.since, undefined);
+      assert.ok([1, 200].includes(filter.limit));
+      lookedBack += rows.length;
+    }
+    return rows;
+  };
+  const output = await f.service.activity('60m'), cells = output.groups['telegram:g0'].cells;
+  assert.equal(filters.length, type === 'user_prompt_submit' && !closes ? 2 : 3);
+  assert.ok(lookedBack <= 401);
+  if (!closes) assert.ok(cells.every(value => value === 'busy'));
+  else if (type === 'pre_tool_use') {
+    assert.ok(cells.slice(0, 10).every(value => value === 'busy'));
+    assert.ok(cells.slice(10).every(value => value === 'idle'));
+  } else assert.ok(cells.every(value => value === 'idle'));
+  assert.ok(output.groups.origin.cells.every(value => value === 'none'));
+});
+
+function activityStore(t) {
+  const f = fixture(t), store = new Store(path.join(f.root, 'activity.db'));
+  f.addCleanup(() => store.close());
+  const minute = 60000, start = Math.floor(f.now() / minute) * minute - 59 * minute;
+  const runId = 'run-telegram:g0', filters = [];
+  f.live.get('telegram:g0').identity.createdAt = (start - 3 * 86400000) / 1000;
+  const add = (id, event_type, at, metadata = {}, run_id = runId) => store.insertEvent({ id, ingest_id: id,
+    timestamp: new Date(at).toISOString(), runtime: 'claude', session_group: 'telegram:g0', run_id,
+    event_type, category: 'activity', metadata });
+  f.store.queryEvents = filter => {
+    const rows = store.queryEvents(filter);
+    if (filter.until && Date.parse(filter.until) < start) {
+      filters.push({ ...filter, returned: rows.length });
+      assert.equal(filter.order, 'desc');
+      assert.equal(filter.offset, undefined);
+      assert.ok(rows.length <= filter.limit);
+    }
+    return rows;
+  };
+  return { f, store, minute, start, runId, filters, add };
+}
+
+// Integration: real Store ordering, bounded lookback and bucket projection.
+// Run for activity history changes; skip rendering-only edits. Owned temporary
+// SQLite/root, injected Core/CLI; no network/tmux/PM2/children; fixture closes DB.
+for (const type of ['user_prompt_submit', 'subagent_start']) {
+  test(`an old open ${type} survives many completed tools before the window`, async t => {
+    const { f, store, minute, start, filters, add } = activityStore(t);
+    store.db.transaction(() => {
+      add('open', type, start - 3 * 86400000, { agent_id: 'long-child' });
+      // Longer than the tool cap; the older open turn/agent must be found by
+      // its own event types, rather than by returning all events in the run.
+      for (let i = 0; i < 1500; i++) {
+        const at = start - 2 * 86400000 + i * minute;
+        add(`tool-${i}`, 'pre_tool_use', at, { tool_use_id: `T${i}` });
+        add(`end-${i}`, 'post_tool_use', at + 1000, { tool_use_id: `T${i}` });
+      }
+    })();
+    const output = await f.service.activity('60m');
+    assert.ok(output.groups['telegram:g0'].cells.every(value => value === 'busy'));
+    assert.equal(filters.length, type === 'user_prompt_submit' ? 2 : 3);
+    assert.ok(filters.reduce((total, filter) => total + filter.returned, 0) <= 401);
+    if (type === 'subagent_start') assert.equal(filters.find(filter => filter.types.includes('pre_tool_use')).returned, 200);
+    const queries = filters.length;
+    assert.equal(await f.service.activity('60m'), output);
+    assert.equal(filters.length, queries);
+  });
+}
+
+// Integration: replaced-run lookback; same isolated Store fixture boundary.
+test('a replaced run opened before the window stays busy until its in-window stop', async t => {
+  const { f, minute, start, filters, add } = activityStore(t);
+  f.live.get('telegram:g0').identity.createdAt = (start + 40 * minute) / 1000;
+  add('old-open', 'user_prompt_submit', start - 10 * minute, {}, 'replaced');
+  add('old-stop', 'stop', start + 30 * minute, {}, 'replaced');
+  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  assert.ok(cells.slice(0, 30).every(value => value === 'busy'));
+  assert.ok(cells.slice(30, 40).every(value => value === 'none'));
+  assert.ok(cells.slice(40).every(value => value === 'idle'));
+  assert.equal(filters.filter(filter => filter.runId === 'replaced').length, 2);
+});
+
+// Integration: ingestion order differs from source time; same isolated fixture.
+for (const type of ['user_prompt_submit', 'pre_tool_use', 'subagent_start']) {
+  test(`late ingestion of an older ${type} does not lose the window baseline`, async t => {
+    const { f, minute, start, add } = activityStore(t);
+    add('first-ingested', 'session_start', start - minute);
+    add('late-open', type, start - 3 * 86400000, { tool_use_id: 'long', agent_id: 'child' });
+    const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+    assert.ok(cells.every(value => value === 'busy'));
+  });
+}
+
+// Integration: stop cuts off tools but not agents; same isolated fixture.
+test('pre-window stop closes tools while a child remains busy until its own end', async t => {
+  const { f, minute, start, filters, add } = activityStore(t);
+  add('tool', 'pre_tool_use', start - 20 * minute, { tool_use_id: 'abandoned' });
+  add('child', 'subagent_start', start - 19 * minute, { agent_id: 'child' });
+  const stop = add('stop', 'stop', start - 10 * minute);
+  add('child-end', 'subagent_stop', start + 10 * minute, { agent_id: 'child' });
+  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  assert.ok(cells.slice(0, 10).every(value => value === 'busy'));
+  assert.ok(cells.slice(10).every(value => value === 'idle'));
+  const tools = filters.find(filter => filter.types.includes('pre_tool_use'));
+  assert.equal(tools.afterSeq, stop.event_seq);
+  assert.equal(tools.returned, 0);
+});
+
+// Integration: explicit display truncation and unmatched-end behavior; same fixture.
+for (const [open, close, idKey] of [['pre_tool_use', 'post_tool_failure', 'tool_use_id'],
+  ['subagent_start', 'subagent_stop', 'agent_id']]) {
+  test(`pre-window ${open} history is capped without turning unmatched ends busy`, async t => {
+    const { f, store, start, filters, add } = activityStore(t);
+    store.db.transaction(() => {
+      add('old-open', open, start - 10000, { [idKey]: 'outstanding' });
+      for (let i = 0; i < 101; i++) {
+        add(`start-${i}`, open, start - 9000 + i * 10, { [idKey]: `closed-${i}` });
+        add(`end-${i}`, close, start - 8999 + i * 10, { [idKey]: `closed-${i}` });
+      }
+      add('last-end', close, start - 1000, { [idKey]: 'unmatched' });
+    })();
+    const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+    assert.ok(cells.every(value => value === 'idle'));
+    assert.equal(filters.length, 3);
+    assert.equal(filters.find(filter => filter.types.includes(open)).returned, 200);
+  });
+}
+
+// Integration: no-event current/inactive projection. Run for activity baseline
+// changes; skip rendering-only changes. Injected adapters, owned temporary root,
+// no external resources or children; fixture owns cleanup.
+test('activity with no events paints the current run idle from its actual start', async t => {
+  const f = fixture(t), start = f.now() - 10 * 60000;
+  f.live.get('telegram:g0').identity.createdAt = start / 1000;
+  const output = await f.service.activity('60m'), cells = output.groups['telegram:g0'].cells;
+  const index = Math.floor((start - output.start) / 60000);
+  assert.ok(cells.slice(0, index).every(value => value === 'none'));
+  assert.ok(cells.slice(index).every(value => value === 'idle'));
+  assert.ok(output.groups.origin.cells.every(value => value === 'none'));
 });
 
 // Integration: Origin error privacy in both collectStatus views; run for Origin

@@ -10,6 +10,7 @@ import { searchGroups } from './group-search.js';
 
 const emptyNames = { listAll: () => new Map(), search: () => [] };
 const activationTypes = ['activate_new', 'start_always', 'activate_failed', 'activate_timeout'];
+const activityLookbackLimit = 200;
 const activityTypes = ['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'user_prompt_submit', 'stop',
   'permission_request', 'wait_health', 'wait_capacity', 'activate_failed', 'activate_timeout', 'session_start',
   'activate_new', 'start_always', 'adopt_ready', 'reclaim_done', 'rotate_done', 'crash_detected', 'subagent_start', 'subagent_stop'];
@@ -147,7 +148,27 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const snapshot = await getSnapshot(at), keys = snapshot.rows.map(row => row.sessionGroup).filter(key => key !== null);
     const width = range === '60m' ? 60000 : 300000, size = range === '60m' ? 60 : 72;
     const start = Math.floor(at / width) * width - (size - 1) * width;
-    const events = keys.flatMap(sessionGroup => queryAllEvents(store, { sessionGroup, since: new Date(start).toISOString(), types: activityTypes }));
+    const events = keys.flatMap(sessionGroup => queryAllEvents(store, { sessionGroup,
+      since: new Date(start).toISOString(), until: new Date(at).toISOString(), types: activityTypes }));
+    const runs = new Map(keys.map(key => [key, new Set()]));
+    for (const row of snapshot.rows) if (row.live?.runId && runs.has(row.sessionGroup)) runs.get(row.sessionGroup).add(row.live.runId);
+    for (const event of events) if (event.run_id != null) runs.get(event.session_group)?.add(event.run_id);
+    for (const [sessionGroup, runIds] of runs) for (const runId of runIds) {
+      const filter = { sessionGroup, runId, until: new Date(start - 1).toISOString(), order: 'desc' };
+      const turn = store.queryEvents({ ...filter, types: ['user_prompt_submit', 'stop'], limit: 1 })[0];
+      if (turn) events.push(turn);
+      // An open turn already covers tools; stop closes every pending tool.
+      // No timestamp floor from an earlier ingested event: source times may
+      // arrive out of order. afterSeq uses the Store's insertion ordering.
+      if (turn?.event_type !== 'user_prompt_submit') events.push(...store.queryEvents({ ...filter,
+        types: ['pre_tool_use', 'post_tool_use', 'post_tool_failure'],
+        ...(turn ? { afterSeq: turn.event_seq } : {}), limit: activityLookbackLimit }));
+      // Stop does not close subagents. Pair their own starts/ends separately.
+      // These caps bound returned rows/queries, not SQLite's scan without a
+      // run index. Starts older than the latest 200 matching events can be
+      // omitted, so this display can under-report very old outstanding work.
+      events.push(...store.queryEvents({ ...filter, types: ['subagent_start', 'subagent_stop'], limit: activityLookbackLimit }));
+    }
     let inbound = [], inboundError = false;
     try { if (keys.length) inbound = c4Reader.getInboundTimes({ since: start, groups: keys }); }
     catch { inboundError = true; }

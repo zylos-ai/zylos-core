@@ -15,7 +15,7 @@ test('activity ranges have the exact aligned windows and reject unsupported rang
     assert.equal(output.range, range); assert.equal(output.cellSeconds, width / 1000);
     assert.equal(output.start, Math.floor(now / width) * width - (count - 1) * width);
     assert.equal(output.groups['chat:a'].cells.length, count);
-    assert.ok(output.groups['chat:a'].cells.every(value => value === 'none'));
+    assert.ok(output.groups['chat:a'].cells.every(value => value === 'idle'));
   }
   assert.throws(() => result([], { range: '1d' }), { code: 'invalid_range', statusCode: 400 });
 });
@@ -43,7 +43,7 @@ test('unmatched tools end at the next stop or the historical run endpoint', () =
   const ended = result([
     event('session_start', at), event('pre_tool_use', at + 1000, { metadata: { tool_use_id: 'open' } }),
     event('reclaim_done', at + 2 * minute),
-  ], { rows: [row('chat:a', 'replacement')] });
+  ], { rows: [row('chat:a', null)] });
   assert.equal(cell(ended, at + minute), 'busy'); assert.equal(cell(ended, at + 3 * minute), 'none');
   const current = result([event('session_start', at), event('pre_tool_use', at + 1000, { metadata: { tool_use_id: 'open' } })]);
   assert.equal(cell(current, now), 'busy');
@@ -156,7 +156,7 @@ for (const run_id of [null, undefined]) test('unattributed events paint only wai
 
 test('a point at a cell boundary paints the following cell only', () => {
   const at = 5 * hour + 10 * minute;
-  const output = result([event('wait_capacity', at, { run_id: null })]);
+  const output = result([event('wait_capacity', at, { run_id: null })], { rows: [row('chat:a', null)] });
   assert.equal(cell(output, at - 1), 'none');
   assert.equal(cell(output, at), 'waiting');
   assert.equal(cell(output, at + minute), 'none');
@@ -169,4 +169,51 @@ test('an interval ending at a cell boundary excludes the following cell', () => 
   ]);
   assert.equal(cell(output, at), 'busy');
   assert.equal(cell(output, at + minute), 'idle');
+});
+
+for (const range of ['60m', '6h']) {
+  for (const [type, metadata] of [['user_prompt_submit', {}], ['pre_tool_use', { tool_use_id: 'long-tool' }],
+    ['subagent_start', { agent_id: 'long-child' }]]) {
+    test(`${range} paints an unfinished ${type} from before the window through now`, () => {
+      const output = result([event('session_start', 0), event(type, minute, { metadata })], { range });
+      assert.ok(output.groups['chat:a'].cells.every(value => value === 'busy'));
+    });
+  }
+}
+
+test('a tool crossing the window start becomes idle after its matching end', () => {
+  const end = 5 * hour + 10 * minute;
+  const output = result([event('session_start', hour),
+    event('pre_tool_use', 2 * hour, { metadata: { tool_use_id: 'long' } }),
+    event('post_tool_use', end, { metadata: { tool_use_id: 'long' } })]);
+  assert.equal(output.groups['chat:a'].cells[0], 'busy');
+  assert.equal(cell(output, end - 1), 'busy');
+  assert.equal(cell(output, end), 'idle');
+  assert.equal(cell(output, now), 'idle');
+});
+
+test('a turn closed before the window contributes no busy cells', () => {
+  const output = result([event('session_start', hour), event('user_prompt_submit', 2 * hour), event('stop', 3 * hour)]);
+  assert.ok(output.groups['chat:a'].cells.every(value => value === 'idle'));
+});
+
+test('a current run without events is idle only after its creation; inactive rows stay empty', () => {
+  const createdAt = 5 * hour + 20 * minute;
+  const output = result([], { rows: [{ ...row(), createdAt: createdAt / 1000 }, row('inactive', null)] });
+  assert.equal(cell(output, createdAt - 1), 'none');
+  assert.equal(cell(output, createdAt), 'idle');
+  assert.equal(cell(output, now), 'idle');
+  assert.ok(output.groups.inactive.cells.every(value => value === 'none'));
+  const older = result([], { rows: [{ ...row(), createdAt: hour / 1000 }] });
+  assert.ok(older.groups['chat:a'].cells.every(value => value === 'idle'));
+});
+
+test('the sampled current cell is covered even when now is exactly on its boundary', () => {
+  const at = 6 * hour;
+  const idle = result([], { now: at, rows: [{ ...row(), createdAt: at / 1000 }] });
+  assert.equal(cell(idle, at), 'idle');
+  const busy = result([event('user_prompt_submit', at - 2 * hour)], { now: at });
+  assert.ok(busy.groups['chat:a'].cells.every(value => value === 'busy'));
+  const stopped = result([event('user_prompt_submit', at - 2 * hour), event('stop', at)], { now: at });
+  assert.equal(cell(stopped, at), 'idle');
 });

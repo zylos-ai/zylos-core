@@ -61,6 +61,12 @@ export function activityBuckets({ range, now, rows, events = [], inbound = [] })
     if (!run) { run = []; groupRuns.set(event.run_id, run); }
     run.push({ ...event, at });
   }
+  for (const row of rows) {
+    if (!currentRuns.has(row.sessionGroup) || row.live?.runId == null) continue;
+    let groupRuns = runs.get(row.sessionGroup);
+    if (!groupRuns) { groupRuns = new Map(); runs.set(row.sessionGroup, groupRuns); }
+    if (!groupRuns.has(row.live.runId)) groupRuns.set(row.live.runId, []);
+  }
   for (const [key, groupRuns] of runs) {
     const cells = groups[key].cells;
     const paint = (from, to, kind) => {
@@ -75,9 +81,14 @@ export function activityBuckets({ range, now, rows, events = [], inbound = [] })
     };
     for (const [runId, run] of groupRuns) {
       run.sort((a, b) => a.at - b.at || (a.event_seq ?? 0) - (b.event_seq ?? 0));
-      const end = runId != null && runId === currentRuns.get(key) ? now : run.at(-1).at;
+      const current = runId != null && runId === currentRuns.get(key);
+      // Include the sampled instant in the current cell, even at a boundary.
+      const end = current ? now + 1 : run.at(-1).at;
       if (runId != null) {
-        paint(run[0].at, end, 'idle');
+        const row = current ? rows.find(row => row.sessionGroup === key) : null;
+        const createdAt = typeof row?.createdAt === 'number' ? row.createdAt * 1000 : milliseconds(row?.createdAt);
+        const from = current && Number.isFinite(createdAt) ? createdAt : run[0]?.at ?? start;
+        paint(from, end, 'idle');
         for (const [from, to] of runIntervals(run, end)) paint(from, to, 'busy');
       }
       for (const event of run) {
