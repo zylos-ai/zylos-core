@@ -114,7 +114,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
     const health = runtimeHealth(snapshot, runtime), meta = metadata[runtime];
     panel.append(element(document, 'h3', runtime === 'codex' ? 'Codex' : 'Claude'));
     panel.append(element(document, 'p', t('wb.settings.health.' + health)));
-    const saveRuntime = element(document, 'button', t('wb.settings.useRuntime'), 'action-btn'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-use-' + runtime; saveRuntime.title = health === 'unavailable' ? t('wb.settings.health.unavailable') : ''; 
+    const saveRuntime = element(document, 'button', t('wb.settings.useRuntime'), 'action-btn'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-use-' + runtime; saveRuntime.title = health === 'unavailable' ? t('wb.settings.health.unavailable') : '';
     const lock = () => !writable() || health === 'unavailable';
     controls.push({ button: saveRuntime, lock }); saveRuntime.disabled = lock();
     saveRuntime.addEventListener('click', async () => {
