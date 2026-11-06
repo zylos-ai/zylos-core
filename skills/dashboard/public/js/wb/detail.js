@@ -57,7 +57,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     totalEvents: 0, totalRuns: 0, currentEvents: [], error: null, lastSuccess: null,
     configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
-  let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null, subagentGeneration = 0;
+  let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
   const getWritable = () => typeof writable === 'function' ? writable() : writable;
   const getLevel = () => typeof detail === 'function' ? detail() : detail;
   const active = gen => !stopped && controller != null && !controller.signal.aborted && generation === gen && owner === identity();
@@ -181,7 +181,6 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     subagentRun = null;
     subagentCursor = 0;
     subagentReady = false;
-    subagentGeneration++;
     state.currentEvents = [];
   }
   async function loadSubagents() {
@@ -192,7 +191,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       subagentRun = runId;
       subagentController = new AbortController();
     }
-    const gen = subagentGeneration;
+    const signal = subagentController.signal;
     const initial = !subagentReady;
     // Only the first attempt may paginate. A failed initial read resumes one
     // page per board snapshot, so recovery cannot restart unbounded work.
@@ -201,8 +200,8 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', run_id: runId,
         types: 'subagent_start,subagent_stop', order: 'asc', limit: '1000' });
       if (subagentCursor || !initial) query.set('after_seq', String(subagentCursor));
-      const value = await request('/api/timeline?' + query, { signal: subagentController.signal });
-      if (gen !== subagentGeneration || state.row?.live?.runId !== runId) return;
+      const value = await request('/api/timeline?' + query, { signal });
+      if (signal.aborted || state.row?.live?.runId !== runId) return;
       const events = value.events ?? [];
       rememberSubagents(events);
       const next = events.at(-1)?.event_seq;
@@ -286,10 +285,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const previousRun = state.row.live?.runId;
       if (!state.historical) state.row = snapshot.rows?.find(row => row.sessionGroup === state.row.sessionGroup) ??
         olderRow(state.row.sessionGroup, { name: state.row.name, listKnown: snapshot.listKnown });
-      if (previousRun !== state.row.live?.runId) {
-        resetSubagents();
-        timeline.close();
-      }
+      if (previousRun !== state.row.live?.runId) timeline.close();
       draw();
       await refresh();
     },

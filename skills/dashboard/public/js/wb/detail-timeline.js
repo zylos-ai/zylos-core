@@ -31,7 +31,7 @@ export function attributeMessages(messages, runs) {
 export function createTimelineLoader({ request, onChange = () => {}, onError = () => {}, active = () => true, now = Date.now }) {
   const state = { open: false, key: null, currentRunId: null, runs: [], totalEvents: 0, totalRuns: 0, unattributed: 0,
     expanded: new Set(), events: new Map(), currentEvents: [], messages: new Map(), between: [], filter: 'all', error: null, loading: false };
-  let generation = 0, filterGeneration = 0, controller = null, pendingOperations = 0, filterReload = null;
+  let generation = 0, filterGeneration = 0, controller = null, pendingOperations = 0;
   const current = gen => gen === generation && active() && !controller?.signal.aborted;
   const publish = () => { if (active()) onChange(state); };
   const path = suffix => `/api/workbench/groups/${encodeURIComponent(state.key ?? 'origin')}/${suffix}`;
@@ -100,15 +100,14 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     const runId = state.currentRunId;
     if (!runId || state.filter === 'messages') return;
     const filterGen = filterGeneration;
-    const loaded = state.events.get(runId);
-    if (!loaded || filterReload != null) return;
+    const loaded = state.events.get(runId) ?? [];
     const afterSeq = loaded.at(-1)?.event_seq ?? 0;
     const query = new URLSearchParams({ session_group: state.key ?? '', run_id: runId,
       order: 'asc', limit: '1000', after_seq: String(afterSeq) });
     const types = timelineTypes[state.filter];
     if (types?.length) query.set('types', types.join(','));
     const value = await read('/api/timeline?' + query, gen);
-    if (filterGen !== filterGeneration || filterReload != null || state.events.get(runId) !== loaded) return;
+    if (filterGen !== filterGeneration) return;
     // A snapshot refresh reads one page only. If over 1000 new events arrive,
     // the following board snapshot continues from this page's final sequence.
     const events = [...loaded, ...(value.events ?? [])];
@@ -147,7 +146,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       });
     },
     async refresh() {
-      if (!state.open || !active() || state.loading || filterReload != null) return;
+      if (!state.open || !active() || state.loading) return;
       const gen = generation;
       await guarded(async () => {
         await appendCurrent(gen);
@@ -168,10 +167,15 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       state.filter = Object.hasOwn(timelineTypes, filter) ? filter : 'all';
       const filterGen = ++filterGeneration;
       const gen = generation;
-      filterReload = filterGen;
-      try {
-        await guarded(() => Promise.all([...state.expanded].map(runId => runEvents(runId, gen, filterGen))));
-      } finally { if (filterReload === filterGen) filterReload = null; }
+      // Cached event arrays belong to the previous filter, including collapsed
+      // segments. A failed reload must not leave those arrays available to append.
+      state.events.clear();
+      state.currentEvents = [];
+      await guarded(async () => {
+        const results = await Promise.allSettled([...state.expanded].map(runId => runEvents(runId, gen, filterGen)));
+        const failure = results.find(result => result.status === 'rejected');
+        if (failure) throw failure.reason;
+      });
     },
     close() {
       controller?.abort();
@@ -179,7 +183,6 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       generation++;
       filterGeneration++;
       pendingOperations = 0;
-      filterReload = null;
       state.loading = false;
       state.open = false;
       state.key = null;

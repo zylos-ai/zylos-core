@@ -607,3 +607,121 @@ test('failed initial subagent pagination resumes at one page per later snapshot'
   assert.equal(calls[0].searchParams.get('after_seq'), '2000');
   f.controller.destroy();
 });
+
+test('a failed first current-run read recovers from zero in bounded incremental pages', async () => {
+  const events = Array.from({ length: 1001 }, (_, index) => ({ run_id: 'r', event_seq: index + 1, event_type: 'post_tool_use' }));
+  const reads = [];
+  let failFirst = true;
+  const loader = createTimelineLoader({ request: async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return { runs: [run('r')], totalRuns: 1, totalEvents: events.length };
+    if (url.pathname.endsWith('/messages')) return { messages: [] };
+    reads.push(url);
+    if (failFirst) { failFirst = false; throw new Error('first_read_offline'); }
+    const after = Number(url.searchParams.get('after_seq') ?? 0);
+    return { events: events.slice(after, after + 1000) };
+  } });
+  await loader.open('a', 'r'); await tick();
+  assert.equal(loader.state.error, 'first_read_offline');
+  assert.equal(loader.state.events.has('r'), false);
+  reads.length = 0; await loader.refresh();
+  assert.equal(reads.length, 1, 'recovery reads a single event page');
+  assert.equal(reads[0].searchParams.get('after_seq'), '0');
+  assert.equal(loader.state.events.get('r').length, 1000);
+  assert.equal(loader.state.error, null);
+  reads.length = 0; await loader.refresh();
+  assert.equal(reads.length, 1);
+  assert.equal(reads[0].searchParams.get('after_seq'), '1000');
+  assert.equal(loader.state.events.get('r').length, 1001);
+  loader.close();
+});
+
+test('a failed tools reload discards the old unfiltered array and recovers only tools from zero', async () => {
+  const all = Array.from({ length: 10 }, (_, index) => ({ run_id: 'r', event_seq: index + 1,
+    event_type: index % 2 ? 'stop' : 'post_tool_use' }));
+  const tools = all.filter(event => event.event_type === 'post_tool_use'), reads = [];
+  let failReload = true;
+  const loader = createTimelineLoader({ request: async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return { runs: [run('r'), run('old', -1000, 0)], totalRuns: 2, totalEvents: all.length * 2 };
+    if (url.pathname.endsWith('/messages')) return { messages: [] };
+    reads.push(url);
+    if (!url.searchParams.has('types')) return { events: all.map(event => ({ ...event, run_id: url.searchParams.get('run_id') })) };
+    if (failReload) { failReload = false; throw new Error('tools_read_offline'); }
+    const after = Number(url.searchParams.get('after_seq') ?? 0);
+    return { events: tools.filter(event => event.event_seq > after).map(event => ({ ...event, run_id: url.searchParams.get('run_id') })) };
+  } });
+  await loader.open('a', 'r');
+  assert.equal(loader.state.events.get('r').some(event => event.event_type === 'stop'), true);
+  await loader.expand('old'); loader.collapse('old');
+  assert.equal(loader.state.events.get('old').some(event => event.event_type === 'stop'), true);
+  await loader.setFilter('tools');
+  assert.equal(loader.state.error, 'tools_read_offline');
+  assert.equal(loader.state.events.has('r'), false, 'old unfiltered events cannot remain under the new tools filter');
+  assert.equal(loader.state.events.has('old'), false, 'collapsed cached runs also discard the previous filter');
+  reads.length = 0; await loader.refresh();
+  assert.equal(reads.length, 1);
+  assert.equal(reads[0].searchParams.get('after_seq'), '0');
+  assert.equal(reads[0].searchParams.get('types'), 'pre_tool_use,post_tool_use,post_tool_failure');
+  assert.equal(loader.state.events.get('r').length, tools.length);
+  assert.equal(loader.state.events.get('r').every(event => event.event_type === 'post_tool_use'), true);
+  assert.equal(loader.state.error, null);
+  await loader.expand('old');
+  assert.equal(loader.state.events.get('old').length, tools.length);
+  assert.equal(loader.state.events.get('old').every(event => event.event_type === 'post_tool_use'), true);
+  loader.close();
+});
+
+test('a completed tools reload rejects an older all-events append that arrives afterward', async () => {
+  const oldAppend = deferred();
+  let phase = 'initial';
+  const loader = createTimelineLoader({ request: async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return { runs: [run('r')], totalRuns: 1, totalEvents: 3 };
+    if (url.pathname.endsWith('/messages')) return { messages: [] };
+    if (url.searchParams.has('types')) return { events: [{ run_id: 'r', event_seq: 1, event_type: 'pre_tool_use' }] };
+    if (phase === 'initial') return { events: [{ run_id: 'r', event_seq: 1, event_type: 'pre_tool_use' },
+      { run_id: 'r', event_seq: 2, event_type: 'stop' }] };
+    return oldAppend.promise;
+  } });
+  await loader.open('a', 'r');
+  phase = 'racing';
+  const oldRefresh = loader.refresh();
+  await loader.setFilter('tools');
+  assert.equal(loader.state.events.get('r').length, 1, 'the tools reload completes before the older append');
+  assert.equal(loader.state.loading, true, 'the old append is still pending');
+  oldAppend.resolve({ events: [{ run_id: 'r', event_seq: 3, event_type: 'stop' }] });
+  await oldRefresh;
+  assert.equal(loader.state.filter, 'tools');
+  assert.equal(loader.state.events.get('r').length, 1);
+  assert.equal(loader.state.events.get('r').every(event => event.event_type === 'pre_tool_use'), true);
+  assert.equal(loader.state.loading, false);
+  loader.close();
+});
+
+test('a stale aborted refresh cannot report a read failure on the replacement run', async () => {
+  const staleSubagents = deferred();
+  let current = row('a'), holdOld = false;
+  const f = detailFixture(async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return response({ runs: [run(current.live.runId)], totalRuns: 1, totalEvents: 1 });
+    if (url.searchParams.get('types') === 'subagent_start,subagent_stop') {
+      if (holdOld && url.searchParams.get('run_id') === 'run-a') return staleSubagents.promise;
+      return response({ events: [] });
+    }
+    return response(defaultRead(path));
+  });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  holdOld = true;
+  const oldRefresh = f.controller.refresh();
+  current = row('a', { live: { runId: 'run-b', sessionId: 'session-b' } });
+  const switched = f.controller.updateSnapshot({ rows: [current], listKnown: true });
+  staleSubagents.reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
+  await Promise.all([oldRefresh, switched]);
+  assert.equal(f.controller.state.row.live.runId, 'run-b');
+  assert.equal(f.controller.state.error, null, 'the stale run refresh does not attach its aborted error to the new run');
+  assert.doesNotMatch(f.root.textContent, /This operation was aborted|wb.readFailed/);
+  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+  assert.equal(f.controller.state.error, null);
+  f.controller.destroy();
+});
