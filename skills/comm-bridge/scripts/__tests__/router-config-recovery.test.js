@@ -70,6 +70,9 @@ for (const [name, source] of badConfigs) {
 // instance. Store, scene, runtime and teardown have the same isolation as above.
 for (const [name, source] of badConfigs) {
   test(`${name} present at Router startup preserves its recovery boundary`, async t => {
+    assert.ok(process.env.HOME && process.env.ZYLOS_DIR && process.env.PM2_HOME && process.env.TMPDIR);
+    const relative = path.relative(process.env.ZYLOS_DIR, CONFIG_FILE);
+    assert.ok(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
     const previous = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE) : null;
     fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
     t.after(() => {
