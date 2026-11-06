@@ -30,6 +30,7 @@ import { PM2Collector } from './lib/collectors/pm2-collector.js';
 import { SystemCollector } from './lib/collectors/system-collector.js';
 import { StatuslineCollector } from './lib/collectors/statusline-collector.js';
 import { ConversationCollector } from './lib/collectors/conversation-collector.js';
+import { UsageTranscripts } from './lib/collectors/usage-transcripts.js';
 import { CodexRolloutCollector } from './lib/collectors/codex-rollout-collector.js';
 import { StateEngine } from './lib/state-engine.js';
 import { MetricResolver, rateLimitWindowExpired } from './lib/metric-resolver.js';
@@ -193,14 +194,14 @@ const eventLoopMonitor = new EventLoopMonitor({
 const pm2Collector = new PM2Collector(store, config);
 const systemCollector = new SystemCollector(store, config);
 const statuslineCollector = new StatuslineCollector(store, config);
-const conversationCollector = isClaudeRuntime ? new ConversationCollector(store, config) : null;
-const codexRolloutCollector = activeRuntime === 'codex' ? new CodexRolloutCollector(store, config) : null;
+const usageTranscripts = new UsageTranscripts(store, config, { getSnapshot: at => workbench.getSnapshot(at) });
+const conversationCollector = new ConversationCollector(store, config, { transcripts: usageTranscripts });
+const codexRolloutCollector = new CodexRolloutCollector(store, config, { transcripts: usageTranscripts });
 
 const collectors = { pm2: pm2Collector, system: systemCollector };
 if (statuslineCollector) collectors.statusline = statuslineCollector;
 if (conversationCollector) collectors.conversation = conversationCollector;
 if (codexRolloutCollector) collectors.codexRollout = codexRolloutCollector;
-if (!isClaudeRuntime) process.stderr.write(`[startup] Runtime "${activeRuntime}" — Claude-only collectors skipped\n`);
 
 // SSE hub
 const sse = new SseHub(15_000);
@@ -355,7 +356,6 @@ systemCollector._onUpdate = (data) => {
   scheduleFleetStateBroadcast();
 };
 if (conversationCollector) {
-  conversationCollector._stateEngine = stateEngine;
   conversationCollector._onEvent = (event) => stateEngine.onEvent(event);
   conversationCollector._onMetric = (metric) => {
     sse.broadcast('metric_update', {
@@ -923,12 +923,12 @@ async function runInitialCollectors() {
     }
   }
   if (conversationCollector) {
-    try { conversationCollector.collect(); } catch (err) {
+    try { await conversationCollector.collect(); } catch (err) {
       process.stderr.write(`[startup] Conversation collector initial run failed: ${err.message}\n`);
     }
   }
   if (codexRolloutCollector) {
-    try { codexRolloutCollector.collect(); } catch (err) {
+    try { await codexRolloutCollector.collect(); } catch (err) {
       process.stderr.write(`[startup] Codex rollout collector initial run failed: ${err.message}\n`);
     }
   }

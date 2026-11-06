@@ -21,6 +21,70 @@ function usageEvents(store) {
   return store.queryMetrics({ name: 'usage_event' });
 }
 
+function collectMapping(collector) {
+  const mapping = collector.store.latestCodexRolloutPath('codex');
+  return collector.collectMapping(mapping ? { ...mapping, isOriginCurrent: true } : null);
+}
+
+test('Codex collection visits every supplied mapping and preserves group attribution', async t => {
+  const dir = tmpDir();
+  const store = new Store(path.join(dir, 'dashboard.db'));
+  t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const mappings = ['origin', 'B'].map((group, index) => {
+    const transcriptPath = path.join(dir, `${group}.jsonl`);
+    const events = [
+      { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'event_msg', payload: { type: 'token_count', info: {
+        id: `${group}-request`, last_token_usage: { input_tokens: 100, output_tokens: 20 }
+      } } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: group }] } },
+      { type: 'response_item', payload: { type: 'function_call', name: 'spawn_agent', call_id: `${group}-spawn`, arguments: '{}' } },
+      { type: 'response_item', payload: { type: 'function_call_output', call_id: `${group}-spawn`, output: JSON.stringify({ agent_id: `${group}-agent` }) } },
+      { type: 'response_item', payload: { type: 'function_call', name: 'close_agent', call_id: `${group}-close`, arguments: JSON.stringify({ agent_id: `${group}-agent` }) } }
+    ];
+    fs.writeFileSync(transcriptPath, events.map((event, eventIndex) => JSON.stringify({
+      timestamp: `2026-11-06T10:0${index}:0${eventIndex}.000Z`, ...event
+    })).join('\n') + '\n');
+    return { transcript_path: transcriptPath, session_id: `${group}-session`, session_group: group, run_id: `${group}-run` };
+  });
+  const transcripts = { snapshot: {}, isOriginCurrent: row => row.session_group === 'origin', async collect(runtime, callback) {
+    assert.equal(runtime, 'codex');
+    let written = 0;
+    for (const mapping of mappings) written += (await callback(mapping, mapping.session_group === 'origin')).written;
+    return written;
+  } };
+  for (const mapping of mappings) store.insertUsageTranscript({ ...mapping, runtime: 'codex' }, new Date().toISOString());
+  const collector = new CodexRolloutCollector(store, { runtimeModelPrices: { codex: DEFAULT_CODEX_MODEL_PRICES } }, { transcripts });
+  await collector.collect();
+  const usage = usageEvents(store);
+  assert.equal(usage.length, 2);
+  for (const mapping of mappings) {
+    const row = usage.find(item => item.session_group === mapping.session_group);
+    assert.equal(row.dimensions.run_id, mapping.run_id);
+    const subagents = store.queryEvents({ types: ['subagent_start', 'subagent_stop'] }).filter(item => item.session_group === mapping.session_group);
+    assert.equal(subagents.length, 2);
+    assert.ok(subagents.every(item => item.run_id === mapping.run_id));
+  }
+  assert.equal(store.queryEvents({ types: ['assistant_message'] }).length, 1);
+  assert.equal(collector.getRuntimeInfo().session_id, 'origin-session');
+});
+
+test('Codex duplicate usage fills only empty group attribution and retains charged cost', t => {
+  const dir = tmpDir();
+  const store = new Store(path.join(dir, 'dashboard.db'));
+  t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const collector = new CodexRolloutCollector(store, {});
+  const point = { timestamp: '2026-11-06T10:00:00.000Z', runtime: 'codex', session_id: 'session',
+    metric_name: 'usage_event', metric_value: 100, source: 'jsonl_usage',
+    dimensions: { event_id: 'request', cost: 0.5 } };
+  assert.equal(collector._insertUsageEventOnce(point), 1);
+  assert.equal(collector._insertUsageEventOnce({ ...point, session_group: 'origin', dimensions: { ...point.dimensions, cost: 5 } }), 0);
+  assert.equal(collector._insertUsageEventOnce({ ...point, session_group: 'B' }), 0);
+  const [row] = usageEvents(store);
+  assert.equal(row.session_group, 'origin');
+  assert.equal(row.dimensions.cost, 0.5);
+});
+
 function collectRateLimitDimensions(rateLimits, expectedWritten = 1) {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-rate-limits.jsonl');
@@ -51,7 +115,7 @@ function collectRateLimitDimensions(rateLimits, expectedWritten = 1) {
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  assert.equal(collector.collect(), expectedWritten);
+  assert.equal(collectMapping(collector), expectedWritten);
   const [event] = usageEvents(store);
   const dimensions = event?.dimensions ?? null;
 
@@ -109,7 +173,7 @@ test('CodexRolloutCollector reports unavailable without hook transcript path', (
   const store = new Store(path.join(dir, 'dashboard.db'));
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
   const health = store.getSourceHealth().find(h => h.name === 'codex_rollout');
   assert.equal(health.status, 'unavailable');
   assert.equal(health.extra.reason, 'no_hook_transcript_path');
@@ -140,7 +204,7 @@ test('CodexRolloutCollector ingests rollout fixture metrics from hook-derived pa
   const runtimeUpdates = [];
   collector._onRuntimeInfo = (info) => runtimeUpdates.push(info);
 
-  const written = collector.collect();
+  const written = collectMapping(collector);
   assert.equal(written, 5);
   assert.equal(runtimeUpdates.length, 1);
   assert.equal(runtimeUpdates[0].model_id, 'gpt-5.3-codex');
@@ -206,7 +270,7 @@ test('CodexRolloutCollector ingests rollout fixture metrics from hook-derived pa
   const cursor = store.getCodexRolloutCursor(rolloutPath);
   assert.equal(cursor.byte_offset, fs.statSync(rolloutPath).size);
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
 
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
@@ -277,12 +341,12 @@ test('CodexRolloutCollector bounds each collect pass by complete lines', () => {
     codexRolloutMaxLinesPerCollect: 2
   });
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
   const fixtureLines = fixtureText.split('\n');
   const firstCursor = store.getCodexRolloutCursor(rolloutPath);
   assert.equal(firstCursor.byte_offset, Buffer.byteLength(`${fixtureLines[0]}\n${fixtureLines[1]}\n`, 'utf8'));
 
-  assert.equal(collector.collect(), 4);
+  assert.equal(collectMapping(collector), 4);
   const secondCursor = store.getCodexRolloutCursor(rolloutPath);
   assert.equal(secondCursor.byte_offset, Buffer.byteLength(`${fixtureLines[0]}\n${fixtureLines[1]}\n${fixtureLines[2]}\n${fixtureLines[3]}\n`, 'utf8'));
   const health = store.getSourceHealth().find(h => h.name === 'jsonl_usage' && h.signal_type === 'runtime_progress');
@@ -312,13 +376,13 @@ test('CodexRolloutCollector advances cursor past oversized rollout lines', () =>
     codexRolloutMaxBytesPerCollect: 4096
   });
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
   const skippedCursor = store.getCodexRolloutCursor(rolloutPath);
   assert.equal(skippedCursor.byte_offset, Buffer.byteLength(`${oversizedLine}\n`, 'utf8'));
   const skipHealth = store.getSourceHealth().find(h => h.name === 'codex_rollout');
   assert.equal(skipHealth.extra.reason, 'oversized_line_skipped');
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
   assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
   const finalCursor = store.getCodexRolloutCursor(rolloutPath);
   assert.equal(finalCursor.byte_offset, fs.statSync(rolloutPath).size);
@@ -347,7 +411,7 @@ test('CodexRolloutCollector extracts cli_version from session_meta without a mod
   const runtimeUpdates = [];
   collector._onRuntimeInfo = (info) => runtimeUpdates.push(info);
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
   assert.equal(runtimeUpdates.length, 1);
   assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
   assert.equal(collector.getRuntimeInfo().model_id, undefined);
@@ -377,7 +441,7 @@ test('CodexRolloutCollector preserves cli_version when turn_context arrives late
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collector.collect();
+  collectMapping(collector);
 
   assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
   assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
@@ -402,13 +466,13 @@ test('CodexRolloutCollector preserves model and service tier when session_meta a
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collector.collect();
+  collectMapping(collector);
   fs.appendFileSync(
     rolloutPath,
     '{"type":"session_meta","timestamp":"2026-05-23T01:00:01.000Z","payload":{"id":"codex-session-1","cli_version":"0.130.0"}}\n'
   );
 
-  collector.collect();
+  collectMapping(collector);
 
   assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
   assert.equal(collector.getRuntimeInfo().service_tier, 'priority');
@@ -441,7 +505,7 @@ test('CodexRolloutCollector backfills cli_version when cursor is already at EOF'
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
   assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
 
   store.close();
@@ -469,7 +533,7 @@ test('CodexRolloutCollector ignores session_meta without cli_version and keeps i
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collector.collect();
+  collectMapping(collector);
 
   assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
   assert.equal(collector.getRuntimeInfo().cli_version, undefined);
@@ -504,7 +568,7 @@ test('CodexRolloutCollector does not carry cli_version across active session cha
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collector.collect();
+  collectMapping(collector);
 
   assert.equal(collector.getRuntimeInfo().session_id, 'codex-session-a');
   assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
@@ -521,7 +585,7 @@ test('CodexRolloutCollector does not carry cli_version across active session cha
     SET updated_at = '2099-05-23 01:01:00'
     WHERE session_id = 'codex-session-b'
   `).run();
-  collector.collect();
+  collectMapping(collector);
 
   assert.equal(collector.getRuntimeInfo().session_id, 'codex-session-b');
   assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.5');
@@ -552,7 +616,7 @@ test('CodexRolloutCollector deduplicates metrics when rollout cursor is replayed
   const liveMetrics = [];
   collector._onMetric = (metric) => liveMetrics.push(metric);
 
-  assert.equal(collector.collect(), 5);
+  assert.equal(collectMapping(collector), 5);
   assert.deepEqual(
     liveMetrics.map(m => m.metric_name),
     [
@@ -567,7 +631,7 @@ test('CodexRolloutCollector deduplicates metrics when rollout cursor is replayed
     sessionId: 'codex-session-1'
   });
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
   assert.equal(liveMetrics.length, 3);
   assert.equal(usageEvents(store).length, 1);
   assert.equal(store.queryMetrics({ name: 'ttft' }).length, 1);
@@ -701,7 +765,7 @@ test('CodexRolloutCollector uses rollout position identity when response item ca
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  assert.equal(collector.collect(), 1);
+  assert.equal(collectMapping(collector), 1);
 
   const [event] = store.queryEvents({ limit: 10, order: 'asc' });
   assert.equal(event.metadata.call_id, null);
@@ -732,14 +796,14 @@ test('CodexRolloutCollector does not backfill legacy rate-limit rows when cursor
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
 
   const rate = store.queryMetrics({ name: 'rate_limit' });
   assert.equal(rate.length, 0);
   const weekly = store.queryMetrics({ name: 'rate_limit_7d' });
   assert.equal(weekly.length, 0);
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
 
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
@@ -871,7 +935,7 @@ test('CodexRolloutCollector skips cost when model price is missing', () => {
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collector.collect();
+  collectMapping(collector);
 
   const [usage] = usageEvents(store);
   assert.equal(usage.metric_value, 12000);
@@ -902,7 +966,7 @@ test('CodexRolloutCollector computes cost from default Codex runtime prices', ()
   const collector = new CodexRolloutCollector(store, {
     runtimeModelPrices: { codex: DEFAULT_CODEX_MODEL_PRICES }
   });
-  collector.collect();
+  collectMapping(collector);
 
   const [usage] = usageEvents(store);
   assert.equal(usage.dimensions.model, 'gpt-5.5');
@@ -939,7 +1003,7 @@ test('CodexRolloutCollector ingests assistant output text into timeline', () => 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
   collector._onEvent = (event) => { stateEvent = event; };
 
-  assert.equal(collector.collect(), 1);
+  assert.equal(collectMapping(collector), 1);
 
   const events = store.queryEvents({ types: ['assistant_message'] });
   assert.equal(events.length, 1);
@@ -979,7 +1043,7 @@ test('CodexRolloutCollector redacts and caps assistant output summaries', () => 
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  assert.equal(collector.collect(), 1);
+  assert.equal(collectMapping(collector), 1);
 
   const events = store.queryEvents({ types: ['assistant_message'] });
   assert.equal(events.length, 1);
@@ -1017,7 +1081,7 @@ test('CodexRolloutCollector skips user message text in timeline', () => {
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
 
-  assert.equal(collector.collect(), 0);
+  assert.equal(collectMapping(collector), 0);
 
   const events = store.queryEvents({ types: ['user_message'] });
   assert.equal(events.length, 0);
@@ -1125,7 +1189,7 @@ test('CodexRolloutCollector uses human-friendly summaries for shell and patch ca
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  assert.equal(collector.collect(), 9);
+  assert.equal(collectMapping(collector), 9);
 
   const events = store.queryEvents({ limit: 10, order: 'asc' });
   assert.deepEqual(events.map(e => e.summary), [
@@ -1219,7 +1283,7 @@ test('CodexRolloutCollector reconstructs subagent lifecycle from rollout tools',
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
   const liveEvents = [];
   collector._onEvent = (event) => liveEvents.push(event);
-  assert.equal(collector.collect(), 9);
+  assert.equal(collectMapping(collector), 9);
 
   const subagentEvents = store.queryEvents({ types: ['subagent_start', 'subagent_stop'] });
   assert.deepEqual(subagentEvents.map(e => e.event_type), ['subagent_start', 'subagent_stop']);
@@ -1309,7 +1373,7 @@ test('CodexRolloutCollector keeps timed-out wait_agent active', () => {
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  assert.equal(collector.collect(), 7);
+  assert.equal(collectMapping(collector), 7);
 
   const stops = store.queryEvents({ types: ['subagent_stop'] });
   assert.equal(stops.length, 0);
@@ -1379,7 +1443,7 @@ test('CodexRolloutCollector handles wait_agent top-level completed map', () => {
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  assert.equal(collector.collect(), 7);
+  assert.equal(collectMapping(collector), 7);
 
   const stops = store.queryEvents({ types: ['subagent_stop'] });
   assert.equal(stops.length, 1);
@@ -1425,7 +1489,7 @@ test('CodexRolloutCollector handles wait_agent array status timeout and agent_id
   });
 
   const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  assert.equal(collector.collect(), 4);
+  assert.equal(collectMapping(collector), 4);
 
   const updates = store.queryEvents({ types: ['subagent_update'] });
   assert.equal(updates.length, 2);
@@ -1459,7 +1523,7 @@ test('CodexRolloutCollector computes cost from Codex priority prices when fast t
     runtimeModelPrices: { codex: DEFAULT_CODEX_MODEL_PRICES },
     runtimeServiceTierModelPrices: { codex: { priority: DEFAULT_CODEX_PRIORITY_MODEL_PRICES } }
   });
-  collector.collect();
+  collectMapping(collector);
 
   const [usage] = usageEvents(store);
   assert.equal(usage.dimensions.model, 'gpt-5.3-codex');

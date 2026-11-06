@@ -30,6 +30,26 @@ export class Store {
   }
 
   _prepareStatements() {
+    this._transcriptStarts = this.db.prepare(`
+      SELECT session_group, run_id, session_id, runtime, timestamp,
+             json_extract(metadata, '$.transcript_path') AS transcript_path
+      FROM runtime_events WHERE event_type = 'session_start' AND source = 'core-log'
+        AND timestamp >= ? ORDER BY timestamp, event_seq
+    `);
+    this._insertUsageTranscript = this.db.prepare(`
+      INSERT OR IGNORE INTO usage_transcripts
+        (transcript_path, parent_path, runtime, session_group, run_id, session_id, byte_offset, first_seen_at, updated_at)
+      VALUES (@transcript_path, @parent_path, @runtime, @session_group, @run_id, @session_id, @byte_offset, @now, @now)
+    `);
+    this._getUsageTranscript = this.db.prepare('SELECT * FROM usage_transcripts WHERE transcript_path = ?');
+    this._activeUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' ORDER BY updated_at, transcript_path LIMIT ?");
+    this._claudeMainTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' AND runtime = 'claude' AND parent_path IS NULL");
+    this._missingUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'missing'");
+    this._restoreUsageTranscript = this.db.prepare("UPDATE usage_transcripts SET status = 'active' WHERE transcript_path = ? AND status = 'missing'");
+    this._updateUsageTranscript = this.db.prepare(`UPDATE usage_transcripts
+      SET byte_offset = COALESCE(@byte_offset, byte_offset), status = @status, updated_at = @now
+      WHERE transcript_path = @transcript_path`);
+    this._pruneUsageTranscripts = this.db.prepare("DELETE FROM usage_transcripts WHERE status IN ('finished','missing') AND updated_at < ?");
     this._getGroupDisplayName = this.db.prepare('SELECT session_group, display_name, source, updated_at FROM group_display_names WHERE session_group = ?');
     this._listGroupDisplayNames = this.db.prepare('SELECT session_group, display_name, source, updated_at FROM group_display_names ORDER BY updated_at DESC');
     this._searchGroupDisplayNames = this.db.prepare('SELECT session_group, display_name, source FROM group_display_names WHERE instr(lower(display_name), lower(?)) > 0 ORDER BY updated_at DESC LIMIT ?');
@@ -66,13 +86,13 @@ export class Store {
     `);
 
     this._insertMetric = this.db.prepare(`
-      INSERT INTO metric_points (timestamp, runtime, session_id, metric_name, metric_value, dimensions, source, confidence)
-      VALUES (@timestamp, @runtime, @session_id, @metric_name, @metric_value, @dimensions, @source, @confidence)
+      INSERT INTO metric_points (timestamp, runtime, session_id, session_group, metric_name, metric_value, dimensions, source, confidence)
+      VALUES (@timestamp, @runtime, @session_id, @session_group, @metric_name, @metric_value, @dimensions, @source, @confidence)
     `);
 
     this._insertMetricIgnore = this.db.prepare(`
-      INSERT OR IGNORE INTO metric_points (timestamp, runtime, session_id, metric_name, metric_value, dimensions, source, confidence)
-      VALUES (@timestamp, @runtime, @session_id, @metric_name, @metric_value, @dimensions, @source, @confidence)
+      INSERT OR IGNORE INTO metric_points (timestamp, runtime, session_id, session_group, metric_name, metric_value, dimensions, source, confidence)
+      VALUES (@timestamp, @runtime, @session_id, @session_group, @metric_name, @metric_value, @dimensions, @source, @confidence)
     `);
 
     this._updateMetric = this.db.prepare(`
@@ -80,6 +100,7 @@ export class Store {
          SET metric_value = COALESCE(@metric_value, metric_value),
              dimensions   = COALESCE(@dimensions, dimensions),
              timestamp    = COALESCE(@timestamp, timestamp),
+             session_group = COALESCE(session_group, @session_group),
              session_id   = CASE WHEN @timestamp IS NOT NULL THEN @session_id ELSE session_id END
        WHERE id = @id
     `);
@@ -425,13 +446,14 @@ export class Store {
   // more than once and the later observation is the more complete one.
   // An optional timestamp/session_id pair replaces attribution atomically;
   // omitting timestamp preserves both, including for existing partial updates.
-  updateMetric(id, { metric_value, dimensions, timestamp, session_id } = {}) {
+  updateMetric(id, { metric_value, dimensions, timestamp, session_id, session_group } = {}) {
     if (!id) return { updated: false };
     const info = this._updateMetric.run({
       id,
       metric_value: metric_value ?? null,
       dimensions: dimensions ? JSON.stringify(dimensions) : null,
       timestamp: timestamp ?? null,
+      session_group: session_group ?? null,
       session_id: session_id || null
     });
     return { updated: info.changes > 0, changes: info.changes };
@@ -442,6 +464,7 @@ export class Store {
       timestamp: point.timestamp,
       runtime: point.runtime || 'claude',
       session_id: point.session_id || null,
+      session_group: point.session_group ?? null,
       metric_name: point.metric_name,
       metric_value: point.metric_value,
       dimensions: point.dimensions ? JSON.stringify(point.dimensions) : null,
@@ -726,6 +749,24 @@ export class Store {
     });
     return { changes: info.changes };
   }
+
+  transcriptStartsSince(since) { return this._transcriptStarts.all(since); }
+
+  insertUsageTranscript(mapping, now) {
+    return this._insertUsageTranscript.run({ ...mapping,
+      parent_path: mapping.parent_path ?? null, session_group: mapping.session_group ?? null,
+      run_id: mapping.run_id ?? null, byte_offset: mapping.byte_offset ?? 0, now });
+  }
+
+  getUsageTranscript(file) { return this._getUsageTranscript.get(file) ?? null; }
+  activeUsageTranscripts(limit = 50) { return this._activeUsageTranscripts.all(limit); }
+  claudeMainTranscripts() { return this._claudeMainTranscripts.all(); }
+  missingUsageTranscripts() { return this._missingUsageTranscripts.all(); }
+  restoreUsageTranscript(file) { return this._restoreUsageTranscript.run(file); }
+  updateUsageTranscript(file, { byte_offset = null, status = 'active', now }) {
+    return this._updateUsageTranscript.run({ transcript_path: file, byte_offset, status, now });
+  }
+  pruneUsageTranscripts(before) { return this._pruneUsageTranscripts.run(before); }
 
   latestCodexRolloutPath(runtime = 'codex') {
     const row = this._latestCodexRolloutPath.get({ runtime });

@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fastModeMultiplierForRuntime, modelPricesForRuntime } from '../config.js';
 import { Sanitizer } from '../sanitizer.js';
-import { claudeProjectSlug } from '../claude-project-path.js';
+import { UsageTranscripts } from './usage-transcripts.js';
 
 const PER_MTOK = 1_000_000;
 const ASSISTANT_MESSAGE_SUMMARY_LIMIT = 500;
@@ -20,108 +20,17 @@ const CACHE_WRITE_INPUT_MULTIPLIER = {
 };
 
 export class ConversationCollector {
-  constructor(store, config, { stateEngine } = {}) {
+  constructor(store, config, { transcripts, getSnapshot } = {}) {
     this.store = store;
     this.config = config;
-    this._stateEngine = stateEngine || null;
+    this.transcripts = transcripts || new UsageTranscripts(store, config, { getSnapshot });
     this._timer = null;
-    this._lastByteOffset = 0;
-    this._currentFile = null;
     this._offsets = new Map();
     this._seenUuids = new Set();
     this._onEvent = null;
     this._onMetric = null;
     this._lastUserPromptAt = null;
     this._sanitizer = config.sanitizer || new Sanitizer(config.zylosDir || path.join(process.env.HOME, 'zylos'));
-    this._restoreOffset();
-  }
-
-  _restoreOffset() {
-    try {
-      const health = this.store.db.prepare(
-        "SELECT extra FROM source_health WHERE name = 'conversation_reader' AND signal_type = 'byte_offset'"
-      ).get();
-      if (health?.extra) {
-        const data = JSON.parse(health.extra);
-        if (data.file && data.offset) {
-          this._currentFile = data.file;
-          this._lastByteOffset = data.offset;
-          this._offsets.set(data.file, data.offset);
-        }
-        // Per-file offsets: a session also has subagent transcripts, each read
-        // independently. Older records carry only the main file above.
-        if (data.files && typeof data.files === 'object') {
-          for (const [file, offset] of Object.entries(data.files)) {
-            if (typeof offset === 'number') this._offsets.set(file, offset);
-          }
-        }
-      }
-    } catch { /* first run or schema mismatch — start from zero */ }
-  }
-
-  _persistOffset() {
-    if (!this._currentFile) return;
-    this.store.upsertSourceHealth('conversation_reader', 'byte_offset', 'tracking', {
-      file: this._currentFile,
-      offset: this._lastByteOffset,
-      files: Object.fromEntries(this._offsets)
-    });
-  }
-
-  _resolveProjectSlug() {
-    const zylosDir = this.config.zylosDir || path.join(process.env.HOME, 'zylos');
-    return claudeProjectSlug(zylosDir);
-  }
-
-  _resolveProjectDir() {
-    return path.join(
-      this.config.homeDir || process.env.HOME,
-      '.claude', 'projects', this._resolveProjectSlug()
-    );
-  }
-
-  // The state engine only learns the session id from session_start /
-  // user_prompt_submit events, and its env-var fallback is never set for a
-  // service process. So after a restart mid-session it reports nothing and
-  // collection stalls until the user's next prompt. The statusline file always
-  // names the live session, so fall back to it.
-  _resolveSessionId() {
-    const fromState = this._stateEngine?.getCurrentSessionId?.();
-    if (fromState) return fromState;
-    try {
-      const statusPath = path.join(
-        this.config.zylosDir || path.join(process.env.HOME, 'zylos'),
-        'activity-monitor', 'statusline.json'
-      );
-      const data = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
-      return data.session_id || null;
-    } catch { return null; }
-  }
-
-  _resolveJsonlPath() {
-    const sessionId = this._resolveSessionId();
-    if (!sessionId) return null;
-    const jsonlPath = path.join(this._resolveProjectDir(), `${sessionId}.jsonl`);
-    return fs.existsSync(jsonlPath) ? jsonlPath : null;
-  }
-
-  // A session's usage is spread over more than one transcript: the main file
-  // plus one per subagent under <session>/subagents/. Reading only the main
-  // file silently omits every Task/background-agent call from cost — measured
-  // at -10% of a session's true cost with a single memory-sync subagent.
-  _resolveSubagentPaths(sessionId) {
-    if (!sessionId) return [];
-    const dir = path.join(this._resolveProjectDir(), sessionId, 'subagents');
-    let entries;
-    try { entries = fs.readdirSync(dir); } catch { return []; }
-    return entries
-      .filter(name => name.endsWith('.jsonl'))
-      .map(name => ({
-        file: path.join(dir, name),
-        // agent-<id>.jsonl — kept as a dimension so subagent spend stays
-        // attributable without leaving the parent session's totals.
-        agentId: name.replace(/^agent-/, '').replace(/\.jsonl$/, '')
-      }));
   }
 
   // A single API response is written to the transcript as one line per content
@@ -211,42 +120,27 @@ export class ConversationCollector {
     return input + output + cacheRead + cacheCreation;
   }
 
-  collect() {
-    const jsonlPath = this._resolveJsonlPath();
-    if (!jsonlPath) return 0;
-
-    if (jsonlPath !== this._currentFile) {
-      this._currentFile = jsonlPath;
-      this._lastByteOffset = 0;
-      this._offsets.clear();
+  async collect() {
+    const written = await this.transcripts.collect('claude', (mapping, originCurrent) => {
+      const file = mapping.transcript_path;
+      this._offsets.set(file, mapping.byte_offset);
       this._seenUuids.clear();
-      this._persistOffset();
-    }
-
-    const sessionId = this._resolveSessionId();
-    let written = this._collectFile(jsonlPath, { sessionId });
-
-    // Subagent transcripts are usage-only: their text is not surfaced in the
-    // activity feed, but their tokens are the parent session's spend.
-    for (const { file, agentId } of this._resolveSubagentPaths(sessionId)) {
-      written += this._collectFile(file, { sessionId, agentId, usageOnly: true });
-    }
-
-    // Persist offsets only AFTER all writes succeed — crash-safe: on restart,
-    // unacknowledged lines are re-read; request-level dedup prevents
-    // double-counting.
-    this._persistOffset();
-
+      const written = this._collectFile(file, {
+        sessionId: mapping.session_id, group: mapping.session_group, runId: mapping.run_id,
+        agentId: mapping.parent_path ? path.basename(file, '.jsonl').replace(/^agent-/, '') : null,
+        usageOnly: Boolean(mapping.parent_path) || !originCurrent,
+      });
+      return { written, byteOffset: this._offsets.get(file) };
+    });
     if (written > 0) {
       this.store.upsertSourceHealth('conversation_reader', 'collector_liveness', 'healthy', {
-        last_success: new Date().toISOString(), messages_ingested: written
+        last_success: new Date().toISOString(), messages_ingested: written,
       });
     }
-
     return written;
   }
 
-  _collectFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false } = {}) {
+  _collectFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false, group = null, runId = null } = {}) {
     const startOffset = this._offsets.get(jsonlPath) || 0;
 
     let stat;
@@ -265,8 +159,6 @@ export class ConversationCollector {
     const lastNewline = chunk.lastIndexOf('\n');
     if (lastNewline === -1) return 0;
     const consumed = Buffer.byteLength(chunk.slice(0, lastNewline + 1), 'utf8');
-    this._offsets.set(jsonlPath, startOffset + consumed);
-    if (jsonlPath === this._currentFile) this._lastByteOffset = startOffset + consumed;
 
     const lines = chunk.slice(0, lastNewline).split('\n').filter(l => l.trim());
 
@@ -317,7 +209,7 @@ export class ConversationCollector {
         const speed = usage.speed || 'standard';
         usageWritten += this._ingestUsage(
           usage, model, rowSessionId, timestamp, uuid, speed, projects,
-          this._requestKeyFor(msg), agentId
+          this._requestKeyFor(msg), agentId, group, runId
         );
       }
 
@@ -344,6 +236,8 @@ export class ConversationCollector {
           timestamp,
           runtime: 'claude',
           session_id: rowSessionId,
+          session_group: group,
+          run_id: runId,
           event_type: 'assistant_message',
           category: 'assistant',
           summary,
@@ -376,10 +270,11 @@ export class ConversationCollector {
       }
     }
 
-    return written;
+    this._offsets.set(jsonlPath, startOffset + consumed);
+    return written + usageWritten;
   }
 
-  _ingestUsage(usage, model, sessionId, timestamp, uuid, speed, projects = [], requestKey = null, agentId = null) {
+  _ingestUsage(usage, model, sessionId, timestamp, uuid, speed, projects = [], requestKey = null, agentId = null, group = null, runId = null) {
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
     const cacheRead = usage.cache_read_input_tokens || 0;
@@ -424,6 +319,7 @@ export class ConversationCollector {
       request_id: key,
       uuid
     };
+    dims.run_id = runId;
     if (agentId) dims.agent_id = agentId;
     if (projects.length > 0) dims.projects = projects;
 
@@ -440,11 +336,12 @@ export class ConversationCollector {
       // wins — in observed transcripts the copies are byte-identical, but the
       // collector must not depend on that holding for every response shape.
       this._upsertUsage(existing, dims, totalInput, timestamp, sessionId);
+      this.store.updateMetric(existing.id, { session_group: group });
       return 0;
     }
 
     const point = {
-      timestamp, runtime: 'claude', session_id: sessionId,
+      timestamp, runtime: 'claude', session_id: sessionId, session_group: group,
       metric_name: 'usage_event', metric_value: totalInput,
       dimensions: dims,
       source: 'jsonl_usage', confidence: 'actual'
@@ -551,8 +448,11 @@ export class ConversationCollector {
 
   start(intervalMs = 5_000) {
     this.stop();
-    this.collect();
-    this._timer = setInterval(() => this.collect(), intervalMs);
+    const collect = () => this.collect().catch(error => {
+      process.stderr.write(`[conversation-collector] ${error.message}\n`);
+    });
+    collect();
+    this._timer = setInterval(collect, intervalMs);
     this._timer.unref();
   }
 

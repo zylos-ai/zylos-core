@@ -131,15 +131,31 @@ function makeCollector(store, tmpDir, sessionId = 'test-session-123', getSession
     },
     ...configOverrides
   };
-  const stateEngine = { getCurrentSessionId: getSessionId || (() => sessionId) };
-  const collector = new ConversationCollector(store, config, { stateEngine });
-
   const zylosResolved = fs.realpathSync(tmpDir);
   const projectSlug = claudeProjectSlug(zylosResolved);
   const projectDir = path.join(tmpDir, '.claude', 'projects', projectSlug);
   fs.mkdirSync(projectDir, { recursive: true });
 
   const jsonlPath = path.join(projectDir, `${sessionId}.jsonl`);
+  const offsets = new Map();
+  const transcripts = { collect(runtime, callback) {
+    const current = getSessionId ? getSessionId() : sessionId;
+    if (!current) return 0;
+    const main = path.join(projectDir, `${current}.jsonl`);
+    const files = [{ file: main, parent: null }];
+    const subdir = path.join(projectDir, current, 'subagents');
+    if (fs.existsSync(subdir)) for (const name of fs.readdirSync(subdir)) {
+      if (name.endsWith('.jsonl')) files.push({ file: path.join(subdir, name), parent: main });
+    }
+    let written = 0;
+    for (const { file, parent } of files) {
+      const result = callback({ transcript_path: file, session_id: current,
+        session_group: null, run_id: null, parent_path: parent, byte_offset: offsets.get(file) ?? 0 }, true);
+      offsets.set(file, result.byteOffset); written += result.written;
+    }
+    return written;
+  } };
+  const collector = new ConversationCollector(store, config, { transcripts });
   return { collector, config, jsonlPath, projectDir };
 }
 
@@ -229,44 +245,25 @@ test('does not double-count on re-read of same data', () => {
   fs.rmSync(tmpDir, { recursive: true });
 });
 
-test('offset persistence prevents duplication on restart', () => {
+test('offset persistence prevents duplication on restart', async t => {
   const tmpDir = makeTmpDir();
-  const store = makeMockStore();
-  const { collector, jsonlPath } = makeCollector(store, tmpDir);
-
+  let store = new Store(path.join(tmpDir, 'dashboard.db'));
+  t.after(() => { store.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  const { config, jsonlPath } = makeCollector(store, tmpDir);
+  fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
+  fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: 'test-session-123' }));
   fs.writeFileSync(jsonlPath, makeJsonlLine('uuid-4') + '\n');
-  collector.collect();
-
-  assert.equal(usageMetrics(store).length, 1);
-
-  // Simulate restart: create new collector with same store (which has persisted offset)
-  const persistedOffset = store.health['conversation_reader:byte_offset'];
-  assert.ok(persistedOffset);
-  assert.ok(persistedOffset.extra.offset > 0);
-
-  // New collector that reads the persisted offset
-  const store2 = makeMockStore();
-  store2.db = {
-    prepare(sql) {
-      return {
-        get(param) {
-          if (sql.includes('byte_offset')) {
-            return { extra: JSON.stringify(persistedOffset.extra) };
-          }
-          if (sql.includes('jsonl_usage')) return undefined;
-          return { seq: 0 };
-        }
-      };
-    }
-  };
-  const { collector: collector2 } = makeCollector(store2, tmpDir);
-  collector2._restoreOffset();
-  collector2.collect();
-
-  // No new metrics since offset was restored past existing data
-  assert.equal(usageMetrics(store2).length, 0);
-
-  fs.rmSync(tmpDir, { recursive: true });
+  await new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) }).collect();
+  assert.equal(store.getUsageTranscript(jsonlPath).byte_offset, fs.statSync(jsonlPath).size);
+  store.close(); store = new Store(path.join(tmpDir, 'dashboard.db'));
+  const collector = new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) });
+  const original = collector._collectFile.bind(collector);
+  t.mock.method(collector, '_collectFile', (file, options) => {
+    assert.equal(collector._offsets.get(file), fs.statSync(file).size);
+    return original(file, options);
+  });
+  await collector.collect();
+  assert.equal(store.db.prepare("SELECT count(*) AS n FROM metric_points WHERE metric_name='usage_event'").get().n, 1);
 });
 
 test('uuid dedup prevents double-counting on crash recovery replay', () => {
@@ -494,50 +491,37 @@ test('subagent transcripts are not re-ingested on the next pass', () => {
   fs.rmSync(tmpDir, { recursive: true });
 });
 
-test('per-file offsets survive a restart', () => {
+test('per-file offsets survive a restart', async t => {
   const tmpDir = makeTmpDir();
-  const store = makeMockStore();
-  const { collector, jsonlPath, projectDir } = makeCollector(store, tmpDir);
+  let store = new Store(path.join(tmpDir, 'dashboard.db'));
+  t.after(() => { store.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  const { config, jsonlPath, projectDir } = makeCollector(store, tmpDir);
+  fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
+  fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: 'test-session-123' }));
 
   fs.writeFileSync(jsonlPath, makeJsonlLine('m1', { requestId: 'req_main' }) + '\n');
   const subDir = path.join(projectDir, 'test-session-123', 'subagents');
   fs.mkdirSync(subDir, { recursive: true });
   fs.writeFileSync(path.join(subDir, 'agent-xyz.jsonl'), makeJsonlLine('s1', { requestId: 'req_sub1' }) + '\n');
 
-  collector.collect();
-  assert.equal(usageMetrics(store).length, 2);
-
-  const persisted = store.health['conversation_reader:byte_offset'].extra;
-  assert.ok(persisted.files, 'per-file offsets are persisted');
-  assert.equal(Object.keys(persisted.files).length, 2);
-
-  // Fresh collector restoring those offsets must not re-read either file.
-  const store2 = makeMockStore();
-  store2.db = {
-    prepare(sql) {
-      return {
-        get(param) {
-          if (sql.includes('byte_offset')) return { extra: JSON.stringify(persisted) };
-          if (sql.includes('$.request_id')) return undefined;
-          return { seq: 0 };
-        }
-      };
-    }
-  };
-  const { collector: collector2 } = makeCollector(store2, tmpDir);
-  collector2._restoreOffset();
-  collector2.collect();
-  assert.equal(usageMetrics(store2).length, 0, 'nothing re-read after restart');
-
-  fs.rmSync(tmpDir, { recursive: true });
+  await new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) }).collect();
+  assert.equal(store.activeUsageTranscripts().length, 2);
+  for (const row of store.activeUsageTranscripts()) assert.equal(row.byte_offset, fs.statSync(row.transcript_path).size);
+  store.close(); store = new Store(path.join(tmpDir, 'dashboard.db'));
+  const collector = new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) });
+  const original = collector._collectFile.bind(collector);
+  t.mock.method(collector, '_collectFile', (file, options) => {
+    assert.equal(collector._offsets.get(file), fs.statSync(file).size); return original(file, options);
+  });
+  await collector.collect();
+  assert.equal(store.db.prepare("SELECT count(*) AS n FROM metric_points WHERE metric_name='usage_event'").get().n, 2);
 });
 
-test('falls back to the statusline session id when the state engine has none', () => {
+test('discovers a legacy session from the statusline without a state engine', async t => {
   const tmpDir = makeTmpDir();
-  const store = makeMockStore();
-  // State engine reports nothing — the situation after a mid-session restart,
-  // where collection used to stall until the user's next prompt.
-  const { collector, jsonlPath } = makeCollector(store, tmpDir, 'test-session-123', () => null);
+  const store = new Store(path.join(tmpDir, 'dashboard.db'));
+  t.after(() => { store.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  const { config, jsonlPath } = makeCollector(store, tmpDir);
 
   fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
   fs.writeFileSync(
@@ -546,18 +530,16 @@ test('falls back to the statusline session id when the state engine has none', (
   );
 
   fs.writeFileSync(jsonlPath, makeJsonlLine('u1', { requestId: 'req_fallback' }) + '\n');
-  collector.collect();
-
-  assert.equal(usageMetrics(store).length, 1, 'collection proceeds via the statusline session id');
-  assert.equal(usageMetrics(store)[0].session_id, 'test-session-123');
-
-  fs.rmSync(tmpDir, { recursive: true });
+  await new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) }).collect();
+  const rows = store.db.prepare("SELECT session_id FROM metric_points WHERE metric_name='usage_event'").all();
+  assert.equal(rows.length, 1); assert.equal(rows[0].session_id, 'test-session-123');
 });
 
-test('state engine session id wins over the statusline fallback', () => {
+test('explicit transcript discovery takes precedence over the legacy statusline', async t => {
   const tmpDir = makeTmpDir();
-  const store = makeMockStore();
-  const { collector, jsonlPath } = makeCollector(store, tmpDir, 'test-session-123');
+  const store = new Store(path.join(tmpDir, 'dashboard.db'));
+  t.after(() => { store.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  const { config, jsonlPath } = makeCollector(store, tmpDir);
 
   fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
   fs.writeFileSync(
@@ -566,12 +548,13 @@ test('state engine session id wins over the statusline fallback', () => {
   );
 
   fs.writeFileSync(jsonlPath, makeJsonlLine('u1', { requestId: 'req_primary' }) + '\n');
-  collector.collect();
-
-  assert.equal(usageMetrics(store).length, 1);
-  assert.equal(usageMetrics(store)[0].session_id, 'test-session-123');
-
-  fs.rmSync(tmpDir, { recursive: true });
+  store.insertEvent({ id: 'start', ingest_id: 'start', timestamp: new Date().toISOString(), runtime: 'claude',
+    session_id: 'test-session-123', session_group: 'origin', run_id: 'current', event_type: 'session_start',
+    category: 'session', source: 'core-log', metadata: { transcript_path: jsonlPath } });
+  await new ConversationCollector(store, config, { getSnapshot: async () => ({ rows: [] }) }).collect();
+  const rows = store.db.prepare("SELECT session_id FROM metric_points WHERE metric_name='usage_event'").all();
+  assert.equal(rows.length, 1); assert.equal(rows[0].session_id, 'test-session-123');
+  assert.equal(store.activeUsageTranscripts().length, 1);
 });
 
 test('unknown model writes token metrics but skips cost', () => {
@@ -676,8 +659,7 @@ test('session file switch resets offset', () => {
   };
 
   let currentSession = 'session-a';
-  const stateEngine = { getCurrentSessionId: () => currentSession };
-  const collector = new ConversationCollector(store, config, { stateEngine });
+  const { collector } = makeCollector(store, tmpDir, 'session-a', () => currentSession, config);
 
   const zylosResolved = fs.realpathSync(tmpDir);
   const projectSlug = claudeProjectSlug(zylosResolved);
