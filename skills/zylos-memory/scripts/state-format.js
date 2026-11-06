@@ -1,6 +1,7 @@
 // Pure working-state format shared by readers, commit and mode conversion.
 import { parseSessionGroup, requireGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 import { escapeText } from '../../comm-bridge/scripts/c4-query-format.js';
+import { projectC4Content } from '../../comm-bridge/scripts/c4-content-projection.js';
 
 const invalidHeader = () => ({ valid: false, scope: null, coverage: null, inboxCommitted: [] });
 const titles = ['# Working State', '## Headline', '## In Progress', '## Pending', '## Commitments'];
@@ -70,7 +71,7 @@ export function renderStateSkeleton({ scope, syncedAt, absorbed = null }) {
     pending += rows.map(row => {
       const route = `${scope === '*' && row.sessionGroup ? row.sessionGroup + ' ' : ''}${row.channel} ${row.endpointId ?? ''}`;
       const routeDisplay = displayText(route, 128, 125, '…');
-      const body = displayText(row.content || '（无正文）', 512, 509, `…（截断，全文见 #${row.id}）`);
+      const body = displayText(projectC4Content(row.content || '（无正文）', { c4Id: row.id }), 512, 509, `…（截断，全文见 #${row.id}）`);
       return `- #${row.id} ${rowTime(row.timestamp)} [${routeDisplay}] ${body}`;
     }).join('\n') + '\n';
   }

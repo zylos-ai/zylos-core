@@ -1,3 +1,4 @@
+import { projectC4Content } from './c4-content-projection.js';
 import { writeSync } from 'node:fs';
 import { composeSessionGroup, parseSessionGroup, requireGroup, validNamespace, dataError, isDataError } from './c4-session-group.js';
 import { configFunctions } from './c4-store-config.js';
@@ -151,8 +152,8 @@ export function createStore(database, dependencies = {}) {
     return snapshot(c => {
       const millis = value => Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
       function row(head) {
-        const preview = get(c, "SELECT timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
-        const text = preview ? [...preview.content].slice(0, 80).join('') : null;
+        const preview = get(c, "SELECT id,timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
+        const text = preview ? [...projectC4Content(preview.content, { c4Id: preview.id })].slice(0, 80).join('') : null;
         if (match !== undefined && !head.session_group.toLowerCase().includes(match.toLowerCase()) && !(text ?? '').toLowerCase().includes(match.toLowerCase())) return null;
         const parsed = parseSessionGroup(head.session_group);
         const componentName = parsed && parsed.namespace !== 'origin' ? get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', parsed.namespace)?.component_name ?? null : null;

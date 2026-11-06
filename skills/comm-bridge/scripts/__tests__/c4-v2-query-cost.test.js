@@ -151,7 +151,7 @@ test('queue and group readers bound history work and use indexed access paths', 
   const active = inspect(() => store.queries.listGroups({ activeSince: Date.parse('2026-01-24T00:00:00Z') }));
   assert.equal(active.result.groups.length, 3); assert.equal(active.result.hasOlder, true);
   assert.equal(cursorRows, 4); assert.ok(cursorsClosed > 0);
-  const previews = plans => plans.filter(item => item.sql.includes('SELECT timestamp,channel,endpoint_id,content FROM conversations'));
+  const previews = plans => plans.filter(item => item.sql.includes('SELECT id,timestamp,channel,endpoint_id,content FROM conversations'));
   assert.equal(previews(active.plans).length, 3);
   const assertHeadIndex = plans => assert.ok(plans.some(plan => plan.details.some(detail => /USING INDEX idx_group_heads_head/.test(detail))), JSON.stringify(plans));
   assertHeadIndex(active.plans);

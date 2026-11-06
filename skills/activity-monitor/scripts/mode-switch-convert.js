@@ -7,6 +7,7 @@ import { absorbedSummaryItems, binaryCompare as binary, scopeFor, replyVia, shel
 import { renderStateSkeleton, validateStateDocument, parseStateHeader, absorbedEntry, inboxSegmentName } from '../../zylos-memory/scripts/state-format.js';
 
 const { groupMemoryDir } = await loadCoreModule('session-group-paths.js');
+const { projectC4Content } = await loadCoreModule('content-projection.js');
 const { modeSwitchPreviousDir, modeSwitchDonePath, modeSwitchUngroupedPath, modeSwitchGroupPath, handoffPath } = await loadCoreModule('session-memory-paths.js');
 const { writeModeSwitchFile, formatModeSwitchHandoff, parseModeSwitchHeader } = await loadCoreModule('mode-switch-files.js');
 const materialName = name => ['state.md', 'inbox.md', 'handoff.md'].includes(name) || inboxSegmentName.test(name);
@@ -50,7 +51,7 @@ export function createModeSwitchConverter({ db, zylosDir, fsImpl = fs, renderSta
   }
   function exportRows(rows) {
     return rows.map(row => JSON.stringify({ id: row.id, direction: row.direction, channel: row.channel,
-      endpoint: row.endpoint_id, timestamp: row.timestamp, content: row.content })).join('\n') + (rows.length ? '\n' : '');
+      endpoint: row.endpoint_id, timestamp: row.timestamp, content: projectC4Content(row.content, { c4Id: row.id }) })).join('\n') + (rows.length ? '\n' : '');
   }
   function sourceMaterials(transition) {
     if (transition.source_mode === 'single') return files(memory);

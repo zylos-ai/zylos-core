@@ -1,4 +1,6 @@
+import { projectC4Content } from './c4-content-projection.js';
 import { dataError, parseSessionGroup } from './c4-session-group.js';
+export const projectConversation = row => ({ ...row, content: projectC4Content(row.content, { c4Id: row.id }) });
 export const ARG_PAYLOAD_MAX = 131071;
 export const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 export function replyVia(row, scriptPath) {
@@ -31,8 +33,9 @@ export function formatAbsorbedPage({ transition, rows }, { group, after = 0, lim
   const pending = scoped.filter(r => r.id > after);
   const runId = transition.run_id;
   const items = pending.slice(0, limit).map((row, index) => {
-    const characters = Array.from(row.content);
-    return { k: index + 1, id: row.id, group: row.session_group, time: time(row.timestamp), textBytes: bytes(row.content),
+    const content = projectC4Content(row.content, { c4Id: row.id });
+    const characters = Array.from(content);
+    return { k: index + 1, id: row.id, group: row.session_group, time: time(row.timestamp), textBytes: bytes(content),
       reply: `c4-send.js --absorbed-reply ${runId} ${row.id}`, text: characters.slice(0, 300).join(''), textTruncated: characters.length > 300 };
   });
   const next = items.length && pending.length > items.length ? items.at(-1).id : null;
@@ -46,7 +49,7 @@ export function absorbedField({ transition, rows }, { id, field = 'text' } = {})
   if (!['text', 'endpoint'].includes(field)) throw dataError('INVALID_ARGS', 'Invalid field');
   const row = rows.find(r => r.id === id);
   if (!row) throw dataError('ABSORBED_NOT_IN_RUN', 'Message is not in this transition');
-  const value = field === 'text' ? row.content : row.endpoint_id ?? '';
+  const value = field === 'text' ? projectC4Content(row.content, { c4Id: row.id }) : row.endpoint_id ?? '';
   return { runId: transition.run_id, id, field, bytes: bytes(value), data: value };
 }
 export function formatAbsorbedFull(snapshot, options = {}) {

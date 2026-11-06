@@ -3,7 +3,7 @@ name: comm-bridge
 description: >-
   C4 communication bridge — central gateway for ALL external communication (Telegram, Lark, etc.).
   Use when replying to users via the "reply via" path, sending proactive messages to external channels,
-  querying recent conversations or checkpoint status (prefer c4-db.js CLI; sqlite3 OK for unsupported queries),
+  querying recent conversations or checkpoint status (prefer c4-db.js CLI; direct SQL text reads require the projection rules below),
   fetching conversation history for Memory Sync, or creating checkpoints after sync.
   Incoming messages are queued by channel bots and delivered to Claude via a PM2 dispatcher daemon.
   Session-start hooks automatically provide conversation context and can trigger Memory Sync when unsummarized conversations exceed the configured threshold.
@@ -84,6 +84,28 @@ memory. Only send what merits waking the recipient. There is no broadcast or
 store-only internal category. Runtime controls and identity/skill notifications
 belong in the control queue. Don't send an internal copy of an already recorded
 outbound message just for bookkeeping.
+
+## Conversation Text and Original Records
+
+Model/Memory Sync history should use `c4-fetch.js` or the projected C4 CLI
+outputs, not direct `sqlite3 SELECT content` output. These readers call the
+public Core `projectC4Content(content, { c4Id: row.id })` API from
+`cli/lib/content-projection.js` on complete content before formatting,
+truncation, byte accounting or matching. Structured messages expose fallback
+text and references; invalid marked messages expose only an error marker and
+C4 reference. Ordinary text is unchanged. `--origin-sync --raw-only` means the
+message segment rather than checkpoint summaries; its content is still projected.
+
+Use SQL for unsupported metadata queries. If a custom model/memory reader must
+select `content`, apply the same public projector to each full row before any
+output, truncation or file write. Original C4 records remain available for
+explicitly authorized original-body reads and business reconciliation; that
+separate authority is not granted by a C4 reference or by this skill.
+
+`c4-db.js insert out dashboard ...` writes directly to C4 and bypasses BeforeSend.
+This is an existing low-level bypass, not a supported Dashboard send path or a
+hook-validated send receipt. Formal Dashboard sends must use their channel send
+path. This boundary does not add a global database-write gate.
 
 ## Database
 

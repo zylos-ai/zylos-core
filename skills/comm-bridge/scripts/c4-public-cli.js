@@ -4,7 +4,7 @@ import * as db from './c4-db.js';
 import { createStore } from './c4-v2-store.js';
 import { createQueryHandlers } from './c4-v2-cli.js';
 import { dataError, requireGroup } from './c4-session-group.js';
-import { formatQueryError, replyVia } from './c4-query-format.js';
+import { formatQueryError, replyVia, projectConversation } from './c4-query-format.js';
 import { queryRejection } from './c4-entry-events.js';
 
 const query = createQueryHandlers(createStore(db.getDb));
@@ -103,7 +103,7 @@ export function databaseCli(args) {
     if (o.positional.length !== 4) invalid('insert requires direction, channel, endpoint and content');
     const [direction, channel, endpoint, content] = o.positional;
     const input = o['session-group'] === undefined ? {} : { groupName: o['session-group'] };
-    const row = db.insertConversation(direction, channel, endpoint === 'null' ? null : endpoint, content, input);
+    const row = projectConversation(db.insertConversation(direction, channel, endpoint === 'null' ? null : endpoint, content, input));
     return o.json ? json(row) : 'Inserted: ' + JSON.stringify(row) + '\n';
   }
   if (command === 'namespace') {
@@ -142,7 +142,7 @@ export function databaseCli(args) {
   }
   if (command === 'recent') {
     const o = options(rest, [], ['json']); if (o.positional.length > 1) invalid('Too many limits');
-    return display(db.getRecentConversations(o.positional.length ? number(o.positional[0], 'limit', 1) : 20), o);
+    return display(db.getRecentConversations(o.positional.length ? number(o.positional[0], 'limit', 1) : 20).map(projectConversation), o);
   }
   if (command === 'checkpoints') { const o = options(rest, [], ['json']); noPositionals(o); return display(db.getCheckpoints(), o); }
   if (command === 'init') { const o = options(rest); noPositionals(o); db.getDb(); return 'Database initialized\n'; }
@@ -211,7 +211,7 @@ export function fetchCli(args) {
     const since = parseSince(o.since);
     if (since === null) invalid('since must be a duration (30m, 6h, 1d) or a datetime (YYYY-MM-DD[ HH:MM[:SS]][Z|±HH:MM])');
     const checkpoint = db.getLatestContentCheckpoint('*');
-    const rows = db.getConversationsSince(since);
+    const rows = db.getConversationsSince(since).map(projectConversation);
     if (o.json) return json({ checkpoint, since, rows });
     // Rows come in timestamp order; report the full id span for --begin/--end.
     let minId = Infinity, maxId = -Infinity;
@@ -222,7 +222,7 @@ export function fetchCli(args) {
   const begin = number(o.begin, 'begin'), end = number(o.end, 'end');
   if (begin > end) invalid('begin must not exceed end');
   const checkpoint = db.getLatestContentCheckpoint('*');
-  const rows = db.getConversationsByRange(begin, end);
+  const rows = db.getConversationsByRange(begin, end).map(projectConversation);
   return o.json ? json({ checkpoint, rows }) : `${checkpoint?.summary ? '[Last Checkpoint Summary] ' + checkpoint.summary + '\n\n' : ''}[Conversations] (id ${begin} ~ ${end})\n${conversations(rows) || 'No conversations in this range.\n'}`;
 }
 export function runCli(kind, args) {

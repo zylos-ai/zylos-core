@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { dataError, requireGroup } from './c4-session-group.js';
-import { formatAbsorbedPage, formatAbsorbedFull, formatAbsorbedSummary, formatQueryError, absorbedField } from './c4-query-format.js';
+import { formatAbsorbedPage, formatAbsorbedFull, formatAbsorbedSummary, formatQueryError, absorbedField, projectConversation } from './c4-query-format.js';
 
 const invalid = message => { throw dataError('INVALID_ARGS', message); };
 const integer = (value, name, minimum = 0) => {
@@ -59,7 +59,8 @@ export function createQueryHandlers(store) {
       return groupScope(group) === '*' ? store.getGlobalUnsummarizedRange() : store.getUnsummarizedRange(group);
     },
     unsummarized({ group, upToConversationId, limit } = {}) {
-      return store.queries.unsummarized({ group: groupScope(group), upToConversationId, limit });
+      const result = store.queries.unsummarized({ group: groupScope(group), upToConversationId, limit });
+      return { ...result, rows: result.rows.map(projectConversation) };
     },
     checkpoints({ group, after } = {}) {
       integer(after, 'after');
@@ -73,7 +74,8 @@ export function createQueryHandlers(store) {
     originCombined({ group, limit } = {}) {
       requireGroup(group);
       if (limit !== undefined) integer(limit, 'limit', 1);
-      return store.queries.originCombined(group, { limit });
+      const result = store.queries.originCombined(group, { limit });
+      return { ...result, rows: result.rows.map(projectConversation) };
     },
     originRaw({ group, after, limit } = {}) {
       requireGroup(group); integer(after, 'after');
@@ -83,7 +85,7 @@ export function createQueryHandlers(store) {
       return store.getOriginSyncConversations(group, {
         afterConversationId: cursor.cursorFrom, rawAfter: after,
         upToConversationId: cursor.upTo, limit: limit ?? Number.MAX_SAFE_INTEGER,
-      });
+      }).map(projectConversation);
     },
   };
 }
