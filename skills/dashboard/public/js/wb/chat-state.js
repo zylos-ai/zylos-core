@@ -30,18 +30,19 @@ export function createChatState({ request, identity = null, onChange } = {}) {
     canCreate: active && !blocked && tab === 'mine' && mode === 'multi' });
   const emit = () => { if (!destroyed) for (const listener of listeners) listener(snapshot()); };
   const valid = e => active && !destroyed && epoch === e && !blocked;
-  function failure(err, e) {
+  function failure(err, e, target = null) {
     if (!valid(e)) return;
     const code = err?.code || err?.payload?.error || err?.message || 'chat_request_failed';
     if (code === 'remote_chat_disabled') {
       epoch++; blocked = true; cells.clear(); items = []; nextCursor = null; selectedId = null; mode = null; loading = false; error = null;
-    } else { error = typeof code === 'string' ? code : 'chat_request_failed'; }
+    } else if (target) { target.error = typeof code === 'string' ? code : 'chat_request_failed'; }
+    else { error = typeof code === 'string' ? code : 'chat_request_failed'; }
     emit();
   }
-  async function run(fn, apply, e = epoch) {
+  async function run(fn, apply, e = epoch, target = null) {
     if (!valid(e)) return;
     try { const result = await fn(); if (valid(e)) await apply(result); }
-    catch (err) { failure(err, e); }
+    catch (err) { failure(err, e, target); }
   }
   async function list(more = false) {
     if (!active || blocked || (more && !nextCursor)) return;
@@ -77,7 +78,7 @@ export function createChatState({ request, identity = null, onChange } = {}) {
           id = data.conversationId;
         }
         emit();
-      }, e);
+      }, e, current);
     }
     if (!valid(e) || version !== selectedVersion || currentTab !== tab || id.startsWith('d:')) return;
     await history(current, id, currentTab, 'initial', e);
@@ -92,7 +93,7 @@ export function createChatState({ request, identity = null, onChange } = {}) {
       if (direction !== 'after') current.messageCursor = data.nextCursor ?? null;
       if (direction !== 'before') current.afterCursor = data.afterCursor ?? null;
       emit();
-    }, e);
+    }, e, current);
   }
   async function refresh() {
     if (!active) return;
@@ -119,7 +120,7 @@ export function createChatState({ request, identity = null, onChange } = {}) {
     await run(() => request(pathFor(id), { method: 'PATCH', body: { displayName } }), data => {
       current.conversation = data.conversation;
       items = items.map(row => row.id === id ? { ...row, display_name: data.conversation.displayName } : row); emit();
-    });
+    }, epoch, current);
   }
   async function send({ retry = false } = {}) {
     const current = cell();
@@ -139,7 +140,7 @@ export function createChatState({ request, identity = null, onChange } = {}) {
       cells.set(`${currentTab}:${canonical}`, current);
       if (selectedId === id && tab === currentTab) selectedId = canonical;
       if (valid(e)) {
-        await run(() => request(pathFor(canonical)), data => { current.conversation = data.conversation; emit(); }, e);
+        await run(() => request(pathFor(canonical)), data => { current.conversation = data.conversation; emit(); }, e, current);
         if (!valid(e) || tab !== currentTab) return;
         await list();
         if (!valid(e) || tab !== currentTab) return;
@@ -152,7 +153,7 @@ export function createChatState({ request, identity = null, onChange } = {}) {
         cells.set(`${currentTab}:${canonical}`, current);
         if (selectedId === id && tab === currentTab) selectedId = canonical;
         const navigation = selectedVersion;
-        await run(() => request(pathFor(canonical)), data => { current.conversation = data.conversation; current.ownershipResolved = !!data.conversation; emit(); }, e);
+        await run(() => request(pathFor(canonical)), data => { current.conversation = data.conversation; current.ownershipResolved = !!data.conversation; emit(); }, e, current);
         if (valid(e) && tab === currentTab && selectedVersion === navigation) {
           await list();
           if (valid(e) && tab === currentTab && selectedVersion === navigation) await history(current, canonical, currentTab, 'initial', e);
@@ -189,10 +190,10 @@ export function createChatState({ request, identity = null, onChange } = {}) {
       if (tab === 'mine') { current.ownershipResolved = false; emit(); await run(() => request(pathFor(id)), data => {
         current.receipt = data; current.conversation = data.conversation; current.ownershipResolved = !!data.conversation;
         current.retryRequired = data.stored === null; emit();
-      }); }
+      }, e, current); }
       if (!valid(e)) return;
       const ids = current.messages.slice(-100).map(row => row.id).join(',');
-      if (ids) await run(() => request(`${pathFor(id)}/status?${query({ tab: currentTab, ids })}`), data => { const updates = new Map((data.items || []).map(row => [row.id, row])); current.messages = current.messages.map(row => ({ ...row, ...updates.get(row.id) })); emit(); }, e);
+      if (ids) await run(() => request(`${pathFor(id)}/status?${query({ tab: currentTab, ids })}`), data => { const updates = new Map((data.items || []).map(row => [row.id, row])); current.messages = current.messages.map(row => ({ ...row, ...updates.get(row.id) })); emit(); }, e, current);
     },
   };
 }

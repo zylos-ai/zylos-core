@@ -235,3 +235,38 @@ for (const source of ['list', 'mode']) test(`selected conversation keeps ${sourc
   assert.equal(state.snapshot().error, 'chat_history_unavailable');
   state.destroy();
 });
+
+for (const requestKind of ['detail', 'messages', 'rename', 'receiptStatus', 'rowStatus', 'sendDetails']) test(`${requestKind} failure stays with its conversation when switching groups`, async () => {
+  let failing = false;
+  const code = 'chat_history_unavailable';
+  const { state } = fixture((path, options) => {
+    const own = path.includes('g%3AA');
+    const detail = own && !path.includes('?') && !path.endsWith('/send') && options?.method !== 'PATCH';
+    if (failing && own && (
+      (['detail', 'receiptStatus', 'sendDetails'].includes(requestKind) && detail) ||
+      (requestKind === 'messages' && path.includes('/messages?')) ||
+      (requestKind === 'rename' && options?.method === 'PATCH') ||
+      (requestKind === 'rowStatus' && path.includes('/status?')))) throw { status: 503, code };
+    if (path.includes('/messages?')) return { items: [{ id: 1, content: 'history', direction: 'in', status: 'delivered' }], afterCursor: 'after' };
+    if (options?.method === 'POST') return { stored: true, conversationId: 'g:A', deliveryState: 'pending' };
+  });
+  await state.open(); await state.select('g:A'); failing = true;
+  if (requestKind === 'rename') await state.rename('Updated name');
+  else if (['receiptStatus', 'rowStatus'].includes(requestKind)) await state.refreshStatus();
+  else if (requestKind === 'sendDetails') { state.setInput('message'); await state.send(); }
+  else await state.select('g:A');
+  assert.equal(state.snapshot().error, code);
+  await state.select('g:B'); assert.equal(state.snapshot().selectedId, 'g:B'); assert.equal(state.snapshot().error, null);
+  await state.select('g:A');
+  assert.equal(state.snapshot().error, ['rename', 'rowStatus'].includes(requestKind) ? null : code);
+  failing = false; await state.select('g:A'); assert.equal(state.snapshot().error, null);
+  state.destroy();
+});
+test('late conversation failure cannot become the selected conversation error', async () => {
+  const wait = pending(), started = pending(); let hold = true;
+  const { state } = fixture(path => { if (path.includes('g%3AA/messages?') && hold) { started.resolve(); return wait.promise; } });
+  await state.open(); const loadingA = state.select('g:A'); await started.promise; await state.select('g:B');
+  wait.reject({ status: 503, code: 'chat_history_unavailable' }); await loadingA;
+  assert.equal(state.snapshot().selectedId, 'g:B'); assert.equal(state.snapshot().error, null);
+  hold = false; await state.select('g:A'); assert.equal(state.snapshot().error, null); state.destroy();
+});

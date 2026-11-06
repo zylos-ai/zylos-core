@@ -15,9 +15,10 @@ const labels = { 'chat.remoteDisabled': 'Remote disabled', 'chat.single': 'Switc
 const t = key => labels[key] ?? key;
 function fixture({ mode = 'multi', tab = 'mine', denied = false, rows = [], draft = false, malformedStatus = null, secondGroup = false, receipt = {}, translate = t } = {}) {
   const document = createDocument(), root = document.createElement('div'), calls = [];
-  let isDenied = denied, pendingMessage = null, listFailed = false;
+  let isDenied = denied, pendingMessage = null, listFailed = false, failedMessageId = null;
   const fetch = async (path, options) => {
     calls.push({ path, options });
+    if (failedMessageId && path.includes(encodeURIComponent(failedMessageId) + '/messages?')) return { ok: false, status: 503, json: async () => ({ error: 'chat_history_unavailable' }) };
     if (listFailed && path.startsWith('/api/chat/conversations?')) return { ok: false, status: 502, json: async () => ({ error: 'chat_history_unavailable' }) };
     if (pendingMessage && path.includes('/messages')) { const pending = pendingMessage; pendingMessage = null; return pending.promise; }
     if (path.endsWith('/send') && malformedStatus) return { ok: malformedStatus < 400, status: malformedStatus, json: async () => { throw new SyntaxError('invalid JSON'); } };
@@ -33,7 +34,7 @@ function fixture({ mode = 'multi', tab = 'mine', denied = false, rows = [], draf
   const page = mountChat({ root, document, t: translate, fetch, endpoint: path => path });
   const button = key => allNodes(root).find(node => node.dataset.action === key);
   const select = async () => { allNodes(root).find(node => node.dataset.conversationId)?.dispatch('click'); await tick(); await tick(); };
-  return { root, page, calls, button, select, tab, failList() { listFailed = true; }, deny() { isDenied = true; }, holdMessage(pending) { pendingMessage = pending; } };
+  return { root, page, calls, button, select, tab, failMessages(id) { failedMessageId = id; }, failList() { listFailed = true; }, deny() { isDenied = true; }, holdMessage(pending) { pendingMessage = pending; } };
 }
 
 test('message text displays plain content and only the valid envelope fallback', () => {
@@ -194,5 +195,15 @@ test('selected stored conversation still displays an unrelated list refresh fail
   const alert = allNodes(f.root).find(node => node.attributes.role === 'alert');
   assert.ok(alert); assert.equal(alert.textContent, 'chat.error.unavailable');
   assert.ok(f.root.textContent.includes('Example'));
+  f.page.destroy();
+});
+
+test('conversation query errors leave the screen when selecting another conversation', async () => {
+  const f = fixture({ secondGroup: true }); await f.page.open(); f.failMessages('g:AA'); await f.select();
+  assert.ok(allNodes(f.root).some(node => node.attributes.role === 'alert'));
+  allNodes(f.root).find(node => node.dataset.conversationId === 'g:BB').dispatch('click'); await tick(); await tick();
+  assert.equal(allNodes(f.root).some(node => node.attributes.role === 'alert'), false);
+  allNodes(f.root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click'); await tick(); await tick();
+  assert.ok(allNodes(f.root).some(node => node.attributes.role === 'alert'));
   f.page.destroy();
 });
