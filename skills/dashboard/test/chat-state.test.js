@@ -224,3 +224,14 @@ test('canonical conflict clears old draft receipt and loads canonical history wi
   assert.equal(state.snapshot().selectedId,'g:B'); assert.equal(state.snapshot().receipt,null); assert.equal(state.snapshot().input,'next text'); assert.equal(state.snapshot().messages[0].content,'canonical history');
   assert.equal(calls.filter(row=>row.options?.method==='POST').length,1); state.destroy();
 });
+
+for (const source of ['list', 'mode']) test(`selected conversation keeps ${source} refresh failure visible`, async () => {
+  let fail = false;
+  const { state } = fixture(path => {
+    if (fail && ((source === 'list' && path.includes('conversations?')) || (source === 'mode' && path === '/api/session-mode'))) throw { status: 502, code: 'chat_history_unavailable' };
+  });
+  await state.open(); await state.select('g:A'); fail = true; await state.refresh();
+  assert.equal(state.snapshot().selectedId, 'g:A');
+  assert.equal(state.snapshot().error, 'chat_history_unavailable');
+  state.destroy();
+});

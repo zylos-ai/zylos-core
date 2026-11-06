@@ -57,10 +57,11 @@ export function createChatState({ request, identity = null, onChange } = {}) {
   }
   async function select(id) {
     if (!active || blocked) return;
-    selectedId = id; selectedVersion++; error = null;
+    selectedId = id; selectedVersion++;
     if (!cells.has(key(id))) cells.set(key(id), blank());
     const current = cell(), currentTab = tab, e = epoch;
     const version = selectedVersion;
+    current.error = null;
     current.conversation ||= items.find(item => item.id === id) || null;
     emit();
     if (currentTab === 'mine') {
