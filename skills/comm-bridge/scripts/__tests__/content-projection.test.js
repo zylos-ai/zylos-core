@@ -104,10 +104,10 @@ test('all channels and both directions use the same protocol without modifying t
 
 test('C4 references accept authoritative integer IDs without echoing arbitrary values', () => {
   const content = CONTENT_PREFIX + '{';
-  for (const c4Id of [1, Number.MAX_SAFE_INTEGER, '123', '9223372036854775807']) {
+  for (const c4Id of [1, 95, '95', Number.MAX_SAFE_INTEGER, '123', '9223372036854775807']) {
     assert.equal(projectC4Content(content, { c4Id }), `[C4 content invalid; c4_id=${c4Id}]`);
   }
-  for (const c4Id of [undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '01', '9223372036854775808', secret, {}]) {
+  for (const c4Id of [undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '01', '9223372036854775808', '10000000000000000000', secret, {}]) {
     assert.equal(projectC4Content(content, { c4Id }), '[C4 content invalid; c4_id=unavailable]');
   }
   assert.equal(projectC4Content(content), '[C4 content invalid; c4_id=unavailable]');
