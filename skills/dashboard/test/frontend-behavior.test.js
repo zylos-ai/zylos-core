@@ -863,12 +863,9 @@ test('back button resolves in-page remote first, standalone remote second, fleet
 
 test('popstate routes /fleet/<name> paths into remote view only on the parent document', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  // The standalone remote document (REMOTE_AGENT) keeps plain tab routing.
-  assert.match(app, /if \(!REMOTE_AGENT\) \{\s*\n\s*const m = path\.match\(\/\\\/fleet\\\/\(\[\^\/\]\+\)\\\/\?\(\?::?trends\|memory\|observer\)\?\$\/\);?/);
+  // Page aliases and pushState paths are exercised by complete-document browser coverage.
   assert.match(app, /await enterRemoteAgent\(decodeURIComponent\(m\[1\]\), \{ push: false \}\);/);
   assert.match(app, /else if \(state\.remoteAgent\) \{\s*\n\s*await exitRemoteAgent\(\{ push: false \}\);/);
-  // Tab pushState carries the remote prefix so deep links stay consistent.
-  assert.match(app, /const path = name === 'overview' \? `\$\{prefix\}\/` : `\$\{prefix\}\/\$\{name\}`;/);
 });
 
 test('fleet wall tiles enter remote agents in-page instead of full navigation', () => {
@@ -1542,8 +1539,6 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
-  assert.match(index, /app\.js\?v=80/);
-  assert.match(index, /style\.css\?v=54/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
@@ -1610,7 +1605,6 @@ test('fleet management entry is local-only and modal is extensible for future ma
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
-  assert.match(index, /app\.js\?v=80/);
   assert.match(index, /<path d="M12 8V4H8"/);
   assert.match(index, /<rect width="16" height="12" x="4" y="8" rx="2"/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
@@ -1744,10 +1738,7 @@ test('i18n loader survives flaky pack fetches (#208)', async () => {
   assert.match(i18n, /if \(seq !== requestSeq\) return;/);
   assert.match(i18n, /renderI18n\(\);[\s\S]*?\} catch \{/);
 
-  // The module itself is cache-busted: a stale i18n.js would reintroduce the
-  // bug class even with a fresh app.js.
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /from '\.\/i18n\.js\?v=2'/);
+  // Versioned main/module assets are loaded by complete-document browser coverage.
 });
 
 test('overlapping initI18n calls: stale slow request cannot overwrite the newer locale (#211 review)', async () => {
@@ -2120,4 +2111,42 @@ test('app.js busts the cached observer-size module whose exports it now needs', 
   // Static modules are cached for 60s; a new named import from an unversioned
   // URL can bind to the previous copy and abort the whole module graph.
   assert.match(app, /import \{ validAgentSize, validObserverSize \} from '\.\/observer-size\.js\?v=2';/);
+});
+
+// Workbench shell cases directly import product modules and inject DOM/API stubs.
+// Existing legacy cases above retain their old harness and are selected separately.
+import { mountWorkbench } from '../public/js/wb/shell.js';
+import { createDocument as wbDocument, storage as wbStorage, tick as wbTick, deferred as wbDeferred } from './fixtures/workbench-dom.js';
+function workbenchHarness(context, read) {
+  const document = wbDocument(), listeners = new Map(), windowListeners = new Map();
+  const selectors = ['#wb-board', '#wb-search', '#wb-range', '#wb-detail-toggle', '#observer-tab', '#wb-instance', '#wb-attention', '#wb-side', '#tab-overview', '#agent-detail'];
+  const nodes = new Map(selectors.map(selector => [selector, document.createElement('div')]));
+  nodes.get('#tab-overview').className = 'active'; document.visibilityState = 'visible';
+  document.querySelector = selector => nodes.get(selector);
+  document.addEventListener = (event, handler) => listeners.set(event, handler);
+  document.removeEventListener = event => listeners.delete(event);
+  const window = { addEventListener: (event, handler) => windowListeners.set(event, handler), removeEventListener: event => windowListeners.delete(event) };
+  let interval, cleared = false; const calls = [], saved = wbStorage();
+  context.mock.method(globalThis, 'setInterval', (handler, delay) => { assert.equal(delay, 5000); interval = handler; return 12; });
+  context.mock.method(globalThis, 'clearInterval', id => { assert.equal(id, 12); cleared = true; });
+  const snapshot = { mode: 'multi', view: 'multi', rows: [{ sessionGroup: 'a', fallbackName: 'A', state: { kind: 'idle' } }], instance: { pool: { used: 1 } } };
+  const stop = mountWorkbench({ document, window, storage: saved, t: key => key,
+    fetch: async path => { calls.push(path); const value = read ? await read(path) : path.startsWith('/api/workbench/groups') ? snapshot :
+      path.startsWith('/api/workbench/activity') ? { start: 0, cellSeconds: 60, groups: { a: { cells: Array(60).fill('none'), inbound: [] } } } : {};
+      return { ok: true, json: async () => value }; } });
+  context.after(stop);
+  return { nodes, saved, calls, listeners, windowListeners, interval: () => interval(), stop, cleared: () => cleared };
+}
+test('workbench shell detail changes redraw without network and activity range persists', async context => {
+  const harness = workbenchHarness(context); await wbTick(); await wbTick();
+  const before = harness.calls.length, toggle = harness.nodes.get('#wb-detail-toggle'); toggle.checked = true; toggle.dispatch('change');
+  assert.equal(harness.calls.length, before); assert.equal(harness.saved.getItem('zylos-dashboard-detail-level'), 'technical');
+  const range = harness.nodes.get('#wb-range'); range.value = '6h'; range.dispatch('change'); await wbTick();
+  assert.equal(harness.saved.getItem('zylos-dashboard-activity-range'), '6h'); assert.equal(harness.calls.at(-1), '/api/workbench/activity?range=6h');
+  harness.stop(); assert.equal(harness.cleared(), true);
+});
+test('workbench shell visibility resumes polling and removes lifecycle listeners', async context => {
+  const harness = workbenchHarness(context); await wbTick(); const before = harness.calls.length;
+  harness.listeners.get('visibilitychange')(); await wbTick(); assert.ok(harness.calls.length > before);
+  harness.stop(); assert.equal(harness.listeners.has('visibilitychange'), false); assert.equal(harness.windowListeners.has('popstate'), false);
 });

@@ -1674,7 +1674,7 @@ export function createServer() {
       return;
     }
 
-    if (pathname === '/' || pathname === '/index.html' || pathname === '/trends' || pathname === '/memory' || pathname === '/observer') {
+    if (['/', '/index.html', '/trends', '/memory', '/observer', '/schedule', '/usage', '/settings'].includes(pathname)) {
       renderIndex(req, res);
       return;
     }

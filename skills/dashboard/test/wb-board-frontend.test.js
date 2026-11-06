@@ -1,0 +1,140 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { renderBoard, renderRow, modelCell, pendingModel, boardController } from '../public/js/wb/board.js';
+import { createBoardSearch } from '../public/js/wb/board-search.js';
+import { activityStrip } from '../public/js/wb/activity-strip.js';
+import { instanceStrip } from '../public/js/wb/instance-strip.js';
+import { renderAttention } from '../public/js/wb/attention-bar.js';
+import { apiError } from '../public/js/wb/fetch-guard.js';
+import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
+const t = (key, values = {}) => key + Object.values(values).join(':');
+const row = (key, kind = 'idle') => ({ sessionGroup: key, name: { displayName: key }, fallbackName: key,
+  state: { kind }, presence: 'running', duration: 32, tools: [], queue: { pending: { count: 2 }, running: { count: 1 } }, contextPct: 42,
+  target: { runtime: 'claude', model: 'default' }, launchConfig: { runtime: 'claude', mode: 'default' }, desired: { runtime: 'claude', mode: 'default' } });
+
+test('board renders snapshot order, text-safe names and technical columns', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const rows = Array.from({ length: 6 }, (_, index) => row('group' + index)); rows[1].name.displayName = '<img onerror=alert(1)>';
+  renderBoard(root, { rows, counts: { idle: 6 } }, { document, t });
+  assert.equal(root.children.length, 6); assert.equal(root.children[0].children[0].textContent, 'group0');
+  assert.equal(root.children[1].children[0].textContent, '<img onerror=alert(1)>');
+  assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-model')).length, 0);
+  renderBoard(root, { rows }, { document, t, level: 'technical' });
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-model')).length, 6);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-queue')).length, 6);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-context-ring')).length, 6);
+  assert.match(root.children[0].textContent, /0m 32s/);
+});
+test('unknown reason and free failure reason remain text, tool title preserves raw name', () => {
+  const document = createDocument(); const value = row('group'); value.state = { kind: 'unknown', reason: '<script>bad</script>', sampledAt: 123 };
+  value.wait = { kind: 'start_failed', reasonCode: '<img onerror=bad>' };
+  const root = renderRow(value, { document, t, level: 'technical' });
+  assert.equal(root.children[1].classList.contains('wb-unknown'), true); assert.match(root.children[1].title, /<script>/);
+  assert.match(root.textContent, /<img onerror=bad>/); assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
+  value.tools = [{ name: 'unrecognized', detail: 'raw' }];
+  const plain = renderRow(value, { document, t }); assert.equal(plain.children[2].title, 'unrecognized'); assert.equal(plain.children[2].textContent, 'wb.tool.unknown');
+});
+test('single view uses only-session name and historical groups have unknown live fields', () => {
+  const document = createDocument(), root = document.createElement('div');
+  renderBoard(root, { view: 'single', rows: [row('origin')] }, { document, t, level: 'technical' });
+  assert.equal(root.children[0].children[0].textContent, 'wb.single');
+  const old = renderRow({ sessionGroup: 'old', state: { kind: 'not_running' }, queue: null, target: null }, { document, t, level: 'technical' });
+  assert.equal(old.children[4].textContent, '—'); assert.equal(old.children[6].textContent, '—');
+});
+test('older hint appears only for strict true without an active query and focuses search', () => {
+  const document = createDocument(), root = document.createElement('div'); let focus = 0;
+  for (const hasOlder of [true, false, null]) {
+    renderBoard(root, { rows: [row('a')], hasOlder }, { document, t, onSearch: () => focus++ });
+    assert.equal(root.children.length, hasOlder === true ? 2 : 1);
+    if (hasOlder) root.children[1].dispatch('click');
+  }
+  assert.equal(focus, 1); renderBoard(root, { rows: [], hasOlder: true }, { document, t, query: 'oc' });
+  assert.equal(root.children.length, 1); assert.equal(root.textContent, 'wb.noMatch');
+});
+test('model text and pending comparison use launch identity, desired config and fence', () => {
+  const value = row('a'); assert.equal(modelCell(value), 'claude · default'); assert.equal(pendingModel(value), false);
+  value.launchConfig = { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' };
+  value.desired = { ...value.launchConfig }; assert.equal(pendingModel(value), false);
+  for (const key of ['runtime', 'model', 'effort']) { value.desired = { ...value.launchConfig, [key]: 'different' }; assert.equal(pendingModel(value), true); }
+  value.desired = null; assert.equal(pendingModel(value), false); value.fence = { reason: 'model_config' }; assert.equal(pendingModel(value), true);
+  value.target.onlyMulti = true; assert.equal(pendingModel(value), false);
+  assert.equal(modelCell({ presence: 'not_running', target: null }), '—');
+});
+test('activity renders real string cells and timestamps, with unknown inbound distinguished', () => {
+  const document = createDocument();
+  for (const [size, seconds] of [[60, 60], [72, 300]]) {
+    const data = { cells: Array(size).fill('none'), inbound: [1000], start: 0, cellSeconds: seconds }; data.cells[1] = 'busy';
+    const root = activityStrip(document, data, { t }); assert.equal(root.children.length, size);
+    assert.equal(root.children[0].classList.contains('wb-none'), true); assert.equal(root.children[0].classList.contains('wb-inbound'), true);
+    assert.match(root.children[1].title, /wb.state.busy/);
+    const unknown = activityStrip(document, data, { inboundUnknown: true, t }); assert.equal(unknown.dataset.inbound, 'unknown');
+    assert.equal(unknown.children[0].classList.contains('wb-inbound'), false);
+  }
+});
+test('board wires activity to each matching group', () => {
+  const document = createDocument(), root = document.createElement('div');
+  renderBoard(root, { rows: [row('a'), row('b')] }, { document, t, activity: { start: 0, cellSeconds: 60,
+    groups: { a: { cells: ['busy'], inbound: [] }, b: { cells: ['none'], inbound: [] } } } });
+  assert.equal(root.children[0].children[3].children[0].className, 'wb-bucket wb-busy');
+  assert.equal(root.children[1].children[3].children[0].className, 'wb-bucket wb-none');
+});
+test('snapshot controller rejects old responses and retains rows after failure', async () => {
+  const first = deferred(), second = deferred(); let calls = 0, shown = null, failure = null;
+  const controller = boardController({ fetchSnapshot: () => (++calls === 1 ? first.promise : calls === 2 ? second.promise : Promise.reject(Error('offline'))),
+    onSnapshot: value => { shown = value; }, onError: (_, at) => { failure = at; }, now: () => 100 });
+  const a = controller.refresh(), b = controller.refresh(); second.resolve('new'); await b; first.resolve('old'); await a;
+  assert.equal(shown, 'new'); await controller.refresh(); assert.equal(shown, 'new'); assert.equal(failure, 100); controller.stop();
+});
+test('snapshot lifecycle polls only while visible and cancels late responses on stop', async () => {
+  let visible = false, calls = 0, timer, cleared; const pending = deferred();
+  const controller = boardController({ visible: () => visible, fetchSnapshot: () => { calls++; return pending.promise; },
+    onSnapshot: () => assert.fail('stopped result'), onError: () => {}, setTimer: (fn, ms) => { timer = fn; assert.equal(ms, 5000); return 7; }, clearTimer: id => { cleared = id; } });
+  controller.start(); assert.equal(calls, 0); visible = true; const work = timer(); assert.equal(calls, 1); controller.stop(); pending.resolve({}); await work; assert.equal(cleared, 7);
+});
+test('search debounces, clears and rejects stale results independently from snapshots', async () => {
+  const first = deferred(), second = deferred(); const timers = []; let shown, clears = 0, calls = 0;
+  const search = createBoardSearch({ fetchRows: query => { calls++; return query === 'oc' ? first.promise : second.promise; },
+    onRows: rows => { shown = rows; }, onClear: () => clears++, onError: assert.fail,
+    setTimer: (fn, delay) => { timers.push({ fn, delay }); return timers.length; }, clearTimer: id => { if (id) timers[id - 1].cancelled = true; } });
+  search.input('o'); search.input('oc'); assert.equal(timers[0].cancelled, true); assert.equal(timers[1].delay, 300); assert.equal(calls, 0);
+  const one = timers[1].fn(); search.input('new'); const two = timers[2].fn(); second.resolve({ rows: ['new'] }); await two; first.resolve({ rows: ['old'] }); await one;
+  assert.equal(shown[0], 'new'); search.input(''); assert.equal(clears, 1); assert.equal(search.query(), ''); search.destroy();
+});
+test('instance strip renders pool unknown or used slots, runtime union, quota and same-sample services', () => {
+  const document = createDocument(), root = document.createElement('div');
+  instanceStrip(root, { mode: 'unreadable', baselineRuntime: 'claude', rows: [{ launchConfig: { runtime: 'codex' } }],
+    instance: { pool: { used: 3, waiting: 1 }, runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'auth_failed' } },
+      accounts: { claude: { used_percentage: 23 }, codex: null }, services: { online: 4, total: 5 } } }, { document, t, cost: 0.25, level: 'technical' });
+  assert.match(root.textContent, /wb.mode · wb.unknown/); assert.match(root.textContent, /3 \/ \?/); assert.match(root.textContent, /23%/);
+  assert.match(root.textContent, /wb.authFailed/); assert.match(root.textContent, /4 \/ 5/);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 3);
+  instanceStrip(root, { mode: 'multi', instance: { pool: { used: null } } }, { document, t });
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 0); assert.match(root.textContent, /wb.pool · wb.unknown/);
+});
+test('attention shows both problems and recovery reminders with text-safe technical reasons', () => {
+  const document = createDocument(), root = document.createElement('div');
+  renderAttention(root, { attention: { problems: [{ kind: 'auth_failed', runtime: 'claude', groups: ['a', 'b'], extraUnknown: 1 },
+    { kind: 'data_unreadable', source: '<img onerror=x>' }], reminders: [{ kind: 'rate_limited', runtime: 'codex', until: 1000 }] } },
+  { document, t, level: 'technical', error: true, lastSuccess: 1000, now: 4000 });
+  assert.equal(root.children.length, 4); assert.match(root.textContent, /wb.attention.rate_limited/); assert.match(root.textContent, /<img onerror=x>/);
+  assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
+});
+test('write error formatting accepts business and HTTP error shapes', () => {
+  assert.equal(apiError({ error: { code: 'NAME_INVALID', message: 'Bad name' } }), 'Bad name');
+  assert.equal(apiError({ error: 'invalid_json' }), 'invalid_json'); assert.equal(apiError({ error: 'payload_too_large' }), 'payload_too_large');
+});
+test('unnamed snapshot rows use localized platform and key fallback rather than the single label', () => {
+  const document = createDocument();
+  const origin = renderRow({ sessionGroup: 'origin', name: null, state: { kind: 'idle' } }, { document, t });
+  assert.equal(origin.children[0].textContent, 'wb.term.origin');
+  const group = renderRow({ sessionGroup: 'telegram:1001', c4: { componentName: 'telegram' }, name: null, state: { kind: 'idle' } }, { document, t });
+  assert.equal(group.children[0].textContent, 'wb.platform.telegram · 1001');
+  const plugin = renderRow({ sessionGroup: 'custom:a:b', c4: null, name: null, state: { kind: 'idle' } }, { document, t });
+  assert.equal(plugin.children[0].textContent, 'custom · a:b');
+});
+test('first read failure never invents a last-success timestamp', () => {
+  const document = createDocument(), root = document.createElement('div');
+  renderAttention(root, null, { document, t, error: true, lastSuccess: null });
+  assert.equal(root.textContent, 'wb.readFailed');
+});

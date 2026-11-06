@@ -1626,3 +1626,41 @@ test('fleet Observer relay admits a rewritten-Host cookie handshake only with it
     await remote.close();
   }
 });
+
+// Workbench proxy integration: injected transport or private loopback only, no
+// child processes, filesystem mutations, PM2 or tmux. Run for proxy page/write
+// routing; skip rendering-only changes. Each owned server is closed in finally.
+test('fleet workbench pages preserve the remote asset and API base', { timeout: 10000 }, async () => {
+  const proxy = new FleetProxy({
+    config: { fleet: { agents: [{ name: 'Remote', base_url: 'https://remote.invalid' }] } },
+    rootDir: publicDir(),
+    poller: { getSessionToken: async () => 'remote-fixture', getAgentAccess: () => 'admin' },
+  });
+  const hub = await listen((req, res) => proxy.handle(req, res, new URL(req.url, 'http://hub.test')));
+  try {
+    for (const route of ['/schedule', '/usage', '/settings', '/trends']) {
+      const response = await fetch(`${hub.origin}/fleet/Remote${route}`, { signal: AbortSignal.timeout(3000) });
+      assert.equal(response.status, 200);
+      const html = await response.text();
+      assert.match(html, /\/fleet\/Remote\/_assets/);
+      assert.match(html, /data-remote-access="admin"/);
+      assert.equal(html.includes('__BASE_PATH__'), false);
+    }
+  } finally { await hub.close(); }
+});
+
+test('fleet workbench write allowlist admits every registered method and path', { timeout: 5000 }, async () => {
+  const { workbenchWriteRoutes } = await import('./fixtures/workbench-write-routes.js');
+  for (const route of workbenchWriteRoutes) {
+    let calls = 0;
+    const proxy = new FleetProxy({ config: {},
+      poller: { getSessionToken: async () => 'remote-fixture' },
+      fetch: async () => { calls++; return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }); },
+    });
+    const req = Readable.from(route.body === null ? [] : [Buffer.from(route.body)]);
+    req.method = route.method; req.headers = {};
+    const res = { status: null, writeHead(status) { this.status = status; }, end() {} };
+    await proxy.proxyApi(req, res, { name: 'Remote', base_url: 'https://remote.invalid' }, route.path, '');
+    assert.equal(res.status, 200); assert.equal(calls, 1);
+  }
+});

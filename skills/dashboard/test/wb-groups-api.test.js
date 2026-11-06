@@ -13,7 +13,7 @@ import { AuthGate } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
 
 function fixture(t, { count = 1, statusError = false, modeError = false, overrideError = false,
-  c4Error = false, queueError = false, groupListError = false, noSample = false } = {}) {
+  c4Error = false, queueError = false, groupListError = false, noSample = false, readPm2 = () => null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-snapshot-'));
   const cleanup = [];
   t.after(async () => { for (const close of cleanup.reverse()) await close(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -49,7 +49,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
       events.push(filter); return [];
     } };
   const c4Reader = { getInboundTimes: () => [] };
-  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock,
+  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2,
     c4Reader, readConfigRuntime: () => { if (configFailure) throw new Error('config'); return configRuntime; }, loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => { if (modeError) throw new Error('config'); return { mode }; } };
       if (name === 'session-state-reader.js') return reader;
@@ -118,6 +118,53 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
   const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
   assert.deepEqual(Object.keys(summary).sort(), ['counts', 'hasOlder', 'mode', 'pool', 'readAt', 'view']);
   assert.deepEqual(summary.pool, { used: 3, capacity: null });
+});
+
+// Integration: shared PM2 snapshot projection and attention boundary. Run for
+// service counts or attention sampling changes; skip UI-only edits. The fixture
+// owns its temporary root; PM2, Core and CLI inputs are injected, no children,
+// network, live databases or tmux. Fixture teardown removes the owned root.
+test('service totals and channel attention share exactly one PM2 sample per snapshot', async t => {
+  let reads = 0;
+  const sample = { processes: [
+    { name: 'zylos-telegram', pm2_env: { status: 'stopped' } },
+    { name: 'zylos-dashboard', pm2_env: { status: 'online' } },
+    { name: 'zylos-other', pm2_env: { status: 'launching' } },
+  ] };
+  const f = fixture(t, { readPm2: () => { reads++; return sample; } });
+  f.service.channelDownCounter.update(sample);
+  f.service.channelDownCounter.update(sample);
+  const snapshot = await f.service.getSnapshot();
+  assert.equal(reads, 1);
+  assert.deepEqual(snapshot.instance.services, { online: 1, total: 3 });
+  assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down' && item.service === 'zylos-telegram').pm2Status, 'stopped');
+  const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
+  assert.equal(reads, 1, 'summary uses the existing snapshot cache');
+  assert.equal(Object.hasOwn(summary, 'services'), false);
+  assert.equal(Object.hasOwn(summary, 'instance'), false);
+  sample.processes[0].pm2_env.status = 'online';
+  f.advance(2100);
+  const next = await f.service.getSnapshot();
+  assert.equal(reads, 2);
+  assert.deepEqual(next.instance.services, { online: 2, total: 3 });
+  assert.equal(next.attention.problems.find(item => item.kind === 'channel_down' && item.service === 'zylos-telegram').pm2Status, 'online');
+});
+
+// Integration: unknown PM2 samples cannot fabricate counts or break attention.
+// Same private fixture boundary as the service-total case; no PM2 process runs.
+test('unreadable and malformed PM2 samples keep service counts unknown', async t => {
+  for (const sample of [null, {}, { processes: null }, { processes: {} }, { processes: [null] }, 'unreadable']) {
+    let calls = 0;
+    const f = fixture(t, { readPm2: () => { calls++; if (sample === 'unreadable') throw new Error('read failed'); return sample; } });
+    const down = { processes: [{ name: 'zylos-telegram', pm2_env: { status: 'stopped' } }] };
+    f.service.channelDownCounter.update(down); f.service.channelDownCounter.update(down);
+    const snapshot = await f.service.getSnapshot();
+    assert.equal(calls, 1);
+    assert.equal(snapshot.instance.services, null);
+    assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down').pm2Status, null);
+  }
+  const empty = fixture(t, { readPm2: () => ({ processes: [] }) });
+  assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0 });
 });
 
 // Integration: Cross-module absent-sample boundary; run for pool projection changes.

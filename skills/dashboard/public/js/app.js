@@ -1,7 +1,9 @@
+import { mountWorkbench } from './wb/shell.js?v=81';
+import { observeTheme } from './wb/view-mode.js?v=81';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { pct, resolveCpuDisplay } from './gauge-utils.js';
-import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=2';
+import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=81';
 import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import { priceWithEditedBaseRates } from './pricing-form.js';
@@ -34,7 +36,7 @@ const PARENT_DASHBOARD_PATH = REMOTE_AGENT ? `${BASE_PATH.slice(0, REMOTE_AGENT_
 const REMOTE_ACCESS = document.documentElement.dataset.remoteAccess === 'admin' ? 'admin' : 'read';
 
 const METRICS = ['context_pct', 'rate_limit', 'rate_limit_7d', 'session_cost', 'ttft', 'turn_duration'];
-const THEMES = ['light'];
+const THEMES = ['light', 'dark', 'system'];
 const THEME_KEY = 'zylos-dashboard-theme';
 const PROMPT_TRANSIENT_SECONDS = 5;
 function effortLabel(level) { return t(`effort.${level}`) || level?.charAt(0).toUpperCase() + level?.slice(1) || ''; }
@@ -147,11 +149,14 @@ function viewedAgentName() {
 }
 
 // ─── Theme ───
+let stopTheme;
 function initTheme(theme) {
-  const stored = localStorage.getItem(THEME_KEY);
-  const resolved = THEMES.includes(theme) ? theme : (THEMES.includes(stored) ? stored : 'light');
-  document.documentElement.dataset.theme = resolved;
-  localStorage.setItem(THEME_KEY, resolved);
+ let stored;try{stored=localStorage.getItem(THEME_KEY);}catch{}
+ const selected=THEMES.includes(theme)?theme:THEMES.includes(stored)?stored:'light';
+ stopTheme?.();stopTheme=observeTheme(selected,value=>{document.documentElement.dataset.theme=value;});
+ try{localStorage.setItem(THEME_KEY,selected);}catch{}
+ const button=document.querySelector('#wb-theme-toggle');
+ if(button)button.onclick=()=>initTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
 }
 
 // ─── Formatting ───
@@ -2524,6 +2529,8 @@ function scheduleSseReconnect() {
 // ─── Tabs ───
 function initTabs() {
   const activateTab = (name, push = false) => {
+    if(name==='usage')name='trends';
+    if(name==='settings'){openSettingsModal();name='overview';}
     if (push) state.navigationGeneration += 1;
     if (name === 'memory' && remoteIsReadOnly()) name = 'overview';
     if (name === 'observer' && ($('#observer-tab')?.hidden || remoteIsReadOnly())) name = 'overview';
@@ -2543,7 +2550,7 @@ function initTabs() {
     }
     if (push) {
       const prefix = remotePrefix();
-      const path = name === 'overview' ? `${prefix}/` : `${prefix}/${name}`;
+      const path = name === 'overview' ? `${prefix}/` : `${prefix}/${name==='trends'?'usage':name}`;
       window.history.pushState({ tab: name }, '', api(path));
     }
   };
@@ -2559,7 +2566,7 @@ function initTabs() {
     // standalone remote document (REMOTE_AGENT) keeps plain tab routing.
     try {
       if (!REMOTE_AGENT) {
-        const m = path.match(/\/fleet\/([^/]+)\/?(?:trends|memory|observer)?$/);
+        const m = path.match(/\/fleet\/([^/]+)\/?(?:trends|usage|schedule|settings|memory|observer)?$/);
         if (m) {
           await enterRemoteAgent(decodeURIComponent(m[1]), { push: false });
         } else if (state.remoteAgent) {
@@ -2571,7 +2578,7 @@ function initTabs() {
       return;
     }
     if (generation !== state.navigationGeneration) return;
-    const tab = path.endsWith('/trends') ? 'trends' : path.endsWith('/memory') ? 'memory' : path.endsWith('/observer') ? 'observer' : 'overview';
+    const tab = path.endsWith('/settings') ? 'settings' : (path.endsWith('/trends') || path.endsWith('/usage')) ? 'trends' : path.endsWith('/memory') ? 'memory' : path.endsWith('/observer') ? 'observer' : 'overview';
     if (tab !== 'overview') showAgentDetail({ navigation: false });
     activateTab(tab, false);
   });
@@ -2582,7 +2589,7 @@ function initTabs() {
     // since reset) until the 10-30s fallbacks fire. Refetch now instead (#247).
     if (document.visibilityState === 'visible') refreshAll().catch(() => {});
   });
-  const initialTab = window.location.pathname.endsWith('/trends') ? 'trends' : window.location.pathname.endsWith('/memory') ? 'memory' : window.location.pathname.endsWith('/observer') ? 'observer' : 'overview';
+  const initialTab = window.location.pathname.endsWith('/settings') ? 'settings' : (window.location.pathname.endsWith('/trends') || window.location.pathname.endsWith('/usage')) ? 'trends' : window.location.pathname.endsWith('/memory') ? 'memory' : window.location.pathname.endsWith('/observer') ? 'observer' : 'overview';
   activateTab(initialTab, false);
 }
 
@@ -4604,6 +4611,8 @@ window.addEventListener('pagehide', () => { closeObserver({ release: true }).cat
 
 // ─── Init ───
 initTheme();
+document.querySelector('#wb-settings-btn')?.addEventListener('click',()=>openSettingsModal());
+window.addEventListener('pagehide',()=>stopTheme?.());
 await initI18n();
 await refreshObserverStatus({ quiet: true });
 initTabs();
@@ -4631,3 +4640,6 @@ try {
 }
 await refreshAll();
 startTimers();
+
+const stopWorkbench=mountWorkbench({t,endpoint:path=>api(agentPath(path)),identity:()=>`${state.remoteAgent??REMOTE_AGENT??'local'}:${state.navigationGeneration}`,openSettings:section=>{openSettingsModal();if(section==='observer')document.querySelector('#observer-settings-group')?.scrollIntoView({block:'center'});},observerStatus:()=>state.observer.status});
+window.addEventListener('pagehide',stopWorkbench);

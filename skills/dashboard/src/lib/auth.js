@@ -299,6 +299,7 @@ function needsAdminApiAccess(pathname, method) {
   if (!proxiedWrite) return false;
   const remotePath = `/api/${proxiedWrite[1]}`;
   if (remotePath === '/api/memory' || remotePath.startsWith('/api/memory/')) return true;
+  if (remotePath === '/api/workbench/memory' || remotePath.startsWith('/api/workbench/memory/')) return true;
   return ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(remotePath) ||
     method === 'POST' && remotePath.startsWith('/api/actions/') ||
     method === 'PUT' && remotePath === '/api/settings';

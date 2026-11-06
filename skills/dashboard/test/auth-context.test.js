@@ -7,7 +7,7 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-test('canonical auth context uses server session hash and stable API key id', () => {
+test('canonical auth context uses server session hash and stable API key id', t => {
   const cookieToken = 'browser-secret';
   const apiToken = `zylos_st_${'a'.repeat(64)}`;
   const now = Date.now();
@@ -28,6 +28,7 @@ test('canonical auth context uses server session hash and stable API key id', ()
     cleanupExpiredApiSessions() {},
   };
   const gate = new AuthGate({ auth: { enabled: true, password: 'scrypt:configured' } }, store);
+  t.after(() => clearInterval(gate._cleanupTimer));
 
   const cookieReq = { headers: { cookie: `__Secure-zylos_dashboard_session=${cookieToken}` } };
   assert.deepEqual(gate.resolveAuthContext(cookieReq), {
@@ -49,4 +50,33 @@ test('canonical auth context uses server session hash and stable API key id', ()
 test('auth-disabled mode has no canonical Observer principal', () => {
   const gate = new AuthGate({ auth: { enabled: false, password: null } }, null);
   assert.equal(gate.resolveAuthContext({ headers: {} }), null);
+});
+
+// Permission integration: real AuthGate with in-memory API sessions only. Run
+// for workbench proxy/admin classification; skip UI-only changes. No network,
+// DB or children; each gate's cleanup timer is removed in test teardown.
+test('workbench proxied memory and registered writes require local admin', async t => {
+  const { workbenchWriteRoutes } = await import('./fixtures/workbench-write-routes.js');
+  const now = Date.now(), token = `zylos_st_${'b'.repeat(64)}`;
+  let scope = 'read';
+  const gate = new AuthGate({ auth: { enabled: true, password: 'scrypt:fixture' } }, {
+    getApiSession: hash => hash === sha256(token) ? { api_key_id: 7, scope, expires_at: now + 60_000, key_revoked_at: null } : null,
+    cleanupSessions() {}, cleanupExpiredApiSessions() {},
+  });
+  t.after(() => clearInterval(gate._cleanupTimer));
+  const routes = [
+    { method: 'GET', path: '/api/workbench/memory/backlog' },
+    ...workbenchWriteRoutes,
+  ];
+  for (const route of routes) {
+    const url = new URL(`/fleet/Remote${route.path}`, 'http://hub.test');
+    const response = { status: null, body: null, setHeader() {}, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
+    const request = () => ({ method: route.method, url: url.pathname, headers: { authorization: `Bearer ${token}` } });
+    scope = 'read';
+    assert.equal(await gate.handle(request(), response, url), true);
+    assert.equal(response.status, 403);
+    assert.deepEqual(response.body, { error: 'insufficient_scope', required: 'admin' });
+    scope = 'admin';
+    assert.equal(await gate.handle(request(), response, url), false);
+  }
 });

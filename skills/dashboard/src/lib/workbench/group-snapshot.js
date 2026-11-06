@@ -122,11 +122,18 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       }) : [];
       row.duration = durationOf(row, { now: at, events });
     }
+    let pm2Data = null;
+    try {
+      const sample = readPm2();
+      if (Array.isArray(sample?.processes) && sample.processes.every(process => process !== null && typeof process === 'object')) pm2Data = sample;
+    } catch { /* an unreadable service sample stays unknown */ }
+    const services = pm2Data ? { online: pm2Data.processes.filter(process => process.pm2_env?.status === 'online').length,
+      total: pm2Data.processes.length } : null;
     const value = { readAt: at, mode, view: status?.view ?? null, rows, counts: countRows(rows), hasOlder,
       listKnown: status !== null && status.groupListError === null, baselineRuntime,
-      instance: { runtimeHealth: status?.runtimeHealth ?? null, accounts: accountsCache.accounts, pool },
+      instance: { runtimeHealth: status?.runtimeHealth ?? null, accounts: accountsCache.accounts, pool, services },
       overrides: ov.ok ? ov.data : null, sources };
-    value.attention = buildAttention(value, { channelDownCounter, pm2Data: readPm2() });
+    value.attention = buildAttention(value, { channelDownCounter, pm2Data });
     for (const row of rows) row.attention = value.attention.problems.filter(problem =>
       problem.group === row.sessionGroup || problem.groups?.includes(row.sessionGroup));
     value.rows = sortRows(rows);

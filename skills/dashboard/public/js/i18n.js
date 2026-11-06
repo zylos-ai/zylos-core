@@ -1,3 +1,4 @@
+import { initWbPack } from './wb/i18n-wb.js?v=81';
 const SUPPORTED = ['en', 'zh'];
 const STORAGE_KEY = 'zylos-dashboard-locale';
 const PACK_CACHE_PREFIX = 'zylos-dashboard-i18n-';
@@ -22,7 +23,7 @@ export function getLocale() { return currentLocale; }
 
 export function resolveLocale(explicit) {
   if (SUPPORTED.includes(explicit)) return explicit;
-  const stored = localStorage.getItem(STORAGE_KEY);
+  let stored; try { stored = localStorage.getItem(STORAGE_KEY); } catch {}
   if (SUPPORTED.includes(stored)) return stored;
   return navigator.language?.startsWith('zh') ? 'zh' : 'en';
 }
@@ -83,6 +84,8 @@ function scheduleHeal(locale, seq) {
       if (seq !== requestSeq) return;
       translations = pack;
       writeCachedPack(locale, pack);
+      await initWbPack(locale, {assetRoot, translations, onMerge:()=>{if(seq===requestSeq)renderI18n();}});
+      if(seq!==requestSeq)return;
       renderI18n();
     } catch {
       if (attempts < HEAL_MAX_ATTEMPTS) healTimer = setTimeout(tick, HEAL_INTERVAL_MS);
@@ -94,8 +97,9 @@ function scheduleHeal(locale, seq) {
 export async function initI18n(locale) {
   const targetLocale = resolveLocale(locale);
   const seq = ++requestSeq;
+  initWbPack.cancel();
   currentLocale = targetLocale;
-  localStorage.setItem(STORAGE_KEY, targetLocale);
+  try { localStorage.setItem(STORAGE_KEY, targetLocale); } catch {}
   document.documentElement.lang = targetLocale;
   clearTimeout(healTimer);
   try {
@@ -110,6 +114,7 @@ export async function initI18n(locale) {
     translations = readCachedPack(targetLocale) || {};
     scheduleHeal(targetLocale, seq);
   }
+  if (seq === requestSeq) await initWbPack(targetLocale, {assetRoot, translations, onMerge:()=>{if(seq===requestSeq)renderI18n();}});
 }
 
 export function t(key, params = {}) {
@@ -124,6 +129,7 @@ export function renderI18n() {
   document.querySelectorAll('[data-i18n]').forEach((el) => {
     el.textContent = t(el.dataset.i18n);
   });
+  document.dispatchEvent?.(new Event('dashboard-locale-change'));
   document.querySelectorAll('[data-i18n-title]').forEach((el) => {
     el.title = t(el.dataset.i18nTitle);
   });
