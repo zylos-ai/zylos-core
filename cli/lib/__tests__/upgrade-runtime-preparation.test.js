@@ -145,7 +145,7 @@ function fixture(t) {
   write('.zylos/instructions/meta.json', '{"schemaVersion":1,"activatedAt":"old"}\n');
   write('.claude/settings.json', '{"permissions":{"allow":["Read"]},"hooks":{}}\n');
   const ctx = { zylosDir, tempDir: packageRoot };
-  const prepare = options => prepareUpgradeRuntime(ctx, { homeDir: root, stopFailureSupported: false, ...options });
+  const prepare = options => prepareUpgradeRuntime(ctx, { homeDir: root, stopFailureSupported: false, subagentHooksSupported: false, ...options });
   return { root, zylosDir, write, ctx, prepare };
 }
 function snapshot(dir) {
@@ -226,13 +226,15 @@ test('Claude settings preserve user settings, remove only exact Dashboard comman
     SessionStart: [{ matcher: 'custom', hooks: [{ command }, { command: `${command} --user` }] }],
   }, permissions: { allow: ['Read'] } }));
   for (const supported of [true, false]) {
-    const result = f.prepare({ stopFailureSupported: supported });
+    const result = f.prepare({ stopFailureSupported: supported, subagentHooksSupported: supported });
     const settings = JSON.parse(result.replacements.find(r => r.kind === 'claude_settings').content);
     assert.equal(settings.model, 'custom-model');
     assert.deepEqual(settings.permissions, { allow: ['Read'] });
     assert.ok(JSON.stringify(settings).includes('--user'));
     assert.equal(settings.hooks.SessionStart.find(g => g.matcher === 'custom').hooks.length, 1);
     assert.equal(Boolean(settings.hooks.StopFailure?.length), supported);
+    for (const event of ['SubagentStart', 'SubagentStop']) assert.equal(Boolean(settings.hooks[event]?.length), supported);
+    for (const matcher of ['startup', 'clear', 'compact']) assert.ok(settings.hooks.SessionStart.find(group => group.matcher === matcher).hooks.some(hook => /hook-activity\.js$/.test(hook.command)));
   }
 });
 
