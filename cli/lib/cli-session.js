@@ -9,6 +9,15 @@ export async function resolveCliSession({ env = process.env, mode = readSessionM
   const sessionGroup = sessionMode === 'multi' ? env.ZYLOS_SESSION_GROUP ?? 'origin' : null;
   if (sessionGroup !== null) assertSessionGroup(sessionGroup);
   const live = await identity(sessionGroup);
-  const runtime = live.present ? live.runtime : await resolveRuntime(sessionGroup);
+  let runtime;
+  if (live.present) runtime = live.runtime;
+  else {
+    try { runtime = await resolveRuntime(sessionGroup); }
+    catch (error) {
+      if (sessionMode !== 'multi') throw error;
+      // Display callers retain the absent identity when target configuration is unreadable.
+      runtime = 'unknown';
+    }
+  }
   return { sessionGroup, live, adapter: runtime === 'unknown' ? null : adapter(runtime), runtime };
 }

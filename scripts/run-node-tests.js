@@ -80,7 +80,22 @@ try {
   const env = { ...process.env, TMPDIR: tmpdir };
   // Runtime identity belongs to each fixture, never the agent running tests.
   for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP']) delete env[key];
-  const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...testFiles], {
+  const nodeArgs = ['--experimental-test-module-mocks', '--test', ...testFiles];
+  // Probe in subshells: unsupported special builtins must not terminate the runner.
+  // Apply limits in the exec shell so Node and every test child inherit them.
+  const limitScript = `
+    limits_supported=true
+    if (ulimit -c 0) 2>/dev/null; then ulimit -c 0; else limits_supported=false; fi
+    if (ulimit -d 4194304) 2>/dev/null; then ulimit -d 4194304; else limits_supported=false; fi
+    if [ "$limits_supported" = false ]; then
+      printf '%s\\n' 'Warning: test process memory/core limits are not fully supported; continuing.' >&2
+    fi
+    exec "$0" "$@"
+  `;
+  const supportsShell = process.platform !== 'win32';
+  if (!supportsShell) console.error('Warning: test process memory/core limits are not supported; continuing.');
+  const result = spawnSync(supportsShell ? '/bin/sh' : process.execPath,
+    supportsShell ? ['-c', limitScript, process.execPath, ...nodeArgs] : nodeArgs, {
     stdio: 'inherit', cwd: ROOT, env,
   });
   process.exitCode = result.status ?? 1;

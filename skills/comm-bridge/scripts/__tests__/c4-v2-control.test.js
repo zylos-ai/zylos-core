@@ -150,7 +150,7 @@ test('stale target rejects pending, unbound, terminal and absent controls withou
 });
 test('fence validation matrix, first-write preservation and manual restart identity guards', t => {
   const { store: s } = fixture(t, single);
-  for (const reason of ['ttl', 'evict']) assert.throws(() => s.setDrainFence('origin', { reason, runId: 'r' }), { code: 'FENCE_INVALID' });
+  assert.throws(() => s.setDrainFence('origin', { reason: 'evict', runId: 'r' }), { code: 'FENCE_INVALID' });
   for (const [group, opts] of [['a', {}], ['*', { reason: 'auth', runId: 'r' }]]) assert.throws(() => s.setDrainFence(group, opts), { code: 'FENCE_INVALID' });
   s.setDrainFence('a', { reason: 'ttl', runId: 'first' }); const first = s.getDrainFence('a'); s.setDrainFence('a', { reason: 'upgrade', runId: 'second' }); assert.deepEqual(s.getDrainFence('a'), first);
   s.clearDrainFence('a'); s.clearDrainFence('a');

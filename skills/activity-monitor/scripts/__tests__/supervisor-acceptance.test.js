@@ -15,12 +15,14 @@ function fixture(t, create = createSupervisor) {
   const current = [], pending = [], controls = [], stops = [];
   const runtimeFor = group => group.startsWith('codex:') ? 'codex' : 'claude';
   const db = {
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
     listPendingSessionGroups: () => pending,
+    listPendingContinuations: () => [],
     resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
     insertControl: (content, options) => {
       controls.push({ id: controls.length + 1, content, ...options, status: 'pending' });
-      return controls.length;
+      return controls.at(-1);
     },
     getControlById: id => controls[id - 1],
   };

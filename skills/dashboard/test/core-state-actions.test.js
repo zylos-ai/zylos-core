@@ -90,6 +90,8 @@ test('Core state enforces readiness, freshness and runtime-specific account usag
   t.mock.module(new URL('../../../cli/lib/session-state-reader.js', import.meta.url).href, { exports: {
     readSessionState: async (group, options) => { calls.push({ type: 'state', group, options }); return structuredClone(observation); },
     readLiveIdentity: async () => structuredClone(observation.identity),
+    resolveTargetRuntime: async () => 'codex',
+    readRuntimeHealth: () => ({ health: 'ok' }),
     readAccountUsage: async runtime => {
       calls.push({ type: 'account', runtime });
       return runtime === 'codex' ? { five_hour: { used_percentage: 23 } } : { five_hour: { used_percentage: 91 } };

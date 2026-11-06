@@ -22,7 +22,8 @@ async function scenario(t, Observation) {
     sendAlert: () => { actions.push('alert'); }, signalProcess: () => { actions.push('signal'); } });
   const scenes = new Observation(base, { guard, open: async () => ({ close() {} }), readGeneration: () => '123:5' });
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
-    listPendingSessionGroups: () => pending, getControlById: () => null,
+    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
+    listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups: () => pending, getControlById: () => null,
     insertControl: () => { actions.push('control'); }, setDrainFence: () => { actions.push('fence'); },
     resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };
   const supervisor = createSupervisor({ db, scenes, zylosDir: root, env: { ZYLOS_DIR: root }, now: () => now,

@@ -427,6 +427,7 @@ export const resolveSessionGroup = (...args) => store.resolveSessionGroup(...arg
 export const insertConversation = (...args) => store.insertConversation(...args);
 export const insertInternalMessage = (...args) => store.insertInternalMessage(...args);
 export const buildTargetBinding = async (...args) => await store.buildTargetBinding(...args);
+export const getOriginNeed = (...args) => store.getOriginNeed(...args);
 export const getNextPending = (...args) => store.getNextPending(...args);
 export const claimConversation = (...args) => store.claimConversation(...args);
 export const requeueConversation = (...args) => store.requeueConversation(...args);
@@ -468,6 +469,16 @@ export const getContentCheckpointsSince = (...args) => store.getContentCheckpoin
 export const getOriginSyncConversations = (...args) => store.getOriginSyncConversations(...args);
 export const advanceOriginSyncCursor = (...args) => store.advanceOriginSyncCursor(...args);
 export const getOriginSyncBacklog = (...args) => store.getOriginSyncBacklog(...args);
+export const takeSlot = (...args) => store.takeSlot(...args);
+export const releaseSlot = (...args) => store.releaseSlot(...args);
+export const adoptSlot = (...args) => store.adoptSlot(...args);
+export const listSlotOccupancy = (...args) => store.listSlotOccupancy(...args);
+export const pruneSlots = (...args) => store.pruneSlots(...args);
+export const recordRunEnd = (...args) => store.recordRunEnd(...args);
+export const listRunEndings = (...args) => store.listRunEndings(...args);
+export const listPendingContinuations = (...args) => store.listPendingContinuations(...args);
+export const clearContinuation = (...args) => store.clearContinuation(...args);
+export const clearAllContinuations = (...args) => store.clearAllContinuations(...args);
 export const insertControl = (...args) => store.insertControl(...args);
 export const getNextPendingControl = (...args) => store.getNextPendingControl(...args);
 export const claimControl = (...args) => store.claimControl(...args);

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { ModeSwitchCoordinator } from '../mode-switch.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { DispatcherRestartConfirmation } from '../dispatcher-restart-confirmation.js';
+import { HANDOFF_FOLLOWUP_PROMPT } from '../origin-prompts.js';
+import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 
 const error = code => Object.assign(new Error(code), { code });
 function fixture(overrides = {}) {
@@ -19,6 +21,8 @@ function fixture(overrides = {}) {
     countGlobalRunningConversations: () => 0,
     absorbForTransition: () => { calls.push('absorb'); row = { ...row, phase: 'converting', cutoff: 10, absorbed_ids: [] }; return { cutoff: 10, absorbedIds: [] }; },
     expirePendingControls: target => calls.push(Object.keys(target)[0]),
+    clearAllContinuations: () => { calls.push('clearContinuations'); return { cleared: 0 }; },
+    insertControl: (content, options) => { assert.equal(content,HANDOFF_FOLLOWUP_PROMPT); assert.deepEqual(options,{sessionGroup:'origin',priority:2,appendAckSuffix:false}); calls.push('followup'); },
   };
   const deps = { db, readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }), readRequests: () => requests,
     legacyPresent: () => legacy, observe: () => sourceScenes, lifecycle: { advanceReclaim: async () => {} },
@@ -74,7 +78,85 @@ test('stages only move forward and conversion never repeats after cutover', asyn
   await owner.advance(); assert.equal(f.row.phase, 'converting'); assert.equal(f.fences[0].sessionGroup, '*');
   await owner.advance(); assert.equal(f.row.phase, 'cutover');
   await owner.advance(); assert.equal(f.row.phase, 'complete'); assert.deepEqual(f.fences, []);
-  assert.deepEqual(f.calls, ['begin', 'absorb', 'convert', 'machine', 'allSessionGroups', 'cutover', 'writeMode', 'complete']);
+  assert.deepEqual(f.calls, ['begin', 'absorb', 'convert', 'machine', 'allSessionGroups', 'clearContinuations', 'cutover', 'writeMode', 'followup', 'complete']);
+});
+
+// Integration boundary: real mode coordinator and memory SQLite only. Run for
+// cutover marker cleanup changes; skip unrelated process/runtime conversion.
+// The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; scene,
+// conversion, restart and clock are injected, with no tmux/network/PM2/notify.
+// Store teardown closes its private database; this case starts no background work.
+test('mode cutover clears every pending restart marker before changing mode and does not restore them', async t => {
+  let mode = 'multi';
+  const clock = 1800000000000;
+  const { store } = databaseFixture(t, { now: () => clock,
+    readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
+  for (const group of ['origin', 'telegram:a']) {
+    store.recordRunEnd(group, { runId: `ended-${group}`, reason: 'unexpected' });
+  }
+  const originalPhase = store.setModeTransitionPhase;
+  let cutovers = 0;
+  store.setModeTransitionPhase = (runId, phase, ...options) => {
+    if (phase === 'cutover') {
+      cutovers++;
+      assert.deepEqual(store.listRunEndings(['origin', 'telegram:a']).map(row => row.continuationPending), [0, 0]);
+    }
+    return originalPhase(runId, phase, ...options);
+  };
+  const owner = new ModeSwitchCoordinator({ db: store, now: () => clock,
+    readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }),
+    readRequests: () => [], legacyPresent: () => false, observe: () => [],
+    lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
+    writeMode: target => { mode = target; }, restart: { advance: async () => ({ confirmed: true }) } });
+  for (const target of ['single', 'multi']) {
+    assert.equal((await owner.handle({ ...request, target })).result, 'accepted');
+    for (let i = 0; i < 3; i++) await owner.advance();
+    assert.equal(mode, target);
+    assert.equal(store.getModeTransition(), null);
+  }
+  assert.equal(cutovers, 2);
+  assert.deepEqual(store.listPendingContinuations(), []);
+});
+
+for (const persistedMode of ['single','multi']) test(`cutover from persisted ${persistedMode} retries failed followup before completion without restarting dispatcher`, async () => {
+  const f=fixture(); f.row={run_id:'transition',source_mode:'single',target_mode:'multi',phase:'cutover',reason:null};
+  f.mode=persistedMode; f.fences=[{sessionGroup:'*',reason:null,runId:null}];
+  let restarts=0,writes=0; f.deps.restart={advance:()=>{restarts++;return {confirmed:true};}};
+  const insert=f.db.insertControl; f.db.insertControl=(...args)=>{if(++writes===1)throw error('DB_BUSY');return insert(...args);};
+  const owner=f.create(); await assert.rejects(owner.advance(),{code:'DB_BUSY'});
+  assert.equal(f.row.phase,'cutover');assert.equal(f.fences[0].sessionGroup,'*');assert.equal(owner.attempt.confirmed,true);
+  await owner.advance();assert.equal(f.row.phase,'complete');assert.equal(restarts,1);assert.equal(writes,2);
+  assert.ok(f.calls.indexOf('followup')<f.calls.indexOf('complete'));
+  assert.equal(f.calls.filter(call => call === 'clearContinuations').length, 0);
+  assert.equal(f.calls.filter(call => call === 'followup').length, 1);
+});
+
+test('cutover to single does not enqueue an Origin followup', async () => {
+  const f=fixture();f.row={run_id:'transition',source_mode:'multi',target_mode:'single',phase:'cutover',reason:null};
+  f.mode='multi';f.fences=[{sessionGroup:'*',reason:null,runId:null}];
+  f.db.insertControl=()=>{throw new Error('single cannot wake Origin');};
+  await f.create().advance();assert.equal(f.row.phase,'complete');
+});
+
+// Integration boundary: real coordinator and private SQLite; run for cutover retry
+// or completion changes, skip unrelated runtime/process conversion. Official runner
+// isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; no tmux/network/PM2 or child work.
+// Configuration/restart are injected and fixture teardown closes the private DB.
+for(const persistedMode of ['single','multi']) test(`real cutover resumed on ${persistedMode} converges to one pending followup after a completion crash`,async t=>{
+  let mode=persistedMode,fail=true;
+  const {db,store}=databaseFixture(t,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:mode}})});
+  const {runId}=store.beginModeTransition('single','multi');store.setDrainFence('*');store.absorbForTransition(runId);store.setModeTransitionPhase(runId,'cutover');
+  const deps={db:{...store,setModeTransitionPhase:(id,phase,options)=>{if(phase==='complete'&&fail)throw error('DB_BUSY');return store.setModeTransitionPhase(id,phase,options);}},
+    readMode:()=>({mode}),writeMode:target=>{mode=target;},restart:{advance:()=>({confirmed:true})}};
+  await assert.rejects(new ModeSwitchCoordinator(deps).advance(),{code:'DB_BUSY'});
+  assert.equal(store.getModeTransition().phase,'cutover');assert.ok(store.getDrainFence('*'));
+  assert.equal(store.getOriginNeed().controls.count,1);
+  fail=false;await new ModeSwitchCoordinator(deps).advance();
+  assert.equal(store.getModeTransition(),null);assert.equal(store.getDrainFence('*'),null);
+  const pending=db.prepare("SELECT * FROM control_queue WHERE status='pending'").all();
+  assert.equal(pending.length,1);assert.equal(pending[0].raw_content,HANDOFF_FOLLOWUP_PROMPT);assert.equal(pending[0].target_binding,null);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM control_queue WHERE status='superseded'").get().n,1);
+  assert.ok(pending[0].created_at<=store.getLastCompletedModeTransition().updated_at);
 });
 
 for (const phase of ['gating', 'converting', 'cutover']) test(`recovery preserves ${phase} state and rejects conflicting`, async () => {

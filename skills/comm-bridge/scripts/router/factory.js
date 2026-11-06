@@ -6,7 +6,7 @@ const { readRuntimeHealth } = await loadCoreModule('session-state-reader.js');
 const { readReadyIdentity } = await loadCoreModule('runtime/session-target.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { listGroupTmuxSessions } = await loadCoreModule('session-group-paths.js');
-const { resolveSessionPoolSize } = await loadCoreModule('session-pool-config.js');
+const { readPoolCapacity } = await loadCoreModule('session-pool-config.js');
 import { createRouter } from './scheduler.js';
 import { createDelivery } from './delivery.js';
 import { formatConversation } from './format.js';
@@ -15,6 +15,9 @@ import { createStatusNoticeSender } from '../c4-status-notice.js';
 import { createPendingExpiryHandler } from './expiry.js';
 import { createRouterDiagnostics } from './diagnostics.js';
 import { createLifecycleProviders } from './lifecycle.js';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { messageForStatus } from '../status-notice-templates.js';
 
 // The supervisor owns the transport. Loading it on use allows the scheduler's
 // independent paths to be exercised without implementing a second protocol.
@@ -35,14 +38,38 @@ export function createDispatcher(overrides = {}, options = {}) {
   const diagnostic = overrides.diagnostic ?? diagnostics.diagnostic;
   const reader = createSessionReader({ env, connectionOptions: tmux });
   const lifecycle = createLifecycleProviders({ env, tmux, diagnostic, log });
-  const config = (overrides.readZylosConfigStrict ?? readZylosConfigStrict)();
-  const poolSize = options.poolSize ?? resolveSessionPoolSize({ env, config: config.state === 'ok' ? config.config : {} });
+  const now = overrides.now ?? Date.now;
+  const poolSize = () => readPoolCapacity({ env, now: now() }).k;
+  const readConfig = () => {
+    try { const value = (overrides.readZylosConfigStrict ?? readZylosConfigStrict)(); return value.state === 'ok' ? value.config : {}; }
+    catch { return {}; }
+  };
+  const alertController = new AbortController();
+  const sendAlert = overrides.sendAlert ?? ((target, message) => new Promise((resolve, reject) => {
+    const child = execFile(process.execPath, [fileURLToPath(new URL('../c4-send.js', import.meta.url)), target.channel, target.endpoint],
+      { env, signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
+    child.stdin.on('error', reject); child.stdin.end(message + '\n');
+  }));
+  const alert = (event, fields) => {
+    if (event !== 'continuation_start_failed') { log(`Router alert: ${event} ${JSON.stringify(fields)}`); return; }
+    // Notification I/O must neither join scheduler lanes nor delay Router stop.
+    void (async () => {
+      const [{ SupervisorServerHealth }, { parseServerAlertTarget }] = await Promise.all([
+        import('../../../activity-monitor/scripts/supervisor-server-health.js'),
+        import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
+      ]);
+      const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
+      const message = messageForStatus({ context: 'repeated_failure', noticeCode: 'could_not_restart',
+        group: fields.sessionGroup, count: fields.failures, reason: fields.reason, others: fields.others }, readConfig().statusNotices ?? {});
+      await guard.notify(message);
+    })().catch(log);
+  };
   const providers = {
     db, readSessionMode, ...reader, readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux), readRuntimeHealth,
     getSessionAdapter: runtime => getSessionAdapter(runtime, { tmux }), submit,
     ...lifecycle, diagnostic, log,
-    alert: (event, fields) => log(`Router alert: ${event} ${JSON.stringify(fields)}`),
+    alert,
     maintainDiagnostics: diagnostics.maintain,
     ...overrides,
   };
@@ -61,6 +88,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     deliverConversation: overrides.deliverConversation ?? delivery.deliverConversation,
   }, { ...options, poolSize });
   return { ...router, async stop() {
+    alertController.abort();
     // Prevent new lanes first; outstanding delivery drains before DB closure.
     const stopping = router.stop();
     await delivery.stop();

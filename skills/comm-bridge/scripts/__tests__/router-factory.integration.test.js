@@ -20,6 +20,9 @@ function configuration(mode = 'multi') {
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', session_mode: mode }));
 }
+// Factory composition boundary: run for dispatcher/slot fixture changes; skip unrelated UI.
+// createTestEnvironment owns the shared SQLite root; scene/runtime I/O is injected.
+// The private root has no publication, so env fixes K independently of the host.
 function setup(t, { mode = 'multi', phase } = {}) {
   configuration(mode);
   const prefix = `factory${++sequence}`, a = `${prefix}a`, b = `${prefix}b`;
@@ -31,8 +34,10 @@ function setup(t, { mode = 'multi', phase } = {}) {
     tmuxName: tmuxNameForGroup(group ?? 'origin'), serverGeneration: 'test-generation', paneId: `%${group}`, createdAt: Math.floor(Date.now()/1000) }]));
   const target = group => ({ ...scenes.get(group), sessionGroup: group, sessionId: `$${group}` });
   const wait = async () => { holding = true; await held.promise; };
+  database.getDb().exec('DELETE FROM slot_occupancy'); // Each fixture owns its occupancy; this file shares one database.
   const db = { ...database };
   const overrides = {
+    env: { ...process.env, ZYLOS_SESSION_POOL_SIZE: '2' },
     db, diagnostics: { diagnostic: (...args) => calls.push(['event', ...args]), maintain() {} }, log: message => calls.push(['log', message]),
     listGroupTmuxSessions: async () => keys.map(sessionGroup => ({ sessionGroup, ...scenes.get(sessionGroup) })),
     readLiveIdentity: async group => scenes.get(group) ?? { present: false },
@@ -59,7 +64,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
     findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
     submit: async () => assert.fail('READY scene needs no start_attempt'),
   };
-  const options = { readyTimeoutMs: 1000, poolSize: 2,
+  const options = { readyTimeoutMs: 1000,
     delivery: { periodicEnabled: false, verifyWaitMs: 1, idleHoldMs: 31, idleWaitMs: 100, idlePollMs: 1, retryBaseMs: 37 } };
   let dispatcher;
   t.after(async () => { held.resolve(); await dispatcher?.stop(); });

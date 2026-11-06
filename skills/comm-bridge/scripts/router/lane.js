@@ -80,7 +80,21 @@ export function createLane(context, group) {
     const live = state.live.get(group);
     if (!live) return; // Unobservable is not absent.
     if (live.present) {
-      if (live.ready && live.runId) return ready(live);
+      if (live.ready && live.runId) {
+        if (state.mode === 'multi') {
+          try {
+            const pending = group === 'origin'
+              ? deps.db.listRunEndings(['origin']).some(row => row.continuationPending)
+              : state.continuations.has(group);
+            if (pending && deps.db.clearContinuation(group, { runId: live.runId }).cleared) {
+              diagnostic('continuation_cleared', { session_group: group, runId: live.runId });
+            }
+          } catch (error) {
+            diagnostic('continuation_clear_failed', { session_group: group, runId: live.runId, reason: error.code ?? error.message });
+          }
+        }
+        return ready(live);
+      }
       if (activation) return;
       return context.handleUnowned(group, live);
     }
@@ -88,13 +102,23 @@ export function createLane(context, group) {
     if (group === null || group === 'origin') {
       state.resident.readySince = null;
       state.resident.absentSince ??= now();
+      if (group === 'origin') {
+        const row = await nextMessage();
+        if (!row) {
+          const need = deps.db.getOriginNeed(Math.floor(now() / 1000));
+          if (need.controls.count === 0 && !need.continuation?.pending) return;
+        }
+      }
       const delay = Math.min(5 * 2 ** Math.min(state.resident.failures, 4), 60) * 1000;
       if (now() - state.resident.absentSince >= delay) await context.activation.begin(group, null);
       return;
     }
     const row = await nextMessage();
-    if (!row) return;
-    if (context.availableCapacity() <= 0) {
+    if (!row) {
+      if (state.continuations.has(group)) await context.activation.beginContinuation(group);
+      return;
+    }
+    if (context.availableCapacity() <= 0 && state.slots.get(group)?.state !== 'held') {
       diagnostic('wait_capacity', { session_group: group, conversation_id: row.id });
       return;
     }

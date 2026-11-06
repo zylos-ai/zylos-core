@@ -55,7 +55,7 @@ test('disabled usage module loads without SQLite; Supervisor database remains in
   }`);
 });
 
-test('missing SQLite skips an eligible usage check without throwing', t => {
+test('eligible usage checks never load SQLite or inspect the C4 database', t => {
   runIsolated(t, `
     import assert from 'node:assert/strict';
     import fs from 'node:fs';
@@ -64,44 +64,18 @@ test('missing SQLite skips an eligible usage check without throwing', t => {
     const { UsageMonitor } = await import(${JSON.stringify(usageUrl)});
     fs.mkdirSync(path.join(process.env.ZYLOS_DIR, 'comm-bridge'));
     fs.writeFileSync(path.join(process.env.ZYLOS_DIR, 'comm-bridge/c4.db'), 'placeholder');
-    const logs = [];
     const monitor = new UsageMonitor({ runtimeId: 'codex' }, {
       zylosDir: process.env.ZYLOS_DIR, getLocalHour: () => 12,
-      checkIntervalSec: 1, idleGateSec: 1, log: message => logs.push(message),
+      activeHoursStart: 8, activeHoursEnd: 23,
     });
-    assert.equal(monitor.canRunTask({ claudeState: 'idle', idleSeconds: 100, currentTime: 1000 }), false);
-    assert.equal(sqliteLoads, 1);
-    assert.ok(logs.some(message => message.includes('SQLite dependency unavailable')));
-    console.log('OPTIONAL_SQLITE_OK');
-  `);
-});
-
-test('database read failure skips the usage check and closes the handle', t => {
-  runIsolated(t, `
-    import assert from 'node:assert/strict';
-    import fs from 'node:fs';
-    import path from 'node:path';
-    import Module from 'node:module';
-    const originalLoad = Module._load;
-    let closed = false;
-    Module._load = function(request, ...args) {
-      if (request === 'better-sqlite3') return class {
-        pragma() { throw new Error('database read failed'); }
-        prepare() { throw new Error('database read failed'); }
-        close() { closed = true; }
-      };
-      return originalLoad.call(this, request, ...args);
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = function(file, ...args) {
+      assert.notEqual(String(file), path.join(process.env.ZYLOS_DIR, 'comm-bridge/c4.db'));
+      return originalRead.call(this, file, ...args);
     };
-    const { UsageMonitor } = await import(${JSON.stringify(usageUrl)});
-    fs.mkdirSync(path.join(process.env.ZYLOS_DIR, 'comm-bridge'));
-    fs.writeFileSync(path.join(process.env.ZYLOS_DIR, 'comm-bridge/c4.db'), 'placeholder');
-    const logs = [];
-    const monitor = new UsageMonitor({ runtimeId: 'codex' }, {
-      zylosDir: process.env.ZYLOS_DIR, log: message => logs.push(message),
-    });
-    assert.equal(monitor.getPendingWorkCount(), Infinity);
-    assert.equal(closed, true);
-    assert.ok(logs.some(message => message.includes('database read failed')));
+    assert.equal(monitor.canRunTask(), true);
+    assert.equal(monitor.canRunTask({activeHoursOnly:true}), true);
+    assert.equal(sqliteLoads, 0);
     console.log('OPTIONAL_SQLITE_OK');
   `);
 });

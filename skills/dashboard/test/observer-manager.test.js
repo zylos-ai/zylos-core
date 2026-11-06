@@ -484,7 +484,7 @@ test('Core Origin lease pins the current run and retires on replacement or unkno
     assert.equal(next.runId,'origin-B');
     runId=null; await f.manager.revalidate();
     assert.equal(f.manager.leases.size,0); assert.equal(f.containment.active,null);
-    await assert.rejects(f.manager.createLease(context('admin')),{code:'target_mismatch'});
+    await assert.rejects(f.manager.createLease(context('admin')),{code:'agent_session_unavailable'});
   } finally { await f.manager.shutdown(); }
 });
 
@@ -492,7 +492,7 @@ test('Core Origin lease creation rejects an unavailable current run', async () =
   for (const resolveOrigin of [async () => ({ tmuxName: 'zylos-group-origin' }), async () => { throw new Error('not ready'); }]) {
     const f = fixture({ resolveOrigin });
     try {
-      await assert.rejects(f.manager.createLease(context('admin')), { code: 'target_mismatch' });
+      await assert.rejects(f.manager.createLease(context('admin')), { code: 'agent_session_unavailable' });
       assert.equal(f.counts().starts, 0);
     } finally { await f.manager.shutdown(); }
   }

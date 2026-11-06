@@ -36,3 +36,15 @@ test('same-tier cooldown suppresses duplicate and enqueue failure never records 
   assert.equal(await f.monitor.runAlert({currentTime:3000}),false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'alert.json'))).lastNotifiedTier,'high');
 });
+test('usage eligibility only depends on runtime and optional active hours',t=>{
+  for(const runtime of ['claude','codex']) {
+    const {monitor}=fixture(t,runtime);let hour=7;
+    Object.assign(monitor.options,{getLocalHour:()=>hour,activeHoursStart:8,activeHoursEnd:23});
+    assert.equal(monitor.canRunTask(),true);
+    assert.equal(monitor.canRunTask({activeHoursOnly:true}),false);
+    hour=8;assert.equal(monitor.canRunTask({activeHoursOnly:true}),true);
+    hour=22;assert.equal(monitor.canRunTask({activeHoursOnly:true}),true);
+    hour=23;assert.equal(monitor.canRunTask({activeHoursOnly:true}),false);
+  }
+  assert.equal(fixture(t,'unknown').monitor.canRunTask(),false);
+});

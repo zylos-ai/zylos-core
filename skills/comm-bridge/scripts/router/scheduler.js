@@ -2,6 +2,7 @@ import { loadCoreModule } from './core-modules.js';
 const { tmuxNameForGroup, groupFromTmuxName } = await loadCoreModule('session-group-paths.js');
 import { createLane } from './lane.js';
 import { createActivationManager } from './activation.js';
+import { createContinuationRestarts } from './continuation.js';
 import { initializeRouter } from './startup.js';
 import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
   CONTROL_CLEANUP_INTERVAL_MS, CONTROL_RETENTION_DAYS, READY_TIMEOUT_MS } from '../c4-config.js';
@@ -18,13 +19,14 @@ export function createRouter(dependencies, configuration = {}) {
   const options = { pendingMaxAgeSeconds: PENDING_MAX_AGE_SECONDS, recoverMaxAgeSeconds: RECOVER_MAX_AGE_SECONDS,
     maxRetries: MAX_RETRIES, cleanupIntervalMs: CONTROL_CLEANUP_INTERVAL_MS, retentionDays: CONTROL_RETENTION_DAYS,
     readyTimeoutMs: READY_TIMEOUT_MS, diagnosticsIntervalMs: 60000, mismatchIntervalMs: 60000, pollIntervalMs: 1000, ...configuration };
-  for (const name of ['readyTimeoutMs','poolSize','pendingMaxAgeSeconds','recoverMaxAgeSeconds','diagnosticsIntervalMs']) {
+  if (typeof options.poolSize !== 'function') throw new TypeError('poolSize must be a function');
+  for (const name of ['readyTimeoutMs','pendingMaxAgeSeconds','recoverMaxAgeSeconds','diagnosticsIntervalMs']) {
     if (!Number.isSafeInteger(options[name]) || options[name] <= 0) throw new TypeError(`${name} must be a positive integer`);
   }
   const deps = dependencies;
   const now = deps.now ?? Date.now;
   const state = { mode: null, inert: false, ready: false, stopped: false, round: 0, sceneObservable: false,
-    live: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
+    slots: new Map(), live: new Map(), continuations: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
     resident: { failures: 0, absentSince: null, readySince: null, fenced: false } };
   const tasks = new Set();
   const observations = new Map();
@@ -38,24 +40,36 @@ export function createRouter(dependencies, configuration = {}) {
   };
   function track(promise) { tasks.add(promise); promise.finally(() => tasks.delete(promise)).catch(() => {}); return promise; }
   const context = { deps, options, state, diagnostic, now, tmuxName: group => tmuxNameForGroup(group ?? 'origin') };
+  context.continuationRestarts = createContinuationRestarts({ now, deps, diagnostic });
+  context.refreshSlots = () => { state.slots = new Map(deps.db.listSlotOccupancy().map(row => [row.sessionGroup, row])); };
   context.availableCapacity = () => {
     if (!state.sceneObservable || [...state.listed].some(group => !state.live.has(group))) return 0;
-    const occupied = new Set([...state.listed].filter(group => group !== 'origin' && group !== null));
-    for (const [group, live] of state.live) if (group !== 'origin' && group !== null && live?.present) occupied.add(group);
-    for (const group of state.activations.keys()) if (group !== 'origin' && group !== null) occupied.add(group);
-    return Math.max(0, options.poolSize - occupied.size);
+    return options.poolSize() - state.slots.size;
   };
   // Capacity opportunities are ordered before asynchronous preflight. They are
   // not pool occupancy: no message is claimed and no launch is reserved yet.
   // A rejected preflight releases its opportunity to the next head this round.
   context.acquireOpportunity = (group, candidate) => {
     if (attemptedRound.get(group) === state.round) return false;
-    const slots = context.availableCapacity() - opportunities.size;
+    const owned = state.slots.get(group);
+    if (owned) {
+      if (!state.sceneObservable || owned.state !== 'held') return false;
+      opportunities.add(group); attemptedRound.set(group, state.round); return true;
+    }
+    const slots = context.availableCapacity() - [...opportunities].filter(key => !state.slots.has(key)).length;
     if (slots <= 0) return false;
-    const eligible = deps.db.listPendingSessionGroups().filter(row => row.sessionGroup !== 'origin' &&
+    const inbound = deps.db.listPendingSessionGroups();
+    const inboundGroups = new Set(inbound.map(row => row.sessionGroup));
+    const candidates = [
+      ...inbound.map(row => ({ ...row, candidateId: row.headId, continuation: false })),
+      ...deps.db.listPendingContinuations().filter(row => !inboundGroups.has(row.sessionGroup))
+        .sort((a, b) => a.endedAt - b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0))
+        .map(row => ({ ...row, candidateId: row.sessionGroup, continuation: true })),
+    ];
+    const eligible = candidates.filter(row => row.sessionGroup !== 'origin' && !state.slots.has(row.sessionGroup) &&
       !state.live.get(row.sessionGroup)?.present && !state.activations.has(row.sessionGroup) && !opportunities.has(row.sessionGroup) &&
       attemptedRound.get(row.sessionGroup) !== state.round);
-    const selected = eligible.slice(0, slots).some(row => row.sessionGroup === group && row.headId === candidate.id);
+    const selected = eligible.slice(0, slots).some(row => row.sessionGroup === group && row.candidateId === candidate.id && row.continuation === Boolean(candidate.continuation));
     if (!selected) return false;
     opportunities.add(group); attemptedRound.set(group, state.round); return true;
   };
@@ -65,7 +79,7 @@ export function createRouter(dependencies, configuration = {}) {
     queueMicrotask(() => {
       if (state.stopped || !state.ready || state.mode !== 'multi') return;
       try {
-        for (const row of deps.db.listPendingSessionGroups()) {
+        for (const row of [...deps.db.listPendingSessionGroups(), ...deps.db.listPendingContinuations()]) {
           if (attemptedRound.get(row.sessionGroup) === state.round) continue;
           const current = state.lanes.get(row.sessionGroup);
           if (current && !current.working) track(current.kick());
@@ -73,10 +87,12 @@ export function createRouter(dependencies, configuration = {}) {
       } catch (error) { diagnostic('scheduler_error', { reason: error.code ?? error.message }); }
     });
   };
+  context.deferOpportunity = group => { attemptedRound.set(group, state.round); context.releaseOpportunity(group); };
   function observe(group) {
     if (observations.has(group)) return observations.get(group);
     const task = Promise.resolve().then(() => deps.readLiveIdentity(group)).then(live => {
       state.live.set(group, live);
+      context.continuationRestarts.observe(group, live);
       if (group === null || group === 'origin') {
         if (live.present) state.resident.absentSince = null;
         if (live.ready) {
@@ -132,6 +148,24 @@ export function createRouter(dependencies, configuration = {}) {
     if (!state.lanes.has(group)) state.lanes.set(group, createLane(context, group));
     return state.lanes.get(group);
   }
+  function adoptReadySlots() {
+    if (!state.sceneObservable) return;
+    for (const group of state.listed) {
+      if (group === null || group === 'origin') continue;
+      const live = state.live.get(group);
+      if (!live?.present || !live.ready || !live.runId) continue;
+      const own = state.slots.get(group);
+      if (own?.state === 'running' && own.runId === live.runId) continue;
+      try {
+        const result = deps.db.adoptSlot(group, { runId: live.runId });
+        if (result.adopted || result.reason === 'already') {
+          state.slots.set(group, { sessionGroup: group, runId: live.runId, state: 'running', heldUntil: null });
+        }
+      } catch (error) {
+        diagnostic('slot_adoption_failed', { session_group: group, runId: live.runId, reason: error.code ?? error.message });
+      }
+    }
+  }
   function tick() {
     if (!state.ready || state.inert || state.stopped) return;
     state.round++;
@@ -155,10 +189,16 @@ export function createRouter(dependencies, configuration = {}) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
+    if (state.mode === 'multi') {
+      context.refreshSlots();
+      adoptReadySlots();
+    }
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
+    const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
+    state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
     const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
-      ...pending.map(row => row.sessionGroup), ...state.activations.keys()]);
-    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...wanted];
+      ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
+    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
     for (const group of new Set(ordered)) {
       if (!state.live.has(group)) observe(group);
       const active = state.activations.get(group);

@@ -7,7 +7,7 @@ import { createRouter } from '../../router/scheduler.js';
 import { tmuxNameForGroup } from '../../../../../cli/lib/session-group-paths.js';
 
 const [directory, phase, boundary] = process.argv.slice(2);
-const now = 1800000000000;
+let now = 1800000000000;
 const database = new Database(path.join(directory, 'c4.db'));
 const store = createStore(database, { now: () => now, validateComponent: () => true,
   readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), validateModel: () => true });
@@ -19,7 +19,8 @@ function barrier(name) {
   fs.writeFileSync(file('barrier.json'), JSON.stringify({ name, pid: process.pid }));
   // A synchronous test barrier freezes the exact observed production boundary.
   // Parent SIGKILLs this process; no graceful cleanup or finally block runs.
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000);
+  database.close(); process.exit(2);
 }
 function publishReady(scene) {
   const recovery = store.insertControl('recovery', { sessionGroup: 'a', priority: 0, bypassState: true, appendAckSuffix: false });
@@ -70,7 +71,7 @@ router = createRouter({ db, now: () => now,
   },
   handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   diagnostic: (event, fields) => record(event, fields), alert: (event, fields) => record('alert', { alert: event, ...fields }),
-}, { poolSize: 1, readyTimeoutMs: 1000, pollIntervalMs: 5 });
+}, { poolSize: () => 1, readyTimeoutMs: 1000, pollIntervalMs: 5 });
 await router.initialize();
 if (phase === 'restart') {
   process.send({ initialized: true });
@@ -79,5 +80,17 @@ if (phase === 'restart') {
   // This fixture hook is outside Router: finish a pre-existing process startup
   // only after restart has observed the persisted unready scene.
   if (scene.a && !scene.a.ready) publishReady(scene);
+  if (!scene.a) {
+    const slot=store.listSlotOccupancy().find(row=>row.sessionGroup==='a');
+    if (!slot || slot.state!=='running') throw Error('Crashed Router lost occupancy');
+    for(let i=0;i<2;i++){router.tick();await router.idle();}
+    if(readScene().a) throw Error('Restart launched before orphan slot cleanup');
+    const orphans=[{sessionGroup:'a',runId:slot.runId}];
+    now=slot.createdAt*1000+999;
+    if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans.length!==0) throw Error('Premature orphan removal');
+    now+=1;
+    if(store.pruneSlots({orphans,minAgeSeconds:1}).deletedOrphans.length!==1) throw Error('Orphan slot cleanup failed');
+    record('orphan-pruned',{runId:slot.runId});
+  }
 }
 await router.start();

@@ -85,7 +85,10 @@ test('ordinary manual restart fences preserve run identity and existing reason r
     assert.equal(store.getDrainFence(group).reason,reason);
     store.clearDrainFence(group);
   }
-  for(const reason of ['ttl','evict']) assert.throws(()=>store.setDrainFence('origin',{reason,runId:'run-o'}),{code:'FENCE_INVALID'});
+  assert.throws(()=>store.setDrainFence('origin',{reason:'evict',runId:'run-o'}),{code:'FENCE_INVALID'});
+  store.setDrainFence('origin',{reason:'ttl',runId:'run-o'});
+  assert.equal(store.getDrainFence('origin').reason,'ttl');
+  store.clearDrainFence('origin');
   assert.throws(()=>store.setDrainFence(group,{reason:'unknown',runId:'run-a'}),{code:'FENCE_INVALID'});
 });
 

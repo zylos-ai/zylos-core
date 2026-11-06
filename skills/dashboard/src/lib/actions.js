@@ -72,7 +72,12 @@ function log(reqId, msg) {
 }
 
 function dedupKey(action, body) {
-  return `${action}:${JSON.stringify(body || {})}`;
+  const payload = body || {};
+  if (['restart-session', 'interrupt', 'chop-chop'].includes(action)) {
+    const { runId, sessionId, ...fields } = payload;
+    return `${action}:${JSON.stringify(fields)}`;
+  }
+  return `${action}:${JSON.stringify(payload)}`;
 }
 
 function isDuplicate(action, body) {

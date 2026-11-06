@@ -36,7 +36,16 @@ if (variant === 'clear-manual') {
 }
 const db = { ...store, getDb: () => database,
   setDrainFence(...args) { const result = store.setDrainFence(...args); barrier('after-fence'); return result; },
-  clearDrainFence(...args) { const result = store.clearDrainFence(...args); barrier('after-clear'); return result; },
+  clearDrainFence(...args) {
+    events.push({ event: 'before_fence_clear', fence: store.getDrainFence(args[0]),
+      controls: database.prepare('SELECT * FROM control_queue ORDER BY id').all() });
+    const result = store.clearDrainFence(...args); barrier('after-clear'); return result;
+  },
+  recordRunEnd(...args) {
+    events.push({ event: 'before_fence_clear', fence: store.getDrainFence(args[0]),
+      controls: database.prepare('SELECT * FROM control_queue ORDER BY id').all() });
+    const result = store.recordRunEnd(...args); barrier('after-clear'); return result;
+  },
 };
 if (variant === 'early-clear') { db.countRunningConversations = () => 0; db.countGlobalRunningConversations = () => 0; }
 if (variant === 'waiting') {
