@@ -50,6 +50,22 @@ export class C4Reader {
     }
   }
 
+  getInboundTimes({ since, groups }) {
+    if (!groups.length) return [];
+    const db = this._open();
+    if (!db) return [];
+    try {
+      return db.prepare(`SELECT session_group, timestamp FROM conversations
+        WHERE direction='in' AND channel<>'internal'
+          AND timestamp >= ?
+          AND session_group IN (${groups.map(() => '?').join(',')})
+        ORDER BY timestamp, id`).all(new Date(since).toISOString().slice(0, 19).replace('T', ' '), ...groups).map(row => ({
+          session_group: row.session_group,
+          timestamp: Date.parse(row.timestamp.includes('T') ? row.timestamp : row.timestamp.replace(' ', 'T') + 'Z'),
+        }));
+    } catch { return []; }
+  }
+
   getPendingQueue() {
     const db = this._open();
     if (!db) return { depth: null, oldest_age_s: null, error: 'READ_FAILED' };

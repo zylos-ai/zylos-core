@@ -53,6 +53,7 @@ import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
 import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
+import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-snapshot.js';
 import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
 import { buildRestartStatus } from './lib/core-actions.js';
 import { createCoreStateChangePublisher } from './lib/core-state-publisher.js';
@@ -339,7 +340,10 @@ const stateEngine = new StateEngine(store, collectors, config, {
 observerService.historyService = new HistoryService({ config, store, stateEngine });
 
 // Wire collector updates to state engine
-pm2Collector._onUpdate = (data) => stateEngine.onPM2Update(data);
+pm2Collector._onUpdate = (data) => {
+  workbench.channelDownCounter.update(data);
+  stateEngine.onPM2Update(data);
+};
 systemCollector._onUpdate = (data) => {
   stateEngine.onSystemUpdate(data);
   scheduleFleetStateBroadcast();
@@ -369,6 +373,9 @@ const metricResolver = new MetricResolver(store, collectors, config, { stateEngi
 
 // 9b. C4 reader (read-only access to comm-bridge DB)
 const c4Reader = new C4Reader(config.zylosDir);
+const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer,
+  readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
+  readPm2: () => pm2Collector.getLatestPM2Data() });
 
 // Rate-limit metric values arrive either as a plain number or as an object
 // keyed by window (same variants the single-agent page handles).
@@ -1077,6 +1084,15 @@ async function handleApi(req, res, pathname, url) {
     const gaps = await coreLogImporter.sanitizeEvents(store.getHistoryDiagnostics({
       sessionGroup, stream, limit: gapLimit, offset: gapOffset }));
     sendJson(res, 200, { events, count: events.length, gaps });
+    return true;
+  }
+
+  if (['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(pathname)) {
+    try { sendJson(res, 200, await workbenchResponse(workbench, pathname, url.searchParams)); }
+    catch (error) {
+      sendJson(res, error.statusCode ?? 500, { error: error.statusCode ? error.code : 'internal_error',
+        ...(error.reason ? { reason: error.reason } : {}) });
+    }
     return true;
   }
 
