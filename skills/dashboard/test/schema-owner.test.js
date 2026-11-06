@@ -223,3 +223,19 @@ test('schema above target refuses migration and malformed group indexes are reje
   assert.equal(owner.inspectSchema(db).currentVersion, 22);
   assert.throws(() => owner.migrate(db), { code: 'SCHEMA_TOO_NEW' });
 });
+
+// Current-layout admission: private SQLite only. Run for schema inspection
+// changes; skip UI-only edits. No children/services; handles close before cleanup.
+test('current schema rejects a missing display-name table or metric group column', t => {
+  for (const missing of ['names', 'metric-group']) {
+    const file = fixture(t); const store = new Store(file); store.close();
+    const db = new Database(file);
+    try {
+      if (missing === 'names') db.exec('DROP TABLE group_display_names');
+      else db.exec('DROP INDEX idx_metric_points_group_ts; ALTER TABLE metric_points DROP COLUMN session_group');
+      assert.equal(db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version, 21);
+      assert.throws(() => owner.inspectSchema(db), missing === 'names'
+        ? /no such table: group_display_names/ : /no such column: session_group/);
+    } finally { db.close(); }
+  }
+});

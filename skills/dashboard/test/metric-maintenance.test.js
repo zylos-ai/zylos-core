@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
+import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema13 } from './fixtures/schema13.js';
 import { runMetricMaintenance } from '../src/lib/metric-maintenance.js';
 
@@ -34,10 +35,13 @@ function fillOldMetrics(store, count = 1500) {
   store.walCheckpoint();
 }
 
+// SQLite integration: run for schema/Store or maintenance changes; skip UI-only
+// edits. Fixture owns its temporary database and closes it before cleanup; no
+// child processes, network, PM2 or tmux are used.
 test('new databases enable incremental vacuum before schema creation', (t) => {
   const store = fixture(t);
   assert.equal(store.autoVacuumMode(), 2);
-  assert.equal(store.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version, 20);
+  assert.equal(store.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version, TARGET_SCHEMA_VERSION);
 });
 
 test('legacy database is not converted at startup or on a non-Sunday maintenance', async (t) => {

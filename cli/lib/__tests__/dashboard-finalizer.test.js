@@ -11,6 +11,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { completeUpgradeFinalization } from '../self-upgrade.js';
 import * as dashboardOwner from '../dashboard-install.js';
 import { Store } from '../../../skills/dashboard/src/lib/store.js';
+import { TARGET_SCHEMA_VERSION } from '../../../skills/dashboard/src/lib/schema.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const maintenance = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
@@ -89,16 +90,24 @@ for (const failHook of [false, true]) test(`finalizer child preserves JSON stdou
   if (!failHook) assert.deepEqual(fs.readFileSync(path.join(root, 'pm2-calls'), 'utf8').trim().split('\n').map(JSON.parse).map(args => args[0]), ['start', 'jlist', 'save']);
 });
 
+// Finalization integration: run for Dashboard schema/takeover changes; skip
+// UI-only edits. Runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, fixture
+// owns the SQLite database and uses a private pm2 stub plus loopback health port.
+// No real PM2/tmux/service is started; bounded finalizer steps finish before cleanup.
 test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard degraded', async t => {
   const { root, data, env } = fixture(t);
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({port: await closedLoopbackPort(), auth: {enabled: true, password: 'fixture-hash'}}));
   const dbPath = path.join(data, 'dashboard.db');
   const store = new Store(dbPath);
-  store.db.exec(`DROP INDEX idx_events_group_seq;
+  store.db.exec(`DROP TABLE group_display_names;
+    DROP TABLE usage_transcripts;
+    DROP INDEX idx_metric_points_group_ts;
+    ALTER TABLE metric_points DROP COLUMN session_group;
+    DROP INDEX idx_events_group_seq;
     DROP TABLE core_log_cursors;
     ALTER TABLE runtime_events DROP COLUMN session_group;
     ALTER TABLE runtime_events DROP COLUMN run_id;
-    DELETE FROM schema_migrations WHERE version=20;
+    DELETE FROM schema_migrations WHERE version>=20;
     CREATE TRIGGER reject_migration20 BEFORE INSERT ON schema_migrations WHEN NEW.version=20
       BEGIN SELECT RAISE(ABORT, 'fixture migration20 failed'); END;`);
   assert.equal(store.db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 13);
@@ -139,13 +148,17 @@ test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard
     assert.equal(db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 13);
     assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='core_log_cursors'").get(), undefined);
     assert.equal(db.pragma('table_info(runtime_events)').some(column => column.name === 'session_group'), false);
+    for (const name of ['group_display_names', 'usage_transcripts', 'idx_metric_points_group_ts']) {
+      assert.equal(db.prepare('SELECT 1 FROM sqlite_master WHERE name=?').get(name), undefined);
+    }
+    assert.equal(db.pragma('table_info(metric_points)').some(column => column.name === 'session_group'), false);
   } finally { db.close(); }
   // Positive control: the same real Store succeeds once the injected fault is removed.
   const repair = new Database(dbPath);
   repair.exec('DROP TRIGGER reject_migration20');
   repair.close();
   const recovered = new Store(dbPath);
-  try { assert.equal(recovered.db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 20); }
+  try { assert.equal(recovered.db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, TARGET_SCHEMA_VERSION); }
   finally { recovered.close(); }
 });
 

@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
+import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { CoreLogImporter } from '../src/lib/core-log-importer.js';
 import { dashboardSchemaOwner } from '../src/lib/schema-owner.js';
 import * as backup from '../../../cli/lib/core-db-backup.js';
@@ -63,12 +64,16 @@ function fixture(t) {
       assert.equal(j.dbRestore['components/dashboard/dashboard.db'].complete,true);
       assert.equal(sha(dbPath),sha(snapshot.copy));
       store=new Store(dbPath);importer=new CoreLogImporter({store,zylosDir:root,batchLines:200});
-      assert.equal(dashboardSchemaOwner.inspectSchema(store.db).currentVersion,20);
+      assert.equal(dashboardSchemaOwner.inspectSchema(store.db).currentVersion,TARGET_SCHEMA_VERSION);
     },
     count(){return store.db.prepare('SELECT count(*) n FROM runtime_events').get().n;},
     cursors(){return store.db.prepare('SELECT * FROM core_log_cursors ORDER BY generation,file_ino').all();},
   };
 }
+// Backup/import integration: run for Dashboard schema, physical backup/restore or
+// cursor changes; skip UI-only edits. All databases/logs and worker payload paths
+// belong to the fixture; workers are bounded by the Core120s limit and runner,
+// importer.stop/Store.close precede cleanup. No network, PM2 or tmux is used.
 test('snapshot sees whole100 or whole120 batch; physical restore resumes to170, no duplicate generation', async t=>{
   const f=fixture(t);fs.writeFileSync(f.file,lines(0,100));await f.import();assert.equal(f.count(),100);
   fs.appendFileSync(f.file,lines(100,20));let pre,post;
@@ -81,6 +86,7 @@ test('snapshot sees whole100 or whole120 batch; physical restore resumes to170, 
   await f.restore(post);assert.equal(f.count(),120);await f.import();assert.equal(f.count(),170);
   assert.equal(f.cursors().length,1);assert.equal(f.cursors()[0].generation,1);
 });
+// Same fixture and isolation boundary; restore must preserve each cursor case.
 for(const scenario of ['rotation','same-identity-replacement','new-identity-replacement','expired-cursor']) {
   test(`restored cursor continues retained logs: ${scenario}`,async t=>{
     const f=fixture(t);fs.writeFileSync(f.file,lines(0,100));await f.import();const snapshot=f.snapshot('saved');

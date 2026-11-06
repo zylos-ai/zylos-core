@@ -1621,7 +1621,14 @@ export function createServer() {
           : displayNames.clearName(key, 'human');
         sendJson(res, 200, { ok: true, data });
       } catch (error) {
-        sendJson(res, 400, { ok: false, error: { code: error.code ?? 'INVALID_ARGS', message: error.message } });
+        if (['KEY_INVALID', 'NAME_INVALID', 'NAME_SET_BY_HUMAN'].includes(error.code)) {
+          sendJson(res, 400, { ok: false, error: { code: error.code, message: error.message } });
+        } else if ((error.status === 400 && error.message === 'invalid_json') ||
+          (error.status === 413 && error.message === 'payload_too_large')) {
+          sendJson(res, error.status, { error: error.message });
+        } else {
+          sendJson(res, 500, { error: 'internal_error' });
+        }
       }
       return;
     }
