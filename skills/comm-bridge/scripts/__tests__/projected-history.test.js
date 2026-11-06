@@ -158,9 +158,33 @@ test('group preview projects before Unicode truncation and matching across list 
   }
 });
 
-// Direct insert is known bypass evidence, NOT proof of hook coverage. Private
-// declared hook script can be executed as a positive control but must not run
-// for this low-level CLI path. No real send/channel/network is invoked.
+// CLI integration uses the same isolated fixture and bounded children above.
+// Run for group preview/match changes; skip unrelated conversion/runtime work.
+test('group matching ignores fallback text and references beyond the 80-character preview', t => {
+  const f = fixture(t);
+  const keyword = 'beyond_preview_keyword';
+  const reference = 'beyond_preview_reference';
+  const content = encode({ ...base, messageId: reference, fallbackText: '🚀'.repeat(80) + keyword });
+  const row = f.store.insertConversation('in', 'dashboard', 'route', content, { groupName: 'long' });
+  const projected = projectC4Content(content, { c4Id: row.id });
+  const preview = f.query.groups({ keyMatch: 'dashboard:long' })[0].preview.text;
+  assert.equal(preview, '🚀'.repeat(80));
+  for (const word of [keyword, reference, `c4_id=${row.id}`]) {
+    assert.ok(projected.includes(word), 'the complete projection contains the excluded match');
+    assert.equal(preview.includes(word), false);
+    assert.deepEqual(f.query.groups({ match: word }), []);
+    for (const json of [false, true]) {
+      const result = JSON.parse(f.invoke('../c4-db.js', ['groups', '--match', word, ...(json ? ['--json'] : [])]));
+      assert.deepEqual(json ? result.data : result, []);
+    }
+  }
+  assert.equal(f.query.groups({ match: '🚀' }).length, 1);
+});
+
+// This branch has no BeforeSend implementation. The marker only fixes that
+// direct insert does not call a hook; manually running its script is not a
+// c4-send positive control. Real channel-hook coverage belongs to integration.
+// No real send/channel/network is invoked.
 test('insert receipts project text but direct Dashboard insertion still bypasses BeforeSend', t => {
   const f = fixture(t), component = path.join(f.env.ZYLOS_DIR, '.claude/skills/dashboard');
   const marker = path.join(f.root, 'hook-called');

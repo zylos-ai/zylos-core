@@ -102,6 +102,30 @@ output, truncation or file write. Original C4 records remain available for
 explicitly authorized original-body reads and business reconciliation; that
 separate authority is not granted by a C4 reference or by this skill.
 
+
+For a custom SQL reader, locate the installed Core package with the same
+resolver used by `loadCoreModule` (the package can be separate from the skills).
+Run this with `node --input-type=module`, then project each SQL row's full
+`content` with its `id` before emitting it:
+
+```js
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const skillsDir = path.join(os.homedir(), 'zylos', '.claude', 'skills');
+const { resolveCoreConfigModule } = await import(pathToFileURL(
+  path.join(skillsDir, 'comm-bridge', 'scripts', 'core-config-loader.js')).href);
+const coreRoot = path.resolve(path.dirname(resolveCoreConfigModule()), '../..');
+const { projectC4Content } = await import(pathToFileURL(
+  path.join(coreRoot, 'cli', 'lib', 'content-projection.js')).href);
+const projectRow = row => projectC4Content(row.content, { c4Id: row.id });
+// For every SQL row, write only projectRow(row).
+```
+
+The resolver checks `ZYLOS_PACKAGE_ROOT`, the source checkout, the `zylos`
+executable on PATH, then `npm root -g` / `zylos`. For a custom skills location,
+set `skillsDir` to that actual directory; do not assume the package is inside it.
+
 `c4-db.js insert out dashboard ...` writes directly to C4 and bypasses BeforeSend.
 This is an existing low-level bypass, not a supported Dashboard send path or a
 hook-validated send receipt. Formal Dashboard sends must use their channel send

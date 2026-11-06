@@ -2,13 +2,38 @@
 
 Core database module for C4. Provides both a programmatic API (imported by other C4 scripts) and a standalone CLI for querying conversations and checkpoints.
 
-CLI conversation text in `recent` and `insert` receipts is projected through
+Read model/memory conversation text through `c4-fetch.js` or the projected
+`c4-db.js` CLI output first. CLI conversation text in `recent` and `insert` receipts is projected through
 Core's public text projector; source records and programmatic reconciliation
 APIs remain original. Models and memory readers should use these CLI outputs or
 `c4-fetch.js`. A custom SQL reader must project complete `content` with
 `projectC4Content(content, { c4Id: row.id })` from `cli/lib/content-projection.js`
 before formatting, truncation or output. Direct original-body reads require
 separate explicit authorization.
+
+
+For a custom SQL reader, locate the installed Core package with the same
+resolver used by `loadCoreModule` (the package can be separate from the skills).
+Run this with `node --input-type=module`, then project each SQL row's full
+`content` with its `id` before emitting it:
+
+```js
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const skillsDir = path.join(os.homedir(), 'zylos', '.claude', 'skills');
+const { resolveCoreConfigModule } = await import(pathToFileURL(
+  path.join(skillsDir, 'comm-bridge', 'scripts', 'core-config-loader.js')).href);
+const coreRoot = path.resolve(path.dirname(resolveCoreConfigModule()), '../..');
+const { projectC4Content } = await import(pathToFileURL(
+  path.join(coreRoot, 'cli', 'lib', 'content-projection.js')).href);
+const projectRow = row => projectC4Content(row.content, { c4Id: row.id });
+// For every SQL row, write only projectRow(row).
+```
+
+The resolver checks `ZYLOS_PACKAGE_ROOT`, the source checkout, the `zylos`
+executable on PATH, then `npm root -g` / `zylos`. For a custom skills location,
+set `skillsDir` to that actual directory; do not assume the package is inside it.
 
 ## CLI Usage
 
