@@ -25,7 +25,9 @@ test('U prevents a later candidate of the same runtime submitting in the same ro
 });
 
 test('resident polling rounds without elapsed time cannot consume seconds of backoff', async t => {
-  const f = routerFixture(t); const router = f.create(); await router.initialize();
+  const f = routerFixture(t);
+  f.db.insertControl('work after backoff', { sessionGroup: 'origin', appendAckSuffix: false });
+  const router = f.create(); await router.initialize();
   await f.rounds(20);
   assert.equal(f.calls.some(x => x[0] === 'launch'), false);
   f.advance(5000); await f.rounds(3);

@@ -1,3 +1,5 @@
+import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
+import { resolveTargetRuntime } from '../lib/session-state-reader.js';
 /**
  * Service management commands
  */
@@ -86,7 +88,7 @@ export function collectHostStatus({ exec = execFileSync, disk = () => fs.statfsS
   return result;
 }
 
-export async function showStatus(args = [], { collect, host = collectHostStatus, load = () => import('../lib/status-view.js'), alertNotice = alertTargetNotice } = {}) {
+export async function showStatus(args = [], { collect, host = collectHostStatus, resolveRuntime = resolveTargetRuntime, load = () => import('../lib/status-view.js'), alertNotice = alertTargetNotice } = {}) {
   const json = args.includes('--json');
   let result;
   if (args.some(arg => arg !== '--json') || args.filter(arg => arg === '--json').length > 1) {
@@ -100,8 +102,15 @@ export async function showStatus(args = [], { collect, host = collectHostStatus,
   else {
     console.log(heading('Zylos Status'));
     console.log(`Session mode: ${result.data.sessionMode ?? 'single'}`);
+    let targetRuntime = null;
+    if (result.data.view === 'multi') {
+      try { targetRuntime = await resolveRuntime('origin'); } catch { /* Health cannot be attributed without a target. */ }
+    }
     for (const row of [result.data.origin, ...result.data.groups]) {
-      console.log(`  ${row.sessionGroup ?? 'single'}: ${row.presence} (${row.runtime ?? 'unknown'})`);
+      const description = row === result.data.origin && result.data.view === 'multi'
+        ? describeOrigin({ ...result.data, targetRuntime, nowSec: Math.floor(result.data.readAt / 1000) }) : null;
+      const message = description && formatOriginDescription(description, targetRuntime, result.data.originNeed);
+      console.log(message ? `  origin: ${message}` : `  ${row.sessionGroup ?? 'single'}: ${row.presence} (${row.runtime ?? 'unknown'})`);
       if (row.status.valid) console.log(`    ${row.status.state}; idle: ${row.status.idleSeconds ?? 'unknown'}s`);
       if (row.error) console.error(`    ${row.error.message}`);
     }

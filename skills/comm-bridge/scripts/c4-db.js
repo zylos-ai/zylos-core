@@ -427,6 +427,7 @@ export const resolveSessionGroup = (...args) => store.resolveSessionGroup(...arg
 export const insertConversation = (...args) => store.insertConversation(...args);
 export const insertInternalMessage = (...args) => store.insertInternalMessage(...args);
 export const buildTargetBinding = async (...args) => await store.buildTargetBinding(...args);
+export const getOriginNeed = (...args) => store.getOriginNeed(...args);
 export const getNextPending = (...args) => store.getNextPending(...args);
 export const claimConversation = (...args) => store.claimConversation(...args);
 export const requeueConversation = (...args) => store.requeueConversation(...args);

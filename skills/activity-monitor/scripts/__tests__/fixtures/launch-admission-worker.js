@@ -76,7 +76,7 @@ if (role === 'm4') {
     deliverConversation: async (row, live) => db.markDelivered(row.id, { sessionId: live.sessionId }),
     handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
     diagnostic: (event, fields) => trace('diagnostic', { event, ...fields }), log: value => trace('log', { value }),
-  }, { poolSize: 4, readyTimeoutMs: 10000 });
+  }, { poolSize: () => 4, readyTimeoutMs: 10000 });
   await router.initialize();
 }
 process.on('message', async message => {
@@ -116,7 +116,7 @@ process.on('message', async message => {
       await observer.pollProbe(probe);result=await pending;trace('probe',{group:arg.group,runId:probe.scene.runId,controlId:probe.controlId,result});
     } else if (op === 'exit') await service.supervisor.health.noteRunExited('claude', arg.runId);
     else if (op === 'add') {
-      const row = db.insertConversation('in', arg.group, 'fixture', 'incoming');
+      const row = db.insertConversation('in', arg.group === 'origin' ? 'system' : arg.group, 'fixture', 'incoming');
       sqlite.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(clock / 1000, row.id); result = row;
     } else if (op === 'fence') result = db.setDrainFence(arg.group, { reason: 'upgrade', runId: 'fixture' });
     else if (op === 'unfence') result = db.clearDrainFence(arg.group);

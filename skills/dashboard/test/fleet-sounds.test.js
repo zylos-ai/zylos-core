@@ -355,3 +355,8 @@ test('pointerdown does not create or resume audio while muted', async (t) => {
   doc.dispatch('pointerdown');
   assert.equal(contexts.length, 0);
 });
+
+test('work changing to wake or authentication failure does not signal completion', () => {
+  const result = computeFleetTransitions(new Map([['origin', 'busy'], ['other', 'thinking']]), [agent('origin', 'WAKE_OVERDUE'), agent('other', 'AUTH_WAIT')]);
+  assert.deepEqual(result.finished, []); assert.deepEqual(result.started, []);
+});

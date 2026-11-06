@@ -1,5 +1,6 @@
 import { DispatcherRestartConfirmation } from './dispatcher-restart-confirmation.js';
 import { binaryCompare as groupSort } from '../../comm-bridge/scripts/c4-query-format.js';
+import { HANDOFF_FOLLOWUP_PROMPT } from './origin-prompts.js';
 
 const failure = (code, message) => Object.assign(new Error(message), { code, persisted: [] });
 const modeOf = value => value?.keyPresent === false && value.mode === null ? 'single' : value?.mode;
@@ -104,6 +105,9 @@ export class ModeSwitchCoordinator {
       if (mode !== row.target_mode) { await this.block(row, `mode_conflict:${row.phase}:${mode}`); return; }
       if (!await this.onlyGlobal(row)) return;
       await this.unblock(row);
+      if (row.target_mode === 'multi') await this.db.insertControl(HANDOFF_FOLLOWUP_PROMPT, {
+        sessionGroup: 'origin', priority: 2, appendAckSuffix: false,
+      });
       // The store atomically verifies the global transition fence and removes it.
       await this.db.setModeTransitionPhase(row.run_id, 'complete');
       this.event('transition_complete', row, { phase: 'complete', reason: null });

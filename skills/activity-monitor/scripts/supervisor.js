@@ -14,9 +14,10 @@ import { SupervisorRunEndings } from './supervisor-run-endings.js';
 import { SessionActivity } from './session-activity.js';
 import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
+import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js';
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
-const { assertSessionGroup, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
+const { assertSessionGroup, groupRunDir, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
 
 export const AUTH_DEMAND_RETRY_MS = 60000;
 
@@ -26,6 +27,7 @@ export function createSupervisor(deps) {
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
   let observer,router,admission,lifecycle,modeSwitch,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
+  const originAuthAlerted=new Set();
   const missingDependencies=deps.missingDependencies ?? new Set();
   const reportError=(error,context={})=>{
     if(['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code)) {
@@ -97,7 +99,7 @@ export function createSupervisor(deps) {
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prompts,
-    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError,
+    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
     readCurrentSession:async group=>{try{return await endings.currentSession(group);}catch{return null;}},
     intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
   modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
@@ -150,6 +152,12 @@ export function createSupervisor(deps) {
       const pendingGroups=await db.listPendingSessionGroups();
       const continuationGroups=configuration.mode==='multi'?await db.listPendingContinuations():[];
       const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups:[...pendingGroups,...continuationGroups],fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
+      if(configuration.mode==='multi' && !context.fences.some(fence=>['origin','*'].includes(fence.sessionGroup)) &&
+          (await db.getOriginNeed(Math.floor(now()/1000))).controls.count>0) {
+        const runtime=await deps.resolveTargetRuntime('origin');
+        if(!demand.has(runtime))demand.set(runtime,new Set());
+        demand.get(runtime).add('origin');
+      }
       for(const runtime of demand.keys())observer.driveDemand(runtime);
       const metrics={ready:current.filter(s=>s.sessionGroup!=='origin' && s.ready).length,starting:current.filter(s=>s.sessionGroup!=='origin' && !s.ready).length,
         reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length,
@@ -203,7 +211,14 @@ export function createSupervisor(deps) {
           return observed.present===false || (typeof observed.runId==='string' && observed.runId!==target.runId);
         },hasAuthFence:async target=>configuration.mode==='multi' && (await db.getDrainFence(target.sessionGroup))?.reason==='auth'});
       }
-
+      if(configuration.mode!=='multi' || context.transition || context.fences.some(fence=>fence.sessionGroup==='*'))return;
+      const runtime=await deps.resolveTargetRuntime('origin');
+      if(health.store(runtime).read().health!=='auth_failed') {originAuthAlerted.delete(runtime);return;}
+      const seconds=Math.floor(now()/1000),need=await db.getOriginNeed(seconds);
+      if(need.inbound.oldestAt!==null && seconds-need.inbound.oldestAt>=PENDING_MAX_AGE_SECONDS-300 && !originAuthAlerted.has(runtime)) {
+        await deps.alert({event:'origin_auth_blocked',runtime,oldest_at:need.inbound.oldestAt});
+        originAuthAlerted.add(runtime);
+      }
     },
   },deps.loopOptions);
   const connectionHandler=createSupervisorConnectionHandler({admission,router,isOpen:()=>admission.open && !stopping,readRun:group=>scenes.readRun(group),readMode,

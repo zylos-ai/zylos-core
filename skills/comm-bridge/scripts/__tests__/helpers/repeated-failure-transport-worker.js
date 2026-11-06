@@ -37,7 +37,8 @@ const deps = { ...f.deps, env: process.env,
   } }),
 };
 delete deps.alert;
-const dispatcher = createDispatcher(deps, { ...f.options, delivery: { periodicEnabled: false } });
+const { poolSize, ...options } = f.options;
+const dispatcher = createDispatcher(deps, { ...options, delivery: { periodicEnabled: false } });
 try {
   const rounds = async n => { for (let i = 0; i < n; i++) { dispatcher.tick(); await dispatcher.idle(); await flush(); } };
   await dispatcher.initialize(); await rounds(2);

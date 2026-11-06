@@ -35,7 +35,7 @@ function fixture(t) {
 // A/B: all ordered decisions and response field relationships.
 test('start registration validates request and evaluates restrictions in order',async t=>{
   const f=fixture(t);
-  for(const change of [{version:2},{requestId:'bad'},{runtime:'BAD'},{runId:'bad'},{sessionGroup:'origin'},{sessionGroup:'*'},{sessionGroup:null}]) assert.equal((await f.health.registerStartAttempt(f.request(change))).code,'invalid_request');
+  for(const change of [{version:2},{requestId:'bad'},{runtime:'BAD'},{runId:'bad'},{sessionGroup:'*'},{sessionGroup:null}]) assert.equal((await f.health.registerStartAttempt(f.request(change))).code,'invalid_request');
   f.set({health:'ok'});f.setScene([{runtime:'claude'}]);f.setProbe(true);
   assert.equal((await f.health.registerStartAttempt(f.request())).result,'not_restricted');
   f.set({health:'auth_failed'});assert.equal((await f.health.registerStartAttempt(f.request())).code,'auth_blocked');
@@ -52,6 +52,29 @@ test('start registration validates request and evaluates restrictions in order',
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'attempt_backoff');
 });
 
+test('Origin start attempts share cooldown, backoff and run association with ordinary groups',async t=>{
+  const f=fixture(t),request=f.request({sessionGroup:'origin'});
+  f.set({health:'rate_limited'},{cooldownUntil:f.now()/1000+1});
+  assert.equal((await f.health.registerStartAttempt(request)).code,'rate_limit_cooldown');
+  f.advance(1000);f.setScene([{runtime:'claude',sessionGroup:'chat:other'}]);
+  assert.equal((await f.health.registerStartAttempt(request)).code,'scene_present');
+  f.setScene([]);registered(await f.health.registerStartAttempt(request));
+  assert.equal((await f.health.registerStartAttempt(request)).code,'attempt_backoff');
+  const result=runId=>f.health.applyProbeResult({runtime:'claude',runId,current:{runtime:'claude',runId},terminal:'timeout'});
+  assert.equal((await result(randomUUID())).linked,false);
+  assert.equal(f.health.associations.get('claude').runId,request.runId);
+  assert.equal((await result(request.runId)).linked,true);assert.equal(f.health.associations.has('claude'),false);
+});
+test('Origin restricted attempts retain the full recovery backoff ladder',async t=>{
+  const f=fixture(t);f.set({health:'rate_limited'});
+  for(const seconds of [60,300,1500,3600]) {
+    registered(await f.health.registerStartAttempt(f.request({sessionGroup:'origin'})));
+    const rejected=await f.health.registerStartAttempt(f.request({sessionGroup:'origin'}));
+    assert.equal(rejected.code,'attempt_backoff');assert.equal(rejected.notBefore,f.now()+seconds*1000);
+    f.advance(seconds*1000);
+  }
+  assert.equal(f.read().scheduling.restartFailureCount,4);
+});
 test('concurrent same-runtime requests commit exactly one attempt and reopen preserves backoff',async t=>{
   const f=fixture(t), first=f.request(), second=f.request({sessionGroup:'lark:two'});
   const replies=await Promise.all([f.health.registerStartAttempt(first),f.health.registerStartAttempt(second)]);

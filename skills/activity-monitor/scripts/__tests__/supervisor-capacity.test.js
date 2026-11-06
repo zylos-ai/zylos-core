@@ -29,7 +29,7 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch =
       setDrainFence: (group, row) => fences.set(group, { ...row, sessionGroup: group }),
       getLastActivity: () => 0, getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
       listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: [] }),
-      listPendingSessionGroups: () => [], listPendingContinuations: () => [], listRunEndings: () => [],
+      listPendingSessionGroups: () => [], listPendingContinuations: () => [], getOriginNeed: () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null } }), listRunEndings: () => [],
       getLastCompletedModeTransition: () => null, getControlById: () => null,
       resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) },
     scenes: { observe: async () => { observations++; return currentScenes.map(scene => ({ ...scene })); },
@@ -93,14 +93,14 @@ test('pending memory read does not block later rounds and single cutover suppres
   let ready = false;
   creating.then(() => { ready = true; });
   try {
-    for (let i = 0; i < 100 && !ready; i++) await flush();
+    for (let i = 0; i < 5000 && !ready; i++) await flush();
     assert.equal(started, true);
     assert.equal(ready, true, 'entry startup must settle while the memory read is pending');
     const f = await creating, before = f.observations();
     for (let i = 0; i < 2; i++) {
       let settled = false;
       const round = f.round().then(() => { settled = true; });
-      for (let spin = 0; spin < 100 && !settled; spin++) await flush();
+      for (let spin = 0; spin < 5000 && !settled; spin++) await flush();
       assert.equal(settled, true, 'lifecycle round must settle before the memory read');
       await round;
     }

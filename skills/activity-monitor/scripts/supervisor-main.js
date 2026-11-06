@@ -40,7 +40,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     return {...result,legacy:false};
   };
   const readMode=()=>{const result=readModeSource();return result?.then?result.then(normalizeMode):normalizeMode(result);};
-  let supervisor,events,configuration,machineTasks,legacy,lifecycleConfiguration,roundContext,stopping;
+  let supervisor,events,configuration,machineTasks,legacy,lifecycleConfiguration,stopping;
   let poolReader,capacityController;
   const capacityWork=new Set(),clock=overrides.now ?? Date.now;
   const applyPublishedCapacity=()=>{
@@ -86,8 +86,10 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     return supervisor.lifecycle.checkCapacityPressure(context);
   });
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
+  const resolveTargetRuntime=async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).mode==='single'?null:group);
   const alert=event=>{
-    const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,event.message].filter(Boolean).join(' ');
+    const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,
+      event.runtime && `runtime=${event.runtime}`,event.oldest_at!==undefined && `oldest_at=${event.oldest_at}`,event.message].filter(Boolean).join(' ');
     const message=event.event==='repeated_unexpected_run_end'
       ? messageForStatus({context:'repeated_failure',noticeCode:'ended_unexpectedly',group:event.sessionGroup ?? event.session_group,count:event.count},configuration?.statusNotices ?? {})
       : `Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim();
@@ -140,7 +142,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       } catch(error) { if(error.code==='TMUX_NO_SERVER')return false;throw error; }
       finally {await connection?.close();}
     },
-    resolveTargetRuntime:async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).mode==='single'?null:group),
+    resolveTargetRuntime,
     checkAuth:runtime=>getSessionAdapter(runtime).checkAuth(),
     matchScreen:(runtime,screen)=>(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
     resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name,toolInput:tool.input,config:configuration}),
@@ -159,10 +161,10 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
         identity:async()=>{const current=await scenes.readIdentity(scene.sessionGroup);return current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime?identity:null;},
         quota:current=>readScopedHealthQuota({runDir:scene.runDir,runId:scene.runId,identity:current}),mutate:fn=>coordinator.serial(scene.runtime,fn),database:db.getDb(),zylosDir:root});
       pendingNotices.add(pending);pending.finally(()=>pendingNotices.delete(pending)).catch(log);
-    },alert,log,...overrides,readMode,scenes,updateCapacity,afterRound:async({context})=>{roundContext=context;await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick();await overrides.afterRound?.();},
+    },alert,log,...overrides,readMode,scenes,updateCapacity,afterRound:async({context})=>{await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick(context);await overrides.afterRound?.();},
   });
   legacy=overrides.legacyStatus ?? new SupervisorLegacyStatus({env,connectionOptions:baseScenes.connectionOptions ?? {},readHealth:runtime=>supervisor.health.store(runtime).read(),log});
-  machineTasks=overrides.machineTasks ?? new SupervisorMachineTasks({zylosDir:root,readMode,readConfig,readOriginState:async()=>{const scene=roundContext?.scenes?.find(scene=>scene.sessionGroup==='origin' || scene.sessionGroup===null);return scene?.present && scene.ready && !scene.observationError?scene:{present:false,ready:false,sampleValid:false,runtime:'unknown'};},readHealth:runtime=>supervisor.health.store(runtime).read(),log});
+  machineTasks=overrides.machineTasks ?? new SupervisorMachineTasks({zylosDir:root,readMode,readConfig,resolveTargetRuntime,readHealth:runtime=>supervisor.health.store(runtime).read(),log});
   const socketPath=path.join(directory,'am.sock');
   const sockets=new Set();
   const server=net.createServer(socket=>{
