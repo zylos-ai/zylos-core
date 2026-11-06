@@ -23,8 +23,9 @@ export function createChatState({ request, identity = null, onChange } = {}) {
   const cells = new Map(), listeners = new Set(onChange ? [onChange] : []);
   const key = id => `${tab}:${id}`;
   const cell = () => cells.get(key(selectedId));
-  const blank = () => ({ conversation: null, ownershipResolved: false, messages: [], messageCursor: null, afterCursor: null, input: '', receipt: null, sending: false, retryRequired: false, error: null, historyVersion: 0 });
-  const snapshot = () => ({ tab, mode, items: [...items], nextCursor, selectedId, ...(cell() || blank()), loading, error: error || cell()?.error, blocked,
+  const blank = () => ({ conversation: null, ownershipResolved: false, messages: [], messageCursor: null, afterCursor: null, input: '', receipt: null, sending: false, retryRequired: false, error: null, historyVersion: 0,
+    questions: [], questionCursor: null, questionsReady: false, questionsLoading: false, questionError: null, questionVersion: 0, questionForms: new Map() });
+  const snapshot = () => ({ tab, mode, items: [...items], nextCursor, selectedId, ...(cell() || blank()), loading, error: error || cell()?.error || cell()?.questionError, blocked,
     canRetry: active && !!cell()?.retryRequired && cell()?.receipt?.retryAllowed === true && !cell()?.sending,
     canWrite: active && !blocked && tab === 'mine' && mode === 'multi' && !!selectedId && cell()?.ownershipResolved === true,
     canCreate: active && !blocked && tab === 'mine' && mode === 'multi' });
@@ -63,6 +64,7 @@ export function createChatState({ request, identity = null, onChange } = {}) {
     const current = cell(), currentTab = tab, e = epoch;
     const version = selectedVersion;
     current.error = null;
+    current.questionsReady = false;
     current.conversation ||= items.find(item => item.id === id) || null;
     emit();
     if (currentTab === 'mine') {
@@ -81,7 +83,80 @@ export function createChatState({ request, identity = null, onChange } = {}) {
       }, e, current);
     }
     if (!valid(e) || version !== selectedVersion || currentTab !== tab || id.startsWith('d:')) return;
-    await history(current, id, currentTab, 'initial', e);
+    await Promise.all([history(current, id, currentTab, 'initial', e), questions(current, id, currentTab, false, e)]);
+  }
+  async function questions(current, id, currentTab, more = false, e = epoch) {
+    if (currentTab !== 'mine' || id.startsWith('d:') || !valid(e) || (more && !current.questionCursor)) return;
+    const version = ++current.questionVersion, cursor = more ? current.questionCursor : null, queryError = { error: null };
+    current.questionsLoading = true; current.questionError = null;
+    if (!more) current.questionsReady = false;
+    emit();
+    await run(async () => {
+      try { return await request(`${pathFor(id)}/questions?${query({ limit: 50, cursor })}`); }
+      catch (err) {
+        if (version === current.questionVersion || err?.code === 'remote_chat_disabled' || err?.payload?.error === 'remote_chat_disabled') throw err;
+        return null;
+      }
+    }, data => {
+      if (version !== current.questionVersion) return;
+      if (!Array.isArray(data?.items)) throw { code: 'chat_invalid_response' };
+      const rows = new Map((more ? current.questions : []).map(row => [row.interrupt_id, row]));
+      for (const row of data.items) rows.set(row.interrupt_id, row);
+      current.questions = [...rows.values()]; current.questionCursor = data.nextCursor ?? null;
+      current.questionsReady = true;
+      for (const row of current.questions) {
+        const formKey = `${row.c4_id}:${row.interrupt_id}`;
+        if (!current.questionForms.has(formKey) && row.status === 'answered' && row.action?.id === row.answer_id && !row.actionError) current.questionForms.set(formKey, {});
+        const form = current.questionForms.get(formKey);
+        if (form && !form.sending) {
+          form.receipt = row.delivery ?? null;
+          form.reconciledPaused = form.locked === true && !!form.action && row.status === 'paused' && !row.answer_id;
+          // Restore only the server's saved action, never reconstruct an intent
+          // from displayed text or labels after a page reload.
+          if (row.status === 'answered' && row.action?.id === row.answer_id && !row.actionError) {
+            form.action = JSON.parse(JSON.stringify(row.action)); form.locked = true;
+          } else if (row.answer_id && (form.action?.id !== row.answer_id || row.actionError)) form.action = null;
+        }
+      }
+      emit();
+    }, e, queryError);
+    if (valid(e) && version === current.questionVersion) { current.questionsLoading = false; current.questionError = queryError.error; emit(); }
+  }
+  async function answer(interruptId, action, { retry = false, conversationId = selectedId, questionC4Id } = {}) {
+    const current = cell(), s = snapshot();
+    if (!s.canWrite || conversationId !== selectedId || !current?.questionsReady || current.questionsLoading) return;
+    const question = current.questions.find(row => row.interrupt_id === interruptId);
+    if (!question || (questionC4Id !== undefined && String(question.c4_id) !== String(questionC4Id))) return;
+    const formKey = `${question.c4_id}:${interruptId}`;
+    const form = current.questionForms.get(formKey);
+    if (!form || form.sending || (form.locked && !retry) || !action || (question.status !== 'paused' &&
+        !(question.status === 'answered' && retry && question.answer_id === action.id))) return;
+    if (retry && (form.action?.id !== action.id || !(form.receipt?.retryAllowed === true || (question.status === 'paused' && form.reconciledPaused === true)))) return;
+    if (!retry && question.status !== 'paused') return;
+    const e = epoch, id = selectedId, sendIdentity = openedIdentity;
+    const submitted = JSON.parse(JSON.stringify(action));
+    // Freeze the accepted intent across network errors and explicit retries.
+    if (form.action && JSON.stringify(form.action) !== JSON.stringify(submitted)) return;
+    form.action = submitted; form.sending = true; form.error = null; form.reconciledPaused = false; current.error = null;
+    current.questionVersion++; current.questionsLoading = false; emit();
+    try {
+      const result = await request(`${pathFor(id)}/answers`, { method: 'POST', body: { interruptId, action: submitted, ...(retry ? { retry: true } : {}) } });
+      if (!result?.answer || !result?.delivery || result.answer.answerId !== submitted.id || ![true, false, null].includes(result.delivery.stored)) throw { code: 'chat_invalid_response' };
+      if (destroyed || blocked || sendIdentity !== openedIdentity) return;
+      form.receipt = result.delivery; form.error = result.delivery.error ?? null;
+      form.locked = true;
+      current.questionVersion++; current.questionsLoading = false;
+      current.questionsReady = true;
+      current.questions = current.questions.map(row => String(row.c4_id) === String(question.c4_id) && row.interrupt_id === interruptId ? { ...row, status: 'answered', answer_id: result.answer.answerId, delivery: result.delivery } : row);
+    } catch (err) {
+      if (sendIdentity !== openedIdentity || blocked || destroyed) return;
+      if (err?.code === 'remote_chat_disabled' || err?.payload?.error === 'remote_chat_disabled') { failure(err, e); return; }
+      form.error = err?.code || err?.payload?.error || 'chat_request_failed';
+      // The server may have accepted before a response was lost. A manual
+      // question refresh must establish authority before another submission.
+      if ([400, 422].includes(err?.status)) { form.action = null; form.locked = false; form.receipt = null; }
+      else { form.receipt = { stored: null, needsReconciliation: true, retryAllowed: false }; form.locked = true; current.questionsReady = false; }
+    } finally { form.sending = false; if (active && sendIdentity === openedIdentity && !blocked) emit(); }
   }
   async function history(current, id, currentTab, direction, e = epoch) {
     const cursor = direction === 'after' ? current.afterCursor : direction === 'before' ? current.messageCursor : null;
@@ -178,11 +253,13 @@ export function createChatState({ request, identity = null, onChange } = {}) {
     close() { active = false; epoch++; loading = false; },
     destroy() { active = false; destroyed = true; epoch++; cells.clear(); listeners.clear(); },
     async setTab(value) { if (!['mine', 'external'].includes(value) || blocked) return; tab = value; selectedId = null; selectedVersion++; items = []; nextCursor = null; emit(); await list(); },
-    select, createDraft, rename, send, refresh,
+    select, createDraft, rename, send, refresh, answer,
+    loadMoreQuestions() { return cell() && questions(cell(), selectedId, tab, true); },
+    refreshQuestions() { return cell() && questions(cell(), selectedId, tab); },
     setInput(value) { if (cell()) { cell().input = value; emit(); } },
     loadMore: () => list(true),
     loadOlder() { return cell() && history(cell(), selectedId, tab, 'before'); },
-    refreshMessages() { return cell() && history(cell(), selectedId, tab, 'after'); },
+    refreshMessages() { return cell() && Promise.all([history(cell(), selectedId, tab, 'after'), questions(cell(), selectedId, tab)]); },
     async refreshStatus() {
       const current = cell(), id = selectedId;
       if (!current || blocked) return;
@@ -194,6 +271,7 @@ export function createChatState({ request, identity = null, onChange } = {}) {
       if (!valid(e)) return;
       const ids = current.messages.slice(-100).map(row => row.id).join(',');
       if (ids) await run(() => request(`${pathFor(id)}/status?${query({ tab: currentTab, ids })}`), data => { const updates = new Map((data.items || []).map(row => [row.id, row])); current.messages = current.messages.map(row => ({ ...row, ...updates.get(row.id) })); emit(); }, e, current);
+      if (valid(e)) await questions(current, id, currentTab, false, e);
     },
   };
 }

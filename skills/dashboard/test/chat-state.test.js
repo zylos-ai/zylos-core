@@ -89,7 +89,7 @@ test('inflight send can settle while closed without being resent on reopen', asy
 test('status refresh updates rows while retaining all history', async () => {
   const {state,calls}=fixture(path=>path.includes('/messages?')?{items:[{id:1,status:'pending',direction:'in',content:'retained',timestamp:'2026-01-01'}],afterCursor:'after'}:path.includes('/status?')?{items:[{id:1,status:'failed',direction:'in',delivery_action:'delivered'}]}:undefined);
   await state.open(); await state.select('g:A'); await state.refreshStatus();
-  assert.match(calls.at(-1).path,/\/status\?/); assert.equal(state.snapshot().messages.length,1); assert.equal(state.snapshot().messages[0].content,'retained'); assert.equal(state.snapshot().messages[0].timestamp,'2026-01-01'); assert.equal(messageState(state.snapshot().messages[0]),'failed'); state.destroy();
+  assert.ok(calls.some(call => /\/status\?/.test(call.path)));  assert.equal(state.snapshot().messages.length,1); assert.equal(state.snapshot().messages[0].content,'retained'); assert.equal(state.snapshot().messages[0].timestamp,'2026-01-01'); assert.equal(messageState(state.snapshot().messages[0]),'failed'); state.destroy();
 });
 for (const status of [200, 502]) test(`invalid JSON response ${status} leaves send pending reconciliation`, async () => {
   const {state,calls}=fixture((path,options)=>options?.method==='POST'?Promise.reject({status,code:'chat_invalid_response'}):undefined);

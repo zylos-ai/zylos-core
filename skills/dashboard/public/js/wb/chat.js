@@ -1,6 +1,8 @@
 import { element } from './plain-text.js?v=85';
-import { createChatState, messageState, receiptState } from './chat-state.js?v=88';
+import { createChatState, messageState, receiptState } from './chat-state.js?v=89';
 import { parseC4Content } from '../../chat-schema.js';
+import { renderChatContent } from './chat-blocks.js?v=89';
+import { renderQuestion } from './chat-questions.js?v=89';
 
 export function messageText(content, t = key => key) {
   const parsed = parseC4Content(content);
@@ -75,7 +77,7 @@ export function mountChat({ root, document = root.ownerDocument, t = key => key,
     if (s.nextCursor) list.append(action('loadMore', () => state.loadMore(), s.loading));
     const main = node('section', undefined, 'chat-main'); main.setAttribute('aria-label', t('chat.history'));
     if (s.mode === 'single') main.append(node('p', t('chat.single'), 'chat-notice'));
-    if (s.error && !(s.receipt?.stored === true && s.error === s.receipt.error)) { const error = node('p', t(errorKey(s.error)), 'chat-error'); error.setAttribute('role', 'alert'); main.append(error); }
+    if (s.error && (s.questionError || !(s.receipt?.stored === true && s.error === s.receipt.error))) { const error = node('p', t(errorKey(s.error)), 'chat-error'); error.setAttribute('role', 'alert'); main.append(error); }
     if (s.loading) main.append(node('p', t('chat.loading'), 'chat-notice'));
     if (!s.selectedId) main.append(node('p', t('chat.select'), 'chat-notice'));
     else {
@@ -92,12 +94,25 @@ export function mountChat({ root, document = root.ownerDocument, t = key => key,
       if (s.messageCursor) controls.append(action('loadOlder', () => state.loadOlder(), s.loading));
       if (!(s.receipt?.draft === true || current?.state === 'draft' || current?.draft === true)) controls.append(action('refreshMessages', () => state.refreshMessages(), s.loading), action('refreshStatus', () => state.refreshStatus(), s.loading));
       main.append(controls);
+      if (s.tab === 'mine' && !s.selectedId.startsWith('d:')) {
+        if (!s.questionsReady) main.append(node('p', t(s.questionsLoading ? 'chat.questions.loading' : 'chat.questions.unavailable'), 'chat-notice'));
+        if (s.questionCursor) main.append(action('loadMoreQuestions', () => state.loadMoreQuestions(), s.questionsLoading));
+      }
       const messages = node('div', undefined, 'chat-messages');
       for (const row of s.messages) {
         const message = node('article', undefined, 'chat-message ' + (row.direction === 'in' ? 'chat-in' : 'chat-out'));
         message.dataset.messageId = String(row.id);
-        message.append(node('span', t(row.direction === 'in' ? 'chat.user' : 'chat.assistant'), 'chat-message-author'),
-          node('p', messageText(row.content, t), 'chat-message-text'), node('span', t('chat.state.' + messageState(row)), 'chat-message-status'));
+        const content = renderChatContent({ document, row, t, renderQuestion: ({ envelope, block }) => {
+          const question = s.questionsReady ? s.questions.find(item => String(item.c4_id) === String(row.id) && item.interrupt_id === envelope.interruptId) : null;
+          const formKey = `${row.id}:${envelope.interruptId}`;
+          if (!s.questionForms.has(formKey)) s.questionForms.set(formKey, {});
+          return renderQuestion({ document, envelope, block, row, question, t,
+            canWrite: s.canWrite && s.questionsReady && !s.questionsLoading,
+            formState: s.questionForms.get(formKey),
+            onSubmit: (answer, options) => state.answer(envelope.interruptId, answer, { ...options, conversationId: s.selectedId, questionC4Id: row.id }) });
+        } });
+        message.append(node('span', t(row.direction === 'in' ? 'chat.user' : 'chat.assistant'), 'chat-message-author'), content,
+          node('span', t('chat.state.' + messageState(row)), 'chat-message-status'));
         messages.append(message);
       }
       main.append(messages);
