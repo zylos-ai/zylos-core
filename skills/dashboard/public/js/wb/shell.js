@@ -5,7 +5,7 @@ import { instanceStrip } from './instance-strip.js?v=87';
 import { renderAttention } from './attention-bar.js?v=87';
 import { createGroupDetail } from './detail.js?v=87';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=87';
-import { createHostPanel } from './host-panel.js?v=87';
+import { createHostPanel } from './host-panel.js?v=88';
 import { element } from './plain-text.js?v=85';
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,

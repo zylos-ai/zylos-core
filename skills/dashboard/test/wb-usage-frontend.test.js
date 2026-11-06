@@ -1,7 +1,8 @@
 import test from 'node:test';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick, Node } from './fixtures/workbench-dom.js';
-import { renderUsage, createUsagePage, usagePath } from '../public/js/wb/usage.js';
+import { renderUsage, createUsagePage, usagePath, formatUsageCount } from '../public/js/wb/usage.js';
 import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
 
@@ -149,4 +150,35 @@ test('technical usage renders unavailable runtime history as unknown instead of 
   }
   assert.ok(f.configs.every(config => config.options.plugins.legend.display));
   view.destroy(); assert.equal(f.destroyed(), 4);
+});
+
+
+test('message counts distinguish unreadable and zero in both locales and detail levels', () => {
+  const sampledAt = '2026-11-06T04:00:00.000Z';
+  for (const locale of ['en', 'zh']) {
+    const pack = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
+    const t = key => pack[key] ?? key;
+    assert.equal(formatUsageCount(null, t), locale === 'zh' ? '未知' : 'Unknown');
+    assert.equal(formatUsageCount(0, t), '0');
+    for (const level of ['plain', 'technical']) {
+      const f = fixture(), failed = { ...value, messagesReason: 'messages_unreadable', messagesSampledAt: sampledAt,
+        messages: value.buckets.map(at => ({ at, in: null, out: null })), totals: { ...value.totals, messages: { in: null, out: null } } };
+      const view = renderUsage(f.root, failed, { ...f, t, level });
+      const totals = allNodes(f.root).find(node => node.classList.contains('wb-usage-totals'));
+      for (const key of ['wb.usage.received', 'wb.usage.sent']) {
+        const box = totals.children.find(node => node.children[0].textContent === t(key));
+        assert.equal(box.children[1].textContent, t('wb.unknown'));
+      }
+      assert.equal(f.root.textContent.includes('messages_unreadable'), level === 'technical');
+      assert.equal(f.root.textContent.includes(sampledAt), level === 'technical');
+      assert.equal(f.configs.length, level === 'technical' ? 5 : 1);
+      assert.equal(f.root.textContent.includes('$5.0000'), true);
+      view.destroy();
+      const empty = fixture();
+      renderUsage(empty.root, { ...value, messagesReason: null, messages: value.buckets.map(at => ({ at, in: 0, out: 0 })),
+        totals: { ...value.totals, messages: { in: 0, out: 0 } } }, { ...empty, t, level });
+      const messageChart = empty.configs[1];
+      assert.deepEqual(messageChart.data.datasets.map(row => row.data), [[0, 0], [-0, -0]]);
+    }
+  }
 });

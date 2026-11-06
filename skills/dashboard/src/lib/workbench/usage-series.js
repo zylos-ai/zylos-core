@@ -38,6 +38,8 @@ export function usageSeries(store, c4Reader, options = {}) {
     totals: { tokens: tokens.reduce((total, row) => total + row.value, 0), cost: costTotals.total,
       costByRuntime: costTotals.byRuntime, messages: messageTotal,
       rotations: rotations === null ? null : rotations.reduce((total, row) => total + row.value, 0), tools: toolTotal },
-    costByRuntime: costs, tokensByRuntime: tokens, messages, rotations, tools,
+    costByRuntime: costs, tokensByRuntime: tokens, messages,
+    messagesReason: messageSeries.reason ?? null, messagesSampledAt: messageSeries.sampledAt ?? null,
+    rotations, tools,
     runtimeEventsUnknown, projects: store.getProjectDistribution({ since, until }) };
 }

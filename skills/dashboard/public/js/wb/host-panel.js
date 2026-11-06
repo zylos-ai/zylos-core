@@ -1,5 +1,5 @@
 import { element } from './plain-text.js?v=85';
-import { seriesChart } from './usage.js?v=87';
+import { seriesChart } from './usage.js?v=88';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 
