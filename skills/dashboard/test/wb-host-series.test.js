@@ -41,5 +41,7 @@ test('host ranges have exactly the requested bucket counts and invalid ranges fa
     assert.equal(result.current.at, null);
     assert.ok(result.series.every(row => row.cpu === null && row.mem === null && row.disk === null));
   }
-  assert.throws(() => hostSeries(f.store, { range: '1d', now }), { code: 'invalid_range', statusCode: 400 });
+  for (const range of ['1d', 'constructor', 'toString', '__proto__']) {
+    assert.throws(() => hostSeries(f.store, { range, now }), { code: 'invalid_range', statusCode: 400 });
+  }
 });

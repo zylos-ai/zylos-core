@@ -47,7 +47,11 @@ test('usage and host reads enforce auth and removed five-hour routes return unkn
     assert.equal((await request(f.origin, route, { headers })).status, 200);
   }
   assert.equal((await request(f.origin, '/api/workbench/usage?range=custom&since=2026-01-01&until=2026-01-01', { headers })).status, 400);
-  assert.equal((await request(f.origin, '/api/workbench/host?range=1d', { headers })).status, 400);
+  for (const range of ['1d', 'constructor', 'toString', '__proto__']) {
+    const invalid = await request(f.origin, '/api/workbench/host?range=' + range, { headers });
+    assert.equal(invalid.status, 400);
+    assert.equal((await invalid.json()).error.code, 'invalid_range');
+  }
   const removed = await request(f.origin, '/api/metrics/rate_limit', { headers });
   assert.equal(removed.status, 404);
   assert.equal((await removed.json()).error, 'unknown_metric');

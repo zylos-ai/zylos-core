@@ -2,7 +2,7 @@ const RANGES = { '6h': [6 * 3600000, 60], '24h': [24 * 3600000, 300], '7d': [7 *
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 export function hostSeries(store, { range = '6h', now = new Date(), pm2Data = null } = {}) {
-  const setting = RANGES[range];
+  const setting = Object.hasOwn(RANGES, range) ? RANGES[range] : null;
   if (!setting) throw Object.assign(new Error('invalid_range'), { statusCode: 400, code: 'invalid_range' });
   const [duration, bucketSeconds] = setting, end = now.getTime(), start = end - duration;
   const since = new Date(start).toISOString(), until = now.toISOString();
