@@ -24,7 +24,7 @@ export function createChatState({ request, identity = null, onChange } = {}) {
   const key = id => `${tab}:${id}`;
   const cell = () => cells.get(key(selectedId));
   const blank = () => ({ conversation: null, ownershipResolved: false, messages: [], messageCursor: null, afterCursor: null, input: '', receipt: null, sending: false, retryRequired: false, error: null, historyVersion: 0 });
-  const snapshot = () => ({ tab, mode, items: [...items], nextCursor, selectedId, ...(cell() || blank()), loading, error: cell()?.error || error, blocked,
+  const snapshot = () => ({ tab, mode, items: [...items], nextCursor, selectedId, ...(cell() || blank()), loading, error: error || cell()?.error, blocked,
     canRetry: active && !!cell()?.retryRequired && cell()?.receipt?.retryAllowed === true && !cell()?.sending,
     canWrite: active && !blocked && tab === 'mine' && mode === 'multi' && !!selectedId && cell()?.ownershipResolved === true,
     canCreate: active && !blocked && tab === 'mine' && mode === 'multi' });
