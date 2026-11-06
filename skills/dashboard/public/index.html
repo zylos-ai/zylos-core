@@ -15,6 +15,22 @@
 <script src="__ASSET_ROOT__/js/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="__ASSET_ROOT__/js/markdown-it.min.js"></script>
 <script type="module" src="__ASSET_ROOT__/js/app.js?v=84"></script>
+<style>
+#tab-settings { overflow-wrap:anywhere; }
+#tab-settings .modal-body { padding:0; }
+#tab-settings input,#tab-settings select { max-width:100%; box-sizing:border-box; }
+#tab-settings .fleet-self-row,#tab-settings .action-field,#tab-settings .action-row { flex-wrap:wrap; }
+#tab-settings .fleet-agent-meta { min-width:0; overflow-wrap:anywhere; }
+#tab-settings details>div button { display:block; margin:4px 0; max-width:100%; text-align:left; }
+#tab-settings #action-confirm { position:sticky; bottom:0; background:var(--bg-elevated,var(--bg)); border:1px solid var(--border); border-radius:8px; z-index:5; }
+#tab-settings nav { flex:0 1 180px; min-width:0; }
+#tab-settings nav>.action-btn { flex:0 0 100%; height:auto; padding:8px 12px; white-space:normal; text-align:left; }
+@media(max-width:600px) {
+  #tab-settings nav { flex-basis:100%; }
+  #tab-settings nav>.action-btn { flex:0 0 auto; min-width:7em; max-width:100%; white-space:nowrap; }
+}
+#tab-settings [hidden] { display:none!important; }
+</style>
 </head>
 <body>
 <header class="app-header">
@@ -23,16 +39,11 @@
     <span class="header-version" id="dashboard-version" hidden></span>
   </div>
   <div class="header-actions">
-<label class="wb-detail"><input id="wb-detail-toggle" type="checkbox"><span data-i18n="wb.detail">Technical details</span></label>
 <button class="header-icon-btn" id="wb-theme-toggle" type="button" data-i18n-title="wb.theme">◐</button>
     <button class="header-icon-btn" id="wb-settings-btn" type="button" data-i18n-title="wb.settings">⚙</button>
     <button class="header-icon-btn" id="fleet-manage-btn" type="button" data-i18n-title="fleet_manage.open">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M9 13v2"/><path d="M15 13v2"/></svg>
     </button>
-    <button class="fleet-sound-toggle" id="fleet-sound-toggle" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-    <span class="connection-pill" id="connection-status" data-state="connecting" data-i18n="status.connecting">Connecting</span>
-    <button class="lang-btn" id="locale-toggle" type="button" data-i18n="lang.switch">中文</button>
-    <button class="lang-btn logout-btn" id="logout-btn" type="button" data-i18n="action.logout">Logout</button>
   </div>
 </header>
 
@@ -67,7 +78,6 @@
 <main>
   <section class="tab-panel active" id="tab-overview">
     <!-- Runtime Info Bar -->
-    <div class="info-bar" id="info-bar"></div>
     <div id="wb-instance" class="wb-instance"></div><div id="wb-attention" role="status"></div>
 <div class="wb-layout"><section class="wb-card"><div class="wb-board-head"><input id="wb-search" type="search" aria-label="Search groups"><button id="wb-auto-name" type="button" data-i18n="wb.name.auto">Auto name</button><select id="wb-range"><option value="60m" data-i18n="wb.range60">60 minutes</option><option value="6h" data-i18n="wb.range6">6 hours</option></select></div><div id="wb-legend" class="wb-legend"></div><div id="wb-board"></div></section><aside id="wb-side" class="wb-card wb-group-detail" aria-label="Group detail" hidden></aside></div>
     <div id="wb-auto-name-dialog" class="wb-auto-name-dialog wb-card" role="dialog" aria-modal="true" hidden></div>
@@ -437,6 +447,13 @@
   <section class="tab-panel" id="tab-schedule" hidden>
     <div class="wb-schedule" id="wb-schedule"></div>
   </section>
+<section class="tab-panel" id="tab-settings" hidden>
+<label class="wb-detail"><input id="wb-detail-toggle" type="checkbox"><span data-i18n="wb.detail">Technical details</span></label>
+    <button class="fleet-sound-toggle" id="fleet-sound-toggle" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+    <span class="connection-pill" id="connection-status" data-state="connecting" data-i18n="status.connecting">Connecting</span>
+    <button class="lang-btn" id="locale-toggle" type="button" data-i18n="lang.switch">中文</button>
+    <button class="lang-btn logout-btn" id="logout-btn" type="button" data-i18n="action.logout">Logout</button>
+</section>
 </main>
 </div>
 </div>

@@ -60,6 +60,7 @@ import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
+import { searchTerm } from './lib/workbench/group-search.js';
 import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
@@ -391,6 +392,42 @@ const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
 const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, getSnapshot: getDetailSnapshot });
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config });
+
+async function runtimeOverridesPage(params) {
+  const childEnv = { ...process.env, ZYLOS_DIR: config.zylosDir };
+  delete childEnv.ZYLOS_SESSION_GROUP;
+  async function read(args) {
+    const { stdout } = await promisify(execFile)('zylos', ['group', 'overrides', ...args, '--json'], {
+      env: childEnv, timeout: 15000, maxBuffer: 1024 * 1024,
+    });
+    const envelope = JSON.parse(stdout);
+    const data = envelope?.data;
+    if (envelope?.ok !== true || !Array.isArray(data?.runtime) ||
+        data.runtime.some(row => !row || typeof row.sessionGroup !== 'string' || !['claude', 'codex'].includes(row.runtime)) ||
+        (data.nextAfter != null && typeof data.nextAfter !== 'string') ||
+        (!args.includes('--group') && data.runtime.length > 100)) throw Error('override_list_failed');
+    return data;
+  }
+  const hasQuery = params.has('q');
+  const term = hasQuery ? searchTerm(params.get('q')) : null;
+  if (term?.none) return { runtime: [], nextAfter: null };
+  const after = params.get('after');
+  const cursor = after === null ? [] : ['--after', after];
+  const names = await displayNames.listAll();
+  const named = row => ({ ...row, name: names.get(row.sessionGroup) ?? null });
+  if (!hasQuery) {
+    const page = await read(cursor);
+    if (!Number.isInteger(page.runtimeTotal) || page.runtimeTotal < 0) throw Error('override_list_failed');
+    return { runtimeTotal: page.runtimeTotal, runtime: page.runtime.map(named), nextAfter: page.nextAfter ?? null };
+  }
+  const hits = (await displayNames.search(term.term, 500)).map(row => row.sessionGroup);
+  const hitKeys = new Set(hits);
+  const nameRows = after === null && hits.length
+    ? (await read(hits.flatMap(key => ['--group', key]))).runtime.sort((a, b) => a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0) : [];
+  const page = term.keyable ? await read(['--match', term.term, ...cursor]) : { runtime: [], nextAfter: null };
+  return { runtime: [...nameRows, ...page.runtime.filter(row => !hitKeys.has(row.sessionGroup))].map(named),
+    nextAfter: page.nextAfter ?? null };
+}
 
 function workbenchGroupKey(encoded) {
   let key;
@@ -1135,6 +1172,30 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/workbench/runtime-overrides') {
+    try { sendJson(res, 200, await runtimeOverridesPage(url.searchParams)); }
+    catch { sendJson(res, 502, { error: 'override_list_failed' }); }
+    return true;
+  }
+
+  if (pathname === '/api/workbench/pricing') {
+    try {
+      const since = new Date(Date.now() - 7 * 86400000).toISOString();
+      const models = store.db.prepare(`SELECT runtime, json_extract(dimensions, '$.model') AS model,
+        SUM(json_extract(dimensions, '$.cost')) AS cost FROM metric_points
+        WHERE metric_name='usage_event' AND timestamp >= ?
+        GROUP BY runtime, model`).all(since);
+      const unmatched = store.db.prepare(`SELECT runtime, json_extract(dimensions, '$.model') AS model,
+        SUM(COALESCE(json_extract(dimensions, '$.total_input'), 0) + COALESCE(json_extract(dimensions, '$.output'), 0)) AS tokens
+        FROM metric_points WHERE metric_name='usage_event' AND timestamp >= ?
+        AND json_extract(dimensions, '$.cost') IS NULL
+        AND (COALESCE(json_extract(dimensions, '$.total_input'), 0) > 0 OR COALESCE(json_extract(dimensions, '$.output'), 0) > 0)
+        GROUP BY runtime, model`).all(since);
+      sendJson(res, 200, { models, unmatched });
+    } catch { sendJson(res, 500, { error: 'pricing_unreadable' }); }
+    return true;
+  }
+
   const detailRead = pathname.match(/^\/api\/workbench\/groups\/([^/]+)\/(runs|messages|backlog|config)$/);
   if (detailRead) {
     try {
@@ -1329,15 +1390,20 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/actions/meta') {
+    const selectedRuntime = url.searchParams.get('runtime') ?? activeRuntime;
+    if (!['claude', 'codex'].includes(selectedRuntime)) {
+      sendJson(res, 400, { error: 'INVALID_RUNTIME' }); return true;
+    }
     const zylosConfig = loadZylosConfig(config.zylosDir);
     zylosConfig.zylosDir = config.zylosDir;
-    const runtimeMeta = activeRuntime === 'codex'
-      ? buildRuntimeInfo()
-      : statuslineCollector?.getRuntimeInfo();
+    zylosConfig.runtime = selectedRuntime;
+    const runtimeMeta = !url.searchParams.has('runtime') && selectedRuntime === activeRuntime
+      ? (activeRuntime === 'codex' ? buildRuntimeInfo() : statuslineCollector?.getRuntimeInfo())
+      : null;
     const meta = getActionsMeta(zylosConfig, runtimeMeta);
     meta.zylos_version = zylosVersion;
-    meta.runtime_cli = activeRuntime === 'codex' ? 'codex' : 'claude';
-    meta.cc_version = activeRuntime === 'codex'
+    meta.runtime_cli = selectedRuntime;
+    meta.cc_version = selectedRuntime === 'codex'
       ? runtimeMeta?.codex_running || runtimeMeta?.codex_version || codexInstalledVersion || null
       : ccInstalledVersion || runtimeMeta?.cc_version || null;
     sendJson(res, 200, meta);
@@ -1437,126 +1503,96 @@ function validateModelPrices(modelPrices, runtime, requiredModels = builtInModel
   return errors;
 }
 
-async function handleSettingsUpdate(req, res) {
-  let body;
-  try {
-    body = await readJsonBody(req, 16 * 1024);
-  } catch (err) {
-    sendJson(res, err.status || 400, { error: err.message });
-    return;
-  }
+function allSettingsPayload() {
+  return { active: activeRuntime, runtimes: { claude: settingsPayload('claude'), codex: settingsPayload('codex') } };
+}
 
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    sendJson(res, 400, { error: 'Request body must be a JSON object' });
-    return;
-  }
-
+function validateRuntimeSettings(body, runtime) {
   const errors = [];
-  const priceRuntime = activeRuntime === 'codex' ? 'codex' : 'claude';
-
-  if (body.modelPrices !== undefined) {
-    errors.push(...validateModelPrices(body.modelPrices, priceRuntime));
-  }
-
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return ['Runtime settings must be an object'];
+  const unknown = Object.keys(body).filter(key => !['modelPrices', 'priorityModelPrices', 'fastModeMultiplier'].includes(key));
+  if (unknown.length) errors.push(`Unknown keys not allowed: ${unknown.join(', ')}`);
+  if (body.modelPrices !== undefined) errors.push(...validateModelPrices(body.modelPrices, runtime));
   if (body.priorityModelPrices !== undefined) {
-    if (priceRuntime !== 'codex') {
-      errors.push(`priorityModelPrices is not supported for ${priceRuntime} runtime`);
-    } else {
-      const priorityBuiltIns = builtInServiceTierModelsForRuntime(priceRuntime, 'priority');
-      errors.push(...validateModelPrices(body.priorityModelPrices, priceRuntime, priorityBuiltIns));
-    }
+    if (runtime !== 'codex') errors.push(`priorityModelPrices is not supported for ${runtime} runtime`);
+    else errors.push(...validateModelPrices(body.priorityModelPrices, runtime, builtInServiceTierModelsForRuntime(runtime, 'priority')));
   }
-
   if (body.fastModeMultiplier !== undefined) {
-    const fm = body.fastModeMultiplier;
-    if (priceRuntime !== 'claude') {
-      errors.push(`fastModeMultiplier is not supported for ${priceRuntime} runtime`);
-    } else if (fm !== null && (typeof fm !== 'number' || !Number.isFinite(fm) || fm <= 0)) {
+    if (runtime !== 'claude') errors.push(`fastModeMultiplier is not supported for ${runtime} runtime`);
+    else if (body.fastModeMultiplier !== null && (!Number.isFinite(body.fastModeMultiplier) || body.fastModeMultiplier <= 0)) {
       errors.push('fastModeMultiplier must be null or a finite number > 0');
     }
   }
+  return errors;
+}
 
-  const allowedKeys = ['modelPrices', 'priorityModelPrices', 'fastModeMultiplier'];
-  const unknownKeys = Object.keys(body).filter(k => !allowedKeys.includes(k));
-  if (unknownKeys.length > 0) {
-    errors.push(`Unknown keys not allowed: ${unknownKeys.join(', ')}`);
+async function handleSettingsUpdate(req, res) {
+  let body;
+  try { body = await readJsonBody(req, 16 * 1024); }
+  catch (err) { sendJson(res, err.status || 400, { error: err.message }); return; }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    sendJson(res, 400, { error: 'Request body must be a JSON object' }); return;
   }
-
-  if (errors.length > 0) {
-    sendJson(res, 400, { error: errors.join('; ') });
-    return;
-  }
+  const multiple = Object.hasOwn(body, 'runtimes');
+  const priceRuntime = activeRuntime === 'codex' ? 'codex' : 'claude';
+  const errors = [];
+  let updates;
+  if (multiple) {
+    const unknown = Object.keys(body).filter(key => key !== 'runtimes');
+    if (unknown.length) errors.push(`Unknown keys not allowed: ${unknown.join(', ')}`);
+    if (!body.runtimes || typeof body.runtimes !== 'object' || Array.isArray(body.runtimes)) {
+      errors.push('runtimes must be an object'); updates = {};
+    } else {
+      updates = body.runtimes;
+      for (const runtime of Object.keys(updates)) {
+        if (!['claude', 'codex'].includes(runtime)) errors.push(`Unknown keys not allowed: ${runtime}`);
+      }
+    }
+  } else updates = { [priceRuntime]: body };
+  for (const [runtime, patch] of Object.entries(updates)) errors.push(...validateRuntimeSettings(patch, runtime));
+  if (errors.length) { sendJson(res, 400, { error: errors.join('; ') }); return; }
 
   try {
-    await mutateConfig(config.configPath, (existing) => {
-      if (body.modelPrices !== undefined) {
-        existing.runtimeModelPrices = {
-          ...(existing.runtimeModelPrices || {}),
-          [priceRuntime]: body.modelPrices
-        };
-        if (priceRuntime === 'claude') existing.modelPrices = body.modelPrices;
-      }
-      if (body.fastModeMultiplier !== undefined) {
-        existing.runtimeFastModeMultipliers = {
-          ...(existing.runtimeFastModeMultipliers || {}),
-          [priceRuntime]: body.fastModeMultiplier
-        };
-        if (priceRuntime === 'claude') existing.fastModeMultiplier = body.fastModeMultiplier;
-        if (body.fastModeMultiplier === null) {
-          delete existing.runtimeFastModeMultipliers[priceRuntime];
-          delete existing.fastModeMultiplier;
+    await mutateConfig(config.configPath, existing => {
+      for (const [runtime, patch] of Object.entries(updates)) {
+        if (patch.modelPrices !== undefined) {
+          existing.runtimeModelPrices = { ...(existing.runtimeModelPrices || {}), [runtime]: patch.modelPrices };
+          if (runtime === 'claude') existing.modelPrices = patch.modelPrices;
         }
-      }
-      if (body.priorityModelPrices !== undefined) {
-        existing.runtimeServiceTierModelPrices = {
-          ...(existing.runtimeServiceTierModelPrices || {}),
-          codex: {
-            ...(existing.runtimeServiceTierModelPrices?.codex || {}),
-            priority: body.priorityModelPrices
+        if (patch.fastModeMultiplier !== undefined) {
+          existing.runtimeFastModeMultipliers = { ...(existing.runtimeFastModeMultipliers || {}), claude: patch.fastModeMultiplier };
+          existing.fastModeMultiplier = patch.fastModeMultiplier;
+          if (patch.fastModeMultiplier === null) {
+            delete existing.runtimeFastModeMultipliers.claude;
+            delete existing.fastModeMultiplier;
           }
-        };
-      }
-    });
-
-    if (body.modelPrices !== undefined) {
-      config.runtimeModelPrices = {
-        ...(config.runtimeModelPrices || {}),
-        [priceRuntime]: body.modelPrices
-      };
-      config.modelPrices = config.runtimeModelPrices.claude;
-    }
-    if (body.fastModeMultiplier !== undefined) {
-      config.runtimeFastModeMultipliers = {
-        ...(config.runtimeFastModeMultipliers || {}),
-        [priceRuntime]: body.fastModeMultiplier
-      };
-      config.configuredRuntimeFastModeMultipliers = {
-        ...(config.configuredRuntimeFastModeMultipliers || {}),
-        [priceRuntime]: body.fastModeMultiplier
-      };
-      if (body.fastModeMultiplier === null) {
-        config.runtimeFastModeMultipliers[priceRuntime] = DEFAULT_RUNTIME_FAST_MODE_MULTIPLIERS[priceRuntime];
-        delete config.configuredRuntimeFastModeMultipliers[priceRuntime];
-      }
-      config.fastModeMultiplier = config.runtimeFastModeMultipliers.claude;
-    }
-    if (body.priorityModelPrices !== undefined) {
-      config.runtimeServiceTierModelPrices = {
-        ...(config.runtimeServiceTierModelPrices || {}),
-        codex: {
-          ...(config.runtimeServiceTierModelPrices?.codex || {}),
-          priority: body.priorityModelPrices
         }
-      };
-    }
-
-    sendJson(res, 200, {
-      ok: true,
-      ...settingsPayload(priceRuntime)
+        if (patch.priorityModelPrices !== undefined) {
+          existing.runtimeServiceTierModelPrices = { ...(existing.runtimeServiceTierModelPrices || {}),
+            codex: { ...(existing.runtimeServiceTierModelPrices?.codex || {}), priority: patch.priorityModelPrices } };
+        }
+      }
     });
-  } catch (err) {
-    sendJson(res, 500, { error: `Failed to save settings: ${err.message}` });
-  }
+    for (const [runtime, patch] of Object.entries(updates)) {
+      if (patch.modelPrices !== undefined) {
+        config.runtimeModelPrices = { ...(config.runtimeModelPrices || {}), [runtime]: patch.modelPrices };
+        config.modelPrices = config.runtimeModelPrices.claude;
+      }
+      if (patch.fastModeMultiplier !== undefined) {
+        config.runtimeFastModeMultipliers = { ...(config.runtimeFastModeMultipliers || {}),
+          claude: patch.fastModeMultiplier ?? DEFAULT_RUNTIME_FAST_MODE_MULTIPLIERS.claude };
+        config.configuredRuntimeFastModeMultipliers = { ...(config.configuredRuntimeFastModeMultipliers || {}) };
+        if (patch.fastModeMultiplier === null) delete config.configuredRuntimeFastModeMultipliers.claude;
+        else config.configuredRuntimeFastModeMultipliers.claude = patch.fastModeMultiplier;
+        config.fastModeMultiplier = config.runtimeFastModeMultipliers.claude;
+      }
+      if (patch.priorityModelPrices !== undefined) {
+        config.runtimeServiceTierModelPrices = { ...(config.runtimeServiceTierModelPrices || {}),
+          codex: { ...(config.runtimeServiceTierModelPrices?.codex || {}), priority: patch.priorityModelPrices } };
+      }
+    }
+    sendJson(res, 200, multiple ? allSettingsPayload() : { ok: true, ...settingsPayload(priceRuntime) });
+  } catch (err) { sendJson(res, 500, { error: `Failed to save settings: ${err.message}` }); }
 }
 
 async function handleMemoryApi(req, res, pathname, url) {
@@ -1670,7 +1706,7 @@ export function createServer() {
 
     if (pathname === '/api/settings' && req.method === 'GET') {
       const priceRuntime = activeRuntime === 'codex' ? 'codex' : 'claude';
-      sendJson(res, 200, settingsPayload(priceRuntime));
+      sendJson(res, 200, url.searchParams.get('all') === '1' ? allSettingsPayload() : settingsPayload(priceRuntime));
       return;
     }
 

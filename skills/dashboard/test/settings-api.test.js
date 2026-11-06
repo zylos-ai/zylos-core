@@ -3,7 +3,18 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import http from 'node:http';
+import * as childProcess from 'node:child_process';
+import { promisify } from 'node:util';
+import { StateEngine } from '../src/lib/state-engine.js';
+import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
+import { VersionChecker } from '../src/lib/version-checker.js';
+import { CoreState } from '../src/lib/core-state.js';
+import { mutateConfig } from '../src/lib/config-mutation.js';
+import { Store } from '../src/lib/store.js';
+import { C4Reader } from '../src/lib/c4-reader.js';
+import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
+
+const fetch = (url, options = {}) => globalThis.fetch(url, { ...options, signal: AbortSignal.timeout(3000) });
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import {
   DEFAULT_CODEX_MODEL_PRICES,
@@ -52,64 +63,92 @@ function parseConfigFile(configPath) {
   return JSON.parse(fs.readFileSync(configPath, 'utf8'));
 }
 
-async function makeSettingsServer(runtime = 'claude', configBody = {}) {
+// HTTP integration boundary: actual settings, override and pricing routes with a
+// private dashboard database and random loopback listener. Run for these routes or
+// config persistence changes; skip unrelated UI-only edits. The runner must supply
+// private HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR and a private tmux namespace.
+// CLI/version/Core activity is replaced BEFORE import; no live daemon or network
+// starts. Requests are bounded to 3s. Cleanup is registered before import, closes
+// listener/connections, all owned timers and database, then only this fixture root.
+async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-server-'));
+  const previous = process.env.ZYLOS_DIR;
+  let server, engine, ownedStore, reader, mutations = 0, closed = false;
+  const timers = [], originalInterval = globalThis.setInterval;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    server?.closeAllConnections();
+    if (server?.listening) await new Promise(resolve => server.close(resolve));
+    for (const timer of timers) clearInterval(timer);
+    engine?.stopSnapshotTimer();
+    reader?.close();
+    ownedStore?.close();
+    if (previous === undefined) delete process.env.ZYLOS_DIR;
+    else process.env.ZYLOS_DIR = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  };
+  t.after(close);
+  t.mock.method(globalThis, 'setInterval', (...args) => {
+    const timer = originalInterval(...args); timers.push(timer); return timer;
+  });
+  t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
+  t.mock.method(VersionChecker.prototype, 'start', () => {});
+  t.mock.method(CoreState.prototype, 'refresh', async () => {});
+  const cliResult = async (file, args, options) => {
+    assert.ok(runCli, 'Unexpected CLI invocation');
+    const data = await runCli(file, args, options);
+    return { stdout: typeof data === 'string' ? data : JSON.stringify(data), stderr: '' };
+  };
+  const fakeExecFile = (file, args, options, callback) => {
+    cliResult(file, args, options).then(({ stdout, stderr }) => callback(null, stdout, stderr), error => callback(error));
+  };
+  fakeExecFile[promisify.custom] = cliResult;
+  t.mock.module('node:child_process', { namedExports: { ...childProcess,
+    execFileSync: () => '1.0.0', execFile: fakeExecFile,
+  } });
+  t.mock.module('../src/lib/store.js', { namedExports: {
+    Store: class extends Store { constructor(...args) { super(...args); ownedStore = this; } },
+  } });
+  t.mock.module('../src/lib/c4-reader.js', { namedExports: {
+    C4Reader: class extends C4Reader { constructor(...args) { super(...args); reader = this; } },
+  } });
+  t.mock.module('../src/lib/state-engine.js', { namedExports: {
+    StateEngine: class extends StateEngine { constructor(...args) { super(...args); engine = this; } },
+  } });
+  t.mock.module('../src/lib/config-mutation.js', { namedExports: {
+    mutateConfig: (...args) => { mutations++; return mutateConfig(...args); },
+  } });
   fs.mkdirSync(path.join(dir, '.zylos'), { recursive: true });
-  fs.writeFileSync(path.join(dir, '.zylos', 'config.json'), JSON.stringify({ runtime }, null, 2) + '\n');
+  fs.writeFileSync(path.join(dir, '.zylos', 'config.json'), JSON.stringify({ runtime }));
   const dashboardDir = path.join(dir, 'components', 'dashboard');
   fs.mkdirSync(dashboardDir, { recursive: true });
   const configPath = path.join(dashboardDir, 'config.json');
-  fs.writeFileSync(configPath, JSON.stringify({
-    auth: { enabled: false },
-    ...configBody
-  }, null, 2) + '\n');
-
-  const previous = process.env.ZYLOS_DIR;
+  fs.writeFileSync(configPath, JSON.stringify({ auth: { enabled: false }, ...configBody }));
   process.env.ZYLOS_DIR = dir;
-  const moduleUrl = new URL(`../src/index.js?settings=${Date.now()}-${Math.random()}`, import.meta.url);
-  const { createServer } = await import(moduleUrl.href);
-  if (previous === undefined) delete process.env.ZYLOS_DIR;
-  else process.env.ZYLOS_DIR = previous;
-
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  return {
-    dir,
-    configPath,
-    origin: `http://127.0.0.1:${port}`,
-    close: async () => {
-      await new Promise((resolve) => server.close(resolve));
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  };
+  const { createServer } = await import(`../src/index.js?settings=${Date.now()}-${Math.random()}`);
+  server = createServer();
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  assert.equal(server.address().address, '127.0.0.1');
+  assert.ok(engine.store.db.name.startsWith(dir + path.sep));
+  return { dir, configPath, store: engine.store, config: engine._config,
+    mutations: () => mutations, origin: `http://127.0.0.1:${server.address().port}`, close };
 }
 
-async function importHandler() {
-  const { readJsonBody, sendJson } = await import('../src/lib/http.js');
-  const { loadConfig } = await import('../src/lib/config.js');
-  return { readJsonBody, sendJson, loadConfig };
-}
-
-test('PUT /api/settings rejects null body', async () => {
-  const { configPath, dir } = makeTmpConfig();
-  const original = parseConfigFile(configPath);
-
-  const { createServer } = await import('../src/index.js');
-
-  // The server requires full setup; instead test the validation logic directly
-  // by checking that null/array/string bodies are caught
-  // This is a lightweight structural test
-
-  // null body → typeof null === 'object' but null check catches it
-  assert.equal(typeof null, 'object');
-  assert.equal(null === null, true);
-  // Array body → Array.isArray catches it
-  assert.equal(Array.isArray([1, 2]), true);
-  // String body → typeof check catches it
-  assert.equal(typeof 'hello' === 'object', false);
-
-  fs.rmSync(dir, { recursive: true });
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('PUT /api/settings rejects non-object bodies without changing config', async t => {
+  const server = await makeSettingsServer(t);
+  const before = fs.readFileSync(server.configPath, 'utf8');
+  for (const body of [null, [], 'hello']) {
+    const response = await fetch(server.origin + '/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 400);
+  }
+  assert.equal(fs.readFileSync(server.configPath, 'utf8'), before);
+  assert.equal(server.mutations(), 0);
 });
 
 test('settings validation: rejects negative prices', () => {
@@ -269,8 +308,11 @@ test('loadConfig migrates legacy modelPrices into Claude prices only', () => {
   });
 });
 
-test('GET /api/settings exposes Codex fast mode as priority service tier', async () => {
-  const server = await makeSettingsServer('codex');
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('GET /api/settings exposes Codex fast mode as priority service tier', async t => {
+  const server = await makeSettingsServer(t, 'codex');
   try {
     const resp = await fetch(`${server.origin}/api/settings`);
     assert.equal(resp.status, 200);
@@ -288,8 +330,11 @@ test('GET /api/settings exposes Codex fast mode as priority service tier', async
   }
 });
 
-test('PUT /api/settings stores Codex priority model prices', async () => {
-  const server = await makeSettingsServer('codex');
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('PUT /api/settings stores Codex priority model prices', async t => {
+  const server = await makeSettingsServer(t, 'codex');
   try {
     const current = await (await fetch(`${server.origin}/api/settings`)).json();
     const priorityModelPrices = {
@@ -311,8 +356,11 @@ test('PUT /api/settings stores Codex priority model prices', async () => {
   }
 });
 
-test('PUT /api/settings rejects fast mode multiplier for Codex runtime', async () => {
-  const server = await makeSettingsServer('codex');
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('PUT /api/settings rejects fast mode multiplier for Codex runtime', async t => {
+  const server = await makeSettingsServer(t, 'codex');
   try {
     const current = await (await fetch(`${server.origin}/api/settings`)).json();
     const resp = await fetch(`${server.origin}/api/settings`, {
@@ -328,8 +376,11 @@ test('PUT /api/settings rejects fast mode multiplier for Codex runtime', async (
   }
 });
 
-test('PUT /api/settings stores fast mode multiplier under Claude runtime', async () => {
-  const server = await makeSettingsServer('claude');
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('PUT /api/settings stores fast mode multiplier under Claude runtime', async t => {
+  const server = await makeSettingsServer(t, 'claude');
   try {
     const current = await (await fetch(`${server.origin}/api/settings`)).json();
     const resp = await fetch(`${server.origin}/api/settings`, {
@@ -390,8 +441,11 @@ function validateFastMultiplier(fm) {
   return errors;
 }
 
-test('settings roundtrip preserves current tariff metadata and marks only explicit Fast overrides', async () => {
-  const server = await makeSettingsServer('claude');
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('settings roundtrip preserves current tariff metadata and marks only explicit Fast overrides', async t => {
+  const server = await makeSettingsServer(t, 'claude');
   try {
     const current = await (await fetch(`${server.origin}/api/settings`)).json();
     assert.equal(current.fastMode.configuredMultiplier, null);
@@ -417,8 +471,11 @@ test('settings roundtrip preserves current tariff metadata and marks only explic
   } finally { await server.close(); }
 });
 
-test('settings preserves long-context rates and rejects invalid tariff metadata', async () => {
-  const server = await makeSettingsServer('codex');
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('settings preserves long-context rates and rejects invalid tariff metadata', async t => {
+  const server = await makeSettingsServer(t, 'codex');
   try {
     const current = await (await fetch(`${server.origin}/api/settings`)).json();
     const put = body => fetch(`${server.origin}/api/settings`, {
@@ -443,10 +500,13 @@ test('settings preserves long-context rates and rejects invalid tariff metadata'
   } finally { await server.close(); }
 });
 
-test('ordinary Settings save preserves custom prefixes without broadening built-in Codex IDs', async () => {
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('ordinary Settings save preserves custom prefixes without broadening built-in Codex IDs', async t => {
   const standard = { input: 9, output: 8, cacheRead: 7, cacheCreation: 6 };
   const priority = { input: 18, output: 16, cacheRead: 14, cacheCreation: 12 };
-  const server = await makeSettingsServer('codex', {
+  const server = await makeSettingsServer(t, 'codex', {
     runtimeModelPrices: { codex: { 'vendor-model': standard } },
     runtimeServiceTierModelPrices: { codex: { priority: { 'vendor-model': priority } } }
   });
@@ -482,4 +542,219 @@ test('ordinary Settings save preserves custom prefixes without broadening built-
     assert.ok(parseConfigFile(server.configPath).runtimeModelPrices.codex['gpt-5']);
     verify(reload());
   } finally { await server.close(); }
+});
+
+// Same isolated HTTP boundary and lifecycle as makeSettingsServer above.
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('all-runtime settings keep legacy payload and atomically save both price tables', async t => {
+  const server = await makeSettingsServer(t);
+  const get = async suffix => (await fetch(server.origin + '/api/settings' + suffix)).json();
+  const original = await get(''), all = await get('?all=1');
+  assert.deepEqual(Object.keys(all).sort(), ['active', 'runtimes']);
+  assert.equal(all.active, 'claude');
+  assert.deepEqual(all.runtimes.claude, original);
+  assert.deepEqual(all.runtimes.claude.builtInModels.sort(), Object.keys(DEFAULT_RUNTIME_MODEL_PRICES.claude).sort());
+  assert.deepEqual(all.runtimes.codex.builtInModels.sort(), Object.keys(DEFAULT_RUNTIME_MODEL_PRICES.codex).sort());
+  const claude = structuredClone(all.runtimes.claude.modelPrices);
+  const codex = structuredClone(all.runtimes.codex.modelPrices);
+  claude['claude-opus-4'].input = 11;
+  codex['gpt-6-astra'].input = 17;
+  const response = await fetch(server.origin + '/api/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runtimes: { claude: { modelPrices: claude, fastModeMultiplier: 7 }, codex: { modelPrices: codex } } }),
+  });
+  assert.equal(response.status, 200);
+  const saved = await response.json();
+  assert.deepEqual(saved, await get('?all=1'));
+  assert.equal(server.mutations(), 1);
+  assert.equal(saved.runtimes.claude.modelPrices['claude-opus-4'].input, 11);
+  assert.equal(saved.runtimes.codex.modelPrices['gpt-6-astra'].input, 17);
+  const disk = parseConfigFile(server.configPath);
+  assert.equal(disk.runtimeModelPrices.codex['gpt-6-astra'].input, 17);
+  assert.equal(disk.modelPrices['claude-opus-4'].input, 11);
+  assert.equal(disk.runtimeFastModeMultipliers.claude, 7);
+});
+
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('invalid combined settings leave both memory and disk unchanged with zero mutations', async t => {
+  const server = await makeSettingsServer(t);
+  const all = await (await fetch(server.origin + '/api/settings?all=1')).json();
+  const claude = structuredClone(all.runtimes.claude.modelPrices);
+  claude['claude-opus-4'].input = 19;
+  const missing = structuredClone(all.runtimes.codex.modelPrices);
+  delete missing['gpt-6-astra'];
+  const before = fs.readFileSync(server.configPath, 'utf8');
+  for (const body of [
+    { runtimes: { claude: { modelPrices: claude }, codex: { modelPrices: missing } } },
+    { runtimes: { claude: { priorityModelPrices: {} } } },
+    { runtimes: { codex: { fastModeMultiplier: 2 } } },
+    { runtimes: { claude: {} }, modelPrices: claude },
+    { runtimes: { foo: {} } }, { runtimes: null }, { runtimes: [] },
+  ]) {
+    const response = await fetch(server.origin + '/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 400);
+    assert.equal(fs.readFileSync(server.configPath, 'utf8'), before);
+  }
+  assert.equal(server.mutations(), 0);
+  assert.deepEqual(await (await fetch(server.origin + '/api/settings?all=1')).json(), all);
+});
+
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('explicit runtime metadata reads saved defaults for active and inactive runtimes', async t => {
+  const server = await makeSettingsServer(t);
+  fs.mkdirSync(path.join(server.dir, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(server.dir, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(server.dir, '.claude/settings.json'), JSON.stringify({ model: 'opus', effortLevel: 'low' }));
+  fs.writeFileSync(path.join(server.dir, '.codex/config.toml'), 'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n');
+  for (const [runtime, effort] of [['claude', 'low'], ['codex', 'high']]) {
+    const response = await fetch(server.origin + '/api/actions/meta?runtime=' + runtime);
+    assert.equal(response.status, 200);
+    const meta = await response.json();
+    assert.equal(meta.runtime, runtime);
+    assert.equal(meta.current_effort, effort);
+    assert.equal(meta.runtime_cli, runtime);
+  }
+  assert.equal((await fetch(server.origin + '/api/actions/meta?runtime=foo')).status, 400);
+  assert.equal((await fetch(server.origin + '/api/actions/meta')).status, 200);
+});
+
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('override pages support read credentials and preserve bounded CLI arguments', async t => {
+  const calls = [];
+  const server = await makeSettingsServer(t, 'claude', { auth: { enabled: true, password: 'scrypt:fixture' } }, (file, args, options) => {
+    calls.push({ file, args, options });
+    return { ok: true, data: { runtimeTotal: 100000, runtime: [{ sessionGroup: 'chat:AbC', runtime: 'codex' }], nextAfter: 'chat:AbC' } };
+  });
+  server.store.insertApiKey({ name: 'read-fixture', keyHash: hashApiKey('zylos_ak_fixture'), scope: 'read' });
+  const token = exchangeApiKeyForToken('zylos_ak_fixture').token;
+  const headers = { Authorization: `Bearer ${token}` };
+  assert.equal((await fetch(server.origin + '/api/workbench/runtime-overrides')).status, 401);
+  assert.equal(calls.length, 0);
+  const response = await fetch(server.origin + '/api/workbench/runtime-overrides', { headers });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.runtimeTotal, 100000);
+  assert.equal(data.runtime.length, 1);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['group', 'overrides', '--json']);
+  assert.equal(calls[0].file, 'zylos');
+  assert.equal(calls[0].options.env.ZYLOS_DIR, server.dir);
+  assert.equal(calls[0].options.env.ZYLOS_SESSION_GROUP, undefined);
+  assert.equal(calls[0].options.timeout, 15000);
+  assert.equal(calls[0].options.maxBuffer, 1024 * 1024);
+  for (const q of [' ', 'x'.repeat(65), '竞品', '--b', '--upstream-x']) {
+    const prior = calls.length;
+    const result = await fetch(server.origin + '/api/workbench/runtime-overrides?q=' + encodeURIComponent(q), { headers });
+    assert.equal(result.status, 200);
+    assert.equal((await result.json()).runtime.length, 0);
+    assert.equal(calls.length, prior);
+  }
+  for (const q of ['a--b', 'AbC']) {
+    await fetch(server.origin + '/api/workbench/runtime-overrides?q=' + q + '&after=chat%3Acursor', { headers });
+    assert.deepEqual(calls.at(-1).args, ['group', 'overrides', '--match', q, '--after', 'chat:cursor', '--json']);
+  }
+  assert.equal((await fetch(server.origin + '/api/workbench/pricing', { headers })).status, 200);
+});
+
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('override search puts display-name matches first and removes them from every key page', async t => {
+  const calls = [];
+  const server = await makeSettingsServer(t, 'claude', {}, (_file, args) => {
+    calls.push(args);
+    if (args.includes('--group')) return { ok: true, data: { runtime: [{ sessionGroup: 'chat:oc_named', runtime: 'codex' }] } };
+    if (args.includes('--after')) return { ok: true, data: { runtime: [
+      { sessionGroup: 'chat:oc_named', runtime: 'codex' }, { sessionGroup: 'chat:oc_tail', runtime: 'claude' },
+    ], nextAfter: null } };
+    return { ok: true, data: { runtime: [{ sessionGroup: 'chat:oc_key', runtime: 'claude' }], nextAfter: 'chat:oc_key' } };
+  });
+  server.store.writeGroupDisplayName('chat:oc_named', '竞品调研 oc_', 'human');
+  server.store.writeGroupDisplayName('chat:no_override', '竞品分析', 'human');
+  server.store.writeGroupDisplayName('chat:oc_key', 'Saved title', 'human');
+  const chinese = await (await fetch(server.origin + '/api/workbench/runtime-overrides?q=' + encodeURIComponent('竞品'))).json();
+  assert.equal(chinese.runtime.length, 1);
+  assert.equal(chinese.runtime[0].name.displayName, '竞品调研 oc_');
+  assert.ok(calls[0].includes('chat:no_override'));
+  assert.equal(calls.some(args => args.includes('--match')), false);
+  calls.length = 0;
+  const first = await (await fetch(server.origin + '/api/workbench/runtime-overrides?q=oc_')).json();
+  assert.deepEqual(first.runtime.map(row => row.sessionGroup), ['chat:oc_named', 'chat:oc_key']);
+  assert.equal(first.runtime[1].name.displayName, 'Saved title');
+  const second = await (await fetch(server.origin + '/api/workbench/runtime-overrides?q=oc_&after=' + encodeURIComponent(first.nextAfter))).json();
+  assert.equal(second.runtime.length, 1);
+  assert.equal(second.runtime[0].sessionGroup, 'chat:oc_tail');
+  assert.equal(calls.filter(args => args.includes('--group')).length, 1);
+  assert.deepEqual(calls.at(-1), ['group', 'overrides', '--match', 'oc_', '--after', 'chat:oc_key', '--json']);
+});
+
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('override source failures and malformed envelopes return one failure code', async t => {
+  let output;
+  const server = await makeSettingsServer(t, 'claude', {}, () => {
+    if (output instanceof Error) throw output;
+    return output;
+  });
+  for (const bad of [new Error('Core failed'), '{', { ok: false }, { ok: true, data: { runtime: [{}] } },
+    { ok: true, data: { runtime: [], runtimeTotal: 'invalid' } }]) {
+    output = bad;
+    const response = await fetch(server.origin + '/api/workbench/runtime-overrides');
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: 'override_list_failed' });
+  }
+  server.store.writeGroupDisplayName('chat:named', '竞品', 'human');
+  output = new Error('named lookup failed');
+  const response = await fetch(server.origin + '/api/workbench/runtime-overrides?q=' + encodeURIComponent('竞品'));
+  assert.equal(response.status, 502);
+  t.mock.method(server.store, 'searchGroupDisplayNames', () => { throw new Error('names unreadable'); });
+  assert.equal((await fetch(server.origin + '/api/workbench/runtime-overrides?q=abc')).status, 502);
+});
+
+// HTTP integration via makeSettingsServer: actual route/config persistence;
+// run when this behavior changes, skip presentation-only changes. Private
+// runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
+test('pricing usage aggregates dimension tokens and preserves old costs after price edits', async t => {
+  const server = await makeSettingsServer(t, 'codex');
+  const insert = server.store.db.prepare("INSERT INTO metric_points(timestamp,runtime,metric_name,metric_value,dimensions,source) VALUES(?,?,'usage_event',999,?,'fixture')");
+  const now = new Date().toISOString(), old = new Date(Date.now() - 8 * 86400000).toISOString();
+  for (const [runtime, dimensions, timestamp = now] of [
+    ['codex', { model: 'gpt-reserve', total_input: 1000000 }],
+    ['codex', { model: 'gpt-reserve', output: 400000 }],
+    ['codex', { model: 'old-unmatched', total_input: 2 }, old],
+    ['claude', { model: 'claude-opus-4', cost: 3 }],
+    ['codex', { model: 'gpt-6-astra', cost: 5 }],
+    ['codex', { model: 'empty' }],
+  ]) insert.run(timestamp, runtime, JSON.stringify(dimensions));
+  const usage = await (await fetch(server.origin + '/api/workbench/pricing')).json();
+  assert.equal(usage.unmatched.length, 1);
+  assert.deepEqual(usage.unmatched[0], { runtime: 'codex', model: 'gpt-reserve', tokens: 1400000 });
+  assert.equal(usage.models.find(row => row.model === 'claude-opus-4').cost, 3);
+  assert.equal(usage.models.some(row => row.model === 'old-unmatched'), false);
+  const collector = new CodexRolloutCollector(server.store, server.config);
+  const mapping = { session_id: 'fixture-codex' };
+  const ingest = id => collector._ingestTokenCount({ id, model: 'gpt-6-astra', last_token_usage: { input_tokens: 1000, output_tokens: 100 } }, now, mapping);
+  assert.equal(ingest('price-before'), 1);
+  const readCost = id => JSON.parse(server.store.db.prepare("SELECT dimensions FROM metric_points WHERE json_extract(dimensions,'$.event_id')=?").get(id).dimensions).cost;
+  const before = readCost('price-before');
+  const all = await (await fetch(server.origin + '/api/settings?all=1')).json();
+  const prices = all.runtimes.codex.modelPrices;
+  prices['gpt-6-astra'].input += 20;
+  const saved = await fetch(server.origin + '/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runtimes: { codex: { modelPrices: prices } } }) });
+  assert.equal(saved.status, 200);
+  assert.equal(ingest('price-after'), 1);
+  assert.equal(readCost('price-before'), before);
+  assert.ok(Math.abs(readCost('price-after') - before - 0.02) < 1e-9);
 });

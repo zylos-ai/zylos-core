@@ -195,8 +195,8 @@ function deriveActivityFeed(state) {
 }
 
 function percentile95(values) {
-  if (!Array.isArray(values) || values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = (Array.isArray(values) ? values : []).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
   const index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
   return sorted[index] ?? null;
 }
@@ -297,6 +297,9 @@ function sanitizeRecord(record) {
     pulse_rate: record.pulse_rate,
     health_reason: record.health_reason,
     link: sanitizeLink(record.link),
+    latency: { samples: Array.isArray(record.latency?.samples) ? record.latency.samples.map(sample => ({
+      at: stringOrNull(sample.at), ms: numberOrNull(sample.ms),
+    })).slice(-LATENCY_SAMPLE_LIMIT) : [] },
     updated_at: record.updated_at,
     base_url: record.base_url,
     self: record.self === true,
@@ -603,14 +606,17 @@ export class FleetPoller {
     if (!record) return null;
     return sanitizeRecord({
       ...record,
-      link: this._deriveLink(agent, record)
+      link: this._deriveLink(agent, record),
+      latency: { samples: (this.latency.get(agent.name)?.samples || []).map(sample => ({
+        at: nowIso(sample.sampledAtMs), ms: sample.latencyMs,
+      })) }
     });
   }
 
   _deriveLink(agent, record = {}) {
     const state = this.latency.get(agent.name);
     const samples = state?.samples || [];
-    const lastSample = samples.at(-1) || null;
+    const lastSample = samples.findLast(sample => sample.latencyMs !== null) || null;
     const latencies = samples.map(sample => sample.latencyMs);
     const p95 = percentile95(latencies);
     const base = {
@@ -635,7 +641,7 @@ export class FleetPoller {
       return { ...base, quality: 'degraded', reason: state.failureReason || 'unreachable' };
     }
 
-    if (samples.length >= 5 && p95 != null && p95 > this.slowThresholdMs) {
+    if (latencies.filter(Number.isFinite).length >= 5 && p95 != null && p95 > this.slowThresholdMs) {
       return { ...base, quality: 'slow', reason: null };
     }
 
@@ -786,6 +792,10 @@ export class FleetPoller {
       state.failureReason = null;
     } catch (err) {
       if (!this._isCurrentAgent(agent, generation)) return;
+      state.samples.push({ latencyMs: null, sampledAtMs: this.now() });
+      if (state.samples.length > LATENCY_SAMPLE_LIMIT) {
+        state.samples.splice(0, state.samples.length - LATENCY_SAMPLE_LIMIT);
+      }
       state.consecutiveFailures += 1;
       state.failureReason = classifyError(err);
     }

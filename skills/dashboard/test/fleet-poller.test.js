@@ -1406,3 +1406,56 @@ test('sleeping Origin remains online in Fleet', () => {
   const row = stateToFleetRecord({ name: 'Origin' }, { state: 'SLEEPING' }, { self: true });
   assert.equal(row.state, 'SLEEPING'); assert.equal(row.pulse_rate, 1); assert.equal(row.health_reason, 'ok');
 });
+
+// Injected transport and clock: no listener, real fetch, probe loop or subprocess.
+// Run for latency sampling/serialization changes; skip unrelated fleet settings.
+test('latency gaps stay in order while latest-success values and p95 skip failures', async () => {
+  let now = 1000, probe = 0;
+  const durations = [10, null, 30, null, 20];
+  const poller = new FleetPoller(makeConfig([
+    { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
+  ], { slow_threshold_ms: 1 }), { now: () => now, fetch: async () => {
+    const ms = durations[probe++];
+    now += ms ?? 5;
+    if (ms === null) throw new Error('offline');
+    return jsonResponse({ ok: true });
+  } });
+  const agent = poller.agents[0];
+  poller._setSuccess(agent, { state: 'IDLE' });
+  for (let i = 0; i < durations.length; i++) await poller._probeAgentLatency(agent);
+  const record = poller.getFleet().agents[0];
+  assert.equal(record.latency.samples.length, 5);
+  assert.deepEqual(record.latency.samples.map(row => row.ms), durations);
+  assert.equal(record.link.latency_ms, 20);
+  assert.equal(record.link.latency_p95_ms, 30);
+  assert.equal(record.link.quality, 'ok', 'slow classification still needs five successful probes');
+  assert.equal(record.link.sampled_at, record.latency.samples[4].at);
+  for (let i = 1; i < 5; i++) assert.ok(record.latency.samples[i].at > record.latency.samples[i - 1].at);
+});
+
+test('all failed latency samples cap at twenty and retain last-success meaning', async () => {
+  let now = 1000, failed = false;
+  const poller = new FleetPoller(makeConfig([
+    { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
+  ]), { now: () => now, fetch: async () => {
+    now += 10;
+    if (failed) throw new Error('offline');
+    return jsonResponse({ ok: true });
+  } });
+  const agent = poller.agents[0];
+  poller._setSuccess(agent, { state: 'IDLE' });
+  await poller._probeAgentLatency(agent);
+  const successAt = poller.getFleet().agents[0].link.sampled_at;
+  failed = true;
+  await poller._probeAgentLatency(agent);
+  const mixed = poller.getFleet().agents[0];
+  assert.equal(mixed.link.latency_ms, 10);
+  assert.equal(mixed.link.sampled_at, successAt);
+  for (let i = 0; i < 24; i++) await poller._probeAgentLatency(agent);
+  const allFailed = poller.getFleet().agents[0];
+  assert.equal(allFailed.latency.samples.length, 20);
+  assert.ok(allFailed.latency.samples.every(row => row.ms === null));
+  assert.equal(allFailed.link.latency_ms, null);
+  assert.equal(allFailed.link.latency_p95_ms, null);
+  assert.equal(allFailed.link.sampled_at, null);
+});

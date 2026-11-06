@@ -1,3 +1,8 @@
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=83';
+import { createPricingPanel } from './wb/settings-pricing.js?v=83';
+import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=83';
+import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=83';
+import { renderVersion } from './wb/settings-version.js?v=83';
 import { mountWorkbench } from './wb/shell.js?v=84';
 import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=84';
 import { mountSchedule } from './wb/schedule.js?v=84';
@@ -7,7 +12,6 @@ import { pct, resolveCpuDisplay } from './gauge-utils.js';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=84';
 import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
-import { priceWithEditedBaseRates } from './pricing-form.js';
 import {
   captureMetricTarget,
   isMetricTargetCurrent,
@@ -19,7 +23,6 @@ import {
   effortOptionState,
   mergeRuntimeInfo,
   modelOptionState,
-  runtimeLabels,
   submitSelectAction,
 } from './runtime-ui.js';
 
@@ -398,38 +401,7 @@ function renderIdentityChrome() {
 
 function renderInfoBar() {
   renderIdentityChrome();
-  const bar = $('#info-bar');
-  if (!bar) return;
-  const ri = state.dashboardState?.runtime_info;
-  if (!ri) { bar.textContent = ''; return; }
-
-  const parts = [];
-  if (ri.zylos_version) {
-    let zv = `zylos v${ri.zylos_version}`;
-    if (ri.zylos_update) zv += ` <span class="info-bar-hint" id="zylos-update-hint" role="button" tabindex="0" title="${esc(t('info.zylos_update_hint', { version: ri.zylos_update }))}">↑${esc(ri.zylos_update)}</span>`;
-    parts.push(zv);
-  }
-  parts.push(...runtimeLabels(ri, t, effortLabel).map(esc));
-  if (ri.runtime === 'codex') {
-    const codexVersion = ri.codex_running || ri.codex_version || ri.codex_installed;
-    if (codexVersion) {
-      let cv = `Codex v${esc(codexVersion)}`;
-      if (ri.codex_restart) cv += ` <span class="info-bar-update" title="${esc(t('info.restart_available', { version: ri.codex_restart }))}">↑${esc(ri.codex_restart)}</span>`;
-      else if (ri.codex_update) cv += ` <span class="info-bar-update" title="${esc(t('info.update_available', { version: ri.codex_update }))}">↑${esc(ri.codex_update)}</span>`;
-      parts.push(cv);
-    }
-  } else if (ri.cc_version) {
-    let cv = `CC v${esc(ri.cc_version)}`;
-    if (ri.cc_restart) cv += ` <span class="info-bar-update" title="${esc(t('info.restart_available', { version: ri.cc_restart }))}">↑${esc(ri.cc_restart)}</span>`;
-    else if (ri.cc_update) cv += ` <span class="info-bar-update" title="${esc(t('info.update_available', { version: ri.cc_update }))}">↑${esc(ri.cc_update)}</span>`;
-    parts.push(cv);
-  }
-
-  const readOnly = remoteIsReadOnly();
-  const actionsTitle = readOnly ? ` title="${esc(t('remote.actions_read_only_tooltip'))}"` : '';
-  const settingsTitle = readOnly ? ` title="${esc(t('remote.settings_read_only_tooltip'))}"` : '';
-  const buttons = `<span class="info-bar-buttons"><button class="info-bar-actions-btn" id="actions-btn" type="button"${readOnly ? ' disabled' : ''}${actionsTitle}>${esc(t('btn.actions'))}</button><button class="info-bar-gear" id="settings-btn" type="button" aria-label="${esc(t('btn.settings'))}"${settingsTitle}>⚙️</button></span>`;
-  bar.innerHTML = `<span class="info-bar-text">${parts.join(' · ')}</span>${buttons}`;
+  refreshSettingsVersion();
 }
 
 // ─── Render: State ───
@@ -1209,21 +1181,9 @@ function renderAll() {
   renderI18n();
   state.observer.history?.refreshLabels();
   initFleetManageButton();
-  if (fleetManageModal) {
-    const wasOpen = !fleetManageModal.hidden;
-    const draft = {
-      selfName: fleetManageModal.querySelector('#fleet-self-name')?.value || '',
-      name: fleetManageModal.querySelector('#fleet-add-name')?.value || '',
-      baseUrl: fleetManageModal.querySelector('#fleet-add-url')?.value || '',
-      readKey: fleetManageModal.querySelector('#fleet-add-key')?.value || '',
-      keyName: fleetManageModal.querySelector('#api-key-name')?.value || '',
-      keyScope: fleetManageModal.querySelector('#api-key-scope')?.value || 'read',
-      activeTab: fleetManageModal.querySelector('.modal-tab.active')?.dataset.tab || 'fleet',
-      createdKey: fleetManageModal._createdKey || null
-    };
-    fleetManageModal.remove();
-    fleetManageModal = null;
-    if (wasOpen) openFleetManageModal(draft);
+  if (settingsPage) {
+    settingsPage.detail(document.documentElement.dataset.detail);
+    refreshSettingsVersion();
   }
   _lastRuntimeApplied = null;
   applyRuntimeVisibility();
@@ -2537,10 +2497,7 @@ function scheduleSseReconnect() {
 function initTabs() {
   const activateTab = (name, push = false) => {
     if (name === 'usage') name = 'trends';
-    if (name === 'settings') {
-      openSettingsModal();
-      name = 'overview';
-    }
+    if (name !== 'settings') settingsLoader?.invalidate();
     if (push) state.navigationGeneration += 1;
     if (name === 'memory' && remoteIsReadOnly()) name = 'overview';
     if (name === 'observer' && ($('#observer-tab')?.hidden || remoteIsReadOnly())) name = 'overview';
@@ -2552,6 +2509,7 @@ function initTabs() {
       p.hidden = !active;
     });
     syncMemoryPinned();
+    if (name === 'settings') refreshSettingsPage();
     if (name === 'trends') refreshCharts();
     if (name === 'memory') loadMemoryTree().catch(() => {});
     if (name === 'observer') {
@@ -2698,10 +2656,16 @@ function applyFleetMode(fleet) {
   if (fleetView) fleetView.hidden = true;
   if (agentDetail) agentDetail.hidden = false;
   syncFleetSubscription();
+  if (tabForPath(window.location.pathname) === 'settings') {
+    state.fleetModeInitialized = true;
+    return;
+  }
   if (prefersReducedMotion()) {
     showFleetView({ animate: false });
   } else {
-    setTimeout(() => showFleetView({ animate: true }), 380);
+    setTimeout(() => {
+      if (tabForPath(window.location.pathname) !== 'settings') showFleetView({ animate: true });
+    }, 380);
   }
   state.fleetModeInitialized = true;
 }
@@ -2826,10 +2790,7 @@ function initFleetMode() {
 function initLocaleToggle() {
   $('#locale-toggle').addEventListener('click', async () => {
     await initI18n(getLocale() === 'zh' ? 'en' : 'zh');
-    if (actionsModal) { actionsModal.remove(); actionsModal = null; }
-    if (settingsModal) { settingsModal.remove(); settingsModal = null; }
-    renderAll();
-    refreshCharts();
+    window.location.reload();
   });
 }
 
@@ -3369,6 +3330,8 @@ function renderFleetManage(data, draft = null) {
         <small>${esc(agent.key_masked || '')} · ${esc(agent.access || 'read')}</small>
       </div>
       <button class="settings-remove-btn fleet-agent-remove" type="button" title="${esc(t('btn.remove'))}">&times;</button>`;
+    const latency = state.fleet?.agents?.find(item => item.name === agent.name)?.latency?.samples;
+    if (latency) { const chart = renderLatency(row, latency, { t }); chart.dataset.settingsLatency = ''; chart.hidden = document.documentElement.dataset.detail !== 'technical'; }
     row.querySelector('.fleet-agent-remove').addEventListener('click', () => removeFleetAgent(agent.name));
     return row;
   }));
@@ -3455,39 +3418,7 @@ async function loadApiKeys() {
   }
 }
 
-async function openFleetManageModal(draft = null) {
-  if (REMOTE_AGENT) return;
-  const modal = createFleetManageModal();
-  modal.hidden = false;
-  if (draft) {
-    modal.querySelector('#fleet-self-name').value = draft.selfName || '';
-    modal.querySelector('#fleet-add-name').value = draft.name || '';
-    modal.querySelector('#fleet-add-url').value = draft.baseUrl || '';
-    modal.querySelector('#fleet-add-key').value = draft.readKey || '';
-    modal.querySelector('#api-key-name').value = draft.keyName || '';
-    modal.querySelector('#api-key-scope').value = draft.keyScope || 'read';
-    renderCreatedApiKey(draft.createdKey || null);
-  }
-  updateApiKeyScopeWarning();
-  fleetManageStatus(t('status.loading'), 'running');
-  try {
-    const resp = await fetch(api('/api/fleet/agents'), { cache: 'no-store' });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || t('fleet_manage.load_failed'));
-    renderFleetManage(data, draft);
-    if (draft?.activeTab === 'keys') switchFleetManageTab('keys');
-    fleetManageStatus('', '');
-  } catch (err) {
-    fleetManageStatus(err.message, 'error');
-  }
-}
-
-function closeFleetManageModal() {
-  if (!fleetManageModal) return;
-  fleetManageModal.hidden = true;
-  // #242: never carry a stale status into the next open.
-  fleetManageStatus('');
-}
+function closeFleetManageModal() { fleetManageStatus(''); }
 
 async function testFleetAgent() {
   const body = fleetFormValues();
@@ -3674,8 +3605,6 @@ async function saveFleetSelfName() {
 }
 
 let settingsModal = null;
-let settingsBuiltInModels = new Set();
-let settingsBuiltInPriorityModels = new Set();
 
 function createSettingsModal() {
   if (settingsModal) return settingsModal;
@@ -3762,7 +3691,7 @@ function createSettingsModal() {
 
   overlay.querySelector('.modal-close').addEventListener('click', closeSettingsModal);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeSettingsModal(); });
-  overlay.querySelector('#settings-cancel').addEventListener('click', closeSettingsModal);
+  overlay.querySelector('#settings-cancel').addEventListener('click', () => refreshSettingsPage());
   overlay.querySelector('#settings-save').addEventListener('click', saveSettings);
   overlay.querySelector('#settings-add-model').addEventListener('click', () => addPriceRow('', { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, false));
   overlay.querySelector('#settings-add-priority-model').addEventListener('click', () => addPriceRow('', { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, false, 'settings-priority-price-rows'));
@@ -3792,7 +3721,7 @@ function applySettingsReadOnly(readOnly) {
   settingsModal.querySelector('#settings-add-model').disabled = readOnly;
   settingsModal.querySelector('#settings-add-priority-model').disabled = readOnly;
   settingsModal.querySelectorAll('.settings-input, .settings-remove-btn').forEach((el) => {
-    el.disabled = readOnly;
+    if (!el.closest('.manage-panel')) el.disabled = readOnly;
   });
   settingsModal.querySelectorAll('.observer-settings-actions button').forEach((el) => {
     el.disabled = readOnly || Boolean(state.observer.lifecyclePending);
@@ -3950,119 +3879,99 @@ function addPriceRow(prefix, prices, builtIn, rowsId = 'settings-price-rows') {
   tbody.appendChild(tr);
 }
 
-async function openSettingsModal() {
-  const modal = createSettingsModal();
-  const status = modal.querySelector('#settings-status');
-  const readOnly = remoteIsReadOnly();
-  status.hidden = true;
-  applySettingsReadOnly(readOnly);
+let settingsPage = null;
+let settingsLoader = null;
+let settingsPricing = null;
+let settingsDefaults = null;
+let settingsSnapshot = null;
+let settingsUpgrade = null;
+let settingsVersionRoot = null;
+let settingsActionDescription = '';
 
+function initSettingsPage() {
+  const root = $('#tab-settings');
+  const oldSettings = createSettingsModal(), oldFleet = createFleetManageModal(), oldActions = createActionsModal();
+  const controls = ['#locale-toggle', '#fleet-sound-toggle', '#wb-detail-toggle', '#logout-btn', '#connection-status'].map(selector => {
+    const node = $(selector); return selector === '#wb-detail-toggle' ? node?.closest('label') : node;
+  });
+  settingsPage = composeSettings(root, { settings: oldSettings, fleet: oldFleet, actions: oldActions, controls, t });
+  oldSettings.remove(); oldFleet.remove(); oldActions.remove();
+  settingsModal = root; fleetManageModal = root; actionsModal = root;
+  settingsUpgrade = root.querySelector('[data-action="upgrade-cc"]');
+  settingsVersionRoot = document.createElement('section'); settingsVersionRoot.id = 'settings-version'; settingsPage.sections.ui.append(settingsVersionRoot);
+  let theme = 'light'; try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
+  mountThemeControl(settingsPage.sections.ui, { t, value: theme, onChange: initTheme });
+  const observerNote = document.createElement('p'); observerNote.textContent = t('wb.settings.observerNote'); settingsPage.sections.observer.prepend(observerNote);
+  const fleetNote = document.createElement('p'); fleetNote.textContent = t('wb.settings.fleetNameNote'); settingsPage.sections.fleet.prepend(fleetNote);
+  const defaults = document.createElement('div'); defaults.id = 'settings-defaults'; settingsPage.sections.defaults.prepend(defaults);
+  const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
+  settingsLoader = createSettingsLoader({ read, onLoad(value) {
+    settingsSnapshot = value.snapshot;
+    settingsDefaults?.destroy();
+    settingsDefaults = renderDefaults(defaults, { ...value, t, read,
+      execute: executeSettingsAction, writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup });
+    settingsPricing?.destroy(); settingsPricing = null;
+    if (value.prices) {
+      settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
+        data: value.prices, usage: value.usage, t, writable: () => !remoteIsReadOnly(),
+        write: body => requestAgentJson('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
+    } else { const status = root.querySelector('#settings-status'); status.hidden = false; status.textContent = t('wb.readFailed'); }
+    const active = value.prices?.active ?? value.snapshot?.baselineRuntime;
+    const meta = value.metadata[active] ?? value.metadata.claude ?? value.metadata.codex;
+    root.querySelector('#action-threshold').value = meta?.new_session_threshold ?? state.newSessionThreshold ?? 70;
+    refreshSettingsLocks(); refreshSettingsVersion();
+  } });
+  $('#wb-detail-toggle').addEventListener('change', () => {
+    settingsPage.detail($('#wb-detail-toggle').checked ? 'technical' : 'plain');
+    root.querySelectorAll('[data-settings-latency]').forEach(node => { node.hidden = !$('#wb-detail-toggle').checked; });
+  });
+  refreshSettingsVersion();
+}
+
+function refreshSettingsVersion() {
+  if (!settingsVersionRoot) return;
+  renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
+}
+function refreshSettingsLocks() {
+  if (!settingsPage) return;
+  applySettingsReadOnly(remoteIsReadOnly());
+  if (!settingsPricing) { for (const node of settingsModal.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier')) node.disabled = true; }
+  for (const node of settingsPage.sections.defaults.querySelectorAll('#action-mode, #action-threshold, #action-threshold-apply')) node.disabled = remoteIsReadOnly();
+  settingsDefaults?.refreshLocks();
+  refreshSettingsVersion();
+}
+async function executeSettingsAction(action, body) {
+  settingsActionDescription = action === 'switch-runtime' ? runtimeConfirmation(settingsSnapshot, t) : '';
+  try { return await execAction(action, body); }
+  finally { settingsActionDescription = ''; if (!countdownTimer) refreshSettingsLocks(); }
+}
+function refreshSettingsPage() {
+  closeSettingsModal();
+  settingsLoader?.open();
   refreshObserverStatus({ quiet: true }).catch(() => {});
-
-  try {
-    const resp = await fetch(api(agentPath('/api/settings')));
-    if (!resp.ok) throw new Error('Failed to load settings');
-    const data = await resp.json();
-    const runtimeLabel = data.runtime === 'codex' ? 'Codex' : 'Claude';
-    settingsBuiltInModels = new Set(data.builtInModels || []);
-    settingsBuiltInPriorityModels = new Set(data.builtInPriorityModels || []);
-    const pricingLabel = document.getElementById('settings-pricing-label');
-    if (pricingLabel) {
-      pricingLabel.firstChild.textContent = t('settings.model_pricing_runtime', { runtime: runtimeLabel });
-    }
-
-    const tbody = document.getElementById('settings-price-rows');
-    tbody.innerHTML = '';
-    for (const [prefix, prices] of Object.entries(data.modelPrices || {})) {
-      addPriceRow(prefix, prices, settingsBuiltInModels.has(prefix));
-    }
-
-    const priorityGroup = document.getElementById('settings-priority-pricing-group');
-    if (priorityGroup) priorityGroup.hidden = data.runtime !== 'codex';
-    const priorityTbody = document.getElementById('settings-priority-price-rows');
-    if (priorityTbody) {
-      priorityTbody.innerHTML = '';
-      for (const [prefix, prices] of Object.entries(data.priorityModelPrices || {})) {
-        addPriceRow(prefix, prices, settingsBuiltInPriorityModels.has(prefix), 'settings-priority-price-rows');
-      }
-    }
-
-    const fastModeGroup = document.getElementById('settings-fast-mode-group');
-    if (fastModeGroup) fastModeGroup.hidden = data.fastMode?.mode !== 'multiplier';
-    const fastInput = document.getElementById('settings-fast-multiplier');
-    if (fastInput) {
-      const configured = data.fastMode?.configuredMultiplier;
-      fastInput.value = configured === null ? '' : configured ?? data.fastMode?.multiplier ?? data.fastModeMultiplier ?? 6;
-      fastInput.dataset.initialValue = fastInput.value;
-      fastInput.placeholder = t('settings.model_defaults');
-      fastInput.disabled = readOnly;
-    }
-    applySettingsReadOnly(readOnly);
-  } catch (err) {
-    status.textContent = err.message;
-    status.hidden = false;
+  refreshModeStatus().catch(() => {});
+  if (!REMOTE_AGENT) {
+    const identity = observerTargetKey();
+    fetch(api('/api/fleet/agents'), { cache: 'no-store' }).then(async response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).then(value => { if (identity === observerTargetKey()) renderFleetManage(value); }).catch(error => { if (identity === observerTargetKey()) fleetManageStatus(error.message, 'error'); });
+    loadApiKeys();
   }
-
-  modal.hidden = false;
+  for (const name of ['fleet', 'keys']) { const remote = Boolean(REMOTE_AGENT); const button = document.querySelector(`[data-settings-section="${name}"]`); if (button) button.hidden = remote; if (remote) settingsPage.sections[name].hidden = true; }
 }
-
+function openSettingsModal(section = 'defaults') {
+  showAgentDetail({ navigation: false });
+  document.querySelectorAll('.tab').forEach(node => node.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(node => { const active = node.id === 'tab-settings'; node.hidden = !active; node.classList.toggle('active', active); });
+  window.history.pushState({ tab: 'settings' }, '', api(`${remotePrefix()}/settings`));
+  settingsPage?.select(section);
+  refreshSettingsPage();
+}
 function closeSettingsModal() {
-  if (settingsModal) settingsModal.hidden = true;
+  settingsLoader?.invalidate();
+  settingsDefaults?.destroy(); settingsDefaults = null;
+  settingsPricing?.destroy(); settingsPricing = null; settingsSnapshot = null;
+  if (settingsModal) resetSettingsDrafts(settingsModal);
 }
-
-async function saveSettings() {
-  if (remoteIsReadOnly()) return;
-  const status = settingsModal.querySelector('#settings-status');
-  status.hidden = true;
-
-  const modelPrices = {};
-  const rows = document.querySelectorAll('#settings-price-rows tr');
-  for (const row of rows) {
-    const inputs = row.querySelectorAll('input');
-    const prefix = inputs[0].value.trim();
-    if (!prefix) continue;
-    modelPrices[prefix] = priceWithEditedBaseRates(row._originalPrice, [...inputs].slice(1, 5).map(input => input.value));
-  }
-
-  const fastModeGroup = document.getElementById('settings-fast-mode-group');
-  const body = { modelPrices };
-  const priorityGroup = document.getElementById('settings-priority-pricing-group');
-  if (priorityGroup && !priorityGroup.hidden) {
-    const priorityModelPrices = {};
-    const priorityRows = document.querySelectorAll('#settings-priority-price-rows tr');
-    for (const row of priorityRows) {
-      const inputs = row.querySelectorAll('input');
-      const prefix = inputs[0].value.trim();
-      if (!prefix) continue;
-      priorityModelPrices[prefix] = priceWithEditedBaseRates(row._originalPrice, [...inputs].slice(1, 5).map(input => input.value));
-    }
-    body.priorityModelPrices = priorityModelPrices;
-  }
-  if (!fastModeGroup?.hidden) {
-    const fastInput = document.getElementById('settings-fast-multiplier');
-    if (fastInput.value !== fastInput.dataset.initialValue) {
-      body.fastModeMultiplier = fastInput.value === '' ? null : Number(fastInput.value);
-    }
-  }
-
-  try {
-    const resp = await fetch(api(agentPath('/api/settings')), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || t('settings.save_failed'));
-    status.textContent = t('settings.saved');
-    status.className = 'modal-status settings-status-ok';
-    status.hidden = false;
-    setTimeout(() => closeSettingsModal(), 1200);
-  } catch (err) {
-    status.textContent = err.message;
-    status.className = 'modal-status';
-    status.hidden = false;
-  }
-}
+async function saveSettings() { return settingsPricing?.save(); }
 
 // ─── Actions Modal ───
 let actionsModal = null;
@@ -4254,32 +4163,36 @@ function createActionsModal() {
 }
 
 async function refreshModeStatus() {
+  const targetKey = observerTargetKey();
   if (pendingManualRestart) {
     try {
       const result = await fetchJson(`/api/restart-status?requestId=${encodeURIComponent(pendingManualRestart.requestId)}`);
+      if (observerTargetKey() !== targetKey) return;
       const text = actionsModal?.querySelector('#action-restart-status');
       const ready = result.origin?.ready && result.origin.runId !== pendingManualRestart.runId;
       if (text) text.textContent = t('actions.restart_progress', { submission: pendingManualRestart.submission, completion: result.completion === 'deadline_exceeded' ? 'unknown' : result.completion, ready: ready ? t('actions.ready') : t('value.unknown') });
       if (result.completion === 'done' || ready) pendingManualRestart = null;
-    } catch {}
+    } catch { if (observerTargetKey() !== targetKey) return; }
   }
   const text = actionsModal?.querySelector('#action-mode-status');
   try {
     const result = await fetchJson('/api/session-mode');
+    if (observerTargetKey() !== targetKey) return;
     if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
     const data = result.data;
     const mode = ['single', 'multi'].includes(data.sessionMode) ? data.sessionMode : null;
     if (mode) actionsModal.querySelector('#action-mode').value = mode;
     text.textContent = [mode || t('value.unknown'), data.transition?.phase, data.transition?.reason, data.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', data.blocked?.since ? t('actions.blocked_since', { time: data.blocked.since }) : ''].filter(Boolean).join(' · ');
-  } catch (error) { if (text) text.textContent = error.message; }
+  } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {
     const result = await fetchJson('/api/instance-status');
+    if (observerTargetKey() !== targetKey) return;
     if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
     const data = result.data || {};
     const originState = data.origin?.status?.state || data.origin?.presence || t('value.unknown');
     if (instanceText) instanceText.textContent = t('actions.instance_status', { view: data.view || t('value.unknown'), mode: data.sessionMode || t('value.unknown'), origin: originState });
-  } catch (error) { if (instanceText) instanceText.textContent = error.message; }
+  } catch (error) { if (observerTargetKey() !== targetKey) return; if (instanceText) instanceText.textContent = error.message; }
 }
 
 async function openActionsModal() {
@@ -4374,7 +4287,7 @@ function closeActionsModal() {
   modeStatusTimer = null;
   if (!actionsModal) return;
   if (pendingConfirmCancel) { pendingConfirmCancel(); pendingConfirmCancel = null; }
-  actionsModal.hidden = true;
+  if (!settingsPage) actionsModal.hidden = true;
   const confirm = actionsModal.querySelector('#action-confirm');
   if (confirm) confirm.hidden = true;
   const status = actionsModal.querySelector('#action-status');
@@ -4450,7 +4363,7 @@ function showConfirm(text) {
     const cancelBtn = actionsModal?.querySelector('#action-confirm-cancel');
     if (!box || !msg || !okBtn || !cancelBtn) { resolve(false); return; }
 
-    msg.textContent = text;
+    msg.textContent = [text, settingsActionDescription].filter(Boolean).join('\n');
     box.hidden = false;
     setModalBodyDisabled(true);
 
@@ -4458,6 +4371,7 @@ function showConfirm(text) {
       pendingConfirmCancel = null;
       box.hidden = true;
       setModalBodyDisabled(false);
+      refreshSettingsLocks();
       okBtn.removeEventListener('click', onOk);
       cancelBtn.removeEventListener('click', onCancel);
     }
@@ -4574,24 +4488,10 @@ function toggleZylosUpdateHint(anchor) {
 }
 
 function initInfoBarButtons() {
-  document.addEventListener('keydown', (e) => {
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.closest?.('#zylos-update-hint')) {
-      e.preventDefault();
-      toggleZylosUpdateHint(e.target.closest('#zylos-update-hint'));
-    } else if (e.key === 'Escape') {
-      toggleZylosUpdateHint(null);
-    }
-  });
-  document.addEventListener('click', (e) => {
-    const hint = e.target.closest('#zylos-update-hint');
-    if (hint) { e.preventDefault(); toggleZylosUpdateHint(hint); return; }
-    toggleZylosUpdateHint(null);
-    if (e.target.closest('#fleet-manage-btn')) { e.preventDefault(); openFleetManageModal(); return; }
-    if (e.target.closest('#settings-btn')) { e.preventDefault(); openSettingsModal(); return; }
-    if (e.target.closest('#actions-btn, .info-bar-update')) {
-      e.preventDefault();
-      if (!remoteIsReadOnly()) openActionsModal();
-    }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') toggleZylosUpdateHint(null); });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#settings-zylos-update')) toggleZylosUpdateHint(null);
+    if (e.target.closest('#fleet-manage-btn')) { e.preventDefault(); openSettingsModal('fleet'); }
   });
 }
 
@@ -4625,6 +4525,7 @@ document.querySelector('#wb-settings-btn')?.addEventListener('click', () => open
 window.addEventListener('pagehide', () => stopTheme?.());
 await initI18n();
 await refreshObserverStatus({ quiet: true });
+initSettingsPage();
 initTabs();
 initFleetMode();
 initLocaleToggle();
@@ -4656,7 +4557,7 @@ const workbench = mountWorkbench({
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   openSettings: section => {
-    openSettingsModal();
+    openSettingsModal(section === 'observer' ? 'observer' : 'defaults');
     if (section === 'observer') document.querySelector('#observer-settings-group')?.scrollIntoView({ block: 'center' });
   },
   writable: () => wbWritable(remoteIsReadOnly),
@@ -4668,7 +4569,8 @@ export function openWorkbenchGroup(key) {
   document.querySelector('.tab[data-tab="overview"]')?.click();
   return workbench.openGroup(key);
 }
-window.addEventListener('pagehide', () => workbench.destroy());
+settingsPage?.detail(document.documentElement.dataset.detail);
+window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); });
 const stopSchedule = mountSchedule({
   t,
   locale: getLocale,

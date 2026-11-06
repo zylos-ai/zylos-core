@@ -197,25 +197,25 @@ test('runtime info upgrade badges use semver-aware comparison', () => {
   assert.doesNotMatch(index, /latest\.zylos !== zylosVersion/);
 });
 
-test('Codex runtime renders CLI update badge in info bar and actions modal', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /const codexVersion = ri\.codex_running \|\| ri\.codex_version \|\| ri\.codex_installed;/);
-  assert.match(app, /if \(ri\.codex_restart\) cv \+=/);
-  assert.match(app, /else if \(ri\.codex_update\) cv \+=/);
+test('Codex runtime renders CLI update badge in settings and the preserved action loader', () => {
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
+  assert.match(version, /ri\.codex_running \|\| ri\.codex_version \|\| ri\.codex_installed/);
+  assert.match(version, /ri\.codex_restart \|\| ri\.codex_update/);
   assert.match(app, /const cliUpdate = meta\.runtime_cli === 'codex' \? ri\?\.codex_restart \|\| ri\?\.codex_update : ri\?\.cc_update;/);
   assert.match(app, /ccVer\.classList\.toggle\('action-ver-dot', !!cliUpdate\)/);
 });
 
-test('zylos-core upgrade is left to the agent: no Actions button, info bar shows a non-action hint', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  const en = JSON.parse(fs.readFileSync(new URL('../public/i18n/en.json', import.meta.url).pathname, 'utf8'));
-  const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/zh.json', import.meta.url).pathname, 'utf8'));
+test('zylos-core upgrade stays an agent hint in settings', () => {
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
+  const en = JSON.parse(fs.readFileSync(new URL('../public/i18n/en.json', import.meta.url), 'utf8'));
+  const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/zh.json', import.meta.url), 'utf8'));
   assert.doesNotMatch(app, /data-action="upgrade-zylos"/);
   assert.doesNotMatch(app, /action-zylos-ver/);
   assert.match(app, /data-action="upgrade-cc"/);
-  assert.match(app, /if \(ri\.zylos_update\) zv \+= ` <span class="info-bar-hint" id="zylos-update-hint"/);
-  assert.doesNotMatch(app, /ri\.zylos_update[^\n]*info-bar-update/);
-  assert.match(app, /e\.target\.closest\('#actions-btn, \.info-bar-update'\)/);
+  assert.match(version, /hint\.title = t\('info.zylos_update_hint'/);
+  assert.match(version, /onHint\(hint\)/);
   assert.match(en['info.zylos_update_hint'], /ask your agent: "Please upgrade your zylos-core to the latest version\."/);
   assert.match(zh['info.zylos_update_hint'], /请升级你的 zylos-core 到最新版本/);
 });
@@ -880,32 +880,23 @@ test('fleet wall tiles enter remote agents in-page instead of full navigation', 
 });
 
 test('remote Actions/Settings are gated by access and routed through the viewed agent', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
   assert.match(app, /function remoteAccess\(\)/);
   assert.match(app, /agent\?\.access === 'admin' \? 'admin' : 'read'/);
   assert.match(app, /const REMOTE_ACCESS = document\.documentElement\.dataset\.remoteAccess === 'admin' \? 'admin' : 'read';/);
-  assert.match(app, /id="actions-btn"[^`]+disabled/);
-  assert.match(app, /remote\.actions_read_only_tooltip/);
-  assert.match(app, /remote\.settings_read_only_tooltip/);
-
-  // Settings stays viewable under read access, but writes and action modals are gated.
-  const handler = app.slice(app.indexOf('function initInfoBarButtons('), app.indexOf('function startTimers('));
-  assert.match(handler, /closest\('#settings-btn'\)[\s\S]+openSettingsModal\(\)/);
-  assert.match(handler, /if \(!remoteIsReadOnly\(\)\) openActionsModal\(\);/);
-
-  assert.match(app, /const resp = await fetch\(api\(agentPath\('\/api\/settings'\)\)\);/);
-  assert.match(app, /const resp = await fetch\(api\(agentPath\('\/api\/settings'\)\), \{/);
+  assert.match(version, /upgrade\.disabled = readOnly/);
+  assert.match(version, /remote\.actions_read_only_tooltip/);
+  assert.match(app, /write: body => requestAgentJson\('\/api\/settings'/);
+  assert.match(app, /applySettingsReadOnly\(remoteIsReadOnly\(\)\)/);
+  assert.match(app, /if \(remoteIsReadOnly\(\)\) return false/);
   assert.match(app, /const actionPath = agentPath\(`\/api\/actions\/\$\{action\}`\);/);
   assert.match(app, /const healthPath = agentPath\('\/api\/health'\);/);
   assert.match(app, /startCountdownAndReload\(15, statusEl, healthPath, summary\);/);
-
-  // An already-open modal cannot survive entering/exiting a remote view
-  // (browser-back with the Actions modal open).
   const reset = app.slice(app.indexOf('function resetAgentData('), app.indexOf('function enterRemoteAgent('));
   assert.match(reset, /closeActionsModal\(\);/);
   assert.match(reset, /closeSettingsModal\(\);/);
 });
-
 test('Observer UI is optional, read-only, agent-routed, and releases leases on exit', () => {
   const index = fs.readFileSync(new URL('../public/index.html', import.meta.url).pathname, 'utf8');
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
@@ -1602,7 +1593,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   }
 });
 
-test('fleet management entry is local-only and modal is extensible for future management sections', () => {
+test('fleet management entry stays local and its controls are retained in settings sections', () => {
   const index = fs.readFileSync(new URL('../public/index.html', import.meta.url).pathname, 'utf8');
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   const css = fs.readFileSync(new URL('../public/css/style.css', import.meta.url).pathname, 'utf8');
@@ -1615,7 +1606,7 @@ test('fleet management entry is local-only and modal is extensible for future ma
   assert.match(index, /<path d="M12 8V4H8"/);
   assert.match(index, /<rect width="16" height="12" x="4" y="8" rx="2"/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
-  assert.match(app, /if \(e\.target\.closest\('#fleet-manage-btn'\)\) \{ e\.preventDefault\(\); openFleetManageModal\(\); return; \}/);
+  assert.match(app, /if \(e\.target\.closest\('#fleet-manage-btn'\)\) \{ e\.preventDefault\(\); openSettingsModal\('fleet'\); \}/);
 
   // Fleet management configures the local consumer even while viewing a remote
   // agent in-page, so these calls intentionally avoid agentPath().
@@ -1633,17 +1624,18 @@ test('fleet management entry is local-only and modal is extensible for future ma
   assert.doesNotMatch(app, /agentPath\('\/api\/keys/);
   assert.match(app, /function fleetManageError\(code, fallback\)/);
   assert.match(app, /fleetManageStatus\(fleetManageError\(data\.error \|\| 'unreachable'/);
-  assert.match(app, /readKey: fleetManageModal\.querySelector\('#fleet-add-key'\)\?\.value \|\| ''/);
-  assert.match(app, /createdKey: fleetManageModal\._createdKey \|\| null/);
-  assert.match(app, /if \(wasOpen\) openFleetManageModal\(draft\);/);
+  const render = app.slice(app.indexOf('function renderAll('), app.indexOf('// ─── Data fetching'));
+  assert.doesNotMatch(render, /fleetManageModal\.remove\(\)/);
+  assert.match(app, /settingsModal = root; fleetManageModal = root; actionsModal = root/);
+  assert.match(app, /composeSettings\(root, \{ settings: oldSettings, fleet: oldFleet, actions: oldActions/);
   assert.match(app, /function renderFleetManage\(data, draft = null\)/);
   assert.match(app, /if \(!draft\) selfInput\.value = data\?\.self\?\.name \|\| viewedAgentName\(\);/);
-  assert.match(app, /renderFleetManage\(data, draft\);/);
+  assert.match(app, /renderFleetManage\(value\)/);
   assert.match(app, /function setFleetAddBusy\(isBusy\)/);
   assert.match(app, /fleetManageModal\?\.querySelector\('#fleet-test'\)\?\.toggleAttribute\('disabled', isBusy\);/);
   assert.match(app, /function setApiKeyBusy\(isBusy\)/);
   assert.match(app, /function renderCreatedApiKey\(createdKey\)/);
-  assert.match(app, /renderCreatedApiKey\(draft\.createdKey \|\| null\);/);
+  assert.match(app, /fleetManageModal\._createdKey = createdKey \|\| null/);
   assert.match(app, /function rotateApiKey\(name\)/);
   assert.match(app, /function hardDeleteApiKey\(name\)/);
   assert.match(app, /function purgeRevokedApiKeys\(\)/);
@@ -1715,10 +1707,14 @@ test('fleet management entry is local-only and modal is extensible for future ma
   const backToFleetRule = css.match(/\.back-to-fleet \{[^}]*\}/)[0];
   assert.match(backToFleetRule, /align-self:\s*flex-start/);
 
-  // #242: success statuses auto-dismiss; closing the modal clears the status.
+  // Success statuses auto-dismiss; leaving fleet management clears its status
+  // without hiding or removing the shared settings page.
   assert.match(app, /clearTimeout\(fleetManageStatusTimer\)/);
   assert.match(app, /fleetManageStatusTimer = setTimeout\(\(\) => fleetManageStatus\(''\), 5000\);/);
-  assert.match(app, /function closeFleetManageModal\(\) \{\s*if \(!fleetManageModal\) return;\s*fleetManageModal\.hidden = true;[\s\S]{0,80}fleetManageStatus\(''\);/);
+  const fleetClose = app.match(/function closeFleetManageModal\(\) \{[^}]*\}/)?.[0];
+  assert.ok(fleetClose);
+  assert.match(fleetClose, /fleetManageStatus\(''\)/);
+  assert.doesNotMatch(fleetClose, /\.hidden\s*=|\.remove\(/);
 });
 
 test('i18n loader survives flaky pack fetches (#208)', async () => {

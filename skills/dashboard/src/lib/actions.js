@@ -122,17 +122,25 @@ export async function handleAction(action, body, config) {
     result = { ok: false, error: 'internal_error', message: err.message, messageKey: 'result.internal_error', messageParams: { error: err.message } };
   }
 
+  if (action === 'switch-runtime' && !result.ok && result.error?.code === 'AUTH_NOT_CONFIRMED') {
+    result = { ...result, messageKey: null,
+      message: [result.error.code, result.error.message].filter(Boolean).join(': ') };
+  }
+
   log(reqId, `<= ${result.ok ? 'ok' : 'fail'}${result.error ? ' ' + result.error : ''}${result.message ? ' | ' + result.message : ''}`);
   return result;
 }
 
 async function switchModel(reqId, body, config, zylosDir) {
+  if (body?.runtime !== undefined && !['claude', 'codex'].includes(body.runtime)) {
+    return { ok: false, error: 'INVALID_RUNTIME' };
+  }
   const model = body?.model;
   if (!model || typeof model !== 'string') {
     return { ok: false, error: 'invalid_model', message: 'model is required', messageKey: 'result.invalid_model' };
   }
 
-  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
+  const runtime = body?.runtime ?? config.runtime ?? process.env.ZYLOS_RUNTIME ?? 'claude';
 
   if (runtime === 'claude') {
     const settings = readSettings(zylosDir);
@@ -145,7 +153,7 @@ async function switchModel(reqId, body, config, zylosDir) {
     log(reqId, `write ${settingsPath(zylosDir)}: model "${prev ?? '(unset)'}" → "${model}"`);
     writeSettings(zylosDir, settings);
 
-    return { ok: true, message: `Model changed to ${model}.`, previous: prev, requires_restart: true, messageKey: 'result.model_changed', messageParams: { value: model } };
+    return { ok: true, message: `Model changed to ${model}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.model_changed', messageParams: { value: model, runtime } };
   }
 
   const prev = readCodexRootString('model', zylosDir);
@@ -155,7 +163,7 @@ async function switchModel(reqId, body, config, zylosDir) {
   }
   writeCodexRootString('model', model, zylosDir);
   log(reqId, `write ${codexProjectConfigPath(zylosDir)}: model "${prev ?? '(unset)'}" → "${model}"`);
-  return { ok: true, message: `Model changed to ${model}.`, previous: prev, requires_restart: true, messageKey: 'result.model_changed', messageParams: { value: model } };
+  return { ok: true, message: `Model changed to ${model}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.model_changed', messageParams: { value: model, runtime } };
 }
 
 function effortsForModel(model) {
@@ -169,8 +177,11 @@ function effortsForModel(model) {
 }
 
 async function switchEffort(reqId, body, config, zylosDir) {
+  if (body?.runtime !== undefined && !['claude', 'codex'].includes(body.runtime)) {
+    return { ok: false, error: 'INVALID_RUNTIME' };
+  }
   const effort = body?.effort;
-  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
+  const runtime = body?.runtime ?? config.runtime ?? process.env.ZYLOS_RUNTIME ?? 'claude';
 
   if (runtime === 'claude') {
     const settings = readSettings(zylosDir);
@@ -188,7 +199,7 @@ async function switchEffort(reqId, body, config, zylosDir) {
     log(reqId, `write ${settingsPath(zylosDir)}: effortLevel "${prev ?? '(unset)'}" → "${effort}"`);
     writeSettings(zylosDir, settings);
 
-    return { ok: true, message: `Effort changed to ${effort}.`, previous: prev, requires_restart: true, messageKey: 'result.effort_changed', messageParams: { value: effort } };
+    return { ok: true, message: `Effort changed to ${effort}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.effort_changed', messageParams: { value: effort, runtime } };
   }
 
   const currentModel = readCodexRootString('model', zylosDir);
@@ -207,7 +218,7 @@ async function switchEffort(reqId, body, config, zylosDir) {
   }
   writeCodexRootString('model_reasoning_effort', effort, zylosDir);
   log(reqId, `write ${codexProjectConfigPath(zylosDir)}: model_reasoning_effort "${prev ?? '(unset)'}" → "${effort}"`);
-  return { ok: true, message: `Effort changed to ${effort}.`, previous: prev, requires_restart: true, messageKey: 'result.effort_changed', messageParams: { value: effort } };
+  return { ok: true, message: `Effort changed to ${effort}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.effort_changed', messageParams: { value: effort, runtime } };
 }
 
 function fetchLatestGitHubTag(repo) {
