@@ -8,7 +8,7 @@ import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-health-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  let clock=1792000000000,mode='multi',transition=null,manual=false,matches={},state={tools:[]},auth={status:'failure'};
+  let clock=1792000000000,mode='multi',transition=null,manual=false,matches={},state={state:'idle',tools:[]},auth={status:'failure'};
   let scenes=[{sessionGroup:'telegram:a',runtime:'claude',runId:randomUUID(),ready:true,present:true,sessionId:'session-a'}];
   const controls=[],stops=[],events=[],interrupts=[],fences=new Map(),errors=[];
   const coordinator=new RuntimeHealthCoordinator({zylosDir:root,now:()=>clock,readMode:()=>mode,resolveTargetRuntime:()=> 'claude',listScenes:()=>scenes});
@@ -22,7 +22,7 @@ function fixture(t) {
   coordinator.probeInFlight=r=>observer.probeInFlight(r);
   return {coordinator,observer,controls,stops,events,interrupts,fences,errors,now:()=>clock,advance:ms=>clock+=ms,
     scene:()=>scenes[0],scenes:()=>scenes,setScenes:v=>scenes=v,setMode:v=>mode=v,setTransition:v=>transition=v,setManual:v=>manual=v,
-    setState:v=>state={tools:[],...v},setMatches:v=>matches=v,setAuth:v=>auth=v,
+    setState:v=>state={tools:[],state:v.tools?.length?'busy':'idle',...v},setMatches:v=>matches=v,setAuth:v=>auth=v,
     health:()=>coordinator.store('claude').read(),setHealth:health=>{const s=coordinator.store('claude').read();s.health=health;s.reason='';coordinator.store('claude').write(s);},
     delivered:(extra={})=>observer.notifyDelivered({...scenes[0],pastedAt:clock,...extra}),
     prepared:async()=>{for(let i=0;i<30 && [...observer.probes.values()].some(p=>p.preparing);i++)await new Promise(resolve=>setImmediate(resolve));}};

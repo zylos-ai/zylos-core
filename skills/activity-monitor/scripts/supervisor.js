@@ -160,6 +160,7 @@ export function createSupervisor(deps) {
           demand.get(runtime).add('origin');
         }
       }
+      await observer.reconcileRecoveryWaits(demand,current);
       for(const runtime of demand.keys())observer.driveDemand(runtime);
       const metrics={ready:current.filter(s=>s.sessionGroup!=='origin' && s.ready).length,starting:current.filter(s=>s.sessionGroup!=='origin' && !s.ready).length,
         reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length,

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { recoveryEligibility } from './runtime-health.js';
 
 const USER_MESSAGE_CHECK_DELAY_MS = 5000;
+const RECOVERY_IDLE_WAIT_MS = 30 * 60 * 1000;
 const TERMINAL = new Set(['done', 'failed', 'timeout', 'cancelled', 'superseded']);
 const fingerprint = text => createHash('sha256').update(String(text ?? '')).digest('hex');
 const sameRun = (a, b) => Boolean(a && b && a.runtime === b.runtime && a.runId && a.runId === b.runId);
@@ -20,6 +21,7 @@ export class SupervisorHealthObserver {
     this.scenes = new Map();
     this.verifications = new Map();
     this.preparations = new Set();
+    this.recoveryWaits = new Map();
     this.stopped = false;
   }
   probeInFlight(runtime) { return this.probes.has(runtime); }
@@ -54,6 +56,7 @@ export class SupervisorHealthObserver {
   }
   async due(runtime) {
     const state = await this.coordinator.restore(runtime);
+    if (state.health === 'ok' || state.health === 'auth_failed') this.recoveryWaits.delete(runtime);
     const cache = await this.coordinator.readNegativeCache(runtime, state);
     return recoveryEligibility(state, { runtime, cache, nowMs: this.now() }).eligible;
   }
@@ -88,34 +91,65 @@ export class SupervisorHealthObserver {
     if (this.probes.get(probe.runtime) === probe) this.probes.delete(probe.runtime);
     probe.resolve(result);
   }
+  async recoveryScenes(runtime, scenes) {
+    const eligible = [];
+    for (const scene of scenes) {
+      if (scene.runtime !== runtime || !scene.runId || scene.ready !== true || scene.present === false || scene.processRunning === false) continue;
+      if (await this.canAct(scene, {requireReady:true,requireOpen:true})) eligible.push(scene);
+    }
+    return eligible;
+  }
+  async reconcileRecoveryWaits(demand, scenes) {
+    const multi = await this.readMode() === 'multi';
+    for (const runtime of this.recoveryWaits.keys()) {
+      const health = this.coordinator.store(runtime).read().health;
+      if (!multi || !demand.has(runtime) || health === 'ok' || health === 'auth_failed' ||
+          !(await this.recoveryScenes(runtime, scenes)).length) this.recoveryWaits.delete(runtime);
+    }
+  }
   async prepareProbe(probe) {
     if(this.stopped)return this.finish(probe,{recovered:false,stopped:true});
     if (!probe.force && !await this.due(probe.runtime)) return this.finish(probe,{recovered:false});
     const mode = await this.readMode();
-    const scenes = (await this.listScenes()).filter(s => s.runtime === probe.runtime && s.ready === true && s.runId)
-      .sort((a,b) => a.sessionGroup === 'origin' ? -1 : b.sessionGroup === 'origin' ? 1 : a.sessionGroup.localeCompare(b.sessionGroup));
-    for (const scene of scenes) {
-      if (!await this.canAct(scene,{requireReady:true,requireOpen:true})) continue;
+    const idleOnly = mode === 'multi' && probe.phase === 'recovery';
+    const scenes = await this.recoveryScenes(probe.runtime, await this.listScenes());
+    const candidates = [];
+    for (const scene of scenes) candidates.push({scene, idle:idleOnly ? (await this.readState(scene))?.state === 'idle' : true});
+    candidates.sort((a,b) => Number(b.idle)-Number(a.idle) ||
+      (a.scene.sessionGroup === 'origin' ? -1 : b.scene.sessionGroup === 'origin' ? 1 : a.scene.sessionGroup.localeCompare(b.scene.sessionGroup)));
+    const waitAt = this.recoveryWaits.get(probe.runtime);
+    const forcedBusy = idleOnly && waitAt !== undefined && this.now()-waitAt >= RECOVERY_IDLE_WAIT_MS;
+    let busy = false;
+    for (const {scene} of candidates) {
       const binding = await this.buildTargetBinding(scene);
       // Binding construction may perform I/O; repeat identity and gates immediately before insertion.
       if (!await this.canAct(scene,{requireReady:true,requireOpen:true}) || this.stopped) continue;
-      const deadline = this.now() + (probe.phase === 'recovery' ? this.recoveryDeadlineMs : 300000);
+      if (idleOnly && !forcedBusy && (await this.readState(scene))?.state !== 'idle') {busy = true;continue;}
+      const sentAt = this.now();
+      const deadline = sentAt + (probe.phase === 'recovery' ? this.recoveryDeadlineMs : 300000);
       const control = await this.insertControl(`Heartbeat check. [phase=${probe.phase}]`, {
         sessionGroup:mode === 'single' ? null : scene.sessionGroup, targetBinding:binding,
         priority:0,bypassState:true,ackDeadlineAt:Math.floor(deadline/1000),
       });
       const controlId = control?.id;
       if (!Number.isInteger(controlId) || controlId <= 0) throw new Error('Recovery control was not inserted');
-      Object.assign(probe,{scene:{...scene},controlId,deadline,preparing:false});
+      Object.assign(probe,{scene:{...scene},controlId,deadline,sentAt,idleOnly,forcedBusy,toolsSeen:false,preparing:false});
       if(probe.phase === 'recovery') await this.coordinator.markProbeQueued(probe.runtime);
       return;
     }
+    if (idleOnly && busy) {
+      if (!this.recoveryWaits.has(probe.runtime)) this.recoveryWaits.set(probe.runtime,this.now());
+    } else if (idleOnly) this.recoveryWaits.delete(probe.runtime);
     this.finish(probe,{recovered:false,noTarget:true});
   }
   async pollProbe(probe) {
     if (this.stopped || probe.preparing) return;
     const current = await this.readIdentity(probe.scene.sessionGroup);
     if (!sameRun(probe.scene,current)) return this.finish(probe,{recovered:false,stale:true});
+    if (probe.idleOnly && !probe.forcedBusy && this.now() <= probe.deadline) {
+      const activity = await this.readState(probe.scene);
+      if (activity?.tools?.length) probe.toolsSeen = true;
+    }
     const row = await this.getControlById(probe.controlId);
     if (!row || !TERMINAL.has(row.status)) return;
     let screen,screenFingerprint;
@@ -125,7 +159,13 @@ export class SupervisorHealthObserver {
     const checked = await this.readIdentity(probe.scene.sessionGroup);
     const result = await this.coordinator.applyProbeResult({runtime:probe.runtime,runId:probe.scene.runId,
       current:checked,terminal:row.last_error === 'STALE_TARGET' ? 'STALE_TARGET' : row.status,matches,
-      identity:(await this.readState(probe.scene))?.healthIdentity ?? {session_id:probe.scene.sessionId},screenFingerprint});
+      identity:(await this.readState(probe.scene))?.healthIdentity ?? {session_id:probe.scene.sessionId},screenFingerprint,
+      waitForIdle:probe.idleOnly && !probe.forcedBusy && probe.toolsSeen && row.status === 'timeout' && this.now() >= probe.deadline});
+    if (result.classification === 'waiting') {
+      if (!this.recoveryWaits.has(probe.runtime)) this.recoveryWaits.set(probe.runtime,probe.sentAt);
+      return this.finish(probe,{recovered:false,waiting:true});
+    }
+    if (result.classification !== 'stale') this.recoveryWaits.delete(probe.runtime);
     this.finish(probe,{recovered:result.classification === 'ok',classification:result.classification});
     if (result.classification === 'other') this.sceneState(probe.scene).pendingStop='recovery_failed';
   }
