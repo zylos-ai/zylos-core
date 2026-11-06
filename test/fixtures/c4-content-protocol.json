@@ -556,63 +556,165 @@
           "replacementInterruptId": "new_question"
         }
       }
+    },
+    {
+      "name": "string_braces_quotes",
+      "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"string_braces\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"String contains } and {\\\" and an escaped quote \\\\\\\"; nested {braces} remain text.\"}}]}",
+      "envelope": {
+        "version": 1,
+        "kind": "message",
+        "messageId": "string_braces",
+        "fallbackText": "可读消息",
+        "blocks": [
+          {
+            "id": "text",
+            "type": "markdown",
+            "schemaVersion": 1,
+            "data": {
+              "text": "String contains } and {\" and an escaped quote \\\"; nested {braces} remain text."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "suppressed_reason_with_spaces",
+      "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_cancel\",\"fallbackText\":\"回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：取消\",\"interruptId\":\"interrupt_confirmation_question\",\"questionSummary\":\"确认执行？\",\"action\":{\"id\":\"answer_cancel\",\"protocolVersion\":\"0.1\",\"type\":\"confirmation.respond\",\"target\":\"operation.confirm\",\"context\":{\"messageId\":\"confirmation_question\",\"blockId\":\"question\"},\"payload\":{\"outcome\":\"cancel\"}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_cancel\"}}}\n\n[C4] Status notification suppressed by cooldown while health=temporarily unavailable reason=quota exceeded.",
+      "envelope": {
+        "version": 1,
+        "kind": "answer",
+        "messageId": "message_cancel",
+        "fallbackText": "回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：取消",
+        "interruptId": "interrupt_confirmation_question",
+        "questionSummary": "确认执行？",
+        "action": {
+          "id": "answer_cancel",
+          "protocolVersion": "0.1",
+          "type": "confirmation.respond",
+          "target": "operation.confirm",
+          "context": {
+            "messageId": "confirmation_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "outcome": "cancel"
+          }
+        },
+        "metadata": {
+          "zylos": {
+            "answerId": "answer_cancel"
+          }
+        }
+      }
     }
   ],
   "invalid": [
     {
       "name": "broken_json",
-      "content": "[C4-CONTENT]\n{\"version\":1"
+      "content": "[C4-CONTENT]\n{\"version\":1",
+      "reason": "invalid_json"
     },
     {
       "name": "non_object",
-      "content": "[C4-CONTENT]\n[]"
+      "content": "[C4-CONTENT]\n[]",
+      "reason": "invalid_json"
     },
     {
       "name": "trailing_prose",
-      "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}do something"
+      "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}do something",
+      "reason": "invalid_suffix"
     },
     {
       "name": "second_json",
-      "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}{}"
+      "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}{}",
+      "reason": "invalid_suffix"
     },
     {
       "name": "fake_suffix",
-      "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}\n\n[C4] Status notification suppressed by cooldown while health=ok reason=quota. extra"
+      "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}\n\n[C4] Status notification suppressed by cooldown while health=ok reason=quota. extra",
+      "reason": "invalid_suffix"
     },
     {
       "name": "missing_fallback",
-      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}"
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
     },
     {
       "name": "unknown_version",
-      "content": "[C4-CONTENT]\n{\"version\": 2, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}"
+      "content": "[C4-CONTENT]\n{\"version\": 2, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
     },
     {
       "name": "unknown_block",
-      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"shell\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}"
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"shell\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
     },
     {
       "name": "unknown_block_version",
-      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 2, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}"
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 2, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
     },
     {
       "name": "missing_question_summary",
-      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}"
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
     },
     {
       "name": "wrong_question_summary",
-      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"客户端伪造摘要\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}"
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"客户端伪造摘要\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
     },
     {
       "name": "answer_id_mismatch",
-      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"answer\", \"messageId\": \"message_single_select\", \"fallbackText\": \"回答了 interruptId=interrupt_single_question（问题：选一个方案）：{\\\"selected\\\": [\\\"a\\\"]}\", \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"action\": {\"id\": \"answer_single_select\", \"protocolVersion\": \"0.1\", \"type\": \"choice.select\", \"target\": \"clarification.answer\", \"context\": {\"messageId\": \"single_question\", \"blockId\": \"question\"}, \"payload\": {\"selected\": [\"a\"]}}, \"metadata\": {\"zylos\": {\"answerId\": \"different_answer\"}}}"
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"answer\", \"messageId\": \"message_single_select\", \"fallbackText\": \"回答了 interruptId=interrupt_single_question（问题：选一个方案）：{\\\"selected\\\": [\\\"a\\\"]}\", \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"action\": {\"id\": \"answer_single_select\", \"protocolVersion\": \"0.1\", \"type\": \"choice.select\", \"target\": \"clarification.answer\", \"context\": {\"messageId\": \"single_question\", \"blockId\": \"question\"}, \"payload\": {\"selected\": [\"a\"]}}, \"metadata\": {\"zylos\": {\"answerId\": \"different_answer\"}}}",
+      "reason": "invalid_envelope"
+    },
+    {
+      "name": "question_noninteractive_block",
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"markdown\", \"schemaVersion\": 1, \"data\": {\"text\": \"not a question\"}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
+    },
+    {
+      "name": "question_missing_block",
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"missing\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
+    },
+    {
+      "name": "block_unknown_action",
+      "content": "[C4-CONTENT]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"shell.execute\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+      "reason": "invalid_envelope"
+    },
+    {
+      "name": "closed_invalid_json",
+      "content": "[C4-CONTENT]\n{\"version\": nope}",
+      "reason": "invalid_json"
     }
   ],
   "ordinary": [
-    "普通文字",
-    "{\"version\":1,\"fallbackText\":\"ordinary JSON\"}",
-    " [C4-CONTENT]\n{}",
-    "[C4-CONTENT]\r\n{}"
+    {
+      "name": "plain_text",
+      "content": "普通文字"
+    },
+    {
+      "name": "ordinary_json",
+      "content": "{\"version\":1,\"fallbackText\":\"ordinary JSON\"}"
+    },
+    {
+      "name": "leading_space_prefix",
+      "content": " [C4-CONTENT]\n{}"
+    },
+    {
+      "name": "crlf_prefix",
+      "content": "[C4-CONTENT]\r\n{}"
+    },
+    {
+      "name": "bom_prefix",
+      "content": "﻿[C4-CONTENT]\n{}"
+    },
+    {
+      "name": "code_fenced_prefix",
+      "content": "```json\n[C4-CONTENT]\n{}\n```"
+    }
   ],
   "actions": [
     {
@@ -1781,6 +1883,102 @@
         "content": "different"
       },
       "valid": false
+    },
+    {
+      "name": "zero_id",
+      "packet": {
+        "version": 1,
+        "c4_id": 0,
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "row": {
+        "id": 123,
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "valid": false
+    },
+    {
+      "name": "negative_id",
+      "packet": {
+        "version": 1,
+        "c4_id": -1,
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "row": {
+        "id": 123,
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "valid": false
+    },
+    {
+      "name": "beyond_int64",
+      "packet": {
+        "version": 1,
+        "c4_id": "9223372036854775808",
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "row": {
+        "id": 123,
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "valid": false
+    },
+    {
+      "name": "noncanonical_decimal",
+      "packet": {
+        "version": 1,
+        "c4_id": "0123",
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "row": {
+        "id": 123,
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "valid": false
+    },
+    {
+      "name": "extra_field",
+      "packet": {
+        "version": 1,
+        "c4_id": 123,
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}",
+        "extra": true
+      },
+      "row": {
+        "id": 123,
+        "channel": "dashboard",
+        "endpoint_id": "conversation_a",
+        "session_group": "dashboard:conversation_a",
+        "content": "[C4-CONTENT]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}"
+      },
+      "valid": false
     }
   ],
   "hookInputs": [
@@ -1806,6 +2004,73 @@
         }
       },
       "valid": true
+    },
+    {
+      "name": "missing_context",
+      "value": {
+        "version": 1,
+        "hook_event_name": "BeforeSend",
+        "hook_id": "dashboard.content",
+        "request_id": "core-request",
+        "invocation_id": "core-invocation",
+        "request": {
+          "channel": "dashboard",
+          "endpoint": "conversation_a",
+          "content": "纯文字",
+          "options": {
+            "groupName": "conversation_a"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_context_field",
+      "value": {
+        "version": 1,
+        "hook_event_name": "BeforeSend",
+        "hook_id": "dashboard.content",
+        "request_id": "core-request",
+        "invocation_id": "core-invocation",
+        "request": {
+          "channel": "dashboard",
+          "endpoint": "conversation_a",
+          "content": "纯文字",
+          "options": {
+            "groupName": "conversation_a"
+          }
+        },
+        "context": {
+          "component": "dashboard",
+          "runtime": "codex",
+          "unknown": "value"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_request_option",
+      "value": {
+        "version": 1,
+        "hook_event_name": "BeforeSend",
+        "hook_id": "dashboard.content",
+        "request_id": "core-request",
+        "invocation_id": "core-invocation",
+        "request": {
+          "channel": "dashboard",
+          "endpoint": "conversation_a",
+          "content": "纯文字",
+          "options": {
+            "groupName": "conversation_a",
+            "unknown": true
+          }
+        },
+        "context": {
+          "component": "dashboard",
+          "runtime": "codex"
+        }
+      },
+      "valid": false
     }
   ],
   "hookOutputs": [
@@ -1840,6 +2105,40 @@
       "value": {
         "version": 1,
         "decision": "async"
+      },
+      "valid": false
+    },
+    {
+      "name": "continue_with_message",
+      "value": {
+        "version": 1,
+        "decision": "continue",
+        "message": "discarded"
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_version",
+      "value": {
+        "version": 2,
+        "decision": "continue"
+      },
+      "valid": false
+    },
+    {
+      "name": "abort_without_message",
+      "value": {
+        "version": 1,
+        "decision": "abort"
+      },
+      "valid": false
+    },
+    {
+      "name": "extra_field",
+      "value": {
+        "version": 1,
+        "decision": "continue",
+        "extra": true
       },
       "valid": false
     }

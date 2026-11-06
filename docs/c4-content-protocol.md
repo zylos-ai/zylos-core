@@ -1,6 +1,6 @@
 # C4 content protocol
 
-Version 1. This is a C4 transport adapter, not the full ChatWeave streaming/message protocol. Definition and fixtures require Luna's acceptance before downstream use. Authority: Dashboard chat design v0.1.6 §3 and implementation plan v0.3.1, Core baseline `6436b3e255d108f097d3863d43f88a2fc140d4dc`. ChatWeave semantics are pinned to [`03e69a4435ce2f4913ed28884509f3db64d6ebcf`](https://github.com/zz-howard/chatweave/tree/03e69a4435ce2f4913ed28884509f3db64d6ebcf), `docs/protocol.md` §§3, 4.8, 5 and its `schemas/v0.1/` definitions.
+Version 1. This is a C4 transport adapter, not the full ChatWeave streaming/message protocol. Definition and fixtures require Luna's acceptance before downstream use. Authority: `zylos-internal-docs` main `ed9c041` — `core/session-architecture/implementation-plan-p14-dashboard-chat.md` v0.3.1 and `core/session-architecture/dashboard-chat.md` v0.1.6 §3 (both at that SHA). Core baseline `6436b3e255d108f097d3863d43f88a2fc140d4dc`. ChatWeave semantics are pinned to [`03e69a4435ce2f4913ed28884509f3db64d6ebcf`](https://github.com/zz-howard/chatweave/tree/03e69a4435ce2f4913ed28884509f3db64d6ebcf), `docs/protocol.md` §§3, 4.8, 5 and its `schemas/v0.1/` definitions.
 
 ## Framing and limits
 
@@ -12,11 +12,25 @@ After JSON, only JSON whitespace or exactly one existing Core suffix is accepted
 \n\n[C4] Status notification suppressed by cooldown while health=<health> reason=<reason>.
 ```
 
-Here `\n` denotes LF bytes, not backslash characters. `health` and `reason` are nonempty, single non-whitespace tokens, with the final period belonging to the template. No extra prose, second JSON, repeated suffix or prefix-matching approximation is accepted. Source: `skills/comm-bridge/scripts/c4-store-delivery.js`, `markStatusNoticeSuppressed`. The writer defaults missing health to `unavailable` and missing reason to health; it appends only to eligible failed inbound records. Parsing ignores this annotation, preserving original C4 identity and `metadata.zylos.answerId`. It neither changes storage nor claims the notification was delivered.
+Here `\n` denotes LF bytes, not backslash characters. `health` and `reason` are nonempty strings containing no LF; spaces are allowed. The complete template is anchored at the end of content (apart from JSON whitespace), with its final period belonging to the template. Their values are diagnostic text, not a finite enum or guaranteed token. No extra prose, second JSON, repeated suffix or prefix-matching approximation is accepted. Source: `skills/comm-bridge/scripts/c4-store-delivery.js`, `markStatusNoticeSuppressed`. The writer defaults missing health to `unavailable` and missing reason to health; it appends only to eligible failed inbound records. Parsing ignores this annotation, preserving original C4 identity and `metadata.zylos.answerId`. It neither changes storage nor claims the notification was delivered.
 
 Every input, including plain text and the prefix/JSON/any suffix, has a maximum of **65,536 UTF-8 bytes**, inclusive. Count bytes, not UTF-16 units or characters. The reader reports oversized content as invalid; sending enforcement belongs to the channel hook. No truncation of structured content. Images/large data use existing references, not inline binaries.
 
 `parseC4Content(content)` returns `{kind:'text',text}`, `{kind:'envelope',envelope,suffix}` or `{kind:'invalid',reason}`. Invalid tagged content never becomes ordinary text; invalid results do not carry raw payload. Consumers provide their existing readable error/C4 reference and no actions. Unsupported versions/types are invalid for this adapter and therefore read-only fallback/error, never an invitation to fetch remote code.
+
+## Parse result reason categories
+
+These fixed functional values are part of the common parser contract. Classification checks content type, then byte limit, then prefix/framing, JSON syntax, suffix, and envelope schema. A marked non-object is invalid_json; unmarked JSON is text.
+
+| reason | Meaning |
+| --- | --- |
+| `content_type` | Input is not a string. |
+| `content_too_large` | UTF-8 encoded content exceeds 65,536 bytes, marked or ordinary. |
+| `invalid_json` | Marked body is not one complete syntactically valid JSON object. |
+| `invalid_suffix` | The complete object has neither JSON whitespace nor the exact known suffix after it. |
+| `invalid_envelope` | Parsed object has unsupported version/type, missing/invalid fields or inconsistent question/answer references. |
+
+Invalid fixtures state expected reason explicitly; replacing one category with another must fail a test. These are parse categories, not new hook machine reason codes.
 
 ## Envelope fields
 
@@ -50,12 +64,14 @@ Blocks keep ChatWeave's `{id,type,schemaVersion:1,data,fallbackText?,metadata?,s
 
 | Presentation | Upstream type / principal data and constraints |
 | --- | --- |
-| Text | `markdown`: `{text}` (max 32,768 code points, subject to whole-content byte cap). |
+| Text | `markdown`: `{text}` (max 32,768 code points and 32,768 UTF-8 bytes, subject to whole-content byte cap). |
 | Chart | `time_series`: `{xType,series,title?,xLabel?,yLabel?,yUnit?,format?,summary?}`, xType date/datetime/number/category, 1–6 series `{key,label,points,unit?}`, up to 500 `{x,y}` points; x string≤64 or number, y finite number/null. Also existing `breakdown` (2–12 nonnegative parts) and `category_series` (1–24 points, finite number/null) keep their upstream schemas. No synthetic `chart` type. |
 | Single choice | `choice`: `{prompt,options,selection?,minSelect?,maxSelect?,allowFreeText?,action,state?}`, default selection single; options 2–10 `{id,label,description?}`; selected payload exactly one known option. |
 | Multiple choice | Same `choice`, `selection:'multiple'`; selected IDs unique, 1–10 overall and within saved minSelect/maxSelect (defaults 1/options.length). |
 | Confirmation | `confirmation`: `{title,severity,action,body?,details?,confirmLabel?,cancelLabel?,state?}`; severity normal/destructive. requiresConfirmation=true only on destructive confirmation. |
 | Form | `form_intent`: `{fields,action,title?,purpose?,submitLabel?,state?}`; 1–12 fields. Field key `[a-z][a-z0-9_]{0,31}`, label, type and optional required/options/min/max/maxLength/unit/placeholder/help/defaultValue. Types text, multiline_text, number, integer, date, datetime, boolean, single_select, multi_select. Select fields need declared options; submitted values must meet saved fields, types, bounds and membership, with no unknown keys. |
+
+Block data also retains upstream depth ≤6 (data root =1) and per-block 5,000 JSON-node limits.
 
 The table selects a supported host subset; it does not rename or redefine the complete upstream block catalogue. Other upstream or future blocks are read-only fallback/error in this version. Detailed per-field limits and interaction-state shapes are the pinned upstream schema; the shared validator embeds the selected definitions so Node and browser use one contract, without runtime network/dependency loading.
 
@@ -95,7 +111,9 @@ c4:
   delivery: stdin
 ```
 
-The number is an example, not a Core default or cap. Required timeout_ms is a finite positive number set by the component. Only one synchronous script BeforeSend; no HTTP, async, BeforeReceive, registry service or ordering chain. Hook declaration validation/execution belongs to the hook implementation.
+The number is an example, not a Core default or cap. Required timeout_ms is a finite positive number set by the component. Only one synchronous script BeforeSend; no HTTP, async, BeforeReceive, registry service or ordering chain. Hook declaration validation/execution belongs to the hook implementation. entry is relative to this channel skill directory and must resolve within that directory; an escaping path is an invalid declaration. Execute `spawn('node',[absoluteEntry])`, without a shell, with cwd equal to that skill directory; entry is the only argv argument to node (no content in argv).
+
+stdout has a 1 MiB cap. On overflow Core terminates the child and reports HOOK_INVALID_OUTPUT; simultaneous overflow/timeout reports HOOK_TIMEOUT. A signal Core sends for timeout/overflow is that cause, not an independent HOOK_EXEC_FAILED signal exit. stderr is not part of the wire; drain and discard it.
 
 Input is exactly one JSON object on stdin:
 
@@ -105,7 +123,7 @@ Input is exactly one JSON object on stdin:
 
 Required top fields are those shown, including context (may be `{}`). request requires channel (nonempty string), endpoint (string/null), content (string), options (object: optional groupName string/wholeGroup boolean). Context allows optional nonempty component/session_group/runtime/session_id/run_id only; omit unavailable identifiers. Core creates correlation IDs; caller cannot override them. No new c4_id before storage; do not write a head/namespace to fill context.
 
-Output: `{version:1,decision:'continue'}` or `{version:1,decision:'abort',message:<string>}`. No content rewrite or extra fields; continue may include a human message without changing content. `validateHookInput`/`validateHookOutput` validate shapes only. `normalizeHookMessage(message)` replaces line breaks (CR/LF/U+2028/U+2029) with spaces, then takes first **500 Unicode code points**. This normalization does not change the machine reason code.
+Output: `{version:1,decision:'continue'}` or `{version:1,decision:'abort',message:<string>}`. No content rewrite or extra fields; continue must contain only version and decision; a message on continue is invalid. `validateHookInput`/`validateHookOutput` validate shapes only. `normalizeHookMessage(message)` replaces line breaks (CR/LF/U+2028/U+2029) with spaces, then takes first **500 Unicode code points**. This normalization does not change the machine reason code.
 
 Core mapping is fixed: normal abort → HOOK_ABORTED; invalid declaration/output, async or unsupported event → HOOK_INVALID_OUTPUT; spawn/nonzero/signal → HOOK_EXEC_FAILED, even if stdout looks valid; timeout → HOOK_TIMEOUT takes priority. Only normal exit continue permits the original send. Failure format includes one stderr line `HOOK_ABORTED <normalized message>` for abort plus machine reason/message. This module runs no hooks, scripts, state reads or writes.
 
