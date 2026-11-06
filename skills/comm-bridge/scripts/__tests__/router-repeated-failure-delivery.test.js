@@ -40,7 +40,8 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
     } }),
   };
   delete dependencies.alert;
-  const dispatcher = createDispatcher(dependencies, { ...f.options, delivery: { periodicEnabled: false } });
+  const { poolSize, ...options } = f.options;
+  const dispatcher = createDispatcher(dependencies, { ...options, delivery: { periodicEnabled: false } });
   t.after(async () => { await dispatcher.stop(); });
   async function rounds(n = 3) {
     for (let i = 0; i < n; i++) { dispatcher.tick(); await dispatcher.idle(); await flush(); }
@@ -73,7 +74,8 @@ test('dispatcher logs unreadable session configuration without notifying the own
     sendAlert: async (target, message) => { sends.push({ target, message }); return true; },
   };
   delete dependencies.alert;
-  const dispatcher = createDispatcher(dependencies, { ...f.options, delivery: { periodicEnabled: false } });
+  const { poolSize, ...options } = f.options;
+  const dispatcher = createDispatcher(dependencies, { ...options, delivery: { periodicEnabled: false } });
   t.after(() => dispatcher.stop());
   await dispatcher.initialize();
   assert.equal(dispatcher.state.inert, true);
