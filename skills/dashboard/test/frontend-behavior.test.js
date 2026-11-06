@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { buildAgentFleetView, liveStateMood, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
+import { tabForPath } from '../public/js/wb/view-mode.js';
 
 function deferred() {
   let resolve;
@@ -85,6 +86,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     AbortController,
     validObserverSize,
     validAgentSize,
+    tabForPath,
     ArrayBuffer,
     window: {
       location: { href: 'http://fixture.local/dashboard/', pathname: '/' },
@@ -863,9 +865,11 @@ test('back button resolves in-page remote first, standalone remote second, fleet
 
 test('popstate routes /fleet/<name> paths into remote view only on the parent document', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  // Page aliases and pushState paths are exercised by complete-document browser coverage.
+  // The standalone remote document keeps plain tab routing.
+  assert.match(app, /if \(!REMOTE_AGENT\) \{\s*\n\s*const m = path\.match\(\/\\\/fleet\\\/\(\[\^\/\]\+\)\\\/\?\(\?::?trends\|usage\|schedule\|settings\|memory\|observer\)\?\$\/\);?/);
   assert.match(app, /await enterRemoteAgent\(decodeURIComponent\(m\[1\]\), \{ push: false \}\);/);
   assert.match(app, /else if \(state\.remoteAgent\) \{\s*\n\s*await exitRemoteAgent\(\{ push: false \}\);/);
+  assert.match(app, /const path = name === 'overview' \? `\$\{prefix\}\/` : `\$\{prefix\}\/\$\{name === 'trends' \? 'usage' : name\}`;/);
 });
 
 test('fleet wall tiles enter remote agents in-page instead of full navigation', () => {
@@ -1539,6 +1543,8 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
+  assert.match(index, /app\.js\?v=81/);
+  assert.match(index, /style\.css\?v=55/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
@@ -1605,6 +1611,7 @@ test('fleet management entry is local-only and modal is extensible for future ma
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
+  assert.match(index, /app\.js\?v=81/);
   assert.match(index, /<path d="M12 8V4H8"/);
   assert.match(index, /<rect width="16" height="12" x="4" y="8" rx="2"/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
@@ -1738,7 +1745,8 @@ test('i18n loader survives flaky pack fetches (#208)', async () => {
   assert.match(i18n, /if \(seq !== requestSeq\) return;/);
   assert.match(i18n, /renderI18n\(\);[\s\S]*?\} catch \{/);
 
-  // Versioned main/module assets are loaded by complete-document browser coverage.
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
+  assert.match(app, /from '\.\/i18n\.js\?v=81'/);
 });
 
 test('overlapping initI18n calls: stale slow request cannot overwrite the newer locale (#211 review)', async () => {
@@ -2113,40 +2121,216 @@ test('app.js busts the cached observer-size module whose exports it now needs', 
   assert.match(app, /import \{ validAgentSize, validObserverSize \} from '\.\/observer-size\.js\?v=2';/);
 });
 
+test('usage and legacy trends paths share tab mapping across local and fleet history', () => {
+  for (const prefix of ['', '/fleet/remote']) {
+    const paths = [prefix + '/', prefix + '/usage', prefix + '/memory', prefix + '/trends'];
+    const expected = ['overview', 'trends', 'memory', 'trends'];
+    for (let index = paths.length - 1; index >= 0; index--) assert.equal(tabForPath(paths[index]), expected[index]);
+    for (let index = 0; index < paths.length; index++) assert.equal(tabForPath(paths[index]), expected[index]);
+    assert.equal(tabForPath(prefix + '/settings'), 'settings');
+    assert.equal(tabForPath(prefix + '/observer'), 'observer');
+    assert.equal(tabForPath(prefix + '/schedule'), 'overview');
+  }
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const tabs = app.slice(app.indexOf('function initTabs()'), app.indexOf('function initObserverControls()'));
+  assert.match(tabs, /window\.addEventListener\('popstate',[\s\S]*?const tab = tabForPath\(path\);/);
+  assert.match(tabs, /const initialTab = tabForPath\(window\.location\.pathname\);/);
+});
+test('unchanged navigation labels stay in the primary language pack', () => {
+  const index = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  for (const tab of ['overview', 'memory', 'observer']) {
+    assert.ok(index.includes('data-tab="' + tab + '" data-i18n="tab.' + tab + '"'));
+  }
+  assert.match(index, /data-tab="trends" data-i18n="wb\.nav\.usage"/);
+});
+
 // Workbench shell cases directly import product modules and inject DOM/API stubs.
 // Existing legacy cases above retain their old harness and are selected separately.
 import { mountWorkbench } from '../public/js/wb/shell.js';
 import { createDocument as wbDocument, storage as wbStorage, tick as wbTick, deferred as wbDeferred } from './fixtures/workbench-dom.js';
-function workbenchHarness(context, read) {
+function workbenchSnapshot(kind = 'idle', key = 'a') {
+  return { mode: 'multi', view: 'multi',
+    rows: [{ sessionGroup: key, name: { displayName: key.toUpperCase() }, state: { kind } }],
+    instance: { pool: { used: 1 } } };
+}
+function workbenchHarness(context, read, options = {}) {
   const document = wbDocument(), listeners = new Map(), windowListeners = new Map();
   const selectors = ['#wb-board', '#wb-search', '#wb-range', '#wb-detail-toggle', '#observer-tab', '#wb-instance', '#wb-attention', '#wb-side', '#tab-overview', '#agent-detail'];
   const nodes = new Map(selectors.map(selector => [selector, document.createElement('div')]));
-  nodes.get('#tab-overview').className = 'active'; document.visibilityState = 'visible';
+  nodes.get('#tab-overview').className = 'active'; document.visibilityState = options.hidden ? 'hidden' : 'visible';
   document.querySelector = selector => nodes.get(selector);
   document.addEventListener = (event, handler) => listeners.set(event, handler);
   document.removeEventListener = event => listeners.delete(event);
-  const window = { addEventListener: (event, handler) => windowListeners.set(event, handler), removeEventListener: event => windowListeners.delete(event) };
-  let interval, cleared = false; const calls = [], saved = wbStorage();
-  context.mock.method(globalThis, 'setInterval', (handler, delay) => { assert.equal(delay, 5000); interval = handler; return 12; });
-  context.mock.method(globalThis, 'clearInterval', id => { assert.equal(id, 12); cleared = true; });
-  const snapshot = { mode: 'multi', view: 'multi', rows: [{ sessionGroup: 'a', fallbackName: 'A', state: { kind: 'idle' } }], instance: { pool: { used: 1 } } };
+  let mutation;
+  const window = {
+    addEventListener: (event, handler) => windowListeners.set(event, handler),
+    removeEventListener: event => windowListeners.delete(event),
+    MutationObserver: class { constructor(handler) { mutation = handler; } observe() {} disconnect() { mutation = null; } },
+  };
+  let nextTimer = 0, owner = 'local', navigationGeneration = 0;
+  const intervals = new Map(), timeouts = new Map(), calls = [], saved = wbStorage(options.storage);
+  context.mock.method(globalThis, 'setInterval', (handler, delay) => { const id = ++nextTimer; intervals.set(id, { handler, delay }); return id; });
+  context.mock.method(globalThis, 'clearInterval', id => intervals.delete(id));
+  context.mock.method(globalThis, 'setTimeout', (handler, delay) => { const id = ++nextTimer; timeouts.set(id, { handler, delay }); return id; });
+  context.mock.method(globalThis, 'clearTimeout', id => timeouts.delete(id));
+  const makeSnapshot = workbenchSnapshot;
+  const fallback = path => path.includes('/api/workbench/groups') ? makeSnapshot() :
+    path.includes('/api/workbench/activity') ? { start: 0, cellSeconds: 60, groups: { a: { cells: Array(60).fill('none'), inbound: [] } } } : {};
   const stop = mountWorkbench({ document, window, storage: saved, t: key => key,
-    fetch: async path => { calls.push(path); const value = read ? await read(path) : path.startsWith('/api/workbench/groups') ? snapshot :
-      path.startsWith('/api/workbench/activity') ? { start: 0, cellSeconds: 60, groups: { a: { cells: Array(60).fill('none'), inbound: [] } } } : {};
-      return { ok: true, json: async () => value }; } });
+    identity: () => owner, endpoint: path => owner === 'local' ? path : '/fleet/' + owner + path,
+    observerStatus: options.observerStatus ?? (() => null), observerAvailable: options.observerAvailable ?? (() => true),
+    openSettings: options.openSettings ?? (() => {}),
+    fetch: async path => {
+      calls.push(path);
+      const value = read ? await read(path, fallback) : fallback(path);
+      return value?.json ? value : { ok: true, json: async () => value };
+    } });
   context.after(stop);
-  return { nodes, saved, calls, listeners, windowListeners, interval: () => interval(), stop, cleared: () => cleared };
+  return { document, nodes, saved, calls, listeners, windowListeners, intervals, timeouts, stop, makeSnapshot,
+    poll: delay => { const timer = [...intervals.values()].find(timer => timer.delay === delay); assert.ok(timer, 'expected polling timer'); return timer.handler(); },
+    debounce: async () => { const job = [...timeouts.entries()].find(([, timer]) => timer.delay === 300); assert.ok(job, 'search debounce exists'); timeouts.delete(job[0]); await job[1].handler(); },
+    setOwner: value => { owner = value; },
+    navigate: active => { navigationGeneration++; nodes.get('#tab-overview').className = active ? 'active' : ''; mutation?.(); },
+    navigationGeneration: () => navigationGeneration,
+    mutate: () => mutation?.(),
+  };
 }
+// Cross-module DOM integration: real shell, board, search and detail modules.
+// Run for workbench lifecycle/wiring changes; skip server-only changes. All DOM,
+// storage, fetches, timers and observers are injected; no sockets, DB, PM2, tmux
+// or children. The runner must isolate HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR
+// and a private tmux namespace, verify those paths before running, then clean
+// them up. Teardown unmounts and releases every fake lifecycle listener.
 test('workbench shell detail changes redraw without network and activity range persists', async context => {
-  const harness = workbenchHarness(context); await wbTick(); await wbTick();
-  const before = harness.calls.length, toggle = harness.nodes.get('#wb-detail-toggle'); toggle.checked = true; toggle.dispatch('change');
-  assert.equal(harness.calls.length, before); assert.equal(harness.saved.getItem('zylos-dashboard-detail-level'), 'technical');
-  const range = harness.nodes.get('#wb-range'); range.value = '6h'; range.dispatch('change'); await wbTick();
-  assert.equal(harness.saved.getItem('zylos-dashboard-activity-range'), '6h'); assert.equal(harness.calls.at(-1), '/api/workbench/activity?range=6h');
-  harness.stop(); assert.equal(harness.cleared(), true);
+  const h = workbenchHarness(context); await wbTick(); await wbTick();
+  const before = h.calls.length, toggle = h.nodes.get('#wb-detail-toggle'); toggle.checked = true; toggle.dispatch('change');
+  assert.equal(h.calls.length, before); assert.equal(h.saved.getItem('zylos-dashboard-detail-level'), 'technical');
+  const range = h.nodes.get('#wb-range'); range.value = '6h'; range.dispatch('change'); await wbTick();
+  assert.equal(h.saved.getItem('zylos-dashboard-activity-range'), '6h'); assert.equal(h.calls.at(-1), '/api/workbench/activity?range=6h');
+  h.stop(); assert.equal(h.intervals.size, 0); assert.equal(h.timeouts.size, 0);
 });
+// Visibility resume and teardown boundary: run for shell lifecycle changes; skip server-only changes. Uses the isolated fake lifecycle above.
 test('workbench shell visibility resumes polling and removes lifecycle listeners', async context => {
-  const harness = workbenchHarness(context); await wbTick(); const before = harness.calls.length;
-  harness.listeners.get('visibilitychange')(); await wbTick(); assert.ok(harness.calls.length > before);
-  harness.stop(); assert.equal(harness.listeners.has('visibilitychange'), false); assert.equal(harness.windowListeners.has('popstate'), false);
+  const h = workbenchHarness(context); await wbTick(); const before = h.calls.length;
+  h.listeners.get('visibilitychange')(); await wbTick(); assert.ok(h.calls.length > before);
+  h.stop(); assert.equal(h.listeners.has('visibilitychange'), false); assert.equal(h.windowListeners.has('popstate'), false);
+});
+// Polling visibility boundary: run for visibility/tab changes; skip server-only changes. Uses the isolated fake lifecycle above.
+test('workbench shell polls only a visible overview', async context => {
+  const h = workbenchHarness(context, null, { hidden: true }); await wbTick();
+  const before = h.calls.length;
+  await h.poll(5000); assert.equal(h.calls.length, before);
+  h.document.visibilityState = 'visible'; await h.poll(5000); await wbTick();
+  const shown = h.calls.length; assert.ok(shown > before); assert.equal(h.nodes.get('#wb-board').children.length, 1);
+  h.navigate(false); await h.poll(5000); assert.equal(h.calls.length, shown);
+  h.navigate(true); await wbTick(); assert.ok(h.calls.length > shown);
+});
+// Search/snapshot overlay boundary: run for board/search wiring changes; skip server-only changes. Uses the isolated fake lifecycle above.
+test('workbench shell refreshes search row state from the newest snapshot without changing membership', async context => {
+  let kind = 'idle';
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path.includes('/search?')) return { rows: [workbenchSnapshot('idle').rows[0], workbenchSnapshot('not_running', 'historical').rows[0]] };
+    if (path.endsWith('/api/workbench/groups')) return { ...fallback(path), rows: [workbenchSnapshot(kind).rows[0], workbenchSnapshot('idle', 'unmatched').rows[0]] };
+    return fallback(path);
+  });
+  await wbTick(); await wbTick();
+  const input = h.nodes.get('#wb-search'); input.value = 'a'; input.dispatch('input'); await h.debounce();
+  const board = h.nodes.get('#wb-board'); assert.equal(board.children.length, 2);
+  assert.equal(board.children[0].children[1].textContent, 'wb.state.idle');
+  kind = 'busy'; await h.poll(5000); await wbTick();
+  assert.equal(board.children.length, 2); assert.equal(board.children[0].children[1].textContent, 'wb.state.busy');
+  assert.equal(board.children[1].children[0].textContent, 'HISTORICAL'); assert.equal(board.textContent.includes('UNMATCHED'), false);
+});
+// Agent identity boundary after JSON decoding: run for request/identity changes; skip server-only changes. Uses the isolated fake lifecycle above.
+test('workbench shell discards an agent response whose JSON finishes after the viewed agent changes', async context => {
+  const json = wbDeferred(); let jsonStarted = false;
+  const h = workbenchHarness(context, (path, fallback) => path === '/api/workbench/groups'
+    ? { ok: true, json: () => { jsonStarted = true; return json.promise; } } : fallback(path));
+  await wbTick(); assert.equal(jsonStarted, true);
+  h.setOwner('Other'); json.resolve(h.makeSnapshot('busy', 'previous-agent')); await wbTick(); await wbTick();
+  assert.equal(h.nodes.get('#wb-board').textContent.includes('PREVIOUS-AGENT'), false);
+  await h.poll(5000); await wbTick();
+  assert.equal(h.nodes.get('#wb-board').children[0].children[0].textContent, 'A');
+  assert.ok(h.calls.includes('/fleet/Other/api/workbench/groups'));
+});
+// Mounted read-failure boundary: run for shell/controller changes; skip server-only changes. Uses the isolated fake lifecycle above.
+test('workbench shell retains rendered rows and warns after a snapshot read failure', async context => {
+  let failed = false;
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (failed && path.endsWith('/api/workbench/groups')) throw Error('offline');
+    return fallback(path);
+  });
+  await wbTick(); await wbTick(); const board = h.nodes.get('#wb-board');
+  assert.equal(board.children[0].children[0].textContent, 'A'); failed = true;
+  await h.poll(5000); await wbTick();
+  assert.equal(board.children.length, 1); assert.equal(board.children[0].children[0].textContent, 'A');
+  assert.match(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
+});
+// Mode/board timer boundary: run for polling changes; skip server-only changes. Uses the isolated fake lifecycle above.
+test('workbench shell samples session mode on mount and every minute independently of board polling', async context => {
+  const h = workbenchHarness(context); await wbTick(); await wbTick();
+  const modeReads = () => h.calls.filter(path => path === '/api/session-mode').length;
+  assert.equal(modeReads(), 1);
+  const beforeGroups = h.calls.filter(path => path === '/api/workbench/groups').length;
+  for (let index = 0; index < 3; index++) { await h.poll(5000); await wbTick(); }
+  assert.equal(modeReads(), 1); assert.equal(h.calls.filter(path => path === '/api/workbench/groups').length, beforeGroups + 3);
+  await h.poll(60000); await wbTick(); assert.equal(modeReads(), 2);
+  h.document.visibilityState = 'hidden'; await h.poll(60000); assert.equal(modeReads(), 2);
+  h.stop(); assert.equal(h.intervals.size, 0);
+});
+// Same-agent navigation boundary: run for identity/navigation changes; skip server-only changes. Uses the isolated fake lifecycle above.
+test('workbench shell navigation preserves the current agent snapshot and search', async context => {
+  const h = workbenchHarness(context, (path, fallback) => path.includes('/search?') ? { rows: [workbenchSnapshot('idle').rows[0]] } : fallback(path));
+  await wbTick(); await wbTick();
+  const search = h.nodes.get('#wb-search'); search.value = 'a'; search.dispatch('input'); await h.debounce();
+  const board = h.nodes.get('#wb-board'), before = board.textContent;
+  board.children[0].dispatch('click'); assert.equal(h.nodes.get('#wb-side').hidden, false);
+  h.navigate(false); assert.equal(search.value, 'a'); assert.equal(board.textContent, before);
+  assert.equal(h.nodes.get('#wb-side').hidden, false);
+  h.navigate(true); await wbTick(); assert.equal(h.navigationGeneration(), 2);
+  assert.equal(search.value, 'a'); assert.equal(board.textContent, before);
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const mount = app.slice(app.lastIndexOf('mountWorkbench('));
+  assert.match(mount, /identity: \(\) => state\.remoteAgent \?\? REMOTE_AGENT \?\? 'local'/);
+  assert.doesNotMatch(mount, /navigationGeneration/);
+});
+// Observer visibility and click integration: run when shell/app availability wiring
+// changes; skip server-only work. Uses the injected DOM/API/timers above; no live
+// resources. The shared teardown unmounts listeners, observers and fake timers.
+test('workbench shell hides unknown recovering and unavailable observer navigation', async context => {
+  let status = null, readOnly = false;
+  const settings = [];
+  const h = workbenchHarness(context, null, { storage: { 'zylos-dashboard-detail-level': 'technical' },
+    observerStatus: () => status,
+    observerAvailable: value => !readOnly && !value?.recoveryReason,
+    openSettings: section => settings.push(section) });
+  await wbTick(); await wbTick();
+  const nav = h.nodes.get('#observer-tab');
+  const redraw = () => h.listeners.get('dashboard-locale-change')();
+  const click = () => {
+    let prevented = 0, stopped = 0;
+    nav.dispatch('click', { preventDefault: () => prevented++, stopImmediatePropagation: () => stopped++ });
+    return { prevented, stopped };
+  };
+  assert.equal(nav.hidden, true);
+  assert.equal(click().prevented, 1);
+  status = { installed: true, enabled: true }; redraw(); assert.equal(nav.hidden, false);
+  assert.equal(nav.textContent, 'tab.observer');
+  assert.equal(click().prevented, 0);
+  readOnly = true; redraw(); assert.equal(nav.hidden, true);
+  nav.hidden = false; h.mutate(); assert.equal(nav.hidden, true);
+  assert.equal(click().stopped, 1); assert.equal(settings.length, 0);
+  readOnly = false; redraw(); assert.equal(nav.hidden, false);
+  status = { installed: true, enabled: true, recoveryReason: 'recovering' }; redraw();
+  assert.equal(nav.hidden, true);
+  nav.hidden = false; h.mutate(); assert.equal(nav.hidden, true);
+  assert.equal(click().stopped, 1); assert.equal(settings.length, 0);
+  status = { installed: false }; redraw();
+  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'wb.observerInstall');
+  assert.equal(click().prevented, 1); assert.equal(settings[0], 'observer');
+  status = { installed: true, enabled: false }; redraw();
+  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'wb.observerDisabled');
+  assert.equal(click().prevented, 1); assert.equal(settings.length, 2);
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /observerAvailable: status => !remoteIsReadOnly\(\) && !observerRecoveryReason\(status\)/);
 });

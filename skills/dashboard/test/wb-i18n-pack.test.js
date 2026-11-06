@@ -58,7 +58,10 @@ test('translation loader tolerates storage writes failing after a fresh pack', a
 });
 
 // Actual main+workbench pack integration with in-memory storage, fetch and timers.
-// Run when either loader/merge/heal wiring changes; no browser, server or process is started.
+// Run when either loader/merge/heal wiring changes; skip changes outside that boundary.
+// No browser, server or process is started. The runner must isolate HOME, ZYLOS_DIR,
+// PM2_HOME, short TMPDIR and a private tmux namespace, read back actual paths before
+// running, then clean up isolated resources; teardown restores all mocked globals.
 test('main translation healing keeps its cache primary-only and restores workbench labels', async context => {
   const saved = storage(); let mainCalls = 0, workbenchCalls = 0, heal;
   context.mock.method(globalThis, 'setTimeout', (callback, delay) => {

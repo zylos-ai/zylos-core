@@ -31,6 +31,10 @@ test('system theme reacts to media changes and removes its listener', () => {
 });
 test('observer navigation follows detail, installation and enabled status', () => {
   assert.equal(observerNavEntry({ installed: true, enabled: true }, 'plain'), null);
+  assert.equal(observerNavEntry(null, 'technical'), null);
+  assert.equal(observerNavEntry(undefined, 'technical'), null);
+  const primary = { 'tab.observer': 'Observer' };
+  assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical', key => primary[key] ?? key).label, 'Observer');
   assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical').target, 'observer');
   assert.equal(observerNavEntry({ state: 'installed', desired: { enabled: true } }, 'technical').target, 'observer');
   assert.match(observerNavEntry({ installed: false }, 'technical').label, /去设置安装/);

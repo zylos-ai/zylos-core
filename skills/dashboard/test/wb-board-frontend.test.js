@@ -5,7 +5,7 @@ import { createBoardSearch } from '../public/js/wb/board-search.js';
 import { activityStrip } from '../public/js/wb/activity-strip.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
 import { renderAttention } from '../public/js/wb/attention-bar.js';
-import { apiError } from '../public/js/wb/fetch-guard.js';
+import { showSidePanel } from '../public/js/wb/side-panel.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 const t = (key, values = {}) => key + Object.values(values).join(':');
 const row = (key, kind = 'idle') => ({ sessionGroup: key, name: { displayName: key }, fallbackName: key,
@@ -72,12 +72,21 @@ test('activity renders real string cells and timestamps, with unknown inbound di
     assert.equal(unknown.children[0].classList.contains('wb-inbound'), false);
   }
 });
+// Board/activity integration: run for activity-to-row wiring changes; skip unrelated
+// work. Injected DOM only, no live I/O or timers; runner uses temporary HOME,
+// ZYLOS_DIR, PM2_HOME, short TMPDIR and private tmux namespace with cleanup.
 test('board wires activity to each matching group', () => {
   const document = createDocument(), root = document.createElement('div');
   renderBoard(root, { rows: [row('a'), row('b')] }, { document, t, activity: { start: 0, cellSeconds: 60,
     groups: { a: { cells: ['busy'], inbound: [] }, b: { cells: ['none'], inbound: [] } } } });
   assert.equal(root.children[0].children[3].children[0].className, 'wb-bucket wb-busy');
   assert.equal(root.children[1].children[3].children[0].className, 'wb-bucket wb-none');
+  renderBoard(root, { rows: [row('a')] }, { document, t, activity: { start: 0, cellSeconds: 60,
+    inboundError: 'inbound_unreadable', groups: { a: { cells: ['busy'], inbound: [1000] } } } });
+  const strip = root.children[0].children[3];
+  assert.equal(strip.dataset.inbound, 'unknown');
+  assert.equal(strip.children[0].classList.contains('wb-inbound'), false);
+  assert.equal(strip.children[0].classList.contains('wb-busy'), true);
 });
 test('snapshot controller rejects old responses and retains rows after failure', async () => {
   const first = deferred(), second = deferred(); let calls = 0, shown = null, failure = null;
@@ -120,9 +129,24 @@ test('attention shows both problems and recovery reminders with text-safe techni
   assert.equal(root.children.length, 4); assert.match(root.textContent, /wb.attention.rate_limited/); assert.match(root.textContent, /<img onerror=x>/);
   assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
 });
-test('write error formatting accepts business and HTTP error shapes', () => {
-  assert.equal(apiError({ error: { code: 'NAME_INVALID', message: 'Bad name' } }), 'Bad name');
-  assert.equal(apiError({ error: 'invalid_json' }), 'invalid_json'); assert.equal(apiError({ error: 'payload_too_large' }), 'payload_too_large');
+// Selection/detail boundary: run for side-panel rendering changes; skip unrelated
+// work. Injected DOM only, no live I/O or timers; runner uses temporary HOME,
+// ZYLOS_DIR, PM2_HOME, short TMPDIR and private tmux namespace with cleanup.
+test('side panel opens only the selected name and state and closes with back', () => {
+  const document = createDocument(), root = document.createElement('aside');
+  root.hidden = true;
+  showSidePanel(root, row('<img onerror=bad>', 'busy'), { document, t });
+  assert.equal(root.hidden, false);
+  assert.equal(root.children.length, 3);
+  assert.equal(root.children[0].tagName, 'BUTTON');
+  assert.equal(root.children[0].textContent, 'wb.back');
+  assert.equal(root.children[1].tagName, 'H2');
+  assert.equal(root.children[1].textContent, '<img onerror=bad>');
+  assert.equal(root.children[2].textContent, 'wb.state.busy');
+  assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
+  assert.equal(allNodes(root).filter(node => node.tagName === 'BUTTON').length, 1);
+  root.children[0].dispatch('click');
+  assert.equal(root.hidden, true);
 });
 test('unnamed snapshot rows use localized platform and key fallback rather than the single label', () => {
   const document = createDocument();

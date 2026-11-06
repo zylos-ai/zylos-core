@@ -1,6 +1,5 @@
 {
   "wb.nav.overview": "总览",
-  "wb.nav.memory": "记忆",
   "wb.nav.usage": "用量与费用",
   "wb.single": "唯一会话",
   "wb.mode": "模式",
@@ -10,7 +9,6 @@
   "wb.cost": "今日费用",
   "wb.week": "本周额度",
   "wb.authFailed": "登录失效",
-  "wb.rateLimited": "额度用完",
   "wb.pending": "待生效",
   "wb.noMatch": "没有匹配的组",
   "wb.noGroups": "暂无活跃组",
@@ -30,7 +28,6 @@
   "wb.recovery": "额度用完，{time} 恢复",
   "wb.costCoverage": "Base 现阶段几乎没有采集到费用",
   "wb.transition": "会话模式转换中",
-  "wb.observer": "终端观察",
   "wb.observerDisabled": "终端观察（已停用）",
   "wb.observerInstall": "终端观察 · 去设置安装",
   "wb.theme": "切换明暗主题",

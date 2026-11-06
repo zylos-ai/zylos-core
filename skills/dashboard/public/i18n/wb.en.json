@@ -1,6 +1,5 @@
 {
   "wb.nav.overview": "Overview",
-  "wb.nav.memory": "Memory",
   "wb.nav.usage": "Usage & cost",
   "wb.single": "Only session",
   "wb.mode": "Mode",
@@ -10,7 +9,6 @@
   "wb.cost": "Cost today",
   "wb.week": "Weekly allowance",
   "wb.authFailed": "Login expired",
-  "wb.rateLimited": "Allowance exhausted",
   "wb.pending": "Pending",
   "wb.noMatch": "No matching groups",
   "wb.noGroups": "No active groups",
@@ -30,7 +28,6 @@
   "wb.recovery": "Allowance exhausted; recovers at {time}",
   "wb.costCoverage": "Base currently collects almost no cost data",
   "wb.transition": "Session mode transition in progress",
-  "wb.observer": "Terminal observer",
   "wb.observerDisabled": "Terminal observer (disabled)",
   "wb.observerInstall": "Terminal observer · Install in settings",
   "wb.theme": "Toggle light / dark theme",

@@ -97,7 +97,6 @@ function scheduleHeal(locale, seq) {
 export async function initI18n(locale) {
   const targetLocale = resolveLocale(locale);
   const seq = ++requestSeq;
-  initWbPack.cancel();
   currentLocale = targetLocale;
   try { localStorage.setItem(STORAGE_KEY, targetLocale); } catch {}
   document.documentElement.lang = targetLocale;
