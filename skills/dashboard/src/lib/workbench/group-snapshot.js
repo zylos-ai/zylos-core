@@ -155,17 +155,24 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     for (const event of events) if (event.run_id != null) runs.get(event.session_group)?.add(event.run_id);
     for (const [sessionGroup, runIds] of runs) for (const runId of runIds) {
       const filter = { sessionGroup, runId, until: new Date(start - 1).toISOString(), order: 'desc' };
-      const turn = store.queryEvents({ ...filter, types: ['user_prompt_submit', 'stop'], limit: 1 })[0];
+      const prompt = store.queryEvents({ ...filter, types: ['user_prompt_submit'], limit: 1 })[0];
+      const stop = store.queryEvents({ ...filter, types: ['stop'], limit: 1 })[0];
+      // Match the reducer's source-time ordering, with insertion order for ties.
+      const turn = !prompt ? stop : !stop ? prompt
+        : (Date.parse(prompt.timestamp) - Date.parse(stop.timestamp) || prompt.event_seq - stop.event_seq) > 0
+          ? prompt : stop;
       if (turn) events.push(turn);
-      // An open turn already covers tools; stop closes every pending tool.
+      // An open turn already covers tools. Stop supplies a fallback tool end;
+      // the reducer still prefers a matching end after stop. Capped lookback
+      // omits pre-stop tools, so that overlap may be absent at the window edge.
       // No timestamp floor from an earlier ingested event: source times may
       // arrive out of order. afterSeq uses the Store's insertion ordering.
       if (turn?.event_type !== 'user_prompt_submit') events.push(...store.queryEvents({ ...filter,
         types: ['pre_tool_use', 'post_tool_use', 'post_tool_failure'],
         ...(turn ? { afterSeq: turn.event_seq } : {}), limit: activityLookbackLimit }));
       // Stop does not close subagents. Pair their own starts/ends separately.
-      // These caps bound returned rows/queries, not SQLite's scan without a
-      // run index. Starts older than the latest 200 matching events can be
+      // The run index bounds scans to this run; caps bound returned rows, not
+      // scans within a long run. Starts older than 200 matching events can be
       // omitted, so this display can under-report very old outstanding work.
       events.push(...store.queryEvents({ ...filter, types: ['subagent_start', 'subagent_stop'], limit: activityLookbackLimit }));
     }

@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 21;
+export const TARGET_SCHEMA_VERSION = 22;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -117,6 +117,9 @@ export function inspectDatabase(db) {
     const groupColumns = db.pragma('index_info(idx_events_group_seq)').map(column => column.name);
     const group = db.pragma('index_list(runtime_events)').find(index => index.name === 'idx_events_group_seq');
     if (!group || group.unique || group.partial || groupColumns.join(',') !== 'session_group,event_seq') throw new Error('Unsupported Dashboard event group index');
+    const runColumns = db.pragma('index_info(idx_events_group_run_seq)').map(column => column.name);
+    const run = db.pragma('index_list(runtime_events)').find(index => index.name === 'idx_events_group_run_seq');
+    if (!run || run.unique || run.partial || runColumns.join(',') !== 'session_group,run_id,event_seq') throw new Error('Unsupported Dashboard event run index');
     for (const [table, name, columns] of [
       ['metric_points', 'idx_metric_points_group_ts', 'metric_name,session_group,timestamp'],
       ['usage_transcripts', 'idx_usage_transcripts_status_updated', 'status,updated_at'],
@@ -369,6 +372,15 @@ export function migrateDatabase(db) {
           );
           CREATE INDEX IF NOT EXISTS idx_usage_transcripts_status_updated ON usage_transcripts(status, updated_at);
           INSERT OR IGNORE INTO schema_migrations (version) VALUES (21);
+        `);
+      })();
+    }
+    if (currentVersion < 22) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_events_group_run_seq
+            ON runtime_events(session_group, run_id, event_seq);
+          INSERT OR IGNORE INTO schema_migrations (version) VALUES (22);
         `);
       })();
     }

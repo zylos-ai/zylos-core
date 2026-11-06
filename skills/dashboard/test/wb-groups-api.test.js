@@ -399,7 +399,6 @@ test('activity uses separate thirty-second range caches and reads every active-g
   const f = fixture(t), filters = [], normal = f.store.queryEvents;
   f.store.queryEvents = filter => {
     if (!filter.types.includes('session_start')) return normal(filter);
-    if (filter.runId) return [];
     filters.push(filter);
     assert.ok(['origin', 'telegram:g0'].includes(filter.sessionGroup));
     assert.equal(filter.limit, 1000);
@@ -612,8 +611,8 @@ for (const [type, metadata, closes] of [
     return rows;
   };
   const output = await f.service.activity('60m'), cells = output.groups['telegram:g0'].cells;
-  assert.equal(filters.length, type === 'user_prompt_submit' && !closes ? 2 : 3);
-  assert.ok(lookedBack <= 401);
+  assert.equal(filters.length, type === 'user_prompt_submit' && !closes ? 3 : 4);
+  assert.ok(lookedBack <= 402);
   if (!closes) assert.ok(cells.every(value => value === 'busy'));
   else if (type === 'pre_tool_use') {
     assert.ok(cells.slice(0, 10).every(value => value === 'busy'));
@@ -662,8 +661,8 @@ for (const type of ['user_prompt_submit', 'subagent_start']) {
     })();
     const output = await f.service.activity('60m');
     assert.ok(output.groups['telegram:g0'].cells.every(value => value === 'busy'));
-    assert.equal(filters.length, type === 'user_prompt_submit' ? 2 : 3);
-    assert.ok(filters.reduce((total, filter) => total + filter.returned, 0) <= 401);
+    assert.equal(filters.length, type === 'user_prompt_submit' ? 3 : 4);
+    assert.ok(filters.reduce((total, filter) => total + filter.returned, 0) <= 402);
     if (type === 'subagent_start') assert.equal(filters.find(filter => filter.types.includes('pre_tool_use')).returned, 200);
     const queries = filters.length;
     assert.equal(await f.service.activity('60m'), output);
@@ -681,7 +680,7 @@ test('a replaced run opened before the window stays busy until its in-window sto
   assert.ok(cells.slice(0, 30).every(value => value === 'busy'));
   assert.ok(cells.slice(30, 40).every(value => value === 'none'));
   assert.ok(cells.slice(40).every(value => value === 'idle'));
-  assert.equal(filters.filter(filter => filter.runId === 'replaced').length, 2);
+  assert.equal(filters.filter(filter => filter.runId === 'replaced').length, 3);
 });
 
 // Integration: ingestion order differs from source time; same isolated fixture.
@@ -695,7 +694,28 @@ for (const type of ['user_prompt_submit', 'pre_tool_use', 'subagent_start']) {
   });
 }
 
-// Integration: stop cuts off tools but not agents; same isolated fixture.
+// Integration: cross-type source time and insertion-order ties; same isolated
+// Store fixture. Run for turn lookback changes; skip rendering-only edits.
+for (const [lateType, equalTime, busy] of [
+  ['user_prompt_submit', false, false], ['stop', false, true],
+  ['user_prompt_submit', true, true], ['stop', true, false],
+]) test(`pre-window late ${lateType} with equalTime=${equalTime} follows source-time turn ordering`, async t => {
+  const { f, minute, start, filters, add } = activityStore(t);
+  const earlier = start - (equalTime ? 10 : 20) * minute;
+  const later = start - 10 * minute;
+  add('first', lateType === 'stop' ? 'user_prompt_submit' : 'stop', later);
+  add('late', lateType, earlier);
+  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  assert.ok(cells.every(value => value === (busy ? 'busy' : 'idle')));
+  for (const type of ['user_prompt_submit', 'stop']) {
+    const query = filters.find(filter => filter.types.length === 1 && filter.types[0] === type);
+    assert.equal(query.limit, 1);
+    assert.equal(query.returned, 1);
+  }
+  assert.equal(filters.length, busy ? 3 : 4);
+});
+
+// Integration: stop fallback closes unmatched tools but not agents; same fixture.
 test('pre-window stop closes tools while a child remains busy until its own end', async t => {
   const { f, minute, start, filters, add } = activityStore(t);
   add('tool', 'pre_tool_use', start - 20 * minute, { tool_use_id: 'abandoned' });
@@ -725,7 +745,7 @@ for (const [open, close, idKey] of [['pre_tool_use', 'post_tool_failure', 'tool_
     })();
     const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
     assert.ok(cells.every(value => value === 'idle'));
-    assert.equal(filters.length, 3);
+    assert.equal(filters.length, 4);
     assert.equal(filters.find(filter => filter.types.includes(open)).returned, 200);
   });
 }
