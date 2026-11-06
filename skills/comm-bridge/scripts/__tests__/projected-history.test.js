@@ -181,19 +181,28 @@ test('group matching ignores fallback text and references beyond the 80-characte
   assert.equal(f.query.groups({ match: '🚀' }).length, 1);
 });
 
-// This branch has no BeforeSend implementation. The marker only fixes that
-// direct insert does not call a hook; manually running its script is not a
-// c4-send positive control. Real channel-hook coverage belongs to integration.
-// No real send/channel/network is invoked.
+// CLI integration: real send must invoke the declared abort hook before any
+// write; direct insert must not invoke it. Both use the isolated fixture above.
+// Run for insert/send boundary changes; skip unrelated conversion/runtime work.
+// No real channel/network is invoked; hook/CLI children are bounded and cleaned.
 test('insert receipts project text but direct Dashboard insertion still bypasses BeforeSend', t => {
   const f = fixture(t), component = path.join(f.env.ZYLOS_DIR, '.claude/skills/dashboard');
   const marker = path.join(f.root, 'hook-called');
-  fs.writeFileSync(path.join(component, 'before-send.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'called'); console.log('{"action":"abort"}');`);
+  fs.writeFileSync(path.join(component, 'before-send.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'called'); console.log('{"version":1,"decision":"abort","message":"fixture abort"}');`);
   fs.writeFileSync(path.join(component, 'package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(component, 'SKILL.md'), '---\nname: dashboard\nc4:\n  before_send:\n    hook_id: dashboard-shape\n    entry: before-send.js\n    timeout_ms: 1000\n---\n');
-  // Verify that the sentinel script can write its marker in this fixture.
-  const control = spawnSync(process.execPath, [path.join(component, 'before-send.js')], { env: f.env, encoding: 'utf8', timeout: 5000 });
-  assert.equal(control.status, 0, control.stderr); assert.equal(fs.readFileSync(marker, 'utf8'), 'called'); fs.unlinkSync(marker);
+  fs.mkdirSync(path.join(component, 'scripts'));
+  fs.writeFileSync(path.join(component, 'scripts/send.js'), "throw new Error('delivery must not run after abort');");
+  const control = spawnSync(process.execPath,
+    [fileURLToPath(new URL('../c4-send.js', import.meta.url)), 'dashboard', 'route'],
+    { env: f.env, input: valid, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024 });
+  assert.equal(control.status, 1, control.stderr);
+  assert.equal(JSON.parse(control.stdout).error.code, 'HOOK_ABORTED');
+  assert.match(control.stderr, /HOOK_ABORTED fixture abort/);
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'called');
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, 0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM group_heads').get().n, 0);
+  fs.unlinkSync(marker);
   for (const json of [false, true]) {
     const output = f.invoke('../c4-db.js', ['insert', 'out', 'dashboard', 'route', valid, ...(json ? ['--json'] : [])]);
     const value = JSON.parse(json ? output : output.slice('Inserted: '.length)), row = json ? value.data : value;
