@@ -53,3 +53,64 @@ test('missing authentication and disabled authentication never authorize chat', 
   for (const route of chatRoutes) assert.equal((await f.request(route)).status, 403);
   assert.equal(f.counts.reads, 0); assert.equal(f.counts.receives, 0);
 });
+
+// Integration: independent local/remote AuthGates over private loopback. Run
+// for proxy authentication changes; skip UI-only edits. Fixture owns teardown.
+test('proxy refuses disabled local authentication before calling an enabled remote', async t => {
+  const f = await chatHttpFixture(t, { chat: { allowRemote: true } }, {
+    localConfig: { auth: { enabled: false, password: null } },
+  });
+  for (const identity of ['none', 'cookie', 'read', 'admin']) for (const route of chatRoutes) {
+    const result = await f.request(route, { fleet: true, identity });
+    assert.equal(result.status, 403);
+    assert.equal(JSON.parse(result.text).error, 'admin_required');
+    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+  }
+  assert.equal((await f.request(chatRoutes[0], { identity: 'admin' })).status, 200);
+  assert.equal(f.counts.reads, 1);
+  assert.equal(f.counts.upstream, 0);
+});
+
+// Integration: actual proxy origin/allowlist checks and independent remote
+// permission; run for proxy write changes, skip presentation-only changes.
+test('proxy cookie writes require exact origin before upstream while API admin may write', async t => {
+  const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
+  const writes = chatRoutes.filter(route => route.method === 'POST');
+  for (const origin of [null, false, 'http://127.0.0.1:1']) for (const route of writes) {
+    const result = await f.request(route, { fleet: true, origin, contentType: 'text/plain' });
+    assert.equal(result.status, 403);
+    assert.equal(JSON.parse(result.text).error, 'origin_required');
+    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+  }
+  for (const route of writes) {
+    assert.equal((await f.request(route, { fleet: true })).status, 200);
+    assert.equal((await f.request(route, { fleet: true, identity: 'admin', origin: false })).status, 200);
+  }
+  assert.equal(f.counts.receives, writes.length * 2);
+  assert.equal(f.counts.upstream, writes.length * 2);
+});
+
+// Integration: whole chat-prefix classification, including future paths and
+// methods; run for auth/proxy route changes. Private fixture resources only.
+test('proxy protects chat prefix for every method and retains explicit write allowlist', async t => {
+  const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
+  const paths = ['/api/chat/conversations', '/api/chat/conversations/', '/api/chat/future'];
+  for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) for (const path of paths) {
+    const result = await f.request({ method, path }, { fleet: true, identity: 'read' });
+    assert.equal(result.status, 403, `${method} ${path}`);
+    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+  }
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) for (const path of paths) {
+    const result = await f.request({ method, path }, { fleet: true });
+    assert.equal(result.status, 403);
+    assert.equal(JSON.parse(result.text).error, 'read_only_proxy');
+    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+  }
+  assert.equal((await f.request({ method: 'HEAD', path: paths[0] }, { fleet: true })).status, 404);
+  assert.equal(f.counts.upstream, 1);
+  for (const method of ['GET', 'PUT']) {
+    const before = f.counts.upstream;
+    assert.equal((await f.request({ method, path: '/api/chat/settings' }, { fleet: true })).status, 403);
+    assert.equal(f.counts.upstream, before);
+  }
+});

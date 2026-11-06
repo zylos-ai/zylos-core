@@ -34,7 +34,7 @@ function fixture(t, remoteScope) {
     const req = Readable.from(route.body === null ? [] : [Buffer.from(route.body)]);
     req.method = route.method;
     req.url = `/fleet/Remote${route.path}?exact=1`;
-    req.headers = { host: 'hub.test', 'content-type': 'application/json',
+    req.headers = { host: 'hub.test', origin: 'http://hub.test', 'content-type': 'application/json',
       ...(localScope === 'read' ? { authorization: `Bearer ${localToken}` } : { cookie: `__Secure-zylos_dashboard_session=${cookie}` }) };
     const response = { status: null, headers: {}, body: '',
       setHeader(name, value) { this.headers[name.toLowerCase()] = value; },

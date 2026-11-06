@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import { browserBaseFromRequest, browserPath, browserRoot, isPathWithinBase } from './browser-base.js';
 import { mutateConfig } from './config-mutation.js';
 import { sendHtml, sendJson, sendText } from './http.js';
-import { isChatDataRoute } from './chat/access.js';
 
 const SCRYPT_KEYLEN = 64;
 const COOKIE_NAME = '__Secure-zylos_dashboard_session';
@@ -309,7 +308,7 @@ function needsAdminApiAccess(pathname, method) {
   const proxiedWrite = pathname.match(/^\/fleet\/[^/]+\/api\/(.+)$/);
   if (!proxiedWrite) return false;
   const remotePath = `/api/${proxiedWrite[1]}`;
-  if (isChatDataRoute(method, remotePath)) return true;
+  if (remotePath.startsWith('/api/chat/')) return true;
   if (remotePath === '/api/memory' || remotePath.startsWith('/api/memory/')) return true;
   if (remotePath === '/api/workbench/memory' || remotePath.startsWith('/api/workbench/memory/')) return true;
   return ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(remotePath) ||

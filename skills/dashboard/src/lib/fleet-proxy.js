@@ -325,6 +325,17 @@ export class FleetProxy {
   }
 
   async proxyApi(req, res, agent, suffix, search) {
+    if (suffix.startsWith('/api/chat/')) {
+      const context = req._authContext;
+      if (context?.scope !== 'admin') {
+        sendJson(res, 403, { error: 'admin_required' });
+        return;
+      }
+      if (!['GET', 'HEAD'].includes(req.method) && context.kind === 'cookie' && !isSameOriginRequest(req)) {
+        sendJson(res, 403, { error: 'origin_required' });
+        return;
+      }
+    }
     if (suffix.startsWith('/api/observer/') || suffix.startsWith('/observer/')) {
       this.pruneObserverLeases();
       if (!isObserverProxyRoute(req.method, suffix)) {

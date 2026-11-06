@@ -2,7 +2,7 @@ import { isSameOriginRequest } from '../request-origin.js';
 
 export const CHAT_SETTINGS_PATH = '/api/chat/settings';
 
-// Keep the proxy's public route contract explicit as handlers are added.
+// Named data routes; the proxy protects the entire /api/chat/ prefix.
 export function isChatDataRoute(method, pathname) {
   return method === 'GET' && (
     pathname === '/api/chat/conversations' ||
@@ -13,6 +13,7 @@ export function isChatDataRoute(method, pathname) {
   );
 }
 
+/** Call on the data instance before querying conversation data. */
 export function requireChatAccess(req, auth, config) {
   const context = auth.enabled ? auth.resolveAuthContext(req) : null;
   if (!context) return { status: 403, error: 'chat_auth_required' };
@@ -24,6 +25,11 @@ export function requireChatAccess(req, auth, config) {
   return context.scope === 'admin' ? null : { status: 403, error: 'insufficient_scope', required: 'admin' };
 }
 
+/**
+ * Call before writing. Supply authoritative server mode and the stored
+ * conversation plus server-resolved namespace/localId, never caller routing
+ * fields. Only draft creation may omit the stored conversation (draft: true).
+ */
 export function requireChatWrite(req, auth, config, { mode, draft = false, conversation, namespace, localId } = {}) {
   const denied = requireChatAccess(req, auth, config);
   if (denied) return denied;

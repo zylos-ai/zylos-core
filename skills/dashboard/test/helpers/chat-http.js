@@ -16,7 +16,7 @@ export const tokens = { read: `zylos_st_${'a'.repeat(64)}`, admin: `zylos_st_${'
 const cookie = 'isolated-browser-session';
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 
-export async function chatHttpFixture(t, config = {}, { workbench } = {}) {
+export async function chatHttpFixture(t, config = {}, { workbench, localConfig = {} } = {}) {
   const store = {
     getSession: hash => hash === digest(cookie) ? { created_at: Date.now(), last_activity_at: Date.now() } : null,
     touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
@@ -27,6 +27,8 @@ export async function chatHttpFixture(t, config = {}, { workbench } = {}) {
   };
   const settings = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: false }, ...config };
   const auth = new AuthGate(settings, store);
+  const hubSettings = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: false }, ...localConfig };
+  const hubAuth = new AuthGate(hubSettings, store);
   const counts = { reads: 0, receives: 0, upstream: 0 };
   let mode = 'multi';
   let record = { channel: 'dashboard', namespace: 'dashboard-owned', localId: 'local-chat' };
@@ -36,7 +38,7 @@ export async function chatHttpFixture(t, config = {}, { workbench } = {}) {
     const server = http.createServer(async (req, res) => {
       try {
         const url = new URL(req.url, 'http://localhost');
-        if (await auth.handle(req, res, url)) return;
+        if (await (isHub ? hubAuth : auth).handle(req, res, url)) return;
         if (isHub) { await proxy.handle(req, res, url); return; }
         if (await handleChatSettings(req, res, url, { auth, config: settings })) return;
         if (workbench && ['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(url.pathname)) {
@@ -64,18 +66,18 @@ export async function chatHttpFixture(t, config = {}, { workbench } = {}) {
   const hub = await start(true);
   t.after(async () => {
     clearInterval(auth._cleanupTimer);
+    clearInterval(hubAuth._cleanupTimer);
     for (const server of servers) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
   });
-  async function request(route, { identity = 'cookie', fleet = false, origin = true, body = '{}' } = {}) {
+  async function request(route, { identity = 'cookie', fleet = false, origin = true, body = '{}', contentType = 'application/json' } = {}) {
     const base = fleet ? hub : remote;
-    const headers = { 'content-type': 'application/json' };
+    const headers = { 'content-type': contentType };
     if (identity === 'cookie') headers.cookie = `__Secure-zylos_dashboard_session=${cookie}`;
     else if (tokens[identity]) headers.authorization = `Bearer ${tokens[identity]}`;
-    if (origin) headers.origin = base;
-    else headers.origin = 'https://other.invalid';
+    if (origin !== null) headers.origin = origin === true ? base : origin || 'https://other.invalid';
     const response = await fetch(`${base}${fleet ? '/fleet/Remote' : ''}${route.path}`, {
-      method: route.method, headers, ...(route.method === 'GET' ? {} : { body }) });
+      method: route.method, headers, ...(['GET', 'HEAD'].includes(route.method) ? {} : { body }) });
     return { status: response.status, text: await response.text() };
   }
-  return { request, config: settings, counts, auth, setMode: value => { mode = value; }, setRecord: value => { record = value; } };
+  return { request, config: settings, localConfig: hubSettings, counts, auth, setMode: value => { mode = value; }, setRecord: value => { record = value; } };
 }

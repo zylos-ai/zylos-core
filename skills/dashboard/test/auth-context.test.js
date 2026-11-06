@@ -68,6 +68,8 @@ test('workbench proxied memory and registered writes require local admin', async
     { method: 'GET', path: '/api/workbench/memory/backlog' },
     { method: 'GET', path: '/api/chat/conversations' },
     ...['messages', 'status', 'questions'].map(kind => ({ method: 'GET', path: `/api/chat/conversations/local-chat/${kind}` })),
+    ...['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].flatMap(method =>
+      ['/api/chat/conversations/', '/api/chat/future'].map(path => ({ method, path }))),
     ...workbenchWriteRoutes,
   ];
   for (const route of routes) {
