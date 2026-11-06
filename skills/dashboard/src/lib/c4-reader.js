@@ -160,10 +160,39 @@ export class C4Reader {
     }
   }
 
-  getMessageSeries({ since, until, bucketSeconds = 3600 } = {}) {
+  getMessageSeries({ since, until, bucketSeconds = 3600, intervals } = {}) {
+    const empty = () => ({ points: intervals?.map(({ at }) => ({ at, in: 0, out: 0 })) ?? [], total: { in: 0, out: 0 } });
     const db = this._open();
-    if (!db) return { points: [], total: { in: 0, out: 0 } };
+    if (!db) return empty();
     try {
+      if (intervals) {
+        if (!intervals.length) return { points: [], total: { in: 0, out: 0 } };
+        const parameters = { since, until };
+        const branch = (first, last) => {
+          if (first === last) return String(first);
+          const middle = Math.floor((first + last + 1) / 2);
+          parameters[`edge${middle}`] = intervals[middle].since;
+          return `CASE WHEN stamp < julianday(@edge${middle}) THEN ${branch(first, middle - 1)} ELSE ${branch(middle, last)} END`;
+        };
+        // Convert the mixed C4 timestamp formats once per row, then assign the
+        // precomputed calendar intervals in one query instead of scanning daily.
+        const rows = db.prepare(`WITH messages AS MATERIALIZED (
+          SELECT julianday(timestamp) AS stamp, direction FROM conversations
+          WHERE julianday(timestamp) BETWEEN julianday(@since) AND julianday(@until)
+        ) SELECT ${branch(0, intervals.length - 1)} AS slot,
+          SUM(CASE WHEN direction = 'in' THEN 1 ELSE 0 END) AS msg_in,
+          SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS msg_out
+          FROM messages GROUP BY slot ORDER BY slot`).all(parameters);
+        const points = intervals.map(({ at }) => ({ at, in: 0, out: 0 }));
+        const total = { in: 0, out: 0 };
+        for (const row of rows) {
+          points[row.slot].in = row.msg_in;
+          points[row.slot].out = row.msg_out;
+          total.in += row.msg_in;
+          total.out += row.msg_out;
+        }
+        return { points, total };
+      }
       const sinceEpoch = Math.floor(new Date(since).getTime() / 1000);
       const untilEpoch = Math.floor(new Date(until).getTime() / 1000);
 
@@ -190,7 +219,7 @@ export class C4Reader {
         total: { in: totRow?.total_in || 0, out: totRow?.total_out || 0 }
       };
     } catch {
-      return { points: [], total: { in: 0, out: 0 } };
+      return empty();
     }
   }
 

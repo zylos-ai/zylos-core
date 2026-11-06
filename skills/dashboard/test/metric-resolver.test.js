@@ -127,15 +127,70 @@ test('pricing usage and strip costs share natural days and include legacy rows',
     pricing.models.filter(row => row.runtime === runtime).reduce((sum, row) => sum + row.cost, 0),
     usage.totals.costByRuntime[runtime]);
   assert.equal(pricing.models.find(row => row.runtime === 'codex' && row.model === null).cost, 7);
+  assert.equal(pricing.models.length, 3);
+  assert.equal(new Set(pricing.models.map(({ runtime, model }) => JSON.stringify([runtime, model]))).size, pricing.models.length);
+  assert.equal(pricing.models.find(row => row.runtime === 'claude' && row.model === 'claude-fixture').cost, 12);
+  assert.equal(pricing.models.find(row => row.runtime === 'codex' && row.model === 'codex-fixture').cost, 14);
   assert.equal(pricing.models.some(row => row.model?.startsWith('outside-')), false);
   assert.deepEqual(pricing.unmatched, [{ runtime: 'codex', model: 'unpriced', tokens: 1400 }]);
   assert.equal(strip.sevenDay.total, usage.totals.cost);
   assert.equal(strip.today.total, 15);
-  assert.deepEqual(usage.costSummary, strip);
+  assert.equal(Object.hasOwn(usage, 'costSummary'), false);
   assert.equal(strip.daily.length, 7);
   assert.equal(strip.daily.reduce((sum, day) => sum + day.total, 0), usage.totals.cost);
   assert.equal(f.store.aggregateCost(usage), usage.totals.cost);
   assert.equal(f.store.aggregateCost({ since: '2026-11-05T16:00:00.000Z', until: usage.until }), strip.today.total);
+});
+
+// HTTP range validation uses the real route and private usageServer lifecycle.
+// Run for usage range parsing/limits; skip unrelated UI changes. The fixture's
+// loopback listener, DB, HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and cleanup are isolated.
+test('custom usage requires both bounds and caps the selected span at 366 days', async t => {
+  const f = await usageServer(t);
+  for (const query of [
+    'until=2026-11-06', 'since=2026-01-01', 'since=&until=2026-11-06',
+    'since=2026-01-01&until=', 'since=0&until=2026-11-06',
+    'since=2025-01-01&until=2026-01-03',
+    'since=2025-01-01T00:00:00.000Z&until=2026-01-02T00:00:00.001Z',
+  ]) {
+    const response = await request(f.origin, '/api/workbench/usage?range=custom&' + query);
+    assert.equal(response.status, 400, query);
+    assert.equal((await response.json()).error.code, 'invalid_range', query);
+  }
+  const accepted = await request(f.origin,
+    '/api/workbench/usage?range=custom&since=2025-01-01T00:00:00.000Z&until=2026-01-02T00:00:00.000Z');
+  assert.equal(accepted.status, 200);
+});
+
+// Real aggregate HTTP route locks the changed 7/30-natural-day boundary and
+// UTC fallback contract. Fixed Date affects range selection only; listener and
+// request deadlines remain real. Same private usageServer lifecycle as above.
+test('aggregate HTTP periods include exactly seven or thirty natural days', async t => {
+  const now = new Date('2026-11-06T04:00:00.000Z');
+  t.mock.timers.enable({ apis: ['Date'], now });
+  const f = await usageServer(t);
+  for (const [period, start] of [
+    ['7d', '2026-10-30T16:00:00.000Z'], ['30d', '2026-10-07T16:00:00.000Z'],
+  ]) {
+    const before = new Date(new Date(start).getTime() - 1).toISOString();
+    for (const [timestamp, cost] of [[before, 1000], [start, 3], [now.toISOString(), 5]]) {
+      f.store.insertMetric({ timestamp, runtime: 'claude', metric_name: 'usage_event', metric_value: cost,
+        dimensions: { cost, total_input: cost, output: 1 }, source: 'jsonl_usage', confidence: 'actual' });
+    }
+    for (const metric of ['cost', 'tokens']) {
+      const response = await request(f.origin, `/api/metrics/aggregate?metric=${metric}&period=${period}&tz=Asia%2FSingapore`);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.since, start);
+      assert.equal(body.until, now.toISOString());
+      if (metric === 'cost') assert.equal(body.value, 8);
+      else assert.deepEqual(body.value, { input: 8, output: 2, cache_read: 0, cache_rate: 0 });
+    }
+    f.store.db.prepare('DELETE FROM metric_points').run();
+  }
+  const fallback = await request(f.origin, '/api/metrics/aggregate?metric=cost&period=7d&tz=invalid-zone');
+  assert.equal(fallback.status, 200);
+  assert.equal((await fallback.json()).since, '2026-10-31T00:00:00.000Z');
 });
 
 // Subprocess integration: real statusline CJS through stdin and an owned random

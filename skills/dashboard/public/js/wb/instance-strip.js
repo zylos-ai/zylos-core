@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=87';
+import { element } from './plain-text.js?v=85';
 export function instanceStrip(root, snapshot, { document = root.ownerDocument, t = key => key, cost = null, costSummary = null, onHost = () => {}, level = 'plain' } = {}) {
   root.replaceChildren(); const instance = snapshot.instance ?? {};
   root.append(element(document, 'div', `${t('wb.mode')} · ${snapshot.mode === 'unreadable' ? t('wb.unknown') : snapshot.mode}`));

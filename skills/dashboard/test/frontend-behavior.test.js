@@ -122,6 +122,8 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     prefersReducedMotion: () => false,
     refreshAll: async () => {},
     refreshCharts() {},
+    usagePage: { open() {}, close() {}, setViewDetail() {} },
+    refreshUsage() {},
     loadMemoryTree: async () => {},
     syncMemoryPinned() {},
     resetMemoryState() {},
@@ -1844,13 +1846,13 @@ test('fleet sound cues use the marimba strike timbre Howard picked (#223)', () =
 
 test('stale rate-limit windows stop painting after resets_at passes (#224)', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  const index = fs.readFileSync(new URL('../src/index.js', import.meta.url).pathname, 'utf8');
+  const resolver = fs.readFileSync(new URL('../src/lib/metric-resolver.js', import.meta.url).pathname, 'utf8');
   // Single-agent bars null out expired readings instead of showing the last value.
   assert.match(app, /function rateWindowExpired\(resetsAt\)/);
   assert.match(app, /const r5 = r5Expired \? null :/);
   assert.match(app, /const r7 = r7Expired \? null :/);
-  // Producer payload (self tile + remote polling) applies the same rule.
-  assert.match(index, /rateLimitWindowExpired\(resolved\.dimensions, metricName\)/);
+  // The remaining weekly metric rejects expired account windows.
+  assert.match(resolver, /if \(metricName === 'rate_limit_7d'\)[\s\S]*?const valid = Number\.isFinite\(value\) && !rateLimitWindowExpired\(dimensions, metricName\)/);
 });
 
 test('memory tree has a collapse-all/expand-all toggle (#226)', () => {
@@ -2455,4 +2457,40 @@ test('workbench shell opens a key outside the snapshot and requests only that gr
   h.stop(); h.calls.length = 0;
   await h.openGroup('telegram:after-unmount');
   assert.equal(h.calls.length, 0);
+});
+
+// Shared drawer ownership: run when host/group selection or Escape changes;
+// all transport, DOM, storage and lifecycle resources are injected above.
+test('workbench shell releases host ownership before selecting a group so Escape preserves group detail', async context => {
+  for (const selection of ['board', 'programmatic']) await context.test(selection, async testContext => {
+    const h = workbenchHarness(testContext, (path, fallback) => {
+      if (path.includes('/api/workbench/host')) return { current: { cpu_pct: 17 } };
+      if (path.includes('/runs')) return { runs: [], totalRuns: 0, totalEvents: 0, unattributed: 0 };
+      if (path.includes('/backlog')) return { count: 0, firstAt: null, syncing: false };
+      if (path.startsWith('/api/timeline')) return { events: [] };
+      return fallback(path);
+    });
+    await wbTick(); await wbTick();
+    const descendants = node => [node, ...node.children.flatMap(descendants)];
+    const hostButton = descendants(h.nodes.get('#wb-instance')).find(node => node.id === 'wb-host-open');
+    assert.ok(hostButton);
+    hostButton.dispatch('click'); await wbTick();
+    const side = h.nodes.get('#wb-side');
+    assert.ok(side.textContent.includes('wb.host.title'));
+    assert.ok(side.textContent.includes('17.0%'));
+    if (selection === 'board') h.nodes.get('#wb-board').children[0].dispatch('click');
+    else await h.openGroup('a');
+    await wbTick(); await wbTick();
+    assert.equal(side.hidden, false);
+    assert.equal(side.textContent.includes('wb.host.title'), false);
+    assert.ok(side.textContent.includes('wb.detail.overview'));
+    const groupContent = side.textContent;
+    const escape = h.listeners.get('keydown');
+    assert.equal(typeof escape, 'function');
+    escape({ key: 'Escape' });
+    assert.equal(side.hidden, false);
+    assert.equal(side.textContent, groupContent);
+    h.stop();
+    assert.equal(h.listeners.has('keydown'), false);
+  });
 });

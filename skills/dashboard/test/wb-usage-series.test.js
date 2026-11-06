@@ -30,8 +30,7 @@ test('usage combines both runtimes and legacy costs while tokens use dimensions'
   const summary = costSummary(f.store, { tz: result.tz, now });
   assert.equal(summary.today.total, 8);
   assert.equal(summary.sevenDay.total, result.totals.cost);
-  assert.equal(result.costSummary.today.total, summary.today.total);
-  assert.equal(result.costSummary.sevenDay.total, summary.sevenDay.total);
+  assert.equal(Object.hasOwn(result, 'costSummary'), false, 'full usage must not repeat the summary query');
   assert.equal(summary.daily.reduce((sum, row) => sum + row.total, 0), summary.sevenDay.total);
   assert.equal(result.projects.items[0].name, 'beta');
   assert.equal(result.projects.items[0].outputTokens, 210);
@@ -46,9 +45,14 @@ test('usage month and custom bounds use natural timezone days and reject invalid
   assert.equal(usageBounds({ tz: 'unknown-zone', now }).tzFallback, true);
   assert.equal(usageBounds({ tz: 'unknown-zone', now }).tz, 'UTC');
   for (const range of [{ range: 'custom', since: now.toISOString(), until: now.toISOString() },
-    { range: 'custom', since: 'bad', until: now.toISOString() }, { range: 'bad' }]) {
+    { range: 'custom', since: 'bad', until: now.toISOString() }, { range: 'bad' },
+    { range: 'custom', until: now.toISOString() }, { range: 'custom', since: '2026-11-01' },
+    { range: 'custom', since: '0', until: now.toISOString() },
+    { range: 'custom', since: new Date(now.getTime() - 366 * 86400000 - 1).toISOString(), until: now.toISOString() }]) {
     assert.throws(() => usageBounds(range), { code: 'invalid_range', statusCode: 400 });
   }
+  const start = new Date(now.getTime() - 366 * 86400000).toISOString();
+  assert.equal(usageBounds({ range: 'custom', since: start, until: now.toISOString() }).since, start);
 });
 
 // Same private Store/C4 fixture; run for shared timezone fallback changes.
@@ -62,7 +66,7 @@ test('summary and full usage label missing or invalid timezones as UTC fallback'
     assert.equal(summary.tzFallback, true);
     assert.equal(usage.tz, summary.tz);
     assert.equal(usage.tzFallback, summary.tzFallback);
-    assert.deepEqual(usage.costSummary, summary);
+    assert.equal(Object.hasOwn(usage, 'costSummary'), false);
     assert.equal(usage.totals.cost, summary.sevenDay.total);
   }
 });
@@ -101,10 +105,10 @@ test('messages use exact contiguous natural days with dense ISO bucket identitie
   assert.equal(result.buckets[0], '2026-10-31T18:30:00.000Z');
   assert.deepEqual(result.messages.map(row => [row.in, row.out]), [[1, 0], [1, 1], [0, 1]]);
   assert.deepEqual(result.totals.messages, { in: 2, out: 2 });
-  assert.equal(calls.length, 3);
-  assert.ok(calls.every(call => call.bucketSeconds === 3600));
-  for (let index = 1; index < calls.length; index++) {
-    assert.equal(new Date(calls[index].since) - new Date(calls[index - 1].until), 1);
+  assert.equal(calls.length, 1, 'all calendar intervals share one C4 query');
+  assert.equal(calls[0].intervals.length, 3);
+  for (let index = 1; index < calls[0].intervals.length; index++) {
+    assert.equal(new Date(calls[0].intervals[index].since) - new Date(calls[0].intervals[index - 1].until), 1);
   }
 });
 
@@ -114,6 +118,78 @@ test('calendar intervals follow DST and extreme timezone local midnights', () =>
   assert.equal(new Date(intervals[1].until) - new Date(intervals[1].since) + 1, 25 * 3600000);
   assert.equal(usageIntervals({ since: '2026-11-01T10:00:00.000Z', until: '2026-11-02T09:59:59.999Z', tz: 'Pacific/Kiritimati' })[0].at,
     '2026-11-01T10:00:00.000Z');
+});
+
+test('calendar intervals advance through the skipped Santiago midnight', () => {
+  const bounds = usageBounds({ range: '7d', tz: 'America/Santiago', now: new Date('2026-09-07T12:00:00.000Z') });
+  const intervals = usageIntervals(bounds);
+  assert.equal(intervals.length, 7);
+  const skipped = intervals.find(row => row.at === '2026-09-06T04:00:00.000Z');
+  assert.ok(skipped, 'the local date begins at its first existing instant, 01:00');
+  assert.equal(skipped.until, '2026-09-07T02:59:59.999Z');
+  for (let index = 1; index < intervals.length; index++) {
+    assert.equal(new Date(intervals[index].since) - new Date(intervals[index - 1].until), 1);
+  }
+});
+
+test('calendar intervals advance through the skipped Havana midnight', () => {
+  const bounds = usageBounds({ range: '7d', tz: 'America/Havana', now: new Date('2026-03-09T12:00:00.000Z') });
+  const intervals = usageIntervals(bounds);
+  assert.equal(intervals.length, 7);
+  const skipped = intervals.find(row => row.at === '2026-03-08T05:00:00.000Z');
+  assert.ok(skipped, 'the local date begins at its first existing instant, 01:00');
+  assert.equal(skipped.until, '2026-03-09T03:59:59.999Z');
+  for (let index = 1; index < intervals.length; index++) {
+    assert.equal(new Date(intervals[index].since) - new Date(intervals[index - 1].until), 1);
+  }
+});
+
+// Same owned SQLite fixture; run for timezone bucket/SQL changes. Distinct
+// values on either side of local midnight prove actual rows align with labels.
+test('token rows align with every natural-day bucket in the selected timezone', t => {
+  const f = usageFixture(t);
+  for (const [timestamp, runtime, total_input, output] of [
+    ['2026-11-01T18:29:59.999Z', 'claude', 10, 1],
+    ['2026-11-01T18:30:00.000Z', 'codex', 20, 2],
+    ['2026-11-02T18:30:00.000Z', 'claude', 30, 3],
+    ['2026-11-03T18:30:00.000Z', 'codex', 40, 4],
+  ]) f.metric(timestamp, runtime, { total_input, output });
+  const result = usageSeries(f.store, f.reader, { range: 'custom',
+    since: '2026-11-01T18:00:00.000Z', until: '2026-11-03T19:00:00.000Z',
+    tz: 'Asia/Kolkata', now: new Date('2026-11-04T00:00:00.000Z') });
+  assert.deepEqual(result.buckets, [
+    '2026-10-31T18:30:00.000Z', '2026-11-01T18:30:00.000Z',
+    '2026-11-02T18:30:00.000Z', '2026-11-03T18:30:00.000Z',
+  ]);
+  assert.deepEqual(result.tokensByRuntime.map(row => [row.at, row.runtime, row.value]), [
+    [result.buckets[0], 'claude', 11], [result.buckets[1], 'codex', 22],
+    [result.buckets[2], 'claude', 33], [result.buckets[3], 'codex', 44],
+  ]);
+  assert.equal(result.totals.tokens, 110);
+});
+
+// Runtime event retention is a read boundary only; the fixture keeps old rows
+// deliberately so zero cannot be mistaken for trustworthy historical coverage.
+test('runtime event totals and rankings are unknown outside their retention window', t => {
+  const f = usageFixture(t), now = new Date('2026-11-06T04:00:00.000Z');
+  f.event('2026-11-06T01:00:00.000Z', 'rotate_done');
+  f.event('2026-11-06T01:00:00.000Z', 'post_tool_use', { tool_name: 'recent' });
+  f.event('2026-10-10T01:00:00.000Z', 'rotate_done');
+  for (const selection of [
+    { range: '30d' }, { range: 'month', now: new Date('2026-11-20T04:00:00.000Z') },
+    { range: 'custom', since: '2026-10-01T00:00:00.000Z', until: now.toISOString() },
+  ]) {
+    const result = usageSeries(f.store, f.reader, { tz: 'UTC', now, ...selection });
+    assert.equal(result.runtimeEventsUnknown, true);
+    assert.equal(result.rotations, null);
+    assert.equal(result.tools, null);
+    assert.equal(result.totals.rotations, null);
+    assert.equal(result.totals.tools, null);
+  }
+  const week = usageSeries(f.store, f.reader, { range: '7d', tz: 'UTC', now });
+  assert.equal(week.runtimeEventsUnknown, false);
+  assert.equal(week.totals.rotations, 1);
+  assert.deepEqual(week.tools, [{ name: 'recent', count: 1 }]);
 });
 
 // Same private Store fixture; run for event query/ranking changes, skip UI-only.

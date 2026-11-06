@@ -1,25 +1,21 @@
 export function dayBoundsUTC(tz, daysBack = 0, now = new Date()) {
   const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
-    hour: 'numeric', minute: 'numeric', second: 'numeric', hourCycle: 'h23'
+    timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric'
   });
   const parts = (date) => Object.fromEntries(fmt.formatToParts(date)
     .filter(({ type }) => type !== 'literal')
     .map(({ type, value }) => [type, Number(value)]));
-  const offsetAt = (timestamp) => {
-    const date = new Date(timestamp);
-    const p = parts(date);
-    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second)
-      - (timestamp - date.getUTCMilliseconds());
-  };
   const p = parts(now);
-  // Subtract calendar days before converting the target local midnight. A day
-  // spanning a DST transition need not contain exactly 24 hours.
-  const localMidnight = Date.UTC(p.year, p.month - 1, p.day - daysBack);
-  let midnightUTC = localMidnight - offsetAt(localMidnight);
-  // Resolve the offset at midnight itself, rather than at the current time.
-  midnightUTC = localMidnight - offsetAt(midnightUTC);
-  return { since: new Date(midnightUTC).toISOString(), until: now.toISOString() };
+  const targetDate = Date.UTC(p.year, p.month - 1, p.day - daysBack);
+  // Find the first existing instant of the local date. Midnight can be skipped
+  // by a DST change; solving its offset directly can oscillate between dates.
+  let low = targetDate - 36 * 3600000, high = targetDate + 36 * 3600000;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2), local = parts(new Date(middle));
+    if (Date.UTC(local.year, local.month - 1, local.day) < targetDate) low = middle + 1;
+    else high = middle;
+  }
+  return { since: new Date(low).toISOString(), until: now.toISOString() };
 }
 
 const METRIC_CHAINS = {

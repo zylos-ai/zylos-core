@@ -51,6 +51,19 @@ test('custom invalid dates do not request and range URL carries explicit bounds'
   allNodes(f.root).find(n=>n.id==='wb-usage-apply').dispatch('click');await tick();assert.equal(reads,1);
   assert.ok(f.root.textContent.includes('wb.usage.invalidRange'));assert.match(usagePath({range:'custom',since:'a',until:'b'}),/since=a&until=b/);page.destroy();
 });
+test('custom usage rejects a range longer than the allowed year before reading', async () => {
+  const f = fixture(); let reads = 0;
+  const page = createUsagePage({ ...f, read: async () => { reads++; return value; } });
+  await page.open();
+  const nodes = allNodes(f.root), range = nodes.find(node => node.id === 'wb-usage-range');
+  range.value = 'custom'; range.dispatch('change');
+  nodes.find(node => node.id === 'wb-usage-since').value = '2025-01-01T00:00';
+  nodes.find(node => node.id === 'wb-usage-until').value = '2026-02-01T00:00';
+  nodes.find(node => node.id === 'wb-usage-apply').dispatch('click'); await tick();
+  assert.equal(reads, 1);
+  assert.ok(f.root.textContent.includes('wb.usage.invalidRange'));
+  page.destroy();
+});
 test('host plain current values and technical curves preserve null gaps and peak', () => {
   const f=fixture(),data={current:{cpu_pct:10,mem_used_pct:20,disk_used_pct:30},pm2:{online:2,total:3},cpuPeak:{value:40,at:'2026-11-01T00:00:00Z'},series:[{at:'2026-11-01T00:00:00Z',cpu:{avg:10,max:40},mem:null,disk:null},{at:'2026-11-01T01:00:00Z',cpu:null,mem:null,disk:null}]};
   renderHost(f.root,data,f);assert.equal(f.configs.length,0);assert.ok(f.root.textContent.includes('2 / 3'));assert.ok(f.root.textContent.includes('10.0%'));
@@ -72,4 +85,68 @@ test('view detail changes redraw existing usage without another read', async () 
 test('failed usage read clears earlier values and hides raw errors in plain view', async () => {
   const f=fixture();let fail=false;const page=createUsagePage({...f,read:async()=>{if(fail)throw Error('private failure');return value;}});
   await page.open();assert.ok(f.root.textContent.includes('$5.0000'));fail=true;await page.refresh();assert.equal(f.root.textContent.includes('$5.0000'),false);assert.ok(f.root.textContent.includes('wb.readFailed'));assert.equal(f.root.textContent.includes('private failure'),false);page.destroy();
+});
+
+test('usage keeps a newer successful result when an older read fails late', async () => {
+  const f = fixture(), older = deferred(); let reads = 0;
+  const page = createUsagePage({ ...f, read: () => ++reads === 1 ? older.promise : Promise.resolve(value) });
+  const opening = page.open();
+  await page.refresh();
+  assert.ok(f.root.textContent.includes('$5.0000'));
+  older.reject(Error('old failure')); await opening;
+  assert.ok(f.root.textContent.includes('$5.0000'));
+  assert.equal(f.root.textContent.includes('wb.readFailed'), false);
+  assert.equal(allNodes(f.root).find(node => node.id === 'wb-usage-status').textContent, '');
+  page.destroy();
+});
+
+test('host range changes keep the newer range when an older response arrives late', async () => {
+  const f = fixture(), older = deferred(), newer = deferred(), paths = [];
+  const panel = createHostPanel({ ...f, detail: () => 'technical', read: path => {
+    paths.push(path); return paths.length === 1 ? older.promise : newer.promise;
+  } });
+  const opening = panel.open();
+  const range = allNodes(f.root).find(node => node.id === 'wb-host-range');
+  range.value = '24h'; range.dispatch('change');
+  assert.deepEqual(paths, ['/api/workbench/host?range=6h', '/api/workbench/host?range=24h']);
+  newer.resolve({ current: { cpu_pct: 24 }, series: [{ at: '2026-11-01T00:00:00Z', cpu: { avg: 24, max: 24 } }] });
+  await tick();
+  assert.ok(f.root.textContent.includes('24.0%'));
+  older.resolve({ current: { cpu_pct: 6 }, series: [{ at: '2026-11-01T00:00:00Z', cpu: { avg: 6, max: 6 } }] });
+  await opening;
+  assert.ok(f.root.textContent.includes('24.0%'));
+  assert.equal(f.root.textContent.includes('6.0%'), false);
+  assert.equal(allNodes(f.root).find(node => node.id === 'wb-host-range').value, '24h');
+  assert.deepEqual(f.configs.at(-3).data.datasets[0].data, [24]);
+  panel.destroy();
+});
+
+test('host keeps a newer successful result when an older read fails late', async () => {
+  const f = fixture(), older = deferred(); let reads = 0;
+  const panel = createHostPanel({ ...f, read: () => ++reads === 1 ? older.promise : Promise.resolve({ current: { cpu_pct: 22 } }) });
+  const opening = panel.open(); await panel.refresh();
+  older.reject(Error('old failure')); await opening;
+  assert.ok(f.root.textContent.includes('22.0%'));
+  assert.equal(f.root.textContent.includes('wb.readFailed'), false);
+  assert.equal(f.root.hidden, false);
+  panel.destroy();
+});
+
+test('technical usage renders unavailable runtime history as unknown instead of zero charts', () => {
+  const f = fixture();
+  const unknown = { ...value, runtimeEventsUnknown: true, rotations: null, tools: null,
+    totals: { ...value.totals, rotations: null, tools: null } };
+  const view = renderUsage(f.root, unknown, { ...f, level: 'technical' });
+  assert.equal(f.configs.length, 4);
+  const unavailable = allNodes(f.root).filter(node => node.tagName === 'SECTION' &&
+    ['wb.usage.rotations', 'wb.usage.tools'].includes(node.children[0]?.textContent));
+  assert.equal(unavailable.length, 2);
+  for (const card of unavailable) assert.equal(card.children[1].textContent, 'wb.unknown');
+  const totals = allNodes(f.root).find(node => node.classList.contains('wb-usage-totals'));
+  for (const title of ['wb.usage.rotations', 'wb.usage.tools']) {
+    const total = totals.children.find(node => node.children[0].textContent === title);
+    assert.equal(total.children[1].textContent, 'wb.unknown');
+  }
+  assert.ok(f.configs.every(config => config.options.plugins.legend.display));
+  view.destroy(); assert.equal(f.destroyed(), 4);
 });

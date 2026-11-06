@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=87';
+import { element } from './plain-text.js?v=85';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];
 export const usageRanges = ['24h', '7d', '30d', 'month', 'custom'];
@@ -59,7 +59,7 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   const addTotal = (label, amount, kind = 'count') => {
     const box = element(document, 'div', undefined, 'wb-card');
     box.style.display = 'flex'; box.style.alignItems = 'baseline'; box.style.gap = '8px';
-    box.append(element(document, 'small', label), element(document, 'strong', kind === 'cost' ? formatCost(amount) : count(amount))); summary.append(box);
+    box.append(element(document, 'small', label), element(document, 'strong', amount == null ? t('wb.unknown') : kind === 'cost' ? formatCost(amount) : count(amount))); summary.append(box);
   };
   addTotal(t('wb.usage.cost'), totals.cost, 'cost');
   for (const runtime of ['claude', 'codex']) addTotal(runtime === 'claude' ? 'Claude' : 'Codex', totals.costByRuntime?.[runtime], 'cost');
@@ -76,6 +76,11 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   const messages = new Map((value.messages ?? []).map(row => [row.at, row]));
   const rotations = new Map((value.rotations ?? []).map(row => [row.at, row.value]));
   const add = spec => charts.push(seriesChart(grid, { ...spec, document, t, chartFactory }));
+  const unknown = title => {
+    const card = element(document, 'section', undefined, 'wb-card');
+    card.append(element(document, 'h3', title), element(document, 'p', t('wb.unknown')));
+    grid.append(card);
+  };
   add({ title: t('wb.usage.cost'), labels, datasets: runtimeSeries('costByRuntime'), stacked: true });
   add({ title: t('wb.usage.messages'), labels, datasets: [
     { label: t('wb.usage.received'), data: buckets.map(at => numeric(messages.get(at)?.in)) },
@@ -83,8 +88,10 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   ], stacked: true });
   if (level === 'technical') {
     add({ title: t('wb.usage.tokens'), labels, datasets: runtimeSeries('tokensByRuntime'), stacked: true });
-    add({ title: t('wb.usage.rotations'), labels, datasets: [{ label: t('wb.usage.rotations'), data: buckets.map(at => numeric(rotations.get(at))) }] });
-    add({ title: t('wb.usage.tools'), labels: (value.tools ?? []).map(row => row.name),
+    if (value.rotations === null) unknown(t('wb.usage.rotations'));
+    else add({ title: t('wb.usage.rotations'), labels, datasets: [{ label: t('wb.usage.rotations'), data: buckets.map(at => numeric(rotations.get(at))) }] });
+    if (value.tools === null) unknown(t('wb.usage.tools'));
+    else add({ title: t('wb.usage.tools'), labels: (value.tools ?? []).map(row => row.name),
       datasets: [{ label: t('wb.usage.calls'), data: (value.tools ?? []).map(row => numeric(row.count)) }], horizontal: true });
     add({ title: t('wb.usage.projects'), labels: (value.projects?.items ?? []).map(row => row.name),
       datasets: [{ label: t('wb.usage.outputTokens'), data: (value.projects?.items ?? []).map(row => numeric(row.outputTokens)) }], horizontal: true });
@@ -119,7 +126,7 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     clear(); status.textContent = t('wb.usage.loading');
     const custom = range.value === 'custom';
     const start = custom ? new Date(since.value).getTime() : null, end = custom ? new Date(until.value).getTime() : null;
-    if (custom && (!Number.isFinite(start) || !Number.isFinite(end) || start >= end)) {
+    if (custom && (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || end - start > 366 * 86400000)) {
       status.textContent = t('wb.usage.invalidRange'); return;
     }
     try {

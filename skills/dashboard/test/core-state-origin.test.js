@@ -57,7 +57,8 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.equal(core.accountUsage.fiveHour.usedPercentage, 37);
   assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
   const metrics = new MetricResolver({}, { statusline: { getAccountUsage: () => ({ runtime: 'codex', value: core.accountUsage }) } }, {});
-  assert.equal(metrics.resolve('rate_limit').value, 37);
+  assert.equal(metrics.resolve('rate_limit').value, null);
+  assert.equal(metrics.resolve('rate_limit').fallback_reason, 'Unknown metric: rate_limit');
   assert.equal(metrics.resolve('rate_limit_7d').value, 61);
   assert.equal(factsReads, 1);
   observation = live();
