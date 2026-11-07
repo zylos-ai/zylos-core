@@ -8,6 +8,8 @@ import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
 import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
+import { latestCodexRolloutSessionBounds } from '../src/lib/metric-aggregate.js';
+import { CodexHistory } from '../src/lib/history/codex-history.js';
 
 const DAY = 86400000;
 function fixture(t, snapshot = { listKnown: true, rows: [] }) {
@@ -42,8 +44,72 @@ test('discovery preserves first attribution, finds subagents and rejects invalid
   assert.equal(f.store.activeUsageTranscripts().length, 5);
   assert.equal(f.store.getUsageTranscript(a).session_group, 'A');
   assert.equal(f.store.getUsageTranscript(path.join(dir, 'agent-one.jsonl')).parent_path, a);
-  assert.equal(f.store.latestCodexRolloutPath().transcript_path, c);
+  assert.equal(f.store.latestCodexRolloutPath(), null);
   assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM source_health').get().n, 0);
+});
+
+function codexGroups(t) {
+  const f = fixture(t);
+  const dir = path.join(f.root, '.codex', 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [index, group] of [null, 'origin', 'b'].entries()) {
+    const timestamp = new Date(f.now() - (3 - index) * 1000).toISOString();
+    const file = path.join(dir, `rollout-${group}.jsonl`);
+    fs.writeFileSync(file, [
+      { type: 'session_meta', timestamp, payload: { id: `session-${group}` } },
+      { type: 'event_msg', timestamp, payload: { type: 'token_count', info: {
+        model: 'gpt-5.3-codex', last_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 20 },
+      } } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    fs.utimesSync(file, new Date(timestamp), new Date(timestamp));
+    f.start(file, group, 'codex', Date.parse(timestamp));
+  }
+  f.inventory.discover();
+  return f;
+}
+
+// SQLite/file integration with real inventory and collectors, no services or children.
+// Run for Codex discovery/attribution changes; skip unrelated UI changes. The runner
+// isolates HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR and tmux socket; fixture cleanup
+// closes its temporary DB and removes its transcript files even on failure.
+test('Codex discovery keeps only Origin rollout paths while collecting every group cost', async t => {
+  const f = codexGroups(t);
+  const collector = new CodexRolloutCollector(f.store, { homeDir: f.root, zylosDir: f.root,
+    runtimeModelPrices: { codex: { 'gpt-5.3-codex': { input: 3, output: 12, cacheRead: 0.3, cacheCreation: 0 } } },
+  }, { transcripts: f.inventory });
+  await collector.collect();
+  assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM usage_transcripts').get().n, 3);
+  for (const group of [null, 'origin', 'b']) {
+    const file = path.join(f.root, '.codex', 'sessions', `rollout-${group}.jsonl`);
+    const row = f.store.getUsageTranscript(file);
+    assert.equal(row.session_group, group);
+    assert.equal(row.session_id, `session-${group}`);
+    assert.equal(row.byte_offset, fs.statSync(file).size);
+    assert.ok(f.store.aggregateCost({ sessionId: `session-${group}` }) > 0);
+  }
+  const paths = f.store.db.prepare('SELECT session_id FROM codex_rollout_paths ORDER BY session_id').all();
+  assert.equal(paths.length, 2);
+  assert.deepEqual(paths.map(row => row.session_id), ['session-null', 'session-origin']);
+});
+
+// SQLite/inventory/metric integration: newer non-Origin starts must not select the
+// session fallback. Run for discovery or fallback selection changes; skip UI-only
+// changes. Same isolated runner and temporary fixture cleanup as the case above.
+test('Codex session metric fallback selects the latest Origin despite a newer group', t => {
+  const f = codexGroups(t);
+  assert.equal(latestCodexRolloutSessionBounds(f.store).sessionId, 'session-origin');
+});
+
+// SQLite/inventory/history integration: real rollout metadata under a private HOME.
+// Run for discovery or history selection changes; skip unrelated UI changes. Same
+// isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/tmux socket and fixture cleanup as above.
+test('Codex history excludes other groups and marks the latest Origin current', async t => {
+  const f = codexGroups(t);
+  const history = new CodexHistory({ store: f.store, homeDir: f.root, zylosDir: f.root });
+  const result = await history.listSessions();
+  assert.equal(result.current, 'session-origin');
+  assert.equal(result.sessions.length, 2);
+  assert.deepEqual(result.sessions.map(row => row.id).sort(), ['session-null', 'session-origin']);
 });
 
 test('legacy discovery adopts saved file offsets and yields to explicit Claude starts', t => {
@@ -376,10 +442,10 @@ test('bounded Codex replay keeps an old transcript active until its final reques
   assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 2);
 });
 
-test('Codex path discovery retains the latest session across repeated discoveries', t => {
+test('Codex path discovery retains the latest Origin session across repeated discoveries', t => {
   const f = fixture(t), older = f.file('codex-older'), newer = f.file('codex-newer');
-  f.start(older, 'older', 'codex', f.now() - 10000);
-  f.start(newer, 'newer', 'codex');
+  f.start(older, null, 'codex', f.now() - 10000);
+  f.start(newer, 'origin', 'codex');
   f.inventory.discover();
   assert.equal(f.store.latestCodexRolloutPath().transcript_path, newer);
   const upserts = [];
