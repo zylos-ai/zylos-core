@@ -235,6 +235,21 @@ test('subagent events reset TTL and eviction clocks; stopped and expired childre
     assert.deepEqual(f.stops, ['run-a']);
   }
 });
+test('stopped child permits eviction at the minimum idle boundary before hot TTL expires', async () => {
+  const f = fixture();
+  f.context.configuration.evictMinIdleSeconds = 5; f.context.configuration.hotTtlSeconds = 30;
+  f.scenes[0].activeSubagents = []; f.scenes[0].lastSubagentActivityAt = f.now - 4999;
+  assert.equal(await f.lifecycle.beginReclaim(f.scenes[0], 'evict', f.context), false);
+  assert.equal(f.fences.size, 0);
+  const fence = f.fence('evict');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'cancelled');
+  assert.equal(f.fences.size, 0); assert.equal(f.stops.length, 0);
+  f.now++;
+  assert.equal(f.now - f.scenes[0].lastSubagentActivityAt, 5000);
+  assert.equal(await f.lifecycle.beginReclaim(f.scenes[0], 'evict', f.context), true);
+  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
+  assert.deepEqual(f.stops, ['run-a']); assert.equal(f.fences.size, 0);
+});
 test('pre-reclaim child activity retains completed preparation until child and main agent are idle', async () => {
   const f = fixture(); f.unsummarized = 1;
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
@@ -307,11 +322,19 @@ test('fresh subagent observations guard fence creation and final TTL or eviction
     g.deps.observeGroup = () => ({ ...g.scenes[0], activeSubagents: active ? [{ agentId: 'child', lastActivityAt: g.now }] : [], lastSubagentActivityAt: g.now });
     assert.equal(await g.lifecycle.advanceReclaim(fence, g.context), guarded ? 'cancelled' : 'done');
     assert.equal(g.stops.length, guarded ? 0 : 1);
+    const finalCancellations = g.events.filter(event => event.event === 'reclaim_cancelled');
+    assert.equal(finalCancellations.length, guarded ? 1 : 0);
+    if (guarded) assert.deepEqual(finalCancellations[0], { event: 'reclaim_cancelled', session_group: 'a', run_id: 'run-a', reason: 'subagent_activity' });
+    assert.equal(g.lifecycle.ttlReset.has('a'), reason === 'ttl');
     const h = fixture(), row = h.fence(reason);
     h.scenes[0].activeSubagents = active ? [{ agentId: 'child', lastActivityAt: h.now }] : [];
     h.scenes[0].lastSubagentActivityAt = h.now;
     assert.equal(await h.lifecycle.advanceReclaim(row, h.context), guarded ? 'cancelled' : 'done');
     assert.equal(h.stops.length, guarded ? 0 : 1);
+    const sampledCancellations = h.events.filter(event => event.event === 'reclaim_cancelled');
+    assert.equal(sampledCancellations.length, guarded ? 1 : 0);
+    if (guarded) assert.deepEqual(sampledCancellations[0], { event: 'reclaim_cancelled', session_group: 'a', run_id: 'run-a', reason: 'subagent_activity' });
+    assert.equal(h.lifecycle.ttlReset.has('a'), reason === 'ttl');
   }
  }
 });
