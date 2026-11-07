@@ -280,6 +280,19 @@ test('question pages are bounded, group scoped and preserve answered and stopped
 });
 
 
+test('question pages continue after the last item without repeating questions', t => {
+  const f = fixture(t);
+  for (const interruptId of ['c_question', 'a_question', 'b_question']) {
+    f.question('single', { interruptId });
+  }
+  const first = f.answers.listQuestions('dashboard:mine', { limit: 2 });
+  assert.deepEqual(first.items.map(item => item.interruptId), ['a_question', 'b_question']);
+  assert.equal(first.nextCursor, first.items[1].interruptId);
+  const second = f.answers.listQuestions('dashboard:mine', { limit: 2, cursor: first.nextCursor });
+  assert.deepEqual(second.items.map(item => item.interruptId), ['c_question']);
+  assert.equal(second.nextCursor, null);
+});
+
 test('question projection preserves large IDs and isolates malformed constraints without changing cursors', t => {
   const f = fixture(t), bad = f.question('single', { interruptId: 'a_question' });
   const good = f.question('single', { interruptId: 'b_question' });
