@@ -1,7 +1,7 @@
 import test from 'node:test';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import { renderBoard, renderRow, modelCell, pendingModel, boardController } from '../public/js/wb/board.js';
+import { renderBoard, renderRow, modelCell, pendingModel, boardController, renderDistribution } from '../public/js/wb/board.js';
 import { createBoardSearch } from '../public/js/wb/board-search.js';
 import { activityStrip } from '../public/js/wb/activity-strip.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
@@ -9,6 +9,7 @@ import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { showSidePanel } from '../public/js/wb/side-panel.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 const t = (key, values = {}) => key + Object.values(values).join(':');
+const nameOf = node => allNodes(node).find(item => item.classList.contains('wb-nm')).textContent;
 const row = (key, kind = 'idle') => ({ sessionGroup: key, name: { displayName: key }, fallbackName: key,
   state: { kind }, presence: 'running', duration: 32, tools: [], queue: { pending: { count: 2 }, running: { count: 1 } }, contextPct: 42,
   target: { runtime: 'claude', model: 'default' }, launchConfig: { runtime: 'claude', mode: 'default' }, desired: { runtime: 'claude', mode: 'default' } });
@@ -17,15 +18,15 @@ test('board renders snapshot order, text-safe names and technical columns', () =
   const document = createDocument(), root = document.createElement('div');
   const rows = Array.from({ length: 6 }, (_, index) => row('group' + index)); rows[1].name.displayName = '<img onerror=alert(1)>';
   renderBoard(root, { rows, counts: { idle: 6 } }, { document, t });
-  assert.equal(root.children.length, 6); assert.equal(root.children[0].children[0].textContent, 'group0');
-  assert.equal(root.children[1].children[0].textContent, '<img onerror=alert(1)>');
+  assert.equal(root.children.length, 6); assert.equal(nameOf(root.children[0]), 'group0');
+  assert.equal(nameOf(root.children[1]), '<img onerror=alert(1)>');
   assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-model')).length, 0);
   renderBoard(root, { rows }, { document, t, level: 'technical' });
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-model')).length, 6);
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-queue')).length, 6);
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-context-ring')).length, 6);
-  assert.match(root.children[0].textContent, /0m 32s/);
+  assert.match(root.children[0].textContent, /32s/);
 });
 test('unknown reason and free failure reason remain text, tool title preserves raw name', () => {
   const document = createDocument(); const value = row('group'); value.state = { kind: 'unknown', reason: '<script>bad</script>', sampledAt: 123 };
@@ -39,7 +40,7 @@ test('unknown reason and free failure reason remain text, tool title preserves r
 test('single view uses only-session name and historical groups have unknown live fields', () => {
   const document = createDocument(), root = document.createElement('div');
   renderBoard(root, { view: 'single', rows: [row('origin')] }, { document, t, level: 'technical' });
-  assert.equal(root.children[0].children[0].textContent, 'wb.single');
+  assert.equal(nameOf(root.children[0]), 'wb.single');
   const old = renderRow({ sessionGroup: 'old', state: { kind: 'not_running' }, queue: null, target: null }, { document, t, level: 'technical' });
   assert.equal(old.children[4].textContent, '—'); assert.equal(old.children[6].textContent, '—');
 });
@@ -129,11 +130,19 @@ test('instance strip renders pool unknown or used slots, runtime union, quota an
   instanceStrip(root, { mode: 'unreadable', baselineRuntime: 'claude', rows: [{ launchConfig: { runtime: 'codex' } }],
     instance: { pool: { used: 3, waiting: 1 }, runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'auth_failed' } },
       accounts: { claude: { used_percentage: 23 }, codex: null }, services: { online: 4, total: 5 } } }, { document, t, cost: 0.25, level: 'technical' });
-  assert.match(root.textContent, /wb.mode · wb.unknown/); assert.match(root.textContent, /3 \/ \?/); assert.match(root.textContent, /23%/);
-  assert.match(root.textContent, /wb.authFailed/); assert.match(root.textContent, /4 \/ 5/);
+  const chip = allNodes(root).find(node => node.classList.contains('wb-mode-chip'));
+  assert.equal(chip.textContent, 'wb.unknown'); assert.equal(chip.title, 'wb.mode');
+  assert.match(root.textContent, /wb.inst.pool3wb.inst.inUse/, 'an unknown capacity shows only the used count'); assert.match(root.textContent, /23%/);
+  assert.match(root.textContent, /wb.inst.authFailedTech/); assert.match(root.textContent, /4 \/ 5/);
+  assert.match(root.textContent, /wb.inst.queuedTech1/);
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 3);
+  instanceStrip(root, { mode: 'multi', instance: { pool: { used: 2, capacity: 4 } } }, { document, t, level: 'technical' });
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 4, 'a known capacity draws free slots too');
+  assert.match(root.textContent, /2 \/ 4/);
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: null } } }, { document, t });
-  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 0); assert.match(root.textContent, /wb.pool · wb.unknown/);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-mode-chip')).length, 0, 'the mode is technical only');
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 0); assert.match(root.textContent, /wb.poolwb.unknown/);
+  assert.equal(root.children.at(-1).id, 'wb-host-open', 'host status stays at the right end');
 });
 test('attention shows both problems and recovery reminders with text-safe technical reasons', () => {
   const document = createDocument(), root = document.createElement('div');
@@ -144,15 +153,19 @@ test('attention shows both problems and recovery reminders with text-safe techni
   assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
 });
 test('attention renders problems and reminders as distinct item classes', () => {
-  const document = createDocument(), root = document.createElement('div');
+  const document = createDocument(), root = document.createElement('div'), selected = [];
   renderAttention(root, { attention: { problems: [{ kind: 'auth_failed', runtime: 'claude', groups: ['a'] }],
-    reminders: [{ kind: 'rate_limited', runtime: 'codex', until: 0 }] } }, { document, t, now: 4000 });
+    reminders: [{ kind: 'rate_limited', runtime: 'codex', until: 0 }] } }, { document, t, now: 4000, onSelect: key => selected.push(key) });
   assert.deepEqual(root.children.map(node => node.className.split(' ').sort()),
     [['wb-attention-item', 'wb-attention-problem'], ['wb-attention-item', 'wb-attention-reminder']]);
   assert.match(root.children[0].textContent, /^wb\.attention\.auth_failed/);
   assert.match(root.children[1].textContent, /^wb\.attention\.rate_limited/);
-  const css = fs.readFileSync(new URL('../public/css/wb.css', import.meta.url), 'utf8');
-  assert.match(css, /\.wb-attention-reminder::before \{ content: "\\23F1\\FE0E\\20"; \}/, 'the clock keeps a space before the reminder text');
+  const icons = node => allNodes(node).filter(item => item.classList.contains('wb-ico')).map(item => item.className);
+  assert.equal(icons(root.children[0])[0], 'wb-ico wb-ico-alert', 'problems carry an alert icon');
+  assert.deepEqual(icons(root.children[1]), ['wb-ico wb-ico-clock'], 'reminders carry a clock icon');
+  assert.equal(root.children[0].tagName, 'BUTTON', 'a problem affecting one group opens it');
+  assert.equal(root.children[1].tagName, 'DIV', 'an instance-level reminder is static');
+  root.children[0].dispatch('click'); assert.deepEqual(selected, ['a']);
 });
 // Selection/detail boundary: run for side-panel rendering changes; skip unrelated
 // work. Injected DOM only, no live I/O or timers; runner uses temporary HOME,
@@ -176,14 +189,39 @@ test('side panel opens only the selected name and state and closes with back', (
 test('unnamed snapshot rows use localized platform and key fallback rather than the single label', () => {
   const document = createDocument();
   const origin = renderRow({ sessionGroup: 'origin', name: null, state: { kind: 'idle' } }, { document, t });
-  assert.equal(origin.children[0].textContent, 'wb.term.origin');
+  assert.equal(nameOf(origin), 'wb.term.origin');
   const group = renderRow({ sessionGroup: 'telegram:1001', c4: { componentName: 'telegram' }, name: null, state: { kind: 'idle' } }, { document, t });
-  assert.equal(group.children[0].textContent, 'wb.platform.telegram · 1001');
+  assert.equal(nameOf(group), 'wb.platform.telegram · 1001');
   const plugin = renderRow({ sessionGroup: 'custom:a:b', c4: null, name: null, state: { kind: 'idle' } }, { document, t });
-  assert.equal(plugin.children[0].textContent, 'custom · a:b');
+  assert.equal(nameOf(plugin), 'custom · a:b');
 });
 test('first read failure never invents a last-success timestamp', () => {
   const document = createDocument(), root = document.createElement('div');
   renderAttention(root, null, { document, t, error: true, lastSuccess: null });
   assert.equal(root.textContent, 'wb.readFailed');
+});
+test('board header counts listed groups by state; plain view names each state', () => {
+  const document = createDocument(), root = document.createElement('div');
+  renderDistribution(root, { rows: [row('a'), row('b'), row('c')], counts: { busy: 2, idle: 1, waiting: 0 } }, { document, t });
+  assert.equal(root.children[0].textContent, 'wb.board.groups3');
+  assert.deepEqual(root.children.slice(1).map(node => node.textContent), ['2 wb.state.busy', '1 wb.state.idle']);
+  renderDistribution(root, { rows: [row('a')], counts: { busy: 1 } }, { document, t, level: 'technical' });
+  assert.equal(root.children[1].textContent, '1'); assert.equal(root.children[1].title, 'wb.state.busy 1');
+});
+test('attention shows an all-clear line, with sample age only in technical detail', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const snapshot = { readAt: 1000, attention: { problems: [], reminders: [], sampledAt: 1000 } };
+  renderAttention(root, snapshot, { document, t, now: 6000 });
+  assert.equal(root.textContent, 'wb.attention.allOk');
+  renderAttention(root, snapshot, { document, t, now: 6000, level: 'technical' });
+  assert.equal(root.textContent, 'wb.attention.allOk · wb.attention.sampled5');
+  renderAttention(root, snapshot, { document, t, now: 6000, error: true, lastSuccess: null });
+  assert.equal(root.textContent, 'wb.readFailed', 'a read failure replaces the all-clear line');
+});
+test('selected rows are marked and the origin row keeps its own style', () => {
+  const document = createDocument(), root = document.createElement('div');
+  renderBoard(root, { rows: [row('origin'), row('a')] }, { document, t, selected: 'a' });
+  assert.equal(root.children[0].classList.contains('wb-row-origin'), true);
+  assert.equal(root.children[1].classList.contains('wb-sel'), true); assert.equal(root.children[1].attributes['aria-current'], 'true');
+  assert.equal(root.children[0].classList.contains('wb-sel'), false);
 });

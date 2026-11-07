@@ -72,7 +72,8 @@ test('overview keeps safe text, section order, technical-only numbers and curren
     wait: { kind: 'unknown', reasonCode: '<script>unknown' }, desired: { runtime: 'codex', mode: 'default' } });
   renderOverview(root, current, { recent: [{ timestamp: 'now', event_type: 'stop' }], currentEvents: events,
     totalEvents: 99, totalRuns: 5, backlog: { count: 3 } }, { document, t, level: 'technical', snapshot: { readAt: 42 } });
-  assert.deepEqual(root.children.map(node => node.children[0].textContent), ['wb.detail.now', 'wb.detail.recent', 'wb.detail.memory', 'wb.detail.config']);
+  assert.deepEqual(root.children.filter(node => node.tagName === 'SECTION').map(node => node.children[0].textContent), ['wb.detail.now', 'wb.detail.recent', 'wb.detail.memory', 'wb.detail.config']);
+  assert.equal(root.children.at(-1).className, 'wb-detail-numbers', 'technical numbers close the overview');
   assert.match(root.textContent, /wb.detail.fullTimeline.*99.*5/);
   assert.match(root.textContent, /wb.detail.memoryLink.*3/);
   assert.match(root.textContent, /wb.pending/);
@@ -140,12 +141,15 @@ test('overview recent activity and evidence are plain in plain view and raw only
   const recent = root.children[1].textContent;
   assert.match(recent, /wb\.event\.wait_health/); assert.match(recent, /wb\.event\.reclaim_done/);
   assert.doesNotMatch(recent, /wait_health ·|reclaim_done$|T10:20:30/);
-  assert.ok(recent.includes(new Date(iso).toLocaleString()));
+  const times = allNodes(root.children[1]).filter(node => node.tagName === 'TIME');
+  assert.equal(times[0].textContent, new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
+  assert.equal(times[0].title, new Date(iso).toLocaleString());
   assert.equal(allNodes(root).some(node => node.tagName === 'DETAILS'), false);
   assert.doesNotMatch(root.textContent, /no_rule|wb\.detail\.evidence/);
   renderOverview(root, current, data, { document, t, level: 'technical' });
-  assert.match(root.children[1].textContent, new RegExp(`${iso} · wait_health`));
-  assert.match(root.children[1].textContent, new RegExp(`${iso} · reclaim_done`));
+  assert.match(root.children[1].textContent, /wait_health/);
+  assert.match(root.children[1].textContent, /reclaim_done/);
+  assert.equal(allNodes(root.children[1]).find(node => node.tagName === 'TIME').title, iso);
   assert.match(root.textContent, /wb\.detail\.evidence · no_rule/);
 });
 
@@ -157,16 +161,23 @@ test('timeline run rows, events and messages hide run ids and raw codes in plain
     filter: 'all', totalRuns: 1 }, setFilter() {}, collapse() {} };
   const document = createDocument(), root = document.createElement('div');
   renderTimeline(root, loader, { document, t, level: 'plain' });
-  const toggle = allNodes(root).find(node => node.attributes?.['aria-expanded'] != null).textContent;
-  assert.equal(toggle, [new Date(start).toLocaleString(), new Date(end).toLocaleString(), 'wb.endReason.manual_restart', 2].join(' · '));
-  const event = allNodes(root).find(node => node.className === 'wb-timeline-event').textContent;
-  assert.equal(event, new Date(at).toLocaleString() + ' · wb.event.reclaim_done');
-  assert.doesNotMatch(root.textContent, /run-0123456789abcdef|· reclaim_done|T10:30:00|· manual_restart/);
-  assert.ok(allNodes(root).find(node => node.className === 'wb-timeline-message').textContent.startsWith(new Date(at).toLocaleString()));
+  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const toggle = allNodes(root).find(node => node.attributes?.['aria-expanded'] != null);
+  assert.equal(toggle.textContent, `${short(start)} – ${short(end)}wb.endReason.manual_restartwb.timeline.count {"count":2}`);
+  assert.ok(allNodes(toggle).some(node => node.title === `${new Date(start).toLocaleString()} – ${new Date(end).toLocaleString()}`), 'the full times stay in the tooltip');
+  const event = allNodes(root).find(node => node.classList.contains('wb-timeline-event'));
+  assert.equal(event.textContent, short(at) + 'wb.event.reclaim_done');
+  assert.equal(allNodes(event).find(node => node.tagName === 'TIME').title, new Date(at).toLocaleString());
+  assert.doesNotMatch(root.textContent, /run-0123456789abcdef|reclaim_done$|T10:30:00|manual_restart(?!wb)/);
+  assert.equal(allNodes(root).find(node => node.classList.contains('wb-timeline-message')).textContent, short(at) + 'wb.timeline.received');
   renderTimeline(root, loader, { document, t, level: 'technical' });
-  assert.match(root.textContent, new RegExp(`run-0123456789abcdef · ${start} · ${end} · manual_restart · 2`));
-  assert.match(root.textContent, new RegExp(`${at} · reclaim_done`));
-  assert.match(root.textContent, new RegExp(`${at} · wb.timeline.received`));
+  const technical = allNodes(root).find(node => node.attributes?.['aria-expanded'] != null);
+  assert.match(technical.textContent, /^run-0123456789abcdef.*manual_restart/);
+  assert.ok(allNodes(technical).some(node => node.title === `${start} – ${end}`), 'technical tooltips keep raw times');
+  assert.match(root.textContent, /reclaim_done/);
+  assert.equal(allNodes(allNodes(root).find(node => node.classList.contains('wb-timeline-event'))).find(node => node.tagName === 'TIME').title, at);
+  assert.match(root.textContent, /wb.timeline.received/);
+  assert.match(root.textContent, /wb.timeline.noEarlier/, 'all runs loaded ends the list explicitly');
 });
 
 test('message attribution projects only direction metadata and leaves gaps between runs', () => {
@@ -837,4 +848,44 @@ test('switching runs aborts a hanging subagent read so the shared refresh can fi
     f.controller.destroy();
     await Promise.allSettled([pending, switching].filter(Boolean));
   }
+});
+
+test('detail header uses icon actions whose tooltip carries any unavailable reason, and Esc leaves the name editor first', async () => {
+  const f = detailFixture(async path => response(defaultRead(path)));
+  await f.controller.open({ ...row('a'), live: null, presence: 'not_running' }, { rows: [], listKnown: true });
+  const actions = allNodes(f.root).filter(node => node.dataset?.action);
+  assert.deepEqual(actions.map(node => node.dataset.action), ['interrupt', 'chop-chop', 'restart']);
+  assert.equal(actions[0].disabled, true);
+  assert.equal(actions[0].title, 'wb.actions.interrupt · wb.actions.targetRequired');
+  assert.equal(actions.some(node => node.textContent !== ''), false, 'actions are icon buttons without inline reason text');
+  assert.equal(allNodes(f.root).some(node => node.classList.contains('wb-action-reason')), false);
+  f.controller.state.nameOpen = true; f.controller.setViewDetail();
+  assert.equal(f.controller.escape(), true); assert.equal(f.controller.state.nameOpen, false); assert.equal(f.root.hidden, false);
+  assert.equal(f.controller.escape(), true); assert.equal(f.root.hidden, true);
+  assert.equal(f.controller.escape(), false, 'a closed drawer ignores Esc');
+  f.controller.destroy();
+});
+
+test('timeline chips combine filters: one chip uses the server filter, several filter loaded events by kind', async () => {
+  const loader = createTimelineLoader({ request: async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return { runs: [run('cur', 1000, 9000)], totalEvents: 3, totalRuns: 1 };
+    if (url.pathname.endsWith('/messages')) return { messages: [{ id: 1, direction: 'in', timestamp: new Date(2000).toISOString() }] };
+    return { events: [{ event_seq: 1, event_type: 'session_start', timestamp: new Date(1500).toISOString() },
+      { event_seq: 2, event_type: 'pre_tool_use', timestamp: new Date(3000).toISOString() }] };
+  } });
+  await loader.open('a', 'cur');
+  const document = createDocument(), root = document.createElement('div');
+  const labels = () => allNodes(root).filter(node => node.classList.contains('wb-ev-t')).map(node => node.textContent);
+  renderTimeline(root, loader, { document, t, level: 'technical' });
+  assert.deepEqual(labels(), ['session_start', 'wb.timeline.received', 'pre_tool_use'], 'events and messages interleave by time');
+  await loader.setChips(['messages', 'lifecycle']);
+  assert.equal(loader.state.filter, 'all');
+  renderTimeline(root, loader, { document, t, level: 'technical' });
+  assert.deepEqual(labels(), ['session_start', 'wb.timeline.received']);
+  await loader.setChips(['tools']);
+  assert.equal(loader.state.filter, 'tools');
+  renderTimeline(root, loader, { document, t, level: 'technical' });
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-chip')).map(node => node.attributes['aria-pressed']).join(), 'false,true,false');
+  loader.close();
 });

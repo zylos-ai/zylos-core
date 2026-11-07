@@ -12,6 +12,8 @@ import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 const t = (key, values = {}) => key + Object.values(values).join(':');
 const now = 1_800_000_000_000;
 const future = now / 1000 + 600;
+// The strip and attention bar show recovery as a short clock time.
+const clock = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const cases = [['zero', 0], ['null', null], ['past', now / 1000 - 600], ['future', future]];
 
 test('recovery time is known only for a future epoch second', () => {
@@ -25,7 +27,7 @@ test('instance strip shows an unknown recovery time unless cooldown is in the fu
     instanceStrip(root, { mode: 'multi', baselineRuntime: 'claude', rows: [],
       instance: { runtimeHealth: { claude: { health: 'rate_limited', cooldownUntil } } } }, { document, t, now });
     if (name === 'future') {
-      assert.match(root.textContent, new RegExp('wb\\.recovery' + new Date(future * 1000).toLocaleTimeString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.match(root.textContent, new RegExp('wb\\.recovery' + clock(future * 1000).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       assert.doesNotMatch(root.textContent, /wb\.recoveryUnknown/);
     } else {
       assert.match(root.textContent, /wb\.recoveryUnknown/, name);
@@ -40,9 +42,9 @@ test('attention reminder shows an unknown recovery time unless cooldown is in th
     renderAttention(root, { attention: { problems: [], reminders: [{ kind: 'rate_limited', runtime: 'codex', until }] } }, { document, t, now });
     const text = root.textContent;
     if (name === 'future') {
-      assert.match(text, /^wb\.attention\.rate_limitedcodex:/);
-      assert.ok(text.endsWith(new Date(future * 1000).toLocaleTimeString()));
-    } else assert.match(text, /^wb\.attention\.rate_limited_unknowncodex/, name);
+      assert.match(text, /^wb\.attention\.rate_limitedCodex:/);
+      assert.ok(text.includes(clock(future * 1000)));
+    } else assert.match(text, /^wb\.attention\.rate_limited_unknownCodex/, name);
     assert.equal(allNodes(root).filter(node => node.className.split(' ').includes('wb-attention-reminder')).length, 1);
   }
 });

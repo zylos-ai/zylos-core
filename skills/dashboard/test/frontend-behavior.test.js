@@ -1542,7 +1542,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
-  assert.match(index, /app\.js\?v=92/);
+  assert.match(index, /app\.js\?v=93/);
   assert.match(index, /style\.css\?v=60/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
@@ -1618,11 +1618,11 @@ test('fleet management entry stays local and its controls are retained in settin
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
-  assert.match(index, /app\.js\?v=92/);
-  assert.match(index, /<path d="M12 8V4H8"/);
-  assert.match(index, /<rect width="16" height="12" x="4" y="8" rx="2"/);
+  assert.match(index, /app\.js\?v=93/);
+  assert.match(index, /id="fleet-manage-btn"[^>]*><i class="wb-ico wb-ico-fleet" aria-hidden="true"><\/i>/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
-  assert.match(app, /if \(e\.target\.closest\('#fleet-manage-btn'\)\) \{ e\.preventDefault\(\); openSettingsModal\('fleet'\); \}/);
+  // With other machines configured the icon opens the fleet wall; otherwise fleet settings.
+  assert.match(app, /if \(e\.target\.closest\('#fleet-manage-btn'\)\) \{ e\.preventDefault\(\); if \(state\.multiAgent && !state\.remoteAgent\) showFleetView\(\); else openSettingsModal\('fleet'\); \}/);
 
   // Fleet management configures the local consumer even while viewing a remote
   // agent in-page, so these calls intentionally avoid agentPath().
@@ -2160,6 +2160,7 @@ test('unchanged navigation labels stay in the primary language pack', () => {
 // Existing legacy cases above retain their old harness and are selected separately.
 import { mountWorkbench } from '../public/js/wb/shell.js';
 import { createDocument as wbDocument, storage as wbStorage, tick as wbTick, deferred as wbDeferred } from './fixtures/workbench-dom.js';
+const wbName = row => row.children[0].children[1].children[0].textContent;
 function workbenchSnapshot(kind = 'idle', key = 'a') {
   return { mode: 'multi', view: 'multi',
     rows: [{ sessionGroup: key, name: { displayName: key.toUpperCase() }, state: { kind } }],
@@ -2220,7 +2221,8 @@ test('workbench shell detail changes redraw without network and activity range p
   const h = workbenchHarness(context); await wbTick(); await wbTick();
   const before = h.calls.length, toggle = h.nodes.get('#wb-detail-toggle'); toggle.checked = true; toggle.dispatch('change');
   assert.equal(h.calls.length, before); assert.equal(h.saved.getItem('zylos-dashboard-detail-level'), 'technical');
-  const range = h.nodes.get('#wb-range'); range.value = '6h'; range.dispatch('change'); await wbTick();
+  const range = h.nodes.get('#wb-range'); range.children.find(button => button.dataset.range === '6h').dispatch('click'); await wbTick();
+  assert.equal(h.nodes.get('#wb-range').children.find(button => button.attributes['aria-pressed'] === 'true').dataset.range, '6h');
   assert.equal(h.saved.getItem('zylos-dashboard-activity-range'), '6h'); assert.equal(h.calls.at(-1), '/api/workbench/activity?range=6h');
   h.stop(); assert.equal(h.intervals.size, 0); assert.equal(h.timeouts.size, 0);
 });
@@ -2254,7 +2256,7 @@ test('workbench shell refreshes search row state from the newest snapshot withou
   assert.equal(board.children[0].children[1].textContent, 'wb.state.idle');
   kind = 'busy'; await h.poll(5000); await wbTick();
   assert.equal(board.children.length, 2); assert.equal(board.children[0].children[1].textContent, 'wb.state.busy');
-  assert.equal(board.children[1].children[0].textContent, 'HISTORICAL'); assert.equal(board.textContent.includes('UNMATCHED'), false);
+  assert.equal(wbName(board.children[1]), 'HISTORICAL'); assert.equal(board.textContent.includes('UNMATCHED'), false);
 });
 // Agent identity boundary after JSON decoding: run for request/identity changes; skip server-only changes. Uses the isolated fake lifecycle above.
 test('workbench shell discards an agent response whose JSON finishes after the viewed agent changes', async context => {
@@ -2265,7 +2267,7 @@ test('workbench shell discards an agent response whose JSON finishes after the v
   h.setOwner('Other'); json.resolve(h.makeSnapshot('busy', 'previous-agent')); await wbTick(); await wbTick();
   assert.equal(h.nodes.get('#wb-board').textContent.includes('PREVIOUS-AGENT'), false);
   await h.poll(5000); await wbTick();
-  assert.equal(h.nodes.get('#wb-board').children[0].children[0].textContent, 'A');
+  assert.equal(wbName(h.nodes.get('#wb-board').children[0]), 'A');
   assert.ok(h.calls.includes('/fleet/Other/api/workbench/groups'));
 });
 // Mounted read-failure boundary: run for shell/controller changes; skip server-only changes. Uses the isolated fake lifecycle above.
@@ -2276,9 +2278,9 @@ test('workbench shell retains and redraws old rows after a snapshot read failure
     return fallback(path);
   });
   await wbTick(); await wbTick(); const board = h.nodes.get('#wb-board');
-  assert.equal(board.children[0].children[0].textContent, 'A'); failed = true;
+  assert.equal(wbName(board.children[0]), 'A'); failed = true;
   await h.poll(5000); await wbTick();
-  assert.equal(board.children.length, 1); assert.equal(board.children[0].children[0].textContent, 'A');
+  assert.equal(board.children.length, 1); assert.equal(wbName(board.children[0]), 'A');
   assert.match(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
   const oldRow = board.children[0], before = h.calls.length;
   assert.equal(oldRow.children.length, 4);
@@ -2325,7 +2327,7 @@ test('workbench shell removes the transition hint after a session mode read fail
   assert.equal(modeReads, 2);
   assert.equal(hints().length, 0);
   assert.equal(attention.textContent.includes('wb.transition'), false);
-  assert.equal(h.nodes.get('#wb-board').children[0].children[0].textContent, 'A');
+  assert.equal(wbName(h.nodes.get('#wb-board').children[0]), 'A');
   h.stop(); assert.equal(h.intervals.size, 0);
 });
 // Same-agent navigation boundary: run for identity/navigation changes; skip server-only changes. Uses the isolated fake lifecycle above.
@@ -2376,10 +2378,11 @@ test('workbench shell hides unknown recovering and unavailable observer navigati
   nav.hidden = false; h.mutate(); assert.equal(nav.hidden, true);
   assert.equal(click().stopped, 1); assert.equal(settings.length, 0);
   status = { installed: false }; redraw();
-  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'wb.observerInstall');
+  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerInstall');
+  assert.equal(nav.classList.contains('wb-tab-muted'), true);
   assert.equal(click().prevented, 1); assert.equal(settings[0], 'observer');
   status = { installed: true, enabled: false }; redraw();
-  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'wb.observerDisabled');
+  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerDisabled');
   assert.equal(click().prevented, 1); assert.equal(settings.length, 2);
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   assert.match(app, /observerAvailable: status => !remoteIsReadOnly\(\) && !observerRecoveryReason\(status\)/);
@@ -2464,7 +2467,7 @@ test('workbench shell opens a key outside the snapshot and requests only that gr
 
 // Shared drawer ownership: run when host/group selection or Escape changes;
 // all transport, DOM, storage and lifecycle resources are injected above.
-test('workbench shell releases host ownership before selecting a group so Escape preserves group detail', async context => {
+test('workbench shell releases host ownership before selecting a group so Escape closes the group detail', async context => {
   for (const selection of ['board', 'programmatic']) await context.test(selection, async testContext => {
     const h = workbenchHarness(testContext, (path, fallback) => {
       if (path.includes('/api/workbench/host')) return { current: { cpu_pct: 17 } };
@@ -2488,11 +2491,14 @@ test('workbench shell releases host ownership before selecting a group so Escape
     assert.equal(side.textContent.includes('wb.host.title'), false);
     assert.ok(side.textContent.includes('wb.detail.overview'));
     const groupContent = side.textContent;
+    h.nodes.get('#wb-auto-name-dialog').hidden = true;
     const escape = h.listeners.get('keydown');
     assert.equal(typeof escape, 'function');
+    // The released host panel no longer owns the drawer: Escape closes the group, never reopens host status.
     escape({ key: 'Escape' });
-    assert.equal(side.hidden, false);
-    assert.equal(side.textContent, groupContent);
+    assert.equal(side.hidden, true);
+    assert.equal(side.textContent.includes('wb.host.title'), false);
+    assert.notEqual(groupContent, '');
     h.stop();
     assert.equal(h.listeners.has('keydown'), false);
   });
@@ -2513,4 +2519,17 @@ test('hidden documents keep conversation initialization enabled', () => {
   assert.ok(start > 0);
   assert.doesNotMatch(handler, /visibilityState/);
   assert.match(handler, /activeTabName\(\) === 'chat'.*chatPage\?\.open\(\)/);
+});
+
+// Keyboard boundary: run for shell key handling changes; uses the injected harness above.
+test('workbench shell moves between board rows with j/k and leaves typing alone', async context => {
+  const h = workbenchHarness(context, (path, fallback) => path === '/api/workbench/groups'
+    ? { ...fallback(path), rows: [workbenchSnapshot('idle', 'a').rows[0], workbenchSnapshot('busy', 'b').rows[0]] } : fallback(path));
+  await wbTick(); await wbTick();
+  const key = h.listeners.get('keydown'), rows = h.nodes.get('#wb-board').children;
+  key({ key: 'j', target: {} }); assert.equal(rows[0].focused, true);
+  h.document.activeElement = rows[0]; key({ key: 'j', target: rows[0] }); assert.equal(rows[1].focused, true);
+  h.document.activeElement = rows[1]; key({ key: 'ArrowDown', target: rows[1] }); assert.equal(rows[1].focused, true, 'the last row stays focused');
+  rows[0].focused = false; key({ key: 'k', target: { tagName: 'INPUT' } }); assert.equal(rows[0].focused, false, 'typing in a field is not navigation');
+  key({ key: 'k', target: rows[1] }); assert.equal(rows[0].focused, true);
 });

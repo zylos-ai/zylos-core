@@ -77,7 +77,8 @@ test('host close callback Escape and late reads preserve lifecycle', async () =>
 test('instance strip uses shared today summary and technical daily bars and host callback', () => {
   const f=fixture();let opened=0;const summary={today:{total:5},sevenDay:{total:9},daily:[{at:'day',total:9}]};
   instanceStrip(f.root,{instance:{},rows:[]},{...f,costSummary:summary,onHost:()=>opened++,level:'technical'});
-  assert.ok(f.root.textContent.includes('$5.0000'));assert.ok(f.root.textContent.includes('$9.0000'));allNodes(f.root).find(n=>n.id==='wb-host-open').dispatch('click');assert.equal(opened,1);
+  assert.ok(f.root.textContent.includes('$5.00'));assert.ok(f.root.textContent.includes('$9.00'));allNodes(f.root).find(n=>n.id==='wb-host-open').dispatch('click');assert.equal(opened,1);
+  instanceStrip(f.root,{instance:{},rows:[]},{...f,costSummary:{today:{total:0.0819},sevenDay:{total:0.5},daily:[]}});assert.ok(f.root.textContent.includes('$0.0819'),'small costs keep their precision');
 });
 test('view detail changes redraw existing usage without another read', async () => {
   const f=fixture();let reads=0,level='plain'; const page=createUsagePage({...f,detail:()=>level,read:async()=>{reads++;return value;}});
@@ -108,7 +109,7 @@ test('host range changes keep the newer range when an older response arrives lat
   } });
   const opening = panel.open();
   const range = allNodes(f.root).find(node => node.id === 'wb-host-range');
-  range.value = '24h'; range.dispatch('change');
+  range.children.find(button => button.dataset.range === '24h').dispatch('click');
   assert.deepEqual(paths, ['/api/workbench/host?range=6h', '/api/workbench/host?range=24h']);
   newer.resolve({ current: { cpu_pct: 24 }, series: [{ at: '2026-11-01T00:00:00Z', cpu: { avg: 24, max: 24 } }] });
   await tick();
@@ -117,7 +118,7 @@ test('host range changes keep the newer range when an older response arrives lat
   await opening;
   assert.ok(f.root.textContent.includes('24.0%'));
   assert.equal(f.root.textContent.includes('6.0%'), false);
-  assert.equal(allNodes(f.root).find(node => node.id === 'wb-host-range').value, '24h');
+  assert.equal(allNodes(f.root).find(node => node.id === 'wb-host-range').children.find(button => button.attributes['aria-pressed'] === 'true').dataset.range, '24h');
   assert.deepEqual(f.configs.at(-3).data.datasets[0].data, [24]);
   panel.destroy();
 });
