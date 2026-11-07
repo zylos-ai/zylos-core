@@ -348,7 +348,7 @@ test('/api/state exposes stable agent identity without fleet secrets', async () 
     const body = await resp.json();
     assert.equal(body.agent.name, 'Jinglever');
     assert.equal(body.agent.id, 'jinglever-main');
-    // Identity now also carries the deterministic mascot tint color/hue.
+    // Identity also carries the deterministic identity color/hue.
     assert.equal(typeof body.agent.color, 'string');
     assert.equal(typeof body.agent.hue, 'number');
     assert.equal(typeof body.new_session_threshold, 'number');

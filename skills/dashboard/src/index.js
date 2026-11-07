@@ -470,8 +470,8 @@ const scheduleWriter = createScheduleWrite({ zylosDir: config.zylosDir, schedule
 
 function buildApiStatePayload() {
   const stateData = coreState.getState();
-  // Include the agent's deterministic identity color/hue so the single-agent
-  // mascot can be tinted to match this agent's fleet tile.
+  // Include the agent's deterministic identity color/hue; machines that read this
+  // instance's state (including older dashboards) still colour it by them.
   stateData.agent = { ...config.agent, ...agentColor(config.agent?.name) };
   stateData.dashboard_version = dashboardVersion;
   stateData.runtime_info = buildRuntimeInfo();

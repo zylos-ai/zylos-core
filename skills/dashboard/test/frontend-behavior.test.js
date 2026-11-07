@@ -182,12 +182,11 @@ test('/api/state exposes the agent identity colour for remote machines that stil
   assert.match(index, /stateData\.agent = \{ \.\.\.config\.agent, \.\.\.agentColor\(config\.agent\?\.name\) \}/);
 });
 
-test('SSE state updates preserve the agent identity color so the mascot stays tinted', () => {
+test('SSE state updates preserve the agent identity color between full state reads', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   // The SSE state_change payload omits the agent color (added only by
   // /api/state). The client must carry it over, the same way it already does
-  // for runtime_info, so the single-agent mascot doesn't flicker back to the
-  // untinted base art on every live update.
+  // for runtime_info, so a live update does not drop the identity colour.
   assert.match(app, /const prevAgent = state\.dashboardState\?\.agent;/);
   assert.match(app, /if \(!data\.agent && prevAgent\) state\.dashboardState\.agent = prevAgent;/);
 });
