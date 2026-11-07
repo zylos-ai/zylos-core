@@ -120,7 +120,8 @@ test('saving model and effort for both engines asks once, lists every change and
   assert.match(asked[0], /Minimal/); assert.doesNotMatch(asked[0], /effort\.minimal/);
   assert.equal(calls.length, 4); assert.ok(calls.every(call => call.options?.confirmed === true), 'no action asks again');
   assert.equal(root.querySelector('#settings-save-models').hidden, true);
-  assert.equal(modelSaveConfirmation([{ runtime: 'claude', key: 'effort', value: 'max' }], tr).split('\n').length, 2); panel.destroy();
+  assert.equal(modelSaveConfirmation([{ runtime: 'claude', key: 'effort', value: 'max' }], tr).split('\n').length, 2);
+  assert.match(modelSaveConfirmation([{ runtime: 'codex', key: 'model', value: 'two' }], (key, params) => params ? params.value : key, { codex: { models: [{ id: 'two', display_name: 'Two Pro' }] } }), /Two Pro/, 'models are named as the dropdown shows them'); panel.destroy();
 });
 
 test('cancelling the model confirmation sends nothing and shows no result', async () => {

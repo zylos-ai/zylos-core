@@ -71,13 +71,14 @@ export function modelDraftChanges(metadata = {}, drafts = {}) {
 
 const effortText = (value, t) => { const key = 'effort.' + value, label = t(key); return label && label !== key ? label : value; };
 /** One line per drafted change, as the confirmation and the result name it. */
-export function modelChangeLabel(change, t = key => key) {
+export function modelChangeLabel(change, t = key => key, metadata = {}) {
+  const model = () => metadata[change.runtime]?.models?.find(item => item.id === change.value)?.display_name ?? change.value;
   return t(change.key === 'model' ? 'wb.settings.changeModel' : 'wb.settings.changeEffort',
-    { runtime: engineName(change.runtime), value: change.key === 'effort' ? effortText(change.value, t) : change.value });
+    { runtime: engineName(change.runtime), value: change.key === 'effort' ? effortText(change.value, t) : model() });
 }
 /** The single confirmation shown before saving every drafted model and effort change together. */
-export function modelSaveConfirmation(changes, t = key => key) {
-  return [t('wb.settings.confirmModels'), ...changes.map(change => modelChangeLabel(change, t))].join('\n');
+export function modelSaveConfirmation(changes, t = key => key, metadata = {}) {
+  return [t('wb.settings.confirmModels'), ...changes.map(change => modelChangeLabel(change, t, metadata))].join('\n');
 }
 /** The engine switch confirmation: what happens, then which groups restart with it. */
 export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
@@ -264,13 +265,13 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
     const pending = changes();
     if (save.disabled || !pending.length) return;
     // One confirmation lists every change; cancelling sends nothing and leaves the result line alone.
-    if (!(await confirm(modelSaveConfirmation(pending, t)))) return;
+    if (!(await confirm(modelSaveConfirmation(pending, t, metadata)))) return;
     save.disabled = true; const applied = [];
     const report = () => {
       const left = pending.filter(change => !applied.includes(change));
       if (!left.length) return t('wb.settings.nextStart');
       if (!applied.length) return t('wb.settings.saveFailed');
-      const list = changes => changes.map(change => modelChangeLabel(change, t)).join(t('wb.settings.listSep'));
+      const list = changes => changes.map(change => modelChangeLabel(change, t, metadata)).join(t('wb.settings.listSep'));
       return t('wb.settings.partlySaved', { done: list(applied), left: list(left) });
     };
     try {
