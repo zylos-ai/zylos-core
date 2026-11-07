@@ -392,7 +392,7 @@
   "chat.block.noValue": "No value",
   "chat.block.pending": "Content pending",
   "chat.questions.loading": "Loading question states…",
-  "chat.questions.unavailable": "Question states unavailable. Refresh before answering.",
+  "chat.questions.unavailable": "Question states are temporarily unavailable. Refresh to check.",
   "chat.loadMoreQuestions": "Load more question states",
   "chat.question.paused": "Awaiting your answer",
   "chat.question.answered": "Answer accepted",
@@ -414,5 +414,9 @@
   "chat.block.state.superseded": "Replaced",
   "chat.block.yes": "Yes",
   "chat.block.no": "No",
-  "chat.question.actionUnavailable": "The saved answer cannot be recovered. This question is read only."
+  "chat.question.actionUnavailable": "The saved answer cannot be recovered. This question is read only.",
+  "chat.block.failed": "Content could not be produced.",
+  "chat.question.stateUnavailable": "Question state is temporarily unavailable. Showing the last known state.",
+  "chat.question.externalReadOnly": "Questions in external history are read only.",
+  "chat.question.ended": "This question has already been answered or ended."
 }

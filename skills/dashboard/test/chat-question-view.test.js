@@ -11,7 +11,7 @@ registerHooks({ resolve(specifier, context, next) {
 } });
 const { renderQuestion } = await import('../public/js/wb/chat-questions.js');
 const t = key => key;
-function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = true, missing = false,
+function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = true, missing = false, stateAvailable = true, readOnlyExternal = false,
   mutateQuestion, formState = {}, submit = async () => {} } = {}) {
   const defaults = type === 'choice' ? { prompt: 'Pick one', options: [{ id: 'a', label: 'First' }, { id: 'b', label: 'Second' }], action: { type: 'choice.select', target: 'answer.choice' } }
     : type === 'confirmation' ? { title: 'Proceed?', severity: 'normal', action: { type: 'confirmation.respond', target: 'answer.confirm' } }
@@ -26,7 +26,7 @@ function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = tru
     question_summary: envelope.questionSummary, status };
   mutateQuestion?.(question);
   const document = createDocument(), requests = [];
-  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, t, formState,
+  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, readOnlyExternal, t, formState,
     onSubmit: async (action, options) => { requests.push({ action, options }); return submit(action, options); } });
   const root = render();
   return { root, render, requests, question, envelope, formState, nodes: () => allNodes(root),
@@ -203,7 +203,7 @@ test('full mounted page posts an answer, then exposes an enabled explicit retry 
   page.destroy();
 });
 
-test('unknown answer cannot infer retry permission from a paused question after manual refresh', async () => {
+test('unknown answer restores normal same-action submission after manual refresh confirms paused without an answer', async () => {
   const { mountChat } = await import('../public/js/wb/chat.js');
   const base = fixture({ type: 'confirmation' });
   const document = createDocument(), root = document.createElement('div'), posts = [];
@@ -230,10 +230,11 @@ test('unknown answer cannot infer retry permission from a paused question after 
   find('refresh').dispatch('click'); await tick(); await tick();
   assert.ok(questionReads > before); assert.equal(posts.length, 1);
   assert.equal(find('retryAnswer'), undefined);
-  assert.equal(find('confirmAnswer'), undefined); assert.equal(find('cancelAnswer'), undefined); assert.equal(find('answerOther'), undefined);
-  const card = allNodes(root).find(node => node.className === 'chat-question');
-  assert.equal(allNodes(card).some(node => ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName)), false);
-  assert.equal(posts.length, 1);
+  assert.ok(find('confirmAnswer')); assert.ok(find('cancelAnswer')); assert.ok(find('answerOther'));
+  assert.equal(find('confirmAnswer').disabled, false);
+  find('confirmAnswer').dispatch('click'); await tick(); await tick();
+  assert.equal(posts.length, 2); assert.equal(Object.hasOwn(posts[1], 'retry'), false);
+  assert.deepEqual(posts[1].action, posts[0].action);
   page.destroy();
 });
 
@@ -297,4 +298,79 @@ test('opening an answered question hydrates its stored action and retries exactl
   retry.dispatch('click'); await tick(); await tick();
   assert.equal(posts.length, 1); assert.deepEqual(posts[0], { interruptId: base.envelope.interruptId, action, retry: true });
   page.destroy();
+});
+
+test('a failed state query preserves the last known lifecycle and explains the missing update separately', () => {
+  const f = fixture({ status: 'paused', stateAvailable: false });
+  assert.match(f.root.textContent, /chat.question.paused/); assert.match(f.root.textContent, /chat.question.stateUnavailable/);
+  assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
+  assert.ok(f.button('answer'));
+  const initial = fixture({ missing: true, canWrite: false, stateAvailable: false });
+  assert.match(initial.root.textContent, /chat.question.stateUnavailable/);
+  assert.equal(initial.root.textContent.includes('chat.question.unavailable'), false);
+  assert.equal(initial.nodes().some(node => node.tagName === 'BUTTON'), false);
+});
+
+test('external history explains read-only questions without claiming they are unregistered', () => {
+  const f = fixture({ missing: true, canWrite: false, readOnlyExternal: true, stateAvailable: false });
+  assert.match(f.root.textContent, /chat.question.externalReadOnly/);
+  assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
+  assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'TEXTAREA'].includes(node.tagName)), false);
+});
+
+for (const error of ['chat_question_not_paused', 'chat_answer_conflict']) test(`${error} uses the server-ended explanation without inventing delivery uncertainty`, () => {
+  const f = fixture({ status: 'answered', formState: { error, locked: true }, mutateQuestion(q) { q.delivery = { stored: true, deliveryState: 'pending', retryAllowed: false }; } });
+  assert.match(f.root.textContent, /chat.question.ended/);
+  assert.equal(f.root.textContent.includes('pending_reconciliation'), false);
+  assert.equal(f.root.textContent.includes('chat.question.submitFailed'), false);
+});
+
+async function mountedQuestions({ mode = 'multi', saved = false, retryAllowed, failQuestionQuery = false } = {}) {
+  const { mountChat } = await import('../public/js/wb/chat.js');
+  const base = fixture({ type: 'confirmation' });
+  const action = { id: 'answer-saved-mount', protocolVersion: '0.1', type: 'confirmation.respond', target: 'answer.confirm',
+    context: { messageId: base.envelope.messageId, blockId: 'question' }, payload: { outcome: 'confirm' } };
+  const document = createDocument(), root = document.createElement('div'), posts = [];
+  let queryFailed = failQuestionQuery;
+  const page = mountChat({ document, root, t, fetch: async (path, options = {}) => {
+    let data;
+    if (path.endsWith('/answers')) { posts.push(JSON.parse(options.body)); throw new Error('response lost'); }
+    if (path.includes('/questions?')) {
+      if (queryFailed) return { ok: false, status: 502, json: async () => ({ error: 'chat_question_unavailable' }) };
+      data = { items: [{ ...base.question, ...(saved ? { status: 'answered', answer_id: action.id, action,
+        delivery: { stored: false, retryAllowed } } : {}) }], nextCursor: null };
+    } else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
+    else if (path.includes('/status?')) data = { items: [] };
+    else if (path.includes('/api/session-mode')) data = { data: { sessionMode: mode } };
+    else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { id: 'g:AA', state: 'active', displayName: 'Original group' }, stored: false };
+    else data = { items: [{ id: 'g:AA', display_name: 'Original group' }], nextCursor: null };
+    return { ok: true, status: 200, json: async () => data };
+  } });
+  await page.open(); allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click'); await tick(); await tick();
+  return { root, posts, page, failQueries() { queryFailed = true; } };
+}
+
+test('mounted single-mode page displays the question but has no answer or retry controls', async () => {
+  const f = await mountedQuestions({ mode: 'single' });
+  assert.match(f.root.textContent, /Proceed\?/);
+  assert.equal(allNodes(f.root).some(node => ['confirmAnswer', 'cancelAnswer', 'answerOther', 'retryAnswer'].includes(node.dataset.action)), false);
+  assert.equal(allNodes(f.root).some(node => ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName)), false);
+  assert.equal(f.posts.length, 0); f.page.destroy();
+});
+
+for (const retryAllowed of [false, null, undefined]) test(`mounted saved answer retryAllowed ${retryAllowed} cannot expose retry`, async () => {
+  const f = await mountedQuestions({ saved: true, retryAllowed });
+  assert.match(f.root.textContent, /chat.question.answered/);
+  assert.equal(allNodes(f.root).some(node => node.dataset.action === 'retryAnswer'), false);
+  assert.equal(f.posts.length, 0); f.page.destroy();
+});
+
+test('mounted failed question query retains paused status and its valid controls', async () => {
+  const f = await mountedQuestions();
+  f.failQueries(); allNodes(f.root).find(node => node.dataset.action === 'refreshMessages').dispatch('click'); await tick(); await tick();
+  const card = allNodes(f.root).find(node => node.className === 'chat-question');
+  assert.match(card.textContent, /chat.question.paused/); assert.match(card.textContent, /chat.question.stateUnavailable/);
+  assert.equal(card.textContent.includes('chat.question.unavailable'), false);
+  assert.ok(allNodes(card).find(node => node.dataset.action === 'confirmAnswer'));
+  assert.equal(f.posts.length, 0); f.page.destroy();
 });

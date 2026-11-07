@@ -10,7 +10,7 @@ const referenceMatches = (question, envelope, block, row) => question && row?.di
   && question.question_summary === envelope.questionSummary && envelope.interrupt?.blockId === block.id;
 
 /** A question uses its immutable message for fields and Dashboard for its current lifecycle. */
-export function renderQuestion({ document, envelope, block, row, question, canWrite = false,
+export function renderQuestion({ document, envelope, block, row, question, canWrite = false, stateAvailable = true, readOnlyExternal = false,
   t = key => key, onSubmit = null, formState = {} } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-question');
@@ -19,22 +19,29 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   const lifecycle = valid && ['paused', 'answered', 'stopped', 'superseded'].includes(question.status)
     ? question.status : 'unavailable';
   root.dataset.interruptId = envelope?.interruptId || '';
-  root.append(node('p', t('chat.question.' + lifecycle), 'chat-question-status'));
+  if (readOnlyExternal) root.append(node('p', t('chat.question.externalReadOnly'), 'chat-question-status'));
+  else {
+    if (valid || stateAvailable) root.append(node('p', t('chat.question.' + lifecycle), 'chat-question-status'));
+    if (!stateAvailable) root.append(node('p', t('chat.question.stateUnavailable'), 'chat-notice'));
+  }
   const receipt = formState.receipt ?? (valid ? question.delivery : null);
   if (receipt) {
     const deliveryState = receipt.stored === false ? 'not_stored' : receiptState(receipt);
     const label = node('p', t('chat.state.' + deliveryState), 'chat-message-status');
     label.setAttribute('role', 'status'); root.append(label);
   }
-  if (formState.error && receipt?.stored !== true) {
-    const error = node('p', t('chat.question.submitFailed'), 'chat-error');
+  const ended = ['chat_question_not_paused', 'chat_answer_conflict'].includes(formState.error);
+  if (formState.error && (ended || receipt?.stored !== true)) {
+    const errorKey = ended ? 'chat.question.ended'
+      : formState.error === 'chat_question_unavailable' ? 'chat.question.stateUnavailable' : 'chat.question.submitFailed';
+    const error = node('p', t(errorKey), 'chat-error');
     error.setAttribute('role', 'alert'); root.append(error);
   }
   const actionUnavailable = lifecycle === 'answered' && (question.actionError ||
     (question.action && (question.action.id !== question.answer_id || !validateAnswer(question.action, envelope))) ||
     (formState.action && (formState.action.id !== question.answer_id || !validateAnswer(formState.action, envelope))));
   if (actionUnavailable) root.append(node('p', t('chat.question.actionUnavailable'), 'chat-error'));
-  const writable = canWrite && valid && !actionUnavailable && typeof onSubmit === 'function';
+  const writable = canWrite && !readOnlyExternal && valid && !actionUnavailable && typeof onSubmit === 'function';
   const controls = [];
   let submitting = false;
   const status = node('p', '', 'chat-error'); status.setAttribute('role', 'alert');
@@ -74,6 +81,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   }
   const data = block.data;
   if (block.type === 'choice') {
+    root.dataset.choiceControls = 'true';
     formState.selected ??= [];
     const group = node('div', undefined, 'chat-question-options');
     for (const option of data.options) {
@@ -86,7 +94,9 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
           ? input.checked ? [...new Set([...formState.selected, option.id])] : formState.selected.filter(id => id !== option.id)
           : input.checked ? [option.id] : [];
       });
-      controls.push(input); label.append(input, node('span', option.label)); group.append(label);
+      controls.push(input); label.append(input, node('span', option.label));
+      if (option.description) label.append(node('span', option.description, 'chat-notice'));
+      group.append(label);
     }
     root.append(group, button(t('chat.question.submit'), () => answer({ selected: [...formState.selected] }), 'answer'));
   } else if (block.type === 'confirmation') {

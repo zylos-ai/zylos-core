@@ -116,8 +116,35 @@ test('pending and failed blocks show fallback without delegating actions', () =>
     const root = render(envelope([{ id: 'block-one', type: 'choice', schemaVersion: 1, status, fallbackText: 'Waiting for content' }]));
     assert.match(root.textContent, /Waiting for content/);
     assert.equal(allNodes(root).some(node => ['BUTTON', 'INPUT'].includes(node.tagName)), false);
-    assert.ok(root.textContent.includes(status === 'error' ? 'chat.invalidContent' : 'chat.block.pending'));
+    assert.ok(root.textContent.includes(status === 'error' ? 'chat.block.reference 42' : 'chat.block.pending'));
+    assert.equal(root.textContent.includes('chat.invalidContent'), false);
   }
+});
+
+test('valid error blocks display their supplied reason as inert text with the original reference', () => {
+  const root = render(envelope([{ id: 'block-one', type: 'choice', schemaVersion: 1, status: 'error', fallbackText: 'Could not build choices', reason: '<img onerror=bad()> Source unavailable' }]));
+  assert.equal(root.textContent, 'Could not build choices<img onerror=bad()> Source unavailablechat.block.reference 42');
+  assert.equal(allNodes(root).some(node => ['IMG', 'SCRIPT', 'BUTTON', 'INPUT'].includes(node.tagName)), false);
+  const empty = render(envelope([{ id: 'block-one', type: 'choice', schemaVersion: 1, status: 'error', fallbackText: '' }]));
+  assert.equal(empty.textContent, 'chat.block.failedchat.block.reference 42');
+});
+
+test('interactive choice controls replace static options while read-only cards retain them', () => {
+  const makeControls = active => () => {
+    const document = createDocument(), root = document.createElement('div');
+    if (active) {
+      root.dataset.choiceControls = 'true';
+      for (const label of ['Plan A', 'Plan B']) { const item = document.createElement('label'); item.textContent = label; root.append(item); }
+    }
+    return root;
+  };
+  const active = render(envelope([choices('single')], true), { renderQuestion: makeControls(true) });
+  assert.equal(active.textContent.match(/Plan A/g)?.length, 1);
+  assert.equal(allNodes(active).some(node => node.className === 'chat-choice-options'), false);
+  assert.match(active.textContent, /Choose a plan/);
+  const readonly = render(envelope([choices('single')], true), { renderQuestion: makeControls(false) });
+  assert.equal(readonly.textContent.match(/Plan A/g)?.length, 1);
+  assert.equal(allNodes(readonly).filter(node => node.className === 'chat-choice-options').length, 1);
 });
 
 for (const [name, invalid] of [

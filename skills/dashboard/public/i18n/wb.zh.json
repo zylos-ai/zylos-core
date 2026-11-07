@@ -392,7 +392,7 @@
   "chat.block.noValue": "无数据",
   "chat.block.pending": "内容待完成",
   "chat.questions.loading": "正在读取问题状态…",
-  "chat.questions.unavailable": "问题状态暂不可用，请刷新后再回答。",
+  "chat.questions.unavailable": "问题状态暂不可用，请手动刷新核对。",
   "chat.loadMoreQuestions": "加载更多问题状态",
   "chat.question.paused": "等待回答",
   "chat.question.answered": "答案已接受",
@@ -414,5 +414,9 @@
   "chat.block.state.superseded": "已替换",
   "chat.block.yes": "是",
   "chat.block.no": "否",
-  "chat.question.actionUnavailable": "已存答案无法恢复，该问题只能查看。"
+  "chat.question.actionUnavailable": "已存答案无法恢复，该问题只能查看。",
+  "chat.block.failed": "内容生成失败。",
+  "chat.question.stateUnavailable": "问题状态暂不可用，显示上次已知状态。",
+  "chat.question.externalReadOnly": "外部历史中的问题只能查看。",
+  "chat.question.ended": "该问题已被回答或已结束。"
 }

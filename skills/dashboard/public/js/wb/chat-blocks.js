@@ -74,15 +74,17 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     text(figure, data.summary);
     return figure;
   }
-  function staticQuestion(block) {
+  function staticQuestion(block, { showChoiceOptions = true } = {}) {
     const part = node('div', undefined, 'chat-question-description'), data = block.data;
     if (block.type === 'choice') {
       text(part, data.prompt, 'chat-block-title');
-      const list = node('ul', undefined, 'chat-choice-options');
-      for (const option of data.options) {
-        const item = node('li'); item.append(node('span', option.label)); text(item, option.description); list.append(item);
+      if (showChoiceOptions) {
+        const list = node('ul', undefined, 'chat-choice-options');
+        for (const option of data.options) {
+          const item = node('li'); item.append(node('span', option.label)); text(item, option.description); list.append(item);
+        }
+        part.append(list);
       }
-      part.append(list);
     } else if (block.type === 'confirmation') {
       text(part, data.title, 'chat-block-title'); text(part, data.body);
       if (data.details?.length) {
@@ -131,16 +133,21 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
       part.dataset.blockId = block.id; part.dataset.blockType = block.type;
       if (block.status === 'error' || block.status === 'pending') {
         text(part, block.fallbackText);
-        if (block.status === 'error') part.append(error());
+        if (block.status === 'error') {
+          if (block.reason) text(part, block.reason, 'chat-error');
+          if (!block.fallbackText && !block.reason) text(part, t('chat.block.failed'), 'chat-error');
+          part.append(reference());
+        }
         else text(part, t('chat.block.pending'), 'chat-message-status');
       } else if (block.type === 'markdown') text(part, block.data.text || block.fallbackText || envelope.fallbackText, 'chat-message-text');
       else if (['time_series', 'breakdown', 'category_series'].includes(block.type)) part.append(chart(block));
       else if (interactive.has(block.type)) {
-        part.append(staticQuestion(block));
+        let question;
         if (renderQuestion && envelope.interrupt?.blockId === block.id) {
-          const question = renderQuestion({ envelope, block, row });
-          if (question) part.append(question);
+          question = renderQuestion({ envelope, block, row });
         }
+        part.append(staticQuestion(block, { showChoiceOptions: question?.dataset.choiceControls !== 'true' }));
+        if (question) part.append(question);
       } else text(part, block.fallbackText || envelope.fallbackText);
       // References are labels only: even valid URI schemes do not grant execution.
       if (block.metadata?.citations?.length) {
