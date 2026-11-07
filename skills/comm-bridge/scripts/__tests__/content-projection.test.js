@@ -117,17 +117,26 @@ test('C4 references accept authoritative integer IDs without echoing arbitrary v
 test('public projection entry loads with an empty component directory and no storage', async () => {
   const home = fs.realpathSync(process.env.HOME), actualHome = fs.realpathSync(os.userInfo().homedir);
   assert.notEqual(home, actualHome);
-  const root = fs.realpathSync(process.env.ZYLOS_DIR);
-  assert.ok(root.startsWith(home + path.sep));
-  const components = path.join(root, 'components');
-  fs.mkdirSync(components, { recursive: true });
-  assert.deepEqual(fs.readdirSync(components), []);
-  const publicApi = await import('../../../../cli/lib/content-projection.js');
-  assert.deepEqual(Object.keys(publicApi), ['projectC4Content']);
-  assert.equal(publicApi.projectC4Content, projectC4Content);
-  for (const fixture of fixtures.valid) {
-    assert.ok(publicApi.projectC4Content(fixture.content, { c4Id: 123 }).startsWith(fixture.envelope.fallbackText + '\n'));
+  // The Node runner shares one ZYLOS_DIR across concurrently running test
+  // files, so this test owns a private root to make its emptiness checks exact.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(home, 'content-projection-zylos-')));
+  const previousZylosDir = process.env.ZYLOS_DIR;
+  process.env.ZYLOS_DIR = root;
+  try {
+    const components = path.join(root, 'components');
+    fs.mkdirSync(components);
+    assert.deepEqual(fs.readdirSync(components), []);
+    const publicApi = await import('../../../../cli/lib/content-projection.js');
+    assert.deepEqual(Object.keys(publicApi), ['projectC4Content']);
+    assert.equal(publicApi.projectC4Content, projectC4Content);
+    for (const fixture of fixtures.valid) {
+      assert.ok(publicApi.projectC4Content(fixture.content, { c4Id: 123 }).startsWith(fixture.envelope.fallbackText + '\n'));
+    }
+    assert.deepEqual(fs.readdirSync(components), []);
+    assert.deepEqual(fs.readdirSync(root), ['components']);
+  } finally {
+    if (previousZylosDir === undefined) delete process.env.ZYLOS_DIR;
+    else process.env.ZYLOS_DIR = previousZylosDir;
+    fs.rmSync(root, { recursive: true, force: true });
   }
-  assert.deepEqual(fs.readdirSync(components), []);
-  assert.deepEqual(fs.readdirSync(root), ['components']);
 });
