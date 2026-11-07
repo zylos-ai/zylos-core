@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
 import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults } from '../public/js/wb/settings-defaults.js';
-import { createPricingPanel, appendPriceRow, collectPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
+import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
+import { keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
 import { renderVersion } from '../public/js/wb/settings-version.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
@@ -316,4 +317,48 @@ test('the version row shows Dashboard, zylos with its update hint and the engine
   assert.ok(root.querySelector('#settings-zylos-update')); assert.equal(root.querySelector('button'), root.querySelector('#settings-zylos-update'));
   renderVersion(root, { zylos_version: '3', cc_version: '2' }, { document, upgrade, t, dashboardVersion: null });
   assert.match(root.textContent, /Dashboard · wb\.unknown/);
+});
+
+test('remote machine rows show the poller connection state and remove through the callback', async () => {
+  const document = documentFixture(), root = document.createElement('div'), removed = [];
+  const agents = [{ name: 'ok', base_url: 'https://ok', access: 'admin' }, { name: 'auth', base_url: 'https://a' }, { name: 'down', base_url: 'https://d' }, { name: 'new', base_url: 'https://n' }];
+  const records = [{ name: 'ok', link: { quality: 'ok', latency_ms: 120.4 } }, { name: 'auth', health_reason: 'auth_failed', pulse_rate: 0 }, { name: 'down', health_reason: 'unreachable', pulse_rate: 0 }];
+  assert.deepEqual(remoteStatus(records[0]), { kind: 'ok', latency: 120 }); assert.equal(remoteStatus(undefined).kind, 'unknown'); assert.equal(remoteStatus({ health_reason: 'not_polled' }).kind, 'pending');
+  renderRemoteAgents(root, agents, { records, document, t, onRemove: name => removed.push(name) });
+  const rows = root.children; assert.equal(rows.length, 4);
+  assert.match(rows[0].textContent, /wb\.settings\.fleet\.reachable · fleet_manage\.scope_admin · 120ms/);
+  assert.match(rows[1].textContent, /wb\.settings\.fleet\.auth/); assert.match(rows[2].textContent, /wb\.settings\.fleet\.down/); assert.match(rows[3].textContent, /wb\.settings\.fleet\.unknown/);
+  await rows[1].querySelector('.fleet-agent-remove').dispatch('click'); assert.deepEqual(removed, ['auth']);
+  renderRemoteAgents(root, [], { document, t }); assert.equal(root.textContent, 'fleet_manage.empty');
+});
+
+test('key table lists active keys before revoked ones with their own text actions', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const keys = [{ name: 'old', scope: 'read', status: 'revoked', created_at: '2026-01-02T03:04:05Z' }, { name: 'ops', scope: 'admin', status: 'active', created_at: '2026-02-03T04:05:06Z', last_used_at: null }];
+  renderKeyTable(root, keys, { document, t, onAction: (action, name) => calls.push([action, name]) });
+  const rows = root.querySelector('tbody').children; assert.deepEqual(rows.map(row => row.children[0].textContent), ['ops', 'old']);
+  assert.match(rows[0].textContent, /fleet_manage\.scope_admin.*2026-02-03 04:05.*wb\.settings\.keys\.never/);
+  assert.ok(rows[0].querySelector('.api-key-rotate')); assert.ok(rows[0].querySelector('.api-key-revoke')); assert.equal(rows[0].querySelector('.api-key-delete'), null);
+  await rows[1].querySelector('.api-key-delete').dispatch('click'); assert.deepEqual(calls, [['delete', 'old']]);
+  assert.deepEqual(keyCounts(keys), { active: 1, revoked: 1 });
+});
+
+test('price change counts cover edited cells, added rows and removed rows', () => {
+  const rate = { input: 1, output: 2, cacheRead: 0.1, cacheCreation: 1 };
+  assert.equal(countPriceChanges({ a: rate, b: rate }, { a: rate, b: rate }), 0);
+  assert.equal(countPriceChanges({ a: rate, b: rate }, { a: { ...rate, input: 3, output: 4 }, b: rate }), 2);
+  assert.equal(countPriceChanges({ a: rate, b: rate }, { a: rate, c: rate }), 2, 'one added, one removed');
+  const fixture = priceFixture(); appendPriceRow(fixture.base, 'x', rate, false, fixture); appendPriceRow(fixture.base, '', rate, false, fixture);
+  const draft = draftPriceRows(fixture.base.children); assert.ok(draft.x); assert.equal(Object.keys(draft).length, 2, 'a blank prefix is a new row');
+});
+
+test('the pricing panel reports unsaved changes to its navigation badge and save bar', async () => {
+  const fixture = priceFixture(), counts = [];
+  const bar = node(fixture.document, 'div'); bar.className = 'settings-footer'; bar.hidden = true; fixture.root.append(bar);
+  const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async () => {}, onDirty: count => counts.push(count) });
+  assert.equal(counts.at(-1), 0); assert.equal(bar.hidden, true);
+  const input = fixture.base.children[0].querySelectorAll('input')[1]; input.value = '9'; await input.dispatch('input');
+  assert.equal(counts.at(-1), 1); assert.equal(bar.hidden, false);
+  panel.addRow(); assert.equal(counts.at(-1), 2);
+  panel.destroy(); assert.equal(counts.at(-1), 0); assert.equal(bar.hidden, true);
 });

@@ -1041,3 +1041,19 @@ test('group details expose conversation navigation for real groups and omit orig
   assert.equal(allNodes(f.root).some(node => node.dataset.action === 'viewConversation'), false);
   f.controller.destroy();
 });
+
+test('the observer entries appear only when the drawer is given an observer and the group has a live run', () => {
+  const document = createDocument(), seen = [];
+  const live = row('origin', { live: { runId: 'r' } }), idle = row('origin', { live: null });
+  const findButton = root => allNodes(root).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.observeLive');
+  let root = document.createElement('div');
+  renderOverview(root, live, {}, { document, t, onObserve: view => seen.push(view) });
+  findButton(root).dispatch('click'); assert.deepEqual(seen, ['live']);
+  root = document.createElement('div'); renderOverview(root, live, {}, { document, t }); assert.equal(findButton(root), undefined);
+  root = document.createElement('div'); renderOverview(root, idle, {}, { document, t, onObserve: () => {} }); assert.equal(findButton(root), undefined);
+  const loader = { state: { runs: [], expanded: new Set(), events: new Map(), messages: new Map(), between: [], filter: 'all', totalRuns: 0 }, setFilter() {}, collapse() {} };
+  root = document.createElement('div'); renderTimeline(root, loader, { document, t, onObserve: view => seen.push(view) });
+  allNodes(root).find(node => node.textContent === 'wb.detail.observeHistory').dispatch('click'); assert.deepEqual(seen, ['live', 'history']);
+  root = document.createElement('div'); renderTimeline(root, loader, { document, t });
+  assert.equal(allNodes(root).some(node => node.textContent === 'wb.detail.observeHistory'), false);
+});
