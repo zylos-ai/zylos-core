@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=85';
+import { element } from './plain-text.js?v=92';
 
 export const settingsSections = ['defaults', 'pricing', 'keys', 'observer', 'fleet', 'ui'];
 // Both views: reuse the actual control nodes so their original listeners survive.

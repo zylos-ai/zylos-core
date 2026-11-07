@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=85';
+import { element } from './plain-text.js?v=92';
 
 // Technical detail view. The upgrade button is the original generated action node.
 export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, onHint = () => {} } = {}) {

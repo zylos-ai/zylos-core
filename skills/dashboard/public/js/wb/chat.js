@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=85';
+import { element } from './plain-text.js?v=92';
 import { createChatState, messageState, receiptState } from './chat-state.js?v=91';
 import { parseC4Content } from '../../chat-schema.js?v=90';
 import { renderChatContent } from './chat-blocks.js?v=90';
