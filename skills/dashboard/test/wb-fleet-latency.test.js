@@ -12,7 +12,7 @@ test('latency chart preserves failed probe gaps and bounds its recent samples', 
   assert.equal(chart.children[0].style.height, '0');
   assert.equal(chart.children[1].dataset.latencyMs, '40');
   assert.match(chart.children[1].title, /40 ms/);
-  assert.equal(chart.children.at(-1).style.height, '30px');
+  assert.equal(chart.children.at(-1).style.height, '12px');
 });
 
 test('latency chart keeps an all-failure series empty without numeric zero bars', () => {

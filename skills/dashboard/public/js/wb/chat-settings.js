@@ -1,18 +1,22 @@
-import { element } from './plain-text.js?v=94';
+import { element, icon } from './plain-text.js?v=94';
 
 export function mountChatSettings(root, { document = root.ownerDocument, t = key => key, local, read, write }) {
-  const panel = element(document, 'div', undefined, 'action-group');
+  const panel = element(document, 'div', undefined, 'wb-set-card');
   panel.id = 'settings-chat';
   panel.hidden = true;
-  const label = element(document, 'label', undefined, 'action-field');
-  const checkbox = element(document, 'input');
+  const head = element(document, 'div', undefined, 'wb-set-card-h'), heading = element(document, 'h4'), title = element(document, 'span', t('wb.settings.chatTitle'));
+  title.dataset.i18n = 'wb.settings.chatTitle'; heading.append(icon(document, 'msg', 'xs'), title); head.append(heading);
+  const label = element(document, 'label', undefined, 'wb-switch-l');
+  const checkbox = element(document, 'input', undefined, 'wb-switch');
   checkbox.id = 'settings-chat-remote';
   checkbox.type = 'checkbox';
+  checkbox.setAttribute('role', 'switch');
   checkbox.disabled = true;
   const text = element(document, 'span', t('wb.settings.allowRemoteChat'));
   text.dataset.i18n = 'wb.settings.allowRemoteChat';
   label.append(checkbox, text);
-  const status = element(document, 'p', undefined, 'modal-status');
+  panel.append(head);
+  const status = element(document, 'p', undefined, 'wb-note');
   status.setAttribute('role', 'status');
   status.hidden = true;
   panel.append(label, status);

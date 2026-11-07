@@ -1,16 +1,14 @@
 import { element } from './plain-text.js?v=94';
 
-// Plain view: this page's Dashboard version. Technical view adds zylos, the CLI and the upgrade
-// button (the original generated action node).
+// This page's Dashboard version, zylos with its update hint, the AI engine CLI and its upgrade
+// button (the original generated action node), in both views.
 export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, onHint = () => {},
-  dashboardVersion = null, level = 'technical' } = {}) {
-  root.replaceChildren(element(document, 'h3', t('wb.settings.version')));
-  root.append(element(document, 'p', 'Dashboard · ' + (dashboardVersion ? 'v' + dashboardVersion : t('wb.unknown'))));
-  if (level !== 'technical') return;
+  dashboardVersion = null } = {}) {
+  root.replaceChildren(element(document, 'p', 'Dashboard · ' + (dashboardVersion ? 'v' + dashboardVersion : t('wb.unknown'))));
   const ri = info ?? {};
   root.append(element(document, 'p', 'zylos · ' + (ri.zylos_version ? 'v' + ri.zylos_version : t('wb.unknown'))));
   if (ri.zylos_update) {
-    const hint = element(document, 'button', t('wb.settings.updateTo', { version: ri.zylos_update }), 'action-btn'); hint.type = 'button'; hint.id = 'settings-zylos-update';
+    const hint = element(document, 'button', t('wb.settings.updateTo', { version: ri.zylos_update }), 'wb-link-btn'); hint.type = 'button'; hint.id = 'settings-zylos-update';
     hint.title = t('info.zylos_update_hint', { version: ri.zylos_update }); hint.addEventListener('click', () => onHint(hint)); root.append(hint);
   }
   const codex = (ri.runtime_cli ?? ri.configured_runtime ?? ri.runtime) === 'codex';

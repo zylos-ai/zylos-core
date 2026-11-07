@@ -1,16 +1,3 @@
-export function runtimeLabels(info, t, effortLabel) {
-  if (!info) return [];
-  if (info.runtime === 'codex') return [
-    t('info.runtime_model', { value: info.model || info.model_id || t('info.unknown') }),
-    t('info.runtime_effort', { value: info.effort ? effortLabel(info.effort) : t('info.unknown') }),
-  ];
-  const labels = [];
-  if (info.runtime) labels.push(info.runtime.charAt(0).toUpperCase() + info.runtime.slice(1));
-  if (info.model) labels.push(info.model.replace(' context', ''));
-  if (info.effort) labels.push(effortLabel(info.effort));
-  return labels;
-}
-
 export function modelOptionState(meta) {
   const models = (meta.models || []).map(model => ({ value: model.id, label: model.display_name || model.id, selected: model.id === meta.current_model }));
   const currentIsListed = models.some(model => model.selected);
@@ -32,22 +19,6 @@ export function effortOptionState(meta, modelId, currentEffort = meta.current_ef
       ...list.map(value => ({ value, selected: value === currentEffort })),
     ],
   };
-}
-
-export async function submitSelectAction(select, action, key, execute) {
-  if (select._inFlight) return false;
-  const previous = select._prevValue ?? select.value;
-  const value = select.value;
-  if (!value || value === previous) return false;
-  select._inFlight = true;
-  try {
-    const accepted = await execute(action, { [key]: value });
-    if (accepted === false) select.value = previous;
-    else select._prevValue = value;
-    return accepted;
-  } finally {
-    select._inFlight = false;
-  }
 }
 
 export function mergeRuntimeInfo(previousState, nextState) {

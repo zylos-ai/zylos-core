@@ -1,5 +1,6 @@
-import { effortOptionState } from '../runtime-ui.js';
-import { element, fallbackName } from './plain-text.js?v=94';
+import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=97';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=94';
+import { settingsCard } from './settings.js?v=97';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {
@@ -54,116 +55,216 @@ export function createOverrideSearch({ read, onChange, setTimer = setTimeout, cl
   };
 }
 
+const runtimes = ['claude', 'codex'];
+const engineName = runtime => runtime === 'codex' ? 'Codex' : 'Claude Code';
+/** Drafted model/effort pairs that differ from what each engine's metadata reports. */
+export function modelDraftChanges(metadata = {}, drafts = {}) {
+  const changes = [];
+  for (const runtime of runtimes) {
+    const meta = metadata[runtime], draft = drafts[runtime];
+    if (!meta || !draft) continue;
+    if (draft.model && draft.model !== (meta.current_model ?? '')) changes.push({ runtime, action: 'switch-model', key: 'model', value: draft.model });
+    if (draft.effort && draft.effort !== (meta.current_effort ?? '')) changes.push({ runtime, action: 'switch-effort', key: 'effort', value: draft.effort });
+  }
+  return changes;
+}
+
 export function renderDefaults(root, { snapshot, page, metadata = {}, document = root.ownerDocument,
   t = key => key, read, execute, confirm = async () => true, writable = () => true, onGroup = () => {} } = {}) {
   root.replaceChildren();
   const groups = defaultGroups(snapshot, page);
-  const current = element(document, 'p', t('wb.settings.currentRuntime') + ': ' + (groups.baseline ?? t('wb.unknown')));
-  current.id = 'settings-current-runtime'; root.append(current);
-  const result = element(document, 'p', '', 'modal-status');
-  const controls = [], effortControls = [];
-  function groupButton(row) {
-    const button = element(document, 'button', row.name?.displayName ?? fallbackName(row, t), 'action-btn action-btn-sm');
-    button.type = 'button'; button.addEventListener('click', () => onGroup(row.sessionGroup));
+  const technical = () => document.documentElement?.dataset.detail === 'technical';
+  const controls = [];
+  const lock = (node, fn) => { controls.push({ node, lock: fn }); node.disabled = fn(); };
+  function groupRow(row, meta) {
+    const button = element(document, 'button', undefined, 'wb-gl-row'); button.type = 'button';
+    button.append(element(document, 'span', row.name?.displayName ?? fallbackName(row, t)));
+    if (meta) button.append(element(document, 'small', meta));
+    button.addEventListener('click', () => onGroup(row.sessionGroup));
     return button;
   }
-  function groupList(rows, key, { searchable = false } = {}) {
-    const details = element(document, 'details');
-    details.append(element(document, 'summary', t(key, { count: rows == null ? t('wb.unknown') : rows.length })));
-    if (rows == null) { details.append(element(document, 'p', t('wb.unknown') + (document.documentElement?.dataset.detail === 'technical' ? ' · override_list_failed' : ''))); return details; }
-    const list = element(document, 'div'); list.style.maxHeight = '16rem'; list.style.overflowY = 'auto';
+  const failed = () => element(document, 'p', t('wb.unknown') + (technical() ? ' · override_list_failed' : ''), 'wb-note');
+  // Counts stay visible; names fold into a searchable list so large instances are not spelled out.
+  function groupList(rows, meta, { searchable = rows?.length > 8 } = {}) {
+    const details = element(document, 'details', undefined, 'wb-glist');
+    const summary = element(document, 'summary'); summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.settings.showGroups', { count: rows.length })));
+    const box = element(document, 'div', undefined, 'wb-gl-box'), list = element(document, 'div', undefined, 'wb-gl-rows');
     const redraw = query => {
       const term = query.toLocaleLowerCase();
-      list.replaceChildren(...rows.filter(row => [row.sessionGroup, row.name?.displayName].some(value => String(value ?? '').toLocaleLowerCase().includes(term))).map(groupButton));
+      const shown = rows.filter(row => [row.sessionGroup, row.name?.displayName].some(value => String(value ?? '').toLocaleLowerCase().includes(term)));
+      list.replaceChildren(...(shown.length ? shown.map(row => groupRow(row, meta?.(row))) : [element(document, 'p', t('wb.noMatch'), 'wb-gl-empty')]));
     };
     if (searchable) {
-      const input = element(document, 'input'); input.type = 'search'; input.placeholder = t('wb.search');
-      input.addEventListener('input', () => redraw(input.value)); details.append(input);
+      const input = element(document, 'input'); input.type = 'search'; input.placeholder = t('wb.settings.searchGroups');
+      input.addEventListener('input', () => redraw(input.value)); box.append(input);
     }
-    redraw(''); details.append(list); return details;
+    redraw(''); box.append(list); details.append(summary, box); return details;
   }
-  root.append(groupList(groups.followers, 'wb.settings.followers', { searchable: true }));
-  const overrides = element(document, 'details');
-  overrides.append(element(document, 'summary', t('wb.settings.overrides', { count: groups.total ?? t('wb.unknown') })));
-  if (groups.total == null) overrides.append(element(document, 'p', t('wb.unknown') + (document.documentElement?.dataset.detail === 'technical' ? ' · override_list_failed' : '')));
-  const flat = element(document, 'div'); flat.style.maxHeight = '16rem'; flat.style.overflowY = 'auto';
-  flat.append(...groups.flat.map(groupButton)); overrides.append(flat);
-  const searchRoot = element(document, 'div'); searchRoot.style.maxHeight = '16rem'; searchRoot.style.overflowY = 'auto';
+  const stateText = row => t('wb.state.' + (row.state?.kind ?? 'unknown'));
+
+  // ─── Default engine ───
+  const engine = settingsCard(document, { icon: 'bot', title: t('wb.settings.currentRuntime'), sub: technical() ? 'zylos runtime' : '' });
+  engine.card.id = 'settings-current-runtime';
+  let draftRuntime = groups.baseline;
+  const line = element(document, 'div', undefined, 'wb-set-inline');
+  const seg = element(document, 'div', undefined, 'wb-seg2'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', t('wb.settings.currentRuntime'));
+  const segButtons = {};
+  for (const runtime of runtimes) {
+    const health = runtimeHealth(snapshot, runtime);
+    const button = element(document, 'button', engineName(runtime)); button.type = 'button'; button.id = 'settings-use-' + runtime;
+    button.title = health === 'unavailable' ? t('wb.settings.health.unavailable') : '';
+    button.addEventListener('click', () => { draftRuntime = runtime; redrawEngine(); });
+    lock(button, () => !writable() || health === 'unavailable');
+    seg.append(button); segButtons[runtime] = button;
+  }
+  line.append(seg);
+  for (const runtime of runtimes) {
+    const health = runtimeHealth(snapshot, runtime);
+    const login = element(document, 'span', undefined, 'wb-login wb-login-' + health);
+    login.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', runtime === 'codex' ? 'Codex' : 'Claude'), element(document, 'span', t('wb.settings.health.' + health)));
+    line.append(login);
+  }
+  const saveRuntime = element(document, 'button', t('wb.settings.saveRuntime'), 'wb-btn wb-btn-primary'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-save-runtime';
+  const undoRuntime = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undoRuntime.type = 'button';
+  undoRuntime.addEventListener('click', () => { draftRuntime = groups.baseline; redrawEngine(); });
+  lock(saveRuntime, () => !writable() || draftRuntime == null || draftRuntime === groups.baseline || runtimeHealth(snapshot, draftRuntime) === 'unavailable');
+  saveRuntime.addEventListener('click', async () => {
+    if (saveRuntime.disabled || !(await confirm(runtimeConfirmation(snapshot, t)))) return;
+    saveRuntime.disabled = true;
+    try {
+      const accepted = await execute('switch-runtime', { runtime: draftRuntime });
+      engineResult.textContent = accepted === false ? t('wb.settings.saveFailed') : t('wb.settings.restartRefresh');
+    } catch (error) { engineResult.textContent = error.message; }
+    finally { refreshLocks(); }
+  });
+  line.append(saveRuntime, undoRuntime);
+  const engineResult = element(document, 'p', '', 'wb-note'); engineResult.setAttribute('role', 'status');
+  const split = element(document, 'div', undefined, 'wb-set-split');
+  const followerCol = element(document, 'div');
+  followerCol.append(element(document, 'div', t('wb.settings.followers', { count: groups.followers == null ? t('wb.unknown') : groups.followers.length }), 'wb-gsum'));
+  if (groups.followers == null) followerCol.append(failed());
+  else if (groups.followers.length) followerCol.append(groupList(groups.followers, stateText, { searchable: true }));
+  const overrideCol = element(document, 'div');
+  overrideCol.append(element(document, 'div', t('wb.settings.overrides', { count: groups.total ?? t('wb.unknown') }), 'wb-gsum'));
+  if (groups.total == null) overrideCol.append(failed());
+  const overrides = element(document, 'div', undefined, 'wb-gl-box');
+  const flat = element(document, 'div', undefined, 'wb-gl-rows'); flat.append(...groups.flat.map(row => groupRow(row, row.target?.runtime ? runtimeName(row.target.runtime) : null)));
+  const searchRoot = element(document, 'div', undefined, 'wb-gl-rows');
   const search = createOverrideSearch({ read, onChange(value) {
     searchRoot.replaceChildren(); flat.hidden = value != null && !value.error;
     if (value == null) return;
-    if (value.error) { searchRoot.append(element(document, 'p', t('wb.readFailed') + (document.documentElement?.dataset.detail === 'technical' ? ' · override_list_failed' : ''))); return; }
-    if (!value.rows.length) searchRoot.append(element(document, 'p', t('wb.noMatch')));
-    else searchRoot.append(...value.rows.map(groupButton));
+    if (value.error) { searchRoot.append(element(document, 'p', t('wb.readFailed') + (technical() ? ' · override_list_failed' : ''), 'wb-gl-empty')); return; }
+    if (!value.rows.length) searchRoot.append(element(document, 'p', t('wb.noMatch'), 'wb-gl-empty'));
+    else searchRoot.append(...value.rows.map(row => groupRow(row, row.runtime ? runtimeName(row.runtime) : null)));
     if (value.nextAfter != null) {
-      const more = element(document, 'button', t('wb.detail.loadMore'), 'action-btn'); more.type = 'button';
+      const more = element(document, 'button', t('wb.detail.loadMore'), 'wb-link-btn wb-gl-more'); more.type = 'button';
       more.addEventListener('click', () => search.more()); searchRoot.append(more);
     }
   } });
   if (groups.total !== 0) {
-    const input = element(document, 'input'); input.id = 'settings-overrides-search'; input.type = 'search'; input.placeholder = t('wb.search');
+    const input = element(document, 'input'); input.id = 'settings-overrides-search'; input.type = 'search'; input.placeholder = t('wb.settings.searchGroups');
     input.addEventListener('input', () => search.input(input.value)); overrides.append(input);
+    overrides.append(flat, searchRoot);
     if (groups.older) {
-      const older = element(document, 'button', t('wb.settings.older'), 'action-btn action-btn-sm'); older.type = 'button';
+      const older = element(document, 'button', t('wb.settings.older'), 'wb-link-btn wb-gl-more'); older.type = 'button';
       older.addEventListener('click', () => input.focus()); overrides.append(older);
     }
+    overrideCol.append(overrides);
   }
-  overrides.append(searchRoot); root.append(overrides);
-  for (const runtime of ['claude', 'codex']) {
-    const panel = element(document, 'section', undefined, 'action-group');
-    const health = runtimeHealth(snapshot, runtime), meta = metadata[runtime];
-    panel.append(element(document, 'h3', runtime === 'codex' ? 'Codex' : 'Claude'));
-    panel.append(element(document, 'p', t('wb.settings.health.' + health)));
-    const saveRuntime = element(document, 'button', t('wb.settings.useRuntime'), 'action-btn'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-use-' + runtime; saveRuntime.title = health === 'unavailable' ? t('wb.settings.health.unavailable') : '';
-    const lock = () => !writable() || health === 'unavailable';
-    controls.push({ button: saveRuntime, lock }); saveRuntime.disabled = lock();
-    saveRuntime.addEventListener('click', async () => {
-      if (lock() || !(await confirm(runtimeConfirmation(snapshot, t)))) return;
-      saveRuntime.disabled = true;
-      try {
-        const accepted = await execute('switch-runtime', { runtime });
-        result.textContent = accepted === false ? t('wb.settings.saveFailed') : t('wb.settings.restartRefresh');
-      } catch (error) { result.textContent = error.message; }
-      finally { refreshLocks(); }
-    });
-    panel.append(saveRuntime);
-    if (meta) {
-      const model = element(document, 'input'); model.id = 'settings-model-' + runtime; model.value = meta.current_model ?? ''; model.placeholder = t('actions.model');
-      const options = element(document, 'datalist'); options.id = 'settings-model-options-' + runtime; model.setAttribute('list', options.id);
-      for (const item of meta.models ?? []) { const option = element(document, 'option'); option.value = item.id; option.textContent = item.display_name ?? item.id; options.append(option); }
-      const effort = element(document, 'select'); effort.id = 'settings-effort-' + runtime;
-      const renderEffort = () => {
-        const state = effortOptionState(meta, model.value.trim(), effort.value || meta.current_effort);
-        effort.replaceChildren(); effort.disabled = !writable() || state.disabled;
-        for (const item of state.options) { const option = element(document, 'option', item.labelKey ? t(item.labelKey, item.labelParams) : item.value); option.value = item.value; option.disabled = item.disabled; option.selected = item.selected; effort.append(option); }
-        effort.hidden = state.hidden;
-      };
-      effortControls.push({ effort, model, meta });
-      renderEffort(); model.addEventListener('input', () => { renderEffort(); refreshLocks(); });
-      panel.append(model, options, effort);
-      for (const [action, field, key] of [['switch-model', model, 'model'], ['switch-effort', effort, 'effort']]) {
-        const save = element(document, 'button', t('btn.save') + ' · ' + t('actions.' + key), 'action-btn'); save.type = 'button'; save.id = 'settings-save-' + key + '-' + runtime;
-        const saveLock = () => !writable() || (key === 'effort' && effortOptionState(meta, model.value.trim(), effort.value || meta.current_effort).disabled);
-        controls.push({ button: save, lock: saveLock }); save.disabled = saveLock();
-        save.addEventListener('click', async () => {
-          if (saveLock() || !field.value.trim()) return;
-          save.disabled = true;
-          try {
-            const accepted = await execute(action, { runtime, [key]: field.value.trim() });
-            result.textContent = accepted === false ? t('wb.settings.saveFailed') : t('wb.settings.nextStart');
-          } catch (error) { result.textContent = error.message; }
-          finally { refreshLocks(); }
-        });
-        panel.append(save);
+  split.append(followerCol, overrideCol);
+  const engineNote = element(document, 'p', t('wb.settings.runtimeNote'), 'wb-note');
+  engine.card.append(line, engineResult, split, engineNote); root.append(engine.card);
+  function redrawEngine() {
+    for (const runtime of runtimes) segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
+    const changed = draftRuntime != null && draftRuntime !== groups.baseline;
+    saveRuntime.hidden = undoRuntime.hidden = !changed;
+    refreshLocks();
+  }
+
+  // ─── Default model and effort, one row per engine, one save for the card ───
+  const models = settingsCard(document, { icon: 'sliders', title: t('wb.settings.modelsTitle'), sub: t('wb.settings.modelsSub') });
+  const drafts = {}, rows = {};
+  const result = element(document, 'p', '', 'wb-note'); result.setAttribute('role', 'status');
+  const undo = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undo.type = 'button';
+  const save = element(document, 'button', t('btn.save'), 'wb-btn wb-btn-primary'); save.type = 'button'; save.id = 'settings-save-models';
+  models.acts.append(undo, save);
+  for (const runtime of runtimes) {
+    const meta = metadata[runtime];
+    const row = element(document, 'div', undefined, 'wb-pref');
+    const label = element(document, 'span', undefined, 'wb-pref-l'); label.append(element(document, 'i', undefined, 'wb-sw wb-sw-' + runtime), element(document, 'span', engineName(runtime)));
+    const cell = element(document, 'div', undefined, 'wb-pref-c'); row.append(label, cell); models.card.append(row);
+    if (!meta) { cell.append(element(document, 'span', t('wb.unknown'), 'wb-note')); continue; }
+    drafts[runtime] = { model: meta.current_model ?? '', effort: meta.current_effort ?? '' };
+    const fields = element(document, 'div', undefined, 'wb-set-inline');
+    const model = element(document, 'select'); model.id = 'settings-model-' + runtime; model.setAttribute('aria-label', t('actions.model'));
+    const custom = element(document, 'input'); custom.id = 'settings-model-custom-' + runtime; custom.placeholder = t('actions.model_placeholder'); custom.className = 'wb-input';
+    const effort = element(document, 'select'); effort.id = 'settings-effort-' + runtime; effort.setAttribute('aria-label', t('actions.effort'));
+    const dirty = element(document, 'span', t('wb.settings.unsavedOne'), 'wb-dirty');
+    const options = modelOptionState(meta);
+    for (const item of options.options) { const option = element(document, 'option', item.labelKey ? t(item.labelKey) : item.label); option.value = item.value; option.disabled = Boolean(item.disabled); model.append(option); }
+    model.value = options.custom ? '__custom__' : meta.current_model ?? ''; custom.value = options.customValue; custom.hidden = !options.custom;
+    const modelValue = () => model.value === '__custom__' ? custom.value.trim() : model.value;
+    const renderEffort = () => {
+      const state = effortOptionState(meta, modelValue(), drafts[runtime].effort || meta.current_effort);
+      effort.replaceChildren();
+      for (const item of state.options) { const option = element(document, 'option', item.labelKey ? t(item.labelKey, item.labelParams) : item.value); option.value = item.value; option.disabled = item.disabled; option.selected = item.selected; effort.append(option); }
+      effort.hidden = state.hidden;
+      const selected = state.options.find(item => item.selected);
+      effort.value = selected?.value ?? '';
+      drafts[runtime].effort = selected && !selected.disabled ? selected.value : '';
+    };
+    const changed = () => { drafts[runtime].model = modelValue(); renderEffort(); redrawModels(); };
+    model.addEventListener('change', () => { custom.hidden = model.value !== '__custom__'; if (!custom.hidden) custom.focus(); changed(); });
+    custom.addEventListener('input', changed);
+    effort.addEventListener('change', () => { drafts[runtime].effort = effort.value; redrawModels(); });
+    renderEffort(); drafts[runtime].effort = meta.current_effort ?? drafts[runtime].effort;
+    fields.append(element(document, 'span', t('actions.model'), 'wb-fld-l'), wrapSelect(document, model), custom, element(document, 'span', t('actions.effort'), 'wb-fld-l'), wrapSelect(document, effort), dirty);
+    const users = modelFollowers(snapshot, runtime);
+    const count = element(document, 'small', users == null ? t('wb.unknown') : users.length ? t('wb.settings.modelFollowers', { count: users.length }) : t('wb.settings.noFollowers'), 'wb-pref-note');
+    cell.append(fields, count);
+    if (users?.length) cell.append(groupList(users, stateText));
+    rows[runtime] = { model, custom, effort, dirty, meta, renderEffort };
+    lock(model, () => !writable()); lock(custom, () => !writable());
+    lock(effort, () => !writable() || effortOptionState(meta, modelValue(), drafts[runtime].effort || meta.current_effort).disabled);
+  }
+  models.card.append(element(document, 'p', t('wb.settings.nextStartNote'), 'wb-note'), result);
+  root.append(models.card);
+  const changes = () => modelDraftChanges(metadata, drafts);
+  function redrawModels() {
+    const pending = changes();
+    for (const [runtime, row] of Object.entries(rows)) row.dirty.hidden = !pending.some(change => change.runtime === runtime);
+    undo.hidden = save.hidden = !pending.length;
+    refreshLocks();
+  }
+  lock(save, () => !writable() || !changes().length);
+  undo.addEventListener('click', () => {
+    for (const [runtime, row] of Object.entries(rows)) {
+      drafts[runtime] = { model: row.meta.current_model ?? '', effort: row.meta.current_effort ?? '' };
+      const initial = modelOptionState(row.meta); row.model.value = initial.custom ? '__custom__' : row.meta.current_model ?? ''; row.custom.value = initial.customValue; row.custom.hidden = !initial.custom; row.renderEffort(); drafts[runtime].effort = row.meta.current_effort ?? '';
+      row.effort.value = drafts[runtime].effort;
+    }
+    redrawModels();
+  });
+  save.addEventListener('click', async () => {
+    const pending = changes();
+    if (save.disabled || !pending.length) return;
+    save.disabled = true; let failures = 0;
+    try {
+      for (const change of pending) {
+        const accepted = await execute(change.action, { runtime: change.runtime, [change.key]: change.value });
+        if (accepted === false) { failures++; break; }
+        if (rows[change.runtime]) rows[change.runtime].meta = { ...rows[change.runtime].meta, ['current_' + change.key]: change.value };
       }
-    } else panel.append(element(document, 'p', t('wb.unknown')));
-    panel.append(groupList(modelFollowers(snapshot, runtime), 'wb.settings.modelFollowers'));
-    root.append(panel);
-  }
-  function refreshLocks() {
-    for (const { effort, model, meta } of effortControls) { model.disabled = !writable(); effort.disabled = !writable() || effortOptionState(meta, model.value.trim(), effort.value || meta.current_effort).disabled; }
-    for (const { button, lock } of controls) button.disabled = lock();
-  }
-  root.append(result); refreshLocks();
+      result.textContent = failures ? t('wb.settings.saveFailed') : t('wb.settings.nextStart');
+    } catch (error) { result.textContent = error.message; }
+    finally { metadata = Object.fromEntries(Object.entries(rows).map(([runtime, row]) => [runtime, row.meta])); redrawModels(); }
+  });
+  function refreshLocks() { for (const { node, lock: fn } of controls) node.disabled = fn(); }
+  redrawEngine(); redrawModels();
   return { destroy: () => search.destroy(), refreshLocks };
+}
+
+function wrapSelect(document, select) {
+  const wrap = element(document, 'span', undefined, 'wb-select-wrap'); wrap.append(select, icon(document, 'chev', 'xs'));
+  return wrap;
 }

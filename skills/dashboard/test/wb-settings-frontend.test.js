@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
 import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults } from '../public/js/wb/settings-defaults.js';
 import { createPricingPanel, appendPriceRow, collectPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
-import { mountThemeControl } from '../public/js/wb/settings-ui.js';
+import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
 import { renderVersion } from '../public/js/wb/settings-version.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { deferred, tick } from './fixtures/workbench-dom.js';
@@ -64,19 +64,36 @@ test('settings loader reads one group snapshot and one first batch on each open 
   assert.equal(loads.length, 1); assert.equal(paths.length, 12); assert.equal(paths.some(path => path.includes('after=')), false);
 });
 
-test('default controls keep auth gate on runtime switch and send runtime for saved model and effort', async () => {
+test('default engine keeps the sign-in gate and model and effort save together per engine', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low'] } });
   const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 100000 }, metadata: { claude: meta('claude'), codex: meta('codex') }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  // Codex is signed out: it cannot become the default, and the reason is its tooltip.
   assert.equal(root.querySelector('#settings-use-codex').disabled, true); assert.match(root.querySelector('#settings-use-codex').title, /unavailable/);
-  assert.equal(root.querySelector('#settings-save-model-codex').disabled, false);
-  const model = root.querySelector('#settings-model-codex'); model.value = 'two'; await model.dispatch('input');
-  const effort = root.querySelector('#settings-effort-codex'); effort.value = 'low'; await root.querySelector('#settings-save-effort-codex').dispatch('click');
-  assert.equal(calls[0].body.runtime, 'codex'); assert.equal(calls[0].body.effort, 'low');
-  model.value = 'unknown'; await model.dispatch('input'); effort.disabled = false; panel.refreshLocks(); assert.equal(effort.disabled, true); assert.equal(root.querySelector('#settings-save-effort-codex').disabled, true);
+  const save = root.querySelector('#settings-save-models');
+  assert.equal(save.disabled, true, 'nothing to save yet'); assert.equal(save.hidden, true);
+  const model = root.querySelector('#settings-model-codex'); model.value = 'two'; await model.dispatch('change');
+  const effort = root.querySelector('#settings-effort-codex'); assert.equal(effort.value, '', 'the old effort is not offered by the new model');
+  effort.value = 'low'; await effort.dispatch('change'); assert.equal(save.disabled, false);
+  await save.dispatch('click');
+  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'codex', model: 'two' } }, { action: 'switch-effort', body: { runtime: 'codex', effort: 'low' } }]);
+  assert.equal(save.hidden, true, 'saved values become the new baseline');
+  model.value = '__custom__'; await model.dispatch('change'); const custom = root.querySelector('#settings-model-custom-codex');
+  assert.equal(custom.hidden, false); custom.value = 'unknown'; await custom.dispatch('input'); assert.equal(effort.disabled, true);
   assert.ok(root.querySelector('#settings-overrides-search')); panel.destroy();
 });
 
+test('changing the default engine is a draft until saved and the undo restores the current one', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
+  const panel = renderDefaults(root, { snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  const save = root.querySelector('#settings-save-runtime');
+  assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
+  await root.querySelector('#settings-use-codex').dispatch('click');
+  assert.equal(save.hidden, false); assert.equal(save.disabled, false); assert.equal(calls.length, 0);
+  await save.dispatch('click'); assert.deepEqual(calls, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
+  panel.destroy();
+});
 test('zero override count hides search and local follower filtering sends no request', async () => {
   const document = documentFixture(), root = document.createElement('div'); let reads = 0;
   const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 0 }, document, t, read: () => { reads++; } });
@@ -128,10 +145,10 @@ test('price row validation rejects duplicate, blank and nonnumeric prices withou
   assert.deepEqual(visiblePricePrefixes({ builtInModels: ['gpt', 'gpt-x'], modelPrices: { gpt: {}, 'gpt-x': {}, custom: {} } }, [{ model: 'gpt-x-1' }]), ['gpt-x', 'custom']);
 });
 
-test('settings composition moves actual control nodes and preserves their listeners', async () => {
+test('settings composition moves actual control nodes into cards and preserves their listeners', async () => {
   const document = documentFixture(), root = document.createElement('div'), settings = document.createElement('div'), fleet = document.createElement('div'), actions = document.createElement('div');
-  const moved = []; let movedCalls = 0;
-  for (const [source, tag, id] of [[settings, 'section', 'settings-model-pricing-group'], [settings, 'section', 'observer-settings-group'], [actions, 'section', 'action-status'], [actions, 'section', 'action-confirm']]) { const control = node(document, tag, id); source.append(control); control.addEventListener('click', () => movedCalls++); moved.push(control); }
+  let movedCalls = 0;
+  for (const [source, tag, id] of [[settings, 'section', 'settings-model-pricing-group'], [settings, 'section', 'observer-settings-group'], [actions, 'section', 'action-status']]) { const control = node(document, tag, id); source.append(control); control.addEventListener('click', () => movedCalls++); }
   const modeField = node(document, 'div'); modeField.className = 'action-field'; const mode = node(document, 'select', 'action-mode'); modeField.append(mode); actions.append(modeField); let calls = 0; mode.addEventListener('change', () => calls++);
   const thresholdField = node(document, 'div'); thresholdField.className = 'action-field';
   const threshold = node(document, 'input', 'action-threshold'), apply = node(document, 'button', 'action-threshold-apply');
@@ -139,19 +156,24 @@ test('settings composition moves actual control nodes and preserves their listen
   const upgrade = node(document, 'button'); upgrade.dataset.action = 'upgrade-cc'; actions.append(upgrade);
   const priceInput = node(document, 'input', 'price-input'); settings.querySelector('#settings-model-pricing-group').append(priceInput);
   for (const name of ['fleet', 'keys']) { const panel = node(document, 'section'); panel.className = 'manage-panel'; panel.dataset.panel = name; panel.hidden = true; panel.addEventListener('click', () => movedCalls++); fleet.append(panel); }
-  const locale = node(document, 'button', 'locale-toggle');
-  const page = composeSettings(root, { settings, fleet, actions, controls: [locale], document, t });
-  assert.equal(settingsSections.length, 6); assert.equal(root.querySelector('#action-mode'), mode); await mode.dispatch('change'); assert.equal(calls, 1);
-  assert.equal(page.sections.keys.querySelector('.manage-panel').hidden, false); assert.equal(page.sections.ui.querySelector('#locale-toggle'), locale);
+  const logout = node(document, 'button', 'logout-btn'), detailLabel = node(document, 'label'); detailLabel.append(node(document, 'input', 'wb-detail-toggle'));
+  const page = composeSettings(root, { settings, fleet, actions, controls: [detailLabel, logout], document, t });
+  assert.deepEqual(settingsSections, ['defaults', 'pricing', 'keys', 'fleet', 'observer', 'ui']);
+  assert.equal(root.querySelector('#action-mode'), mode); await mode.dispatch('change'); assert.equal(calls, 1);
+  // Each section starts with its own heading and lead; content follows them (no prepend ahead of the title).
+  for (const name of settingsSections) { assert.equal(page.sections[name].children[0].tagName, 'H2'); assert.equal(page.sections[name].children[1].className, 'wb-set-lead'); }
+  assert.equal(page.sections.defaults.children[2].id, 'settings-defaults');
+  assert.equal(page.sections.keys.querySelector('.manage-panel').hidden, false);
+  assert.equal(page.prefs.account.querySelector('#logout-btn'), logout); assert.equal(page.prefs.detail.querySelector('#wb-detail-toggle').parentElement, detailLabel);
+  assert.equal(page.prefs.version.querySelector('[data-action="upgrade-cc"]'), upgrade);
   page.select('pricing'); assert.equal(page.sections.pricing.hidden, false); assert.equal(page.sections.defaults.hidden, true);
   page.detail('technical'); page.select('observer'); page.detail('plain'); assert.equal(page.sections.observer.hidden, true); assert.equal(page.sections.defaults.hidden, false);
-  assert.equal(root.querySelector('#action-confirm').closest('.modal-body'), null);
   const actionBody = page.actionsScope.querySelector('.modal-body');
   assert.equal(mode.closest('.modal-body'), actionBody); assert.equal(threshold.closest('.modal-body'), actionBody); assert.equal(apply.closest('.modal-body'), actionBody);
   assert.deepEqual(actionBody.querySelectorAll('button, select, input'), [mode, threshold, apply]);
   assert.equal(priceInput.closest('.modal-body'), null); assert.equal(upgrade.closest('.modal-body'), null);
-  assert.equal(page.sections.ui.querySelector('[data-action="upgrade-cc"]'), upgrade);
-  page.select('ui'); assert.equal(page.sections.ui.hidden, false); assert.equal(root.querySelector('#action-confirm').parentElement, page.actionsScope);
+  page.badge('pricing', 2); const badge = root.querySelector('nav').querySelectorAll('.wb-set-nav-n')[1]; assert.equal(badge.textContent, '2'); assert.equal(badge.hidden, false);
+  page.badge('pricing', 0); assert.equal(badge.hidden, true);
   await page.sections.observer.querySelector('#observer-settings-group').dispatch('click');
   await page.sections.fleet.querySelector('.manage-panel').dispatch('click');
   await page.sections.keys.querySelector('.manage-panel').dispatch('click'); assert.equal(movedCalls, 3);
@@ -197,9 +219,15 @@ test('version panel reuses upgrade control, labels Codex and retains readonly re
   renderVersion(root, { runtime: 'codex', codex_version: '1' }, { document, upgrade, t, readOnly: false }); await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
 });
 
-test('theme control exposes follow system and forwards the selected value', async () => {
-  const document = documentFixture(), root = document.createElement('div'); let value;
-  const select = mountThemeControl(root, { document, t, value: 'system', onChange: next => value = next }); assert.equal(select.value, 'system'); assert.equal(select.children.length, 3); select.value = 'dark'; await select.dispatch('change'); assert.equal(value, 'dark');
+test('theme and language are segmented choices that forward the pressed value', async () => {
+  const document = documentFixture(), root = document.createElement('div'); let value, locale;
+  const theme = mountThemeControl(root, { document, t, value: 'system', onChange: next => value = next });
+  assert.deepEqual(theme.children.map(button => button.dataset.value), ['system', 'light', 'dark']);
+  assert.equal(theme.children[0].getAttribute('aria-pressed'), 'true');
+  await theme.children[2].dispatch('click'); assert.equal(value, 'dark'); assert.equal(theme.children[2].getAttribute('aria-pressed'), 'true'); assert.equal(theme.children[0].getAttribute('aria-pressed'), 'false');
+  const language = mountLanguageControl(root, { document, t, value: 'zh', onChange: next => locale = next });
+  assert.equal(language.id, 'locale-toggle'); assert.deepEqual(language.children.map(button => button.textContent), ['中文', 'English']);
+  await language.children[1].dispatch('click'); assert.equal(locale, 'en');
 });
 
 test('settings instance status follows the current detail level', () => {
@@ -216,7 +244,9 @@ test('removed header entry selectors have no startup bindings and account contro
     assert.equal(html.includes('id="' + selector + '"'), false, 'obsolete node ' + selector);
   }
   const header = html.slice(html.indexOf('<header'), html.indexOf('</header>'));
-  for (const id of ['locale-toggle', 'fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
+  for (const id of ['fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
+  assert.equal(html.includes('id="locale-toggle"'), false, 'the language choice is built inside the settings page');
+  assert.match(app, /mountLanguageControl\(settingsPage\.prefs\.lang, \{ t, value: getLocale\(\), onChange: changeLocale \}\);/);
   assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=100/); assert.match(html, /style\.css\?v=60/);
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());
@@ -252,7 +282,7 @@ test('unknown override count retains search and failed search preserves the flat
   context.mock.timers.enable({apis:['setTimeout']});
   const document=documentFixture(),root=document.createElement('div');const panel=renderDefaults(root,{snapshot:snapshot(),page:null,document,t,read:async()=>{throw Error('502');}});
   const input=root.querySelector('#settings-overrides-search');assert.ok(input);
-  const flat=root.querySelectorAll('button').find(n=>n.textContent==='Name a').parentElement;
+  const flat=root.querySelectorAll('button').find(n=>n.textContent.startsWith('Name a')).parentElement;
   input.value='gone';await input.dispatch('input');context.mock.timers.tick(300);await tick();
   assert.equal(flat.hidden,false);assert.ok(flat.textContent.includes('Name a'));assert.ok(root.textContent.includes('wb.readFailed'));panel.destroy();
 });
@@ -268,21 +298,22 @@ test('default controls retain the restart lock after an accepted runtime change'
   const document = documentFixture(), root = document.createElement('div');
   let writable = true;
   const meta = { current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } };
-  const panel = renderDefaults(root, { snapshot: snapshot(), page: {}, metadata: { claude: meta, codex: meta }, document, t,
+  const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
+  const panel = renderDefaults(root, { snapshot: healthy, page: {}, metadata: { claude: meta, codex: meta }, document, t,
     read: async () => ({}), writable: () => writable,
-    execute: async () => { writable = false; root.querySelectorAll('button, select, input').forEach(control => { control.disabled = true; }); return true; } });
-  await root.querySelector('#settings-use-claude').dispatch('click');
-  for (const runtime of ['claude', 'codex']) {
-    for (const id of ['settings-use-', 'settings-save-model-', 'settings-save-effort-', 'settings-model-', 'settings-effort-'])
-      assert.equal(root.querySelector('#' + id + runtime).disabled, true, id + runtime);
-  }
+    execute: async () => { writable = false; return true; } });
+  await root.querySelector('#settings-use-codex').dispatch('click');
+  await root.querySelector('#settings-save-runtime').dispatch('click');
+  for (const id of ['settings-use-claude', 'settings-use-codex', 'settings-save-runtime', 'settings-save-models', 'settings-model-claude', 'settings-effort-claude', 'settings-model-codex', 'settings-effort-codex'])
+    assert.equal(root.querySelector('#' + id).disabled, true, id);
   panel.destroy();
 });
 
-test('the plain settings view shows this page\'s Dashboard version and leaves the rest technical', () => {
+test('the version row shows Dashboard, zylos with its update hint and the engine CLI in both views', () => {
   const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button');
-  renderVersion(root, { zylos_version: '3', cc_version: '2' }, { document, upgrade, t, dashboardVersion: '0.7.0', level: 'plain' });
-  assert.match(root.textContent, /Dashboard · v0\.7\.0/); assert.doesNotMatch(root.textContent, /zylos|CC/);
+  renderVersion(root, { zylos_version: '3', zylos_update: '4', cc_version: '2' }, { document, upgrade, t, dashboardVersion: '0.7.0' });
+  assert.match(root.textContent, /Dashboard · v0\.7\.0/); assert.match(root.textContent, /zylos · v3/); assert.match(root.textContent, /CC · v2/);
+  assert.ok(root.querySelector('#settings-zylos-update')); assert.equal(root.querySelector('button'), root.querySelector('#settings-zylos-update'));
   renderVersion(root, { zylos_version: '3', cc_version: '2' }, { document, upgrade, t, dashboardVersion: null });
-  assert.match(root.textContent, /Dashboard · wb\.unknown/); assert.match(root.textContent, /zylos · v3/);
+  assert.match(root.textContent, /Dashboard · wb\.unknown/);
 });
