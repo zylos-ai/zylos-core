@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { renderStateSkeleton } from '../state-format.js';
 import { projectC4Content } from '../../../comm-bridge/scripts/c4-content-projection.js';
 import { escapeText } from '../../../comm-bridge/scripts/c4-query-format.js';
+import { CONTENT_PREFIX, parseC4Content } from '../../../comm-bridge/scripts/c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const row = (content, id = 7) => ({ id, content, timestamp: '2026-11-07T00:00:00Z', sessionGroup: 'demo:a', channel: 'demo', endpointId: 'room' });
@@ -30,4 +31,32 @@ test('working state contains only invalid-content references for marked damage a
   const plain = 'plain text\nwith \\ escapes';
   assert.ok(render([row(plain)]).includes(escapeText(plain)));
   assert.ok(render([row('')]).includes('（无正文）'));
+});
+
+// Actual memory-state formatter and shared fixtures; run for View/projection or
+// memory body-budget changes. Pure calls only, no memory store or runtime IO.
+test('valid degraded and overdeep Views leave memory projection byte-identical', () => {
+  const shared = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
+  const view = structuredClone(shared.views.find(item => item.name === 'balanced_columns').view);
+  const unknown = { ...structuredClone(view), schemaVersion: 99 };
+  const overdeep = structuredClone(view); overdeep.nodes[1].extra = { b: { c: 'VIEW_ONLY_SECRET' } };
+  for (const long of [false, true]) {
+    const envelope = structuredClone(shared.message);
+    envelope.blocks[0].data.text = 'CONTENT_ONLY_SECRET' + 'x'.repeat(30000);
+    if (long) envelope.fallbackText = 'Visible summary ' + '中'.repeat(1000);
+    const content = CONTENT_PREFIX + JSON.stringify(envelope);
+    const expected = render([row(content)]);
+    for (const [layout, valid] of [[view, true], [unknown, false], [overdeep, false]]) {
+      const withView = CONTENT_PREFIX + JSON.stringify({ ...envelope, metadata: { view: layout } });
+      const parsed = parseC4Content(withView);
+      assert.equal(parsed.kind, 'envelope');
+      assert.equal(parsed.view !== null, valid);
+      assert.equal(render([row(withView)]), expected);
+      assert.equal(expected.includes('CONTENT_ONLY_SECRET'), false);
+      assert.equal(expected.includes('VIEW_ONLY_SECRET'), false);
+      assert.equal(expected.includes('"nodes"'), false);
+      if (parsed.viewError) assert.equal(expected.includes(parsed.viewError), false);
+    }
+    assert.equal(expected.includes('截断，全文见 #7'), long);
+  }
 });

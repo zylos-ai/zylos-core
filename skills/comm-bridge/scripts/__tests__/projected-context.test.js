@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONTENT_PREFIX } from '../c4-content-schema.js';
+import { CONTENT_PREFIX, parseC4Content } from '../c4-content-schema.js';
 import { projectC4Content } from '../c4-content-projection.js';
 import { formatConversation } from '../router/format.js';
 import { replyVia } from '../c4-query-format.js';
@@ -211,4 +211,55 @@ test('startup budgets count projected messages and preserve ordinary whole-messa
   // Global scope migration is an existing separate startup concern.
   const single = await emitC4Conversations({ agent_id: 'fixture-child' });
   checkVisible(single, rows[0]);
+});
+
+// Real Core formatters, startup packer and spill files; run for View/projection
+// changes, skip unrelated UI. Storage opens are forbidden above; transports are
+// injected, files stay under the mandatory runner's private ZYLOS_DIR.
+test('View metadata stays absent from Core default reading long packets startup and spill', async () => {
+  const shared = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
+  const view = structuredClone(shared.views.find(item => item.name === 'balanced_columns').view);
+  const unknown = { ...structuredClone(view), schemaVersion: 99 };
+  const overdeep = structuredClone(view); overdeep.nodes[1].extra = { b: { c: 'VIEW_ONLY_SECRET' } };
+  for (const [name, layout, valid] of [['valid', view, true], ['unknown', unknown, false], ['overdeep', overdeep, false]]) {
+    const envelope = structuredClone(shared.message);
+    envelope.blocks[0].data.text = 'CONTENT_ONLY_SECRET' + 'x'.repeat(30000);
+    const noView = encode(envelope), withView = encode({ ...envelope, metadata: { view: layout } });
+    const parsed = parseC4Content(withView);
+    assert.equal(parsed.kind, 'envelope', name);
+    assert.equal(parsed.view !== null, valid, name);
+    const row = { ...sample('question', 950), content: noView };
+    const plain = actualDb.formatConversations([row]);
+    assert.equal(actualDb.formatConversations([{ ...row, content: withView }]), plain, name);
+    assert.equal(actualDb.formatConversationsForAgent([{ ...row, content: withView }]),
+      actualDb.formatConversationsForAgent([row]), name);
+    assert.equal(plain.includes('CONTENT_ONLY_SECRET'), false);
+    assert.equal(plain.includes('VIEW_ONLY_SECRET'), false);
+    if (parsed.viewError) assert.equal(plain.includes(parsed.viewError), false);
+    assert.equal(plain.includes('TRUNCATED'), false, 'raw packet length does not consume the output budget');
+
+    scopeMode = 'multi'; rows = [row];
+    const startup = await emitC4Conversations({});
+    const budget = { maxChars: startup.length + 200, maxTokens: 100000 };
+    rows = [{ ...row, content: withView }];
+    assert.equal(await emitC4Conversations({}, budget), startup, name);
+
+    envelope.fallbackText = 'Visible long summary ' + '中'.repeat(1000);
+    const plainLong = { ...row, content: encode(envelope) };
+    const viewLong = { ...row, content: encode({ ...envelope, metadata: { view: layout } }) };
+    for (const format of [value => formatConversation(value), value => actualDb.formatConversationsForAgent([value])]) {
+      const expectedPreview = format(plainLong);
+      const file = path.join(ATTACHMENTS_DIR, 'conv-950', 'message.txt');
+      const expectedFull = fs.readFileSync(file, 'utf8');
+      assert.equal(format(viewLong), expectedPreview, name);
+      const full = fs.readFileSync(file, 'utf8');
+      assert.equal(full, expectedFull, name);
+      assert.equal(full.includes('VIEW_ONLY_SECRET'), false);
+      assert.equal(full.includes('CONTENT_ONLY_SECRET'), false);
+      assert.equal(full.includes('"nodes"'), false);
+      if (parsed.viewError) assert.equal(full.includes(parsed.viewError), false);
+    }
+  }
+  assert.equal(databaseOpens, 0);
+  assert.equal(dashboardCalls, 0);
 });

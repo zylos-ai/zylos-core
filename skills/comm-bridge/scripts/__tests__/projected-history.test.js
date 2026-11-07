@@ -9,7 +9,7 @@ import { fixture as storeFixture } from './c4-v2-test-helpers.js';
 import { createQueryHandlers } from '../c4-v2-cli.js';
 import { escapeText } from '../c4-query-format.js';
 import { projectC4Content } from '../c4-content-projection.js';
-import { CONTENT_PREFIX } from '../c4-content-schema.js';
+import { CONTENT_PREFIX, parseC4Content } from '../c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url)));
 const hidden = 'host_only_secret_1987';
@@ -220,5 +220,34 @@ test('CLI and SQL documentation preserve projection and direct-insert boundaries
   for (const text of [skill, usage]) {
     assert.ok(text.includes('projectC4Content(content, { c4Id: row.id })'));
     assert.ok(text.includes('insert out dashboard')); assert.match(text, /bypasses\s+BeforeSend/);
+  }
+});
+
+// Default public reader integration: one real private SQLite row is read via
+// the actual CLI before/after only its View metadata changes. Run for View or
+// public projection changes; skip unrelated runtime/UI work. The fixture above
+// verifies every owned path and bounds children to 5s; no services or network.
+test('default CLI reading ignores valid unknown and overdeep View metadata', t => {
+  const f = fixture(t);
+  const shared = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
+  const envelope = structuredClone(shared.message);
+  envelope.blocks[0].data.text = 'CONTENT_ONLY_SECRET' + 'x'.repeat(30000);
+  const content = encode(envelope);
+  const saved = f.store.insertConversation('out', 'dashboard', 'route', content, { groupName: 'alpha' });
+  const args = ['--begin', String(saved.id), '--end', String(saved.id)];
+  const expected = f.invoke('../c4-fetch.js', args);
+  assert.ok(expected.includes(envelope.fallbackText));
+  assert.equal(expected.includes('CONTENT_ONLY_SECRET'), false);
+  const view = structuredClone(shared.views.find(item => item.name === 'balanced_columns').view);
+  const unknown = { ...structuredClone(view), schemaVersion: 99 };
+  const overdeep = structuredClone(view); overdeep.nodes[1].extra = { b: { c: 'VIEW_ONLY_SECRET' } };
+  for (const [layout, valid] of [[view, true], [unknown, false], [overdeep, false]]) {
+    const withView = encode({ ...envelope, metadata: { view: layout } });
+    const parsed = parseC4Content(withView);
+    assert.equal(parsed.kind, 'envelope');
+    assert.equal(parsed.view !== null, valid);
+    f.db.prepare('UPDATE conversations SET content=? WHERE id=?').run(withView, saved.id);
+    assert.equal(f.invoke('../c4-fetch.js', args), expected);
+    assert.equal(f.db.prepare('SELECT content FROM conversations WHERE id=?').get(saved.id).content, withView);
   }
 });

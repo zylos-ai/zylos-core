@@ -10,6 +10,7 @@ const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c
 const encode = envelope => CONTENT_PREFIX + JSON.stringify(envelope);
 const secret = 'HOST_SECRET_SENTINEL';
 const invalid = '[C4 content invalid; c4_id=123]';
+const viewFixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
 
 for (const fixture of fixtures.ordinary) test(`projection preserves ordinary ${fixture.name}`, () => {
   assert.equal(projectC4Content(fixture.content, { c4Id: 123 }), fixture.content);
@@ -139,4 +140,20 @@ test('public projection entry loads with an empty component directory and no sto
     else process.env.ZYLOS_DIR = previousZylosDir;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// Shared Content/View boundary only. Run for parser/projection changes; skip
+// unrelated storage or UI work. No database, transport or component is loaded.
+for (const fixture of viewFixtures.views) test(`View ${fixture.name} leaves model projection byte-identical`, () => {
+  const base = structuredClone(viewFixtures.message), withView = structuredClone(base);
+  withView.metadata = { view: structuredClone(fixture.view) };
+  const original = encode(withView), parsed = parseC4Content(original);
+  assert.equal(parsed.kind, 'envelope');
+  assert.equal(parsed.view === null, !fixture.valid);
+  assert.equal('viewError' in parsed, !fixture.valid);
+  const expected = `${base.fallbackText}\n[C4 messageId=${base.messageId} interruptId=${base.interruptId}; c4_id=123]`;
+  assert.equal(projectC4Content(encode(base), { c4Id: 123 }), expected);
+  assert.equal(projectC4Content(original, { c4Id: 123 }), expected);
+  if (parsed.viewError) assert.equal(expected.includes(parsed.viewError), false);
+  assert.equal(encode(withView), original, 'projection does not rewrite the stored packet');
 });

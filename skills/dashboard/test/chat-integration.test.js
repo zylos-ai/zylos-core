@@ -10,9 +10,14 @@
 // skips all work. No live history, PM2, tmux socket or model is used here.
 import strictAssert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { createChatApiFixture, createRemoteChatApiFixture, questionContent, assertChatProcessIsolation } from './helpers/chat-integration-api.js';
+import { acceptDelivery } from '../src/lib/chat/channel.js';
+import { makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
+
+const conditionalFixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
 
 let assertionCount = 0;
 const assert = new Proxy(strictAssert, { get(target, key) {
@@ -83,6 +88,94 @@ registerIntegrationCase('HTTP conversation, channel question and conditional ans
     assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 1);
   } finally { await otherSandbox.close(); }
 });
+
+// Boundary: authoritative C4 channel registration -> HTTP/AuthGate -> saved
+// conditional validation -> Dashboard transaction -> real in-process receive.
+// Run for conditional answers or saved-question changes; unrelated UI may skip.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are
+// read back before resources start, and reclaimed on completion/failure/timeout.
+for (const example of conditionalFixtures.answers) {
+  registerIntegrationCase(`HTTP conditional answer validates ${example.name}`, async (t, sandbox) => {
+    const a = await createChatApiFixture(t, sandbox);
+    const active = await a.createConversation();
+    const question = structuredClone(conditionalFixtures.formQuestion);
+    question.questionSummary = makeQuestionSummary(question);
+    const outbound = a.addOutbound(active.draft.localId, questionContent(question));
+    const body = a.answer(question, `http_${example.name}`);
+    body.action.payload = { values: structuredClone(example.values) };
+    const before = a.counts.receive;
+    const result = await a.request(active.route + '/answers', post(body));
+    if (!example.valid) {
+      assert.equal(result.status, 400);
+      assert.deepEqual(result.body, { error: 'invalid_chat_answer' });
+      assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
+      assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 0);
+      assert.equal(a.answerRows(body.action.id).length, 0);
+      assert.equal(a.counts.receive, before);
+      assert.equal(a.answers.question(outbound.session_group, question.interruptId).status, 'paused');
+      return;
+    }
+    assert.equal(result.status, 200);
+    assert.equal(result.body.delivery.stored, true);
+    assert.equal(a.counts.receive, before + 1);
+    const rows = a.answerRows(body.action.id);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].endpoint_id, active.draft.localId);
+    assert.equal(rows[0].session_group, outbound.session_group);
+    const parsed = parseC4Content(rows[0].content);
+    assert.equal(parsed.kind, 'envelope');
+    assert.equal(parsed.envelope.version, 1);
+    assert.equal(parsed.envelope.action.protocolVersion, '0.1');
+    assert.deepEqual(parsed.envelope.action.context, body.action.context);
+    assert.deepEqual(parsed.envelope.action.payload.values, example.values);
+    assert.equal(parsed.envelope.questionSummary, question.questionSummary);
+    assert.equal(parsed.envelope.metadata.zylos.answerId, body.action.id);
+    assert.equal((await a.request(active.route + '/answers', post(body))).status, 200);
+    assert.equal(a.counts.receive, before + 1);
+    assert.equal(a.answerRows(body.action.id).length, 1);
+    assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 1);
+    assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 1);
+  });
+}
+
+// Boundary: historical View degradation must not block channel registration or
+// HTTP answers. Run for parser/registration/saved-constraint changes; UI may skip.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are
+// read back before resources start, and reclaimed on completion/failure/timeout.
+for (const [name, view, legal] of [
+  ['legal', { schemaVersion: 1, root: 'layout', nodes: [{ id: 'layout', type: 'block', blockId: 'customer_form' }] }, true],
+  ['scalar', 1, false],
+  ['unknown', { schemaVersion: 99, root: 'layout', nodes: [] }, false],
+  ['overdeep', { schemaVersion: 1, root: 'layout', nodes: [{ id: 'layout', type: 'block', blockId: 'customer_form', extra: { b: { c: 1 } } }] }, false],
+]) {
+  registerIntegrationCase(`HTTP conditional answer survives ${name} historical View`, async (t, sandbox) => {
+    const a = await createChatApiFixture(t, sandbox);
+    const active = await a.createConversation();
+    const question = structuredClone(conditionalFixtures.formQuestion);
+    question.questionSummary = makeQuestionSummary(question);
+    question.metadata = { view };
+    const content = questionContent(question), parsed = parseC4Content(content);
+    assert.equal(parsed.kind, 'envelope');
+    assert.equal('viewError' in parsed, !legal);
+    // Bad Views cannot be produced today. Insert an actual historical C4 row,
+    // then use the real channel's authoritative readback and registration.
+    const row = a.c4.insertConversation('out', 'dashboard', active.draft.localId, content, { groupName: active.draft.localId });
+    acceptDelivery({ version: 1, c4_id: row.id, channel: row.channel, endpoint_id: row.endpoint_id,
+      session_group: row.session_group, content }, { env: sandbox.env });
+    const saved = a.answers.question(row.session_group, question.interruptId);
+    assert.deepEqual(JSON.parse(saved.constraints), { block: question.blocks[0], interrupt: question.interrupt });
+    const page = await a.request(active.route + '/questions');
+    assert.equal(page.status, 200); assert.equal(page.body.items.length, 1);
+    const body = a.answer(question, `http_view_${name}`);
+    body.action.payload = { values: { customer_type: 'person' } };
+    const before = a.counts.receive;
+    const result = await a.request(active.route + '/answers', post(body));
+    assert.equal(result.status, 200); assert.equal(result.body.delivery.stored, true);
+    assert.equal(a.counts.receive, before + 1);
+    assert.equal(a.answerRows(body.action.id).length, 1);
+    assert.equal(a.db.prepare('SELECT content FROM conversations WHERE id=?').get(row.id).content, content);
+  });
+}
 
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
 registerIntegrationCase('receive failures and lost receipts preserve commit evidence across delivery restart without automatic sends', async (t, sandbox) => {
