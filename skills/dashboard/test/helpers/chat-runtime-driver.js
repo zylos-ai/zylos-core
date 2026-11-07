@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createChatSandbox } from './chat-integration-harness.js';
-import { nativeRuntimeEnvironment, retainNativeFailure, writeNativeRuntimeManifest } from './chat-runtime-support.js';
+import { retainNativeFailure, writeNativeRuntimeManifest } from './chat-runtime-support.js';
 
 // A standalone process is required: product configuration modules capture env
 // on first import. No module is re-evaluated and no production source is edited.
@@ -14,7 +14,6 @@ assert.ok(['claude', 'codex', 'ttl'].includes(scenario));
 const fixture = JSON.parse(fixtureConfiguration);
 const sandbox = createChatSandbox(null, { runtime: true, existingRoot: parentRoot });
 assert.ok(sandbox);
-nativeRuntimeEnvironment(sandbox);
 const packageRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const root = sandbox.paths.zylos;
 const bin = path.join(root, 'bin');

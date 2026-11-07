@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
-import { nativeRuntimeEnvironment, retainNativeFailure, runtimeProxyNames, writeNativeRuntimeManifest } from './helpers/chat-runtime-support.js';
+import { retainNativeFailure, runtimeProxyNames, writeNativeRuntimeManifest } from './helpers/chat-runtime-support.js';
 
 // Claude: real Supervisor admission, Core receive/router/delivery and native
 // Claude session, then Dashboard questions/answers and same-group continuation.
@@ -58,7 +58,6 @@ for (const [name, scenario, accounts] of [
     fixture[runtime] = { authDirectory: directory, ...(binary ? { binary } : {}) };
   }
   const sandbox = createChatSandbox(t, { runtime: true });
-  nativeRuntimeEnvironment(sandbox);
   const tmux = fixture.tmuxBinary;
   let completed = false, childResult;
   // A model CLI can outlive its launcher if it is held by a tmux daemon. The
@@ -106,7 +105,7 @@ for (const [name, scenario, accounts] of [
 test('native fixture shares Claude onboarding config and preserves proxy launch environment', { skip: !chatEnabled() }, async t => {
   const proxies = Object.fromEntries(runtimeProxyNames.map(key => [key, `http://fixture-${key}.invalid:8080`]));
   const sandbox = createChatSandbox(t, { gateEnv: { ...process.env, ...proxies } });
-  const env = nativeRuntimeEnvironment(sandbox);
+  const env = sandbox.env;
   assert.equal(Object.hasOwn(env, 'CLAUDE_CONFIG_DIR'), false);
   fs.mkdirSync(path.join(sandbox.paths.zylos, '.zylos'), { recursive: true });
   writeNativeRuntimeManifest(sandbox.paths.zylos, path.dirname(process.execPath));
@@ -132,24 +131,46 @@ test('native failure evidence survives sandbox removal without copying auth or e
   const runtimeLog = path.join(sandbox.paths.zylos, 'activity-monitor/native-fixture.log');
   fs.mkdirSync(path.dirname(runtimeLog), { recursive: true });
   sandbox.env.HTTPS_PROXY = 'http://fixture-user:fixture-password@proxy.invalid:8080';
-  fs.writeFileSync(runtimeLog, 'x'.repeat(100000) + '\nrefreshToken="synthetic-secret"\n' + sandbox.env.HTTPS_PROXY);
-  fs.writeFileSync(path.join(sandbox.paths.home, '.claude/.credentials.json'), 'DO_NOT_COPY_CREDENTIAL_FILE');
+  const claudeCredentials = { claudeAiOauth: { accessToken: 'fixture-claude-access-value', refreshToken: 'fixture-claude-refresh-value' },
+    nested: ['fixture-nested-"quoted"-secret'] };
+  const codexCredentials = { tokens: { id_token: 'fixture-codex-id-value', account_id: 'fixture-codex-account-value' } };
+  const credentialValues = [claudeCredentials.claudeAiOauth.accessToken, claudeCredentials.claudeAiOauth.refreshToken,
+    ...claudeCredentials.nested, codexCredentials.tokens.id_token, codexCredentials.tokens.account_id];
+  const claudeAuthFile = path.join(sandbox.paths.home, '.claude/.credentials.json');
+  fs.writeFileSync(claudeAuthFile, JSON.stringify(claudeCredentials));
+  fs.writeFileSync(path.join(sandbox.paths.home, '.codex/auth.json'), JSON.stringify(codexCredentials));
+  const genericSecrets = ['sk-ant-oat01-fixture-bare-secret', 'sk-ant-fixture-environment-secret',
+    'sk-ant-api03-fixture-api-secret', 'sk-ant-sid01-fixture-session-secret', 'eyJfixture.eyJpayload.fixturesignature'];
+  const secretOutput = [JSON.stringify(claudeCredentials), JSON.stringify(codexCredentials), ...credentialValues,
+    genericSecrets[0], `CLAUDE_CODE_OAUTH_TOKEN=${genericSecrets[1]}`, `x-api-key: ${genericSecrets[2]}`,
+    `sessionKey=${genericSecrets[3]}`, `id-token: ${genericSecrets[4]}`, 'Bearer synthetic-bearer-secret',
+    'refreshToken="synthetic-secret"', sandbox.env.HTTPS_PROXY].join('\n');
+  fs.writeFileSync(runtimeLog, 'x'.repeat(100000) + '\n' + secretOutput);
+  fs.symlinkSync(claudeAuthFile, path.join(sandbox.paths.zylos, 'activity-monitor/supervisor-events.jsonl'));
   const executable = path.join(sandbox.paths.tmp, 'capture-fixture');
   const commands = path.join(sandbox.paths.tmp, 'capture-commands.jsonl');
-  fs.writeFileSync(executable, `#!${process.execPath}\nimport fs from 'node:fs';\nconst args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(commands)}, JSON.stringify(args)+'\\n');\nprocess.stdout.write(args.includes('list-panes')?'%1\\n%2\\n%3\\n%4\\n%5\\n%6\\n':'Synthetic model terminal\\n');\n`, { mode: 0o700 });
+  fs.writeFileSync(executable, `#!${process.execPath}\nimport fs from 'node:fs';\nconst args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(commands)}, JSON.stringify(args)+'\\n');\nprocess.stdout.write(args.includes('list-panes')?'%1\\n%2\\n%3\\n%4\\n%5\\n%6\\n':${JSON.stringify('Synthetic model terminal\n' + secretOutput)});\n`, { mode: 0o700 });
   assert.throws(() => retainNativeFailure(sandbox, { directory: path.join(sandbox.root, 'forbidden-evidence'), scenario: 'controlled', tmuxBinary: executable }), /outlive the sandbox/);
-  const receipt = retainNativeFailure(sandbox, { directory: target, scenario: 'controlled', tmuxBinary: executable, error: Error('controlled native failure') });
+  const receipt = retainNativeFailure(sandbox, { directory: target, scenario: 'controlled', tmuxBinary: executable,
+    error: Error('controlled native failure\n' + secretOutput), stdout: secretOutput, stderr: secretOutput });
   assert.ok(receipt.files.includes('pane-1.log'));
   assert.ok(receipt.files.includes('activity-monitor_native-fixture.log'));
+  assert.equal(receipt.files.includes('activity-monitor_supervisor-events.jsonl'), false, 'Credential-targeting log symlink is skipped');
+  assert.equal(fs.existsSync(path.join(receipt.directory, 'activity-monitor_supervisor-events.jsonl')), false);
   const invocations = fs.readFileSync(commands, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.equal(invocations.length, 5, 'At most four panes are captured');
   for (const args of invocations) { assert.equal(args[0], '-S'); assert.equal(args[1], sandbox.paths.socket); }
   for (const file of receipt.files) {
     const bytes = fs.readFileSync(path.join(receipt.directory, file));
     assert.ok(bytes.length <= 65536);
-    for (const secret of ['synthetic-secret', sandbox.env.HTTPS_PROXY, 'DO_NOT_COPY_CREDENTIAL_FILE']) assert.equal(bytes.includes(secret), false);
+    for (const secret of ['synthetic-secret', 'synthetic-bearer-secret', sandbox.env.HTTPS_PROXY, ...credentialValues, ...genericSecrets]) {
+      assert.equal(bytes.includes(secret), false, 'Captured output must not retain a synthetic credential');
+      assert.equal(bytes.includes(JSON.stringify(secret).slice(1, -1)), false, 'JSON-escaped credential must also be redacted');
+    }
   }
-  assert.equal(fs.readFileSync(path.join(receipt.directory, 'pane-1.log'), 'utf8'), 'Synthetic model terminal\n');
+  const pane = fs.readFileSync(path.join(receipt.directory, 'pane-1.log'), 'utf8');
+  assert.ok(pane.startsWith('Synthetic model terminal\n'));
+  assert.ok(pane.includes('[REDACTED]'), 'The synthetic pane really contained credential-bearing output');
   await sandbox.close();
   assert.equal(fs.existsSync(sandbox.root), false);
   assert.equal(fs.existsSync(path.join(receipt.directory, 'failure.log')), true);

@@ -26,7 +26,7 @@ export function createChatSandbox(t, { runtime = false, gateEnv = process.env, e
     assert.match(path.basename(root), /^c-[A-Za-z0-9]{6}$/);
     parentTmp = path.dirname(root);
     assert.equal(gateEnv.ZYLOS_CHAT_SANDBOX_PARENT, parentTmp, 'Child must inherit its parent allocation boundary');
-    for (const [key, leaf] of [['HOME', 'home'], ['ZYLOS_DIR', 'instance'], ['PM2_HOME', 'pm2'], ['TMPDIR', 'tmp']]) {
+    for (const [key, leaf] of [['HOME', 'home'], ['ZYLOS_DIR', 'instance'], ['PM2_HOME', 'pm2'], ['TMPDIR', 'tmp'], ['CODEX_HOME', 'home/.codex']]) {
       assert.equal(gateEnv[key], path.join(root, leaf), 'Child must reuse its parent-proven case');
       assert.equal(fs.realpathSync(gateEnv[key]), gateEnv[key], 'Reused paths must remain canonical');
     }
@@ -50,7 +50,7 @@ export function createChatSandbox(t, { runtime = false, gateEnv = process.env, e
   const env = {
     PATH: gateEnv.PATH || '/usr/bin:/bin', HOME: paths.home, ZYLOS_DIR: paths.zylos,
     PM2_HOME: paths.pm2, TMPDIR: paths.tmp, TMUX_TMPDIR: paths.tmp,
-    CODEX_HOME: path.join(paths.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(paths.home, '.claude'),
+    CODEX_HOME: path.join(paths.home, '.codex'),
     ZYLOS_CHAT_SANDBOX_PARENT: parentTmp,
     ZYLOS_CHAT_INTEGRATION: '1', ...(runtime ? { ZYLOS_CHAT_RUNTIME: '1' } : {}),
     ...(gateEnv.NODE_OPTIONS ? { NODE_OPTIONS: gateEnv.NODE_OPTIONS } : {}),
@@ -69,11 +69,12 @@ export function createChatSandbox(t, { runtime = false, gateEnv = process.env, e
   function assertIsolation({ env: checkedEnv = env, socket = paths.socket,
     databases: checkedDbs = [paths.c4Db, paths.dashboardDb] } = {}) {
     assert.ok(!closed, 'Chat sandbox is closed');
-    for (const [key, expected] of [['HOME', paths.home], ['ZYLOS_DIR', paths.zylos], ['PM2_HOME', paths.pm2], ['TMPDIR', paths.tmp]]) {
+    for (const [key, expected] of [['HOME', paths.home], ['ZYLOS_DIR', paths.zylos], ['PM2_HOME', paths.pm2], ['TMPDIR', paths.tmp], ['CODEX_HOME', path.join(paths.home, '.codex')]]) {
       assert.equal(checkedEnv[key], expected, `${key} must name this case's private directory`);
       assert.equal(fs.realpathSync(checkedEnv[key]), expected, `${key} may not redirect through a symlink`);
     }
     assert.equal(checkedEnv.TMUX_TMPDIR, paths.tmp, 'tmux temporary directory must be private');
+    assert.equal(checkedEnv.CLAUDE_CONFIG_DIR, undefined, 'Claude must use the private HOME default config');
     assert.equal(checkedEnv.ZYLOS_CHAT_SANDBOX_PARENT, parentTmp, 'Parent allocation boundary must be preserved');
     assert.equal(typeof socket, 'string', 'An explicit private tmux socket is required');
     assert.equal(socket, paths.socket, 'An explicit private tmux socket is required');
@@ -86,7 +87,8 @@ export function createChatSandbox(t, { runtime = false, gateEnv = process.env, e
       if (fs.existsSync(filename)) assert.equal(fs.realpathSync(filename), filename, 'Database may not redirect through a symlink');
     }
     return { root, HOME: checkedEnv.HOME, ZYLOS_DIR: checkedEnv.ZYLOS_DIR, PM2_HOME: checkedEnv.PM2_HOME,
-      TMPDIR: checkedEnv.TMPDIR, socket, databases: [...checkedDbs] };
+      TMPDIR: checkedEnv.TMPDIR, TMUX_TMPDIR: checkedEnv.TMUX_TMPDIR, CODEX_HOME: checkedEnv.CODEX_HOME,
+      socket, databases: [...checkedDbs] };
   }
 
   function openDatabase(filename, factory, proof) {
@@ -115,8 +117,9 @@ export function createChatSandbox(t, { runtime = false, gateEnv = process.env, e
     // A supplied proof may narrow socket/DB evidence, but cannot substitute a
     // different environment for the bytes actually passed to spawn.
     assertIsolation({ ...options.proof, env: childEnv });
+    assert.ok(!Object.hasOwn(options, 'cwd') || options.cwd === paths.zylos, 'Child working directory must name this case instance');
     counts.runtime++; starts.runtime++;
-    const child = spawn(command, args, { cwd: paths.zylos, ...options, env: childEnv,
+    const child = spawn(command, args, { ...options, cwd: paths.zylos, env: childEnv,
       detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     children.add(child); allChildren.add(child);
     const deadline = setTimeout(() => killChild(child), options.timeoutMs || 30_000);
@@ -155,7 +158,15 @@ export function createChatSandbox(t, { runtime = false, gateEnv = process.env, e
       // Stop producers before closing database files and removing their roots.
       try {
         for (const child of allChildren) await attempt(() => killChild(child));
-        await attempt(() => Promise.all([...allChildren].map(child => child.completion)));
+        await attempt(async () => {
+          let timer;
+          try {
+            await Promise.race([
+              Promise.all([...allChildren].map(child => child.completion)),
+              new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Chat child cleanup timed out')), 10_000); }),
+            ]);
+          } finally { clearTimeout(timer); }
+        });
         for (const server of servers) await attempt(async () => {
           server.closeAllConnections?.();
           if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

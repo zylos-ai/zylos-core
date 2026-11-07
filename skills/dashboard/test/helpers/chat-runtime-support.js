@@ -7,13 +7,6 @@ import { fileURLToPath } from 'node:url';
 export const runtimeProxyNames = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'];
 
-export function nativeRuntimeEnvironment(sandbox) {
-  // Core's Claude adapter confirms onboarding in HOME/.claude.json. Let the
-  // real CLI use that same default, rather than a second config-root file.
-  delete sandbox.env.CLAUDE_CONFIG_DIR;
-  return sandbox.env;
-}
-
 export function writeNativeRuntimeManifest(root, bin) {
   fs.writeFileSync(path.join(root, '.zylos/runtime-env.manifest'), [
     `path_prepend ${bin}`, ...['ZYLOS_PACKAGE_ROOT', 'CODEX_HOME', 'PM2_HOME', 'TMPDIR',
@@ -29,8 +22,9 @@ const logFiles = ['activity-monitor/native-fixture.log', 'activity-monitor/super
   'comm-bridge/router-events.jsonl', 'comm-bridge/receive-events.jsonl'];
 
 // Collect only this proven fixture's known runtime logs and terminal panes.
-// No home/auth/config/history directory is traversed or copied. Each call is
-// bounded to six 64KiB log tails, four 64KiB panes, and one small failure file.
+// Only the two copied sandbox auth JSON files are read to build an in-memory
+// redaction list; no auth/config/history file is copied to the evidence. Each
+// call retains at most six 64KiB log tails, four 64KiB panes and a failure file.
 export function retainNativeFailure(sandbox, { directory, scenario, tmuxBinary, error, stdout = '', stderr = '' } = {}) {
   sandbox.assertIsolation();
   assert.ok(path.isAbsolute(directory), 'Runtime evidence directory must be absolute');
@@ -40,10 +34,32 @@ export function retainNativeFailure(sandbox, { directory, scenario, tmuxBinary, 
   const canonical = fs.realpathSync(resolved);
   assert.ok(!within(sandbox.root, canonical) && !within(packageRoot, canonical), 'Runtime evidence directory may not redirect into sandbox or repository');
   const output = fs.mkdtempSync(path.join(canonical, `${scenario}-`));
-  const secrets = runtimeProxyNames.map(key => sandbox.env[key]).filter(value => typeof value === 'string' && value.length);
+  const secrets = new Set(runtimeProxyNames.map(key => sandbox.env[key]).filter(value => typeof value === 'string' && value.length));
+  for (const relative of ['.claude/.credentials.json', '.codex/auth.json']) {
+    const filename = path.join(sandbox.paths.home, relative);
+    try {
+      const stat = fs.lstatSync(filename);
+      assert.ok(stat.isFile() && !stat.isSymbolicLink() && within(sandbox.paths.home, fs.realpathSync(filename)),
+        'Redaction credentials must be copied files inside the sandbox home');
+      let credentials;
+      try { credentials = JSON.parse(fs.readFileSync(filename, 'utf8')); }
+      catch { throw Error('Cannot read sandbox credential JSON for failure redaction'); }
+      const pending = [credentials];
+      while (pending.length) {
+        const value = pending.pop();
+        if (typeof value === 'string' && value.length >= 8) {
+          secrets.add(value);
+          secrets.add(JSON.stringify(value).slice(1, -1));
+        } else if (value && typeof value === 'object') pending.push(...Object.values(value));
+      }
+    } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+  }
+  const literals = [...secrets].sort((left, right) => right.length - left.length);
   const redact = value => {
     let text = String(value ?? '');
-    for (const secret of secrets) text = text.replaceAll(secret, '[REDACTED_PROXY]');
+    for (const secret of literals) text = text.replaceAll(secret, '[REDACTED]');
+    text = text.replace(/sk-ant-[\w-]+/g, '[REDACTED]')
+      .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, '[REDACTED]');
     return text.replace(/(Bearer\s+)[^\s"']+/gi, '$1[REDACTED]')
       .replace(/("?(?:access_?token|refresh_?token|api_?key|password|authorization)"?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,}]+)/gi, '$1"[REDACTED]"');
   };
@@ -78,7 +94,7 @@ export function retainNativeFailure(sandbox, { directory, scenario, tmuxBinary, 
       if (capture.status !== 0) captureErrors.push(`capture-pane ${pane}: ${capture.error?.code || capture.status}`);
     }
   } catch (failure) { captureErrors.push(`tmux capture: ${failure.code || failure.message}`); }
-  save('failure.log', JSON.stringify({ scenario, message: String(error?.stack || error || '').slice(-16000),
-    stdout: stdout.slice(-16000), stderr: stderr.slice(-16000), captureErrors }, null, 2));
+  save('failure.log', JSON.stringify({ scenario, message: redact(String(error?.stack || error || '').slice(-16000)),
+    stdout: redact(stdout.slice(-16000)), stderr: redact(stderr.slice(-16000)), captureErrors: captureErrors.map(redact) }, null, 2));
   return { directory: output, files, captureErrors: captureErrors.map(redact) };
 }

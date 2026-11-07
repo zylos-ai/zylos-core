@@ -45,11 +45,15 @@ test('missing or realistic foreign isolation paths prevent HTTP and runtime star
   const outsideDbDirectory = path.join(sandbox.root, 'outside'); fs.mkdirSync(outsideDbDirectory);
   proofs.push({ socket: '/tmp/tmux-1000/default' }, { databases: [sandbox.paths.c4Db] },
     { databases: [sandbox.paths.c4Db, sandbox.paths.dashboardDb, path.join(outsideDbDirectory, 'c4.db')] },
-    { env: { ...sandbox.env, HOME: process.env.HOME } });
+    { env: { ...sandbox.env, HOME: process.env.HOME } },
+    { env: { ...sandbox.env, TMUX_TMPDIR: process.env.TMPDIR } },
+    { env: { ...sandbox.env, CODEX_HOME: path.join(process.env.HOME, '.codex') } },
+    { env: { ...sandbox.env, CLAUDE_CONFIG_DIR: path.join(sandbox.paths.home, '.claude') } });
   for (const proof of proofs) {
     const server = http.createServer();
     await assert.rejects(sandbox.startHttp(server, proof), { code: 'ERR_ASSERTION' });
-    const env = proof.env ? Object.fromEntries(Object.keys(sandbox.env).map(key => [key, proof.env[key]])) : undefined;
+    const env = proof.env ? Object.fromEntries([...new Set([...Object.keys(sandbox.env), ...Object.keys(proof.env)])]
+      .map(key => [key, proof.env[key]])) : undefined;
     assert.throws(() => sandbox.startChild(process.execPath, ['-e', 'process.exit(99)'], { proof, env }), { code: 'ERR_ASSERTION' });
     assert.equal(server.listening, false);
     assert.equal(sandbox.counts.http, 0);
@@ -58,7 +62,34 @@ test('missing or realistic foreign isolation paths prevent HTTP and runtime star
   assert.throws(() => sandbox.startChild(process.execPath, ['-e', 'process.exit(99)'], {
     env: { HOME: process.env.HOME }, proof: { env: sandbox.env },
   }), { code: 'ERR_ASSERTION' }, 'A valid proof.env cannot hide the actual foreign child HOME');
+  for (const cwd of [process.cwd(), null, undefined]) {
+    assert.throws(() => sandbox.startChild(process.execPath, ['-e', 'process.exit(99)'], {
+      cwd,
+    }), { code: 'ERR_ASSERTION' }, 'Child cwd cannot bypass the private instance');
+  }
   assert.equal(sandbox.counts.runtime, 0);
+});
+
+// Integration opt-in only: all expected env values stay unchanged while one
+// private directory redirects through a symlink; proof must reject before use.
+test('a redirected private directory prevents HTTP and child startup', { skip: !enabled }, async t => {
+  const sandbox = createChatSandbox(t);
+  const original = path.join(sandbox.root, 'original-tmp');
+  const redirected = path.join(sandbox.root, 'redirected-tmp');
+  fs.renameSync(sandbox.paths.tmp, original);
+  fs.mkdirSync(redirected);
+  fs.symlinkSync(redirected, sandbox.paths.tmp, 'dir');
+  try {
+    const server = http.createServer();
+    await assert.rejects(sandbox.startHttp(server), { code: 'ERR_ASSERTION' });
+    assert.throws(() => sandbox.startChild(process.execPath, ['-e', 'process.exit(99)']), { code: 'ERR_ASSERTION' });
+    assert.equal(server.listening, false);
+    assert.equal(sandbox.counts.http, 0);
+    assert.equal(sandbox.counts.runtime, 0);
+  } finally {
+    fs.unlinkSync(sandbox.paths.tmp);
+    fs.renameSync(original, sandbox.paths.tmp);
+  }
 });
 
 // Integration opt-in only: reuse inherits the exact parent HOME/ZYLOS_DIR,
@@ -68,6 +99,7 @@ test('child reuse validates the inherited root before allocating or starting res
   const before = chatResourceCounts();
   for (const [key, value] of [['HOME', process.env.HOME], ['ZYLOS_DIR', process.env.ZYLOS_DIR],
     ['PM2_HOME', process.env.PM2_HOME], ['TMPDIR', process.env.TMPDIR],
+    ['CODEX_HOME', path.join(process.env.HOME, '.codex')],
     ['ZYLOS_CHAT_SANDBOX_PARENT', process.env.TMPDIR + '/another-parent']]) {
     assert.throws(() => createChatSandbox(null, { existingRoot: sandbox.root,
       gateEnv: { ...sandbox.env, [key]: value } }), { code: 'ERR_ASSERTION' });
@@ -89,6 +121,7 @@ test('sandbox preserves explicit network proxies without inheriting account conf
   const sandbox = createChatSandbox(t, { gateEnv: { ...process.env, ...values, UNRELATED_ACCOUNT_SECRET: 'must-not-cross' } });
   for (const [key, value] of Object.entries(values)) assert.equal(sandbox.env[key], value);
   assert.equal(sandbox.env.UNRELATED_ACCOUNT_SECRET, undefined);
+  assert.equal(sandbox.env.CLAUDE_CONFIG_DIR, undefined);
 });
 
 async function lifecycle(t, failEarly) {
@@ -154,6 +187,23 @@ test('a failing cleanup still closes SQLite and removes copied authentication fi
   assert.equal(fs.existsSync(sandbox.root), false);
 });
 
+// Integration opt-in only: a real child has exited but its completion receipt
+// never settles. The private DB/root must still be cleaned after a bounded wait.
+test('stalled child completion cannot prevent later cleanup or private root removal', { skip: !enabled, timeout: 15_000 }, async () => {
+  const sandbox = createChatSandbox(null);
+  const { default: Database } = await import('better-sqlite3');
+  const database = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
+  const child = sandbox.startChild(process.execPath, ['-e', 'process.exit(0)']);
+  assert.equal((await child.completion).code, 0);
+  child.completion = new Promise(() => {});
+  let laterCleanup = false;
+  sandbox.addCleanup(() => { laterCleanup = true; });
+  await assert.rejects(sandbox.close(), /Chat child cleanup timed out/);
+  assert.equal(laterCleanup, true);
+  assert.equal(database.open, false);
+  assert.equal(fs.existsSync(sandbox.root), false);
+});
+
 // Integration opt-in only: private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB proof
 // precedes the output producer; no model/network/PM2 or default socket is used.
 test('output overflow terminates a real producer and recovers its child and private root', { skip: !enabled, timeout: 5000 }, async t => {
@@ -162,7 +212,7 @@ test('output overflow terminates a real producer and recovers its child and priv
   const limit = 2048;
   await sandbox.runCase(async () => {
     child = sandbox.startChild(process.execPath, [fileURLToPath(new URL('./helpers/chat-output-loop.js', import.meta.url))],
-      { maxOutputBytes: limit, timeoutMs: 3000 });
+      { maxOutputBytes: limit, timeoutMs: 10_000 });
     const result = await child.completion;
     assert.equal(result.outputExceeded, true);
     assert.ok(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) <= limit);
@@ -173,7 +223,7 @@ test('output overflow terminates a real producer and recovers its child and priv
     } };
     for (let n = 0; n < 50 && alive(descendant); n++) await delay(10);
     assert.equal(alive(descendant), false, 'Overflow also reaps the real descendant');
-  });
+  }, { timeoutMs: 2000 });
   assert.equal(sandbox.children.size, 0);
   assert.equal(fs.existsSync(sandbox.root), false);
 });
