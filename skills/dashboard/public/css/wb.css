@@ -493,6 +493,8 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-axis { position: relative; height: 22px; color: var(--text-muted); font-size: 10.5px; }
 .wb-sched-axis span { position: absolute; top: 5px; transform: translateX(-50%); white-space: nowrap; }
 .wb-sched-axis .wb-sched-axis-now { left: 0; transform: none; }
+.wb-sched-axis span.wb-start { transform: none; }
+.wb-sched-axis span.wb-end { transform: translateX(-100%); }
 .wb-sched-axis .wb-near, .wb-sched-axis .wb-crowded { visibility: hidden; }
 .wb-sched-axis .wb-near { display: none; }
 .wb-sched-lane { container-type: inline-size; }
@@ -517,7 +519,8 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-select { grid-column: 1 / 5; grid-template-columns: subgrid; min-width: 0; padding: 10px 0 10px 16px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .wb-sched-select:focus-visible { outline: 2px solid var(--wb-accent-line); outline-offset: -2px; }
 .wb-sched-name, .wb-sched-rule, .wb-sched-next, .wb-sched-recent { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.wb-sched-name b { display: flex; align-items: center; gap: 6px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-sched-name b { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; white-space: nowrap; }
+.wb-sched-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .wb-sched-name small, .wb-sched-rule small, .wb-sched-next small, .wb-sched-recent small { color: var(--text-muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-sched-rule small { font-size: 11px; }
 .wb-sched-next { font-variant-numeric: tabular-nums; }
@@ -547,6 +550,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-valid { color: var(--wb-work); }
 /* Drawer */
 .wb-sched-side { position: fixed; top: var(--wb-header-h); right: 0; bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--shadow-card); overflow-wrap: anywhere; }
+.wb-sched-side[hidden] { display: none; }
 .wb-sched-detail { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .wb-sched-detail .wb-detail-header { padding-bottom: 12px; }
 .wb-sched-detail .wb-d-top > .wb-d-title { flex: 1; }
@@ -769,6 +773,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-date > .wb-ico { color: var(--text-muted); }
 .wb-date.wb-unset .wb-date-text { color: var(--text-muted); }
 .wb-date-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-date[hidden] { display: none; }
 .wb-date-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
 .wb-usage-dash { color: var(--text-muted); }
 .wb-usage-status { margin: 8px 0 0; color: var(--text-dim); font-size: 12.5px; }

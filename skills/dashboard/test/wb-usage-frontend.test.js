@@ -2,7 +2,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick, Node } from './fixtures/workbench-dom.js';
-import { renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
+import { cachePath, renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
 import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
 
@@ -232,4 +232,22 @@ test('axis labels are short dates with today named, or clock hours', () => {
     ['11-02', 'wb.usage.today']);
   assert.deepEqual(bucketLabels(['2026-11-03T01:00:00.000Z'], { tz: 'Asia/Singapore', bucket: 'hour', now }), ['09:00']);
   assert.equal(compactCount(215000000), '215M'); assert.equal(compactCount(8400), '8,400'); assert.equal(compactCount(84000), '84K');
+});
+
+test('technical usage reads the cache hit rate for the same period and shows it under tokens', async () => {
+  const f = fixture(), paths = []; let level = 'plain', cache = { total: 0.623 };
+  const reply = { ...value, since: '2026-11-01T00:00:00.000Z', until: '2026-11-08T00:00:00.000Z' };
+  const page = createUsagePage({ ...f, detail: () => level, t: (key, params) => key + (params ? ' ' + JSON.stringify(params) : ''),
+    read: async path => { paths.push(path); if (path.startsWith('/api/metrics/series')) { if (!cache) throw Error('read_failed'); return cache; } return reply; } });
+  await page.open();
+  assert.deepEqual(paths, ['/api/workbench/usage?range=7d'], 'plain view has no token total and reads no hit rate');
+  level = 'technical'; page.setViewDetail(); await tick();
+  assert.equal(paths[1], cachePath(reply));
+  assert.match(paths[1], /metric=cache&since=2026-11-01T00%3A00%3A00\.000Z&until=2026-11-08T00%3A00%3A00\.000Z/);
+  assert.match(f.root.textContent, /wb\.usage\.cacheHit \{"pct":62\}/);
+  page.setViewDetail(); await tick();
+  assert.equal(paths.length, 2, 'a known rate is not read again');
+  cache = null; await page.refresh(); await tick();
+  assert.equal(f.root.textContent.includes('wb.usage.cacheHit'), false, 'an unreadable rate leaves the line out');
+  page.destroy();
 });

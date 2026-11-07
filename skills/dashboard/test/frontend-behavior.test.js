@@ -1820,18 +1820,6 @@ test('memory tab pins the page frame and panes scroll independently (#222)', () 
   assert.match(css, /body\.memory-tab-active \.memory-tree \{ flex: 1; min-height: 0; max-height: none; \}/);
 });
 
-test('memory file list sections collapse and expand (#222)', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  const scope = fs.readFileSync(new URL('../public/js/wb/memory-scope.js', import.meta.url).pathname, 'utf8');
-  // The shared list and each group are folding sections whose headers carry their expansion state.
-  assert.match(scope, /toggleCollapsed\('shared'\)/);
-  assert.match(scope, /head\.setAttribute\('aria-expanded', String\(!isCollapsed\(key\)\)\)/);
-  // Folding flips membership in the collapsed set and re-renders.
-  assert.match(app, /isCollapsed: key => state\.memory\.collapsed\.has\(key\)/);
-  assert.match(app, /state\.memory\.collapsed\.delete\(key\)/);
-  assert.match(app, /state\.memory\.collapsed\.add\(key\)/);
-});
-
 test('fleet sound cues use the marimba strike timbre Howard picked (#223)', () => {
   const sounds = fs.readFileSync(new URL('../public/js/fleet-sounds.js', import.meta.url).pathname, 'utf8');
   // Fixed-pitch percussive strike with a 4th-harmonic partial — no glide.
@@ -1864,8 +1852,7 @@ test('memory tree has a collapse-all/expand-all toggle (#226)', () => {
   assert.match(html, /id="memory-fold"/);
   // Toggle folds every directory at once, or expands everything back.
   assert.match(app, /state\.memory\.collapsed = allCollapsed \? new Set\(\) : new Set\(dirs\)/);
-  // Button label/icon track whether everything is already collapsed.
-  assert.match(app, /allCollapsed \? MEMORY_UNFOLD_ICON : MEMORY_FOLD_ICON/);
+  // Button label tracks whether everything is already collapsed.
   assert.match(app, /allCollapsed \? t\('memory\.expand_all'\) : t\('memory\.collapse_all'\)/);
   assert.match(i18nEn, /memory\.collapse_all/);
   assert.match(i18nZh, /memory\.collapse_all/);

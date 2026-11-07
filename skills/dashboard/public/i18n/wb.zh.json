@@ -552,7 +552,6 @@
   "wb.config.pickModel": "选择模型",
   "wb.config.pickEffort": "选择思考强度",
   "wb.config.pairNote": "模型与思考强度一起保存，下次有消息启动时用新配置。",
-  "wb.config.pairNote": "模型与思考强度一起保存，下次有消息启动时用新配置。",
   "wb.schedule.times": "{n} 次",
   "wb.schedule.week.title": "近 7 天执行情况",
   "wb.schedule.week.worst": "最多问题：{date}（{n} 次）",
@@ -595,6 +594,7 @@
   "wb.schedule.create": "创建",
   "wb.schedule.form.namePlaceholder": "例如 morning-briefing",
   "wb.schedule.form.promptPlaceholder": "到点时发给目标组的指令",
+  "wb.schedule.form.pickTime": "选择时间",
   "wb.schedule.form.everyPlaceholder": "例如 30m、2h、1d",
   "wb.schedule.form.priorityHint": "同时到点时先投递高优先级",
   "wb.schedule.form.missHint": "到点后超过这个时间还没开始就跳过",
@@ -604,7 +604,6 @@
   "wb.schedule.miss.m30": "30 分钟",
   "wb.schedule.miss.h1": "1 小时",
   "wb.schedule.miss.d1": "1 天",
-  "wb.schedule.miss.seconds": "{n} 秒",
   "wb.memory.all": "全部",
   "wb.memory.sharedTitle": "共享 · 所有组共用",
   "wb.memory.groupsTitle": "各组 · memory/session-groups/",
@@ -632,5 +631,7 @@
   "wb.usage.rotationsHint": "上下文用满后换新会话",
   "wb.usage.topTool": "最多：{name}",
   "wb.usage.topTen": "调用最多的 10 个",
-  "wb.usage.none": "没有数据"
+  "wb.usage.none": "没有数据",
+  "wb.usage.cacheHit": "缓存命中 {pct}%",
+  "wb.memory.upkeepConflict": "这台实例有多个组在后台整理记忆，保存可能和后台整理冲突；冲突时会让你选择保留哪一份。"
 }

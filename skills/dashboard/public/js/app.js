@@ -1,3 +1,4 @@
+import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=94';
 import { createPricingPanel } from './wb/settings-pricing.js?v=94';
 import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=94';
@@ -7,7 +8,7 @@ import { mountChat } from './wb/chat.js?v=96';
 import { mountChatSettings } from './wb/chat-settings.js?v=94';
 import { mountWorkbench } from './wb/shell.js?v=95';
 import { watchHeader } from './wb/header-fit.js?v=94';
-import { createMemoryScope, memoryFileScope, memoryGroupLabel, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=95';
+import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=95';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
 import { mountSchedule } from './wb/schedule.js?v=95';
 import { createUsagePage } from './wb/usage.js?v=95';
@@ -1414,10 +1415,6 @@ function preferredMemoryPath(root) {
 }
 
 // Feather chevrons-down-up / chevrons-up-down for the fold-all toggle.
-const MEMORY_FOLD_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/></svg>';
-const MEMORY_UNFOLD_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>';
 const API_KEY_ROTATE_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.74-5.95L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.74 5.95L3 16"/><path d="M3 21v-5h5"/></svg>';
 const API_KEY_REVOKE_ICON =
@@ -1425,33 +1422,11 @@ const API_KEY_REVOKE_ICON =
 const API_KEY_DELETE_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
 
-// Memory content is semi-trusted (agent-written): html:false keeps raw HTML
-// escaped, matching the XSS posture of the previous minimal renderer.
 let markdownRenderer = null;
 
-function getMarkdownRenderer() {
-  if (!markdownRenderer && typeof window.markdownit === 'function') {
-    markdownRenderer = window.markdownit({ html: false, linkify: true });
-    // Only explicit links (scheme or www.) become links; bare file names such as
-    // identity.md or state.md would otherwise turn into links to a .md domain.
-    markdownRenderer.linkify.set({ fuzzyLink: false });
-    const renderToken = (tokens, idx, options, env, self) => self.renderToken(tokens, idx, options);
-    const defaultLinkOpen = markdownRenderer.renderer.rules.link_open || renderToken;
-    markdownRenderer.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-      tokens[idx].attrSet('target', '_blank');
-      tokens[idx].attrSet('rel', 'noopener noreferrer');
-      return defaultLinkOpen(tokens, idx, options, env, self);
-    };
-  }
-  return markdownRenderer;
-}
-
 function renderMarkdown(text) {
-  const source = String(text || '');
-  const md = getMarkdownRenderer();
-  // Vendored script failed to load: degrade to the escaped raw view.
-  if (!md) return `<pre class="memory-raw"><code>${esc(source)}</code></pre>`;
-  return md.render(source);
+  markdownRenderer ??= createMarkdownRenderer(window.markdownit);
+  return markdownHtml(markdownRenderer, text, esc);
 }
 
 function isCompleteMemoryFile(value) {
@@ -1569,7 +1544,10 @@ function renderMemoryContent() {
     const retry = state.memory.error === 'memory_conflict_latest_failed'
       ? `<div class="memory-notice warning">${esc(t('memory.conflict_retry_body'))} <button type="button" data-memory-retry-conflict>${esc(t('memory.retry'))}</button></div>`
       : '';
-    content.innerHTML = `${notice}${live}${retry}${conflict}<textarea class="memory-editor" id="memory-editor" spellcheck="false">${esc(state.memory.draft)}</textarea>`;
+    const upkeep = memoryUpkeepNotice(state.memory.tree)
+      ? `<div class="memory-notice warning">${esc(t('wb.memory.upkeepConflict'))}</div>`
+      : '';
+    content.innerHTML = `${upkeep}${notice}${live}${retry}${conflict}<textarea class="memory-editor" id="memory-editor" spellcheck="false">${esc(state.memory.draft)}</textarea>`;
     const editor = $('#memory-editor');
     editor?.addEventListener('input', () => {
       state.memory.draft = editor.value;
@@ -1670,7 +1648,7 @@ function renderMemory() {
     const dirs = memoryScopeView.sectionKeys();
     const allCollapsed = dirs.length > 0 && dirs.every(d => state.memory.collapsed.has(d));
     fold.disabled = !state.memory.tree || dirs.length === 0;
-    fold.innerHTML = allCollapsed ? MEMORY_UNFOLD_ICON : MEMORY_FOLD_ICON;
+    fold.innerHTML = `<i class="wb-ico wb-ico-${allCollapsed ? 'unfold' : 'fold'}" aria-hidden="true"></i>`;
     fold.title = allCollapsed ? t('memory.expand_all') : t('memory.collapse_all');
     fold.setAttribute('aria-label', fold.title);
   }
@@ -1851,8 +1829,7 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
 async function resolveMemoryConflict(action) {
   const conflict = state.memory.conflict;
   if (action === 'later') {
-    // Leave the conflict without saving: the draft stays in the editor and in this browser.
-    state.memory.conflict = null;
+    leaveMemoryConflict(state.memory);
     renderMemoryPreservingEditor(renderMemory, document);
     return;
   }

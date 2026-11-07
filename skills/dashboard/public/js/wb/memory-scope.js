@@ -1,6 +1,12 @@
 import { element, fallbackName, icon, platformOf } from './plain-text.js?v=94';
 
 // Scope metadata is validated by Core's parseSessionGroup on the server.
+/**
+ * Multi-session instances have background upkeep writing memory per group. Until Core has a locked write
+ * path, the editor always says a save may conflict with it; the tree lists groups only on such instances.
+ */
+export const memoryUpkeepNotice = tree => Array.isArray(tree?.sessionGroups) && tree.sessionGroups.length > 0;
+
 export function memoryScope(tree) {
   const root = tree?.root ?? { path: '', type: 'directory', children: [] };
   const metadata = new Map((tree?.sessionGroups ?? []).map(row => [row.sessionGroup, row]));
@@ -62,6 +68,11 @@ export function memoryWriteMessage(code, t) {
     memory_write_unknown: 'writeUnknown',
   };
   return keys[code] ? t('wb.memory.' + keys[code]) : null;
+}
+
+/** "Later" in the conflict dialog: close it without saving; the draft stays in the editor and this browser. */
+export function leaveMemoryConflict(memory) {
+  memory.conflict = null;
 }
 
 /** Submit once. An unknown result permits one readback, never a write retry. */
@@ -416,14 +427,9 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       if (!stopped && operation === generation && captured === identity()) { backlog = null; loaded = true; render(); }
     }
   }
-  const toggle = document.querySelector?.('#wb-detail-toggle');
-  const redraw = () => queueMicrotask(() => { if (!stopped) render(); });
-  toggle?.addEventListener('change', redraw);
-  document.addEventListener?.('dashboard-locale-change', redraw);
+  // The page redraws this view when the detail level or language changes (app.js renderMemory).
   return { tree, render, renderList, load, selectGroup, initialPath, sectionKeys, destroy() {
     stopped = true; generation++;
-    toggle?.removeEventListener('change', redraw);
-    document.removeEventListener?.('dashboard-locale-change', redraw);
     root?.replaceChildren(); chartsRoot?.replaceChildren(); listRoot?.replaceChildren(); summaryRoot?.replaceChildren();
   } };
 }

@@ -1,5 +1,6 @@
 import { element, icon } from './plain-text.js?v=94';
 import { money } from './instance-strip.js?v=94';
+import { dateField } from './date-field.js?v=1';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];
 export const usageRanges = ['24h', '7d', 'month', '30d', 'custom'];
@@ -139,6 +140,11 @@ export function barList(root, { title, rows = [], valueLabel, iconName = null, s
   return { node: card, destroy() {} };
 }
 
+/** The cache hit rate over the period the usage reply covers. */
+export function cachePath({ since, until }) {
+  return '/api/metrics/series?' + new URLSearchParams({ metric: 'cache', since, until, bucket: '86400' });
+}
+
 export function usagePath({ range = '7d', since = '', until = '' } = {}) {
   const params = new URLSearchParams({ range });
   if (range === 'custom') { params.set('since', since); params.set('until', until); }
@@ -149,7 +155,7 @@ const sum = rows => rows.reduce((total, value) => total + numeric(value), 0);
 
 // Both views show costs and messages; all other usage details are technical only.
 export function renderUsage(root, value, { document = root.ownerDocument, t = key => key,
-  level = 'plain', chartFactory = defaultChart, now = Date.now() } = {}) {
+  level = 'plain', chartFactory = defaultChart, now = Date.now(), cacheRate = null } = {}) {
   root.replaceChildren();
   const charts = [];
   if (!value) return { destroy() {} };
@@ -175,7 +181,9 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   addTotal(t('wb.usage.received'), formatUsageCount(totals.messages?.in, t),
     `${t('wb.usage.sent')} ${formatUsageCount(totals.messages?.out, t)}`);
   if (level === 'technical') {
-    addTotal(t('wb.usage.tokens'), compactCount(totals.tokens, t), '', totals.tokens);
+    // The cache hit rate comes from the metrics endpoint: all engines together over the same period.
+    addTotal(t('wb.usage.tokens'), compactCount(totals.tokens, t),
+      cacheRate == null ? '' : t('wb.usage.cacheHit', { pct: Math.round(cacheRate * 100) }), totals.tokens);
     addTotal(t('wb.usage.rotations'), totals.rotations == null ? t('wb.unknown') : t('wb.usage.times', { count: totals.rotations }),
       t('wb.usage.rotationsHint'));
     addTotal(t('wb.usage.tools'), compactCount(totals.tools, t),
@@ -237,7 +245,7 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
 
 export function createUsagePage({ root, read, identity = () => '', detail = () => 'plain',
   document = root.ownerDocument, t = key => key, chartFactory = defaultChart } = {}) {
-  let generation = 0, active = false, owner = null, data = null, rendered = null, range = '7d';
+  let generation = 0, active = false, owner = null, data = null, rendered = null, range = '7d', cacheRate = null;
   root.classList?.add('wb-usage-page');
   const title = element(document, 'h2', t('wb.nav.usage'), 'wb-usage-title');
   const controls = element(document, 'div', undefined, 'wb-usage-controls');
@@ -248,24 +256,10 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     const button = element(document, 'button', t('wb.usage.range.' + name)); button.type = 'button'; button.dataset.range = name;
     button.addEventListener('click', () => choose(name)); seg.append(button); return button;
   });
-  const since = element(document, 'input', undefined, 'wb-date-native'); since.type = 'datetime-local'; since.id = 'wb-usage-since'; since.setAttribute('aria-label', t('wb.usage.since'));
-  const until = element(document, 'input', undefined, 'wb-date-native'); until.type = 'datetime-local'; until.id = 'wb-usage-until'; until.setAttribute('aria-label', t('wb.usage.until'));
-  // The native field shows its format in the browser's language (mm/dd/yyyy on an English browser);
-  // a styled field shows the page language instead and still opens the native picker.
-  const dateField = (input, key) => {
-    const field = element(document, 'label', undefined, 'wb-input wb-date');
-    const text = element(document, 'span', undefined, 'wb-date-text');
-    const sync = () => {
-      text.textContent = input.value ? input.value.replace('T', ' ') : t(key);
-      field.classList.toggle('wb-unset', !input.value);
-    };
-    input.addEventListener('input', sync); input.addEventListener('change', sync);
-    field.addEventListener('click', () => { try { input.showPicker?.(); } catch {} });
-    field.append(icon(document, 'clock', 'xs'), text, input);
-    sync();
-    return { field, sync };
-  };
-  const sinceField = dateField(since, 'wb.usage.since'), untilField = dateField(until, 'wb.usage.until');
+  const since = element(document, 'input'); since.type = 'datetime-local'; since.id = 'wb-usage-since'; since.setAttribute('aria-label', t('wb.usage.since'));
+  const until = element(document, 'input'); until.type = 'datetime-local'; until.id = 'wb-usage-until'; until.setAttribute('aria-label', t('wb.usage.until'));
+  const sinceField = dateField(document, since, () => t('wb.usage.since'));
+  const untilField = dateField(document, until, () => t('wb.usage.until'));
   const dash = element(document, 'span', '—', 'wb-usage-dash');
   const apply = element(document, 'button', t('wb.usage.apply'), 'wb-btn'); apply.type = 'button'; apply.id = 'wb-usage-apply';
   controls.append(seg, sinceField.field, dash, untilField.field, apply);
@@ -279,8 +273,8 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     since.setAttribute('aria-label', t('wb.usage.since')); until.setAttribute('aria-label', t('wb.usage.until')); apply.textContent = t('wb.usage.apply');
     sinceField.sync(); untilField.sync();
     mark();
-    rendered?.destroy(); rendered = renderUsage(body, data, { document, t, level: detail(), chartFactory }); };
-  const clear = () => { data = null; draw(); };
+    rendered?.destroy(); rendered = renderUsage(body, data, { document, t, level: detail(), chartFactory, cacheRate }); };
+  const clear = () => { data = null; cacheRate = null; draw(); };
   async function refresh() {
     if (!active) return;
     const current = ++generation, target = identity(); owner = target;
@@ -297,7 +291,19 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     } catch (error) {
       if (!active || current !== generation || target !== identity()) return;
       status.textContent = t('wb.readFailed') + (detail() === 'technical' ? ' · ' + error.message : '');
+      return;
     }
+    await readCache(current, target);
+  }
+  // The hit rate is an extra line under the technical token total; when it cannot be read the line is left out.
+  async function readCache(current = generation, target = identity()) {
+    if (detail() !== 'technical' || cacheRate != null || !data?.since || !data?.until) return;
+    try {
+      const cache = await read(cachePath(data));
+      if (!active || current !== generation || target !== identity()) return;
+      cacheRate = Number.isFinite(cache?.total) ? cache.total : null;
+      if (cacheRate != null) draw();
+    } catch {}
   }
   function choose(name) {
     if (range === name) return;
@@ -308,7 +314,7 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
   return {
     open() { active = true; return refresh(); }, refresh,
     close() { active = false; generation++; clear(); status.textContent = ''; },
-    setViewDetail() { if (active && owner === identity()) draw(); },
+    setViewDetail() { if (active && owner === identity()) { draw(); void readCache(); } },
     destroy() { active = false; generation++; rendered?.destroy(); apply.removeEventListener('click', applyCustom); root.replaceChildren(); },
   };
 }

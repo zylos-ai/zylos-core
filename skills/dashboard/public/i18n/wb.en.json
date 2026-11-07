@@ -552,7 +552,6 @@
   "wb.config.pickModel": "Choose a model",
   "wb.config.pickEffort": "Choose an effort",
   "wb.config.pairNote": "Model and effort are saved together and used from the next start.",
-  "wb.config.pairNote": "Model and effort are saved together and used from the next start.",
   "wb.schedule.times": "{n}",
   "wb.schedule.week.title": "Runs in the last 7 days",
   "wb.schedule.week.worst": "Most problems: {date} ({n})",
@@ -595,6 +594,7 @@
   "wb.schedule.create": "Create",
   "wb.schedule.form.namePlaceholder": "e.g. morning-briefing",
   "wb.schedule.form.promptPlaceholder": "Instruction sent to the target group when it is due",
+  "wb.schedule.form.pickTime": "Pick a time",
   "wb.schedule.form.everyPlaceholder": "e.g. 30m, 2h, 1d",
   "wb.schedule.form.priorityHint": "Higher priority is delivered first when tasks are due together",
   "wb.schedule.form.missHint": "Skipped if it has not started this long after it was due",
@@ -604,7 +604,6 @@
   "wb.schedule.miss.m30": "30 minutes",
   "wb.schedule.miss.h1": "1 hour",
   "wb.schedule.miss.d1": "1 day",
-  "wb.schedule.miss.seconds": "{n} seconds",
   "wb.memory.all": "All",
   "wb.memory.sharedTitle": "Shared · used by every group",
   "wb.memory.groupsTitle": "Groups · memory/session-groups/",
@@ -632,5 +631,7 @@
   "wb.usage.rotationsHint": "A new session starts when the context is full",
   "wb.usage.topTool": "Most: {name}",
   "wb.usage.topTen": "Top 10 by calls",
-  "wb.usage.none": "No data"
+  "wb.usage.none": "No data",
+  "wb.usage.cacheHit": "Cache hits {pct}%",
+  "wb.memory.upkeepConflict": "Several groups on this instance tidy memory in the background, so a save may conflict with that; if it does, you choose which version to keep."
 }
