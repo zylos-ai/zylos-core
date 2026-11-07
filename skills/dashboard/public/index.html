@@ -10,12 +10,12 @@
 <link rel="stylesheet" href="__ASSET_ROOT__/css/style.css?v=60">
 <link rel="stylesheet" href="__ASSET_ROOT__/themes/light.css?v=2">
 <link rel="stylesheet" href="__ASSET_ROOT__/themes/dark.css?v=1">
-<link rel="stylesheet" href="__ASSET_ROOT__/css/wb.css?v=10">
-<link rel="stylesheet" href="__ASSET_ROOT__/css/wb-icons.css?v=3">
+<link rel="stylesheet" href="__ASSET_ROOT__/css/wb.css?v=12">
+<link rel="stylesheet" href="__ASSET_ROOT__/css/wb-icons.css?v=5">
 <script src="__ASSET_ROOT__/vendor/chart.umd.js"></script>
 <script src="__ASSET_ROOT__/js/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="__ASSET_ROOT__/js/markdown-it.min.js"></script>
-<script type="module" src="__ASSET_ROOT__/js/app.js?v=97"></script>
+<script type="module" src="__ASSET_ROOT__/js/app.js?v=98"></script>
 <style>
 #tab-settings { overflow-wrap:anywhere; }
 #tab-settings .modal-body { padding:0; }
@@ -343,34 +343,38 @@
   </section>
 
   <section class="tab-panel" id="tab-memory" hidden>
+    <div class="wb-memory-summary" id="memory-summary" role="status" hidden></div>
+    <div class="wb-memory-charts" id="memory-charts" hidden></div>
     <div class="memory-layout">
       <aside class="memory-tree-card" aria-labelledby="memory-title">
+        <h2 id="memory-title" class="wb-vh" data-i18n="memory.title">Memory</h2>
         <div class="memory-head">
-          <h2 id="memory-title" data-i18n="memory.title">Memory</h2>
+          <div id="memory-scope"></div>
           <div class="memory-head-actions">
-            <button class="memory-refresh" id="memory-fold" type="button" data-i18n-title="memory.collapse_all"></button>
-            <button class="memory-refresh" id="memory-refresh" type="button" data-i18n-title="memory.refresh">↻</button>
+            <button class="memory-refresh wb-icon-btn" id="memory-fold" type="button" data-i18n-title="memory.collapse_all"></button>
+            <button class="memory-refresh wb-icon-btn" id="memory-refresh" type="button" data-i18n-title="memory.refresh"><i class="wb-ico wb-ico-restart" aria-hidden="true"></i><span class="wb-vh" data-i18n="memory.refresh">Refresh</span></button>
           </div>
         </div>
-        <div id="memory-scope"></div>
         <div class="memory-tree" id="memory-tree"></div>
-        <div class="wb-memory-charts" id="memory-charts" hidden></div>
       </aside>
       <section class="memory-viewer" aria-labelledby="memory-file-title">
         <div class="memory-viewer-head">
-          <div>
-            <h2 id="memory-file-title" data-i18n="memory.select_file">Select a file</h2>
+          <div class="memory-viewer-title">
+            <div class="memory-path-line">
+              <h2 id="memory-file-title" class="wb-mono"></h2>
+              <span id="memory-scope-tag"></span>
+            </div>
             <div class="memory-meta" id="memory-meta"></div>
           </div>
           <div class="memory-viewer-actions">
-            <div class="memory-toggle" role="group" aria-label="Memory view mode">
+            <div class="memory-toggle wb-seg" role="group" aria-label="Memory view mode">
               <button class="memory-mode active" id="memory-rendered-btn" type="button" data-mode="rendered" data-i18n="memory.rendered">Rendered</button>
               <button class="memory-mode" id="memory-raw-btn" type="button" data-mode="raw" data-i18n="memory.raw">Raw</button>
             </div>
             <div class="memory-edit-actions">
-              <button class="memory-action" id="memory-edit-btn" type="button" data-i18n="memory.edit">Edit</button>
-              <button class="memory-action primary" id="memory-save-btn" type="button" data-i18n="memory.save" hidden>Save</button>
-              <button class="memory-action" id="memory-reset-btn" type="button" data-i18n="memory.reset" hidden>Cancel</button>
+              <button class="memory-action wb-btn" id="memory-edit-btn" type="button"><i class="wb-ico wb-ico-edit wb-ico-xs" aria-hidden="true"></i><span data-i18n="memory.edit">Edit</span></button>
+              <button class="memory-action wb-btn wb-btn-primary primary" id="memory-save-btn" type="button" data-i18n="memory.save" hidden>Save</button>
+              <button class="memory-action wb-btn" id="memory-reset-btn" type="button" data-i18n="memory.reset" hidden>Cancel</button>
             </div>
           </div>
         </div>

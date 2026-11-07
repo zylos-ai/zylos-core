@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
+import { gzipSync } from 'node:zlib';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import Database from 'better-sqlite3';
@@ -18,12 +19,29 @@ import { FleetProxy } from '../src/lib/fleet-proxy.js';
 import { sendJson } from '../src/lib/http.js';
 import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../comm-bridge/scripts/c4-schema.js';
+import { workbenchWriteRoutes } from './fixtures/workbench-write-routes.js';
 
 const MiB = 1024 * 1024;
 const boundary = 'fleet-file-boundary';
 const opening = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="report.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`);
 const ending = Buffer.from(`\r\n--${boundary}--\r\n`);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+
+function diskSnapshot(root, excluded = []) {
+  const entries = [];
+  const visit = directory => {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const filename = path.join(directory, name);
+      if (excluded.includes(filename)) continue;
+      const stat = fs.lstatSync(filename), relative = path.relative(root, filename);
+      if (stat.isDirectory()) { entries.push([relative, 'directory']); visit(filename); }
+      else if (stat.isSymbolicLink()) entries.push([relative, 'link', fs.readlinkSync(filename)]);
+      else entries.push([relative, stat.size, digest(fs.readFileSync(filename))]);
+    }
+  };
+  visit(root);
+  return entries;
+}
 
 async function waitFor(check, timeout = 4000) {
   const deadline = Date.now() + timeout;
@@ -40,6 +58,7 @@ async function listen(handler) {
       else res.destroy();
     });
   });
+  server.keepAliveTimeout = 100;
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return { server, origin: `http://127.0.0.1:${server.address().port}` };
 }
@@ -61,7 +80,7 @@ async function fixture(t, { limit = 20 } = {}) {
   fs.mkdirSync(path.join(hubRoot, 'components/dashboard/media'), { recursive: true });
   fs.writeFileSync(path.join(targetRoot, '.env'), `WEB_CONSOLE_MAX_UPLOAD_MB=${limit}\n`);
   console.log(JSON.stringify({ isolated: true, HOME: process.env.HOME, ZYLOS_DIR: targetRoot,
-    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, privateSocket: path.join(root, 'tmux.sock'), hubRoot }));
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, hubRoot }));
   const db = new Database(path.join(targetRoot, 'comm-bridge/c4.db'));
   guardDatabase(db, schema);
   db.prepare("INSERT INTO channel_namespaces(namespace,component_name) VALUES('dash','dashboard')").run();
@@ -74,6 +93,9 @@ async function fixture(t, { limit = 20 } = {}) {
   let mode = 'multi', token = 'fixture-admin-a', localEnabled = true, uploadStatus = null;
   let uploads = 0, tokenCalls = 0, seenHeaders = null, downloadHeaders = null, dropReply = false;
   let synthetic = null, releaseUpload = null, slowUpload = false, uploadPaused = false;
+  let rejectedToken = null, refreshedToken = 'fixture-refreshed', forcedRefreshes = 0, localChecks = 0;
+  let slowConversation = false;
+  const upstreamRequests = [], downloadResponses = [], checkTimes = [];
   const activeTimers = new Set();
   const timer = (fn, ms) => { const id = setTimeout(() => { activeTimers.delete(id); fn(); }, ms); activeTimers.add(id); return id; };
   const sender = new ChatSender({ conversations, c4Reader, attachments, zylosDir: targetRoot,
@@ -92,6 +114,12 @@ async function fixture(t, { limit = 20 } = {}) {
   const target = await listen(async (req, res) => {
     seenHeaders = req.headers;
     const url = new URL(req.url, 'http://target.test');
+    upstreamRequests.push({ method: req.method, path: url.pathname, authorization: req.headers.authorization });
+    if (rejectedToken && req.headers.authorization === `Bearer ${rejectedToken}`) {
+      sendJson(res, 401, { error: 'expired_fixture_session' }); return;
+    }
+    if (slowConversation && req.method === 'GET' && /^\/api\/chat\/conversations\/[^/]+$/.test(url.pathname)) await delay(3500);
+    if (url.pathname.includes('/attachments/')) downloadResponses.push(res);
     if (url.pathname.includes('/attachments/')) downloadHeaders = req.headers;
     if (url.pathname.endsWith('/uploads') && req.method === 'POST') {
       uploads++;
@@ -115,8 +143,12 @@ async function fixture(t, { limit = 20 } = {}) {
   });
   const hubConfig = { fleet: { agents: [{ name: 'Target', base_url: target.origin }] } };
   const proxy = new FleetProxy({ config: hubConfig, rootDir: hubRoot,
-    authGate: { revalidateAuthContext: context => localEnabled ? context : null },
-    poller: { getSessionToken: async () => { tokenCalls++; return token; }, getAgentAccess: () => token === 'fixture-read' ? 'read' : 'admin' } });
+    authGate: { revalidateAuthContext: context => {
+      localChecks++; checkTimes.push(Date.now()); return localEnabled ? context : null;
+    } },
+    poller: { getSessionToken: async (_name, options = {}) => {
+      tokenCalls++; if (options.force) { forcedRefreshes++; token = refreshedToken; } return token;
+    }, getAgentAccess: () => token === 'fixture-read' ? 'read' : 'admin' } });
   const hub = await listen(async (req, res) => {
     const who = req.headers['x-fixture-local'] || 'admin';
     req._authContext = who === 'none' ? null : { kind: 'cookie', scope: who === 'read' ? 'read' : 'admin', principalId: who };
@@ -136,8 +168,8 @@ async function fixture(t, { limit = 20 } = {}) {
       ...options, signal: AbortSignal.timeout(10000), headers: { origin: hub.origin,
         ...(direct ? { authorization: `Bearer ${token}` } : {}), ...headers } });
   };
-  const upload = async (bytes = Buffer.from('target bytes'), options = {}) => {
-    const body = new FormData(); body.append('file', new Blob([bytes]), 'report.bin');
+  const upload = async (bytes = Buffer.from('target bytes'), { name = 'report.bin', ...options } = {}) => {
+    const body = new FormData(); body.append('file', new Blob([bytes]), name);
     const response = await request('/uploads', { method: 'POST', body, ...options });
     return { status: response.status, body: await response.json() };
   };
@@ -152,6 +184,10 @@ async function fixture(t, { limit = 20 } = {}) {
     setUploadStatus: value => { uploadStatus = value; }, setDropReply: value => { dropReply = value; },
     setSynthetic: value => { synthetic = value; }, setSlowUpload: value => { slowUpload = value; },
     uploadPaused: () => uploadPaused, releaseUpload: () => releaseUpload?.(),
+    expireToken: () => { rejectedToken = token; }, forcedRefreshes: () => forcedRefreshes,
+    upstreamRequests, downloadResponses, localChecks: () => localChecks, checkTimes,
+    setSlowConversation: value => { slowConversation = value; },
+    diskSnapshot: () => ({ tmp: diskSnapshot(os.tmpdir(), [targetRoot]), hub: diskSnapshot(hubRoot) }),
     uploads: () => uploads, tokenCalls: () => tokenCalls, headers: () => seenHeaders, downloadHeaders: () => downloadHeaders,
     media: () => fs.readdirSync(attachments.mediaDir), hubMedia: () => fs.readdirSync(path.join(hubRoot, 'components/dashboard/media')) };
 }
@@ -236,6 +272,7 @@ test('config and downloads require both data gates while downloading remains val
 
 test('twenty MiB is streamed only to target media and downloaded byte-for-byte with true length and identity', async t => {
   const f = await fixture(t), bytes = Buffer.alloc(20 * MiB, 0x93);
+  const before = f.diskSnapshot();
   for (let i = 0; i < bytes.length; i += 4093) bytes[i] = i % 251;
   const uploaded = await f.upload(bytes);
   assert.equal(uploaded.status, 201); assert.equal(uploaded.body.size, bytes.length);
@@ -248,6 +285,18 @@ test('twenty MiB is streamed only to target media and downloaded byte-for-byte w
   for await (const chunk of response.body) { count += chunk.length; largest = Math.max(largest, chunk.length); hash.update(chunk); }
   assert.equal(count, bytes.length); assert.equal(hash.digest('hex'), digest(bytes));
   assert.ok(largest < MiB, 'download arrives in bounded chunks');
+  assert.deepEqual(f.diskSnapshot(), before, 'proxy creates or changes no files in TMPDIR or its root');
+});
+
+test('CJK and emoji filenames survive a real fleet upload with file payloads larger than text-field limits', async t => {
+  const f = await fixture(t), bytes = Buffer.alloc(2048, 0x93);
+  for (const name of ['报告.pdf', '😀.bin']) {
+    const uploaded = await f.upload(bytes, { name });
+    assert.equal(uploaded.status, 201);
+    assert.equal(uploaded.body.name, name); assert.equal(uploaded.body.size, bytes.length);
+    const row = f.store.db.prepare('SELECT * FROM chat_attachments WHERE id=?').get(uploaded.body.id);
+    assert.equal(digest(fs.readFileSync(path.join(f.attachments.mediaDir, row.storage_name))), digest(bytes));
+  }
 });
 
 test('chunked uploads grow target partial files before completion and disconnect cleans both sides', async t => {
@@ -321,6 +370,7 @@ test('a target upload 401 is never replayed and a lost successful reply is expli
   f.setUploadStatus(401);
   const denied = await f.upload();
   assert.equal(denied.status, 401); assert.equal(f.uploads(), 1);
+  assert.equal(f.forcedRefreshes(), 0);
   f.setUploadStatus(null); f.setDropReply(true);
   const lost = await f.upload();
   assert.equal(lost.status, 502); assert.equal(lost.body.error, 'upload_result_unknown');
@@ -330,13 +380,56 @@ test('a target upload 401 is never replayed and a lost successful reply is expli
   assert.equal(f.hubMedia().length, 0);
 });
 
+test('expired tokens refresh once for safe config preflight and download GETs', async t => {
+  const f = await fixture(t);
+  f.expireToken();
+  const uploaded = await f.upload();
+  assert.equal(uploaded.status, 201); assert.equal(f.forcedRefreshes(), 1);
+  const configs = f.upstreamRequests.filter(row => row.path.endsWith('/uploads/config'));
+  assert.equal(configs.length, 2);
+  assert.equal(configs[0].authorization, 'Bearer fixture-admin-a');
+  assert.equal(configs[1].authorization, 'Bearer fixture-refreshed');
+  assert.equal(f.uploads(), 1);
+  assert.equal((await f.send(uploaded.body.id)).status, 200);
+  // Use a different fresh key to prove the retry does not retain the expired
+  // bearer. Linked downloads are authorized by visibility, not the upload key.
+  f.setToken('fixture-download-expired'); f.expireToken();
+  const response = await f.request('/attachments/' + uploaded.body.id);
+  assert.equal(response.status, 200); assert.equal(await response.text(), 'target bytes');
+  assert.equal(f.forcedRefreshes(), 2);
+  const downloads = f.upstreamRequests.filter(row => row.path.includes('/attachments/'));
+  assert.equal(downloads.length, 2);
+  assert.equal(downloads[0].authorization, 'Bearer fixture-download-expired');
+  assert.equal(downloads[1].authorization, 'Bearer fixture-refreshed');
+  f.expireToken();
+  const beforeRetry = f.upstreamRequests.length;
+  assert.equal((await f.upload()).status, 401);
+  assert.equal(f.forcedRefreshes(), 3); assert.equal(f.uploads(), 1);
+  assert.equal(f.upstreamRequests.slice(beforeRetry).filter(row => row.path.endsWith('/uploads/config')).length, 2);
+  const beforeDownloadRetry = f.upstreamRequests.length;
+  const denied = await f.request('/attachments/' + uploaded.body.id);
+  assert.equal(denied.status, 401); await denied.arrayBuffer();
+  assert.equal(f.forcedRefreshes(), 4);
+  assert.equal(f.upstreamRequests.slice(beforeDownloadRetry).filter(row => row.path.includes('/attachments/')).length, 2);
+});
+
 test('ordinary writes retain their one MiB limit while exact attachment uploads are allowlisted', async t => {
   const f = await fixture(t);
   const response = await f.request('/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'x'.repeat(MiB + 1) });
   assert.equal(response.status, 413);
-  const forbidden = await f.request('/uploads/extra', { method: 'POST', body: 'x' });
-  assert.equal(forbidden.status, 403);
-  assert.equal((await f.upload()).status, 201);
+  const before = f.upstreamRequests.length;
+  for (const suffix of ['/uploads/extra', '/uploads/config', '/attachments/x', '/foo']) {
+    const forbidden = await f.request(suffix, { method: 'POST', body: 'x' });
+    assert.equal(forbidden.status, 403);
+  }
+  assert.equal(f.upstreamRequests.length, before, 'unregistered writes never reach the target');
+  const registered = workbenchWriteRoutes.find(route => route.attachment);
+  assert.equal(registered.method, 'POST');
+  assert.match(registered.path, /\/api\/chat\/conversations\/[^/]+\/uploads$/);
+  const upload = await f.request('/uploads', { method: registered.method,
+    headers: { 'content-type': registered.contentType }, body: registered.body });
+  assert.equal(upload.status, 201);
+  assert.equal((await upload.json()).size, 4);
 });
 
 test('a slow target bounds upstream progress and backpressure reaches a chunked upload', async t => {
@@ -430,16 +523,18 @@ test('download failures before headers are explicit and secret-bearing metadata 
   f.setSynthetic((req, res) => sendJson(res, 403, { error: 'fixture-admin-a' }));
   const errorLeak = await f.request('/attachments/transport-file');
   assert.equal(errorLeak.status, 502); assert.equal((await errorLeak.json()).error, 'secret_leak_blocked');
+  const compressed = gzipSync(Buffer.from('valid gzip must never be decompressed into a successful attachment'));
   f.setSynthetic((req, res) => {
-    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-encoding': 'gzip', 'content-length': 5 });
-    res.end('plain');
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-encoding': 'gzip', 'content-length': compressed.length });
+    res.end(compressed);
   });
   const encoded = await f.request('/attachments/transport-file');
-  assert.equal(encoded.status, 502); assert.ok((await encoded.json()).error);
+  assert.equal(encoded.status, 502);
+  assert.equal((await encoded.json()).error, 'unexpected_attachment_encoding');
 });
 
 for (const failure of ['disconnect', 'short', 'sensitive']) {
-  test(`a ${failure} after download headers destroys the client response`, async t => {
+  test(`${failure === 'short' ? 'HTTP-truncated content-length' : failure} after download headers destroys the client response`, async t => {
     const f = await fixture(t);
     f.setSynthetic((req, res, timer) => {
       res.writeHead(200, { 'content-type': 'application/octet-stream', ...(failure === 'short' ? { 'content-length': '65536' } : {}) });
@@ -458,20 +553,61 @@ for (const failure of ['disconnect', 'short', 'sensitive']) {
   });
 }
 
-test('revoking target or local access during a download cancels both stream directions', async t => {
-  for (const side of ['target', 'local']) {
-    const f = await fixture(t); let upstreamClosed = false;
-    f.setSynthetic((req, res, timer) => {
-      res.writeHead(200, { 'content-type': 'application/octet-stream' });
-      res.on('close', () => { upstreamClosed = true; });
-      const write = () => { if (res.destroyed) return; res.write(Buffer.alloc(4096, 70)); timer(write, 20); };
-      write();
+for (const side of ['target', 'local']) {
+  test(`revoking ${side} access interrupts a real attachment download within three seconds`, async t => {
+    const f = await fixture(t), uploaded = await f.upload(Buffer.alloc(20 * MiB, 0x95));
+    assert.equal(uploaded.status, 201); assert.equal((await f.send(uploaded.body.id)).status, 200);
+    // A paused browser supplies actual TCP backpressure to the real target
+    // file route. No target download handler or filesystem stream is replaced.
+    f.setSlowConversation(true);
+    let request;
+    const response = await new Promise((resolve, reject) => {
+      request = http.get(f.hub.origin + '/fleet/Target' + f.route + '/attachments/' + uploaded.body.id, resolve);
+      request.once('error', reject);
+      request.setTimeout(4000, () => request.destroy(new Error('bounded real download timeout')));
     });
-    const response = await f.request('/attachments/transport-file'); assert.equal(response.status, 200);
+    t.after(() => request.destroy());
+    response.on('error', () => {}); response.pause();
+    assert.equal(response.statusCode, 200);
+    await delay(150);
+    assert.equal(f.downloadResponses.length, 1);
+    assert.equal(f.downloadResponses[0].writableFinished, false, 'target is still serving the real file when access is revoked');
+    const started = Date.now();
     if (side === 'target') f.targetConfig.chat.allowRemote = false; else f.setLocalEnabled(false);
-    await assert.rejects(async () => { for await (const chunk of response.body) assert.ok(chunk.length <= 65536); });
-    await waitFor(() => upstreamClosed);
-  }
+    await delay(1050);
+    await assert.rejects(async () => { for await (const chunk of response) assert.ok(chunk.length <= 65536); });
+    assert.ok(Date.now() - started < 3000, 'revocation fails before a request timeout could masquerade as enforcement');
+    await waitFor(() => f.downloadResponses[0].destroyed);
+    assert.equal(f.upstreamRequests.filter(row => row.method === 'GET' && /^\/api\/chat\/conversations\/[^/]+$/.test(row.path)).length, 0,
+      'download never polls the reconciling conversation GET');
+  });
+}
+
+test('local session revalidation is time bounded and slow unrelated conversation reads cannot abort downloads', async t => {
+  const f = await fixture(t);
+  f.setSlowConversation(true);
+  f.setSynthetic((req, res, timer) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    let count = 0;
+    const write = () => {
+      if (res.destroyed) return;
+      res.write(Buffer.alloc(4096, 0x95));
+      if (++count === 130) res.end(); else timer(write, 20);
+    };
+    write();
+  });
+  const baseline = f.localChecks(), started = Date.now();
+  const response = await f.request('/attachments/transport-file');
+  assert.equal(response.status, 200);
+  let bytes = 0;
+  for await (const chunk of response.body) bytes += chunk.length;
+  assert.equal(bytes, 130 * 4096);
+  const elapsed = Date.now() - started, checks = f.localChecks() - baseline;
+  assert.ok(checks >= 2, 'a long download continues to revalidate its local session');
+  assert.ok(checks <= Math.floor(elapsed / 1000) + 1, `revalidation count ${checks} is bounded by elapsed time ${elapsed}ms`);
+  const times = f.checkTimes.slice(baseline);
+  for (let i = 1; i < times.length; i++) assert.ok(times[i] - times[i - 1] >= 1000, 'no more than one local session check per second');
+  assert.equal(f.upstreamRequests.filter(row => row.method === 'GET' && /^\/api\/chat\/conversations\/[^/]+$/.test(row.path)).length, 0);
 });
 
 test('literal credential field words are downloadable locally but blocked by fleet', async t => {

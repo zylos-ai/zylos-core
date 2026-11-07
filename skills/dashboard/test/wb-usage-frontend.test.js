@@ -2,7 +2,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick, Node } from './fixtures/workbench-dom.js';
-import { renderUsage, createUsagePage, usagePath, formatUsageCount } from '../public/js/wb/usage.js';
+import { cachePath, renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
 import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
 
@@ -28,13 +28,19 @@ test('usage plain view shows costs and signed messages with runtime stacks and t
   assert.deepEqual(f.configs[1].data.datasets[1].data,[-2,-0]);
   assert.equal(f.root.textContent.includes('wb.usage.tokens'),false);
   assert.equal(allNodes(f.root).filter(n=>n.tagName==='TABLE').length,2);
-  assert.ok(f.configs.every(c=>c.options.plugins.legend.display));
+  // Series are named in each card header instead of a chart legend; sent counts read as positive numbers there.
+  assert.ok(f.configs.every(c=>c.options.plugins.legend.display===false));
+  assert.equal(allNodes(f.root).filter(n=>n.classList.contains('wb-usage-key')).length,4);
+  assert.deepEqual(f.configs[1].options.scales.y.ticks.callback(-8),8);
+  assert.ok(f.root.textContent.includes('Claude $2.00 · Codex $3.00'));
   view.destroy(); assert.equal(f.destroyed(),2);
 });
 test('technical usage adds tokens rotations tools and output token projects without quotas', () => {
   const f=fixture(); renderUsage(f.root,value,{...f,level:'technical'});
-  assert.equal(f.configs.length,6); assert.deepEqual(f.configs[5].data.labels,['example']);
-  assert.deepEqual(f.configs[5].data.datasets[0].data,[91]);
+  // Tools and projects are ranked bar lists, so only cost, messages, tokens and rotations are charts.
+  assert.equal(f.configs.length,4);
+  const bars=allNodes(f.root).filter(n=>n.classList.contains('wb-usage-bar-row')).map(n=>n.textContent);
+  assert.deepEqual(bars,['Read8','example91']);
   assert.equal(f.root.textContent.includes('quota'),false);
 });
 test('usage page ignores closed and changed target replies and releases charts', async () => {
@@ -48,7 +54,7 @@ test('usage page ignores closed and changed target replies and releases charts',
 });
 test('custom invalid dates do not request and range URL carries explicit bounds', async () => {
   const f=fixture();let reads=0; const page=createUsagePage({...f,read:async()=>{reads++;return value;}});
-  await page.open(); const range=allNodes(f.root).find(n=>n.id==='wb-usage-range');range.value='custom';range.dispatch('change');
+  await page.open();
   allNodes(f.root).find(n=>n.id==='wb-usage-apply').dispatch('click');await tick();assert.equal(reads,1);
   assert.ok(f.root.textContent.includes('wb.usage.invalidRange'));assert.match(usagePath({range:'custom',since:'a',until:'b'}),/since=a&until=b/);page.destroy();
 });
@@ -56,8 +62,7 @@ test('custom usage rejects a range longer than the allowed year before reading',
   const f = fixture(); let reads = 0;
   const page = createUsagePage({ ...f, read: async () => { reads++; return value; } });
   await page.open();
-  const nodes = allNodes(f.root), range = nodes.find(node => node.id === 'wb-usage-range');
-  range.value = 'custom'; range.dispatch('change');
+  const nodes = allNodes(f.root);
   nodes.find(node => node.id === 'wb-usage-since').value = '2025-01-01T00:00';
   nodes.find(node => node.id === 'wb-usage-until').value = '2026-02-01T00:00';
   nodes.find(node => node.id === 'wb-usage-apply').dispatch('click'); await tick();
@@ -82,11 +87,11 @@ test('instance strip uses shared today summary and technical daily bars and host
 });
 test('view detail changes redraw existing usage without another read', async () => {
   const f=fixture();let reads=0,level='plain'; const page=createUsagePage({...f,detail:()=>level,read:async()=>{reads++;return value;}});
-  await page.open();assert.equal(f.configs.length,2);level='technical';page.setViewDetail();assert.equal(reads,1);assert.equal(f.configs.length,8);assert.equal(f.destroyed(),2);page.destroy();assert.equal(f.destroyed(),8);
+  await page.open();assert.equal(f.configs.length,2);level='technical';page.setViewDetail();assert.equal(reads,1);assert.equal(f.configs.length,6);assert.equal(f.destroyed(),2);page.destroy();assert.equal(f.destroyed(),6);
 });
 test('failed usage read clears earlier values and hides raw errors in plain view', async () => {
   const f=fixture();let fail=false;const page=createUsagePage({...f,read:async()=>{if(fail)throw Error('private failure');return value;}});
-  await page.open();assert.ok(f.root.textContent.includes('$5.0000'));fail=true;await page.refresh();assert.equal(f.root.textContent.includes('$5.0000'),false);assert.ok(f.root.textContent.includes('wb.readFailed'));assert.equal(f.root.textContent.includes('private failure'),false);page.destroy();
+  await page.open();assert.ok(f.root.textContent.includes('$5.00'));fail=true;await page.refresh();assert.equal(f.root.textContent.includes('$5.00'),false);assert.ok(f.root.textContent.includes('wb.readFailed'));assert.equal(f.root.textContent.includes('private failure'),false);page.destroy();
 });
 
 test('usage keeps a newer successful result when an older read fails late', async () => {
@@ -94,9 +99,9 @@ test('usage keeps a newer successful result when an older read fails late', asyn
   const page = createUsagePage({ ...f, read: () => ++reads === 1 ? older.promise : Promise.resolve(value) });
   const opening = page.open();
   await page.refresh();
-  assert.ok(f.root.textContent.includes('$5.0000'));
+  assert.ok(f.root.textContent.includes('$5.00'));
   older.reject(Error('old failure')); await opening;
-  assert.ok(f.root.textContent.includes('$5.0000'));
+  assert.ok(f.root.textContent.includes('$5.00'));
   assert.equal(f.root.textContent.includes('wb.readFailed'), false);
   assert.equal(allNodes(f.root).find(node => node.id === 'wb-usage-status').textContent, '');
   page.destroy();
@@ -139,7 +144,7 @@ test('technical usage renders unavailable runtime history as unknown instead of 
   const unknown = { ...value, runtimeEventsUnknown: true, rotations: null, tools: null,
     totals: { ...value.totals, rotations: null, tools: null } };
   const view = renderUsage(f.root, unknown, { ...f, level: 'technical' });
-  assert.equal(f.configs.length, 4);
+  assert.equal(f.configs.length, 3);
   const unavailable = allNodes(f.root).filter(node => node.tagName === 'SECTION' &&
     ['wb.usage.rotations', 'wb.usage.tools'].includes(node.children[0]?.textContent));
   assert.equal(unavailable.length, 2);
@@ -149,8 +154,7 @@ test('technical usage renders unavailable runtime history as unknown instead of 
     const total = totals.children.find(node => node.children[0].textContent === title);
     assert.equal(total.children[1].textContent, 'wb.unknown');
   }
-  assert.ok(f.configs.every(config => config.options.plugins.legend.display));
-  view.destroy(); assert.equal(f.destroyed(), 4);
+  view.destroy(); assert.equal(f.destroyed(), 3);
 });
 
 
@@ -166,23 +170,22 @@ test('message counts distinguish unreadable and zero in both locales and detail 
         messages: value.buckets.map(at => ({ at, in: null, out: null })), totals: { ...value.totals, messages: { in: null, out: null } } };
       const view = renderUsage(f.root, failed, { ...f, t, level });
       const totals = allNodes(f.root).find(node => node.classList.contains('wb-usage-totals'));
-      for (const key of ['wb.usage.received', 'wb.usage.sent']) {
-        const box = totals.children.find(node => node.children[0].textContent === t(key));
-        assert.equal(box.children[1].textContent, t('wb.unknown'));
-      }
+      // Sent messages sit under the received count in the same summary box.
+      const box = totals.children.find(node => node.children[0].textContent === t('wb.usage.received'));
+      assert.equal(box.children[1].textContent, t('wb.unknown'));
+      assert.equal(box.children[2].textContent, `${t('wb.usage.sent')} ${t('wb.unknown')}`);
       assert.equal(f.root.textContent.includes('messages_unreadable'), level === 'technical');
       assert.equal(f.root.textContent.includes(sampledAt), level === 'technical');
-      assert.equal(f.configs.length, level === 'technical' ? 5 : 1);
-      assert.equal(f.root.textContent.includes('$5.0000'), true);
+      assert.equal(f.configs.length, level === 'technical' ? 3 : 1);
+      assert.equal(f.root.textContent.includes('$5.00'), true);
       view.destroy();
       const empty = fixture();
       renderUsage(empty.root, { ...value, messagesReason: null, messages: value.buckets.map(at => ({ at, in: 0, out: 0 })),
         totals: { ...value.totals, messages: { in: 0, out: 0 } } }, { ...empty, t, level });
       const emptyTotals = allNodes(empty.root).find(node => node.classList.contains('wb-usage-totals'));
-      for (const key of ['wb.usage.received', 'wb.usage.sent']) {
-        const box = emptyTotals.children.find(node => node.children[0].textContent === t(key));
-        assert.equal(box.children[1].textContent, '0');
-      }
+      const emptyBox = emptyTotals.children.find(node => node.children[0].textContent === t('wb.usage.received'));
+      assert.equal(emptyBox.children[1].textContent, '0');
+      assert.equal(emptyBox.children[2].textContent, `${t('wb.usage.sent')} 0`);
       const messageChart = empty.configs[1];
       assert.deepEqual(messageChart.data.datasets.map(row => row.data), [[0, 0], [-0, -0]]);
     }
@@ -199,4 +202,64 @@ test('host curves keep a legend, a labelled 0–100% axis and a readable height,
   assert.ok(nodes.filter(n=>n.classList?.contains('wb-host-frame')).every(n=>parseInt(n.style.height)>=100));
   assert.doesNotMatch(String(f.configs[0].data.datasets[0].backgroundColor),/22$/,'no hex+alpha concatenation');
   view.destroy();
+});
+
+test('range buttons and the always-visible custom dates choose what is read', async () => {
+  const f = fixture(), paths = [];
+  const page = createUsagePage({ ...f, read: async path => { paths.push(path); return value; } });
+  await page.open();
+  const nodes = allNodes(f.root), pressed = () => nodes.find(node => node.id === 'wb-usage-range').children
+    .filter(node => node.attributes['aria-pressed'] === 'true').map(node => node.dataset.range);
+  assert.deepEqual(pressed(), ['7d']);
+  nodes.find(node => node.dataset.range === '24h').dispatch('click'); await tick();
+  assert.match(paths.at(-1), /range=24h$/); assert.deepEqual(pressed(), ['24h']);
+  // The visible field shows the page-language label until a time is chosen, then the chosen time.
+  const shown = () => nodes.filter(node => node.classList.contains('wb-date-text')).map(node => node.textContent);
+  assert.deepEqual(shown(), ['wb.usage.since', 'wb.usage.until']);
+  const since = nodes.find(node => node.id === 'wb-usage-since');
+  since.value = '2026-11-01T00:00'; since.dispatch('input');
+  nodes.find(node => node.id === 'wb-usage-until').value = '2026-11-03T00:00';
+  assert.deepEqual(shown(), ['2026-11-01 00:00', 'wb.usage.until']);
+  nodes.find(node => node.id === 'wb-usage-apply').dispatch('click'); await tick();
+  assert.match(paths.at(-1), /range=custom&since=.*&until=/); assert.deepEqual(pressed(), []);
+  assert.deepEqual(shown(), ['2026-11-01 00:00', '2026-11-03 00:00']);
+  page.destroy();
+});
+
+test('axis labels are short dates with today named, or clock hours', () => {
+  const now = Date.parse('2026-11-03T05:00:00Z');
+  assert.deepEqual(bucketLabels(['2026-11-01T16:00:00.000Z', '2026-11-02T16:00:00.000Z'], { tz: 'Asia/Singapore', now, t: key => key }),
+    ['11-02', 'wb.usage.today']);
+  assert.deepEqual(bucketLabels(['2026-11-03T01:00:00.000Z'], { tz: 'Asia/Singapore', bucket: 'hour', now }), ['09:00']);
+  assert.equal(compactCount(215000000), '215M'); assert.equal(compactCount(8400), '8,400'); assert.equal(compactCount(84000), '84K');
+});
+
+test('technical usage reads the cache hit rate for the same period and shows it under tokens', async () => {
+  const f = fixture(), paths = []; let level = 'plain', cache = { total: 0.623 };
+  const reply = { ...value, since: '2026-11-01T00:00:00.000Z', until: '2026-11-08T00:00:00.000Z' };
+  const page = createUsagePage({ ...f, detail: () => level, t: (key, params) => key + (params ? ' ' + JSON.stringify(params) : ''),
+    read: async path => { paths.push(path); if (path.startsWith('/api/metrics/series')) { if (!cache) throw Error('read_failed'); return cache; } return reply; } });
+  await page.open();
+  assert.deepEqual(paths, ['/api/workbench/usage?range=7d'], 'plain view has no token total and reads no hit rate');
+  level = 'technical'; page.setViewDetail(); await tick();
+  assert.equal(paths[1], cachePath(reply));
+  assert.match(paths[1], /metric=cache&since=2026-11-01T00%3A00%3A00\.000Z&until=2026-11-08T00%3A00%3A00\.000Z/);
+  assert.match(f.root.textContent, /wb\.usage\.cacheHit \{"pct":62\}/);
+  page.setViewDetail(); await tick();
+  assert.equal(paths.length, 2, 'a known rate is not read again');
+  cache = null; await page.refresh(); await tick();
+  assert.equal(f.root.textContent.includes('wb.usage.cacheHit'), false, 'an unreadable rate leaves the line out');
+  page.destroy();
+});
+test('beyond the seven days of runtime events the unknown cards take full rows and tokens fills its row', () => {
+  const f = fixture();
+  renderUsage(f.root, { ...value, rotations: null, tools: null }, { ...f, level: 'technical' });
+  const cards = allNodes(f.root).filter(node => node.classList.contains('wb-usage-chart'));
+  const unknown = cards.filter(node => node.classList.contains('wb-usage-unknown'));
+  assert.equal(unknown.length, 2);
+  assert.ok(unknown.every(node => node.classList.contains('wb-usage-wide')));
+  const tokens = cards.find(node => node.textContent.includes('wb.usage.tokens'));
+  assert.ok(tokens.classList.contains('wb-usage-wide'));
+  const cost = cards.find(node => node.textContent.includes('wb.usage.cost'));
+  assert.equal(cost.classList.contains('wb-usage-wide'), false);
 });

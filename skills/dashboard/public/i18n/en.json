@@ -40,8 +40,8 @@
   "memory.collapse_all": "Collapse all directories",
   "memory.expand_all": "Expand all directories",
   "memory.select_file": "Select a file",
-  "memory.rendered": "Rendered",
-  "memory.raw": "Raw",
+  "memory.rendered": "Preview",
+  "memory.raw": "Source",
   "memory.edit": "Edit",
   "memory.save": "Save",
   "memory.saving": "Saving...",
@@ -565,5 +565,6 @@
   "result.mode_switch_accepted": "Mode switch to {value} accepted; check the current transition state.",
   "result.mode_switch_unchanged": "Session mode is already {value}.",
   "result.mode_switch_rejected": "Mode switch rejected ({code}).",
-  "result.mode_switch_unknown": "Mode switch result is unknown. Check the current mode before retrying."
+  "result.mode_switch_unknown": "Mode switch result is unknown. Check the current mode before retrying.",
+  "memory.conflict_later": "Not now"
 }

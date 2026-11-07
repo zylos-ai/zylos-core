@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { AuthGate } from '../src/lib/auth.js';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
@@ -24,8 +25,13 @@ function fixture(t, remoteScope) {
     config: { fleet: { agents: [{ name: 'Remote', base_url: 'https://remote.invalid/dashboard' }] } },
     poller: { getSessionToken: async () => remoteScope === 'admin' ? 'remote-admin-fixture' : 'remote-read-fixture' },
     fetch: async (url, options) => {
-      forwarded.push({ url, method: options.method, body: options.body?.toString(), headers: options.headers });
-      const body = remoteScope === 'admin' ? { ok: true, data: { accepted: true } } : { error: 'insufficient_scope', required: 'admin' };
+      let received = '';
+      if (options.body && typeof options.body !== 'string' && !Buffer.isBuffer(options.body)) {
+        for await (const chunk of options.body) received += chunk.toString();
+      } else received = options.body?.toString() || '';
+      forwarded.push({ url, method: options.method || 'GET', body: received, headers: options.headers });
+      const body = remoteScope !== 'admin' ? { error: 'insufficient_scope', required: 'admin' }
+        : url.endsWith('/uploads/config') ? { maxUploadBytes: 1024 * 1024 } : { ok: true, data: { accepted: true } };
       return new Response(JSON.stringify(body), { status: remoteScope === 'admin' ? 200 : 403,
         headers: { 'content-type': 'application/json', 'x-remote-result': 'preserved' } });
     },
@@ -33,14 +39,14 @@ function fixture(t, remoteScope) {
   async function request(route, localScope = 'admin') {
     const req = Readable.from(route.body === null ? [] : [Buffer.from(route.body)]);
     req.method = route.method;
-    req.url = `/fleet/Remote${route.path}?exact=1`;
-    req.headers = { host: 'hub.test', origin: 'http://hub.test', 'content-type': 'application/json',
+    req.url = `/fleet/Remote${route.path}${route.attachment ? '' : '?exact=1'}`;
+    req.headers = { host: 'hub.test', origin: 'http://hub.test', 'content-type': route.contentType || 'application/json',
       ...(localScope === 'read' ? { authorization: `Bearer ${localToken}` } : { cookie: `__Secure-zylos_dashboard_session=${cookie}` }) };
-    const response = { status: null, headers: {}, body: '',
+    const response = Object.assign(new EventEmitter(), { status: null, headers: {}, body: '',
       setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
       writeHead(status, headers = {}) { this.status = status; Object.assign(this.headers, headers); },
-      end(body) { this.body += body?.toString() ?? ''; },
-    };
+      end(body) { this.body += body?.toString() ?? ''; this.writableFinished = true; },
+    });
     const url = new URL(req.url, 'http://hub.test');
     if (!await auth.handle(req, response, url)) await proxy.handle(req, response, url);
     return response;
@@ -63,12 +69,17 @@ for (const route of workbenchWriteRoutes) {
     assert.equal(response.status, 200);
     assert.deepEqual(JSON.parse(response.body), { ok: true, data: { accepted: true } });
     assert.equal(response.headers['x-remote-result'], 'preserved');
-    assert.equal(adminRemote.forwarded.length, 1);
-    assert.deepEqual({ ...adminRemote.forwarded[0], headers: undefined }, {
-      url: `https://remote.invalid/dashboard${route.path}?exact=1`, method: route.method,
+    assert.equal(adminRemote.forwarded.length, route.attachment ? 2 : 1);
+    if (route.attachment) {
+      assert.equal(adminRemote.forwarded[0].method, 'GET');
+      assert.equal(adminRemote.forwarded[0].url, 'https://remote.invalid/dashboard' + route.path + '/config');
+    }
+    const forwarded = adminRemote.forwarded.at(-1);
+    assert.deepEqual({ ...forwarded, headers: undefined }, {
+      url: `https://remote.invalid/dashboard${route.path}${route.attachment ? '' : '?exact=1'}`, method: route.method,
       body: route.body ?? '', headers: undefined,
     });
-    assert.equal(adminRemote.forwarded[0].headers.authorization, 'Bearer remote-admin-fixture');
+    assert.equal(forwarded.headers.authorization, 'Bearer remote-admin-fixture');
     const readRemote = fixture(t, 'read');
     response = await readRemote.request(route);
     assert.equal(response.status, 403);

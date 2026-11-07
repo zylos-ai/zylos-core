@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { createMarkdownRenderer, markdownHtml } from '../public/js/markdown-config.js';
 const vendoredPath = new URL('../public/js/markdown-it.min.js', import.meta.url).pathname;
 
 // The UMD bundle sits inside a "type":"module" package, so require() would
@@ -13,20 +14,8 @@ function loadVendoredMarkdownIt() {
   return mod.exports;
 }
 
-// Mirror the app.js configuration (html: false keeps agent-written memory
-// content escaped; the link_open rule opens links in a new tab).
-function buildRenderer() {
-  const markdownit = loadVendoredMarkdownIt();
-  const md = markdownit({ html: false, linkify: true });
-  const renderToken = (tokens, idx, options, env, self) => self.renderToken(tokens, idx, options);
-  const defaultLinkOpen = md.renderer.rules.link_open || renderToken;
-  md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-    tokens[idx].attrSet('target', '_blank');
-    tokens[idx].attrSet('rel', 'noopener noreferrer');
-    return defaultLinkOpen(tokens, idx, options, env, self);
-  };
-  return md;
-}
+// The renderer the memory page uses, built on the vendored bundle.
+const buildRenderer = () => createMarkdownRenderer(loadVendoredMarkdownIt());
 
 test('vendored markdown-it bundle is committed and loadable', () => {
   const stat = fs.statSync(vendoredPath);
@@ -49,6 +38,8 @@ test('links render with target=_blank and rel=noopener noreferrer', () => {
   // linkify: bare URLs become links with the same hardening.
   const bare = md.render('see https://example.com');
   assert.match(bare, /<a href="https:\/\/example\.com" target="_blank" rel="noopener noreferrer">/);
+  // Memory file names are not domains: identity.md stays plain text, in headings too.
+  assert.doesNotMatch(md.render('# identity.md\n\nsee state.md'), /<a /);
 });
 
 test('tables and blockquotes render', () => {
@@ -82,15 +73,16 @@ test('headings and fenced code blocks still render as before', () => {
   assert.match(html, /<pre><code>const a = 1;\n<\/code><\/pre>/);
 });
 
-test('app.js uses the vendored renderer with html disabled and a safe fallback', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /window\.markdownit\(\{ html: false, linkify: true \}\)/);
-  assert.match(app, /attrSet\('target', '_blank'\)/);
-  assert.match(app, /attrSet\('rel', 'noopener noreferrer'\)/);
-  // Fallback keeps content visible (escaped) if the vendored script is missing.
-  assert.match(app, /if \(!md\) return `<pre class="memory-raw"><code>\$\{esc\(source\)\}<\/code><\/pre>`;/);
-  // The hand-rolled line-by-line renderer is gone.
-  assert.doesNotMatch(app, /let inCode = false;/);
+test('the renderer keeps raw HTML escaped and falls back to the escaped raw view without the bundle', () => {
+  const md = buildRenderer();
+  assert.doesNotMatch(md.render('<script>alert(1)</script>'), /<script>/);
+  assert.doesNotMatch(md.render('[x](javascript:alert(1))'), /href="javascript:/);
+  // Without a scheme nothing becomes a link: file names and www. addresses stay text.
+  assert.doesNotMatch(md.render('see www.example.com and notes.md'), /<a /);
+  assert.equal(createMarkdownRenderer(undefined), null);
+  const esc = text => text.replace(/</g, '&lt;');
+  assert.equal(markdownHtml(null, '<b>raw</b>', esc), '<pre class="memory-raw"><code>&lt;b>raw&lt;/b></code></pre>');
+  assert.match(markdownHtml(md, '**bold**', esc), /<strong>bold<\/strong>/);
 });
 
 test('index.html loads markdown-it before app.js and bumps cache versions', () => {
@@ -99,7 +91,7 @@ test('index.html loads markdown-it before app.js and bumps cache versions', () =
   const appIdx = html.indexOf('js/app.js?v=');
   assert.ok(mdIdx > -1, 'markdown-it script tag present');
   assert.ok(mdIdx < appIdx, 'markdown-it loads before app.js');
-  assert.match(html, /app\.js\?v=97/);
+  assert.match(html, /app\.js\?v=98/);
   assert.match(html, /style\.css\?v=60/);
 });
 

@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { once } from 'node:events';
-import { attachmentUploadStream } from './attachment-upload-stream.js';
 import { browserPath, browserBaseFromRequest } from './browser-base.js';
 import { sendHtml, sendJson, sendText, serveStatic } from './http.js';
 import { validateMemoryQueryPath } from './memory-browser.js';
@@ -629,25 +628,40 @@ export class FleetProxy {
   async _relayAttachment(req, res, agent, suffix, search, token, conversationPath, upload) {
     const control = new AbortController();
     const context = req._authContext;
-    const guard = createSecretGuard(token);
-    const tokenBytes = Buffer.from(String(token || ''));
+    let guard = createSecretGuard(token);
+    let tokenBytes = Buffer.from(String(token || ''));
     const fail = (code, status = 502) => Object.assign(new Error(code), { status });
-    let body, timer, uploadError, started = false;
+    let body, uploadError, started = false, lastLocalCheck = -Infinity;
     const abort = () => control.abort();
     req.once('aborted', abort);
     req.once('error', abort);
     res.once('close', abort);
     const localAccess = () => {
+      const now = Date.now();
+      if (now - lastLocalCheck < 1000) return true;
       const current = this.authGate?.revalidateAuthContext
         ? this.authGate.revalidateAuthContext(context) : context;
-      return samePrincipal(current, context) && this.config.fleet?.agents?.some(candidate =>
+      const allowed = samePrincipal(current, context) && this.config.fleet?.agents?.some(candidate =>
         candidate.name === agent.name && candidate.base_url === agent.base_url);
+      if (allowed) lastLocalCheck = now;
+      return allowed;
     };
     const fetchTarget = (route, options = {}) => this.fetch(remoteUrl(agent, route), {
       ...options, redirect: 'error',
       headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'identity', ...options.headers },
       signal: options.signal || control.signal,
     });
+    const fetchRead = async (route, options) => {
+      let response = await fetchTarget(route, options);
+      if (response.status === 401) {
+        await response.body?.cancel();
+        token = await this.poller.getSessionToken(agent.name, { force: true });
+        guard = createSecretGuard(token);
+        tokenBytes = Buffer.from(String(token || ''));
+        response = await fetchTarget(route, options);
+      }
+      return response;
+    };
     const smallBody = async response => {
       const chunks = []; let size = 0;
       if (response.body) for await (const chunk of response.body) {
@@ -671,7 +685,7 @@ export class FleetProxy {
       if (upload) {
         // A target-authorized config read precedes any access to the browser's
         // body. Never refresh credentials and replay a streaming upload.
-        const configResponse = await fetchTarget(`${conversationPath}/uploads/config`, {
+        const configResponse = await fetchRead(`${conversationPath}/uploads/config`, {
           signal: AbortSignal.any([control.signal, AbortSignal.timeout(5000)]),
         });
         const configHeaders = responseHeaders(configResponse);
@@ -684,7 +698,13 @@ export class FleetProxy {
         if (!Number.isSafeInteger(maximum) || maximum <= 0 || !Number.isSafeInteger(maximum + 65536)) throw fail('invalid_upload_config');
         if (!localAccess()) throw fail('admin_required', 403);
         if (Number(req.headers['content-length']) > maximum + 65536) throw fail('chat_upload_too_large', 413);
-        body = attachmentUploadStream(req.headers['content-type'], maximum);
+        let total = 0;
+        // The target owns multipart parsing and per-part limits. The relay
+        // only needs a bounded byte budget for the original streamed request.
+        body = new Transform({ transform(chunk, encoding, callback) {
+          total += chunk.length;
+          callback(total > maximum + 65536 ? fail('chat_upload_too_large', 413) : null, chunk);
+        } });
         body.once('error', error => { uploadError = error; control.abort(); });
         req.pipe(body);
         started = true;
@@ -698,7 +718,7 @@ export class FleetProxy {
         return;
       }
 
-      const response = await fetchTarget(suffix);
+      const response = await fetchRead(suffix);
       const headers = responseHeaders(response);
       if (!response.ok) {
         const bytes = await smallBody(response);
@@ -708,25 +728,7 @@ export class FleetProxy {
       const declared = response.headers.get('content-length');
       if (declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)))) throw fail('invalid_attachment_length');
       if (declared !== null) headers['content-length'] = declared;
-      let count = 0, tail = Buffer.alloc(0), checking = false;
-      // Probe a data-access route (not uploads/config, which requires write
-      // mode). Poll while stalled too; a revoked target must cancel both hops.
-      timer = setInterval(async () => {
-        if (checking || control.signal.aborted) return;
-        checking = true;
-        try {
-          if (!localAccess()) throw fail('admin_required', 403);
-          const probe = await fetchTarget(conversationPath, {
-            signal: AbortSignal.any([control.signal, AbortSignal.timeout(3000)]),
-          });
-          await probe.body?.cancel();
-          if (!probe.ok) throw fail('attachment_access_revoked', 403);
-        } catch {
-          control.abort();
-          if (res.headersSent) res.destroy();
-        } finally { checking = false; }
-      }, 1000);
-      timer.unref?.();
+      let count = 0, tail = Buffer.alloc(0);
       const write = async bytes => {
         if (!bytes.length) return;
         if (!localAccess()) throw fail('admin_required', 403);
@@ -761,7 +763,6 @@ export class FleetProxy {
         sendJson(res, failure.status || 502, { error: code });
       }
     } finally {
-      clearInterval(timer);
       control.abort();
       if (body) { req.unpipe(body); body.destroy(); }
       if (upload && !req.complete) {

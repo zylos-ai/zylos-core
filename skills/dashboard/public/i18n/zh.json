@@ -40,8 +40,8 @@
   "memory.collapse_all": "全部折叠",
   "memory.expand_all": "全部展开",
   "memory.select_file": "选择文件",
-  "memory.rendered": "渲染",
-  "memory.raw": "源码",
+  "memory.rendered": "预览",
+  "memory.raw": "原文",
   "memory.edit": "编辑",
   "memory.save": "保存",
   "memory.saving": "保存中...",
@@ -565,5 +565,6 @@
   "result.mode_switch_accepted": "已接受切换到 {value} 模式的请求，请查看当前切换状态。",
   "result.mode_switch_unchanged": "当前会话模式已经是 {value}。",
   "result.mode_switch_rejected": "模式切换被拒绝（{code}）。",
-  "result.mode_switch_unknown": "模式切换结果未知，请先查看当前模式再决定是否重试。"
+  "result.mode_switch_unknown": "模式切换结果未知，请先查看当前模式再决定是否重试。",
+  "memory.conflict_later": "先不保存"
 }

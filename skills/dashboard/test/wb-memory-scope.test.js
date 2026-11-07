@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
-import { memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
+import { leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 
 // Direct product imports and injected DOM/request. Run for memory scope, charts,
@@ -140,17 +140,15 @@ test('save completion is fenced when the instance or selected file changes', asy
   assert.equal(await saving, null); assert.equal(reads, 0);
 });
 
-test('detail toggle redraws memory charts after the shared mode changes without reading again', async () => {
-  const document = createDocument(), toggle = document.createElement('input');
-  document.querySelector = selector => selector === '#wb-detail-toggle' ? toggle : null;
+test('a redraw after the detail level changes shows or hides the memory charts without reading again', async () => {
   let reads = 0;
-  const f = fixture({ document, request: async () => { reads++; return { groups: [] }; } });
+  const f = fixture({ request: async () => { reads++; return { groups: [] }; } });
   await f.controller.load(); assert.equal(f.chartsRoot.hidden, true);
-  toggle.dispatch('change'); document.documentElement.dataset.detail = 'technical';
-  await Promise.resolve(); assert.equal(f.chartsRoot.hidden, false); assert.equal(reads, 1);
-  toggle.dispatch('change'); document.documentElement.dataset.detail = 'plain';
-  await Promise.resolve(); assert.equal(f.chartsRoot.hidden, true); assert.equal(reads, 1);
-  f.controller.destroy(); assert.equal(toggle.listeners.get('change').length, 0);
+  f.document.documentElement.dataset.detail = 'technical'; f.controller.render();
+  assert.equal(f.chartsRoot.hidden, false); assert.equal(reads, 1);
+  f.document.documentElement.dataset.detail = 'plain'; f.controller.render();
+  assert.equal(f.chartsRoot.hidden, true); assert.equal(reads, 1);
+  f.controller.destroy();
 });
 
 
@@ -380,4 +378,56 @@ test('repeated action renders keep invalid group drafts read-only', () => {
   Object.assign(edit, { hidden: false, disabled: false }); save.disabled = true;
   applyMemoryWriteAccess(edit, save, value, 'identity.md');
   assert.equal(edit.hidden, false); assert.equal(edit.disabled, false); assert.equal(save.disabled, true, 'ordinary pending/clean restrictions remain in force');
+});
+
+
+test('memory files list flat per section, skip dot files and know their scope', () => {
+  const value = tree();
+  value.root.children.push(file('.gitkeep'), dir('reference', [file('reference/decisions.md'), file('reference/.gitkeep')]));
+  const shared = memoryFlatFiles(memoryScope(value).shared).map(node => node.path);
+  assert.deepEqual(shared.filter(path => !path.startsWith('session-groups/')),
+    ['identity.md', 'references.md', 'state.md', 'users/profile.md', 'reference/decisions.md']);
+  assert.equal(shared.some(path => path.split('/').at(-1).startsWith('.')), false);
+  assert.deepEqual(memoryFileScope(value, 'state.md'), { kind: 'shared' });
+  assert.equal(memoryFileScope(value, 'session-groups/telegram:dm-1001/handoff.md').kind, 'group');
+  assert.equal(memoryFileScope(value, 'session-groups/telegram:dm-1001/handoff.md').group.sessionGroup, 'telegram:dm-1001');
+  assert.deepEqual(memoryFileScope(value, 'session-groups/bad name/notes.md'), { kind: 'invalid' });
+  assert.deepEqual(memoryFileScope(value, 'session-groups/telegram:dm-1001'), { kind: 'invalid' });
+});
+
+test('the file list folds by section, keeps search results open and names the folding state', () => {
+  const collapsed = new Set(), toggled = [], listRoot = createDocument().createElement('div');
+  const f = fixture({ listRoot, isCollapsed: key => collapsed.has(key), toggleCollapsed: key => toggled.push(key) });
+  assert.deepEqual(f.controller.sectionKeys(), ['shared', 'session-groups/telegram:dm-1001']);
+  f.controller.renderList();
+  const heads = () => nodesOfClass(listRoot, 'wb-memory-section-h').concat(nodesOfClass(listRoot, 'wb-memory-group-h'));
+  assert.deepEqual(heads().map(node => node.attributes['aria-expanded']), ['true', 'true']);
+  const paths = () => allNodes(listRoot).filter(node => node.dataset.path).map(node => node.dataset.path);
+  assert.ok(paths().includes('state.md') && paths().includes('session-groups/telegram:dm-1001/handoff.md'));
+  heads()[1].dispatch('click'); assert.deepEqual(toggled, ['session-groups/telegram:dm-1001']);
+  collapsed.add('shared'); collapsed.add('session-groups/telegram:dm-1001'); f.controller.renderList();
+  assert.deepEqual(heads().map(node => node.attributes['aria-expanded']), ['false', 'false']);
+  assert.deepEqual(paths(), []);
+  // A search shows matches inside folded sections; no match says so.
+  const search = allNodes(f.root).find(node => node.type === 'search');
+  search.value = 'handoff'; search.dispatch('input');
+  assert.deepEqual(paths(), ['session-groups/telegram:dm-1001/handoff.md']);
+  search.value = 'nothing-here'; search.dispatch('input');
+  assert.match(listRoot.textContent, /wb\.memory\.noMatch/);
+  // The shared scope has no group sections to fold.
+  allNodes(f.root).find(node => node.textContent === 'wb.memory.shared').dispatch('click');
+  assert.deepEqual(f.controller.sectionKeys(), ['shared']);
+  f.controller.destroy();
+});
+
+test('later in the conflict dialog closes it and keeps the unsaved draft', () => {
+  const memory = { conflict: { mine: 'a', theirs: { text: 'b' } }, draft: 'my draft', dirty: true, editing: true };
+  leaveMemoryConflict(memory);
+  assert.deepEqual(memory, { conflict: null, draft: 'my draft', dirty: true, editing: true });
+});
+
+test('the editor warns about background upkeep only on instances with session groups', () => {
+  assert.equal(memoryUpkeepNotice(tree()), true);
+  assert.equal(memoryUpkeepNotice({ root: tree().root, sessionGroups: [] }), false);
+  assert.equal(memoryUpkeepNotice(null), false);
 });

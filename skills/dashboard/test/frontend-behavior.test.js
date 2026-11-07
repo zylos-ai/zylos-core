@@ -1542,7 +1542,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
-  assert.match(index, /app\.js\?v=97/);
+  assert.match(index, /app\.js\?v=98/);
   assert.match(index, /style\.css\?v=60/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
@@ -1618,7 +1618,7 @@ test('fleet management entry stays local and its controls are retained in settin
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
-  assert.match(index, /app\.js\?v=97/);
+  assert.match(index, /app\.js\?v=98/);
   assert.match(index, /id="fleet-manage-btn"[^>]*><i class="wb-ico wb-ico-fleet" aria-hidden="true"><\/i>/);
   assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
   // With other machines configured the icon opens the fleet wall; otherwise fleet settings.
@@ -1820,20 +1820,6 @@ test('memory tab pins the page frame and panes scroll independently (#222)', () 
   assert.match(css, /body\.memory-tab-active \.memory-tree \{ flex: 1; min-height: 0; max-height: none; \}/);
 });
 
-test('memory tree directories collapse and expand (#222)', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  // Directory rows are buttons carrying their path and expansion state.
-  assert.match(app, /<button class="memory-dir" type="button" data-dir="\$\{esc\(node\.path\)\}" aria-expanded="\$\{!collapsed\}"/);
-  // #226: caret is an SVG chevron rotated by class, large enough to read.
-  assert.match(app, /memory-dir-caret\$\{collapsed \? '' : ' expanded'\}/);
-  assert.match(app, /MEMORY_CARET_ICON/);
-  // Collapsed directories render no children.
-  assert.match(app, /state\.memory\.collapsed\.has\(node\.path\)/);
-  // Toggling flips membership in the collapsed set and re-renders.
-  assert.match(app, /state\.memory\.collapsed\.delete\(dir\)/);
-  assert.match(app, /state\.memory\.collapsed\.add\(dir\)/);
-});
-
 test('fleet sound cues use the marimba strike timbre Howard picked (#223)', () => {
   const sounds = fs.readFileSync(new URL('../public/js/fleet-sounds.js', import.meta.url).pathname, 'utf8');
   // Fixed-pitch percussive strike with a 4th-harmonic partial — no glide.
@@ -1866,8 +1852,7 @@ test('memory tree has a collapse-all/expand-all toggle (#226)', () => {
   assert.match(html, /id="memory-fold"/);
   // Toggle folds every directory at once, or expands everything back.
   assert.match(app, /state\.memory\.collapsed = allCollapsed \? new Set\(\) : new Set\(dirs\)/);
-  // Button label/icon track whether everything is already collapsed.
-  assert.match(app, /allCollapsed \? MEMORY_UNFOLD_ICON : MEMORY_FOLD_ICON/);
+  // Button label tracks whether everything is already collapsed.
   assert.match(app, /allCollapsed \? t\('memory\.expand_all'\) : t\('memory\.collapse_all'\)/);
   assert.match(i18nEn, /memory\.collapse_all/);
   assert.match(i18nZh, /memory\.collapse_all/);
