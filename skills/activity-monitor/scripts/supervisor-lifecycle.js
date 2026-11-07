@@ -271,12 +271,13 @@ export class SupervisorLifecycle {
       if (typeof scene.processRunning !== 'boolean') return 'unknown_process';
       if (scene.processRunning !== false) {
         if (preparedTtl && this.activeSubagents(scene, context)) return 'waiting_idle';
-        if (this.subagentReclaimBlocked(scene, fence.reason, context) ||
+        const childBlocked = this.subagentReclaimBlocked(scene, fence.reason, context);
+        if (childBlocked ||
             !await this.reclaimRead(fence, () => this.idle(scene, context))) {
           if (singleAuth || fence.reason === 'model_config') return 'waiting_idle';
           if (!unfenced) await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
-          await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'not_idle' });
+          await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: childBlocked ? 'subagent_activity' : 'not_idle' });
           return 'cancelled';
         }
         const again = await this.reclaimRead(fence, async () => singleAuth ? this.running(group, { withoutDeadline: true }) : {
@@ -299,6 +300,8 @@ export class SupervisorLifecycle {
         if (scene.processRunning && this.subagentReclaimBlocked(scene, fence.reason, context)) {
           if (preparedTtl && this.activeSubagents(scene, context)) return 'waiting_idle';
           await this.clear(fence, context);
+          if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
+          await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'subagent_activity' });
           return 'cancelled';
         }
         await this.reclaimRead(fence, async () => {
