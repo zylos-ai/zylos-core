@@ -20,7 +20,7 @@ export function installMemoryScripts(zylosDir) {
   const bridge = path.join(skills, 'comm-bridge', 'scripts');
   fs.mkdirSync(bridge, { recursive: true });
   fs.writeFileSync(path.join(skills, 'comm-bridge', 'package.json'), '{"type":"module"}');
-  for (const name of ['core-config-loader.js', 'c4-query-format.js', 'c4-session-group.js']) {
+  for (const name of ['core-config-loader.js', 'c4-query-format.js', 'c4-session-group.js', 'c4-content-projection.js', 'c4-content-schema.js']) {
     fs.copyFileSync(path.join(coreRoot, 'skills', 'comm-bridge', 'scripts', name), path.join(bridge, name));
   }
   return path.join(target, 'memory-write.js');

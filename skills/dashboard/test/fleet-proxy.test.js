@@ -1658,7 +1658,8 @@ test('fleet workbench write allowlist admits every registered method and path', 
       fetch: async () => { calls++; return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }); },
     });
     const req = Readable.from(route.body === null ? [] : [Buffer.from(route.body)]);
-    req.method = route.method; req.headers = {};
+    // The local auth gate runs first; conversation routes also require its admin scope.
+    req.method = route.method; req.headers = {}; req._authContext = { scope: 'admin', kind: 'api' };
     const res = { status: null, writeHead(status) { this.status = status; }, end() {} };
     await proxy.proxyApi(req, res, { name: 'Remote', base_url: 'https://remote.invalid' }, route.path, '');
     assert.equal(res.status, 200); assert.equal(calls, 1);
