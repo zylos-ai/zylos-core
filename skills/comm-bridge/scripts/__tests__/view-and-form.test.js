@@ -80,6 +80,35 @@ for (const kind of ['answer', 'control']) test(`${kind} envelopes cannot carry l
   assert.equal(parseC4Content(encode(envelope)).kind, 'invalid');
 });
 
+for (const kind of ['answer', 'control']) for (const view of [1, { schemaVersion: 99, root: 'x', nodes: [] }]) {
+  test(`${kind} envelopes reject ${typeof view === 'number' ? 'scalar' : 'unknown-version'} layout metadata`, () => {
+    const envelope = kind === 'answer'
+      ? { version: 1, kind, messageId: 'answer_message', fallbackText: 'Plan A chosen', interruptId: fixtures.message.interruptId,
+        questionSummary: fixtures.message.questionSummary, action: choiceAction(), metadata: { zylos: { answerId: 'layout_answer' } } }
+      : { version: 1, kind, messageId: 'stop_message', fallbackText: 'Stopped', interruptId: fixtures.message.interruptId,
+        control: { operation: 'stop', messageId: fixtures.message.messageId } };
+    assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
+    envelope.metadata = { ...envelope.metadata, view: clone(view) };
+    assert.equal(parseC4Content(encode(envelope)).kind, 'invalid');
+  });
+}
+
+test('an overdeep stored layout does not block a valid Content answer', () => {
+  const message = clone(fixtures.message);
+  assert.equal(validateAnswer(choiceAction(), message), true);
+  message.metadata = { view: clone(fixtures.views.find(item => item.name === 'balanced_columns').view) };
+  message.metadata.view.nodes[1].extra = { b: { c: 1 } };
+  const depth = value => value !== null && typeof value === 'object'
+    ? 1 + Math.max(0, ...Object.values(value).map(depth)) : 1;
+  assert.equal(depth(message.metadata), 7);
+  const result = parseC4Content(encode(message));
+  assert.equal(result.kind, 'envelope');
+  assert.equal(result.view, null);
+  assert.ok(result.viewError);
+  assert.equal('view' in result.envelope.metadata, false);
+  assert.equal(validateAnswer(choiceAction(), message), true);
+});
+
 function nodeBoundaryMessage(total) {
   const message = { version: 1, kind: 'message', messageId: 'many_nodes', fallbackText: 'Many complete blocks', blocks: [] };
   const view = { schemaVersion: 1, root: 'root', nodes: [{ id: 'root', type: 'stack', children: [] }] };
