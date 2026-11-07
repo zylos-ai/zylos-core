@@ -79,6 +79,8 @@ test('history uses one metadata batch and refreshes unavailable rows without a n
   assert.equal(calls.length, 1);
   assert.equal(calls[0].length, 20);
   assert.equal(first.items[0].attachments[0].available, false);
+  assert.equal(first.items[0].preview, '[文件] report.pdf');
+  assert.equal(first.items[0].preview.includes('/private/'), false);
   available = true;
   const next = f.history.messages(id, { direction: 'after', cursor: first.afterCursor, recheckIds: '1,2' });
   assert.equal(next.items.length, 0);

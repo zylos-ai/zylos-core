@@ -633,5 +633,17 @@
   "wb.usage.topTen": "Top 10 by calls",
   "wb.usage.none": "No data",
   "wb.usage.cacheHit": "Cache hits {pct}%",
-  "wb.memory.upkeepConflict": "Several groups on this instance tidy memory in the background, so a save may conflict with that; if it does, you choose which version to keep."
+  "wb.memory.upkeepConflict": "Several groups on this instance tidy memory in the background, so a save may conflict with that; if it does, you choose which version to keep.",
+  "chat.page.back": "Back to conversations",
+  "chat.page.blankPreview": "Blank conversation · created after your first message",
+  "chat.page.cancel": "Cancel",
+  "chat.page.dashboard": "Dashboard",
+  "chat.page.groupInfo": "Group details",
+  "chat.page.historyGap": "More new messages are missing in between.",
+  "chat.page.loadGap": "Load missing messages",
+  "chat.page.newMessages": "↓ {count} new messages",
+  "chat.page.noMessages": "No messages yet",
+  "chat.page.placeholder": "Message your agent (Enter for a new line, Ctrl/⌘ + Enter to send)",
+  "chat.page.sendHint": "Messages are stored before delivery. The status reports what actually happened.",
+  "chat.page.updateRetry": "Automatic updates paused; retrying"
 }
