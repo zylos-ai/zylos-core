@@ -20,6 +20,7 @@ test('Console HTTP, initial WebSocket and polling share current session response
   fs.symlinkSync(path.resolve('cli/lib/runtime'), path.join(pkg, 'cli/lib/runtime'));
   fs.writeFileSync(path.join(pkg, 'package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(pkg, 'cli/lib/config.js'), `export * from ${JSON.stringify(new URL('../config.js', import.meta.url).href)};`);
+  fs.writeFileSync(path.join(pkg, 'cli/lib/instance-config-status.js'), `export * from ${JSON.stringify(new URL('../instance-config-status.js', import.meta.url).href)};`);
   fs.writeFileSync(path.join(pkg, 'cli/lib/session-state-reader.js'), `import fs from 'node:fs'; export async function readSessionState(group, options) { const sample = JSON.parse(fs.readFileSync(${JSON.stringify(fixture)}, 'utf8')); fs.appendFileSync(${JSON.stringify(path.join(root,'calls'))}, JSON.stringify({group,options})+'\\n'); if(sample.throw) throw Error(sample.throw); return sample; }`);
   const db = new Database(path.join(zylos, 'comm-bridge/c4.db')); db.exec(fs.readFileSync('skills/comm-bridge/init-db.sql','utf8')); db.close();
   fs.mkdirSync(path.join(zylos, 'activity-monitor'));
