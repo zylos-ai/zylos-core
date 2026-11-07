@@ -388,6 +388,17 @@ test('this machine reads both weekly quotas from the raw groups snapshot, Claude
   assert.match(compare, /Codex<\/span><span class="wb-qbar-tr"><i style="width:35%" class="wb-sw-codex">/);
 });
 
+test('an unreachable machine says how long ago it was last reachable in the page language', () => {
+  const lastSeen = new Date(Date.now() - 2 * 3600e3 - 60e3).toISOString();
+  const fleet = { agents: [{ name: 'lab', state: 'OFFLINE', health_reason: 'unreachable', last_seen: lastSeen }] };
+  const english = renderAgentFleetHtml(fleet);
+  assert.match(english, /last reachable 2h ago/);
+  const chinese = renderAgentFleetHtml(fleet, { labels: { lastSeen: '{time}最后在线' }, ageText: () => '2 小时前' });
+  assert.match(chinese, /2 小时前最后在线/);
+  assert.doesNotMatch(chinese, /2h/);
+  assert.equal(renderAgentFleetHtml({ agents: [{ name: 'lab', state: 'OFFLINE', health_reason: 'unreachable', last_seen: 'not a time' }] }).includes('last reachable'), false);
+});
+
 test('problem cards say why in plain words, keep the precise reason for technical view and offer settings and refresh', () => {
   const html = renderAgentFleetHtml({ agents: [
     { name: 'k', state: 'UNKNOWN', health_reason: 'auth_failed', pulse_rate: 0, base_url: 'https://k.example' },

@@ -684,7 +684,7 @@
   "wb.fleet.fixAuth": "Ask them for a new key and add it again under Settings · This machine and others.",
   "wb.fleet.fixDown": "The other machine may be off, or its address changed.",
   "wb.fleet.fixVersion": "Their Dashboard needs an upgrade.",
-  "wb.fleet.lastSeen": "last reachable {time} ago",
+  "wb.fleet.lastSeen": "last reachable {time}",
   "wb.fleet.todayWeek": "Today / 7 days",
   "wb.fleet.groups": "Groups",
   "wb.fleet.host": "CPU · Memory · Disk",

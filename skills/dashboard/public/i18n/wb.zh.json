@@ -684,7 +684,7 @@
   "wb.fleet.fixAuth": "请向对方要新密钥，在「设置 · 本机与多台机器」里重新添加。",
   "wb.fleet.fixDown": "对方可能已关机，或地址变了。",
   "wb.fleet.fixVersion": "对方的 Dashboard 需要升级。",
-  "wb.fleet.lastSeen": "{time}前最后在线",
+  "wb.fleet.lastSeen": "{time}最后在线",
   "wb.fleet.todayWeek": "今日 / 7 天",
   "wb.fleet.groups": "组",
   "wb.fleet.host": "CPU · 内存 · 磁盘",

@@ -307,6 +307,7 @@ function renderFleet() {
   renderAgentFleet(container, state.fleet, {
     basePath: BASE_PATH,
     labels: agentFleetLabels(),
+    ageText: ts => ageSec(ts) >= 3600 ? t('time.hours_exact', { h: Math.floor(ageSec(ts) / 3600) }) : fmtAge(ts),
     self: state.fleetSelf
   });
   const updated = $('#fleet-updated');

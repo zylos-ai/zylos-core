@@ -195,14 +195,15 @@ export function defaultAgentFleetLabels() {
 }
 
 const fill = (text, values = {}) => String(text ?? '').replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
+// How long ago a machine was last reachable; the page passes its own localized wording.
 function ageLabel(iso, now = Date.now()) {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return null;
   const s = Math.max(0, Math.floor((now - ms) / 1000));
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 // Plain view gives the short reason; the technical view keeps the precise one.
 function problemOf(agent, labels) {
@@ -216,6 +217,7 @@ export function buildAgentFleetView(fleet, options = {}) {
   const labels = { ...defaultAgentFleetLabels(), ...(options.labels || {}) };
   const basePath = options.basePath || '';
   const self = options.self || null;
+  const ageText = options.ageText || ageLabel;
   const tiles = sortAgents(fleet?.agents).map((agent) => {
     const activityFeed = Array.isArray(agent.activity_feed) ? agent.activity_feed : [];
     const baseMood = stateMood(agent);
@@ -267,6 +269,7 @@ export function buildAgentFleetView(fleet, options = {}) {
       baseUrl: agent.base_url || '',
       access: agent.access === 'admin' ? 'admin' : 'read',
       lastSeen: agent.last_seen || null,
+      lastSeenText: agent.last_seen && Number.isFinite(Date.parse(agent.last_seen)) ? ageText(agent.last_seen) : null,
       self: isSelf ? self : null,
       href: isSelf ? `${basePath}/` : `${basePath}/fleet/${encodeURIComponent(String(agent.name || ''))}/`
     };
@@ -359,7 +362,7 @@ function renderTile(tile, labels) {
     ? `<div class="wb-f-sub">${escapeHtml(labels.self)}<span class="wb-tech"> · ${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span></div>`
     : `<div class="wb-f-sub wb-tech"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span>${tile.offline ? '' : ` · ${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}${tile.latencyLabel ? ` · ${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}` : ''}`} ${linkChip}</div>`;
   if (tile.offline) {
-    const seen = ageLabel(tile.lastSeen);
+    const seen = tile.lastSeenText;
     return `<div class="wb-f-card bad" ${data} data-state="${escapeHtml(tile.mood)}">
     <div class="wb-f-top"><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i><b>${escapeHtml(tile.name)}</b><span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
@@ -396,7 +399,7 @@ function renderCompare(view) {
   const maxCost = Math.max(0.0001, ...ok.map((tile) => tile.dailyCost ?? 0));
   const rows = view.tiles.map((tile) => {
     const name = `<span class="wb-f-nm"><span class="wb-hdot${tile.offline ? ' err' : ''}"></span><span>${escapeHtml(tile.name)}${tile.isSelf ? ` (${escapeHtml(labels.self)})` : ''}</span></span>`;
-    if (tile.offline) return `<div class="wb-f-row">${name}<span class="wb-f-na">${escapeHtml(tile.stateLabel)}${tile.lastSeen ? ` · ${escapeHtml(fill(labels.lastSeen, { time: ageLabel(tile.lastSeen) }))}` : ''}</span></div>`;
+    if (tile.offline) return `<div class="wb-f-row">${name}<span class="wb-f-na">${escapeHtml(tile.stateLabel)}${tile.lastSeenText ? ` · ${escapeHtml(fill(labels.lastSeen, { time: tile.lastSeenText }))}` : ''}</span></div>`;
     const cost = tile.dailyCost == null ? '' : `<div class="wb-qbar"><span></span><span class="wb-qbar-tr"><i class="wb-qbar-cost" style="width:${(tile.dailyCost / maxCost * 100).toFixed(1)}%"></i></span><b>${escapeHtml(tile.dailyCostLabel)}</b></div>`;
     return `<div class="wb-f-row">${name}${quotaBars(tile, labels)}<div class="wb-qbars">${cost}</div></div>`;
   }).join('');
