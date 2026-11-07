@@ -1060,11 +1060,11 @@ a.wb-btn { text-decoration: none; }
 .wb-once p { margin: 0; }
 .wb-once code { display: block; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--wb-line-strong); border-radius: 6px; background: var(--wb-panel); color: var(--text); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12.5px; word-break: break-all; }
 .wb-self-name { color: var(--text); font-size: 15px; }
-.wb-agent-row { display: grid; grid-template-columns: 18px 140px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--wb-line); font-size: 13px; }
+.wb-agent-row { display: grid; grid-template-columns: 18px minmax(80px, 140px) minmax(0, 1fr) minmax(0, max-content) auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--wb-line); font-size: 13px; }
 .wb-agent-row:first-child { border-top: 0; }
 .wb-agent-row > b { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-agent-url { overflow: hidden; color: var(--text-dim); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.wb-agent-st { display: flex; align-items: center; gap: 6px; color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+.wb-agent-st { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-dim); font-size: 12px; }
 .wb-agent-st.bad { color: var(--wb-err); }
 .wb-lat { display: inline-flex; align-items: flex-end; gap: 1px; height: 12px; }
 .wb-lat i { width: 3px; border-radius: 1px; background: color-mix(in srgb, var(--text) 35%, transparent); }
@@ -1072,6 +1072,7 @@ a.wb-btn { text-decoration: none; }
 .wb-addform[hidden] { display: none; }
 .wb-addform .wb-input { width: 100%; height: var(--wb-h); }
 .wb-addform-hint { grid-column: 1 / -1; color: var(--text-muted); font-size: 12px; }
+@media (max-width: 1100px) { .wb-addform { grid-template-columns: 1fr 1fr; } .wb-addform > .wb-set-inline { grid-column: 1 / -1; } }
 
 /* ─── Machines page ─── */
 .fleet-view { padding: 0; }
