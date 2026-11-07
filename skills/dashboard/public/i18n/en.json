@@ -383,7 +383,7 @@
   "result.upgrade_failed": "Upgrade failed: {error}",
   "result.set_failed": "Setting failed: {error}",
   "status.loading": "Loading...",
-  "fleet_manage.open": "Manage this dashboard's fleet",
+  "fleet_manage.open": "Machines",
   "fleet_manage.title": "Manage this dashboard's fleet",
   "fleet_manage.tab_fleet": "Fleet",
   "fleet_manage.local_agent": "Local agent",

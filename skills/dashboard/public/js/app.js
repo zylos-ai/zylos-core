@@ -5,7 +5,7 @@ import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=87';
 import { renderVersion } from './wb/settings-version.js?v=87';
 import { mountChat } from './wb/chat.js?v=91';
 import { mountChatSettings } from './wb/chat-settings.js?v=87';
-import { mountWorkbench } from './wb/shell.js?v=91';
+import { mountWorkbench } from './wb/shell.js?v=92';
 import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=89';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
 import { mountSchedule } from './wb/schedule.js?v=87';
@@ -4539,7 +4539,8 @@ function initInfoBarButtons() {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') toggleZylosUpdateHint(null); });
   document.addEventListener('click', e => {
     if (!e.target.closest('#settings-zylos-update')) toggleZylosUpdateHint(null);
-    if (e.target.closest('#fleet-manage-btn')) { e.preventDefault(); openSettingsModal('fleet'); }
+    // With other machines configured the icon opens the fleet wall; otherwise it opens fleet settings.
+    if (e.target.closest('#fleet-manage-btn')) { e.preventDefault(); if (state.multiAgent && !state.remoteAgent) showFleetView(); else openSettingsModal('fleet'); }
   });
 }
 
@@ -4548,6 +4549,16 @@ function initFleetManageButton() {
   if (!btn) return;
   btn.hidden = !!REMOTE_AGENT;
   btn.setAttribute('aria-label', t('fleet_manage.open'));
+}
+
+// The header switch drives the settings checkbox so every existing listener sees one change event.
+function initTechButton() {
+  const button = $('#wb-tech-btn'), toggle = $('#wb-detail-toggle');
+  if (!button || !toggle) return;
+  const sync = () => button.setAttribute('aria-pressed', String(toggle.checked));
+  button.addEventListener('click', () => { toggle.checked = !toggle.checked; toggle.dispatchEvent(new Event('change', { bubbles: true })); });
+  toggle.addEventListener('change', sync);
+  sync();
 }
 
 // ─── Timers ───
@@ -4619,7 +4630,9 @@ workbench = mountWorkbench({
   },
   observerStatus: () => state.observer.status,
   observerAvailable: status => !remoteIsReadOnly() && !observerRecoveryReason(status),
+  instanceInfo: () => ({ name: viewedAgentName(), version: state.dashboardState?.dashboard_version ? 'dashboard ' + state.dashboardState.dashboard_version : null }),
 });
+initTechButton();
 export function openWorkbenchGroup(key) {
   document.querySelector('.tab[data-tab="overview"]')?.click();
   return workbench.openGroup(key);

@@ -1,9 +1,10 @@
-import { element, fallbackName } from './plain-text.js?v=85';
+import { element, fallbackName, icon } from './plain-text.js?v=92';
 import { olderRow } from './older-row.js?v=85';
-import { renderOverview } from './detail-overview.js?v=91';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=89';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=85';
-import { renderNameEditor } from './name-edit.js?v=85';
+import { channelIcon, statePill } from './board.js?v=92';
+import { renderOverview } from './detail-overview.js?v=92';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=92';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=92';
+import { renderNameEditor } from './name-edit.js?v=92';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -43,6 +44,33 @@ export function groupActionText(value, t = key => key) {
   return String(result ?? value?.code ?? value?.reason ?? t('wb.actions.submitted'));
 }
 
+const actionIcons = { interrupt: 'stop', 'chop-chop': 'nudge', restart: 'restart' };
+
+/** In-page confirmation in the dashboard's own style; resolves true only on the explicit action. */
+export function confirmDialog(document, { title, body, ok, cancel }) {
+  if (!document.body) return Promise.resolve(Boolean(globalThis.confirm?.(body)));
+  return new Promise(resolve => {
+    const backdrop = element(document, 'div', undefined, 'wb-modal-bg');
+    const dialog = element(document, 'div', undefined, 'wb-modal');
+    dialog.setAttribute('role', 'alertdialog'); dialog.setAttribute('aria-modal', 'true');
+    const no = element(document, 'button', cancel, 'wb-btn'), yes = element(document, 'button', ok, 'wb-btn wb-btn-danger');
+    no.type = yes.type = 'button';
+    const actions = element(document, 'div', undefined, 'wb-modal-acts'); actions.append(no, yes);
+    dialog.append(element(document, 'h3', title), element(document, 'p', body), actions);
+    backdrop.append(dialog);
+    const previous = document.activeElement;
+    const finish = value => {
+      document.removeEventListener('keydown', keydown, true);
+      backdrop.remove(); previous?.focus?.(); resolve(value);
+    };
+    const keydown = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false); } };
+    no.addEventListener('click', () => finish(false)); yes.addEventListener('click', () => finish(true));
+    backdrop.addEventListener('click', event => { if (event.target === backdrop) finish(false); });
+    document.addEventListener('keydown', keydown, true);
+    document.body.append(backdrop); no.focus();
+  });
+}
+
 export function formatStartedAt(value, locale) {
   if (value == null) return null;
   const date = new Date(value * 1000);
@@ -51,7 +79,7 @@ export function formatStartedAt(value, locale) {
 
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
   t = key => key, writable = () => true, detail = () => 'plain', identity = () => '',
-  onClose = () => {}, onMemory = () => {}, onRename = () => {}, confirm = globalThis.confirm,
+  onClose = () => {}, onMemory = () => {}, onRename = () => {}, confirm,
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
     totalEvents: 0, totalRuns: 0, currentEvents: [], error: null, lastSuccess: null,
@@ -84,23 +112,35 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const row = state.row;
     const key = row.sessionGroup ?? 'origin';
     const header = element(document, 'header', undefined, 'wb-detail-header');
+    const top = element(document, 'div', undefined, 'wb-d-top');
     const title = row.sessionGroup == null ? t('wb.single') : row.name?.displayName ?? fallbackName(row, t);
-    header.append(element(document, 'h2', title), element(document, 'span', t('wb.state.' + (row.state?.kind ?? 'unknown')), 'wb-detail-state'));
+    const box = element(document, 'span', undefined, 'wb-ch'); box.append(icon(document, channelIcon(row)));
+    const heading = element(document, 'div', undefined, 'wb-d-title-wrap');
+    heading.append(element(document, 'h2', title, 'wb-d-title'));
     if (row.sessionGroup !== 'origin' && row.sessionGroup != null) {
-      const rename = element(document, 'button', '✎'); rename.type = 'button'; rename.disabled = !getWritable();
-      rename.setAttribute('aria-label', t('wb.name.edit'));
+      const rename = element(document, 'button', undefined, 'wb-icon-btn wb-icon-btn-sm'); rename.type = 'button'; rename.disabled = !getWritable();
+      rename.setAttribute('aria-label', t('wb.name.edit')); rename.title = getWritable() ? t('wb.name.edit') : t('wb.readOnly');
+      rename.append(icon(document, 'edit', 'xs'));
       rename.addEventListener('click', () => { state.nameOpen = true; state.nameDraft = row.name?.displayName ?? ''; draw(); });
-      header.append(rename);
+      heading.append(rename);
     }
+    top.append(box, heading, statePill(document, row, { t, level: getLevel() }));
+    const actions = element(document, 'div', undefined, 'wb-d-acts');
     for (const item of groupActionButtons(row, getWritable())) {
-      const button = element(document, 'button', t('wb.actions.' + item.action)); button.type = 'button';
+      const button = element(document, 'button', undefined, 'wb-icon-btn'); button.type = 'button';
       button.disabled = item.disabled || state.actionBusy;
-      if (item.reason) button.title = t(item.reason);
-      button.addEventListener('click', () => act(item.action)); header.append(button);
-      if (item.reason) header.append(element(document, 'small', t(item.reason), 'wb-action-reason'));
+      button.dataset.action = item.action;
+      button.setAttribute('aria-label', t('wb.actions.' + item.action));
+      // Unavailable actions stay visible and say why in their tooltip.
+      button.title = t('wb.actions.' + item.action) + (item.reason ? ' · ' + t(item.reason) : '');
+      button.append(icon(document, actionIcons[item.action]));
+      button.addEventListener('click', () => act(item.action)); actions.append(button);
     }
-    const closeButton = element(document, 'button', t('wb.close')); closeButton.type = 'button'; closeButton.addEventListener('click', close);
-    header.append(closeButton);
+    const closeButton = element(document, 'button', undefined, 'wb-icon-btn'); closeButton.type = 'button';
+    closeButton.setAttribute('aria-label', t('wb.close')); closeButton.title = t('wb.closeEsc');
+    closeButton.append(icon(document, 'x')); closeButton.addEventListener('click', close);
+    top.append(actions, closeButton);
+    header.append(top);
     const previousScroll = root.querySelector?.('.wb-detail-timeline')?.scrollTop ?? 0;
     const uptime = row.createdAt == null ? t('wb.unknown') : Math.max(0, Math.floor((now() - row.createdAt * 1000) / 60000));
     const platformKey = row.sessionGroup?.split(':')[0];
@@ -111,9 +151,11 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         : row.target?.reason === 'launch_config_unreadable' ? [row.target.runtime, t('wb.detail.launchConfigUnreadable')] : [])].filter(value => value != null).join(' · ')
       : platform + ' · ' + (row.createdAt == null ? t('wb.unknown') : t('wb.detail.continuous', { minutes: uptime }));
     const tabs = element(document, 'nav', undefined, 'wb-detail-tabs');
+    tabs.setAttribute('role', 'tablist');
     for (const tab of ['overview', 'timeline']) {
-      const button = element(document, 'button', t('wb.detail.' + tab) + (tab === 'timeline' ? ` ${state.totalEvents}` : ''));
-      button.type = 'button'; button.setAttribute('aria-selected', String(state.tab === tab));
+      const button = element(document, 'button', t('wb.detail.' + tab));
+      if (tab === 'timeline') button.append(element(document, 'span', ` ${state.totalEvents}`, 'wb-n'));
+      button.type = 'button'; button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(state.tab === tab));
       button.addEventListener('click', () => { void selectTab(tab); }); tabs.append(button);
     }
     const body = element(document, 'div', undefined, 'wb-detail-body');
@@ -133,24 +175,26 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     }
     if (state.nameOpen) {
       const editor = element(document, 'div', undefined, 'wb-name-editor');
+      header.append(editor);
       const gen = generation;
       renderNameEditor(editor, { key, name: state.nameDraft, request, document, t, writable: getWritable(), active: () => active(gen),
         onInput: value => { state.nameDraft = value; }, onCancel: () => { state.nameOpen = false; draw(); },
         onSave: value => { state.row = { ...state.row, name: value }; state.nameOpen = false; onRename(value); draw(); },
       });
-      body.append(editor);
     }
-    root.replaceChildren(header, element(document, 'p', meta, 'wb-detail-meta'), tabs, body);
+    header.append(element(document, 'p', meta, 'wb-detail-meta'), tabs);
+    root.replaceChildren(header, body);
     if (state.tab === 'timeline') body.scrollTop = previousScroll;
-    if (state.error) root.append(element(document, 'p', t('wb.readFailed') + ' · ' + state.error, 'wb-detail-error'));
-    if (state.actionResult) root.append(element(document, 'p', state.actionResult, 'wb-action-result'));
+    if (state.error) header.append(element(document, 'p', t('wb.readFailed') + ' · ' + state.error, 'wb-detail-error'));
+    if (state.actionResult) header.append(element(document, 'p', state.actionResult, 'wb-action-result'));
     root.hidden = false;
   }
   async function act(action) {
     if (!state.row || state.actionBusy || groupActionButtons(state.row, getWritable()).find(item => item.action === action)?.disabled) return;
     const confirmation = state.row.sessionGroup == null || state.row.sessionGroup === 'origin'
       ? 'confirm.restart' : 'wb.actions.restartConfirm';
-    if (action === 'restart' && !await confirm?.(t(confirmation))) return;
+    if (action === 'restart' && !await (confirm ? confirm(t(confirmation)) : confirmDialog(document, { title: t('wb.actions.restartTitle'),
+      body: t(confirmation), ok: t('wb.actions.restart'), cancel: t('wb.cancel') }))) return;
     const gen = generation;
     const row = state.row;
     state.actionBusy = true; draw();
@@ -268,8 +312,15 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     state.actionResult = ''; state.actionBusy = false;
     root.hidden = true; root.replaceChildren(); onClose();
   }
+  // Esc first leaves the inline name editor, then closes the drawer. Returns whether it acted.
+  function escape() {
+    if (!controller) return false;
+    if (state.nameOpen) { state.nameOpen = false; draw(); return true; }
+    close();
+    return true;
+  }
   return {
-    state, timeline, refresh, close, act, selectTab,
+    state, timeline, refresh, close, act, selectTab, escape,
     async open(selection, snapshot = {}) {
       close(); stopped = false; controller = new AbortController(); owner = identity();
       const selected = resolveDetailRow(selection, snapshot);

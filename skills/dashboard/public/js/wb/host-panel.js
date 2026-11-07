@@ -1,43 +1,116 @@
-import { element } from './plain-text.js?v=85';
-import { seriesChart } from './usage.js?v=88';
+import { element, icon } from './plain-text.js?v=92';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
+const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
+const seriesPeak = (series, field) => series.reduce((peak, row) => row[field]?.max == null || (peak != null && peak >= row[field].max) ? peak : row[field].max, null);
+
+// Small area curve; only the bottom chart carries time ticks so the three read as one stack.
+function hostChart(root, { title, current, peak, peakTitle, labels, avg, max, axis, document, t, chartFactory }) {
+  const box = element(document, 'div', undefined, 'wb-host-chart');
+  const head = element(document, 'h5', title);
+  head.append(element(document, 'b', percent(current)));
+  const peakNode = element(document, 'small', t('wb.host.peak', { value: percent(peak) }));
+  if (peakTitle) peakNode.title = peakTitle;
+  head.append(peakNode);
+  const frame = element(document, 'div', undefined, 'wb-host-frame');
+  frame.style.height = axis ? '84px' : '62px';
+  const canvas = element(document, 'canvas'); canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', title);
+  frame.append(canvas); box.append(head, frame); root.append(box);
+  const style = document.defaultView?.getComputedStyle(root);
+  const color = style?.getPropertyValue('--text-dim').trim() || '#526170';
+  const grid = style?.getPropertyValue('--wb-line').trim() || 'rgba(15,23,42,0.08)';
+  const chart = chartFactory(canvas, { type: 'line', data: { labels, datasets: [
+    { label: t('wb.host.avg'), data: avg, borderColor: color, backgroundColor: color + '22', fill: 'origin', borderWidth: 1.5, pointRadius: 0, spanGaps: false, tension: 0.25 },
+    { label: t('wb.host.max'), data: max, borderColor: color + '88', borderDash: [3, 3], borderWidth: 1, pointRadius: 0, spanGaps: false, fill: false },
+  ] }, options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+    plugins: { legend: { display: false }, tooltip: { callbacks: { label: item => `${item.dataset.label} ${percent(item.raw)}` } } },
+    scales: { x: { display: axis, grid: { display: false }, ticks: { color, maxTicksLimit: 6, maxRotation: 0, autoSkip: true, font: { size: 10 } } },
+      y: { min: 0, max: 100, ticks: { display: false, stepSize: 50 }, grid: { color: grid }, border: { display: false } } } } });
+  return { destroy: () => chart?.destroy() };
+}
+
+function rangeControl(document, range, onRange, t) {
+  const seg = element(document, 'span', undefined, 'wb-seg-sm'); seg.id = 'wb-host-range';
+  seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', t('wb.usage.range'));
+  for (const name of ['6h', '24h', '7d']) {
+    const button = element(document, 'button', t('wb.host.range.' + name)); button.type = 'button'; button.dataset.range = name;
+    button.setAttribute('aria-pressed', String(range === name));
+    button.addEventListener('click', () => { if (range !== name) onRange(name); });
+    seg.append(button);
+  }
+  return seg;
+}
 
 // Only host observations belong in this panel; runtime and group data stay out.
 export function renderHost(root, value, { document = root.ownerDocument, t = key => key,
-  level = 'plain', range = '6h', onRange = () => {}, onClose = () => {}, chartFactory } = {}) {
+  level = 'plain', range = '6h', meta = null, onRange = () => {}, onClose = () => {}, onUsage = () => {}, chartFactory = defaultChart } = {}) {
   root.replaceChildren();
   const charts = [], header = element(document, 'header', undefined, 'wb-detail-header');
-  header.append(element(document, 'h2', t('wb.host.title')));
-  const close = element(document, 'button', '×'); close.type = 'button'; close.id = 'wb-host-close'; close.setAttribute('aria-label', t('wb.close')); close.addEventListener('click', onClose); header.append(close); root.append(header);
+  const top = element(document, 'div', undefined, 'wb-d-top');
+  const box = element(document, 'span', undefined, 'wb-ch'); box.append(icon(document, 'server'));
+  const close = element(document, 'button', undefined, 'wb-icon-btn'); close.type = 'button'; close.id = 'wb-host-close';
+  close.setAttribute('aria-label', t('wb.close')); close.title = t('wb.closeEsc'); close.append(icon(document, 'x')); close.addEventListener('click', onClose);
+  top.append(box, element(document, 'h2', t('wb.host.title'), 'wb-d-title'), close);
+  header.append(top);
+  const metaItems = [meta?.name, ...(level === 'technical' ? [meta?.mode, meta?.version] : [])].filter(Boolean);
+  if (metaItems.length) header.append(element(document, 'p', metaItems.join(' · '), 'wb-detail-meta'));
+  root.append(header);
   root.setAttribute('aria-label', t('wb.host.title'));
-  const body = element(document, 'div', undefined, 'wb-detail-body'); root.append(body);
+  const body = element(document, 'div', undefined, 'wb-detail-body wb-host-body'); root.append(body);
+  const card = element(document, 'section', undefined, 'wb-ip-card');
+  const title = element(document, 'h4'); title.append(icon(document, 'server', 'xs'), element(document, 'span', t('wb.host.machine')));
+  card.append(title); body.append(card);
   const pm2 = value?.pm2;
-  body.append(element(document, 'p', `${t('wb.services')} · ${pm2 == null ? t('wb.unknown') : pm2.online + ' / ' + pm2.total}`));
-  for (const [name, field] of [['cpu', 'cpu_pct'], ['memory', 'mem_used_pct'], ['disk', 'disk_used_pct']]) {
-    body.append(element(document, 'p', t('wb.host.' + name) + ' · ' + percent(value?.current?.[field])));
-  }
-  if (level === 'technical') {
-    const select = element(document, 'select'); select.id = 'wb-host-range'; select.setAttribute('aria-label', t('wb.usage.range'));
-    for (const name of ['6h', '24h', '7d']) { const option = element(document, 'option', t('wb.host.range.' + name)); option.value = name; select.append(option); }
-    select.value = range; select.addEventListener('change', () => onRange(select.value)); body.append(select);
-    const peak = value?.cpuPeak;
-    body.append(element(document, 'p', t('wb.host.cpuPeak') + ' · ' + (peak == null ? t('wb.unknown') : percent(peak.value) + ' · ' + new Date(peak.at).toLocaleString(document.documentElement?.lang))));
-    const labels = (value?.series ?? []).map(row => new Date(row.at).toLocaleString(document.documentElement?.lang));
-    for (const [field, label] of [['cpu', 'cpu'], ['mem', 'memory'], ['disk', 'disk']]) {
-      charts.push(seriesChart(body, { title: t('wb.host.' + label), labels, type: 'line', document, t, chartFactory,
-        datasets: ['avg', 'max'].map(statistic => ({ label: t('wb.host.' + statistic), data: (value?.series ?? []).map(row => row[field]?.[statistic] ?? null) })) }));
+  if (level !== 'technical') {
+    const grid = element(document, 'div', undefined, 'wb-kvs');
+    const down = pm2 == null ? null : pm2.total - pm2.online;
+    grid.append(element(document, 'span', t('wb.services')),
+      element(document, 'b', pm2 == null ? t('wb.unknown') : `${pm2.online} / ${pm2.total}` + (down ? ' · ' + t('wb.host.offline', { count: down }) : ''), down ? 'wb-txt-warn' : undefined));
+    for (const [name, field] of [['cpu', 'cpu_pct'], ['memory', 'mem_used_pct'], ['disk', 'disk_used_pct']]) {
+      grid.append(element(document, 'span', t('wb.host.' + name)), element(document, 'b', percent(value?.current?.[field])));
     }
+    const note = element(document, 'p', t('wb.host.usageNote'), 'wb-note');
+    const go = element(document, 'button', t('wb.host.usageLink'), 'wb-link-btn wb-chev'); go.type = 'button'; go.addEventListener('click', onUsage);
+    note.append(go);
+    card.append(grid, note);
+    return { destroy() {} };
   }
+  title.append(rangeControl(document, range, onRange, t));
+  card.append(element(document, 'p', `${t('wb.host.pm2')} ${pm2 == null ? t('wb.unknown') : pm2.online + ' / ' + pm2.total} ${t('wb.host.online')}`, 'wb-host-svc'));
+  const series = value?.series ?? [], lang = document.documentElement?.lang || undefined;
+  const short = range === '7d' ? { month: 'numeric', day: 'numeric' } : { hour: '2-digit', minute: '2-digit' };
+  const labels = series.map(row => new Date(row.at).toLocaleString(lang, short));
+  const peak = value?.cpuPeak;
+  const fields = [['cpu', 'cpu', 'cpu_pct'], ['mem', 'memory', 'mem_used_pct'], ['disk', 'disk', 'disk_used_pct']];
+  for (const [index, [field, label, current]] of fields.entries()) {
+    charts.push(hostChart(card, { title: t('wb.host.' + label), current: value?.current?.[current],
+      peak: field === 'cpu' ? peak?.value ?? seriesPeak(series, field) : seriesPeak(series, field),
+      peakTitle: field === 'cpu' && peak?.at ? new Date(peak.at).toLocaleString(lang) : '',
+      labels, avg: series.map(row => row[field]?.avg ?? null), max: series.map(row => row[field]?.max ?? null),
+      axis: index === fields.length - 1, document, t, chartFactory }));
+  }
+  const details = element(document, 'details', undefined, 'wb-host-table');
+  details.append(element(document, 'summary', t('wb.usage.dataTable')));
+  const scroll = element(document, 'div', undefined, 'wb-table-scroll');
+  const table = element(document, 'table'), head = element(document, 'tr');
+  head.append(element(document, 'th', t('wb.usage.bucket')));
+  for (const [, label] of fields) for (const statistic of ['avg', 'max']) head.append(element(document, 'th', `${t('wb.host.' + label)} ${t('wb.host.' + statistic)}`));
+  const thead = element(document, 'thead'), tbody = element(document, 'tbody'); thead.append(head); table.append(thead, tbody);
+  for (const row of series) {
+    const line = element(document, 'tr'); line.append(element(document, 'th', new Date(row.at).toLocaleString(lang)));
+    for (const [field] of fields) for (const statistic of ['avg', 'max']) line.append(element(document, 'td', percent(row[field]?.[statistic])));
+    tbody.append(line);
+  }
+  scroll.append(table); details.append(scroll); card.append(details);
   return { destroy() { charts.forEach(chart => chart.destroy()); } };
 }
 
-export function createHostPanel({ root, read, identity = () => '', detail = () => 'plain',
-  document = root.ownerDocument, t = key => key, onOpen = () => {}, chartFactory } = {}) {
+export function createHostPanel({ root, read, identity = () => '', detail = () => 'plain', meta = () => null,
+  document = root.ownerDocument, t = key => key, onOpen = () => {}, onClose = () => {}, onUsage = () => {}, chartFactory } = {}) {
   let active = false, generation = 0, owner = null, data = null, rendered = null, range = '6h', failure = null;
   const draw = () => {
-    rendered?.destroy(); rendered = renderHost(root, data, { document, t, level: detail(), range, onClose: close,
-      onRange: next => { range = next; void refresh(); }, chartFactory });
+    rendered?.destroy(); rendered = renderHost(root, data, { document, t, level: detail(), range, meta: meta(), onClose: close,
+      onUsage: () => { close(); onUsage(); }, onRange: next => { range = next; void refresh(); }, chartFactory });
     if (failure) root.append(element(document, 'p', t('wb.readFailed') + (detail() === 'technical' ? ' · ' + failure : ''), 'wb-detail-error'));
     root.hidden = false;
   };
@@ -56,7 +129,7 @@ export function createHostPanel({ root, read, identity = () => '', detail = () =
   function close() {
     if (!active) return;
     active = false; generation++; data = null; failure = null; rendered?.destroy(); rendered = null;
-    root.hidden = true; root.replaceChildren();
+    root.hidden = true; root.replaceChildren(); onClose();
   }
   const escape = event => { if (active && event.key === 'Escape') close(); };
   document.addEventListener('keydown', escape);

@@ -1,17 +1,17 @@
 import { createViewMode, observerNavEntry } from './view-mode.js?v=91';
-import { boardController, renderBoard } from './board.js?v=91';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=92';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip } from './instance-strip.js?v=89';
-import { renderAttention } from './attention-bar.js?v=89';
-import { createGroupDetail } from './detail.js?v=91';
+import { instanceStrip } from './instance-strip.js?v=92';
+import { renderAttention } from './attention-bar.js?v=92';
+import { createGroupDetail } from './detail.js?v=92';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=87';
-import { createHostPanel } from './host-panel.js?v=88';
-import { element } from './plain-text.js?v=85';
+import { createHostPanel } from './host-panel.js?v=92';
+import { element, icon } from './plain-text.js?v=92';
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
   endpoint = path => path, identity = () => endpoint('/api/workbench/groups'), openSettings = () => {},
   observerStatus = () => null, observerAvailable = () => true,
-  writable = () => true, onMemory = () => {},
+  writable = () => true, onMemory = () => {}, instanceInfo = () => ({}),
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
   const board = document.querySelector('#wb-board');
   if (!board) return { openGroup: async () => {}, setViewDetail() {}, destroy() {} };
@@ -28,7 +28,6 @@ export function mountWorkbench({ document = globalThis.document, window = global
   try {
     if (storage.getItem('zylos-dashboard-activity-range') === '6h') range = '6h';
   } catch {}
-  rangeInput.value = range;
   const read = async path => {
     const captured = identity();
     const response = await fetch(endpoint(path));
@@ -51,8 +50,12 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const syncNav = () => {
     const entry = observerEntry();
     if (nav) {
+      // The page name stays fixed; an unavailable observer says why in the tooltip and opens settings.
+      const label = entry ? t('tab.observer') : '', hint = entry?.target === 'settings' ? entry.label : '';
       if (nav.hidden !== !entry) nav.hidden = !entry;
-      if (nav.textContent !== (entry?.label ?? '')) nav.textContent = entry?.label ?? '';
+      if (nav.textContent !== label) nav.textContent = label;
+      if (nav.title !== hint) nav.title = hint;
+      nav.classList.toggle('wb-tab-muted', Boolean(hint));
     }
   };
   function redraw() {
@@ -65,32 +68,67 @@ export function mountWorkbench({ document = globalThis.document, window = global
       nameButton.disabled = !writable();
       nameButton.title = writable() ? '' : t('wb.readOnly');
     }
+    const level = mode.detailLevel();
     const legend = document.querySelector('#wb-legend');
     if (legend) {
       legend.replaceChildren();
-      for (const state of ['idle', 'busy', 'waiting', 'error', 'none']) {
-        const item = element(document, 'span', t('wb.state.' + state), 'wb-legend-item');
+      for (const state of ['busy', 'idle', 'waiting', 'error', 'none']) {
+        const item = element(document, 'span', t('wb.legend.' + state), 'wb-legend-item');
         item.append(element(document, 'i', undefined, 'wb-bucket wb-' + state));
         legend.append(item);
       }
-      legend.append(element(document, 'span', t(activity?.inboundError ? 'wb.inboundUnknown' : 'wb.inboundLegend')));
+      const inbound = element(document, 'span', t(activity?.inboundError ? 'wb.inboundUnknown' : 'wb.inboundLegend'), 'wb-legend-item');
+      if (!activity?.inboundError) inbound.append(element(document, 'i', undefined, 'wb-bucket wb-idle wb-inbound'));
+      legend.append(inbound, element(document, 'span', t(level === 'technical' ? 'wb.legend.cells.' + range : 'wb.legend.rightNow'), 'wb-legend-note'));
     }
+    if (rangeInput) {
+      rangeInput.replaceChildren();
+      rangeInput.setAttribute('aria-label', t('wb.range'));
+      for (const value of ['60m', '6h']) {
+        const button = element(document, 'button', t(value === '60m' ? 'wb.range60' : 'wb.range6'));
+        button.type = 'button'; button.dataset.range = value; button.setAttribute('aria-pressed', String(range === value));
+        button.addEventListener('click', () => changeRange(value));
+        rangeInput.append(button);
+      }
+    }
+    const dist = document.querySelector('#wb-dist');
+    if (dist) renderDistribution(dist, snapshot, { document, t, level });
     searchInput.placeholder = t('wb.search');
     searchInput.setAttribute('aria-label', t('wb.search'));
     const attention = document.querySelector('#wb-attention');
-    renderAttention(attention, snapshot, { document, t, error, lastSuccess, level: mode.detailLevel() });
+    renderAttention(attention, snapshot, { document, t, error, lastSuccess, level, onSelect: openFromAttention });
     if (transition) {
-      attention.append(element(document, 'p', t('wb.transition') + ' · ' + transition.phase, 'wb-transition'));
+      const hint = element(document, 'div', undefined, 'wb-attention-item wb-attention-reminder wb-transition');
+      hint.append(icon(document, 'clock'), element(document, 'span', t('wb.transition') + ' · ' + transition.phase));
+      attention.append(hint);
     }
+    syncSide();
     if (!snapshot) return;
-    instanceStrip(document.querySelector('#wb-instance'), snapshot, { document, t, costSummary: cost, onHost: () => hostPanel.open(), level: mode.detailLevel() });
+    instanceStrip(document.querySelector('#wb-instance'), snapshot, { document, t, costSummary: cost, level,
+      hostOpen: Boolean(hostPanel?.active), onHost: () => { if (hostPanel.active) hostPanel.close(); else { void hostPanel.open(); redraw(); } } });
     const fresh = new Map(snapshot.rows.map(row => [row.sessionGroup, row]));
     const rows = searchRows?.map(row => fresh.get(row.sessionGroup) ?? row) ?? snapshot.rows;
     renderBoard(board, snapshot, {
-      rows, query: search.query(), activity, document, t, level: mode.detailLevel(),
+      rows, query: search.query(), activity, document, t, level,
+      selected: groupDetail?.state.row ? groupDetail.state.row.sessionGroup : undefined,
       onSearch: () => searchInput.focus(),
-      onSelect: row => { hostPanel.close(); return groupDetail?.open(row, snapshot); },
+      onSelect: selectRow,
     });
+  }
+  function selectRow(row) {
+    hostPanel.close();
+    const opening = groupDetail?.open(row, snapshot);
+    redraw();
+    return opening;
+  }
+  function openFromAttention(key) {
+    const row = snapshot?.rows.find(item => item.sessionGroup === key) ?? key;
+    return selectRow(row);
+  }
+  // The detail drawer is fixed to the right edge; the overview yields its width while it is open.
+  function syncSide() {
+    const side = document.querySelector('#wb-side'), overview = document.querySelector('#tab-overview');
+    overview?.classList.toggle('wb-has-side', Boolean(side && !side.hidden));
   }
   const search = createBoardSearch({
     fetchRows: q => read('/api/workbench/groups/search?q=' + encodeURIComponent(q)),
@@ -139,10 +177,12 @@ export function mountWorkbench({ document = globalThis.document, window = global
   groupDetail = createGroupDetail({ root: document.querySelector('#wb-side'), document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable,
     detail: () => mode.detailLevel(), isVisible: visible, onMemory,
-    onRename: () => controller.refresh(),
+    onRename: () => controller.refresh(), onClose: () => { if (!stopped) redraw(); },
   });
   hostPanel = createHostPanel({ root: document.querySelector('#wb-side'), document, t, read, identity,
-    detail: () => mode.detailLevel(), onOpen: () => groupDetail.close() });
+    detail: () => mode.detailLevel(), onOpen: () => groupDetail.close(), onClose: () => { if (!stopped) redraw(); },
+    meta: () => ({ ...instanceInfo(), mode: snapshot?.mode && snapshot.mode !== 'unreadable' ? t('wb.mode') + ' ' + snapshot.mode : null }),
+    onUsage: () => document.querySelector('.tab[data-tab="trends"]')?.click?.() });
   const autoName = async () => {
     if (!writable() || !nameDialog) return;
     nameRequest?.abort();
@@ -219,10 +259,30 @@ export function mountWorkbench({ document = globalThis.document, window = global
   }
   const changeDetail = () => mode.setDetailLevel(toggle.checked ? 'technical' : 'plain');
   const input = () => search.input(searchInput.value);
-  const changeRange = () => {
-    range = rangeInput.value === '6h' ? '6h' : '60m';
+  function changeRange(value) {
+    range = value === '6h' ? '6h' : '60m';
     try { storage.setItem('zylos-dashboard-activity-range', range); } catch {}
+    redraw();
     refreshActivity(true);
+  }
+  const typing = target => ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || target?.isContentEditable;
+  // Esc closes the open drawer; j/k and arrow keys move between board rows.
+  const keydown = event => {
+    if (!visible() || event.defaultPrevented) return;
+    if (event.key === 'Escape') {
+      if (nameDialog && !nameDialog.hidden) { nameDialog.hidden = true; nameDialog.replaceChildren(); return; }
+      if (hostPanel.active) { hostPanel.close(); redraw(); return; }
+      if (groupDetail.escape()) redraw();
+      return;
+    }
+    if (typing(event.target) || event.altKey || event.ctrlKey || event.metaKey) return;
+    const step = { j: 1, ArrowDown: 1, k: -1, ArrowUp: -1 }[event.key];
+    if (!step) return;
+    const rows = [...board.children].filter(node => node.classList.contains('wb-row'));
+    if (!rows.length) return;
+    const index = rows.indexOf(document.activeElement);
+    rows[index < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, index + step))].focus();
+    event.preventDefault?.();
   };
   const visibility = () => {
     if (document.visibilityState === 'visible') controller.refresh();
@@ -240,7 +300,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   toggle.addEventListener('change', changeDetail);
   const unsubscribe = mode.subscribe(redraw);
   searchInput.addEventListener('input', input);
-  rangeInput.addEventListener('change', changeRange);
+  document.addEventListener('keydown', keydown);
   nav?.addEventListener('click', observerClick, true);
   document.addEventListener('visibilitychange', visibility);
   const localeChange = () => redraw();
@@ -278,7 +338,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     observer?.disconnect();
     toggle.removeEventListener('change', changeDetail);
     searchInput.removeEventListener('input', input);
-    rangeInput.removeEventListener('change', changeRange);
+    document.removeEventListener('keydown', keydown);
     nav?.removeEventListener('click', observerClick, true);
     document.removeEventListener('visibilitychange', visibility);
     document.removeEventListener('dashboard-locale-change', localeChange);

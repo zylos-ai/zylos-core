@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=85';
+import { element } from './plain-text.js?v=92';
 
 export function responseError(value, fallback = 'request_failed') {
   const error = value?.error;
@@ -92,7 +92,6 @@ export function configSummary(value) {
 }
 
 export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true } = {}) {
-  root.replaceChildren();
   const { state } = controller;
   state.draft ??= {};
   const runtime = element(document, 'select');
@@ -127,8 +126,21 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   for (const node of [target, model, effort, saveModel, reset]) node.disabled = !writable || state.busy;
   saveModel.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, model: model.value, effort: effort.value }));
   reset.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, reset: true }));
-  root.append(element(document, 'p', t('wb.config.oneAtATime')), runtime, saveRuntime, target, model, effort, saveModel, reset);
-  if (!writable) root.append(element(document, 'p', t('wb.readOnly')));
+  saveRuntime.className = saveModel.className = 'wb-btn wb-btn-primary wb-btn-sm';
+  reset.className = 'wb-btn wb-btn-sm';
+  runtime.setAttribute('aria-label', t('wb.term.runtime')); target.setAttribute('aria-label', t('wb.config.targetRuntime'));
+  // Two independent saves, one per line: the AI engine, then the model and effort pair for a chosen engine.
+  const line = (label, ...controls) => {
+    const row = element(document, 'div', undefined, 'wb-cfg-row');
+    row.append(element(document, 'span', label, 'wb-cfg-label'));
+    const box = element(document, 'div', undefined, 'wb-cfg-controls'); box.append(...controls); row.append(box);
+    return row;
+  };
+  const form = element(document, 'div', undefined, 'wb-cfg-edit');
+  form.append(line(t('wb.term.runtime'), runtime, saveRuntime), line(t('wb.config.modelPair'), target, model, effort, saveModel, reset),
+    element(document, 'p', t('wb.config.oneAtATime'), 'wb-note'));
+  root.append(form);
+  if (!writable) root.append(element(document, 'p', t('wb.readOnly'), 'wb-note'));
   if (state.result) root.append(element(document, 'p', state.result, 'wb-config-result'));
   if (state.error) root.append(element(document, 'p', state.error, 'wb-config-error'));
 }

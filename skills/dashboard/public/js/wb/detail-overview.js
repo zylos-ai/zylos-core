@@ -1,5 +1,5 @@
-import { element } from './plain-text.js?v=85';
-import { modelCell, pendingModel } from './board.js?v=91';
+import { element, icon } from './plain-text.js?v=92';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=92';
 import { techOnly, toolLabel, waitText } from './view-mode.js?v=91';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=89';
 
@@ -34,55 +34,154 @@ export function detailEvidence(row, snapshot = {}) {
 
 export function detailNumbers(row, { backlog, now = Date.now() } = {}, t = key => key) {
   return [
-    { key: 'wb.detail.queue', value: row.queue == null ? '—' : row.queue.known === false ? t('wb.unknown') : `${row.queue.pending?.count ?? 0} · ${row.queue.running?.count ?? 0}` },
-    { key: 'wb.detail.context', value: row.contextPct == null ? t('wb.unknown') : `${Math.round(row.contextPct)}%` },
+    { key: 'wb.detail.queue', value: row.queue == null ? '—' : row.queue.known === false ? t('wb.unknown') : `${row.queue.pending?.count ?? 0} · ${row.queue.running?.count ?? 0}`, note: 'wb.detail.queueNote' },
+    { key: 'wb.detail.context', value: row.contextPct == null ? t('wb.unknown') : `${Math.round(row.contextPct)}%`, pct: row.contextPct, note: row.contextPct == null ? null : 'wb.detail.contextNote' },
     { key: 'wb.detail.thisRun', value: row.createdAt == null ? t('wb.unknown') : t('wb.detail.runDuration', { minutes: Math.max(0, Math.floor((now - row.createdAt * 1000) / 60000)) }) },
-    { key: 'wb.term.unsummarized', value: backlog?.count == null ? t('wb.unknown') : backlog.count },
+    { key: 'wb.term.unsummarized', value: backlog?.count == null ? t('wb.unknown') : backlog.count, memory: true },
   ];
+}
+
+/** Short clock time in the event column; the full or raw value stays in the tooltip. */
+export function eventTime(value, level = 'plain', locale) {
+  const time = timeValue(value);
+  if (!Number.isFinite(time)) return { text: value == null ? '' : String(value), title: value == null ? '' : String(value) };
+  return { text: new Date(time).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }), title: displayTime(value, level, locale) };
+}
+const toolEvents = new Set(['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'permission_request']);
+const inEvents = new Set(['user_prompt_submit']);
+const outEvents = new Set(['stop', 'assistant_message', 'turn_complete']);
+const badEvents = new Set(['crash_detected', 'activate_failed', 'activate_timeout', 'post_tool_failure']);
+export function eventKind(event) {
+  if (event.direction) return event.direction === 'in' ? 'in' : 'out';
+  const type = event.event_type;
+  if (toolEvents.has(type)) return 'tool';
+  if (inEvents.has(type)) return 'in';
+  if (outEvents.has(type)) return 'out';
+  if (String(type ?? '').startsWith('subagent')) return 'bot';
+  return 'power';
+}
+/** One timeline line: time | round icon | label. Shared by recent activity and the full timeline. */
+export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev' } = {}) {
+  const kind = eventKind(event);
+  const node = element(document, 'div', undefined, `${className} wb-ev-${kind}${badEvents.has(event.event_type) ? ' wb-ev-bad' : ''}`);
+  const time = eventTime(event.timestamp, level, document.documentElement?.lang);
+  const stamp = element(document, 'time', time.text); stamp.title = time.title;
+  const mark = element(document, 'span', undefined, 'wb-ev-k');
+  mark.append(icon(document, kind === 'bot' ? 'bot' : kind, 'xs'));
+  node.append(stamp, mark, element(document, 'span', label ?? eventLabel(event, level, t), 'wb-ev-t'));
+  return node;
+}
+
+function nowCard(document, row, data, { level, t, snapshot }) {
+  const kind = row.state?.kind ?? 'unknown';
+  const card = element(document, 'div', undefined, 'wb-now-card');
+  const title = element(document, 'div', undefined, 'wb-now-title');
+  card.append(title);
+  const tools = row.tools ?? [];
+  if (tools.length) {
+    card.classList.add('wb-now-work');
+    for (const [index, tool] of tools.entries()) {
+      const line = index === 0 ? title : element(document, 'div', undefined, 'wb-now-title');
+      line.append(icon(document, 'tool'), element(document, 'span', toolLabel(tool.name, level, t), 'wb-detail-tool'));
+      line.title = tool.name;
+      if (index === 0 && row.duration != null) {
+        const pill = element(document, 'span', undefined, 'wb-pill wb-busy wb-push');
+        pill.append(element(document, 'i', undefined, 'wb-dot'), element(document, 'span', t('wb.detail.runningFor')), element(document, 'span', shortDuration(row.duration), 'wb-dur'));
+        line.append(pill);
+      }
+      if (index > 0) card.append(line);
+      if (level === 'technical' && tool.detail) card.append(element(document, 'div', tool.detail, 'wb-args'));
+    }
+    if (row.preview?.text) card.append(element(document, 'p', t('wb.board.lastReceived', { text: row.preview.text }), 'wb-now-sub'));
+  } else if (row.wait) {
+    const failed = row.wait.kind === 'start_failed' || kind === 'error';
+    card.classList.add(failed ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
+    title.append(icon(document, failed ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', t('wb.state.' + kind)));
+    card.append(element(document, 'p', waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t), 'wb-now-sub'));
+  } else {
+    if (kind === 'error') card.classList.add('wb-now-err');
+    title.append(icon(document, kind === 'not_running' ? 'power' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock'),
+      element(document, 'span', t('wb.state.' + kind)));
+    if (row.duration != null && !['not_running', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
+    const sub = kind === 'not_running' ? t('wb.detail.standby') : row.preview?.text ? t('wb.board.lastReceived', { text: row.preview.text }) : '';
+    if (sub) card.append(element(document, 'p', sub, 'wb-now-sub'));
+  }
+  if (level === 'technical' && techOnly('evidence')) {
+    const evidence = detailEvidence(row, snapshot);
+    const details = element(document, 'details', undefined, 'wb-detail-evidence');
+    details.open = false;
+    const summary = element(document, 'summary');
+    summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.evidence') + ' · ' + evidence.headline));
+    details.append(summary);
+    const table = element(document, 'table'), body = element(document, 'tbody');
+    for (const item of evidence.samples) {
+      const line = element(document, 'tr');
+      line.append(element(document, 'td', item.source), element(document, 'td', item.value == null ? '—' : String(item.value)), element(document, 'td', item.at == null ? '' : String(item.at)));
+      body.append(line);
+    }
+    table.append(body); details.append(table); card.append(details);
+  }
+  return card;
 }
 
 export function renderOverview(root, row, data = {}, { document = root.ownerDocument, t = key => key,
   level = 'plain', snapshot = {}, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {} } = {}) {
   root.replaceChildren();
-  const section = (key, className) => {
+  const section = (key, className, glyph) => {
     const node = element(document, 'section', undefined, 'wb-detail-section ' + className);
-    node.append(element(document, 'h3', t(key))); root.append(node); return node;
+    const head = element(document, 'h3'); head.append(icon(document, glyph, 'xs'), element(document, 'span', t(key)));
+    node.append(head); root.append(node); return node;
   };
-  const now = section('wb.detail.now', 'wb-detail-now');
-  for (const tool of row.tools ?? []) now.append(element(document, 'p', toolLabel(tool.name, level, t) +
-    (level === 'technical' && tool.detail ? ' · ' + tool.detail : ''), 'wb-detail-tool'));
-  if (row.wait) now.append(element(document, 'p', waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t)));
-  if (!(row.tools?.length) && !row.wait) now.append(element(document, 'p', t('wb.state.' + (row.state?.kind ?? 'unknown'))));
-  if (level === 'technical' && techOnly('evidence')) {
-    const evidence = detailEvidence(row, snapshot);
-    const details = element(document, 'details', undefined, 'wb-detail-evidence');
-    details.open = false;
-    details.append(element(document, 'summary', t('wb.detail.evidence') + ' · ' + evidence.headline));
-    for (const item of evidence.samples) details.append(element(document, 'p', [item.source, item.value, item.at].filter(value => value != null).join(' · ')));
-    now.append(details);
+  const now = section('wb.detail.now', 'wb-detail-now', 'activity');
+  now.append(nowCard(document, row, data, { level, t, snapshot }));
+  const agents = activeSubagents(data.currentEvents ?? [], row.live?.runId);
+  if (agents.length) {
+    const subs = element(document, 'div', undefined, 'wb-subs');
+    for (const agent of agents) {
+      const tag = element(document, 'span', undefined, 'wb-tag');
+      tag.append(icon(document, 'bot', 'xs'), element(document, 'span', t('wb.detail.subagent') + ' · ' + agent.name));
+      subs.append(tag);
+    }
+    now.append(subs);
   }
-  const runId = row.live?.runId;
-  for (const agent of activeSubagents(data.currentEvents ?? [], runId)) now.append(element(document, 'p', t('wb.detail.subagent') + ' · ' + agent.name));
-  if (level === 'technical') {
-    const numbers = element(document, 'div', undefined, 'wb-detail-numbers');
-    for (const number of detailNumbers(row, data, t)) numbers.append(element(document, 'div', `${t(number.key)} · ${number.value}`));
-    now.append(numbers);
-  }
-  const recent = section('wb.detail.recent', 'wb-detail-recent');
-  for (const event of data.recent ?? []) recent.append(element(document, 'p', [displayTime(event.timestamp, level), eventLabel(event, level, t)].filter(Boolean).join(' · ')));
-  const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: data.totalEvents ?? 0, runs: data.totalRuns ?? 0 }));
+  const recent = section('wb.detail.recent', 'wb-detail-recent', 'clock');
+  for (const event of data.recent ?? []) recent.append(eventRow(document, event, { level, t }));
+  const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: data.totalEvents ?? 0, runs: data.totalRuns ?? 0 }), 'wb-link-btn wb-chev');
   timeline.type = 'button'; timeline.addEventListener('click', onTimeline); recent.append(timeline);
-  const memory = section('wb.detail.memory', 'wb-detail-memory');
-  const link = element(document, 'button', t('wb.detail.memoryLink', { count: data.backlog?.count == null ? t('wb.unknown') : data.backlog.count }));
-  link.type = 'button'; link.addEventListener('click', onMemory); memory.append(link);
-  if (data.backlog?.syncing === true) memory.append(element(document, 'p', t('wb.detail.syncing')));
-  const config = section('wb.detail.config', 'wb-detail-config');
-  config.append(element(document, 'p', modelCell(row, t)));
+  const memory = section('wb.detail.memory', 'wb-detail-memory', 'book');
+  const line = element(document, 'div', undefined, 'wb-mem-line');
+  const count = data.backlog?.count;
+  line.append(element(document, 'span', count == null ? t('wb.detail.memoryUnknown') : count ? t('wb.detail.memoryPending', { count }) : t('wb.detail.memorySaved')));
+  if (data.backlog?.syncing === true) line.append(element(document, 'span', ' · ' + t('wb.detail.syncing'), 'wb-sub'));
+  const link = element(document, 'button', t('wb.detail.memoryLink', { count: count == null ? t('wb.unknown') : count }), 'wb-link-btn wb-chev');
+  link.type = 'button'; link.addEventListener('click', onMemory); line.append(link);
+  memory.append(line);
+  const config = section('wb.detail.config', 'wb-detail-config', 'sliders');
+  const cfg = element(document, 'div', undefined, 'wb-cfg-line');
+  cfg.append(element(document, 'b', modelCell(row, t)));
   if (pendingModel(row)) {
     const desired = row.desired;
-    config.append(element(document, 'p', t('wb.pending') + ' · ' + [desired?.runtime, desired?.model, desired?.effort].filter(Boolean).join(' · '), 'wb-config-pending'),
-      element(document, 'p', t('wb.config.running') + ' · ' + modelCell(row, t)));
+    cfg.append(element(document, 'span', t('wb.pending') + ' · ' + [desired?.runtime, desired?.model, desired?.effort].filter(Boolean).join(' · '), 'wb-config-pending wb-txt-warn'),
+      element(document, 'span', t('wb.config.running') + ' · ' + modelCell(row, t), 'wb-sub'));
   }
-  const edit = element(document, 'button', t('wb.detail.modify')); edit.type = 'button'; edit.addEventListener('click', onConfig); config.append(edit);
+  const edit = element(document, 'button', t('wb.detail.modify'), 'wb-btn wb-btn-secondary wb-btn-sm'); edit.type = 'button'; edit.addEventListener('click', onConfig); cfg.append(edit);
+  config.append(cfg);
+  if (level === 'technical') {
+    const numbers = element(document, 'div', undefined, 'wb-detail-numbers');
+    for (const number of detailNumbers(row, data, t)) {
+      const cell = element(document, 'div', t(number.key), number.pct >= 75 ? 'wb-hi' : undefined);
+      cell.append(element(document, 'b', number.value));
+      if (number.pct != null) {
+        const bar = element(document, 'span', undefined, 'wb-meter' + (number.pct >= 75 ? ' wb-warn' : ''));
+        const fill = element(document, 'i'); fill.style.width = Math.max(0, Math.min(100, number.pct)) + '%'; bar.append(fill); cell.append(bar);
+      }
+      if (number.note) cell.append(element(document, 'small', t(number.note)));
+      if (number.memory) {
+        const go = element(document, 'button', t('wb.detail.groupMemory'), 'wb-link-btn wb-chev'); go.type = 'button'; go.addEventListener('click', onMemory); cell.append(go);
+      }
+      numbers.append(cell);
+    }
+    root.append(numbers);
+  }
   return { config, now, recent, memory };
 }
