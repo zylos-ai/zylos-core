@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
+import { once } from 'node:events';
+import { attachmentUploadStream } from './attachment-upload-stream.js';
 import { browserPath, browserBaseFromRequest } from './browser-base.js';
 import { sendHtml, sendJson, sendText, serveStatic } from './http.js';
 import { validateMemoryQueryPath } from './memory-browser.js';
@@ -74,7 +76,7 @@ function isSseResponse(resp) {
 
 function isAllowedProxyWrite(method, suffix) {
   return method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
-    method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers)$/.test(suffix)) ||
+    method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(suffix)) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(suffix) ||
     method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(suffix) ||
     method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(suffix) ||
@@ -373,6 +375,13 @@ export class FleetProxy {
       return;
     }
 
+    const attachment = /^(\/api\/chat\/conversations\/[^/]+)\/(uploads|attachments\/[^/]+)$/.exec(suffix);
+    if (attachment && (req.method === 'POST' && attachment[2] === 'uploads' ||
+        req.method === 'GET' && attachment[2].startsWith('attachments/'))) {
+      await this._relayAttachment(req, res, agent, suffix, search, token, attachment[1], attachment[2] === 'uploads');
+      return;
+    }
+
     // Owns the upstream fetch lifetime: aborting it is the only reliable way
     // to release the upstream connection when a relay is torn down (#257).
     const upstreamControl = new AbortController();
@@ -614,6 +623,158 @@ export class FleetProxy {
       }
       close();
       return true;
+    }
+  }
+
+  async _relayAttachment(req, res, agent, suffix, search, token, conversationPath, upload) {
+    const control = new AbortController();
+    const context = req._authContext;
+    const guard = createSecretGuard(token);
+    const tokenBytes = Buffer.from(String(token || ''));
+    const fail = (code, status = 502) => Object.assign(new Error(code), { status });
+    let body, timer, uploadError, started = false;
+    const abort = () => control.abort();
+    req.once('aborted', abort);
+    req.once('error', abort);
+    res.once('close', abort);
+    const localAccess = () => {
+      const current = this.authGate?.revalidateAuthContext
+        ? this.authGate.revalidateAuthContext(context) : context;
+      return samePrincipal(current, context) && this.config.fleet?.agents?.some(candidate =>
+        candidate.name === agent.name && candidate.base_url === agent.base_url);
+    };
+    const fetchTarget = (route, options = {}) => this.fetch(remoteUrl(agent, route), {
+      ...options, redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'identity', ...options.headers },
+      signal: options.signal || control.signal,
+    });
+    const smallBody = async response => {
+      const chunks = []; let size = 0;
+      if (response.body) for await (const chunk of response.body) {
+        size += chunk.length;
+        if (size > MAX_WRITE_BODY_BYTES) throw fail('upstream_body_too_large');
+        chunks.push(chunk);
+      }
+      const bytes = Buffer.concat(chunks);
+      if (guard.contains(bytes.toString('utf8'))) throw fail('secret_leak_blocked');
+      return bytes;
+    };
+    const responseHeaders = response => {
+      const headers = stripHopByHop(Object.fromEntries(response.headers.entries()));
+      headers['cache-control'] = 'no-store';
+      if (headersContainSecret(headers, guard)) throw fail('secret_leak_blocked');
+      return headers;
+    };
+    try {
+      if (search) throw fail('invalid_chat_parameters', 400);
+      if (!localAccess()) throw fail('admin_required', 403);
+      if (upload) {
+        // A target-authorized config read precedes any access to the browser's
+        // body. Never refresh credentials and replay a streaming upload.
+        const configResponse = await fetchTarget(`${conversationPath}/uploads/config`, {
+          signal: AbortSignal.any([control.signal, AbortSignal.timeout(5000)]),
+        });
+        const configHeaders = responseHeaders(configResponse);
+        const configBytes = await smallBody(configResponse);
+        if (!configResponse.ok) {
+          res.writeHead(configResponse.status, configHeaders); res.end(configBytes); return;
+        }
+        let maximum;
+        try { maximum = JSON.parse(configBytes.toString('utf8')).maxUploadBytes; } catch { throw fail('invalid_upload_config'); }
+        if (!Number.isSafeInteger(maximum) || maximum <= 0 || !Number.isSafeInteger(maximum + 65536)) throw fail('invalid_upload_config');
+        if (!localAccess()) throw fail('admin_required', 403);
+        if (Number(req.headers['content-length']) > maximum + 65536) throw fail('chat_upload_too_large', 413);
+        body = attachmentUploadStream(req.headers['content-type'], maximum);
+        body.once('error', error => { uploadError = error; control.abort(); });
+        req.pipe(body);
+        started = true;
+        const response = await fetchTarget(suffix, { method: 'POST', duplex: 'half', body,
+          headers: { 'content-type': req.headers['content-type'] } });
+        const headers = responseHeaders(response);
+        const bytes = await smallBody(response);
+        if (uploadError) throw uploadError;
+        if (!localAccess()) throw fail('admin_required', 403);
+        res.writeHead(response.status, headers); res.end(bytes);
+        return;
+      }
+
+      const response = await fetchTarget(suffix);
+      const headers = responseHeaders(response);
+      if (!response.ok) {
+        const bytes = await smallBody(response);
+        res.writeHead(response.status, headers); res.end(bytes); return;
+      }
+      if (response.headers.get('content-encoding') && response.headers.get('content-encoding') !== 'identity') throw fail('unexpected_attachment_encoding');
+      const declared = response.headers.get('content-length');
+      if (declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)))) throw fail('invalid_attachment_length');
+      if (declared !== null) headers['content-length'] = declared;
+      let count = 0, tail = Buffer.alloc(0), checking = false;
+      // Probe a data-access route (not uploads/config, which requires write
+      // mode). Poll while stalled too; a revoked target must cancel both hops.
+      timer = setInterval(async () => {
+        if (checking || control.signal.aborted) return;
+        checking = true;
+        try {
+          if (!localAccess()) throw fail('admin_required', 403);
+          const probe = await fetchTarget(conversationPath, {
+            signal: AbortSignal.any([control.signal, AbortSignal.timeout(3000)]),
+          });
+          await probe.body?.cancel();
+          if (!probe.ok) throw fail('attachment_access_revoked', 403);
+        } catch {
+          control.abort();
+          if (res.headersSent) res.destroy();
+        } finally { checking = false; }
+      }, 1000);
+      timer.unref?.();
+      const write = async bytes => {
+        if (!bytes.length) return;
+        if (!localAccess()) throw fail('admin_required', 403);
+        control.signal.throwIfAborted();
+        if (!res.headersSent) res.writeHead(response.status, headers);
+        if (!res.write(bytes)) await once(res, 'drain', { signal: control.signal });
+      };
+      if (response.body) for await (const chunk of response.body) {
+        count += chunk.length;
+        if (declared !== null && count > Number(declared)) throw fail('invalid_attachment_length');
+        const combined = Buffer.concat([tail, chunk]);
+        // Latin-1 preserves ASCII credential shapes without decoding binary
+        // payloads. Exact token matching also covers non-ASCII token bytes.
+        if (containsSecret(combined.toString('latin1')) || tokenBytes.length && combined.includes(tokenBytes)) throw fail('secret_leak_blocked');
+        const safe = Math.max(0, combined.length - Math.max(STREAM_GUARD_TAIL_CHARS, tokenBytes.length));
+        await write(combined.subarray(0, safe));
+        tail = Buffer.from(combined.subarray(safe));
+      }
+      if (declared !== null && count !== Number(declared)) throw fail('invalid_attachment_length');
+      await write(tail);
+      control.signal.throwIfAborted();
+      if (!localAccess()) throw fail('admin_required', 403);
+      if (!res.headersSent) res.writeHead(response.status, headers);
+      res.end();
+    } catch (error) {
+      if (res.headersSent) res.destroy();
+      else if (!res.destroyed) {
+        // An interrupted reply can follow a committed target upload. The
+        // browser must retain uncertainty rather than infer message delivery.
+        const failure = uploadError || error;
+        const code = failure.status ? failure.message : upload && started ? 'upload_result_unknown' : 'upstream_unreachable';
+        sendJson(res, failure.status || 502, { error: code });
+      }
+    } finally {
+      clearInterval(timer);
+      control.abort();
+      if (body) { req.unpipe(body); body.destroy(); }
+      if (upload && !req.complete) {
+        req.pause();
+        // Close only after the error response drains; do not continue consuming
+        // an unbounded rejected browser body or leave a target partial alive.
+        res.shouldKeepAlive = false;
+        if (res.writableFinished) req.destroy();
+        else res.once('finish', () => req.destroy());
+      }
+      req.removeListener('aborted', abort);
+      req.removeListener('error', abort);
+      res.removeListener('close', abort);
     }
   }
 
