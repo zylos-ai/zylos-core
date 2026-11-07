@@ -28,6 +28,8 @@ mock.module('../c4-db.js', { namedExports: {
   getGlobalCoverageEnd: () => { queryCalls.push(['globalCoverage']); return 40; },
   getDeliveredSince: (group, after, options) => { queryCalls.push(['tail', group, after, options]); return rows; },
   getGlobalDeliveredSince: (after, options) => { queryCalls.push(['globalTail', after, options]); return rows; },
+  getUnsummarizedRange: group => { queryCalls.push(['range', group]); return { count: 1, firstConversationId: 95 }; },
+  getGlobalUnsummarizedRange: () => { queryCalls.push(['globalRange']); return { count: 1, firstConversationId: 95 }; },
 } });
 mock.module('../../../activity-monitor/scripts/bootstrap-scope.js', { namedExports: {
   bootstrapScope: async () => ({ mode: scopeMode, scope: scopeMode === 'multi' ? 'work' : '*',
@@ -185,7 +187,7 @@ test(`${runtime} ${entry} startup retains projected ${name} history`, async t =>
   checkVisible(output, rows[0]);
   assert.equal(output.includes('UNAVAILABLE'), false);
   assert.equal(output.includes('TRUNCATED'), false);
-  assert.deepEqual(queryCalls, [['coverage', 'work'], ['tail', 'work', 40, { limit: 6 }]]);
+  assert.deepEqual(queryCalls, [['coverage', 'work'], ['tail', 'work', 40, { limit: 6 }], ['range', 'work']]);
   assert.equal(closeCalls, initialClose + 1);
   assert.equal(JSON.stringify(rows), before);
   assert.equal(dashboardCalls, 0); assert.equal(databaseOpens, 0);

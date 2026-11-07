@@ -90,6 +90,14 @@ for (const mode of ['single', 'multi']) {
     const f = backlogFixture(4);
     assert.doesNotMatch(await emitC4Conversations({ agent_id: 'child' }, null, f.options), /unsummarized|--after/);
   });
+  test(`${mode} exact full-tail budget keeps all four messages without manufacturing a gap`, async () => {
+    const f = backlogFixture(4);
+    const full = await emitC4Conversations({ agent_id: 'child' }, null, f.options);
+    const out = await emitC4Conversations({ agent_id: 'child' }, { maxChars: full.length + 200, maxTokens: 100000 }, f.options);
+    assert.equal(out, full);
+    assert.doesNotMatch(out, /unsummarized|--after/);
+    for (const row of f.rows) assert.ok(out.includes(row.content));
+  });
   test(`${mode} unavailable backlog count preserves the complete tail`, async () => {
     const f = backlogFixture();
     f.db.getUnsummarizedRange = f.db.getGlobalUnsummarizedRange = () => { throw Error('busy'); };
@@ -98,7 +106,7 @@ for (const mode of ['single', 'multi']) {
     for (const row of f.rows) assert.ok(out.includes(row.content));
     assert.doesNotMatch(out, /--unsummarized|About 300/);
   });
-  test(`${mode} budget reserves the complete lag notice before trimming to two messages`, async () => {
+  test(`${mode} budget preserves the complete lag notice while trimming to two messages`, async () => {
     const f = backlogFixture();
     const all = await emitC4Conversations({ agent_id: 'child' }, null, f.options);
     const removedLength = f.rows.slice(0, 4).reduce((n, row) => n + row.content.length + 1, 0);

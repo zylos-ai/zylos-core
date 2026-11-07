@@ -163,18 +163,18 @@ export async function emitC4Conversations(payload, budget = null, {
         else if (migration.state === 'unreadable') instructions.push('References migration record UNAVAILABLE; do not overwrite it.');
       } catch { instructions.push('References migration record UNAVAILABLE; do not overwrite it.'); }
     }
-    const lagNotice = (rows, reserve) => {
+    const lagNotice = rows => {
       if (!unsummarized) return 'Unsummarized count temporarily unavailable.';
-      if (unsummarized.count <= 0 || (!reserve && rows.length && unsummarized.firstConversationId >= rows[0].id)) return '';
+      if (unsummarized.count <= 0 || (rows.length && unsummarized.firstConversationId >= rows[0].id)) return '';
       const command = `node ${path.join(scope.root, '.claude/skills/comm-bridge/scripts/c4-fetch.js')} --unsummarized${scope.mode === 'multi' ? ` --group ${scope.sessionGroup}` : ''} --limit 50`;
       const stop = rows.length ? `until the oldest shown id ${rows[0].id}` : 'through the delivered frontier (no tail shown)';
       return `Checkpoint covers id ${coverage}; state.md may lag (use its header coverage). About ${unsummarized.count} messages unsummarized; latest ${rows.length} shown. Before judging old tasks, promises or todos, inspect the omitted middle: ${command}. Continue with --after <previous output's round upper bound> ${stop}; reads stop at the delivered frontier.`;
     };
-    const assemble = (rows, reserve = false) => formatSection('RECENT CONVERSATIONS',
-      [...instructions, lagNotice(rows, reserve)].filter(Boolean).join('\n') + '\n\n' + db.formatConversationsForAgent(rows, { spill: false }));
+    const assemble = rows => formatSection('RECENT CONVERSATIONS',
+      [...instructions, lagNotice(rows)].filter(Boolean).join('\n') + '\n\n' + db.formatConversationsForAgent(rows, { spill: false }));
     let kept = conversations;
     const packBudget = budget && { maxChars: Math.max(0, budget.maxChars - 200), maxTokens: Math.max(0, budget.maxTokens - 60) };
-    while (kept.length && packBudget && !withinBudget(assemble(kept, true), packBudget)) kept = kept.slice(1);
+    while (kept.length && packBudget && !withinBudget(assemble(kept), packBudget)) kept = kept.slice(1);
     return assemble(kept);
   });
 }
