@@ -96,15 +96,17 @@ export function createPreviewer({ fetchPreview, onResult, setTimer = setTimeout,
   };
 }
 
-function field(document, label, control) {
+function field(document, label, control, hint) {
   const wrap = element(document, 'label', undefined, 'wb-sched-field');
-  wrap.append(element(document, 'span', label), control);
+  wrap.append(element(document, 'span', label, 'wb-sched-label'), control);
+  if (hint) wrap.append(element(document, 'small', hint, 'wb-sched-hint'));
   return wrap;
 }
 
 function input(document, type, value, onInput) {
   const node = document.createElement(type === 'textarea' ? 'textarea' : 'input');
   if (type !== 'textarea') node.type = type;
+  if (type !== 'checkbox') node.className = 'wb-input';
   if (type === 'checkbox') node.checked = Boolean(value);
   else node.value = value;
   node.addEventListener(type === 'checkbox' ? 'change' : 'input', () => onInput(type === 'checkbox' ? node.checked : node.value));
@@ -121,6 +123,7 @@ function previewText(preview, { t, formatTime }) {
 
 function select(document, values, label, current, onSelect) {
   const node = document.createElement('select');
+  node.className = 'wb-input wb-select';
   for (const value of values) {
     const option = element(document, 'option', label(value));
     option.value = value;
@@ -131,24 +134,30 @@ function select(document, values, label, current, onSelect) {
   return node;
 }
 
+const MISS_CHOICES = ['300', '1800', '3600', '86400'];
+const MISS_KEYS = { 300: 'm5', 1800: 'm30', 3600: 'h1', 86400: 'd1' };
+const PLACEHOLDER = { cron: '0 9 * * 1-5', every: 'wb.schedule.form.everyPlaceholder' };
+
 /**
  * Builds the form once; typing updates state in place so inputs keep focus.
  * `onChange(state)` lets the caller request a preview for the new schedule.
+ * The title is returned separately so the drawer can place it in its header.
  */
 export function createForm(document, { state: initial, t = key => key, creating = false, reenable = false,
   tzLabel = '', formatTime = String, onChange = () => {}, onSave = () => {}, onCancel = () => {} }) {
   const state = { ...initial };
   let preview = null, busy = false;
   const root = element(document, 'form', undefined, 'wb-sched-form');
-  const title = creating ? 'wb.schedule.form.new' : reenable ? 'wb.schedule.reenable' : 'wb.schedule.form.edit';
-  root.append(element(document, 'h3', t(title)));
-  const save = element(document, 'button', t('wb.schedule.save'), 'wb-sched-save');
+  const titleKey = creating ? 'wb.schedule.form.new' : reenable ? 'wb.schedule.reenable' : 'wb.schedule.form.edit';
+  const title = element(document, 'h3', t(titleKey), 'wb-d-title');
+  const save = element(document, 'button', t(creating ? 'wb.schedule.create' : 'wb.schedule.save'), 'wb-btn wb-btn-primary wb-sched-save');
   const previewLine = element(document, 'p', '', 'wb-sched-preview');
   const message = element(document, 'p', '', 'wb-sched-message');
   const sync = () => {
     save.disabled = busy || !saveAllowed(state, preview, { creating, reenable });
     previewLine.textContent = previewText(preview, { t, formatTime });
-    previewLine.className = 'wb-sched-preview' + (preview?.valid === false ? ' wb-sched-invalid' : '');
+    previewLine.className = 'wb-sched-preview' + (preview?.valid === false ? ' wb-sched-invalid'
+      : preview?.valid ? ' wb-sched-valid' : '');
   };
   const set = (key, scheduleChanged = false) => value => {
     state[key] = value;
@@ -156,47 +165,79 @@ export function createForm(document, { state: initial, t = key => key, creating 
     sync();
     onChange({ ...state }, scheduleChanged);
   };
-  root.append(field(document, t('wb.schedule.form.name'), input(document, 'text', state.name, set('name'))));
-  root.append(field(document, t('wb.schedule.form.prompt'), input(document, 'textarea', state.prompt, set('prompt'))));
+  const name = input(document, 'text', state.name, set('name'));
+  name.placeholder = t('wb.schedule.form.namePlaceholder');
+  root.append(field(document, t('wb.schedule.form.name'), name));
+  const prompt = input(document, 'textarea', state.prompt, set('prompt'));
+  prompt.placeholder = t('wb.schedule.form.promptPlaceholder');
+  prompt.rows = 6;
+  root.append(field(document, t('wb.schedule.form.prompt'), prompt));
   const time = input(document, state.kind === 'at' ? 'datetime-local' : 'text', state.value, set('value', true));
   time.required = creating || reenable;
-  const timeLabel = element(document, 'span', '');
-  const labelTime = () => {
-    timeLabel.textContent = t('wb.schedule.form.time') + (state.kind === 'at' ? ' · ' + tzLabel : '');
+  const tzNote = element(document, 'small', '', 'wb-sched-hint');
+  const placeholder = () => {
+    time.placeholder = state.kind === 'cron' ? PLACEHOLDER.cron : state.kind === 'every' ? t(PLACEHOLDER.every) : '';
+    tzNote.textContent = state.kind === 'at' ? tzLabel : '';
   };
-  const kind = select(document, ['cron', 'every', 'at'], value => t('wb.schedule.kind.' + value), state.kind, value => {
-    state.kind = value;
-    state.value = '';
-    time.type = value === 'at' ? 'datetime-local' : 'text';
-    time.value = '';
-    labelTime();
-    set('value', true)('');
+  const kind = element(document, 'div', undefined, 'wb-seg wb-sched-kind');
+  kind.setAttribute('role', 'group');
+  kind.setAttribute('aria-label', t('wb.schedule.form.kind'));
+  const kinds = ['cron', 'every', 'at'].map(value => {
+    const item = element(document, 'button', t('wb.schedule.kind.' + value));
+    item.type = 'button';
+    item.dataset.kind = value;
+    item.disabled = reenable;
+    item.addEventListener('click', () => {
+      if (state.kind === value) return;
+      state.kind = value;
+      state.value = '';
+      time.type = value === 'at' ? 'datetime-local' : 'text';
+      time.value = '';
+      kinds.forEach(other => other.setAttribute('aria-pressed', String(other.dataset.kind === value)));
+      placeholder();
+      set('value', true)('');
+    });
+    item.setAttribute('aria-pressed', String(state.kind === value));
+    kind.append(item);
+    return item;
   });
-  kind.disabled = reenable;
-  root.append(field(document, t('wb.schedule.form.kind'), kind));
-  labelTime();
-  const timeWrap = element(document, 'label', undefined, 'wb-sched-field');
-  timeWrap.append(timeLabel, time);
-  root.append(timeWrap, previewLine);
-  root.append(field(document, t('wb.schedule.form.priority'),
-    select(document, ['1', '2', '3'], value => t('wb.schedule.priority.' + value), state.priority, set('priority'))));
-  root.append(field(document, t('wb.schedule.form.missThreshold'),
-    input(document, 'number', state.missThreshold, set('missThreshold'))));
-  root.append(field(document, t('wb.schedule.form.requireIdle'),
-    input(document, 'checkbox', state.requireIdle, set('requireIdle'))));
+  placeholder();
+  const timeWrap = element(document, 'div', undefined, 'wb-sched-field');
+  timeWrap.append(element(document, 'span', t('wb.schedule.form.time'), 'wb-sched-label'), kind, time, previewLine, tzNote);
+  root.append(timeWrap);
+  const pair = element(document, 'div', undefined, 'wb-sched-pair');
+  pair.append(field(document, t('wb.schedule.form.priority'),
+    select(document, ['1', '2', '3'], value => `P${value} ${t('wb.schedule.priority.' + value)}`, state.priority, set('priority')),
+    t('wb.schedule.form.priorityHint')));
+  const misses = MISS_CHOICES.includes(String(state.missThreshold)) ? MISS_CHOICES
+    : [...MISS_CHOICES, String(state.missThreshold)];
+  pair.append(field(document, t('wb.schedule.form.missThreshold'),
+    select(document, misses, value => MISS_KEYS[value] ? t('wb.schedule.miss.' + MISS_KEYS[value])
+      : t('wb.schedule.miss.seconds', { n: value }), String(state.missThreshold), set('missThreshold')),
+    t('wb.schedule.form.missHint')));
+  root.append(pair);
+  const idle = element(document, 'label', undefined, 'wb-sched-check');
+  const idleText = element(document, 'span');
+  idleText.append(element(document, 'span', t('wb.schedule.form.requireIdle')),
+    element(document, 'small', t('wb.schedule.form.requireIdleHint'), 'wb-sched-hint'));
+  idle.append(input(document, 'checkbox', state.requireIdle, set('requireIdle')), idleText);
+  root.append(idle);
   root.append(element(document, 'p', t('wb.schedule.form.deliveryNote'), 'wb-sched-note'), message);
   save.type = 'submit';
-  const cancel = element(document, 'button', t('wb.schedule.cancel'));
+  const cancel = element(document, 'button', t('wb.schedule.cancel'), 'wb-btn');
   cancel.type = 'button';
   cancel.addEventListener('click', onCancel);
   root.addEventListener('submit', event => {
     event?.preventDefault?.();
     if (!save.disabled) onSave({ ...state });
   });
-  root.append(save, cancel);
+  const acts = element(document, 'div', undefined, 'wb-sched-form-acts');
+  acts.append(save, cancel, element(document, 'small', t('wb.schedule.form.saveNote'), 'wb-sched-hint'));
+  root.append(acts);
   sync();
   return {
     root,
+    title,
     save,
     state: () => ({ ...state }),
     setPreview(value) {

@@ -70,14 +70,18 @@ test('list sections order enabled tasks by next run and keep expired and complet
 test('the shared form has no delivery fields and saving follows the preview', () => {
   const document = createDocument();
   const form = createForm(document, { state: initialForm(), t, creating: true });
-  const labels = form.root.children.filter(node => node.tagName === 'LABEL').map(node => node.children[0].textContent);
-  assert.deepEqual(labels, ['名称', '内容', '时间方式', '时间', '优先级', '错过多久后跳过（秒）', '等空闲再跑']);
-  assert.equal(labels.some(label => /目标|回复|组/.test(label)), false);
+  const labelText = node => node.children[0].textContent;
+  const fields = allNodes(form.root).filter(node => node.classList.contains('wb-sched-field'));
+  assert.deepEqual(fields.map(labelText), ['名称', '内容', '时间', '优先级', '错过多久跳过']);
+  assert.deepEqual(allNodes(form.root).filter(node => node.dataset.kind).map(node => node.textContent), ['周期', '间隔', '一次性']);
+  assert.match(textOf(form.root), /等空闲再跑/);
+  assert.equal(fields.some(node => /目标|回复|组/.test(labelText(node))), false);
+  assert.equal(form.title.textContent, '新建定时任务');
   assert.equal(form.save.disabled, true);
   const [name, prompt] = allNodes(form.root).filter(node => ['INPUT', 'TEXTAREA'].includes(node.tagName));
   prompt.value = 'Check backups';
   prompt.dispatch('input');
-  const time = form.root.children[4].children[1];
+  const time = fields[2].children[2];
   time.value = '*/x * * * *';
   time.dispatch('input');
   assert.equal(form.save.disabled, false);
@@ -98,17 +102,22 @@ test('the shared form has no delivery fields and saving follows the preview', ()
   const expired = task({ type: 'one-time', status: 'failed', reenable: true, cron: null });
   const reenable = createForm(document, { state: initialForm(expired, { reenable: true }), t, reenable: true });
   assert.equal(reenable.save.disabled, true);
-  assert.equal(reenable.root.children[3].children[1].disabled, true);
+  assert.equal(allNodes(reenable.root).filter(node => node.dataset.kind).every(node => node.disabled), true);
   for (const missThreshold of ['1.5', '1e3', '', '-1']) {
     assert.equal(saveAllowed({ ...initialForm(), prompt: 'x', value: '1h', missThreshold }, null, { creating: true }), false, missThreshold);
   }
   assert.equal(saveAllowed({ ...initialForm(), prompt: 'x', value: '1h', missThreshold: '600' }, null, { creating: true }), true);
   const thresholdForm = createForm(document, { state: { ...initialForm(), prompt: 'x', kind: 'every', value: '1h' }, t, creating: true });
   assert.equal(thresholdForm.save.disabled, false);
-  const thresholdInput = allNodes(thresholdForm.root).find(node => node.type === 'number');
-  thresholdInput.value = '1.5';
-  thresholdInput.dispatch('input');
-  assert.equal(thresholdForm.save.disabled, true);
+  // The miss threshold is a choice list; a stored value outside the usual choices stays selectable.
+  const threshold = allNodes(thresholdForm.root).filter(node => node.tagName === 'SELECT')[1];
+  assert.deepEqual(threshold.children.map(node => node.value), ['300', '1800', '3600', '86400']);
+  threshold.value = '1800';
+  threshold.dispatch('change');
+  assert.equal(thresholdForm.state().missThreshold, '1800');
+  assert.equal(thresholdForm.save.disabled, false);
+  const custom = createForm(document, { state: { ...initialForm(), missThreshold: '120' }, t, creating: true });
+  assert.equal(allNodes(custom.root).filter(node => node.tagName === 'SELECT')[1].children.at(-1).textContent, '120 秒');
   assert.equal(saveAllowed({ ...initialForm(expired, { reenable: true }), value: '2030-01-01T09:00' },
     { valid: false, error: 'reschedule_not_future' }, { reenable: true }), false);
   const original = initialForm(task(), { tz: 'Asia/Singapore' });
@@ -191,7 +200,7 @@ test('schedule page polls only while visible and keeps old rows after a read fai
   await h.poll();
   assert.equal(h.reads(), 1);
   assert.match(textOf(h.root), /Morning report/);
-  assert.match(textOf(h.root), /时区 Asia\/Singapore（取自 .env）/);
+  assert.equal(textOf(h.root).includes('时区未知'), false);
   h.nodes.get('#tab-schedule').className = 'tab-panel';
   await h.poll();
   assert.equal(h.reads(), 1);
@@ -271,7 +280,7 @@ test('an unknown write result re-reads the list once and a re-enable moves the t
   assert.equal(h.reads(), before + 2);
   assert.match(textOf(h.root), /已重新启用/);
   const section = allNodes(h.root).find(node => node.classList.contains('wb-sched-section'));
-  assert.equal(section.children[0].textContent, '启用中');
+  assert.match(section.children[0].textContent, /^启用中/);
 });
 
 test('read-only agents get no write entry points and target groups open the overview', async context => {
@@ -320,7 +329,7 @@ test('schedule page shows an unknown time zone, unavailable previews and the idl
   assert.equal(allNodes(h.root).some(node => node.classList.contains('wb-sched-dot')), false);
   select.dispatch('click');
   await tick();
-  assert.match(textOf(h.root), /接下来 5 次 · 无法预览/);
+  assert.match(textOf(h.root), /接下来 5 次\|无法预览/);
   assert.match(textOf(h.root), /等空闲再跑：是/);
 });
 
@@ -335,7 +344,7 @@ test('a refused write explains the refusal and rows hold two sibling buttons', a
   assert.equal(row.tagName, 'DIV');
   assert.equal(row.listeners.size, 0);
   assert.deepEqual(row.children.map(node => [node.tagName, node.className]),
-    [['BUTTON', 'wb-sched-select'], ['BUTTON', 'wb-sched-target']]);
+    [['BUTTON', 'wb-sched-select'], ['BUTTON', 'wb-sched-target'], ['SPAN', 'wb-sched-state wb-on']]);
   assert.equal(allNodes(row.children[0]).filter(node => node.tagName === 'BUTTON').length, 1);
   // Activating the group button opens the group and does not select the task.
   row.children[1].dispatch('click');
