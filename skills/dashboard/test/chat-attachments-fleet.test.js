@@ -94,7 +94,7 @@ async function fixture(t, { limit = 20 } = {}) {
   let uploads = 0, tokenCalls = 0, seenHeaders = null, downloadHeaders = null, dropReply = false;
   let synthetic = null, releaseUpload = null, slowUpload = false, uploadPaused = false;
   let rejectedToken = null, refreshedToken = 'fixture-refreshed', forcedRefreshes = 0, localChecks = 0;
-  let slowConversation = false;
+  let slowConversation = false, corkDownload = false;
   const upstreamRequests = [], downloadResponses = [], checkTimes = [];
   const activeTimers = new Set();
   const timer = (fn, ms) => { const id = setTimeout(() => { activeTimers.delete(id); fn(); }, ms); activeTimers.add(id); return id; };
@@ -121,6 +121,11 @@ async function fixture(t, { limit = 20 } = {}) {
     if (slowConversation && req.method === 'GET' && /^\/api\/chat\/conversations\/[^/]+$/.test(url.pathname)) await delay(3500);
     if (url.pathname.includes('/attachments/')) downloadResponses.push(res);
     if (url.pathname.includes('/attachments/')) downloadHeaders = req.headers;
+    if (corkDownload && url.pathname.includes('/attachments/')) {
+      res.once('pipe', source => source.once('data', () => {
+        setImmediate(() => { if (!res.destroyed) res.cork(); });
+      }));
+    }
     if (url.pathname.endsWith('/uploads') && req.method === 'POST') {
       uploads++;
       if (uploadStatus) { sendJson(res, uploadStatus, { error: 'fixture_upload_denied' }); return; }
@@ -187,7 +192,8 @@ async function fixture(t, { limit = 20 } = {}) {
     expireToken: () => { rejectedToken = token; }, forcedRefreshes: () => forcedRefreshes,
     upstreamRequests, downloadResponses, localChecks: () => localChecks, checkTimes,
     setSlowConversation: value => { slowConversation = value; },
-    diskSnapshot: () => ({ tmp: diskSnapshot(os.tmpdir(), [targetRoot]), hub: diskSnapshot(hubRoot) }),
+    setCorkDownload: value => { corkDownload = value; },
+    diskSnapshot: tmpRoot => ({ tmp: diskSnapshot(tmpRoot), hub: diskSnapshot(hubRoot) }),
     uploads: () => uploads, tokenCalls: () => tokenCalls, headers: () => seenHeaders, downloadHeaders: () => downloadHeaders,
     media: () => fs.readdirSync(attachments.mediaDir), hubMedia: () => fs.readdirSync(path.join(hubRoot, 'components/dashboard/media')) };
 }
@@ -208,6 +214,20 @@ function openUpload(t, f, extraHeaders = {}) {
   request.write(opening);
   return { request, response };
 }
+
+async function openDownload(t, f, suffix) {
+  let request;
+  const response = await new Promise((resolve, reject) => {
+    request = http.get(f.hub.origin + '/fleet/Target' + f.route + suffix, resolve);
+    request.once('error', reject);
+    request.setTimeout(4000, () => request.destroy(new Error('bounded real download timeout')));
+  });
+  t.after(() => request.destroy());
+  response.on('error', () => {});
+  return response;
+}
+
+const isDownloadAbort = error => ['ECONNRESET', 'ERR_STREAM_PREMATURE_CLOSE'].includes(error.code) || error.message === 'aborted';
 
 test('target key and conversation own pending attachments while known IDs share only the same key and group', async t => {
   const f = await fixture(t), uploaded = await f.upload();
@@ -272,7 +292,15 @@ test('config and downloads require both data gates while downloading remains val
 
 test('twenty MiB is streamed only to target media and downloaded byte-for-byte with true length and identity', async t => {
   const f = await fixture(t), bytes = Buffer.alloc(20 * MiB, 0x93);
-  const before = f.diskSnapshot();
+  const tmpRoot = path.join(f.root, 'proxy-tmp');
+  fs.mkdirSync(tmpRoot);
+  const previousTmp = process.env.TMPDIR;
+  process.env.TMPDIR = tmpRoot;
+  t.after(() => {
+    if (previousTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmp;
+  });
+  const before = f.diskSnapshot(tmpRoot);
   for (let i = 0; i < bytes.length; i += 4093) bytes[i] = i % 251;
   const uploaded = await f.upload(bytes);
   assert.equal(uploaded.status, 201); assert.equal(uploaded.body.size, bytes.length);
@@ -285,18 +313,27 @@ test('twenty MiB is streamed only to target media and downloaded byte-for-byte w
   for await (const chunk of response.body) { count += chunk.length; largest = Math.max(largest, chunk.length); hash.update(chunk); }
   assert.equal(count, bytes.length); assert.equal(hash.digest('hex'), digest(bytes));
   assert.ok(largest < MiB, 'download arrives in bounded chunks');
-  assert.deepEqual(f.diskSnapshot(), before, 'proxy creates or changes no files in TMPDIR or its root');
+  assert.deepEqual(f.diskSnapshot(tmpRoot), before, 'proxy creates or changes no files in its private TMPDIR or hub root');
 });
 
-test('CJK and emoji filenames survive a real fleet upload with file payloads larger than text-field limits', async t => {
-  const f = await fixture(t), bytes = Buffer.alloc(2048, 0x93);
-  for (const name of ['报告.pdf', '😀.bin']) {
+test('Unicode filenames survive real fleet uploads and direct and fleet downloads', async t => {
+  for (const name of ['报告.pdf', '😀.bin', 'résumé.pdf']) await t.test(name, async t => {
+    const f = await fixture(t), bytes = Buffer.alloc(2048, 0x93);
     const uploaded = await f.upload(bytes, { name });
     assert.equal(uploaded.status, 201);
     assert.equal(uploaded.body.name, name); assert.equal(uploaded.body.size, bytes.length);
     const row = f.store.db.prepare('SELECT * FROM chat_attachments WHERE id=?').get(uploaded.body.id);
     assert.equal(digest(fs.readFileSync(path.join(f.attachments.mediaDir, row.storage_name))), digest(bytes));
-  }
+    assert.equal((await f.send(uploaded.body.id)).status, 200);
+    for (const direct of [true, false]) {
+      const downloaded = await f.request('/attachments/' + uploaded.body.id, { direct });
+      assert.equal(downloaded.status, 200);
+      const header = downloaded.headers.get('content-disposition');
+      assert.match(header, /^attachment; filename="[\x20-\x7e]+"; filename\*=UTF-8''/);
+      assert.equal(decodeURIComponent(header.split("filename*=UTF-8''")[1]), name);
+      assert.equal(digest(Buffer.from(await downloaded.arrayBuffer())), digest(bytes));
+    }
+  });
 });
 
 test('chunked uploads grow target partial files before completion and disconnect cleans both sides', async t => {
@@ -547,9 +584,11 @@ for (const failure of ['disconnect', 'short', 'sensitive']) {
         else res.destroy();
       }, 30);
     });
-    const response = await f.request('/attachments/transport-file');
-    assert.equal(response.status, 200);
-    await assert.rejects(async () => { for await (const chunk of response.body) assert.ok(chunk.length <= 65536); });
+    const response = await openDownload(t, f, '/attachments/transport-file');
+    assert.equal(response.statusCode, 200);
+    let received = 0;
+    await assert.rejects(async () => { for await (const chunk of response) received += chunk.length; }, isDownloadAbort);
+    assert.ok(received < 65536);
   });
 }
 
@@ -557,17 +596,13 @@ for (const side of ['target', 'local']) {
   test(`revoking ${side} access interrupts a real attachment download within three seconds`, async t => {
     const f = await fixture(t), uploaded = await f.upload(Buffer.alloc(20 * MiB, 0x95));
     assert.equal(uploaded.status, 201); assert.equal((await f.send(uploaded.body.id)).status, 200);
-    // A paused browser supplies actual TCP backpressure to the real target
-    // file route. No target download handler or filesystem stream is replaced.
+    // Cork the native target response after its first chunk so kernel buffer
+    // sizes cannot turn the byte bound into a machine-dependent assertion.
+    // The actual file route, stream and access checks remain in the pipeline.
     f.setSlowConversation(true);
-    let request;
-    const response = await new Promise((resolve, reject) => {
-      request = http.get(f.hub.origin + '/fleet/Target' + f.route + '/attachments/' + uploaded.body.id, resolve);
-      request.once('error', reject);
-      request.setTimeout(4000, () => request.destroy(new Error('bounded real download timeout')));
-    });
-    t.after(() => request.destroy());
-    response.on('error', () => {}); response.pause();
+    f.setCorkDownload(true);
+    const response = await openDownload(t, f, '/attachments/' + uploaded.body.id);
+    response.pause();
     assert.equal(response.statusCode, 200);
     await delay(150);
     assert.equal(f.downloadResponses.length, 1);
@@ -575,7 +610,10 @@ for (const side of ['target', 'local']) {
     const started = Date.now();
     if (side === 'target') f.targetConfig.chat.allowRemote = false; else f.setLocalEnabled(false);
     await delay(1050);
-    await assert.rejects(async () => { for await (const chunk of response) assert.ok(chunk.length <= 65536); });
+    f.downloadResponses[0].uncork();
+    let received = 0;
+    await assert.rejects(async () => { for await (const chunk of response) received += chunk.length; }, isDownloadAbort);
+    assert.ok(received < 10 * MiB, `revocation stops the stream before ten MiB, received ${received}`);
     assert.ok(Date.now() - started < 3000, 'revocation fails before a request timeout could masquerade as enforcement');
     await waitFor(() => f.downloadResponses[0].destroyed);
     assert.equal(f.upstreamRequests.filter(row => row.method === 'GET' && /^\/api\/chat\/conversations\/[^/]+$/.test(row.path)).length, 0,
