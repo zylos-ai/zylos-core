@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=94';
+import { element, icon } from './plain-text.js?v=94';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 
 const pad = value => String(value).padStart(2, '0');
@@ -121,6 +121,13 @@ function previewText(preview, { t, formatTime }) {
   return [preview.text, times].filter(Boolean).join(' · ');
 }
 
+/** A styled select with the shared chevron icon in place of the native arrow. */
+export function wrapSelect(document, node) {
+  const wrap = element(document, 'span', undefined, 'wb-select-wrap');
+  wrap.append(node, icon(document, 'chev', 'xs'));
+  return wrap;
+}
+
 function select(document, values, label, current, onSelect) {
   const node = document.createElement('select');
   node.className = 'wb-input wb-select';
@@ -207,13 +214,13 @@ export function createForm(document, { state: initial, t = key => key, creating 
   root.append(timeWrap);
   const pair = element(document, 'div', undefined, 'wb-sched-pair');
   pair.append(field(document, t('wb.schedule.form.priority'),
-    select(document, ['1', '2', '3'], value => `P${value} ${t('wb.schedule.priority.' + value)}`, state.priority, set('priority')),
+    wrapSelect(document, select(document, ['1', '2', '3'], value => `P${value} ${t('wb.schedule.priority.' + value)}`, state.priority, set('priority'))),
     t('wb.schedule.form.priorityHint')));
   const misses = MISS_CHOICES.includes(String(state.missThreshold)) ? MISS_CHOICES
     : [...MISS_CHOICES, String(state.missThreshold)];
   pair.append(field(document, t('wb.schedule.form.missThreshold'),
-    select(document, misses, value => MISS_KEYS[value] ? t('wb.schedule.miss.' + MISS_KEYS[value])
-      : t('wb.schedule.miss.seconds', { n: value }), String(state.missThreshold), set('missThreshold')),
+    wrapSelect(document, select(document, misses, value => MISS_KEYS[value] ? t('wb.schedule.miss.' + MISS_KEYS[value])
+      : t('wb.schedule.miss.seconds', { n: value }), String(state.missThreshold), set('missThreshold'))),
     t('wb.schedule.form.missHint')));
   root.append(pair);
   const idle = element(document, 'label', undefined, 'wb-sched-check');

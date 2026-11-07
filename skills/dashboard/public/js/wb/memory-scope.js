@@ -1,4 +1,4 @@
-import { element, fallbackName } from './plain-text.js?v=94';
+import { element, fallbackName, icon, platformOf } from './plain-text.js?v=94';
 
 // Scope metadata is validated by Core's parseSessionGroup on the server.
 export function memoryScope(tree) {
@@ -21,6 +21,26 @@ export function memoryScope(tree) {
 export function memoryGroupLabel(group, t) {
   return group.displayName || fallbackName(group, t);
 }
+
+/** Which part of memory a file belongs to: shared, a valid group, or an invalid group directory. */
+export function memoryFileScope(tree, path) {
+  if (typeof path !== 'string' || !path.startsWith('session-groups/')) return { kind: 'shared' };
+  const key = path.split('/')[1];
+  const group = (tree?.sessionGroups ?? []).find(row => row.sessionGroup === key);
+  return group && path.split('/').length >= 3 ? { kind: 'group', group } : { kind: 'invalid' };
+}
+
+/** Files under a directory as one flat list; dot files such as .gitkeep are not memory content. */
+export function memoryFlatFiles(node, files = []) {
+  for (const child of node?.children ?? []) {
+    if (child.type === 'file' && !String(child.name).startsWith('.')) files.push(child);
+    else if (child.type === 'directory') memoryFlatFiles(child, files);
+  }
+  return files;
+}
+
+const CHANNEL_ICON = { telegram: 'send', lark: 'msg', feishu: 'msg', wechat: 'msg', openmax: 'hex', 'web-console': 'monitor' };
+export const memoryGroupIcon = group => group.sessionGroup === 'origin' ? 'origin' : CHANNEL_ICON[platformOf(group)] ?? 'msg';
 
 export function memoryBudgetRows(tree, budgets) {
   const files = tree?.root?.children ?? [];
@@ -125,15 +145,28 @@ export function applyMemoryWriteAccess(edit, save, tree, path) {
 const byteSize = value => `${(Number(value) / 1024).toFixed(1)} KiB`;
 const isNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
-// Browsing is ordinary UI. Progress and file budgets belong to technical details.
-export function createMemoryScope({ document = globalThis.document, root, chartsRoot,
+// Browsing is ordinary UI. Progress and file budgets belong to technical details;
+// the ordinary view gets a one-line summary instead.
+export function createMemoryScope({ document = globalThis.document, root, chartsRoot, listRoot = null, summaryRoot = null,
   t = key => key, request, getTree = () => null, getFile = () => null, onChange = () => {},
   onGroup = () => {}, onFile = () => {}, detail = () => document.documentElement.dataset.detail,
-  identity = () => 'local' } = {}) {
-  let selected = 'shared', selectedGroup = '', backlog = null, owner = identity(), generation = 0, stopped = false;
+  identity = () => 'local', selectedPath = () => getFile()?.path ?? null, isCollapsed = () => false,
+  toggleCollapsed = () => {}, fileTitle = () => '', sizeText = byteSize } = {}) {
+  let selected = 'all', selectedGroup = '', backlog = null, loaded = false, owner = identity(), generation = 0, stopped = false,
+    query = '';
+  const search = element(document, 'input', undefined, 'wb-input');
+  search.type = 'search';
+  search.addEventListener('input', () => {
+    query = search.value;
+    renderList();
+  });
+  const searchWrap = element(document, 'label', undefined, 'wb-search wb-memory-search');
+  searchWrap.append(icon(document, 'search', 'xs'), search);
   function currentScope() { return memoryScope(getTree()); }
   function syncIdentity() {
-    if (owner !== identity()) { owner = identity(); selected = 'shared'; selectedGroup = ''; backlog = null; generation++; }
+    if (owner !== identity()) {
+      owner = identity(); selected = 'all'; selectedGroup = ''; backlog = null; loaded = false; generation++;
+    }
   }
   function selectGroup(key) {
     syncIdentity();
@@ -141,12 +174,19 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     onGroup(key == null ? null : `session-groups/${key}`);
     onChange();
   }
+  function clearGroup() {
+    selectedGroup = '';
+    onGroup(null);
+    onChange();
+  }
   function tree(value) {
     syncIdentity();
     const partition = memoryScope(value);
-    if (selected === 'shared') return partition.shared;
     const groups = selectedGroup ? partition.groups.filter(group => group.sessionGroup === selectedGroup) : partition.groups;
-    return { ...value?.root, path: '', type: 'directory', children: groups.map(group => ({ ...group.directory, name: memoryGroupLabel(group, t) })) };
+    const groupDirs = groups.map(group => ({ ...group.directory, name: memoryGroupLabel(group, t) }));
+    if (selected === 'shared') return partition.shared;
+    if (selected === 'all') return { ...partition.shared, children: [...partition.shared.children, ...groupDirs] };
+    return { ...value?.root, path: '', type: 'directory', children: groupDirs };
   }
   function initialPath(value, previousPath, preferredPath) {
     const scoped = tree(value);
@@ -156,43 +196,161 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   function button(parent, text, handler, className) {
     const node = element(document, 'button', text, className); node.type = 'button'; node.addEventListener('click', handler); parent.append(node); return node;
   }
+  const backlogRow = key => backlog?.groups?.find(row => row.sessionGroup === key) ?? null;
+  /** Section keys that fold, in display order; the caller keeps the folded set. */
+  function sectionKeys() {
+    const keys = selected === 'groups' ? [] : ['shared'];
+    if (selected !== 'shared') for (const group of currentScope().groups) keys.push(`session-groups/${group.sessionGroup}`);
+    return keys;
+  }
   function render() {
     if (!root || stopped) return;
     syncIdentity();
     root.replaceChildren();
-    const nav = element(document, 'div', undefined, 'wb-memory-scopes');
+    const nav = element(document, 'div', undefined, 'wb-seg wb-memory-scopes');
     nav.setAttribute('role', 'group'); nav.setAttribute('aria-label', t('wb.memory.scope'));
-    button(nav, t('wb.memory.shared'), () => { selected = 'shared'; selectedGroup = ''; onChange(); }, selected === 'shared' ? 'active' : '');
-    button(nav, t('wb.memory.groups'), () => selectGroup(null), selected === 'groups' ? 'active' : '');
-    root.append(nav);
-    if (selected === 'groups') {
-      const label = element(document, 'label', t('wb.memory.filter'), 'wb-memory-filter');
-      const select = element(document, 'select');
-      const all = element(document, 'option', t('wb.memory.allGroups')); all.value = ''; select.append(all);
-      for (const group of currentScope().groups) {
-        const option = element(document, 'option', memoryGroupLabel(group, t)); option.value = group.sessionGroup; select.append(option);
-      }
-      if (selectedGroup && !currentScope().groups.some(group => group.sessionGroup === selectedGroup)) {
-        const missing = element(document, 'option', fallbackName({ sessionGroup: selectedGroup }, t)); missing.value = selectedGroup; select.append(missing);
-      }
-      select.value = selectedGroup; select.addEventListener('change', () => selectGroup(select.value || null));
-      label.append(select); root.append(label);
-      if (selectedGroup && !currentScope().groups.some(group => group.sessionGroup === selectedGroup)) root.append(element(document, 'p', t('wb.memory.noGroupFiles'), 'empty-state'));
+    for (const [value, label] of [['all', 'wb.memory.all'], ['shared', 'wb.memory.shared'], ['groups', 'wb.memory.groups']]) {
+      const item = button(nav, t(label), () => {
+        if (value === 'groups') return selectGroup(selectedGroup || null);
+        selected = value; onChange();
+      }, selected === value ? 'active' : '');
+      item.setAttribute('aria-pressed', String(selected === value));
     }
+    root.append(nav);
+    const filters = element(document, 'div', undefined, 'wb-memory-filter');
+    const select = element(document, 'select', undefined, 'wb-input wb-select');
+    select.setAttribute('aria-label', t('wb.memory.filter'));
+    const all = element(document, 'option', t('wb.memory.allGroups')); all.value = ''; select.append(all);
+    for (const group of currentScope().groups) {
+      const option = element(document, 'option', memoryGroupLabel(group, t)); option.value = group.sessionGroup; select.append(option);
+    }
+    if (selectedGroup && !currentScope().groups.some(group => group.sessionGroup === selectedGroup)) {
+      const missing = element(document, 'option', fallbackName({ sessionGroup: selectedGroup }, t)); missing.value = selectedGroup; select.append(missing);
+    }
+    select.value = selectedGroup; select.addEventListener('change', () => select.value ? selectGroup(select.value) : clearGroup());
+    select.disabled = selected === 'shared';
+    const selectWrap = element(document, 'span', undefined, 'wb-select-wrap');
+    const caret = icon(document, 'chev', 'xs');
+    selectWrap.append(select, caret);
+    search.placeholder = t('wb.memory.search');
+    search.setAttribute('aria-label', t('wb.memory.search'));
+    filters.append(selectWrap, searchWrap);
+    root.append(filters);
+    if (selectedGroup && !currentScope().groups.some(group => group.sessionGroup === selectedGroup)) root.append(element(document, 'p', t('wb.memory.noGroupFiles'), 'empty-state'));
     if (currentScope().shared.children.some(node => node.path === 'session-groups')) root.append(element(document, 'p', t('wb.memory.invalidGroup'), 'wb-memory-diagnostic'));
     const file = getFile();
     if (file && !memoryWriteAllowed(getTree(), file.path)) {
       root.append(element(document, 'p', t('wb.memory.invalidGroupFile'), 'wb-memory-diagnostic'));
     }
+    renderList();
+    renderSummary();
     renderCharts();
+  }
+  function fileButton(parent, node, prefix, sizeClass = '') {
+    const item = button(parent, undefined, () => onFile(node.path),
+      'memory-file' + (selectedPath() === node.path ? ' active' : ''));
+    item.dataset.path = node.path;
+    item.disabled = !node.renderable;
+    item.title = fileTitle(node);
+    const name = element(document, 'span', undefined, 'memory-file-name');
+    if (prefix) name.append(element(document, 'span', prefix, 'memory-file-dir'));
+    name.append(element(document, 'span', node.name));
+    item.append(icon(document, 'book', 'xs'), name,
+      element(document, 'span', isNumber(node.size_bytes) ? sizeText(node.size_bytes) : '', 'memory-file-meta' + sizeClass));
+    return item;
+  }
+  function renderList() {
+    if (!listRoot || stopped) return;
+    const value = getTree();
+    listRoot.replaceChildren();
+    if (!value) { listRoot.append(element(document, 'p', t('memory.loading'), 'empty-state')); return; }
+    const scope = memoryScope(value);
+    const needle = query.trim().toLowerCase();
+    const matches = node => !needle || String(node.path).toLowerCase().includes(needle);
+    let shown = 0;
+    if (selected !== 'groups') {
+      const budgets = new Map(memoryBudgetRows(value, backlog?.budgets).map(row => [row.path, row]));
+      const files = memoryFlatFiles(scope.shared).filter(matches);
+      if (files.length) {
+        const section = element(document, 'div', undefined, 'wb-memory-section');
+        const head = button(section, undefined, () => toggleCollapsed('shared'), 'wb-memory-section-h');
+        head.setAttribute('aria-expanded', String(!isCollapsed('shared')));
+        head.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.memory.sharedTitle')));
+        if (!isCollapsed('shared') || needle) {
+          for (const node of files) {
+            const slash = node.path.lastIndexOf('/');
+            const budget = budgets.get(node.path);
+            fileButton(section, node, slash < 0 ? '' : node.path.slice(0, slash + 1),
+              budget?.over > 0 || budget?.warned ? ' wb-txt-warn' : '');
+          }
+        }
+        listRoot.append(section);
+        shown += files.length;
+      }
+    }
+    if (selected !== 'shared') {
+      const groups = selectedGroup ? scope.groups.filter(group => group.sessionGroup === selectedGroup) : scope.groups;
+      const blocks = [];
+      for (const group of groups) {
+        const files = memoryFlatFiles(group.directory).filter(matches);
+        const label = memoryGroupLabel(group, t);
+        if (needle && !files.length && !label.toLowerCase().includes(needle)) continue;
+        const key = `session-groups/${group.sessionGroup}`;
+        const block = element(document, 'div', undefined, 'wb-memory-group');
+        const head = button(block, undefined, () => toggleCollapsed(key), 'wb-memory-group-h');
+        head.setAttribute('aria-expanded', String(!isCollapsed(key)));
+        const name = element(document, 'span', undefined, 'wb-memory-group-name');
+        name.append(element(document, 'b', label));
+        if (detail() === 'technical') name.append(element(document, 'span', group.sessionGroup, 'wb-mono'));
+        head.append(icon(document, memoryGroupIcon(group), 'xs'), name);
+        const row = backlogRow(group.sessionGroup);
+        if (row?.syncing === true) {
+          const badge = element(document, 'span', undefined, 'wb-memory-badge');
+          badge.append(icon(document, 'loader', 'xs'), element(document, 'span', t('wb.memory.syncing')));
+          head.append(badge);
+        } else if (isNumber(row?.count) && row.count > 0) {
+          head.append(element(document, 'span', t('wb.memory.pending', { count: row.count }), 'wb-memory-count'));
+        }
+        if (!isCollapsed(key) || needle) for (const node of files) fileButton(block, node, '');
+        blocks.push(block);
+        shown += files.length;
+      }
+      if (blocks.length) {
+        listRoot.append(element(document, 'p', t('wb.memory.groupsTitle'), 'wb-memory-list-h'), ...blocks);
+      }
+    }
+    if (!shown && needle) listRoot.append(element(document, 'p', t('wb.memory.noMatch'), 'empty-state'));
+  }
+  function renderSummary() {
+    if (!summaryRoot || stopped) return;
+    summaryRoot.replaceChildren();
+    summaryRoot.hidden = detail() === 'technical' || !getTree();
+    if (summaryRoot.hidden) return;
+    const rows = backlog?.groups ?? [];
+    const unknown = !backlog || rows.some(row => row.count == null || row.syncing === null);
+    const late = rows.some(row => row.aged);
+    const waiting = rows.filter(row => isNumber(row.count) && row.count > 0).length;
+    const syncing = rows.filter(row => row.syncing === true).length;
+    summaryRoot.className = 'wb-memory-summary' + (late ? ' wb-warn' : '');
+    summaryRoot.append(icon(document, late ? 'alert' : unknown ? 'help' : 'check', 'xs'),
+      element(document, 'b', t(!loaded ? 'memory.loading' : late ? 'wb.memory.summaryLate' : unknown ? 'wb.memory.summaryUnknown' : 'wb.memory.summaryOk')));
+    if (syncing) summaryRoot.append(element(document, 'span', t('wb.memory.summarySyncing', { count: syncing })));
+    if (waiting) summaryRoot.append(element(document, 'span', t('wb.memory.summaryWaiting', { count: waiting })));
+    summaryRoot.append(element(document, 'span', t('wb.memory.summaryTech'), 'wb-sub'));
+  }
+  function chartCard(className, iconName, title, hint) {
+    const card = element(document, 'section', undefined, className + ' wb-memory-card');
+    const head = element(document, 'h3');
+    head.append(icon(document, iconName, 'xs'), element(document, 'span', title), element(document, 'small', hint));
+    card.append(head);
+    return card;
   }
   function renderCharts() {
     if (!chartsRoot || stopped) return;
     chartsRoot.replaceChildren();
     chartsRoot.hidden = detail() !== 'technical';
     if (chartsRoot.hidden) return;
-    const progress = element(document, 'section', undefined, 'wb-memory-progress');
-    progress.append(element(document, 'h3', t('wb.memory.backlog')));
+    const progress = chartCard('wb-memory-progress', 'layers', t('wb.memory.backlog'), t('wb.memory.backlogHint'));
     if (!backlog) progress.append(element(document, 'p', t('wb.unknown')));
     for (const row of backlog?.groups ?? []) {
       const meta = { ...(getTree()?.sessionGroups ?? []).find(group => group.sessionGroup === row.sessionGroup), ...row };
@@ -200,9 +358,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       const name = button(item, memoryGroupLabel(meta, t), () => selectGroup(row.sessionGroup), 'wb-memory-chart-label');
       name.title = row.sessionGroup;
       const value = isNumber(row.count) ? String(row.count) : t('wb.unknown');
-      item.append(element(document, 'span', value, 'wb-memory-chart-value'));
+      const track = element(document, 'div', undefined, 'wb-memory-track');
       if (isNumber(row.count)) {
-        const track = element(document, 'div', undefined, 'wb-memory-track');
         const max = Math.max(row.count, isNumber(row.threshold) ? row.threshold * 1.25 : 0, 1);
         const fill = element(document, 'span', undefined, 'wb-memory-fill' + (isNumber(row.threshold) && row.count > row.threshold ? ' warning' : ''));
         fill.style.width = `${100 * row.count / max}%`; track.append(fill);
@@ -211,24 +368,25 @@ export function createMemoryScope({ document = globalThis.document, root, charts
           line.title = t('wb.memory.threshold', { count: row.threshold }); track.append(line);
           track.setAttribute('aria-label', t('wb.memory.countThreshold', { count: row.count, threshold: row.threshold }));
         } else track.setAttribute('aria-label', value);
-        item.append(track);
       }
-      item.append(element(document, 'span', row.syncing === true ? t('wb.memory.syncing') : row.syncing === null ? t('wb.memory.syncUnknown') : '', 'wb-memory-sync'));
-      if (row.aged) item.append(element(document, 'span', t('wb.memory.aged'), 'wb-memory-warning'));
-      if (row.reason) item.append(element(document, 'small', row.reason));
+      item.append(track, element(document, 'span', value, 'wb-memory-chart-value'));
+      const flags = element(document, 'span', undefined, 'wb-memory-flags');
+      if (isNumber(row.count) && isNumber(row.threshold) && row.count > row.threshold) flags.append(element(document, 'span', t('wb.memory.overThreshold'), 'wb-memory-warning'));
+      flags.append(element(document, 'span', row.syncing === true ? t('wb.memory.syncing') : row.syncing === null ? t('wb.memory.syncUnknown') : '', 'wb-memory-sync'));
+      if (row.aged) flags.append(element(document, 'span', t('wb.memory.aged'), 'wb-memory-warning'));
+      if (row.reason) flags.append(element(document, 'small', row.reason));
+      item.append(flags);
       progress.append(item);
     }
-    if (backlog?.hasOlder === true) progress.append(element(document, 'p', t('wb.older')));
+    if (backlog?.hasOlder === true) progress.append(element(document, 'p', t('wb.older'), 'wb-memory-source'));
     progress.append(element(document, 'p', t('wb.memory.backlogSource'), 'wb-memory-source'));
     chartsRoot.append(progress);
-    const budgets = element(document, 'section', undefined, 'wb-memory-budgets');
-    budgets.append(element(document, 'h3', t('wb.memory.budgets')));
+    const budgets = chartCard('wb-memory-budgets', 'book', t('wb.memory.budgets'), t('wb.memory.budgetHint'));
     for (const row of memoryBudgetRows(getTree(), backlog?.budgets)) {
       const item = element(document, 'div', undefined, 'wb-memory-chart-row');
       button(item, row.path, () => onFile(row.path), 'wb-memory-chart-label');
-      item.append(element(document, 'span', byteSize(row.size) + (isNumber(row.limit) ? ' / ' + byteSize(row.limit) : ''), 'wb-memory-chart-value'));
+      const track = element(document, 'div', undefined, 'wb-memory-track');
       if (isNumber(row.limit)) {
-        const track = element(document, 'div', undefined, 'wb-memory-track');
         const max = Math.max(row.limit, row.size, 1);
         const fill = element(document, 'span', undefined, 'wb-memory-fill' + (row.warned ? ' warning' : ''));
         fill.style.width = `${100 * Math.min(row.size, row.limit) / max}%`; track.append(fill);
@@ -236,10 +394,13 @@ export function createMemoryScope({ document = globalThis.document, root, charts
           const excess = element(document, 'span', undefined, 'wb-memory-fill excess'); excess.style.width = `${100 * row.over / max}%`; track.append(excess);
         }
         if (isNumber(row.warning)) { const warning = element(document, 'span', undefined, 'wb-memory-threshold'); warning.style.left = `${100 * row.warning / max}%`; warning.title = t('wb.memory.warnAt', { size: byteSize(row.warning) }); track.append(warning); }
-        track.setAttribute('aria-label', t('wb.memory.sizeBudget', { size: byteSize(row.size), budget: byteSize(row.limit) })); item.append(track);
+        track.setAttribute('aria-label', t('wb.memory.sizeBudget', { size: byteSize(row.size), budget: byteSize(row.limit) }));
       }
-      if (row.over > 0) item.append(element(document, 'span', t('wb.memory.overBudget', { size: byteSize(row.over) }), 'wb-memory-warning'));
-      else if (row.warned) item.append(element(document, 'span', t('wb.memory.warning'), 'wb-memory-warning'));
+      item.append(track, element(document, 'span', byteSize(row.size) + (isNumber(row.limit) ? ' / ' + byteSize(row.limit) : ''), 'wb-memory-chart-value'));
+      const flags = element(document, 'span', undefined, 'wb-memory-flags');
+      if (row.over > 0) flags.append(element(document, 'span', t('wb.memory.overBudget', { size: byteSize(row.over) }), 'wb-memory-warning'));
+      else if (row.warned) flags.append(element(document, 'span', t('wb.memory.warning'), 'wb-memory-warning'));
+      item.append(flags);
       budgets.append(item);
     }
     budgets.append(element(document, 'p', t('wb.memory.budgetSource'), 'wb-memory-source'));
@@ -250,19 +411,19 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     try {
       const value = await request('/api/workbench/memory/backlog');
       if (stopped || operation !== generation || captured !== identity()) return;
-      backlog = value; owner = captured; render();
+      backlog = value; loaded = true; owner = captured; render();
     } catch {
-      if (!stopped && operation === generation && captured === identity()) { backlog = null; render(); }
+      if (!stopped && operation === generation && captured === identity()) { backlog = null; loaded = true; render(); }
     }
   }
   const toggle = document.querySelector?.('#wb-detail-toggle');
   const redraw = () => queueMicrotask(() => { if (!stopped) render(); });
   toggle?.addEventListener('change', redraw);
   document.addEventListener?.('dashboard-locale-change', redraw);
-  return { tree, render, load, selectGroup, initialPath, destroy() {
+  return { tree, render, renderList, load, selectGroup, initialPath, sectionKeys, destroy() {
     stopped = true; generation++;
     toggle?.removeEventListener('change', redraw);
     document.removeEventListener?.('dashboard-locale-change', redraw);
-    root?.replaceChildren(); chartsRoot?.replaceChildren();
+    root?.replaceChildren(); chartsRoot?.replaceChildren(); listRoot?.replaceChildren(); summaryRoot?.replaceChildren();
   } };
 }

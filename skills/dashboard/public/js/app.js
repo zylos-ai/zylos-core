@@ -7,7 +7,7 @@ import { mountChat } from './wb/chat.js?v=96';
 import { mountChatSettings } from './wb/chat-settings.js?v=94';
 import { mountWorkbench } from './wb/shell.js?v=95';
 import { watchHeader } from './wb/header-fit.js?v=94';
-import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=94';
+import { createMemoryScope, memoryFileScope, memoryGroupLabel, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=94';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
 import { mountSchedule } from './wb/schedule.js?v=94';
 import { createUsagePage } from './wb/usage.js?v=94';
@@ -1242,13 +1242,29 @@ async function requestAgentJson(path, options = {}) {
 }
 
 const memoryScopeView = createMemoryScope({
-  document, root: $('#memory-scope'), chartsRoot: $('#memory-charts'), t,
+  document, root: $('#memory-scope'), chartsRoot: $('#memory-charts'), listRoot: $('#memory-tree'),
+  summaryRoot: $('#memory-summary'), t,
   request: fetchAgentJson, getTree: () => state.memory.tree, getFile: () => state.memory.file,
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   onChange: () => renderMemory(), onFile: path => openMemoryFile(path).catch(() => {}),
   onGroup: path => state.memory.collapsed.delete(path),
+  selectedPath: () => state.memory.selectedPath,
+  isCollapsed: key => state.memory.collapsed.has(key),
+  toggleCollapsed: key => {
+    if (state.memory.collapsed.has(key)) state.memory.collapsed.delete(key);
+    else state.memory.collapsed.add(key);
+    renderMemory();
+  },
+  fileTitle: node => [node.path, fmtBytes(node.size_bytes), fmtAge(node.mtime)].filter(Boolean).join(' · '),
+  sizeText: fmtBytes,
 });
 window.addEventListener('pagehide', () => memoryScopeView.destroy());
+// The detail level can be set after the memory page first drew (on load, or from the header switch);
+// redraw so the summary line, technical charts and commit details follow it.
+if (window.MutationObserver) {
+  new MutationObserver(() => { if (state.memory?.tree) renderMemoryPreservingEditor(renderMemory, document); })
+    .observe(document.documentElement, { attributes: true, attributeFilter: ['data-detail'] });
+}
 
 function resetMemoryState() {
   if (state.memory?.draftTimer) clearTimeout(state.memory.draftTimer);
@@ -1396,9 +1412,6 @@ function preferredMemoryPath(root) {
     null;
 }
 
-// Chevron rotates 90° via the .expanded class — one icon, CSS owns the state.
-const MEMORY_CARET_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>';
 // Feather chevrons-down-up / chevrons-up-down for the fold-all toggle.
 const MEMORY_FOLD_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/></svg>';
@@ -1410,34 +1423,6 @@ const API_KEY_REVOKE_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>';
 const API_KEY_DELETE_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
-
-function collectMemoryDirPaths(node, out = []) {
-  if (!node) return out;
-  if (node.type === 'directory' && node.path) out.push(node.path);
-  for (const child of node.children || []) collectMemoryDirPaths(child, out);
-  return out;
-}
-
-function renderMemoryTreeNode(node, depth = 0) {
-  if (!node) return '';
-  if (node.type === 'directory') {
-    const collapsed = node.path ? state.memory.collapsed.has(node.path) : false;
-    const children = collapsed
-      ? ''
-      : (node.children || []).map(child => renderMemoryTreeNode(child, depth + 1)).join('');
-    const label = node.path
-      ? `<button class="memory-dir" type="button" data-dir="${esc(node.path)}" aria-expanded="${!collapsed}" style="padding-left:${8 + depth * 14}px"><span class="memory-dir-caret${collapsed ? '' : ' expanded'}">${MEMORY_CARET_ICON}</span>${esc(node.name)}</button>`
-      : '';
-    return `${label}${children}`;
-  }
-  const active = state.memory.selectedPath === node.path;
-  const disabled = !node.renderable;
-  const meta = [fmtBytes(node.size_bytes), fmtAge(node.mtime)].filter(Boolean).join(' · ');
-  return `<button class="memory-file${active ? ' active' : ''}" type="button" data-path="${esc(node.path)}" style="padding-left:${8 + depth * 14}px"${disabled ? ' disabled' : ''}>
-    <span class="memory-file-name">${esc(node.name)}</span>
-    <span class="memory-file-meta">${esc(meta)}</span>
-  </button>`;
-}
 
 // Memory content is semi-trusted (agent-written): html:false keeps raw HTML
 // escaped, matching the XSS posture of the previous minimal renderer.
@@ -1545,18 +1530,20 @@ function renderMemoryConflict(conflict) {
     `<div class="memory-diff-row ${row.type}"><span>${row.type === 'same' ? ' ' : row.type === 'mine' ? '-' : row.type === 'theirs' ? '+' : '!'}</span><code>${esc(row.text)}</code></div>`
   ).join('');
   const notice = truncated ? `<div class="memory-diff-note">${esc(t('memory.diff_truncated', { count: diff.length - 240 }))}</div>` : '';
-  return `<section class="memory-conflict" id="memory-conflict">
+  return `<div class="wb-modal-bg memory-conflict-bg"><section class="memory-conflict wb-modal" id="memory-conflict" role="dialog" aria-modal="true">
     <div class="memory-conflict-head">
       <strong>${esc(t('memory.conflict_title'))}</strong>
       <span>${esc(t('memory.conflict_body'))}</span>
     </div>
-    <div class="memory-conflict-actions">
-      <button class="memory-action" type="button" data-memory-conflict="mine">${esc(t('memory.use_mine'))}</button>
-      <button class="memory-action" type="button" data-memory-conflict="theirs">${esc(t('memory.take_theirs'))}</button>
-      <button class="memory-action primary" type="button" data-memory-conflict="manual">${esc(t('memory.manual_merge'))}</button>
-    </div>
     <div class="memory-diff">${rows}${notice}</div>
-  </section>`;
+    <div class="memory-conflict-actions">
+      <button class="wb-btn" type="button" data-memory-conflict="later">${esc(t('memory.conflict_later'))}</button>
+      <span class="wb-grow"></span>
+      <button class="wb-btn" type="button" data-memory-conflict="theirs">${esc(t('memory.take_theirs'))}</button>
+      <button class="wb-btn" type="button" data-memory-conflict="manual">${esc(t('memory.manual_merge'))}</button>
+      <button class="wb-btn wb-btn-danger" type="button" data-memory-conflict="mine">${esc(t('memory.use_mine'))}</button>
+    </div>
+  </section></div>`;
 }
 
 function renderMemoryContent() {
@@ -1674,43 +1661,44 @@ function renderMemory() {
     status.hidden = true;
   }
 
-  tree.innerHTML = state.memory.tree ? renderMemoryTreeNode(memoryScopeView.tree(state.memory.tree)) : `<p class="empty-state">${esc(t('memory.loading'))}</p>`;
-  tree.querySelectorAll('.memory-file').forEach((btn) => {
-    btn.addEventListener('click', () => openMemoryFile(btn.dataset.path).catch(() => {}));
-  });
-  tree.querySelectorAll('.memory-dir').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const dir = btn.dataset.dir;
-      if (!dir) return;
-      if (state.memory.collapsed.has(dir)) state.memory.collapsed.delete(dir);
-      else state.memory.collapsed.add(dir);
-      renderMemory();
-    });
-  });
   const fold = $('#memory-fold');
   if (fold) {
-    const dirs = collectMemoryDirPaths(state.memory.tree?.root);
+    const dirs = memoryScopeView.sectionKeys();
     const allCollapsed = dirs.length > 0 && dirs.every(d => state.memory.collapsed.has(d));
-    fold.disabled = dirs.length === 0;
+    fold.disabled = !state.memory.tree || dirs.length === 0;
     fold.innerHTML = allCollapsed ? MEMORY_UNFOLD_ICON : MEMORY_FOLD_ICON;
     fold.title = allCollapsed ? t('memory.expand_all') : t('memory.collapse_all');
     fold.setAttribute('aria-label', fold.title);
   }
 
   const file = state.memory.file;
+  const scopeTag = $('#memory-scope-tag');
   if (!file) {
     title.textContent = t('memory.select_file');
     meta.textContent = '';
+    if (scopeTag) scopeTag.innerHTML = '';
   } else {
-    title.textContent = file.path;
+    title.textContent = `memory/${file.path}`;
+    // Size and age for everyone; the hash and last commit belong to technical details.
     const commit = state.memory.git?.commit;
-    const parts = [
-      fmtBytes(file.size_bytes),
-      fmtAge(file.mtime),
-      file.sha256 ? `sha ${file.sha256.slice(0, 8)}` : '',
-      commit ? `${commit.short_hash} ${commit.subject}` : t('memory.no_commit')
-    ].filter(Boolean);
-    meta.textContent = parts.join(' · ');
+    const technical = document.documentElement.dataset.detail === 'technical';
+    meta.innerHTML = [
+      esc(fmtBytes(file.size_bytes)),
+      esc(t('wb.memory.modified', { time: fmtAge(file.mtime) })),
+      ...(technical ? [
+        file.sha256 ? `<span class="wb-mono">sha ${esc(file.sha256.slice(0, 8))}</span>` : '',
+        commit ? `<span class="wb-mono">${esc(commit.short_hash)} ${esc(commit.subject)}</span>` : esc(t('memory.no_commit')),
+      ] : []),
+    ].filter(Boolean).map(part => `<span>${part}</span>`).join('');
+    if (scopeTag) {
+      const scope = memoryFileScope(state.memory.tree, file.path);
+      if (scope.kind === 'group') {
+        scopeTag.innerHTML = `<button type="button" class="wb-tag wb-memory-tag" title="${esc(t('wb.schedule.openGroup'))}">${esc(t('wb.memory.scopeGroup', { name: memoryGroupLabel(scope.group, t) }))}</button>`;
+        scopeTag.querySelector('button')?.addEventListener('click', () => openWorkbenchGroup(scope.group.sessionGroup));
+      } else {
+        scopeTag.innerHTML = `<span class="wb-tag">${esc(t(scope.kind === 'invalid' ? 'wb.memory.scopeInvalid' : 'wb.memory.scopeShared'))}</span>`;
+      }
+    }
   }
   renderMemoryContent();
   renderMemoryActions();
@@ -1858,6 +1846,12 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
 
 async function resolveMemoryConflict(action) {
   const conflict = state.memory.conflict;
+  if (action === 'later') {
+    // Leave the conflict without saving: the draft stays in the editor and in this browser.
+    state.memory.conflict = null;
+    renderMemoryPreservingEditor(renderMemory, document);
+    return;
+  }
   if (!isCompleteMemoryFile(conflict?.theirs)) return;
   if (action === 'theirs') {
     state.memory.file = conflict.theirs;
@@ -2619,7 +2613,7 @@ function initMemoryControls() {
   $('#memory-save-btn')?.addEventListener('click', () => saveMemoryDraftToServer().catch(() => {}));
   $('#memory-reset-btn')?.addEventListener('click', resetMemoryEdit);
   $('#memory-fold')?.addEventListener('click', () => {
-    const dirs = collectMemoryDirPaths(state.memory.tree?.root);
+    const dirs = memoryScopeView.sectionKeys();
     if (!dirs.length) return;
     const allCollapsed = dirs.every(d => state.memory.collapsed.has(d));
     state.memory.collapsed = allCollapsed ? new Set() : new Set(dirs);

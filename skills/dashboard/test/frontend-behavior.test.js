@@ -1820,18 +1820,16 @@ test('memory tab pins the page frame and panes scroll independently (#222)', () 
   assert.match(css, /body\.memory-tab-active \.memory-tree \{ flex: 1; min-height: 0; max-height: none; \}/);
 });
 
-test('memory tree directories collapse and expand (#222)', () => {
+test('memory file list sections collapse and expand (#222)', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  // Directory rows are buttons carrying their path and expansion state.
-  assert.match(app, /<button class="memory-dir" type="button" data-dir="\$\{esc\(node\.path\)\}" aria-expanded="\$\{!collapsed\}"/);
-  // #226: caret is an SVG chevron rotated by class, large enough to read.
-  assert.match(app, /memory-dir-caret\$\{collapsed \? '' : ' expanded'\}/);
-  assert.match(app, /MEMORY_CARET_ICON/);
-  // Collapsed directories render no children.
-  assert.match(app, /state\.memory\.collapsed\.has\(node\.path\)/);
-  // Toggling flips membership in the collapsed set and re-renders.
-  assert.match(app, /state\.memory\.collapsed\.delete\(dir\)/);
-  assert.match(app, /state\.memory\.collapsed\.add\(dir\)/);
+  const scope = fs.readFileSync(new URL('../public/js/wb/memory-scope.js', import.meta.url).pathname, 'utf8');
+  // The shared list and each group are folding sections whose headers carry their expansion state.
+  assert.match(scope, /toggleCollapsed\('shared'\)/);
+  assert.match(scope, /head\.setAttribute\('aria-expanded', String\(!isCollapsed\(key\)\)\)/);
+  // Folding flips membership in the collapsed set and re-renders.
+  assert.match(app, /isCollapsed: key => state\.memory\.collapsed\.has\(key\)/);
+  assert.match(app, /state\.memory\.collapsed\.delete\(key\)/);
+  assert.match(app, /state\.memory\.collapsed\.add\(key\)/);
 });
 
 test('fleet sound cues use the marimba strike timbre Howard picked (#223)', () => {
