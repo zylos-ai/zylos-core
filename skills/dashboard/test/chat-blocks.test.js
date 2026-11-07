@@ -6,10 +6,10 @@ import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { CONTENT_PREFIX, makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 // Resolve the browser alias to the same shared source; never evaluate source text.
-const browserSchema = new URL('../public/chat-schema.js?v=92', import.meta.url).href;
+const browserSchema = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
-  if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserSchema) return next(sourceSchema, context);
   return next(specifier, context);
 } });
 const { renderChatContent } = await import('../public/js/wb/chat-blocks.js');
@@ -192,4 +192,14 @@ test('a conditional form without a shipped renderer uses fallback and never requ
   assert.ok(root.textContent.includes(source.blocks[0].fallbackText));
   assert.equal(allNodes(root).some(node => ['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'DL'].includes(node.tagName)), false);
   assert.equal(allNodes(root).some(node => node.className?.includes('chat-block-error')), false);
+});
+
+test('plain hosts hide message references while technical hosts retain them', () => {
+  const row = { id: 66, content: CONTENT_PREFIX + '{invalid' };
+  const plain = renderChatContent({ document: createDocument(), row, t: key => key, showTechnicalDetails: false });
+  const technical = renderChatContent({ document: createDocument(), row, t: key => key, showTechnicalDetails: true });
+  const find = root => allNodes(root).find(node => node.className === 'chat-block-reference');
+  assert.equal(find(plain).hidden, true);
+  assert.equal(find(technical).hidden, false);
+  assert.ok(technical.textContent.includes('66'));
 });

@@ -1,16 +1,20 @@
-import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=92';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=99';
 import { element } from './plain-text.js?v=94';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=92';
+export { validateAnswer } from '../../chat-schema.js?v=99';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 
 /** Render the validated shared protocol as inert DOM; the host owns answers. */
-export function renderChatContent({ document, row, t = key => key, renderQuestion, supportsBlock } = {}) {
+export function renderChatContent({ document, row, t = key => key, renderQuestion, supportsBlock, showTechnicalDetails = true } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-message-content');
-  const reference = () => node('span', `${t('chat.block.reference')} ${String(row.id)}`, 'chat-block-reference');
+  const reference = () => {
+    const label = node('span', `${t('chat.block.reference')} ${String(row.id)}`, 'chat-block-reference');
+    label.hidden = !showTechnicalDetails;
+    return label;
+  };
   const error = () => {
     const result = node('div', undefined, 'chat-block-error');
     result.setAttribute('role', 'note');

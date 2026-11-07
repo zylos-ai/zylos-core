@@ -6,7 +6,7 @@ import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=94';
 import { renderVersion } from './wb/settings-version.js?v=94';
 import { mountConversationPage as mountChat } from './wb/conversation-page.js?v=99';
 import { mountChatSettings } from './wb/chat-settings.js?v=94';
-import { mountWorkbench } from './wb/shell.js?v=95';
+import { mountWorkbench } from './wb/shell.js?v=99';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=96';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
@@ -4599,6 +4599,10 @@ workbench = mountWorkbench({
     memoryScopeView.selectGroup(key);
     document.querySelector('.tab[data-tab="memory"]')?.click();
   },
+  onConversation: row => {
+    document.querySelector('.tab[data-tab="chat"]')?.click();
+    return chatPage?.openGroup(row.sessionGroup, { channel: row.c4?.componentName });
+  },
   observerStatus: () => state.observer.status,
   observerAvailable: status => !remoteIsReadOnly() && !observerRecoveryReason(status),
   instanceInfo: () => ({ name: viewedAgentName(), version: state.dashboardState?.dashboard_version ? 'dashboard ' + state.dashboardState.dashboard_version : null,
@@ -4624,10 +4628,12 @@ window.addEventListener('pagehide', stopSchedule);
 chatPage = mountChat({ root: document.querySelector('#wb-chat'), t,
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
+  technicalDetails: () => document.documentElement.dataset.detail === 'technical',
   onOpenGroup: conversation => openWorkbenchGroup(conversation.sessionGroup ?? conversation.session_group),
 });
 const chatLocaleChange = () => chatPage.redraw();
 document.addEventListener('dashboard-locale-change', chatLocaleChange);
+document.querySelector('#wb-detail-toggle')?.addEventListener('change', chatLocaleChange);
 const usageDetailChange = () => usagePage.setViewDetail();
 document.querySelector('#wb-detail-toggle')?.addEventListener('change', usageDetailChange);
 document.addEventListener('dashboard-locale-change', usageDetailChange);
@@ -4635,6 +4641,7 @@ refreshUsage();
 refreshChat();
 window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); usagePage.destroy(); chatPage.destroy();
   document.removeEventListener('dashboard-locale-change', chatLocaleChange);
+  document.querySelector('#wb-detail-toggle')?.removeEventListener('change', chatLocaleChange);
   document.querySelector('#wb-detail-toggle')?.removeEventListener('change', usageDetailChange);
   document.removeEventListener('dashboard-locale-change', usageDetailChange);
 });

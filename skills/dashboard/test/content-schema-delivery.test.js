@@ -69,27 +69,58 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=98)"/.exec(pageText)?.[1];
-    assert.ok(appPath, 'the entry page loads the refreshed application module');
-    const application = await fetch(origin + prefix + '/_assets/' + appPath);
-    assert.equal(application.status, 200);
-    assert.match(await application.text(), /from '\.\/wb\/chat\.js\?v=96'/);
-    for (const moduleName of ['chat', 'chat-blocks', 'chat-questions']) {
-      const version = 96;
-      const moduleUrl = origin + prefix + `/_assets/js/wb/${moduleName}.js?v=${version}`;
-      const entry = await fetch(moduleUrl);
-      assert.equal(entry.status, 200);
-      const body = await entry.text();
-      const specifier = /from ['"]([^'"]*chat-schema\.js[^'"]*)['"]/.exec(body)?.[1];
-      assert.equal(specifier, '../../chat-schema.js?v=92');
-      const schemaUrl = new URL(specifier, moduleUrl);
-      assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
-      assert.equal(schemaUrl.search, '?v=92');
-      const response = await fetch(schemaUrl);
-      assert.equal(response.status, 200);
-      assert.match(response.headers.get('content-type'), /^text\/javascript; charset=utf-8$/);
-      assert.equal(Buffer.from(await response.arrayBuffer()).equals(expected), true);
+    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(pageText)?.[1];
+    assert.ok(appPath, 'the entry page loads the current application module');
+    const cache = new Map();
+    async function moduleAt(url) {
+      if (cache.has(url)) return cache.get(url);
+      const response = await fetch(url);
+      assert.equal(response.status, 200, url);
+      const body = await response.text();
+      cache.set(url, body);
+      return body;
     }
+    const appUrl = origin + prefix + '/_assets/' + appPath;
+    let parentUrl = appUrl;
+    const activeModules = new Map();
+    for (const name of ['conversation-page', 'conversation-content', 'chat-blocks']) {
+      const parent = await moduleAt(parentUrl);
+      const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
+      const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=99`));
+      assert.ok(specifier, `${parentUrl} loads ${name}`);
+      parentUrl = new URL(specifier, parentUrl).href;
+      activeModules.set(name, parentUrl);
+    }
+    const pageUrl = activeModules.get('conversation-page');
+    const page = await moduleAt(pageUrl);
+    for (const name of ['conversation-state', 'chat-questions']) {
+      const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
+        .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=99`));
+      assert.ok(specifier, `${name} belongs to the active page graph`);
+      activeModules.set(name, new URL(specifier, pageUrl).href);
+    }
+    const schemaVersions = new Set(), stateVersions = new Set();
+    let schemaImports = 0;
+    for (const moduleUrl of activeModules.values()) {
+      const body = await moduleAt(moduleUrl);
+      for (const match of body.matchAll(/from ['"]([^'"]*chat-schema\.js[^'"]*)['"]/g)) {
+        schemaImports++;
+        const schemaUrl = new URL(match[1], moduleUrl);
+        assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
+        schemaVersions.add(schemaUrl.search);
+        const response = await fetch(schemaUrl);
+        assert.equal(response.status, 200);
+        assert.match(response.headers.get('content-type'), /^text\/javascript; charset=utf-8$/);
+        assert.equal(Buffer.from(await response.arrayBuffer()).equals(expected), true);
+      }
+      for (const match of body.matchAll(/from ['"]([^'"]*chat-state\.js[^'"]*)['"]/g)) {
+        stateVersions.add(new URL(match[1], moduleUrl).search);
+      }
+    }
+    assert.ok(schemaImports >= 4, 'all schema imports and re-exports are checked');
+    assert.equal(schemaVersions.size, 1, 'one shared schema module instance');
+    assert.equal(stateVersions.size, 1, 'one shared receipt/state module instance');
+
   }
 });
 

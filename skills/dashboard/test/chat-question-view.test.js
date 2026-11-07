@@ -6,13 +6,13 @@ import { CONTENT_PREFIX, parseC4Content, makeQuestionSummary, validateAnswer } f
 const browserSchema = new URL('../public/chat-schema.js?v=92', import.meta.url).href;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
-  if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === new URL(browserSchema).pathname) return next(sourceSchema, context);
   return next(specifier, context);
 } });
 const { renderQuestion } = await import('../public/js/wb/chat-questions.js');
 const t = key => key;
 function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = true, missing = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
-  mutateQuestion, formState = {}, submit = async () => {} } = {}) {
+  mutateQuestion, formState = {}, submit = async () => {}, otherAnswerDisclosure = false } = {}) {
   const defaults = type === 'choice' ? { prompt: 'Pick one', options: [{ id: 'a', label: 'First' }, { id: 'b', label: 'Second' }], action: { type: 'choice.select', target: 'answer.choice' } }
     : type === 'confirmation' ? { title: 'Proceed?', severity: 'normal', action: { type: 'confirmation.respond', target: 'answer.confirm' } }
       : { title: 'Your details', fields: [{ key: 'name', label: 'Name', type: 'text', required: true, maxLength: 10 }], action: { type: 'form.submit', target: 'answer.form' } };
@@ -27,7 +27,7 @@ function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = tru
     status, answerId: null, action: null, actionError: null, delivery: null };
   mutateQuestion?.(question);
   const document = createDocument(), requests = [];
-  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, t, formState,
+  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, otherAnswerDisclosure, t, formState,
     onSubmit: async (action, options) => { requests.push({ action, options }); return submit(action, options); } });
   const root = render();
   return { root, render, requests, question, envelope, formState, nodes: () => allNodes(root),
@@ -464,4 +464,24 @@ test('a saved question with invalid constraints displays unavailable without ans
   assert.match(f.root.textContent, /chat.question.unavailable/);
   assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName)), false);
   assert.equal(f.requests.length, 0);
+});
+
+
+test('other-answer disclosure is created by the question renderer and keeps the answer action', async () => {
+  const f = fixture({ otherAnswerDisclosure: true });
+  const details = f.nodes().find(node => node.tagName === 'DETAILS');
+  assert.ok(details);
+  assert.equal(details.children[0].tagName, 'SUMMARY');
+  assert.equal(details.children[0].textContent, 'chat.question.otherAnswer');
+  const input = f.nodes().find(node => node.tagName === 'TEXTAREA');
+  assert.ok(input);
+  assert.equal(details.children[1].children[0], input);
+  assert.equal(details.children[2], f.button('answerOther'));
+  change(input, 'My own answer');
+  f.button('answerOther').dispatch('click');
+  await tick();
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].action.payload.freeText, 'My own answer');
+  const normal = fixture();
+  assert.equal(normal.nodes().some(node => node.tagName === 'DETAILS'), false);
 });
