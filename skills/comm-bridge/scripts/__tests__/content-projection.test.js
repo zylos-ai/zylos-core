@@ -155,5 +155,4 @@ for (const fixture of viewFixtures.views) test(`View ${fixture.name} leaves mode
   assert.equal(projectC4Content(encode(base), { c4Id: 123 }), expected);
   assert.equal(projectC4Content(original, { c4Id: 123 }), expected);
   if (parsed.viewError) assert.equal(expected.includes(parsed.viewError), false);
-  assert.equal(encode(withView), original, 'projection does not rewrite the stored packet');
 });

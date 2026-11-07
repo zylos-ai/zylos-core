@@ -64,6 +64,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.ok(expected.includes(Buffer.from(`export const ${name} = ${JSON.stringify(value)}`)), name);
   }
   assert.ok(expected.includes(Buffer.from('export function evaluateFormState(fields, values)')));
+  assert.ok(expected.includes(Buffer.from('export function validateFormFields(fields, values)')));
   assert.doesNotMatch(expected.toString(), /^import\s/m, 'browser schema remains one generated-data module without runtime imports');
   for (const prefix of ['', '/dashboard', '/fleet/Peer', '/dashboard/fleet/Peer']) {
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');

@@ -1,4 +1,4 @@
-import { CONTENT_PREFIX, parseC4Content, validateAnswer } from '../../../../comm-bridge/scripts/c4-content-schema.js';
+import { CONTENT_PREFIX, parseC4Content, validateAnswer, validateFormFields } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const canonicalId = group => `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
@@ -59,6 +59,30 @@ function savedEnvelope(question) {
   return envelope;
 }
 
+function answerEnvelope(question, action, fallbackText) {
+  return { version: 1, kind: 'answer', messageId: action.id, fallbackText,
+    interruptId: question.interrupt_id, questionSummary: question.question_summary, action,
+    metadata: { zylos: { answerId: action.id } } };
+}
+
+function fieldErrors(question, envelope, action) {
+  const block = envelope.blocks[0], data = block.data;
+  if (question.status !== 'paused' || block.type !== 'form_intent' || block.schemaVersion !== 2
+      || (data.state?.status ?? 'open') !== 'open' || !action || typeof action !== 'object') return null;
+  // Validate the original closed Action shape through the existing parser.
+  // The provisional fallback uses only the authoritative saved summary.
+  let parsed;
+  try { parsed = parseC4Content(CONTENT_PREFIX + JSON.stringify(answerEnvelope(question, action, question.question_summary))); }
+  catch { return null; }
+  if (parsed.kind !== 'envelope'
+      || action.context.messageId !== envelope.messageId || action.context.blockId !== block.id
+      || action.type !== data.action.type || action.target !== data.action.target
+      || (action.context.conversationId !== undefined && action.context.conversationId !== canonicalId(question.session_group))
+      || !Object.hasOwn(action.payload, 'values')) return null;
+  const result = validateFormFields(data.fields, action.payload.values);
+  return !result.formError && result.errors.length ? result.errors : null;
+}
+
 function readableAnswer(action, block) {
   const payload = action.payload, data = block.data;
   if (Object.hasOwn(payload, 'freeText')) return payload.freeText;
@@ -116,7 +140,11 @@ export class ChatAnswers {
       if (question.endpoint_id !== endpointId) throw fail('chat_question_forbidden', 403);
       const envelope = savedEnvelope(question);
       if (!validateAnswer(action, envelope) || (action.context.conversationId !== undefined
-          && action.context.conversationId !== canonicalId(sessionGroup))) throw fail('invalid_chat_answer');
+          && action.context.conversationId !== canonicalId(sessionGroup))) {
+        const error = fail('invalid_chat_answer'), fields = fieldErrors(question, envelope, action);
+        if (fields) error.fields = fields;
+        throw error;
+      }
       const previous = this.db.prepare('SELECT * FROM chat_answers WHERE answer_id=?').get(action.id);
       if (previous) {
         if (previous.question_c4_id !== question.c4_id || previous.session_group !== sessionGroup
@@ -126,10 +154,8 @@ export class ChatAnswers {
         return { answer: projectAnswer(previous), created: false };
       }
       if (question.status !== 'paused') throw fail('chat_question_not_paused', 409);
-      const content = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'answer', messageId: action.id,
-        fallbackText: `回答了 interruptId=${question.interrupt_id}（问题：${question.question_summary}）：${readableAnswer(action, envelope.blocks[0])}`,
-        interruptId: question.interrupt_id, questionSummary: question.question_summary, action,
-        metadata: { zylos: { answerId: action.id } } });
+      const content = CONTENT_PREFIX + JSON.stringify(answerEnvelope(question, action,
+        `回答了 interruptId=${question.interrupt_id}（问题：${question.question_summary}）：${readableAnswer(action, envelope.blocks[0])}`));
       if (parseC4Content(content).kind !== 'envelope') throw fail('invalid_chat_answer');
       const changed = this.db.prepare("UPDATE chat_questions SET status='answered' WHERE c4_id=? AND status='paused'").run(question.c4_id);
       if (changed.changes !== 1) throw fail('chat_question_not_paused', 409);

@@ -68,7 +68,8 @@ export async function handleChatAnswers(req, res, url, { auth, config, answers, 
     });
     sendJson(res, 200, { answer: accepted.answer, delivery: receipt });
   } catch (error) {
-    sendJson(res, error.statusCode || error.status || 502, { error: error.code || error.message || 'chat_answer_failed' });
+    sendJson(res, error.statusCode || error.status || 502, { error: error.code || error.message || 'chat_answer_failed',
+      ...(error.code === 'invalid_chat_answer' && error.fields ? { fields: error.fields } : {}) });
   }
   return true;
 }

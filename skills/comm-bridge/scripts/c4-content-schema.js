@@ -352,6 +352,35 @@ export function evaluateFormState(fields, values) {
   return { activeKeys: fields.filter(field => active.has(field.key)).map(field => field.key), errors: [] };
 }
 
+/**
+ * Diagnose v2 form values only; action, context and free-text checks belong to
+ * validateAnswer. With valid definitions, errors are ordered by submitted
+ * inactive/unknown keys first, then active fields in their definition order.
+ * Invalid definitions or a non-object values input return formError instead.
+ */
+export function validateFormFields(fields, values) {
+  const state = evaluateFormState(fields, values);
+  if (state.errors.length) return { activeKeys: state.activeKeys, errors: [], formError: state.errors[0] };
+  const active = new Set(state.activeKeys), known = new Set(fields.map(field => field.key)), errors = [];
+  for (const key of Object.keys(values)) {
+    if (!known.has(key)) errors.push({ key, reason: 'unknown' });
+    else if (!active.has(key)) errors.push({ key, reason: 'inactive' });
+  }
+  for (const field of fields) {
+    if (!active.has(field.key)) continue;
+    const value = own(values, field.key) ? values[field.key] : undefined;
+    if (validFieldValue(field, value)) continue;
+    let reason = 'type';
+    if (value == null) reason = 'required';
+    else if (['text', 'multiline_text'].includes(field.type) && typeof value === 'string') reason = 'range';
+    else if (['number', 'integer'].includes(field.type) && typeValid(field.type, value)) reason = 'range';
+    else if (field.type === 'single_select' && typeof value === 'string') reason = 'range';
+    else if (field.type === 'multi_select' && Array.isArray(value) && value.every(item => typeof item === 'string')) reason = 'range';
+    errors.push({ key: field.key, reason });
+  }
+  return { activeKeys: state.activeKeys, errors };
+}
+
 export function validateAnswer(action, questionEnvelope) {
   try {
     questionEnvelope = splitMessageView(questionEnvelope).envelope;
@@ -370,10 +399,8 @@ export function validateAnswer(action, questionEnvelope) {
     if (block.type === 'confirmation') return ['confirm', 'cancel'].includes(payload.outcome);
     if (block.type === 'form_intent') {
       if (block.schemaVersion === 2) {
-        const state = evaluateFormState(data.fields, payload.values), active = new Set(state.activeKeys);
-        return !state.errors.length && Object.keys(payload.values).every(key => active.has(key))
-          && data.fields.filter(field => active.has(field.key))
-            .every(field => validFieldValue(field, own(payload.values, field.key) ? payload.values[field.key] : undefined));
+        const result = validateFormFields(data.fields, payload.values);
+        return !result.formError && result.errors.length === 0;
       }
       return Object.keys(payload.values).every(key => data.fields.some(field => field.key === key))
         && data.fields.every(field => validFieldValue(field, own(payload.values, field.key) ? payload.values[field.key] : undefined));

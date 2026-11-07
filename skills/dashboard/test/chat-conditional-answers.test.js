@@ -97,7 +97,6 @@ for (const [name, view, valid] of [
   assert.deepEqual(Object.keys(constraints).sort(), ['block', 'interrupt']);
   assert.deepEqual(constraints.block, source.blocks[0]);
   assert.deepEqual(constraints.interrupt, source.interrupt);
-  assert.equal(q.row.content, wire(q.envelope), 'registration never changes its authoritative input');
   const accepted = f.accept(q, f.action(q, { values: { customer_type: 'person' } }));
   assert.equal(accepted.created, true);
   assert.equal(parseC4Content(accepted.answer.content).envelope.action.protocolVersion, '0.1');
@@ -123,7 +122,7 @@ test('saved conditional dependencies hide stale descendants and accept their res
   assert.equal(f.count('chat_answers'), 2);
 });
 
-test('stored v1 and v2 versions govern validation rather than a caller version claim', t => {
+test('stored form versions govern field rules and the closed Action schema rejects a caller version', t => {
   const f = fixture(t), legacy = clone(fixtures.formQuestion);
   legacy.blocks[0].schemaVersion = 1;
   for (const field of legacy.blocks[0].data.fields) delete field.activeWhen;

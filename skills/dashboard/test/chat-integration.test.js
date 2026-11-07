@@ -15,7 +15,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { createChatApiFixture, createRemoteChatApiFixture, questionContent, assertChatProcessIsolation } from './helpers/chat-integration-api.js';
 import { acceptDelivery } from '../src/lib/chat/channel.js';
-import { makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { makeQuestionSummary, parseC4Content, validateFormFields } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const conditionalFixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
 
@@ -107,7 +107,8 @@ for (const example of conditionalFixtures.answers) {
     const result = await a.request(active.route + '/answers', post(body));
     if (!example.valid) {
       assert.equal(result.status, 400);
-      assert.deepEqual(result.body, { error: 'invalid_chat_answer' });
+      assert.deepEqual(result.body, { error: 'invalid_chat_answer',
+        fields: validateFormFields(question.blocks[0].data.fields, example.values).errors });
       assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
       assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 0);
       assert.equal(a.answerRows(body.action.id).length, 0);
@@ -176,6 +177,86 @@ for (const [name, view, legal] of [
     assert.equal(a.db.prepare('SELECT content FROM conversations WHERE id=?').get(row.id).content, content);
   });
 }
+
+// Boundary: only paused v2 field refusals expose diagnostics. Run for answer
+// diagnostics or routing changes; unrelated UI may skip. Private HOME/ZYLOS_DIR/
+// PM2_HOME/short TMPDIR/socket/DBs are read back before opens and reclaimed.
+registerIntegrationCase('HTTP conditional answer keeps action authorization and lifecycle errors separate from field reasons', async (t, sandbox) => {
+  const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
+  const question = structuredClone(conditionalFixtures.formQuestion);
+  question.questionSummary = makeQuestionSummary(question);
+  const row = a.addOutbound(active.draft.localId, questionContent(question));
+  const valid = a.answer(question, 'http_field_errors');
+  valid.action.payload = { values: { customer_type: 'person' } };
+  const invalid = structuredClone(valid);
+  invalid.action.payload.values.company_name = null;
+  const before = a.counts.receive;
+  for (const change of [
+    action => { action.protocolVersion = '0.2'; },
+    action => { action.context.messageId = 'another_message'; },
+    action => { action.context.blockId = 'another_block'; },
+    action => { action.context.conversationId = 'g:666F726569676E'; },
+    action => { action.target = 'another.handler'; },
+    action => { action.schemaVersion = 2; },
+  ]) {
+    const body = structuredClone(invalid); change(body.action);
+    const result = await a.request(active.route + '/answers', post(body));
+    assert.equal(result.status, 400);
+    assert.deepEqual(result.body, { error: 'invalid_chat_answer' });
+  }
+  const denied = await a.request(active.route + '/answers', { ...post(invalid), identity: 'read' });
+  assert.equal(denied.status, 403); assert.equal(Object.hasOwn(denied.body, 'fields'), false);
+  assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
+  assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 0);
+  assert.equal(a.counts.receive, before);
+  const result = await a.request(active.route + '/answers', post(valid));
+  assert.equal(result.status, 200); assert.equal(result.body.delivery.stored, true);
+  const conflicted = structuredClone(valid); conflicted.action.payload.values.customer_type = 'partner';
+  const conflict = await a.request(active.route + '/answers', post(conflicted));
+  assert.equal(conflict.status, 409); assert.deepEqual(conflict.body, { error: 'chat_answer_conflict' });
+  const nonpaused = structuredClone(valid); nonpaused.action.id = 'http_other_answer';
+  const closed = await a.request(active.route + '/answers', post(nonpaused));
+  assert.equal(closed.status, 409); assert.deepEqual(closed.body, { error: 'chat_question_not_paused' });
+  const badClosed = await a.request(active.route + '/answers', post(invalid));
+  assert.equal(badClosed.status, 400); assert.deepEqual(badClosed.body, { error: 'invalid_chat_answer' });
+  assert.equal(a.counts.receive, before + 1); assert.equal(a.answerRows(valid.action.id).length, 1);
+  assert.equal(a.answers.question(row.session_group, question.interruptId).status, 'answered');
+});
+
+// Boundary: v1 keeps its generic rejection and freeText retains its permission.
+// Run for shared field diagnostics or answer error changes; UI-only may skip.
+// Private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DBs precede opens; teardown.
+registerIntegrationCase('HTTP conditional answer preserves legacy field errors and free-text permission', async (t, sandbox) => {
+  const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
+  const question = structuredClone(conditionalFixtures.formQuestion);
+  question.blocks[0].schemaVersion = 1;
+  for (const field of question.blocks[0].data.fields) delete field.activeWhen;
+  question.questionSummary = makeQuestionSummary(question);
+  a.addOutbound(active.draft.localId, questionContent(question));
+  const body = a.answer(question, 'http_legacy_fields');
+  body.action.payload = { values: { customer_type: 'person' } };
+  const before = a.counts.receive;
+  const rejected = await a.request(active.route + '/answers', post(body));
+  assert.equal(rejected.status, 400); assert.deepEqual(rejected.body, { error: 'invalid_chat_answer' });
+  const conditional = structuredClone(conditionalFixtures.formQuestion);
+  conditional.messageId += '_free'; conditional.interruptId += '_free';
+  conditional.interrupt.otherInput = false;
+  conditional.questionSummary = makeQuestionSummary(conditional);
+  a.addOutbound(active.draft.localId, questionContent(conditional));
+  const free = a.answer(conditional, 'http_free_denied'); free.action.payload = { freeText: 'Please clarify' };
+  const denied = await a.request(active.route + '/answers', post(free));
+  assert.equal(denied.status, 400); assert.deepEqual(denied.body, { error: 'invalid_chat_answer' });
+  assert.equal(a.counts.receive, before);
+  assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
+  assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 0);
+  const allowed = structuredClone(conditional);
+  allowed.messageId += '_allowed'; allowed.interruptId += '_allowed'; allowed.interrupt.otherInput = true;
+  a.addOutbound(active.draft.localId, questionContent(allowed));
+  const accepted = a.answer(allowed, 'http_free_allowed'); accepted.action.payload = { freeText: 'Please clarify' };
+  const result = await a.request(active.route + '/answers', post(accepted));
+  assert.equal(result.status, 200); assert.equal(result.body.delivery.stored, true);
+  assert.equal(a.counts.receive, before + 1);
+});
 
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
 registerIntegrationCase('receive failures and lost receipts preserve commit evidence across delivery restart without automatic sends', async (t, sandbox) => {
