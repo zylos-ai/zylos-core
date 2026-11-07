@@ -107,7 +107,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
   const fastInput = host.querySelector('#settings-fast-multiplier'), status = host.querySelector('#settings-status');
   const moreRow = host.querySelector('#settings-price-more') ?? root; moreRow.append(showAll);
   const baseTitle = host.querySelector('#settings-price-title'), savebar = host.querySelector('.settings-footer'), dirtyText = host.querySelector('#settings-dirty');
-  const fastSaved = String(saved.claude?.fastMode?.configuredMultiplier ?? '');
+  let fastSaved = String(saved.claude?.fastMode?.configuredMultiplier ?? '');
   fastInput?.addEventListener('input', () => { fastInput.classList.toggle('wb-dirty-in', fastInput.value !== fastSaved); refreshDirty(); });
   function hiddenBuiltIns(payload) {
     return Object.fromEntries(Object.entries(payload.modelPrices ?? {}).filter(([key]) => (payload.builtInModels ?? []).includes(key) && !renderedPrefixes.has(key)));
@@ -218,7 +218,22 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
           if (value === 'codex') runtimes[value].priorityModelPrices = payload.priorityModelPrices;
           else if (Object.hasOwn(payload, '_editedFastMultiplier')) runtimes[value].fastModeMultiplier = payload._editedFastMultiplier;
         }
-        await write({ runtimes }); if (!stopped) status.textContent = t('wb.settings.pricesSaved');
+        await write({ runtimes });
+        if (stopped) return;
+        // What was written is the new baseline: dirty marks, the save bar and the navigation count all clear.
+        for (const value of ['claude', 'codex']) {
+          saved[value] ??= {};
+          saved[value].modelPrices = structuredClone(runtimes[value].modelPrices);
+          if (value === 'codex') saved[value].priorityModelPrices = structuredClone(runtimes[value].priorityModelPrices);
+        }
+        if (Object.hasOwn(runtimes.claude, 'fastModeMultiplier')) {
+          const multiplier = runtimes.claude.fastModeMultiplier;
+          for (const side of [saved.claude, drafts.claude]) side.fastMode = { ...side.fastMode, configuredMultiplier: multiplier };
+          delete drafts.claude._editedFastMultiplier;
+          fastSaved = String(multiplier ?? '');
+        }
+        render();
+        status.hidden = false; status.textContent = t('wb.settings.pricesSaved');
       } catch (error) { if (!stopped) status.textContent = error.message; }
     },
     /** A blank editable row in the base or the priority table. */

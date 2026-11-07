@@ -352,6 +352,33 @@ test('price change counts cover edited cells, added rows and removed rows', () =
   const draft = draftPriceRows(fixture.base.children); assert.ok(draft.x); assert.equal(Object.keys(draft).length, 2, 'a blank prefix is a new row');
 });
 
+test('a successful price save clears the unsaved count, the save bar, the navigation badge and the dirty cells', async () => {
+  const fixture = priceFixture(), counts = [], writes = [];
+  const bar = node(fixture.document, 'div'); bar.className = 'settings-footer'; bar.hidden = true; fixture.root.append(bar);
+  const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async body => writes.push(body), onDirty: count => counts.push(count) });
+  const input = fixture.base.children[0].querySelectorAll('input')[1]; input.value = '9'; await input.dispatch('input');
+  const fast = fixture.root.querySelector('#settings-fast-multiplier'); fast.value = '4'; await fast.dispatch('input');
+  assert.equal(counts.at(-1), 2); assert.equal(bar.hidden, false);
+  await panel.save();
+  assert.equal(writes.length, 1); assert.equal(writes[0].runtimes.claude.fastModeMultiplier, 4);
+  assert.equal(counts.at(-1), 0); assert.equal(bar.hidden, true);
+  assert.equal(fixture.root.querySelector('#settings-status').textContent, 'wb.settings.pricesSaved');
+  assert.equal(fixture.base.children[0].querySelectorAll('input')[1].value, '9', 'the saved value stays on screen');
+  assert.equal(fixture.base.children[0].querySelectorAll('input').some(cell => cell.classList.contains('wb-dirty-in')), false);
+  assert.equal(fast.value, '4'); assert.equal(fast.classList.contains('wb-dirty-in'), false);
+  await fixture.root.querySelector('#settings-price-tab-codex').dispatch('click'); await fixture.root.querySelector('#settings-price-tab-claude').dispatch('click');
+  assert.equal(counts.at(-1), 0, 'switching tabs after the save finds nothing unsaved');
+  fixture.base.children[0].querySelectorAll('input')[1].value = '5'; await fixture.base.children[0].querySelectorAll('input')[1].dispatch('input');
+  assert.equal(counts.at(-1), 1, 'later edits count against the saved values'); panel.destroy();
+});
+
+test('a failed price save keeps the unsaved count', async () => {
+  const fixture = priceFixture(), counts = [];
+  const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async () => { throw new Error('write_failed'); }, onDirty: count => counts.push(count) });
+  const input = fixture.base.children[0].querySelectorAll('input')[1]; input.value = '9'; await input.dispatch('input');
+  await panel.save(); assert.equal(counts.at(-1), 1); assert.equal(fixture.root.querySelector('#settings-status').textContent, 'write_failed'); panel.destroy();
+});
+
 test('the pricing panel reports unsaved changes to its navigation badge and save bar', async () => {
   const fixture = priceFixture(), counts = [];
   const bar = node(fixture.document, 'div'); bar.className = 'settings-footer'; bar.hidden = true; fixture.root.append(bar);
