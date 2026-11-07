@@ -7,6 +7,7 @@ import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
 import { ChatAnswers } from '../src/lib/chat/answers.js';
 import { dashboardSchemaOwner as owner } from '../src/lib/schema-owner.js';
+import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
@@ -326,10 +327,10 @@ test('answer schema upgrades the prior draft layout without changing questions, 
     INSERT INTO group_display_names(session_group,display_name,source) VALUES('dashboard:mine','Human title','human');
     CREATE TABLE user_answer_notes(note TEXT); INSERT INTO user_answer_notes VALUES('retained');
     DROP TABLE chat_answer_deliveries; DROP TABLE chat_answers; DROP TABLE chat_question_controls;
-    DELETE FROM schema_migrations WHERE version=25;`);
+    DELETE FROM schema_migrations WHERE version>=25;`);
   const before = f.store.db.prepare('SELECT * FROM chat_questions WHERE c4_id=?').get(q.id);
   assert.equal(owner.inspectSchema(f.store.db).currentVersion, 24);
-  assert.equal(owner.migrate(f.store.db).currentVersion, 25);
+  assert.equal(owner.migrate(f.store.db).currentVersion, TARGET_SCHEMA_VERSION);
   assert.deepEqual(f.store.db.prepare('SELECT * FROM chat_questions WHERE c4_id=?').get(q.id), before);
   assert.equal(f.store.db.prepare('SELECT display_name FROM chat_conversations').get().display_name, 'Draft');
   assert.equal(f.store.db.prepare('SELECT display_name FROM group_display_names').get().display_name, 'Human title');
@@ -341,7 +342,7 @@ test('answer schema upgrades the prior draft layout without changing questions, 
 test('a failed answer table migration retains the prior version and existing question records', t => {
   const f = fixture(t), q = f.question();
   f.store.db.exec(`DROP TABLE chat_answer_deliveries; DROP TABLE chat_answers; DROP TABLE chat_question_controls;
-    DELETE FROM schema_migrations WHERE version=25;
+    DELETE FROM schema_migrations WHERE version>=25;
     CREATE TABLE chat_answers(unrelated TEXT);`);
   assert.throws(() => owner.migrate(f.store.db), /no such column/);
   assert.equal(owner.inspectSchema(f.store.db).currentVersion, 24);

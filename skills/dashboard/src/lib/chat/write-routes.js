@@ -1,5 +1,6 @@
 import { requireChatAccess, requireChatWrite } from './access.js';
 import { readJsonBody, sendJson } from '../http.js';
+import { attachmentPrincipal } from './attachment-routes.js';
 
 const deniedResponse = (res, denied) => {
   const { status, ...body } = denied;
@@ -32,7 +33,7 @@ export async function handleChatConversations(req, res, url, { auth, config, con
       return true;
     }
     const body = await readJsonBody(req, 512 * 1024);
-    const permitted = draft ? ['displayName'] : match[2] ? ['content', 'retry'] : ['displayName'];
+    const permitted = draft ? ['displayName'] : match[2] ? ['content', 'retry', 'attachments'] : ['displayName'];
     if (!object(body) || Object.keys(body).some(key => !permitted.includes(key))
         || (Object.hasOwn(body, 'retry') && typeof body.retry !== 'boolean')
         || (!draft && !match[2] && !Object.hasOwn(body, 'displayName'))) {
@@ -49,7 +50,7 @@ export async function handleChatConversations(req, res, url, { auth, config, con
       draft: record.namespace === null && record.state !== 'active',
     });
     if (match[2]) {
-      sendJson(res, 200, await sender.send(id, body, { authorize }));
+      sendJson(res, 200, await sender.send(id, body, { authorize, principal: attachmentPrincipal(req._authContext) }));
     } else {
       const row = await sender.resolve(id);
       const denied = authorize(row);

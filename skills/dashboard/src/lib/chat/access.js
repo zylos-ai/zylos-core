@@ -7,10 +7,10 @@ export function isChatDataRoute(method, pathname) {
   return method === 'GET' && (
     pathname === '/api/chat/conversations' ||
     /^\/api\/chat\/conversations\/[^/]+$/.test(pathname) ||
-    /^\/api\/chat\/conversations\/[^/]+\/(?:messages|status|questions)$/.test(pathname)
+    /^\/api\/chat\/conversations\/[^/]+\/(?:messages|status|questions|uploads\/config|attachments\/[^/]+)$/.test(pathname)
   ) || method === 'POST' && (
     pathname === '/api/chat/drafts' ||
-    /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers)$/.test(pathname)
+    /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(pathname)
   ) || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(pathname);
 }
 

@@ -1,9 +1,28 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
+import { parse as parseDotenv } from 'dotenv';
 
 export const MAX_ATTACHMENTS = 20;
 export const UPLOAD_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+export function resolveUploadRoot(env = process.env) {
+  return fs.realpathSync(env.ZYLOS_DIR || path.join(env.HOME || os.homedir(), 'zylos'));
+}
+
+export function readUploadLimit(zylosDir) {
+  try {
+    const root = fs.realpathSync(zylosDir);
+    const value = parseDotenv(fs.readFileSync(path.join(root, '.env'), 'utf8')).WEB_CONSOLE_MAX_UPLOAD_MB;
+    if (typeof value !== 'string' || !/^[0-9]+$/.test(value)) return DEFAULT_UPLOAD_BYTES;
+    const bytes = Number(value) * 1024 * 1024;
+    return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : DEFAULT_UPLOAD_BYTES;
+  } catch {
+    return DEFAULT_UPLOAD_BYTES;
+  }
+}
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 const MEDIA_RE = /^\[MEDIA:(image|file)\]([^\r\n]+)$/;
 const ATTACHMENT_RE = /^\[attachment:(image|file) (.+) name="([^"]*)" ([^\]]+)\]$/;

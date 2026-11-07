@@ -1,11 +1,35 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { projectC4Content } from '../../../../comm-bridge/scripts/c4-content-projection.js';
+import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
+import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../web-console/scripts/attachment-utils.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const visible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin','*')
   AND c.channel <> '' AND c.channel NOT IN ('void','internal','system','scheduler','control')`;
 const identity = `CASE WHEN c.session_group = '' THEN 'l:' || hex(c.channel) || ':' || hex(c.endpoint_id)
   ELSE 'g:' || hex(c.session_group) END`;
+
+const readableAttachment = attachment => `${attachment.kind === 'image' ? '[图片]' : '[文件]'} ${sanitizeDisplayName(attachment.name)}`;
+
+/** Browser summaries contain attachment names, never storage/model references. */
+export function chatAttachmentPreview(content, { external = false } = {}) {
+  const parsed = parseC4Content(content);
+  if (parsed.kind === 'invalid') return '无法显示的消息';
+  if (parsed.kind === 'envelope') {
+    const blocks = parsed.envelope.blocks ?? [];
+    if (!blocks.some(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type))) {
+      return parsed.envelope.fallbackText;
+    }
+    return blocks.map(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type)
+      ? readableAttachment({ kind: block.type === 'x-zylos.image' ? 'image' : 'file', name: block.data.nameSnapshot })
+      : block.fallbackText).filter(Boolean).join('\n');
+  }
+  const split = splitContentAndAttachments(content);
+  if (!split.attachments.length) {
+    return external ? content.replace(/^\[MEDIA:[^\r\n]*$/gm, '[媒体] 原渠道附件') : content;
+  }
+  const body = external ? split.content.replace(/^\[MEDIA:[^\r\n]*$/gm, '[媒体] 原渠道附件') : split.content;
+  return [body, ...split.attachments.map(readableAttachment)].filter(Boolean).join('\n');
+}
 
 export function deliveryState(row) {
   if (row.direction === 'out') return row.status === 'delivered' ? 'stored' : 'pending_reconciliation';
@@ -15,9 +39,10 @@ export function deliveryState(row) {
 }
 
 export class ChatHistory {
-  constructor({ c4Reader, conversations = null }) {
+  constructor({ c4Reader, conversations = null, attachments = null }) {
     this.c4Reader = c4Reader;
     this.conversations = conversations;
+    this.attachments = attachments;
     this.secret = randomBytes(32);
   }
 
@@ -104,7 +129,7 @@ export class ChatHistory {
         ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
       const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
       const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
-      return { ...row, preview: projectC4Content(latest?.content ?? '', { c4Id: latest?.id }).slice(0, 160),
+      return { ...row, preview: chatAttachmentPreview(latest?.content ?? '', { external: tab === 'external' }).slice(0, 160),
         display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
         ...(registered ? { localId: registered.localId } : {}), draft: false };
@@ -174,11 +199,12 @@ export class ChatHistory {
     return range;
   }
 
-  messages(id, { tab = 'mine', limit, cursor, direction = 'before' } = {}) {
+  messages(id, { tab = 'mine', limit, cursor, direction = 'before', recheckIds } = {}) {
     limit = this._limit(limit);
     if (!['before', 'after'].includes(direction)) throw fail('invalid_chat_direction');
     if (direction === 'after' && cursor == null) throw fail('invalid_chat_cursor');
     const range = this._conversation(tab, id);
+    const recheck = recheckIds === undefined ? [] : this._messageIds(recheckIds);
     const position = this._cursor(cursor, `messages:${tab}:${id}:${direction}`);
     const rows = this._query(`SELECT c.id, c.timestamp, c.direction, c.channel,
       c.endpoint_id, c.session_group, c.content, c.status, c.delivery_action FROM conversations c
@@ -189,25 +215,52 @@ export class ChatHistory {
     const more = rows.length > limit;
     const page = rows.slice(0, limit);
     const next = page.at(-1)?.id;
-    const items = (direction === 'before' ? page.reverse() : page).map(row => ({ ...row, deliveryState: deliveryState(row) }));
+    const rechecked = recheck.length ? this._rowsByIds(range, recheck,
+      'c.id,c.direction,c.channel,c.endpoint_id,c.session_group,c.content') : [];
+    const batch = [...new Map([...page, ...rechecked].map(row => [row.id, row])).values()];
+    const metadata = new Map();
+    if (tab === 'mine' && this.attachments) {
+      for (let offset = 0; offset < batch.length; offset += 100) {
+        for (const [rowId, values] of this.attachments.metadata(batch.slice(offset, offset + 100))) {
+          metadata.set(rowId, values);
+        }
+      }
+    }
+    const rowAttachments = row => tab === 'external'
+      ? splitContentAndAttachments(row.content).attachments.map(attachment => ({
+        name: attachment.name, kind: attachment.kind, sizeLabel: attachment.sizeLabel,
+        available: false, external: true,
+      })) : metadata.get(row.id) ?? [];
+    const items = (direction === 'before' ? page.reverse() : page).map(row => ({ ...row,
+      deliveryState: deliveryState(row), attachments: rowAttachments(row) }));
     const newest = items.at(-1)?.id ?? position?.id ?? 0;
     return { items, nextCursor: more ? this._token({ scope: `messages:${tab}:${id}:${direction}`, id: next }) : null,
-      afterCursor: this._token({ scope: `messages:${tab}:${id}:after`, id: newest }) };
+      afterCursor: this._token({ scope: `messages:${tab}:${id}:after`, id: newest }),
+      ...(recheckIds !== undefined ? { attachmentUpdates: rechecked.map(row => ({ id: row.id, attachments: rowAttachments(row) })) } : {}) };
   }
 
-  status(id, { tab = 'mine', ids } = {}) {
-    const range = this._conversation(tab, id);
+  _messageIds(ids) {
     const values = typeof ids === 'string' ? ids.split(',') : ids;
     if (!Array.isArray(values) || !values.length || values.length > 100 || values.some(value => !/^[1-9][0-9]*$/.test(String(value)) || !Number.isSafeInteger(Number(value)))) {
       throw fail('invalid_chat_message_ids');
     }
     const unique = [...new Set(values.map(Number))];
     if (unique.length !== values.length) throw fail('invalid_chat_message_ids');
+    return unique;
+  }
+
+  _rowsByIds(range, unique, columns) {
     const parameters = { ...range.parameters, limit: unique.length };
     unique.forEach((value, index) => { parameters[`id${index}`] = value; });
-    const rows = this._query(`SELECT c.id, c.direction, c.status, c.delivery_action FROM conversations c
+    const rows = this._query(`SELECT ${columns} FROM conversations c
       WHERE ${visible} AND ${range.where} AND c.id IN (${unique.map((_, index) => `@id${index}`).join(',')}) LIMIT @limit`, parameters);
     if (rows.length !== unique.length) throw fail('chat_message_not_found', 404);
+    return rows;
+  }
+
+  status(id, { tab = 'mine', ids } = {}) {
+    const range = this._conversation(tab, id);
+    const rows = this._rowsByIds(range, this._messageIds(ids), 'c.id,c.direction,c.status,c.delivery_action');
     return { items: rows.map(row => ({ ...row, deliveryState: deliveryState(row) })) };
   }
 }

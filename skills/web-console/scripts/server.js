@@ -25,6 +25,7 @@ import {
   contentDisposition,
   generateStoredFileName,
   parseMediaContent,
+  readUploadLimit,
   resolveAllowedPathSync,
   sanitizeDisplayName,
   sniffImage,
@@ -54,8 +55,8 @@ const SKILLS_DIR = process.env.WEB_CONSOLE_SKILLS_DIR || path.join(os.homedir(),
 const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DB_DIR, 'c4.db');
 const MEDIA_DIR = path.join(ZYLOS_DIR, 'web-console', 'media');
-const MAX_UPLOAD_MB = Number.parseInt(process.env.WEB_CONSOLE_MAX_UPLOAD_MB || '20', 10);
-const MAX_UPLOAD_BYTES = Math.max(1, MAX_UPLOAD_MB) * 1024 * 1024;
+const MAX_UPLOAD_BYTES = readUploadLimit(ZYLOS_DIR);
+const MAX_UPLOAD_MB = MAX_UPLOAD_BYTES / (1024 * 1024);
 const C4_SCRIPT_DIR = path.join(SKILLS_DIR, 'comm-bridge', 'scripts');
 
 // Paths - __dirname is scripts/, public/ is one level up
