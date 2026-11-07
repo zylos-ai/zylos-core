@@ -359,8 +359,8 @@ function renderTile(tile, labels) {
   const multi = tile.self?.mode === 'multi';
   const mode = tile.offline ? labels.modeUnknown : tile.self ? (multi ? labels.modeMulti : labels.modeSingle) : labels.modeSingle;
   const sub = tile.isSelf
-    ? `<div class="wb-f-sub">${escapeHtml(labels.self)}<span class="wb-tech"> · ${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span></div>`
-    : `<div class="wb-f-sub wb-tech"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span>${tile.offline ? '' : ` · ${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}${tile.latencyLabel ? ` · ${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}` : ''}`} ${linkChip}</div>`;
+    ? `<div class="wb-f-sub"><span class="wb-f-seg">${escapeHtml(labels.self)}</span><span class="wb-f-seg wb-tech">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span></div>`
+    : `<div class="wb-f-sub wb-tech"><span class="wb-f-seg"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span></span>${tile.offline ? '' : `<span class="wb-f-seg">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span>${tile.latencyLabel ? `<span class="wb-f-seg">${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}</span>` : ''}`}${linkChip}</div>`;
   if (tile.offline) {
     const seen = tile.lastSeenText;
     return `<div class="wb-f-card bad" ${data} data-state="${escapeHtml(tile.mood)}">
