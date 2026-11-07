@@ -179,6 +179,7 @@
   "actions.custom": "Custom...",
   "actions.model_placeholder": "e.g. claude-opus-4-7",
   "btn.remove": "Remove",
+  "effort.minimal": "Minimal",
   "effort.low": "Low",
   "effort.medium": "Medium",
   "effort.high": "High",

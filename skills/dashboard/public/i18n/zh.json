@@ -179,6 +179,7 @@
   "actions.custom": "自定义...",
   "actions.model_placeholder": "如 claude-opus-4-7",
   "btn.remove": "移除",
+  "effort.minimal": "极低",
   "effort.low": "低",
   "effort.medium": "中",
   "effort.high": "高",

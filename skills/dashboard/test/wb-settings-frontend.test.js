@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
-import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults } from '../public/js/wb/settings-defaults.js';
+import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
 import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
 import { keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
@@ -92,8 +92,61 @@ test('changing the default engine is a draft until saved and the undo restores t
   assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   await root.querySelector('#settings-use-codex').dispatch('click');
   assert.equal(save.hidden, false); assert.equal(save.disabled, false); assert.equal(calls.length, 0);
+  await root.querySelector('#settings-undo-runtime').dispatch('click');
+  assert.equal(save.hidden, true, 'undo drops the draft'); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
+  assert.equal(root.querySelector('#settings-use-codex').getAttribute('aria-pressed'), 'false'); assert.equal(calls.length, 0);
+  await root.querySelector('#settings-use-codex').dispatch('click');
   await save.dispatch('click'); assert.deepEqual(calls, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
   panel.destroy();
+});
+
+const effortMeta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low', 'minimal'] } });
+async function draftBothEngines(root) {
+  for (const runtime of ['claude', 'codex']) {
+    const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
+    const effort = root.querySelector('#settings-effort-' + runtime); effort.value = runtime === 'codex' ? 'minimal' : 'low'; await effort.dispatch('change');
+  }
+}
+
+test('saving model and effort for both engines asks once, lists every change and runs them without asking again', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [], asked = [];
+  const tr = (key, params) => key === 'effort.minimal' ? 'Minimal' : t(key, params);
+  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t: tr, read: async () => ({}),
+    confirm: async text => { asked.push(text); return true; }, execute: async (action, body, options) => { calls.push({ action, body, options }); return true; } });
+  await draftBothEngines(root);
+  await root.querySelector('#settings-save-models').dispatch('click');
+  assert.equal(asked.length, 1, 'one confirmation for the whole card');
+  assert.equal(asked[0].split('\n').length, 5, 'a heading and the four changes');
+  assert.match(asked[0], /Minimal/); assert.doesNotMatch(asked[0], /effort\.minimal/);
+  assert.equal(calls.length, 4); assert.ok(calls.every(call => call.options?.confirmed === true), 'no action asks again');
+  assert.equal(root.querySelector('#settings-save-models').hidden, true);
+  assert.equal(modelSaveConfirmation([{ runtime: 'claude', key: 'effort', value: 'max' }], tr).split('\n').length, 2); panel.destroy();
+});
+
+test('cancelling the model confirmation sends nothing and shows no result', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t, read: async () => ({}),
+    confirm: async () => false, execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  await draftBothEngines(root);
+  const save = root.querySelector('#settings-save-models'), before = root.textContent;
+  await save.dispatch('click');
+  assert.equal(calls.length, 0); assert.equal(save.hidden, false, 'the drafts stay'); assert.equal(root.textContent, before, 'no result line appears');
+  assert.doesNotMatch(root.textContent, /wb\.settings\.(saveFailed|nextStart(?!Note)|partlySaved)/); panel.destroy();
+});
+
+test('a model save that fails part way names what took effect and what did not', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document,
+    t: (key, params) => params ? key + JSON.stringify(params) : key, read: async () => ({}),
+    confirm: async () => true, execute: async (action, body) => { calls.push({ action, body }); return calls.length < 2; } });
+  await draftBothEngines(root);
+  await root.querySelector('#settings-save-models').dispatch('click');
+  assert.equal(calls.length, 2, 'stops at the first failure');
+  const text = root.textContent;
+  assert.match(text, /wb\.settings\.partlySaved/);
+  assert.match(text, /"done":"wb\.settings\.changeModel\{\\"runtime\\":\\"Claude Code\\",\\"value\\":\\"two\\"\}"/);
+  assert.match(text, /"left":"wb\.settings\.changeEffort/);
+  assert.equal(root.querySelector('#settings-save-models').hidden, false, 'what did not apply is still a draft'); panel.destroy();
 });
 test('zero override count hides search and local follower filtering sends no request', async () => {
   const document = documentFixture(), root = document.createElement('div'); let reads = 0;

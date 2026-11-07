@@ -69,6 +69,21 @@ export function modelDraftChanges(metadata = {}, drafts = {}) {
   return changes;
 }
 
+const effortText = (value, t) => { const key = 'effort.' + value, label = t(key); return label && label !== key ? label : value; };
+/** One line per drafted change, as the confirmation and the result name it. */
+export function modelChangeLabel(change, t = key => key) {
+  return t(change.key === 'model' ? 'wb.settings.changeModel' : 'wb.settings.changeEffort',
+    { runtime: engineName(change.runtime), value: change.key === 'effort' ? effortText(change.value, t) : change.value });
+}
+/** The single confirmation shown before saving every drafted model and effort change together. */
+export function modelSaveConfirmation(changes, t = key => key) {
+  return [t('wb.settings.confirmModels'), ...changes.map(change => modelChangeLabel(change, t))].join('\n');
+}
+/** The engine switch confirmation: what happens, then which groups restart with it. */
+export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
+  return [runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: engineName(runtime) }), runtimeConfirmation(snapshot, t)].join('\n');
+}
+
 export function renderDefaults(root, { snapshot, page, metadata = {}, document = root.ownerDocument,
   t = key => key, read, execute, confirm = async () => true, writable = () => true, onGroup = () => {} } = {}) {
   root.replaceChildren();
@@ -125,14 +140,14 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
     line.append(login);
   }
   const saveRuntime = element(document, 'button', t('wb.settings.saveRuntime'), 'wb-btn wb-btn-primary'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-save-runtime';
-  const undoRuntime = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undoRuntime.type = 'button';
+  const undoRuntime = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undoRuntime.type = 'button'; undoRuntime.id = 'settings-undo-runtime';
   undoRuntime.addEventListener('click', () => { draftRuntime = groups.baseline; redrawEngine(); });
   lock(saveRuntime, () => !writable() || draftRuntime == null || draftRuntime === groups.baseline || runtimeHealth(snapshot, draftRuntime) === 'unavailable');
   saveRuntime.addEventListener('click', async () => {
-    if (saveRuntime.disabled || !(await confirm(runtimeConfirmation(snapshot, t)))) return;
+    if (saveRuntime.disabled || !(await confirm(runtimeSaveConfirmation(draftRuntime, snapshot, t)))) return;
     saveRuntime.disabled = true;
     try {
-      const accepted = await execute('switch-runtime', { runtime: draftRuntime });
+      const accepted = await execute('switch-runtime', { runtime: draftRuntime }, { confirmed: true });
       engineResult.textContent = accepted === false ? t('wb.settings.saveFailed') : t('wb.settings.restartRefresh');
     } catch (error) { engineResult.textContent = error.message; }
     finally { refreshLocks(); }
@@ -248,15 +263,25 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
   save.addEventListener('click', async () => {
     const pending = changes();
     if (save.disabled || !pending.length) return;
-    save.disabled = true; let failures = 0;
+    // One confirmation lists every change; cancelling sends nothing and leaves the result line alone.
+    if (!(await confirm(modelSaveConfirmation(pending, t)))) return;
+    save.disabled = true; const applied = [];
+    const report = () => {
+      const left = pending.filter(change => !applied.includes(change));
+      if (!left.length) return t('wb.settings.nextStart');
+      if (!applied.length) return t('wb.settings.saveFailed');
+      const list = changes => changes.map(change => modelChangeLabel(change, t)).join(t('wb.settings.listSep'));
+      return t('wb.settings.partlySaved', { done: list(applied), left: list(left) });
+    };
     try {
       for (const change of pending) {
-        const accepted = await execute(change.action, { runtime: change.runtime, [change.key]: change.value });
-        if (accepted === false) { failures++; break; }
+        const accepted = await execute(change.action, { runtime: change.runtime, [change.key]: change.value }, { confirmed: true });
+        if (accepted === false) break;
+        applied.push(change);
         if (rows[change.runtime]) rows[change.runtime].meta = { ...rows[change.runtime].meta, ['current_' + change.key]: change.value };
       }
-      result.textContent = failures ? t('wb.settings.saveFailed') : t('wb.settings.nextStart');
-    } catch (error) { result.textContent = error.message; }
+      result.textContent = report();
+    } catch (error) { result.textContent = applied.length ? report() + ' · ' + error.message : error.message; }
     finally { metadata = Object.fromEntries(Object.entries(rows).map(([runtime, row]) => [runtime, row.meta])); redrawModels(); }
   });
   function refreshLocks() { for (const { node, lock: fn } of controls) node.disabled = fn(); }

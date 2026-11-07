@@ -1,7 +1,7 @@
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=98';
 import { createPricingPanel } from './wb/settings-pricing.js?v=98';
-import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=98';
+import { renderDefaults } from './wb/settings-defaults.js?v=99';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=98';
 import { keyCounts, renderCreatedKey, renderKeyTable, renderRemoteAgents } from './wb/settings-access.js?v=98';
 import { confirmDialog } from './wb/detail.js?v=98';
@@ -2514,10 +2514,8 @@ let settingsPage = null;
 let settingsLoader = null;
 let settingsPricing = null;
 let settingsDefaults = null;
-let settingsSnapshot = null;
 let settingsUpgrade = null;
 let settingsVersionRoot = null;
-let settingsActionDescription = '';
 let settingsChat = null;
 
 function initSettingsPage() {
@@ -2542,10 +2540,9 @@ function initSettingsPage() {
   });
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
-    settingsSnapshot = value.snapshot;
     settingsDefaults?.destroy();
     settingsDefaults = renderDefaults(defaults, { ...value, t, read,
-      execute: executeSettingsAction, writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup });
+      execute: executeSettingsAction, confirm: confirmSettingsChange, writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup });
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
@@ -2579,10 +2576,12 @@ function refreshSettingsLocks() {
   settingsDefaults?.refreshLocks();
   refreshSettingsVersion();
 }
-async function executeSettingsAction(action, body) {
-  settingsActionDescription = action === 'switch-runtime' ? runtimeConfirmation(settingsSnapshot, t) : '';
-  try { return await execAction(action, body); }
-  finally { settingsActionDescription = ''; }
+// The default-settings card confirms all of its changes once, then runs them without asking again.
+function confirmSettingsChange(text) {
+  return showConfirm(state.remoteAgent || REMOTE_AGENT ? `${text}\n${t('confirm.remote_target', { agent: viewedAgentName() })}` : text);
+}
+function executeSettingsAction(action, body, { confirmed = false } = {}) {
+  return execAction(action, body, { confirmed });
 }
 function refreshSettingsPage() {
   closeSettingsModal();
@@ -2610,7 +2609,7 @@ function closeSettingsModal() {
   fleetManageStatus('');
   settingsChat?.invalidate();
   settingsDefaults?.destroy(); settingsDefaults = null;
-  settingsPricing?.destroy(); settingsPricing = null; settingsSnapshot = null;
+  settingsPricing?.destroy(); settingsPricing = null;
   if (settingsModal) resetSettingsDrafts(settingsModal);
 }
 async function saveSettings() { return settingsPricing?.save(); }
@@ -2769,11 +2768,11 @@ function setModalBodyDisabled(disabled) {
 
 async function showConfirm(text) {
   setModalBodyDisabled(true);
-  try { return await confirmSetting([text, settingsActionDescription].filter(Boolean).join('\n')); }
+  try { return await confirmSetting(text); }
   finally { setModalBodyDisabled(false); }
 }
 
-async function execAction(action, body) {
+async function execAction(action, body, { confirmed = false } = {}) {
   if (remoteIsReadOnly()) return false;
   if (['interrupt', 'chop-chop'].includes(action) && originSessionUnavailable(state.dashboardState)) return false;
   if (['interrupt', 'chop-chop', 'restart-session'].includes(action)) {
@@ -2782,7 +2781,7 @@ async function execAction(action, body) {
   }
   const actionPath = agentPath(`/api/actions/${action}`);
   const healthPath = agentPath('/api/health');
-  if (CONFIRM_ACTIONS.has(action)) {
+  if (CONFIRM_ACTIONS.has(action) && !confirmed) {
     const labels = {
       'switch-mode': t('confirm.switch_mode', { mode: body?.mode }),
       'interrupt': t('confirm.interrupt'),

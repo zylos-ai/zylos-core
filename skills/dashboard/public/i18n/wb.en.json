@@ -810,5 +810,9 @@
   "wb.settings.unsavedRuntime": "{runtime} {count}",
   "wb.settings.chatTitle": "Conversations access",
   "wb.settings.unmatchedNote": "{tokens} tokens in the last 7 days were recorded but not costed, so the totals above are low.",
-  "wb.fleet.quotaHead": "Weekly quota"
+  "wb.fleet.quotaHead": "Weekly quota",
+  "wb.settings.confirmModels": "Save these changes? Groups use them from their next start.",
+  "wb.settings.changeModel": "{runtime} model: {value}",
+  "wb.settings.changeEffort": "{runtime} effort: {value}",
+  "wb.settings.partlySaved": "Only partly saved. Applied: {done}. Not applied: {left}; see the action result"
 }
