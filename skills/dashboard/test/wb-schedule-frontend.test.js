@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deliveryLine, groupTasks, mountSchedule, targetLabel, writeMessage, writeOutcome } from '../public/js/wb/schedule.js';
+import { axisLabels, dayTime, deliveryLine, groupTasks, laneDots, laneTicks, missText, mountSchedule, targetLabel, untilText, writeMessage,
+  writeOutcome } from '../public/js/wb/schedule.js';
 import { createForm, createPreviewer, formPayload, initialForm, saveAllowed } from '../public/js/wb/schedule-form.js';
 import { allNodes, createDocument, deferred, tick } from './fixtures/workbench-dom.js';
 import { packTranslator } from './fixtures/schedule-env.js';
@@ -117,7 +118,9 @@ test('the shared form has no delivery fields and saving follows the preview', ()
   assert.equal(thresholdForm.state().missThreshold, '1800');
   assert.equal(thresholdForm.save.disabled, false);
   const custom = createForm(document, { state: { ...initialForm(), missThreshold: '120' }, t, creating: true });
-  assert.equal(allNodes(custom.root).filter(node => node.tagName === 'SELECT')[1].children.at(-1).textContent, '120 秒');
+  assert.equal(allNodes(custom.root).filter(node => node.tagName === 'SELECT')[1].children.at(-1).textContent, '2 分钟');
+  const hours = createForm(document, { state: { ...initialForm(), missThreshold: '7200' }, t, creating: true });
+  assert.equal(allNodes(hours.root).filter(node => node.tagName === 'SELECT')[1].children.at(-1).textContent, '2 小时');
   assert.equal(saveAllowed({ ...initialForm(expired, { reenable: true }), value: '2030-01-01T09:00' },
     { valid: false, error: 'reschedule_not_future' }, { reenable: true }), false);
   const original = initialForm(task(), { tz: 'Asia/Singapore' });
@@ -288,7 +291,7 @@ test('read-only agents get no write entry points and target groups open the over
   const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
     : page([task({ target: group, reply: { channel: 'telegram', endpoint: '1001' } })]), { writable: false });
   await tick();
-  assert.equal(buttons(h.root, '新建').length, 0);
+  assert.equal(buttons(h.root, '新建任务').length, 0);
   allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();
   for (const label of ['编辑', '删除', '暂停', '改时间并重新启用']) assert.equal(buttons(h.root, label).length, 0, label);
@@ -363,4 +366,128 @@ test('a refused write explains the refusal and rows hold two sibling buttons', a
   assert.equal(h.reads(), before + 1);
   assert.match(textOf(form), /内容太长，未保存/);
   assert.equal(textOf(form).includes('结果未知'), false);
+});
+
+
+// Pure time helpers with a fixed clock in the scheduler's zone (Asia/Singapore, UTC+8).
+const SGT = 'Asia/Singapore', at = (hours, minutes = 0) => Date.UTC(2027, 0, 15, hours - 8, minutes) / 1000;
+
+test('countdowns, day words and miss thresholds read the way the list and drawer show them', () => {
+  const now = at(16) * 1000;
+  assert.equal(untilText(at(16, 25), now, t), '25m后');
+  assert.equal(untilText(at(20, 39), now, t), '4h39m后');
+  assert.equal(untilText(at(16) + 2 * 86400 + 3 * 3600, now, t), '2d3h后');
+  assert.equal(untilText(at(15, 30), now, t), '30m前');
+  assert.equal(untilText(null, now, t), '');
+  assert.equal(dayTime(at(23, 45), { tz: SGT, nowMs: now, t }), '今天 23:45');
+  assert.equal(dayTime(at(24), { tz: SGT, nowMs: now, t }), '明天 00:00');
+  assert.equal(dayTime(at(8) - 86400, { tz: SGT, nowMs: now, t }), '昨天 08:00');
+  assert.equal(dayTime(at(8) + 3 * 86400, { tz: SGT, nowMs: now, t }), '01-18 08:00');
+  assert.equal(dayTime(null, { tz: SGT, nowMs: now, t }), '—');
+  assert.deepEqual(['300', 1800, 3600, 86400, 7200, 45, -1, 'x'].map(value => missText(value, t)),
+    ['5 分钟', '30 分钟', '1 小时', '1 天', '2 小时', '45 秒', '—', '—']);
+});
+
+test('the next-24-hours lane ticks every three clock hours and spreads close dots over rows', () => {
+  const start = at(16);
+  const ticks = laneTicks(start, SGT);
+  assert.deepEqual(ticks.map(tick => tick.hour), ['18', '21', '00', '03', '06', '09', '12', '15']);
+  assert.equal(ticks[0].left, 2 * 3600 / 864);
+  assert.equal(ticks.find(tick => tick.midnight).hour, '00');
+  const dots = laneDots([task({ id: 'a', nextRuns: { in24h: [start + 3600, start + 3700] } }),
+    task({ id: 'b', nextRuns: { in24h: [start + 3650, start + 40000] } })], start);
+  assert.deepEqual(dots.map(dot => [dot.task.id, dot.row]), [['a', 0], ['b', 1], ['a', 2], ['b', 0]]);
+  assert.ok(dots.every(dot => dot.left >= 0 && dot.left <= 100));
+});
+
+test('lane labels stay inside the lane and keep "tomorrow 00:00" at 00:10 and 23:00', () => {
+  // 00:10: midnight is the last tick, 99.3% across; it is right-aligned so it cannot spill past the lane.
+  const early = axisLabels(laneTicks(at(24, 10), SGT));
+  const lastMidnight = early.labels.find(label => label.midnight);
+  assert.ok(lastMidnight.left > 99);
+  assert.deepEqual(lastMidnight.classes, ['wb-end']);
+  assert.equal(early.hideNow, false);
+  // 23:00: midnight is 4% in, next to "now". It stays (left-aligned) and "now" gives way.
+  const late = axisLabels(laneTicks(at(23), SGT));
+  const firstMidnight = late.labels.find(label => label.midnight);
+  assert.ok(firstMidnight.left < 6);
+  assert.deepEqual(firstMidnight.classes, ['wb-start']);
+  assert.equal(late.hideNow, true);
+  // Midnight is never thinned out on a narrow lane; other labels near "now" or at odd positions are.
+  for (let minute = 0; minute < 24 * 60; minute += 10) {
+    const { labels } = axisLabels(laneTicks(at(0, minute), SGT));
+    const midnight = labels.find(label => label.midnight);
+    // At exactly 00:00 the next midnight is 24 hours away, just past the lane.
+    if (minute) assert.deepEqual(midnight.classes.filter(name => !['wb-start', 'wb-end'].includes(name)), [], String(minute));
+    for (const label of labels) {
+      if (label.left > 94) assert.ok(label.classes.includes('wb-end'), String(minute));
+      if (label.left < 6) assert.ok(label.classes.includes('wb-start'), String(minute));
+    }
+  }
+});
+
+test('a refresh keeps the drawer scroll position and an open form keeps its node, focus and text', async context => {
+  const rows = Array.from({ length: 40 }, (_, index) => ({ id: index, executedAt: 1799990000 - index * 3600, status: 'success', duration: 1000 }));
+  const h = harness(context, path => path.includes('/history') ? { rows, next: null } : page());
+  await tick();
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
+  await tick();
+  const aside = h.root.children.find(node => node.tagName === 'ASIDE');
+  const body = () => allNodes(aside).find(node => node.classList.contains('wb-detail-body'));
+  body().scrollTop = 375;
+  await h.poll();
+  assert.equal(h.root.children.find(node => node.tagName === 'ASIDE'), aside, 'the drawer stays mounted');
+  assert.equal(body().scrollTop, 375);
+  buttons(h.root, '加载全部')[0].dispatch('click');
+  assert.equal(body().scrollTop, 375);
+  buttons(h.root, '编辑')[0].dispatch('click');
+  const panel = aside.children[0];
+  const name = allNodes(panel).find(node => node.tagName === 'INPUT');
+  name.focus();
+  name.value = 'Renamed';
+  name.dispatch('input');
+  await h.poll();
+  assert.equal(aside.children[0], panel, 'the form is not rebuilt');
+  assert.equal(allNodes(aside).find(node => node.tagName === 'INPUT'), name);
+  assert.equal(name.focused, true);
+  assert.equal(name.value, 'Renamed');
+});
+
+test('Esc leaves an input method alone and keeps a form with typed changes open', async context => {
+  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null } : page());
+  await tick();
+  const escape = (fields = {}) => h.listeners.get('keydown')({ key: 'Escape', preventDefault() {}, ...fields });
+  const formOpen = () => allNodes(h.root).some(node => node.tagName === 'FORM');
+  buttons(h.root, '新建任务')[0].dispatch('click');
+  escape();
+  assert.equal(formOpen(), false, 'an untouched form closes');
+  buttons(h.root, '新建任务')[0].dispatch('click');
+  escape({ isComposing: true });
+  escape({ keyCode: 229 });
+  assert.equal(formOpen(), true, 'composing text keeps the form');
+  const prompt = allNodes(h.root).find(node => node.tagName === 'TEXTAREA');
+  prompt.value = '整理今天的日志';
+  prompt.dispatch('input');
+  escape();
+  assert.equal(formOpen(), true, 'typed changes keep the form');
+  assert.equal(prompt.value, '整理今天的日志');
+  buttons(h.root, '取消')[0].dispatch('click');
+  assert.equal(formOpen(), false);
+});
+
+test('the edit button of an expired one-time task opens the re-enable form', async context => {
+  const expired = task({ id: 'task-x', type: 'one-time', status: 'failed', cron: null, reenable: true,
+    showLastError: true, lastError: 'Missed execution window', nextRuns: [] });
+  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
+    : path.startsWith('/api/workbench/schedule/preview') ? { valid: true, runs: [] } : page([expired]));
+  await tick();
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
+  await tick();
+  assert.equal(buttons(h.root, '改时间并重新启用').length, 1);
+  buttons(h.root, '编辑')[0].dispatch('click');
+  const form = allNodes(h.root).find(node => node.tagName === 'FORM');
+  assert.ok(form);
+  assert.ok(allNodes(h.root).some(node => node.classList.contains('wb-d-title') && node.textContent === '改时间并重新启用'));
+  assert.equal(allNodes(form).filter(node => node.dataset.kind).every(node => node.disabled), true);
+  assert.equal(allNodes(form).find(node => node.type === 'datetime-local').value, '');
 });

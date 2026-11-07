@@ -1,7 +1,9 @@
 import { element, fallbackName, icon } from './plain-text.js?v=94';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 import { cronText } from './cron-text.js?v=94';
-import { createForm, createPreviewer, formPayload, initialForm, intervalText, previewPath, wrapSelect } from './schedule-form.js?v=95';
+import { createForm, createPreviewer, formPayload, initialForm, intervalText, missText, previewPath, wrapSelect } from './schedule-form.js?v=96';
+
+export { missText };
 
 const ENABLED = new Set(['pending', 'running']);
 const SECTIONS = [
@@ -117,16 +119,6 @@ export function durationText(ms) {
   return `${Math.floor(seconds / 3600)}h${String(Math.floor(seconds % 3600 / 60)).padStart(2, '0')}m`;
 }
 
-/** Plain wording of the miss threshold: `5 分钟` for the usual choices, seconds otherwise. */
-export function missText(seconds, t = key => key) {
-  const value = Number(seconds);
-  if (!Number.isFinite(value) || value < 0) return '—';
-  if (value % 86400 === 0 && value) return t('wb.schedule.span.days', { n: value / 86400 });
-  if (value % 3600 === 0 && value) return t('wb.schedule.span.hours', { n: value / 3600 });
-  if (value % 60 === 0 && value) return t('wb.schedule.span.minutes', { n: value / 60 });
-  return t('wb.schedule.span.seconds', { n: value });
-}
-
 /** Status filter counts over all tasks, so the segmented control shows what each choice holds. */
 export function statusCounts(tasks) {
   const counts = { all: tasks.length };
@@ -166,6 +158,26 @@ export function laneTicks(startSeconds, tz) {
     ticks.push({ left: (at - startSeconds) / 864, hour, midnight: hour === '00' });
   }
   return ticks;
+}
+
+/**
+ * Axis labels for the lane ticks. Labels near either end are aligned to that end so none spills past the
+ * lane. "Tomorrow 00:00" is never dropped by the narrow-lane thinning; when it sits right next to "now",
+ * the "now" label gives way.
+ */
+export function axisLabels(ticks) {
+  const labels = ticks.map((tick, index) => {
+    const classes = [];
+    if (tick.left > 94) classes.push('wb-end');
+    else if (tick.left < 6) classes.push('wb-start');
+    if (!tick.midnight) {
+      if (index % 2) classes.push('wb-odd');
+      if (tick.left < 6) classes.push('wb-near');
+      else if (tick.left < 12) classes.push('wb-near2');
+    }
+    return { ...tick, classes };
+  });
+  return { labels, hideNow: labels.some(label => label.midnight && label.left < 6) };
 }
 
 const nextRun = task => Array.isArray(task.nextRuns?.runs) ? task.nextRuns.runs[0] ?? null : null;
@@ -257,6 +269,13 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   let data = null, error = false, selected = null, history = null, historyGen = 0, form = null, confirmFor = null,
     filter = { status: 'all', target: 'all', query: '' }, owner = identity(), stopped = false, notice = null,
     fullPrompt = null;
+  // The page, the drawer and the dialog layer stay mounted across redraws, so a refresh keeps the drawer's
+  // scroll position and an open form keeps its focus and typed text.
+  const main = element(document, 'div', undefined, 'wb-sched-main');
+  const aside = element(document, 'aside', undefined, 'wb-sched-side');
+  const layer = element(document, 'div', undefined, 'wb-sched-layer');
+  let mounted = false, sideKey = null, sideBody = null;
+  aside.hidden = true;
   const level = () => document.documentElement?.dataset?.detail === 'technical' ? 'technical' : 'plain';
   const tz = () => data?.tz ?? null;
   const time = epoch => formatTime(epoch, tz(), locale());
@@ -278,6 +297,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     confirmFor = null;
     notice = null;
     root.replaceChildren();
+    mounted = false;
     return true;
   }
   async function read(path) {
@@ -472,17 +492,18 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const lane = element(document, 'div', undefined, 'wb-sched-timeline');
     const axis = element(document, 'div', undefined, 'wb-sched-axis');
     const start = Math.floor(now() / 1000);
-    axis.append(element(document, 'span', t('wb.schedule.now'), 'wb-sched-axis-now'));
-    laneTicks(start, tz()).forEach((tick, index) => {
+    const { labels, hideNow } = axisLabels(laneTicks(start, tz()));
+    axis.append(element(document, 'span', t('wb.schedule.now'), 'wb-sched-axis-now' + (hideNow ? ' wb-near' : '')));
+    for (const tick of labels) {
       const line = element(document, 'i', undefined, 'wb-sched-tick');
       line.style.setProperty('left', `${tick.left}%`);
       lane.append(line);
       // A narrow lane keeps every other label; labels close to "now" are dropped so they never overlap it.
       const label = element(document, 'span', tick.midnight ? t('wb.schedule.day.tomorrow', { time: '00:00' }) : `${tick.hour}:00`,
-        [index % 2 ? 'wb-odd' : '', tick.left < 6 ? 'wb-near' : tick.left < 12 ? 'wb-near2' : ''].filter(Boolean).join(' ') || undefined);
+        [...tick.classes, tick.midnight ? 'wb-midnight' : ''].filter(Boolean).join(' ') || undefined);
       label.style.setProperty('left', `${tick.left}%`);
       axis.append(label);
-    });
+    }
     for (const dot of laneDots(data.tasks, start)) {
       const node = button(document, '', () => select(dot.task.id), 'wb-sched-dot' +
         (dot.task.priority === 1 ? ' wb-p1' : '') + (dot.task.id === selected ? ' active' : ''));
@@ -566,7 +587,9 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const row = element(document, 'div', undefined, 'wb-sched-row' + (task.id === selected ? ' active' : ''));
     const open = button(document, undefined, () => select(task.id), 'wb-sched-select');
     const name = element(document, 'span', undefined, 'wb-sched-name');
-    const title = element(document, 'b', task.name);
+    // The name sits in its own span: an ellipsis needs a block box, and the bold line is a flex row.
+    const title = element(document, 'b');
+    title.append(element(document, 'span', task.name, 'wb-sched-title'));
     if (level() === 'technical') title.append(element(document, 'span', 'P' + task.priority, 'wb-tag wb-sched-prio'));
     name.append(title, element(document, 'small', firstSentence(task.prompt)));
     const rule = element(document, 'span', scheduleText(task, { t, locale: locale() }), 'wb-sched-rule');
@@ -688,7 +711,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     if (writable()) {
       if (task.status === 'pending') acts.append(iconButton(document, 'pause', t('wb.schedule.pause'), () => act(task, 'pause')));
       if (task.status === 'paused') acts.append(iconButton(document, 'play', t('wb.schedule.resume'), () => act(task, 'resume')));
-      if (!task.reenable) acts.append(iconButton(document, 'edit', t('wb.schedule.edit'), () => openForm(task)));
+      // An expired one-time task edits through the re-enable form: saving a future time enables it again.
+      acts.append(iconButton(document, 'edit', t('wb.schedule.edit'), () => openForm(task, task.reenable)));
       acts.append(iconButton(document, 'trash', t('wb.schedule.delete'), () => {
         confirmFor = task.id;
         redraw();
@@ -701,6 +725,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     header.append(top, meta);
     panel.append(header);
     const body = element(document, 'div', undefined, 'wb-detail-body');
+    sideBody = body;
     const rows = history?.rows ?? [];
     const finished = rows.filter(run => run.status !== 'started');
     const rate = finished.length ? `${Math.round(finished.filter(run => run.status === 'success').length / finished.length * 100)}%` : '—';
@@ -778,7 +803,6 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   function redraw() {
     if (stopped) return;
-    const main = element(document, 'div', undefined, 'wb-sched-main');
     const notes = [];
     if (data && !data.tz) notes.push(element(document, 'p', t('wb.schedule.tzUnknown'), 'wb-sched-tz wb-txt-warn'));
     if (error) notes.push(element(document, 'p', t('wb.readFailed'), 'wb-sched-error'));
@@ -788,41 +812,59 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       empty.append(icon(document, 'clock'), element(document, 'p', t('wb.schedule.empty')));
       notes.push(empty);
     }
-    main.append(...notes);
     const task = data?.available ? data.tasks.find(item => item.id === selected) : null;
-    let side = null;
     if (data?.available) {
       const top = element(document, 'div', undefined, 'wb-sched-top');
       top.append(renderKpi(), renderWeek(), renderTimeline());
-      main.append(top, renderFilters(), renderList());
-      if (form && (form.taskId === null || form.taskId === task?.id)) side = renderFormPanel();
-      else if (task) side = renderDetail(task);
+      notes.push(top, renderFilters(), renderList());
     }
-    const nodes = [main];
-    if (side) {
-      const aside = element(document, 'aside', undefined, 'wb-sched-side');
-      aside.append(side);
-      nodes.push(aside);
+    main.replaceChildren(...notes);
+    const showForm = data?.available && form && (form.taskId === null || form.taskId === task?.id);
+    const key = showForm ? form : task ? task.id : null;
+    if (showForm) {
+      // A mounted form is never rebuilt: its inputs keep focus and their text.
+      form.panel ??= renderFormPanel();
+      if (aside.children[0] !== form.panel) aside.replaceChildren(form.panel);
+    } else if (task) {
+      const scroll = key === sideKey ? sideBody?.scrollTop ?? 0 : 0;
+      aside.replaceChildren(renderDetail(task));
+      if (scroll) sideBody.scrollTop = scroll;
+    } else {
+      aside.replaceChildren();
     }
-    if (task && confirmFor === task.id) nodes.push(renderConfirm(task));
-    root.className = 'wb-schedule' + (side ? ' wb-has-side' : '');
-    root.replaceChildren(...nodes);
+    sideKey = key;
+    aside.hidden = key === null;
+    layer.replaceChildren(...(task && confirmFor === task.id ? [renderConfirm(task)] : []));
+    root.className = 'wb-schedule' + (key === null ? '' : ' wb-has-side');
+    if (!mounted) {
+      root.replaceChildren(main, aside, layer);
+      mounted = true;
+    }
     fitAxis();
   }
-  /** After layout, drop lane labels that would touch the one before them (long words such as "Tomorrow 00:00"). */
+  /**
+   * After layout, drop lane labels that would touch the one before them or reach past the lane's right edge
+   * (long words such as "Tomorrow 00:00"). On a collision "Tomorrow 00:00" stays and the other label goes.
+   */
   function fitAxis() {
     const frame = window?.requestAnimationFrame;
     if (!frame) return;
     frame(() => {
       const axis = root.querySelector?.('.wb-sched-axis');
       if (!axis?.getBoundingClientRect) return;
+      const edge = axis.getBoundingClientRect().right;
       let last = null;
       for (const label of axis.children) {
         label.classList.remove('wb-crowded');
         if (getComputedStyle(label).display === 'none') continue;
         const box = label.getBoundingClientRect();
-        if (last !== null && box.left < last + 6) label.classList.add('wb-crowded');
-        else last = box.right;
+        if (box.right > edge + 0.5) label.classList.add('wb-crowded');
+        else if (last && box.left < last.box.right + 6) {
+          if (label.classList.contains('wb-midnight')) {
+            last.label.classList.add('wb-crowded');
+            last = { label, box };
+          } else label.classList.add('wb-crowded');
+        } else last = { label, box };
       }
     });
   }
@@ -831,7 +873,11 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   };
   const keydown = event => {
     if (event.key !== 'Escape' || !document.querySelector('#tab-schedule')?.classList.contains('active')) return;
+    // Esc also cancels an input method's candidate list; that must never close the form.
+    if (event.isComposing || event.keyCode === 229) return;
     if (confirmFor) confirmFor = null;
+    // A form with typed changes stays open; it is closed with Cancel.
+    else if (form?.handle.dirty()) return;
     else if (form) form = null;
     else if (selected) selected = null;
     else return;

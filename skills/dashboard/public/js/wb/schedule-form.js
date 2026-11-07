@@ -1,5 +1,6 @@
 import { element, icon } from './plain-text.js?v=94';
 import { createFetchGuard } from './fetch-guard.js?v=85';
+import { dateField } from './date-field.js?v=1';
 
 const pad = value => String(value).padStart(2, '0');
 
@@ -141,6 +142,16 @@ function select(document, values, label, current, onSelect) {
   return node;
 }
 
+/** Plain wording of the miss threshold: `5 分钟` for the usual choices, `2 小时` or seconds otherwise. */
+export function missText(seconds, t = key => key) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return '—';
+  if (value % 86400 === 0 && value) return t('wb.schedule.span.days', { n: value / 86400 });
+  if (value % 3600 === 0 && value) return t('wb.schedule.span.hours', { n: value / 3600 });
+  if (value % 60 === 0 && value) return t('wb.schedule.span.minutes', { n: value / 60 });
+  return t('wb.schedule.span.seconds', { n: value });
+}
+
 const MISS_CHOICES = ['300', '1800', '3600', '86400'];
 const MISS_KEYS = { 300: 'm5', 1800: 'm30', 3600: 'h1', 86400: 'd1' };
 const PLACEHOLDER = { cron: '0 9 * * 1-5', every: 'wb.schedule.form.everyPlaceholder' };
@@ -179,11 +190,16 @@ export function createForm(document, { state: initial, t = key => key, creating 
   prompt.placeholder = t('wb.schedule.form.promptPlaceholder');
   prompt.rows = 6;
   root.append(field(document, t('wb.schedule.form.prompt'), prompt));
-  const time = input(document, state.kind === 'at' ? 'datetime-local' : 'text', state.value, set('value', true));
-  time.required = creating || reenable;
+  // Rules and intervals are typed; a one-time run picks a date in the same styled field as the usage page.
+  const time = input(document, 'text', state.kind === 'at' ? '' : state.value, set('value', true));
+  const at = input(document, 'datetime-local', state.kind === 'at' ? state.value : '', set('value', true));
+  time.required = at.required = creating || reenable;
+  const atField = dateField(document, at, () => t('wb.schedule.form.pickTime'));
   const tzNote = element(document, 'small', '', 'wb-sched-hint');
   const placeholder = () => {
     time.placeholder = state.kind === 'cron' ? PLACEHOLDER.cron : state.kind === 'every' ? t(PLACEHOLDER.every) : '';
+    time.hidden = state.kind === 'at';
+    atField.field.hidden = state.kind !== 'at';
     tzNote.textContent = state.kind === 'at' ? tzLabel : '';
   };
   const kind = element(document, 'div', undefined, 'wb-seg wb-sched-kind');
@@ -198,8 +214,9 @@ export function createForm(document, { state: initial, t = key => key, creating 
       if (state.kind === value) return;
       state.kind = value;
       state.value = '';
-      time.type = value === 'at' ? 'datetime-local' : 'text';
       time.value = '';
+      at.value = '';
+      atField.sync();
       kinds.forEach(other => other.setAttribute('aria-pressed', String(other.dataset.kind === value)));
       placeholder();
       set('value', true)('');
@@ -210,7 +227,7 @@ export function createForm(document, { state: initial, t = key => key, creating 
   });
   placeholder();
   const timeWrap = element(document, 'div', undefined, 'wb-sched-field');
-  timeWrap.append(element(document, 'span', t('wb.schedule.form.time'), 'wb-sched-label'), kind, time, previewLine, tzNote);
+  timeWrap.append(element(document, 'span', t('wb.schedule.form.time'), 'wb-sched-label'), kind, time, atField.field, previewLine, tzNote);
   root.append(timeWrap);
   const pair = element(document, 'div', undefined, 'wb-sched-pair');
   pair.append(field(document, t('wb.schedule.form.priority'),
@@ -220,7 +237,7 @@ export function createForm(document, { state: initial, t = key => key, creating 
     : [...MISS_CHOICES, String(state.missThreshold)];
   pair.append(field(document, t('wb.schedule.form.missThreshold'),
     wrapSelect(document, select(document, misses, value => MISS_KEYS[value] ? t('wb.schedule.miss.' + MISS_KEYS[value])
-      : t('wb.schedule.miss.seconds', { n: value }), String(state.missThreshold), set('missThreshold'))),
+      : missText(value, t), String(state.missThreshold), set('missThreshold'))),
     t('wb.schedule.form.missHint')));
   root.append(pair);
   const idle = element(document, 'label', undefined, 'wb-sched-check');
@@ -247,6 +264,7 @@ export function createForm(document, { state: initial, t = key => key, creating 
     title,
     save,
     state: () => ({ ...state }),
+    dirty: () => Object.keys(initial).some(key => String(state[key]) !== String(initial[key])),
     setPreview(value) {
       preview = value;
       sync();
