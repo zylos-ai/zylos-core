@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createChatApiFixture, protocolFixtures, questionContent } from './chat-integration-api.js';
 import { sendJson } from '../../src/lib/http.js';
+import { CONTENT_PREFIX } from '../../../comm-bridge/scripts/c4-content-schema.js';
 
 // Actual application HTML/ESM/CSS, real HTTP chat middleware and private DBs.
 // Other dashboard panes receive a bounded operational fixture, never live data.
@@ -63,7 +64,7 @@ export async function runVisualCase(t, sandbox) {
   }
   // Historic bad packet remains readable; it is not sent through a permissive
   // fake hook. Product BeforeSend rejects new bad packets as intended.
-  fixture.c4.insertConversation('out', 'dashboard', localId, '[C4-CONTENT]\n{historic-bad-packet', { groupName: localId });
+  fixture.c4.insertConversation('out', 'dashboard', localId, CONTENT_PREFIX + '{historic-bad-packet', { groupName: localId });
   for (const [direction, status, content] of [['in', 'pending', 'Waiting for runtime'], ['in', 'failed', 'Failed delivery'],
     ['out', 'failed', 'Unknown authority state']]) {
     const row = fixture.c4.insertConversation(direction, 'dashboard', localId, content, { groupName: localId });
