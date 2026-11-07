@@ -2378,7 +2378,7 @@ test('workbench shell hides unknown recovering and unavailable observer navigati
   nav.hidden = false; h.mutate(); assert.equal(nav.hidden, true);
   assert.equal(click().stopped, 1); assert.equal(settings.length, 0);
   status = { installed: false }; redraw();
-  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerInstall');
+  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerInstall'); assert.equal(nav.dataset.wbHint, 'wb.observerInstall', 'app.js restores this hint after its Origin lock');
   assert.equal(nav.classList.contains('wb-tab-muted'), true);
   assert.equal(click().prevented, 1); assert.equal(settings[0], 'observer');
   status = { installed: true, enabled: false }; redraw();
@@ -2419,10 +2419,12 @@ test('workbench shell gates automatic naming and discards an old agent prompt', 
   await wbTick(); await wbTick();
   const button = h.nodes.get('#wb-auto-name'), dialog = h.nodes.get('#wb-auto-name-dialog');
   assert.equal(button.disabled, true);
+  assert.equal(button.title, 'wb.readOnly');
   button.dispatch('click'); await wbTick();
   assert.equal(requests.some(item => item.path.endsWith('/name-prompt')), false);
   writable = true; h.listeners.get('dashboard-locale-change')();
   assert.equal(button.disabled, false);
+  assert.equal(button.title, 'wb.name.autoHint', 'redraw keeps the auto-name explanation as the tooltip');
   button.dispatch('click'); await wbTick();
   const prompt = requests.find(item => item.path.endsWith('/name-prompt'));
   assert.ok(prompt?.options?.signal);

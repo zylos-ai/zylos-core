@@ -1,4 +1,5 @@
 import test from 'node:test';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
@@ -853,11 +854,12 @@ test('switching runs aborts a hanging subagent read so the shared refresh can fi
 test('detail header uses icon actions whose tooltip carries any unavailable reason, and Esc leaves the name editor first', async () => {
   const f = detailFixture(async path => response(defaultRead(path)));
   await f.controller.open({ ...row('a'), live: null, presence: 'not_running' }, { rows: [], listKnown: true });
-  const actions = allNodes(f.root).filter(node => node.dataset?.action);
-  assert.deepEqual(actions.map(node => node.dataset.action), ['interrupt', 'chop-chop', 'restart']);
+  const actions = allNodes(f.root).filter(node => node.dataset?.wbAction);
+  assert.deepEqual(actions.map(node => node.dataset.wbAction), ['interrupt', 'chop-chop', 'restart']);
   assert.equal(actions[0].disabled, true);
   assert.equal(actions[0].title, 'wb.actions.interrupt · wb.actions.targetRequired');
-  assert.equal(actions.some(node => node.textContent !== ''), false, 'actions are icon buttons without inline reason text');
+  // The only text is the action name, which CSS shows on narrow screens; reasons stay in the tooltip.
+  assert.deepEqual(actions.map(node => node.textContent), ['wb.actions.interrupt', 'wb.actions.chop-chop', 'wb.actions.restart']);
   assert.equal(allNodes(f.root).some(node => node.classList.contains('wb-action-reason')), false);
   f.controller.state.nameOpen = true; f.controller.setViewDetail();
   assert.equal(f.controller.escape(), true); assert.equal(f.controller.state.nameOpen, false); assert.equal(f.root.hidden, false);
@@ -888,4 +890,30 @@ test('timeline chips combine filters: one chip uses the server filter, several f
   renderTimeline(root, loader, { document, t, level: 'technical' });
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-chip')).map(node => node.attributes['aria-pressed']).join(), 'false,true,false');
   loader.close();
+});
+
+test('the Origin lock in app.js leaves mounted drawer actions, the observer hint and their names alone', async () => {
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('function renderOriginAvailability(');
+  const source = app.slice(start, app.indexOf('function renderState(', start));
+  const f = detailFixture(async path => response(defaultRead(path)));
+  await f.controller.open(row('telegram:a', { state: { kind: 'idle' } }), { rows: [], listKnown: true });
+  const drawer = allNodes(f.root).filter(node => node.dataset?.wbAction);
+  const before = drawer.map(node => [node.disabled, node.title, node.attributes['aria-label']]);
+  const observer = f.document.createElement('button'); observer.id = 'observer-tab'; observer.dataset.wbHint = 'wb.observerInstall'; observer.title = 'wb.observerInstall';
+  const legacy = f.document.createElement('button'); legacy.dataset.action = 'chop-chop';
+  const mounted = [observer, legacy, ...allNodes(f.root)];
+  for (const node of mounted) node.closest = () => null;
+  // Same selector semantics as the browser: #id, or data-action (dataset.action), never data-wb-action.
+  const matches = (node, selector) => selector.startsWith('#') ? node.id === selector.slice(1)
+    : node.dataset?.action === /data-action="([^"]+)"/.exec(selector)?.[1];
+  f.document.querySelectorAll = selectors => mounted.filter(node => selectors.split(',').some(selector => matches(node, selector.trim())));
+  for (const unavailable of [true, false]) {
+    const render = new Function('document', 't', 'originSessionUnavailable', 'state', 'remoteIsReadOnly', source + '\nreturn renderOriginAvailability;')(
+      f.document, key => key, () => unavailable, { dashboardState: {} }, () => false);
+    render();
+    assert.deepEqual(drawer.map(node => [node.disabled, node.title, node.attributes['aria-label']]), before, 'drawer actions are not re-locked');
+    assert.equal(legacy.disabled, unavailable);
+    assert.equal(observer.title, unavailable ? 'action.origin_not_running' : 'wb.observerInstall');
+  }
 });

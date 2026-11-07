@@ -54,6 +54,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
       const label = entry ? t('tab.observer') : '', hint = entry?.target === 'settings' ? entry.label : '';
       if (nav.hidden !== !entry) nav.hidden = !entry;
       if (nav.textContent !== label) nav.textContent = label;
+      nav.dataset.wbHint = hint;
       if (nav.title !== hint) nav.title = hint;
       nav.classList.toggle('wb-tab-muted', Boolean(hint));
     }
@@ -66,7 +67,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     if (nameButton) {
       nameButton.textContent = t('wb.name.auto');
       nameButton.disabled = !writable();
-      nameButton.title = writable() ? '' : t('wb.readOnly');
+      nameButton.title = writable() ? t('wb.name.autoHint') : t('wb.readOnly');
     }
     const level = mode.detailLevel();
     const legend = document.querySelector('#wb-legend');

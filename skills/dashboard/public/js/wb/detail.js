@@ -127,13 +127,14 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     top.append(box, heading, statePill(document, row, { t, level: getLevel() }));
     const actions = element(document, 'div', undefined, 'wb-d-acts');
     for (const item of groupActionButtons(row, getWritable())) {
-      const button = element(document, 'button', undefined, 'wb-icon-btn'); button.type = 'button';
+      const button = element(document, 'button', undefined, 'wb-icon-btn wb-act'); button.type = 'button';
       button.disabled = item.disabled || state.actionBusy;
-      button.dataset.action = item.action;
+      // Not data-action: app.js still re-locks every [data-action="interrupt"/"chop-chop"] by the Origin state.
+      button.dataset.wbAction = item.action;
       button.setAttribute('aria-label', t('wb.actions.' + item.action));
-      // Unavailable actions stay visible and say why in their tooltip.
+      // Unavailable actions stay visible and say why in their tooltip; narrow screens also show the label.
       button.title = t('wb.actions.' + item.action) + (item.reason ? ' · ' + t(item.reason) : '');
-      button.append(icon(document, actionIcons[item.action]));
+      button.append(icon(document, actionIcons[item.action]), element(document, 'span', t('wb.actions.' + item.action), 'wb-act-label'));
       button.addEventListener('click', () => act(item.action)); actions.append(button);
     }
     const closeButton = element(document, 'button', undefined, 'wb-icon-btn'); closeButton.type = 'button';

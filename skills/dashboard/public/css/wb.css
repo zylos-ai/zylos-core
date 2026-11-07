@@ -38,6 +38,7 @@
 .wb-icon-btn:hover:not(:disabled) { background: var(--wb-hover); color: var(--text); }
 .wb-icon-btn:disabled { opacity: .38; cursor: not-allowed; }
 .wb-icon-btn-sm { width: 24px; height: 24px; }
+.wb-act-label { display: none; }
 .wb-link-btn { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12.5px; cursor: pointer; }
 .wb-link-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
 .wb-link-btn:disabled { color: var(--text-muted); cursor: not-allowed; text-decoration: none; }
@@ -347,6 +348,9 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   #wb-side:not([hidden]) { inset: 0; z-index: 55; width: auto; border-left: 0; box-shadow: none; }
   .wb-detail-header { padding-top: max(14px, env(safe-area-inset-top)); }
   .wb-detail-body { padding-bottom: env(safe-area-inset-bottom); }
+  /* Touch screens have no tooltip, so the drawer actions carry their names. */
+  .wb-d-acts .wb-act { width: auto; gap: 5px; padding: 0 8px; border-color: var(--wb-line-strong); font-size: 12px; }
+  .wb-act-label { display: inline; }
 }
 @media (max-width: 760px) {
   :root { --wb-header-h: 0px; }

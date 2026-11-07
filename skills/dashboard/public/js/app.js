@@ -431,7 +431,8 @@ function renderOriginAvailability() {
   const reason = unavailable ? t('action.origin_not_running') : '';
   for (const button of document.querySelectorAll('#observer-tab, [data-action="interrupt"], [data-action="chop-chop"]')) {
     button.disabled = unavailable || remoteIsReadOnly() || Boolean(button.closest('.modal-body-disabled'));
-    button.title = reason;
+    // The observer tab keeps the workbench's install / disabled hint whenever the Origin is available.
+    button.title = reason || button.dataset.wbHint || '';
   }
 }
 
