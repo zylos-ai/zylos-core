@@ -1,0 +1,3395 @@
+{
+  "source": {
+    "coreCommit": "977958c913d19be5ebe80fa03a5133f61b4acbb9",
+    "chatweaveCommit": "03e69a4435ce2f4913ed28884509f3db64d6ebcf"
+  },
+  "BLOCK_SCHEMA": {
+    "type": "object",
+    "required": [
+      "id",
+      "type",
+      "schemaVersion"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "$ref": "#/$defs/blockId"
+      },
+      "type": {
+        "enum": [
+          "markdown",
+          "time_series",
+          "breakdown",
+          "category_series",
+          "choice",
+          "confirmation",
+          "form_intent"
+        ]
+      },
+      "schemaVersion": {
+        "const": 1
+      },
+      "data": {
+        "type": "object"
+      },
+      "fallbackText": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "metadata": {
+        "$ref": "#/$defs/blockMetadata"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "complete",
+          "pending",
+          "error"
+        ]
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 500
+      }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "not": {
+                "const": "markdown"
+              }
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "fallbackText"
+          ]
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "markdown"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/markdownData"
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "time_series"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/timeSeriesData"
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "breakdown"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/breakdownData"
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "category_series"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/categorySeriesData"
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "choice"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/choiceData"
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "confirmation"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/confirmationData"
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "form_intent"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/formIntentData"
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "status": {
+              "enum": [
+                "pending",
+                "error"
+              ]
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        "then": {
+          "required": [
+            "fallbackText"
+          ]
+        },
+        "else": {
+          "required": [
+            "data"
+          ]
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "status": {
+              "const": "error"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        "else": {
+          "not": {
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "metadata": {
+              "properties": {
+                "provenance": {
+                  "const": "adapter"
+                }
+              },
+              "required": [
+                "provenance"
+              ]
+            }
+          },
+          "required": [
+            "metadata"
+          ]
+        },
+        "then": {
+          "properties": {
+            "type": {
+              "const": "markdown"
+            }
+          }
+        }
+      }
+    ],
+    "$defs": {
+      "blockId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+      },
+      "key": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      },
+      "label": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "shortLabel": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 24
+      },
+      "text": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "unit": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32
+      },
+      "scalar": {
+        "type": [
+          "number",
+          "string",
+          "boolean",
+          "null"
+        ],
+        "maxLength": 500
+      },
+      "temporal": {
+        "type": "string",
+        "anyOf": [
+          {
+            "format": "date"
+          },
+          {
+            "format": "date-time"
+          }
+        ]
+      },
+      "assessment": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "positive",
+              "negative",
+              "warning",
+              "critical",
+              "neutral",
+              "info"
+            ]
+          },
+          "label": {
+            "$ref": "#/$defs/label"
+          },
+          "detail": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      },
+      "valueFormat": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "style": {
+            "type": "string",
+            "enum": [
+              "decimal",
+              "integer",
+              "percent",
+              "currency",
+              "duration"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "minorUnits": {
+            "type": "boolean"
+          },
+          "maximumFractionDigits": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          }
+        }
+      },
+      "blockMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "model",
+              "tool",
+              "host",
+              "adapter"
+            ]
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "citations": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "required": [
+                "label"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "maxLength": 2000
+                },
+                "ref": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              }
+            }
+          },
+          "host": {
+            "type": "object",
+            "maxProperties": 16
+          }
+        }
+      },
+      "blockState": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "resolved",
+              "expired",
+              "cancelled",
+              "superseded"
+            ]
+          },
+          "selected": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "action.schema.json#/$defs/optionId"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "freeText": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirm",
+              "cancel"
+            ]
+          },
+          "values": {
+            "type": "object",
+            "maxProperties": 12
+          },
+          "resolvedBy": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "supersededBy": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "object",
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "withdrawn",
+                  "policy",
+                  "record_changed",
+                  "record_deleted",
+                  "permission_changed",
+                  "stopped",
+                  "other"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 200
+              }
+            }
+          },
+          "note": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "resolved"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "resolvedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "cancelled"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "cancelled",
+                    "expired",
+                    "superseded"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "resolvedBy"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "open",
+                    "resolved"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "resolved"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "required": [
+                    "selected"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "outcome"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "values"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "freeText"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "required": [
+                    "outcome"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "selected"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "values"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "freeText"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "required": [
+                    "values"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "selected"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "outcome"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "freeText"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "required": [
+                    "freeText"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "selected"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "outcome"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "values"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "selected"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "outcome"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "values"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "freeText"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "resolvedAt"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "resolvedBy"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "superseded"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "supersededBy"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "supersededBy"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "markdownData": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 32768
+          }
+        }
+      },
+      "timeSeriesData": {
+        "type": "object",
+        "required": [
+          "xType",
+          "series"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "$ref": "#/$defs/label"
+          },
+          "xType": {
+            "type": "string",
+            "enum": [
+              "date",
+              "datetime",
+              "number",
+              "category"
+            ]
+          },
+          "xLabel": {
+            "$ref": "#/$defs/label"
+          },
+          "yLabel": {
+            "$ref": "#/$defs/label"
+          },
+          "yUnit": {
+            "$ref": "#/$defs/unit"
+          },
+          "format": {
+            "$ref": "#/$defs/valueFormat"
+          },
+          "series": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "label",
+                "points"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "$ref": "#/$defs/key"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                },
+                "points": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "x",
+                      "y"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "x": {
+                        "type": [
+                          "string",
+                          "number"
+                        ],
+                        "maxLength": 64
+                      },
+                      "y": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "summary": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      },
+      "breakdownData": {
+        "type": "object",
+        "required": [
+          "parts"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "$ref": "#/$defs/label"
+          },
+          "unit": {
+            "$ref": "#/$defs/unit"
+          },
+          "format": {
+            "$ref": "#/$defs/valueFormat"
+          },
+          "parts": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "label",
+                "value"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "$ref": "#/$defs/key"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "value": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "mergedCount": {
+                  "type": "integer",
+                  "minimum": 2
+                }
+              }
+            }
+          },
+          "asOf": {
+            "$ref": "#/$defs/temporal"
+          },
+          "summary": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      },
+      "categorySeriesData": {
+        "type": "object",
+        "required": [
+          "points"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "$ref": "#/$defs/label"
+          },
+          "xLabel": {
+            "$ref": "#/$defs/label"
+          },
+          "yLabel": {
+            "$ref": "#/$defs/label"
+          },
+          "unit": {
+            "$ref": "#/$defs/unit"
+          },
+          "format": {
+            "$ref": "#/$defs/valueFormat"
+          },
+          "points": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 24,
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "label",
+                "value"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "$ref": "#/$defs/key"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "value": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "assessment": {
+                  "$ref": "#/$defs/assessment"
+                }
+              }
+            }
+          },
+          "reference": {
+            "type": "object",
+            "required": [
+              "label",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "$ref": "#/$defs/label"
+              },
+              "value": {
+                "type": "number"
+              }
+            }
+          },
+          "summary": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      },
+      "option": {
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "label": {
+            "$ref": "#/$defs/label"
+          },
+          "description": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      },
+      "choiceData": {
+        "type": "object",
+        "required": [
+          "prompt",
+          "options",
+          "action"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "prompt": {
+            "$ref": "#/$defs/text"
+          },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/$defs/option"
+            }
+          },
+          "selection": {
+            "type": "string",
+            "enum": [
+              "single",
+              "multiple"
+            ]
+          },
+          "minSelect": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "maxSelect": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "allowFreeText": {
+            "type": "boolean"
+          },
+          "action": {
+            "allOf": [
+              {
+                "$ref": "action.schema.json#/$defs/actionSpec"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "choice.select"
+                  }
+                }
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/blockState"
+          }
+        },
+        "allOf": [
+          {
+            "properties": {
+              "state": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "outcome"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "values"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "confirmationData": {
+        "type": "object",
+        "required": [
+          "title",
+          "severity",
+          "action"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "$ref": "#/$defs/label"
+          },
+          "body": {
+            "$ref": "#/$defs/text"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "destructive"
+            ]
+          },
+          "details": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "value": {
+                  "$ref": "#/$defs/scalar"
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                },
+                "format": {
+                  "$ref": "#/$defs/valueFormat"
+                }
+              }
+            }
+          },
+          "confirmLabel": {
+            "$ref": "#/$defs/shortLabel"
+          },
+          "cancelLabel": {
+            "$ref": "#/$defs/shortLabel"
+          },
+          "action": {
+            "allOf": [
+              {
+                "$ref": "action.schema.json#/$defs/actionSpec"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "confirmation.respond"
+                  }
+                }
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/blockState"
+          }
+        },
+        "if": {
+          "properties": {
+            "action": {
+              "properties": {
+                "requiresConfirmation": {
+                  "const": true
+                }
+              },
+              "required": [
+                "requiresConfirmation"
+              ]
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "severity": {
+              "const": "destructive"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "properties": {
+              "state": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "selected"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "values"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "formField": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "$ref": "#/$defs/key"
+          },
+          "label": {
+            "$ref": "#/$defs/label"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "multiline_text",
+              "number",
+              "integer",
+              "date",
+              "datetime",
+              "boolean",
+              "single_select",
+              "multi_select"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "options": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/$defs/option"
+            }
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          },
+          "maxLength": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          },
+          "unit": {
+            "$ref": "#/$defs/unit"
+          },
+          "placeholder": {
+            "$ref": "#/$defs/label"
+          },
+          "help": {
+            "$ref": "#/$defs/text"
+          },
+          "defaultValue": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/scalar"
+              },
+              {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "single_select",
+                    "multi_select"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "options"
+              ],
+              "properties": {
+                "options": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        ]
+      },
+      "formIntentData": {
+        "type": "object",
+        "required": [
+          "fields",
+          "action"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "$ref": "#/$defs/label"
+          },
+          "purpose": {
+            "$ref": "#/$defs/text"
+          },
+          "fields": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/$defs/formField"
+            }
+          },
+          "submitLabel": {
+            "$ref": "#/$defs/shortLabel"
+          },
+          "action": {
+            "allOf": [
+              {
+                "$ref": "action.schema.json#/$defs/actionSpec"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "const": "form.submit"
+                  }
+                }
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/blockState"
+          }
+        },
+        "allOf": [
+          {
+            "properties": {
+              "state": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "selected"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "outcome"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "ACTION_SCHEMA": {
+    "$defs": {
+      "messageId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+      },
+      "blockId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+      },
+      "optionId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+      },
+      "actionId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$"
+      },
+      "actionType": {
+        "type": "string",
+        "enum": [
+          "choice.select",
+          "confirmation.respond",
+          "form.submit"
+        ]
+      },
+      "target": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){0,3}$",
+        "maxLength": 64
+      },
+      "actionSpec": {
+        "type": "object",
+        "required": [
+          "type",
+          "target"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "$ref": "#/$defs/actionType"
+          },
+          "target": {
+            "$ref": "#/$defs/target"
+          },
+          "requiresConfirmation": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "if": {
+          "properties": {
+            "requiresConfirmation": {
+              "const": true
+            }
+          },
+          "required": [
+            "requiresConfirmation"
+          ]
+        },
+        "then": {
+          "properties": {
+            "type": {
+              "const": "confirmation.respond"
+            }
+          }
+        }
+      },
+      "actionContext": {
+        "type": "object",
+        "required": [
+          "messageId",
+          "blockId"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "conversationId": {
+            "$ref": "#/$defs/messageId"
+          },
+          "messageId": {
+            "$ref": "#/$defs/messageId"
+          },
+          "blockId": {
+            "$ref": "#/$defs/blockId"
+          }
+        }
+      },
+      "choiceSelectPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "selected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/optionId"
+            },
+            "minItems": 1,
+            "maxItems": 10,
+            "uniqueItems": true
+          },
+          "freeText": {
+            "$ref": "#/$defs/freeText"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "selected"
+            ]
+          },
+          {
+            "required": [
+              "freeText"
+            ]
+          }
+        ]
+      },
+      "freeText": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      },
+      "confirmationRespondPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirm",
+              "cancel"
+            ]
+          },
+          "freeText": {
+            "$ref": "#/$defs/freeText"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "outcome"
+            ]
+          },
+          {
+            "required": [
+              "freeText"
+            ]
+          }
+        ]
+      },
+      "formSubmitPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "values"
+            ]
+          },
+          {
+            "required": [
+              "freeText"
+            ]
+          }
+        ],
+        "properties": {
+          "freeText": {
+            "$ref": "#/$defs/freeText"
+          },
+          "values": {
+            "type": "object",
+            "maxProperties": 12,
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ],
+                  "maxLength": 2000
+                },
+                {
+                  "type": "array",
+                  "maxItems": 20,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "actionRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "protocolVersion",
+          "type",
+          "target",
+          "context",
+          "payload"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/actionId"
+          },
+          "protocolVersion": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+$"
+          },
+          "type": {
+            "$ref": "#/$defs/actionType"
+          },
+          "target": {
+            "$ref": "#/$defs/target"
+          },
+          "context": {
+            "$ref": "#/$defs/actionContext"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "clientTs": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "choice.select"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/choiceSelectPayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "confirmation.respond"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/confirmationRespondPayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "form.submit"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/formSubmitPayload"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "compatibility": {
+    "valid": [
+      {
+        "name": "markdown",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "markdown_message",
+          "fallbackText": "可读消息",
+          "blocks": [
+            {
+              "id": "text",
+              "type": "markdown",
+              "schemaVersion": 1,
+              "data": {
+                "text": "嵌套 { 字符 } 与 \\\" 引号；<img onerror=\"bad()\">"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "time_series",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"chart_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"chart\",\"type\":\"time_series\",\"schemaVersion\":1,\"data\":{\"xType\":\"date\",\"series\":[{\"key\":\"usage\",\"label\":\"用量\",\"points\":[{\"x\":\"2026-11-01\",\"y\":1},{\"x\":\"2026-11-02\",\"y\":null}]}]},\"fallbackText\":\"用量图：首日1，次日未知\"}]}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "chart_message",
+          "fallbackText": "可读消息",
+          "blocks": [
+            {
+              "id": "chart",
+              "type": "time_series",
+              "schemaVersion": 1,
+              "data": {
+                "xType": "date",
+                "series": [
+                  {
+                    "key": "usage",
+                    "label": "用量",
+                    "points": [
+                      {
+                        "x": "2026-11-01",
+                        "y": 1
+                      },
+                      {
+                        "x": "2026-11-02",
+                        "y": null
+                      }
+                    ]
+                  }
+                ]
+              },
+              "fallbackText": "用量图：首日1，次日未知"
+            }
+          ]
+        }
+      },
+      {
+        "name": "breakdown",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"breakdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"parts\",\"type\":\"breakdown\",\"schemaVersion\":1,\"data\":{\"parts\":[{\"key\":\"a\",\"label\":\"甲\",\"value\":2},{\"key\":\"b\",\"label\":\"乙\",\"value\":3}]},\"fallbackText\":\"甲2，乙3\"}]}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "breakdown_message",
+          "fallbackText": "可读消息",
+          "blocks": [
+            {
+              "id": "parts",
+              "type": "breakdown",
+              "schemaVersion": 1,
+              "data": {
+                "parts": [
+                  {
+                    "key": "a",
+                    "label": "甲",
+                    "value": 2
+                  },
+                  {
+                    "key": "b",
+                    "label": "乙",
+                    "value": 3
+                  }
+                ]
+              },
+              "fallbackText": "甲2，乙3"
+            }
+          ]
+        }
+      },
+      {
+        "name": "category_series",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"category_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"categories\",\"type\":\"category_series\",\"schemaVersion\":1,\"data\":{\"points\":[{\"key\":\"a\",\"label\":\"甲\",\"value\":0},{\"key\":\"b\",\"label\":\"乙\",\"value\":null}]},\"fallbackText\":\"甲0，乙未知\"}]}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "category_message",
+          "fallbackText": "可读消息",
+          "blocks": [
+            {
+              "id": "categories",
+              "type": "category_series",
+              "schemaVersion": 1,
+              "data": {
+                "points": [
+                  {
+                    "key": "a",
+                    "label": "甲",
+                    "value": 0
+                  },
+                  {
+                    "key": "b",
+                    "label": "乙",
+                    "value": null
+                  }
+                ]
+              },
+              "fallbackText": "甲0，乙未知"
+            }
+          ]
+        }
+      },
+      {
+        "name": "single",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"single_question\",\"fallbackText\":\"选一个方案；等待用户回答。\",\"blocks\":[{\"id\":\"question\",\"type\":\"choice\",\"schemaVersion\":1,\"data\":{\"prompt\":\"选一个方案\",\"options\":[{\"id\":\"a\",\"label\":\"方案甲\"},{\"id\":\"b\",\"label\":\"方案乙\"}],\"action\":{\"type\":\"choice.select\",\"target\":\"clarification.answer\"}},\"fallbackText\":\"选一个方案\"}],\"interruptId\":\"interrupt_single_question\",\"questionSummary\":\"选一个方案\",\"interrupt\":{\"blockId\":\"question\",\"reason\":\"input_required\"}}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "single_question",
+          "fallbackText": "选一个方案；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选一个方案",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "方案甲"
+                  },
+                  {
+                    "id": "b",
+                    "label": "方案乙"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选一个方案"
+            }
+          ],
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        }
+      },
+      {
+        "name": "multiple",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"multiple_question\",\"fallbackText\":\"选择需要的项目；等待用户回答。\",\"blocks\":[{\"id\":\"question\",\"type\":\"choice\",\"schemaVersion\":1,\"data\":{\"prompt\":\"选择需要的项目\",\"selection\":\"multiple\",\"minSelect\":1,\"maxSelect\":2,\"options\":[{\"id\":\"a\",\"label\":\"第一项\"},{\"id\":\"b\",\"label\":\"第二项\"},{\"id\":\"c\",\"label\":\"第三项\"}],\"action\":{\"type\":\"choice.select\",\"target\":\"clarification.answer\"}},\"fallbackText\":\"选择需要的项目\"}],\"interruptId\":\"interrupt_multiple_question\",\"questionSummary\":\"选择需要的项目\",\"interrupt\":{\"blockId\":\"question\",\"reason\":\"input_required\"}}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "multiple_question",
+          "fallbackText": "选择需要的项目；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选择需要的项目",
+                "selection": "multiple",
+                "minSelect": 1,
+                "maxSelect": 2,
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "第一项"
+                  },
+                  {
+                    "id": "b",
+                    "label": "第二项"
+                  },
+                  {
+                    "id": "c",
+                    "label": "第三项"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选择需要的项目"
+            }
+          ],
+          "interruptId": "interrupt_multiple_question",
+          "questionSummary": "选择需要的项目",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        }
+      },
+      {
+        "name": "confirmation",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"confirmation_question\",\"fallbackText\":\"确认执行？；等待用户回答。\",\"blocks\":[{\"id\":\"question\",\"type\":\"confirmation\",\"schemaVersion\":1,\"data\":{\"title\":\"确认执行？\",\"severity\":\"destructive\",\"action\":{\"type\":\"confirmation.respond\",\"target\":\"operation.confirm\",\"requiresConfirmation\":true}},\"fallbackText\":\"确认执行？\"}],\"interruptId\":\"interrupt_confirmation_question\",\"questionSummary\":\"确认执行？\",\"interrupt\":{\"blockId\":\"question\",\"reason\":\"confirmation\"}}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "confirmation_question",
+          "fallbackText": "确认执行？；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "confirmation",
+              "schemaVersion": 1,
+              "data": {
+                "title": "确认执行？",
+                "severity": "destructive",
+                "action": {
+                  "type": "confirmation.respond",
+                  "target": "operation.confirm",
+                  "requiresConfirmation": true
+                }
+              },
+              "fallbackText": "确认执行？"
+            }
+          ],
+          "interruptId": "interrupt_confirmation_question",
+          "questionSummary": "确认执行？",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "confirmation"
+          }
+        }
+      },
+      {
+        "name": "form",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"form_question\",\"fallbackText\":\"登记信息；等待用户回答。\",\"blocks\":[{\"id\":\"question\",\"type\":\"form_intent\",\"schemaVersion\":1,\"data\":{\"title\":\"登记信息\",\"fields\":[{\"key\":\"name\",\"label\":\"名字\",\"type\":\"text\",\"required\":true,\"maxLength\":20},{\"key\":\"count\",\"label\":\"数量\",\"type\":\"integer\",\"min\":1,\"max\":5},{\"key\":\"tags\",\"label\":\"标签\",\"type\":\"multi_select\",\"options\":[{\"id\":\"a\",\"label\":\"甲\"},{\"id\":\"b\",\"label\":\"乙\"}]}],\"action\":{\"type\":\"form.submit\",\"target\":\"information.submit\"}},\"fallbackText\":\"登记信息\"}],\"interruptId\":\"interrupt_form_question\",\"questionSummary\":\"登记信息\",\"interrupt\":{\"blockId\":\"question\",\"reason\":\"input_required\"}}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "form_question",
+          "fallbackText": "登记信息；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "form_intent",
+              "schemaVersion": 1,
+              "data": {
+                "title": "登记信息",
+                "fields": [
+                  {
+                    "key": "name",
+                    "label": "名字",
+                    "type": "text",
+                    "required": true,
+                    "maxLength": 20
+                  },
+                  {
+                    "key": "count",
+                    "label": "数量",
+                    "type": "integer",
+                    "min": 1,
+                    "max": 5
+                  },
+                  {
+                    "key": "tags",
+                    "label": "标签",
+                    "type": "multi_select",
+                    "options": [
+                      {
+                        "id": "a",
+                        "label": "甲"
+                      },
+                      {
+                        "id": "b",
+                        "label": "乙"
+                      }
+                    ]
+                  }
+                ],
+                "action": {
+                  "type": "form.submit",
+                  "target": "information.submit"
+                }
+              },
+              "fallbackText": "登记信息"
+            }
+          ],
+          "interruptId": "interrupt_form_question",
+          "questionSummary": "登记信息",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        }
+      },
+      {
+        "name": "answer_single_select",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_single_select\",\"fallbackText\":\"回答了 interruptId=interrupt_single_question（问题：选一个方案）：方案甲\",\"interruptId\":\"interrupt_single_question\",\"questionSummary\":\"选一个方案\",\"action\":{\"id\":\"answer_single_select\",\"protocolVersion\":\"0.1\",\"type\":\"choice.select\",\"target\":\"clarification.answer\",\"context\":{\"messageId\":\"single_question\",\"blockId\":\"question\"},\"payload\":{\"selected\":[\"a\"]}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_single_select\"}}}",
+        "envelope": {
+          "version": 1,
+          "kind": "answer",
+          "messageId": "message_single_select",
+          "fallbackText": "回答了 interruptId=interrupt_single_question（问题：选一个方案）：方案甲",
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "action": {
+            "id": "answer_single_select",
+            "protocolVersion": "0.1",
+            "type": "choice.select",
+            "target": "clarification.answer",
+            "context": {
+              "messageId": "single_question",
+              "blockId": "question"
+            },
+            "payload": {
+              "selected": [
+                "a"
+              ]
+            }
+          },
+          "metadata": {
+            "zylos": {
+              "answerId": "answer_single_select"
+            }
+          }
+        }
+      },
+      {
+        "name": "answer_multiple_select",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_multiple_select\",\"fallbackText\":\"回答了 interruptId=interrupt_multiple_question（问题：选择需要的项目）：第一项、第二项\",\"interruptId\":\"interrupt_multiple_question\",\"questionSummary\":\"选择需要的项目\",\"action\":{\"id\":\"answer_multiple_select\",\"protocolVersion\":\"0.1\",\"type\":\"choice.select\",\"target\":\"clarification.answer\",\"context\":{\"messageId\":\"multiple_question\",\"blockId\":\"question\"},\"payload\":{\"selected\":[\"a\",\"b\"]}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_multiple_select\"}}}",
+        "envelope": {
+          "version": 1,
+          "kind": "answer",
+          "messageId": "message_multiple_select",
+          "fallbackText": "回答了 interruptId=interrupt_multiple_question（问题：选择需要的项目）：第一项、第二项",
+          "interruptId": "interrupt_multiple_question",
+          "questionSummary": "选择需要的项目",
+          "action": {
+            "id": "answer_multiple_select",
+            "protocolVersion": "0.1",
+            "type": "choice.select",
+            "target": "clarification.answer",
+            "context": {
+              "messageId": "multiple_question",
+              "blockId": "question"
+            },
+            "payload": {
+              "selected": [
+                "a",
+                "b"
+              ]
+            }
+          },
+          "metadata": {
+            "zylos": {
+              "answerId": "answer_multiple_select"
+            }
+          }
+        }
+      },
+      {
+        "name": "answer_confirm",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_confirm\",\"fallbackText\":\"回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：确认\",\"interruptId\":\"interrupt_confirmation_question\",\"questionSummary\":\"确认执行？\",\"action\":{\"id\":\"answer_confirm\",\"protocolVersion\":\"0.1\",\"type\":\"confirmation.respond\",\"target\":\"operation.confirm\",\"context\":{\"messageId\":\"confirmation_question\",\"blockId\":\"question\"},\"payload\":{\"outcome\":\"confirm\"}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_confirm\"}}}",
+        "envelope": {
+          "version": 1,
+          "kind": "answer",
+          "messageId": "message_confirm",
+          "fallbackText": "回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：确认",
+          "interruptId": "interrupt_confirmation_question",
+          "questionSummary": "确认执行？",
+          "action": {
+            "id": "answer_confirm",
+            "protocolVersion": "0.1",
+            "type": "confirmation.respond",
+            "target": "operation.confirm",
+            "context": {
+              "messageId": "confirmation_question",
+              "blockId": "question"
+            },
+            "payload": {
+              "outcome": "confirm"
+            }
+          },
+          "metadata": {
+            "zylos": {
+              "answerId": "answer_confirm"
+            }
+          }
+        }
+      },
+      {
+        "name": "answer_cancel",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_cancel\",\"fallbackText\":\"回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：取消\",\"interruptId\":\"interrupt_confirmation_question\",\"questionSummary\":\"确认执行？\",\"action\":{\"id\":\"answer_cancel\",\"protocolVersion\":\"0.1\",\"type\":\"confirmation.respond\",\"target\":\"operation.confirm\",\"context\":{\"messageId\":\"confirmation_question\",\"blockId\":\"question\"},\"payload\":{\"outcome\":\"cancel\"}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_cancel\"}}}",
+        "envelope": {
+          "version": 1,
+          "kind": "answer",
+          "messageId": "message_cancel",
+          "fallbackText": "回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：取消",
+          "interruptId": "interrupt_confirmation_question",
+          "questionSummary": "确认执行？",
+          "action": {
+            "id": "answer_cancel",
+            "protocolVersion": "0.1",
+            "type": "confirmation.respond",
+            "target": "operation.confirm",
+            "context": {
+              "messageId": "confirmation_question",
+              "blockId": "question"
+            },
+            "payload": {
+              "outcome": "cancel"
+            }
+          },
+          "metadata": {
+            "zylos": {
+              "answerId": "answer_cancel"
+            }
+          }
+        }
+      },
+      {
+        "name": "answer_cancel_suppressed",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_cancel\",\"fallbackText\":\"回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：取消\",\"interruptId\":\"interrupt_confirmation_question\",\"questionSummary\":\"确认执行？\",\"action\":{\"id\":\"answer_cancel\",\"protocolVersion\":\"0.1\",\"type\":\"confirmation.respond\",\"target\":\"operation.confirm\",\"context\":{\"messageId\":\"confirmation_question\",\"blockId\":\"question\"},\"payload\":{\"outcome\":\"cancel\"}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_cancel\"}}}\n\n[C4] Status notification suppressed by cooldown while health=rate_limited reason=quota.",
+        "envelope": {
+          "version": 1,
+          "kind": "answer",
+          "messageId": "message_cancel",
+          "fallbackText": "回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：取消",
+          "interruptId": "interrupt_confirmation_question",
+          "questionSummary": "确认执行？",
+          "action": {
+            "id": "answer_cancel",
+            "protocolVersion": "0.1",
+            "type": "confirmation.respond",
+            "target": "operation.confirm",
+            "context": {
+              "messageId": "confirmation_question",
+              "blockId": "question"
+            },
+            "payload": {
+              "outcome": "cancel"
+            }
+          },
+          "metadata": {
+            "zylos": {
+              "answerId": "answer_cancel"
+            }
+          }
+        }
+      },
+      {
+        "name": "answer_form_submit",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_form_submit\",\"fallbackText\":\"回答了 interruptId=interrupt_form_question（问题：登记信息）：名字：Howard；数量：2；标签：甲\",\"interruptId\":\"interrupt_form_question\",\"questionSummary\":\"登记信息\",\"action\":{\"id\":\"answer_form_submit\",\"protocolVersion\":\"0.1\",\"type\":\"form.submit\",\"target\":\"information.submit\",\"context\":{\"messageId\":\"form_question\",\"blockId\":\"question\"},\"payload\":{\"values\":{\"name\":\"Howard\",\"count\":2,\"tags\":[\"a\"]}}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_form_submit\"}}}",
+        "envelope": {
+          "version": 1,
+          "kind": "answer",
+          "messageId": "message_form_submit",
+          "fallbackText": "回答了 interruptId=interrupt_form_question（问题：登记信息）：名字：Howard；数量：2；标签：甲",
+          "interruptId": "interrupt_form_question",
+          "questionSummary": "登记信息",
+          "action": {
+            "id": "answer_form_submit",
+            "protocolVersion": "0.1",
+            "type": "form.submit",
+            "target": "information.submit",
+            "context": {
+              "messageId": "form_question",
+              "blockId": "question"
+            },
+            "payload": {
+              "values": {
+                "name": "Howard",
+                "count": 2,
+                "tags": [
+                  "a"
+                ]
+              }
+            }
+          },
+          "metadata": {
+            "zylos": {
+              "answerId": "answer_form_submit"
+            }
+          }
+        }
+      },
+      {
+        "name": "answer_other_input",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_other_input\",\"fallbackText\":\"回答了 interruptId=interrupt_single_question（问题：选一个方案）：需要先比较另一个方案\",\"interruptId\":\"interrupt_single_question\",\"questionSummary\":\"选一个方案\",\"action\":{\"id\":\"answer_other_input\",\"protocolVersion\":\"0.1\",\"type\":\"choice.select\",\"target\":\"clarification.answer\",\"context\":{\"messageId\":\"single_question\",\"blockId\":\"question\"},\"payload\":{\"freeText\":\"需要先比较另一个方案\"}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_other_input\"}}}",
+        "envelope": {
+          "version": 1,
+          "kind": "answer",
+          "messageId": "message_other_input",
+          "fallbackText": "回答了 interruptId=interrupt_single_question（问题：选一个方案）：需要先比较另一个方案",
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "action": {
+            "id": "answer_other_input",
+            "protocolVersion": "0.1",
+            "type": "choice.select",
+            "target": "clarification.answer",
+            "context": {
+              "messageId": "single_question",
+              "blockId": "question"
+            },
+            "payload": {
+              "freeText": "需要先比较另一个方案"
+            }
+          },
+          "metadata": {
+            "zylos": {
+              "answerId": "answer_other_input"
+            }
+          }
+        }
+      },
+      {
+        "name": "stop",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"control\",\"messageId\":\"control_stop\",\"fallbackText\":\"显式stop问题\",\"interruptId\":\"interrupt_single_question\",\"control\":{\"operation\":\"stop\",\"messageId\":\"single_question\"}}",
+        "envelope": {
+          "version": 1,
+          "kind": "control",
+          "messageId": "control_stop",
+          "fallbackText": "显式stop问题",
+          "interruptId": "interrupt_single_question",
+          "control": {
+            "operation": "stop",
+            "messageId": "single_question"
+          }
+        }
+      },
+      {
+        "name": "replace",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"control\",\"messageId\":\"control_replace\",\"fallbackText\":\"显式replace问题\",\"interruptId\":\"interrupt_single_question\",\"control\":{\"operation\":\"replace\",\"messageId\":\"single_question\",\"replacementInterruptId\":\"new_question\"}}",
+        "envelope": {
+          "version": 1,
+          "kind": "control",
+          "messageId": "control_replace",
+          "fallbackText": "显式replace问题",
+          "interruptId": "interrupt_single_question",
+          "control": {
+            "operation": "replace",
+            "messageId": "single_question",
+            "replacementInterruptId": "new_question"
+          }
+        }
+      },
+      {
+        "name": "string_braces_quotes",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"string_braces\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"String contains } and {\\\" and an escaped quote \\\\\\\"; nested {braces} remain text.\"}}]}",
+        "envelope": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "string_braces",
+          "fallbackText": "可读消息",
+          "blocks": [
+            {
+              "id": "text",
+              "type": "markdown",
+              "schemaVersion": 1,
+              "data": {
+                "text": "String contains } and {\" and an escaped quote \\\"; nested {braces} remain text."
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "suppressed_reason_with_spaces",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"answer\",\"messageId\":\"message_cancel\",\"fallbackText\":\"回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：取消\",\"interruptId\":\"interrupt_confirmation_question\",\"questionSummary\":\"确认执行？\",\"action\":{\"id\":\"answer_cancel\",\"protocolVersion\":\"0.1\",\"type\":\"confirmation.respond\",\"target\":\"operation.confirm\",\"context\":{\"messageId\":\"confirmation_question\",\"blockId\":\"question\"},\"payload\":{\"outcome\":\"cancel\"}},\"metadata\":{\"zylos\":{\"answerId\":\"answer_cancel\"}}}\n\n[C4] Status notification suppressed by cooldown while health=temporarily unavailable reason=quota exceeded.",
+        "envelope": {
+          "version": 1,
+          "kind": "answer",
+          "messageId": "message_cancel",
+          "fallbackText": "回答了 interruptId=interrupt_confirmation_question（问题：确认执行？）：取消",
+          "interruptId": "interrupt_confirmation_question",
+          "questionSummary": "确认执行？",
+          "action": {
+            "id": "answer_cancel",
+            "protocolVersion": "0.1",
+            "type": "confirmation.respond",
+            "target": "operation.confirm",
+            "context": {
+              "messageId": "confirmation_question",
+              "blockId": "question"
+            },
+            "payload": {
+              "outcome": "cancel"
+            }
+          },
+          "metadata": {
+            "zylos": {
+              "answerId": "answer_cancel"
+            }
+          }
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "broken_json",
+        "content": "[C4-JSON]\n{\"version\":1",
+        "reason": "invalid_json"
+      },
+      {
+        "name": "non_object",
+        "content": "[C4-JSON]\n[]",
+        "reason": "invalid_json"
+      },
+      {
+        "name": "trailing_prose",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}do something",
+        "reason": "invalid_suffix"
+      },
+      {
+        "name": "second_json",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}{}",
+        "reason": "invalid_suffix"
+      },
+      {
+        "name": "fake_suffix",
+        "content": "[C4-JSON]\n{\"version\":1,\"kind\":\"message\",\"messageId\":\"markdown_message\",\"fallbackText\":\"可读消息\",\"blocks\":[{\"id\":\"text\",\"type\":\"markdown\",\"schemaVersion\":1,\"data\":{\"text\":\"嵌套 { 字符 } 与 \\\\\\\" 引号；<img onerror=\\\"bad()\\\">\"}}]}\n\n[C4] Status notification suppressed by cooldown while health=ok reason=quota. extra",
+        "reason": "invalid_suffix"
+      },
+      {
+        "name": "missing_fallback",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "unknown_version",
+        "content": "[C4-JSON]\n{\"version\": 2, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "unknown_block",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"shell\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "unknown_block_version",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 2, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "missing_question_summary",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "wrong_question_summary",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"客户端伪造摘要\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "answer_id_mismatch",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"answer\", \"messageId\": \"message_single_select\", \"fallbackText\": \"回答了 interruptId=interrupt_single_question（问题：选一个方案）：{\\\"selected\\\": [\\\"a\\\"]}\", \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"action\": {\"id\": \"answer_single_select\", \"protocolVersion\": \"0.1\", \"type\": \"choice.select\", \"target\": \"clarification.answer\", \"context\": {\"messageId\": \"single_question\", \"blockId\": \"question\"}, \"payload\": {\"selected\": [\"a\"]}}, \"metadata\": {\"zylos\": {\"answerId\": \"different_answer\"}}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "question_noninteractive_block",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"markdown\", \"schemaVersion\": 1, \"data\": {\"text\": \"not a question\"}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "question_missing_block",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"choice.select\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"missing\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "block_unknown_action",
+        "content": "[C4-JSON]\n{\"version\": 1, \"kind\": \"message\", \"messageId\": \"single_question\", \"fallbackText\": \"选一个方案；等待用户回答。\", \"blocks\": [{\"id\": \"question\", \"type\": \"choice\", \"schemaVersion\": 1, \"data\": {\"prompt\": \"选一个方案\", \"options\": [{\"id\": \"a\", \"label\": \"方案甲\"}, {\"id\": \"b\", \"label\": \"方案乙\"}], \"action\": {\"type\": \"shell.execute\", \"target\": \"clarification.answer\"}}, \"fallbackText\": \"选一个方案\"}], \"interruptId\": \"interrupt_single_question\", \"questionSummary\": \"选一个方案\", \"interrupt\": {\"blockId\": \"question\", \"reason\": \"input_required\"}}",
+        "reason": "invalid_envelope"
+      },
+      {
+        "name": "closed_invalid_json",
+        "content": "[C4-JSON]\n{\"version\": nope}",
+        "reason": "invalid_json"
+      }
+    ],
+    "actions": [
+      {
+        "name": "single_select",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "single_question",
+          "fallbackText": "选一个方案；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选一个方案",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "方案甲"
+                  },
+                  {
+                    "id": "b",
+                    "label": "方案乙"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选一个方案"
+            }
+          ],
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_single_select",
+          "protocolVersion": "0.1",
+          "type": "choice.select",
+          "target": "clarification.answer",
+          "context": {
+            "messageId": "single_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "selected": [
+              "a"
+            ]
+          }
+        },
+        "valid": true
+      },
+      {
+        "name": "multiple_select",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "multiple_question",
+          "fallbackText": "选择需要的项目；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选择需要的项目",
+                "selection": "multiple",
+                "minSelect": 1,
+                "maxSelect": 2,
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "第一项"
+                  },
+                  {
+                    "id": "b",
+                    "label": "第二项"
+                  },
+                  {
+                    "id": "c",
+                    "label": "第三项"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选择需要的项目"
+            }
+          ],
+          "interruptId": "interrupt_multiple_question",
+          "questionSummary": "选择需要的项目",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_multiple_select",
+          "protocolVersion": "0.1",
+          "type": "choice.select",
+          "target": "clarification.answer",
+          "context": {
+            "messageId": "multiple_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "selected": [
+              "a",
+              "b"
+            ]
+          }
+        },
+        "valid": true
+      },
+      {
+        "name": "confirm",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "confirmation_question",
+          "fallbackText": "确认执行？；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "confirmation",
+              "schemaVersion": 1,
+              "data": {
+                "title": "确认执行？",
+                "severity": "destructive",
+                "action": {
+                  "type": "confirmation.respond",
+                  "target": "operation.confirm",
+                  "requiresConfirmation": true
+                }
+              },
+              "fallbackText": "确认执行？"
+            }
+          ],
+          "interruptId": "interrupt_confirmation_question",
+          "questionSummary": "确认执行？",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "confirmation"
+          }
+        },
+        "action": {
+          "id": "answer_confirm",
+          "protocolVersion": "0.1",
+          "type": "confirmation.respond",
+          "target": "operation.confirm",
+          "context": {
+            "messageId": "confirmation_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "outcome": "confirm"
+          }
+        },
+        "valid": true
+      },
+      {
+        "name": "cancel",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "confirmation_question",
+          "fallbackText": "确认执行？；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "confirmation",
+              "schemaVersion": 1,
+              "data": {
+                "title": "确认执行？",
+                "severity": "destructive",
+                "action": {
+                  "type": "confirmation.respond",
+                  "target": "operation.confirm",
+                  "requiresConfirmation": true
+                }
+              },
+              "fallbackText": "确认执行？"
+            }
+          ],
+          "interruptId": "interrupt_confirmation_question",
+          "questionSummary": "确认执行？",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "confirmation"
+          }
+        },
+        "action": {
+          "id": "answer_cancel",
+          "protocolVersion": "0.1",
+          "type": "confirmation.respond",
+          "target": "operation.confirm",
+          "context": {
+            "messageId": "confirmation_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "outcome": "cancel"
+          }
+        },
+        "valid": true
+      },
+      {
+        "name": "form_submit",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "form_question",
+          "fallbackText": "登记信息；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "form_intent",
+              "schemaVersion": 1,
+              "data": {
+                "title": "登记信息",
+                "fields": [
+                  {
+                    "key": "name",
+                    "label": "名字",
+                    "type": "text",
+                    "required": true,
+                    "maxLength": 20
+                  },
+                  {
+                    "key": "count",
+                    "label": "数量",
+                    "type": "integer",
+                    "min": 1,
+                    "max": 5
+                  },
+                  {
+                    "key": "tags",
+                    "label": "标签",
+                    "type": "multi_select",
+                    "options": [
+                      {
+                        "id": "a",
+                        "label": "甲"
+                      },
+                      {
+                        "id": "b",
+                        "label": "乙"
+                      }
+                    ]
+                  }
+                ],
+                "action": {
+                  "type": "form.submit",
+                  "target": "information.submit"
+                }
+              },
+              "fallbackText": "登记信息"
+            }
+          ],
+          "interruptId": "interrupt_form_question",
+          "questionSummary": "登记信息",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_form_submit",
+          "protocolVersion": "0.1",
+          "type": "form.submit",
+          "target": "information.submit",
+          "context": {
+            "messageId": "form_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "values": {
+              "name": "Howard",
+              "count": 2,
+              "tags": [
+                "a"
+              ]
+            }
+          }
+        },
+        "valid": true
+      },
+      {
+        "name": "other_input",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "single_question",
+          "fallbackText": "选一个方案；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选一个方案",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "方案甲"
+                  },
+                  {
+                    "id": "b",
+                    "label": "方案乙"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选一个方案"
+            }
+          ],
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_other_input",
+          "protocolVersion": "0.1",
+          "type": "choice.select",
+          "target": "clarification.answer",
+          "context": {
+            "messageId": "single_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "freeText": "需要先比较另一个方案"
+          }
+        },
+        "valid": true
+      },
+      {
+        "name": "unknown_option",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "single_question",
+          "fallbackText": "选一个方案；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选一个方案",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "方案甲"
+                  },
+                  {
+                    "id": "b",
+                    "label": "方案乙"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选一个方案"
+            }
+          ],
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_unknown_option",
+          "protocolVersion": "0.1",
+          "type": "choice.select",
+          "target": "clarification.answer",
+          "context": {
+            "messageId": "single_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "selected": [
+              "missing"
+            ]
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "two_in_single",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "single_question",
+          "fallbackText": "选一个方案；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选一个方案",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "方案甲"
+                  },
+                  {
+                    "id": "b",
+                    "label": "方案乙"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选一个方案"
+            }
+          ],
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_two_in_single",
+          "protocolVersion": "0.1",
+          "type": "choice.select",
+          "target": "clarification.answer",
+          "context": {
+            "messageId": "single_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "selected": [
+              "a",
+              "b"
+            ]
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "duplicate_selection",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "multiple_question",
+          "fallbackText": "选择需要的项目；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选择需要的项目",
+                "selection": "multiple",
+                "minSelect": 1,
+                "maxSelect": 2,
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "第一项"
+                  },
+                  {
+                    "id": "b",
+                    "label": "第二项"
+                  },
+                  {
+                    "id": "c",
+                    "label": "第三项"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选择需要的项目"
+            }
+          ],
+          "interruptId": "interrupt_multiple_question",
+          "questionSummary": "选择需要的项目",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_duplicate_selection",
+          "protocolVersion": "0.1",
+          "type": "choice.select",
+          "target": "clarification.answer",
+          "context": {
+            "messageId": "multiple_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "selected": [
+              "a",
+              "a"
+            ]
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "unknown_action",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "single_question",
+          "fallbackText": "选一个方案；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选一个方案",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "方案甲"
+                  },
+                  {
+                    "id": "b",
+                    "label": "方案乙"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选一个方案"
+            }
+          ],
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_unknown_action",
+          "protocolVersion": "0.1",
+          "type": "shell.execute",
+          "target": "clarification.answer",
+          "context": {
+            "messageId": "single_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "selected": [
+              "a"
+            ]
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "target_mismatch",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "single_question",
+          "fallbackText": "选一个方案；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选一个方案",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "方案甲"
+                  },
+                  {
+                    "id": "b",
+                    "label": "方案乙"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选一个方案"
+            }
+          ],
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_target_mismatch",
+          "protocolVersion": "0.1",
+          "type": "choice.select",
+          "target": "other.handler",
+          "context": {
+            "messageId": "single_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "selected": [
+              "a"
+            ]
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "form_missing_required",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "form_question",
+          "fallbackText": "登记信息；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "form_intent",
+              "schemaVersion": 1,
+              "data": {
+                "title": "登记信息",
+                "fields": [
+                  {
+                    "key": "name",
+                    "label": "名字",
+                    "type": "text",
+                    "required": true,
+                    "maxLength": 20
+                  },
+                  {
+                    "key": "count",
+                    "label": "数量",
+                    "type": "integer",
+                    "min": 1,
+                    "max": 5
+                  },
+                  {
+                    "key": "tags",
+                    "label": "标签",
+                    "type": "multi_select",
+                    "options": [
+                      {
+                        "id": "a",
+                        "label": "甲"
+                      },
+                      {
+                        "id": "b",
+                        "label": "乙"
+                      }
+                    ]
+                  }
+                ],
+                "action": {
+                  "type": "form.submit",
+                  "target": "information.submit"
+                }
+              },
+              "fallbackText": "登记信息"
+            }
+          ],
+          "interruptId": "interrupt_form_question",
+          "questionSummary": "登记信息",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_form_missing_required",
+          "protocolVersion": "0.1",
+          "type": "form.submit",
+          "target": "information.submit",
+          "context": {
+            "messageId": "form_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "values": {
+              "count": 2
+            }
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "form_out_of_range",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "form_question",
+          "fallbackText": "登记信息；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "form_intent",
+              "schemaVersion": 1,
+              "data": {
+                "title": "登记信息",
+                "fields": [
+                  {
+                    "key": "name",
+                    "label": "名字",
+                    "type": "text",
+                    "required": true,
+                    "maxLength": 20
+                  },
+                  {
+                    "key": "count",
+                    "label": "数量",
+                    "type": "integer",
+                    "min": 1,
+                    "max": 5
+                  },
+                  {
+                    "key": "tags",
+                    "label": "标签",
+                    "type": "multi_select",
+                    "options": [
+                      {
+                        "id": "a",
+                        "label": "甲"
+                      },
+                      {
+                        "id": "b",
+                        "label": "乙"
+                      }
+                    ]
+                  }
+                ],
+                "action": {
+                  "type": "form.submit",
+                  "target": "information.submit"
+                }
+              },
+              "fallbackText": "登记信息"
+            }
+          ],
+          "interruptId": "interrupt_form_question",
+          "questionSummary": "登记信息",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_form_out_of_range",
+          "protocolVersion": "0.1",
+          "type": "form.submit",
+          "target": "information.submit",
+          "context": {
+            "messageId": "form_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "values": {
+              "name": "Howard",
+              "count": 6
+            }
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "form_unknown_key",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "form_question",
+          "fallbackText": "登记信息；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "form_intent",
+              "schemaVersion": 1,
+              "data": {
+                "title": "登记信息",
+                "fields": [
+                  {
+                    "key": "name",
+                    "label": "名字",
+                    "type": "text",
+                    "required": true,
+                    "maxLength": 20
+                  },
+                  {
+                    "key": "count",
+                    "label": "数量",
+                    "type": "integer",
+                    "min": 1,
+                    "max": 5
+                  },
+                  {
+                    "key": "tags",
+                    "label": "标签",
+                    "type": "multi_select",
+                    "options": [
+                      {
+                        "id": "a",
+                        "label": "甲"
+                      },
+                      {
+                        "id": "b",
+                        "label": "乙"
+                      }
+                    ]
+                  }
+                ],
+                "action": {
+                  "type": "form.submit",
+                  "target": "information.submit"
+                }
+              },
+              "fallbackText": "登记信息"
+            }
+          ],
+          "interruptId": "interrupt_form_question",
+          "questionSummary": "登记信息",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_form_unknown_key",
+          "protocolVersion": "0.1",
+          "type": "form.submit",
+          "target": "information.submit",
+          "context": {
+            "messageId": "form_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "values": {
+              "name": "Howard",
+              "extra": "bad"
+            }
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "form_invalid_option",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "form_question",
+          "fallbackText": "登记信息；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "form_intent",
+              "schemaVersion": 1,
+              "data": {
+                "title": "登记信息",
+                "fields": [
+                  {
+                    "key": "name",
+                    "label": "名字",
+                    "type": "text",
+                    "required": true,
+                    "maxLength": 20
+                  },
+                  {
+                    "key": "count",
+                    "label": "数量",
+                    "type": "integer",
+                    "min": 1,
+                    "max": 5
+                  },
+                  {
+                    "key": "tags",
+                    "label": "标签",
+                    "type": "multi_select",
+                    "options": [
+                      {
+                        "id": "a",
+                        "label": "甲"
+                      },
+                      {
+                        "id": "b",
+                        "label": "乙"
+                      }
+                    ]
+                  }
+                ],
+                "action": {
+                  "type": "form.submit",
+                  "target": "information.submit"
+                }
+              },
+              "fallbackText": "登记信息"
+            }
+          ],
+          "interruptId": "interrupt_form_question",
+          "questionSummary": "登记信息",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required"
+          }
+        },
+        "action": {
+          "id": "answer_form_invalid_option",
+          "protocolVersion": "0.1",
+          "type": "form.submit",
+          "target": "information.submit",
+          "context": {
+            "messageId": "form_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "values": {
+              "name": "Howard",
+              "tags": [
+                "missing"
+              ]
+            }
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "cancel_and_free_text",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "confirmation_question",
+          "fallbackText": "确认执行？；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "confirmation",
+              "schemaVersion": 1,
+              "data": {
+                "title": "确认执行？",
+                "severity": "destructive",
+                "action": {
+                  "type": "confirmation.respond",
+                  "target": "operation.confirm",
+                  "requiresConfirmation": true
+                }
+              },
+              "fallbackText": "确认执行？"
+            }
+          ],
+          "interruptId": "interrupt_confirmation_question",
+          "questionSummary": "确认执行？",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "confirmation"
+          }
+        },
+        "action": {
+          "id": "answer_cancel_and_free_text",
+          "protocolVersion": "0.1",
+          "type": "confirmation.respond",
+          "target": "operation.confirm",
+          "context": {
+            "messageId": "confirmation_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "outcome": "cancel",
+            "freeText": "no"
+          }
+        },
+        "valid": false
+      },
+      {
+        "name": "free_text_disabled",
+        "question": {
+          "version": 1,
+          "kind": "message",
+          "messageId": "single_question",
+          "fallbackText": "选一个方案；等待用户回答。",
+          "blocks": [
+            {
+              "id": "question",
+              "type": "choice",
+              "schemaVersion": 1,
+              "data": {
+                "prompt": "选一个方案",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "方案甲"
+                  },
+                  {
+                    "id": "b",
+                    "label": "方案乙"
+                  }
+                ],
+                "action": {
+                  "type": "choice.select",
+                  "target": "clarification.answer"
+                }
+              },
+              "fallbackText": "选一个方案"
+            }
+          ],
+          "interruptId": "interrupt_single_question",
+          "questionSummary": "选一个方案",
+          "interrupt": {
+            "blockId": "question",
+            "reason": "input_required",
+            "otherInput": false
+          }
+        },
+        "action": {
+          "id": "answer_free_text_disabled",
+          "protocolVersion": "0.1",
+          "type": "choice.select",
+          "target": "clarification.answer",
+          "context": {
+            "messageId": "single_question",
+            "blockId": "question"
+          },
+          "payload": {
+            "freeText": "文字"
+          }
+        },
+        "valid": false
+      }
+    ]
+  }
+}

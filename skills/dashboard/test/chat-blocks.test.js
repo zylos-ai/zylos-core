@@ -5,7 +5,7 @@ import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { CONTENT_PREFIX, makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 // Resolve the browser alias to the same shared source; never evaluate source text.
-const browserSchema = new URL('../public/chat-schema.js?v=90', import.meta.url).href;
+const browserSchema = new URL('../public/chat-schema.js?v=91', import.meta.url).href;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
