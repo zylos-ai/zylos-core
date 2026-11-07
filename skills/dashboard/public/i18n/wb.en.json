@@ -536,5 +536,21 @@
   "wb.timeline.currentRun": "Current run",
   "wb.timeline.count": "{count} events",
   "wb.timeline.empty": "No events match the filter",
-  "wb.timeline.noEarlier": "No earlier records"
+  "wb.timeline.noEarlier": "No earlier records",
+  "wb.chat.dm": "Direct message",
+  "wb.chat.group": "Group chat",
+  "wb.board.standby": "Standing by, starts when a message arrives",
+  "wb.inst.modeMulti": "Multiple groups",
+  "wb.inst.modeSingle": "Single session",
+  "wb.detail.agoSeconds": "{n}s ago",
+  "wb.detail.ago": "{span} ago",
+  "wb.event.toolDone": "done",
+  "wb.event.toolFailed": "failed",
+  "wb.config.state.applied": "Applied",
+  "wb.config.state.not_running": "Used at next start",
+  "wb.config.state.unknown": "Not readable right now",
+  "wb.config.source.override": "Set for this group",
+  "wb.config.source.default": "Uses the default",
+  "wb.config.save": "Save",
+  "wb.config.pairNote": "Model and effort are saved together and used from the next start."
 }

@@ -1,4 +1,4 @@
-import { element, fallbackName, icon } from './plain-text.js?v=92';
+import { element, fallbackName, icon } from './plain-text.js?v=94';
 import { recoveryTime } from './cooldown.js?v=89';
 const clock = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 function entry(document, { severity, glyph, text, sub, group, onSelect, t }) {

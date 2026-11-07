@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=92';
+import { element } from './plain-text.js?v=94';
 
 export function mountChatSettings(root, { document = root.ownerDocument, t = key => key, local, read, write }) {
   const panel = element(document, 'div', undefined, 'action-group');

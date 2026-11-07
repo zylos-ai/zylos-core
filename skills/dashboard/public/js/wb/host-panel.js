@@ -1,10 +1,21 @@
-import { element, icon } from './plain-text.js?v=92';
+import { element, icon } from './plain-text.js?v=94';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
 const seriesPeak = (series, field) => series.reduce((peak, row) => row[field]?.max == null || (peak != null && peak >= row[field].max) ? peak : row[field].max, null);
 
-// Small area curve; only the bottom chart carries time ticks so the three read as one stack.
+// Theme colour mixed with transparency, resolved by the browser so any colour syntax works.
+function mixColor(document, root, color, percent) {
+  const probe = document.createElement('span');
+  if (!probe.style || !document.defaultView?.getComputedStyle || !root.append) return color;
+  probe.style.color = `color-mix(in srgb, ${color} ${percent}%, transparent)`;
+  probe.hidden = true; root.append(probe);
+  const value = document.defaultView.getComputedStyle(probe).color;
+  probe.remove?.();
+  return value || color;
+}
+
+// Compact area curve with a 0–100% axis; only the bottom chart carries time ticks so the three read as one stack.
 function hostChart(root, { title, current, peak, peakTitle, labels, avg, max, axis, document, t, chartFactory }) {
   const box = element(document, 'div', undefined, 'wb-host-chart');
   const head = element(document, 'h5', title);
@@ -13,20 +24,30 @@ function hostChart(root, { title, current, peak, peakTitle, labels, avg, max, ax
   if (peakTitle) peakNode.title = peakTitle;
   head.append(peakNode);
   const frame = element(document, 'div', undefined, 'wb-host-frame');
-  frame.style.height = axis ? '84px' : '62px';
+  frame.style.height = axis ? '128px' : '104px';
   const canvas = element(document, 'canvas'); canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', title);
   frame.append(canvas); box.append(head, frame); root.append(box);
   const style = document.defaultView?.getComputedStyle(root);
-  const color = style?.getPropertyValue('--text-dim').trim() || '#526170';
-  const grid = style?.getPropertyValue('--wb-line').trim() || 'rgba(15,23,42,0.08)';
+  const color = style?.getPropertyValue('--text-dim').trim() || 'currentColor';
+  const grid = style?.getPropertyValue('--wb-line').trim() || color;
   const chart = chartFactory(canvas, { type: 'line', data: { labels, datasets: [
-    { label: t('wb.host.avg'), data: avg, borderColor: color, backgroundColor: color + '22', fill: 'origin', borderWidth: 1.5, pointRadius: 0, spanGaps: false, tension: 0.25 },
-    { label: t('wb.host.max'), data: max, borderColor: color + '88', borderDash: [3, 3], borderWidth: 1, pointRadius: 0, spanGaps: false, fill: false },
+    { label: t('wb.host.avg'), data: avg, borderColor: color, backgroundColor: mixColor(document, root, color, 13), fill: 'origin', borderWidth: 1.5, pointRadius: 0, spanGaps: false, tension: 0.25 },
+    { label: t('wb.host.max'), data: max, borderColor: mixColor(document, root, color, 55), borderDash: [3, 3], borderWidth: 1, pointRadius: 0, spanGaps: false, fill: false },
   ] }, options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
     plugins: { legend: { display: false }, tooltip: { callbacks: { label: item => `${item.dataset.label} ${percent(item.raw)}` } } },
     scales: { x: { display: axis, grid: { display: false }, ticks: { color, maxTicksLimit: 6, maxRotation: 0, autoSkip: true, font: { size: 10 } } },
-      y: { min: 0, max: 100, ticks: { display: false, stepSize: 50 }, grid: { color: grid }, border: { display: false } } } } });
+      y: { min: 0, max: 100, ticks: { color, stepSize: 50, font: { size: 10 }, callback: value => value + '%' }, grid: { color: grid }, border: { display: false } } } } });
   return { destroy: () => chart?.destroy() };
+}
+
+// One legend for the stack: the solid line is the average of each slot, the dashed one its maximum.
+function hostLegend(document, t) {
+  const legend = element(document, 'div', undefined, 'wb-host-legend');
+  for (const [name, className] of [['avg', 'wb-key-avg'], ['max', 'wb-key-max']]) {
+    const item = element(document, 'span'); item.append(element(document, 'i', undefined, className), element(document, 'span', t('wb.host.' + name)));
+    legend.append(item);
+  }
+  return legend;
 }
 
 function rangeControl(document, range, onRange, t) {
@@ -52,7 +73,7 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   close.setAttribute('aria-label', t('wb.close')); close.title = t('wb.closeEsc'); close.append(icon(document, 'x')); close.addEventListener('click', onClose);
   top.append(box, element(document, 'h2', t('wb.host.title'), 'wb-d-title'), close);
   header.append(top);
-  const metaItems = [meta?.name, ...(level === 'technical' ? [meta?.mode, meta?.version] : [])].filter(Boolean);
+  const metaItems = [meta?.name, ...(level === 'technical' ? [meta?.mode, meta?.core, meta?.version] : [])].filter(Boolean);
   if (metaItems.length) header.append(element(document, 'p', metaItems.join(' · '), 'wb-detail-meta'));
   root.append(header);
   root.setAttribute('aria-label', t('wb.host.title'));
@@ -81,6 +102,7 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   const short = range === '7d' ? { month: 'numeric', day: 'numeric' } : { hour: '2-digit', minute: '2-digit' };
   const labels = series.map(row => new Date(row.at).toLocaleString(lang, short));
   const peak = value?.cpuPeak;
+  card.append(hostLegend(document, t));
   const fields = [['cpu', 'cpu', 'cpu_pct'], ['mem', 'memory', 'mem_used_pct'], ['disk', 'disk', 'disk_used_pct']];
   for (const [index, [field, label, current]] of fields.entries()) {
     charts.push(hostChart(card, { title: t('wb.host.' + label), current: value?.current?.[current],

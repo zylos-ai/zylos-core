@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=92';
+import { element } from './plain-text.js?v=94';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];
 export const usageRanges = ['24h', '7d', '30d', 'month', 'custom'];

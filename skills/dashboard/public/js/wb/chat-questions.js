@@ -1,5 +1,5 @@
 import { parseC4Content, CONTENT_PREFIX, validateAnswer } from '../../chat-schema.js?v=90';
-import { element } from './plain-text.js?v=92';
+import { element } from './plain-text.js?v=94';
 import { receiptState } from './chat-state.js?v=91';
 
 const clone = value => JSON.parse(JSON.stringify(value));

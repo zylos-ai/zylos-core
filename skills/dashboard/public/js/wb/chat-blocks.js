@@ -1,5 +1,5 @@
 import { parseC4Content } from '../../chat-schema.js?v=90';
-import { element } from './plain-text.js?v=92';
+import { element } from './plain-text.js?v=94';
 
 export { parseC4Content };
 export { validateAnswer } from '../../chat-schema.js?v=90';

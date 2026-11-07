@@ -217,7 +217,7 @@ test('removed header entry selectors have no startup bindings and account contro
   }
   const header = html.slice(html.indexOf('<header'), html.indexOf('</header>'));
   for (const id of ['locale-toggle', 'fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
-  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=93/); assert.match(html, /style\.css\?v=60/);
+  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=94/); assert.match(html, /style\.css\?v=60/);
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());
 });
@@ -277,4 +277,12 @@ test('default controls retain the restart lock after an accepted runtime change'
       assert.equal(root.querySelector('#' + id + runtime).disabled, true, id + runtime);
   }
   panel.destroy();
+});
+
+test('the plain settings view shows this page\'s Dashboard version and leaves the rest technical', () => {
+  const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button');
+  renderVersion(root, { zylos_version: '3', cc_version: '2' }, { document, upgrade, t, dashboardVersion: '0.7.0', level: 'plain' });
+  assert.match(root.textContent, /Dashboard · v0\.7\.0/); assert.doesNotMatch(root.textContent, /zylos|CC/);
+  renderVersion(root, { zylos_version: '3', cc_version: '2' }, { document, upgrade, t, dashboardVersion: null });
+  assert.match(root.textContent, /Dashboard · wb\.unknown/); assert.match(root.textContent, /zylos · v3/);
 });

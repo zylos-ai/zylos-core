@@ -1,16 +1,16 @@
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=87';
-import { createPricingPanel } from './wb/settings-pricing.js?v=87';
-import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=87';
-import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=87';
-import { renderVersion } from './wb/settings-version.js?v=87';
-import { mountChat } from './wb/chat.js?v=91';
-import { mountChatSettings } from './wb/chat-settings.js?v=87';
-import { mountWorkbench } from './wb/shell.js?v=92';
-import { watchHeader } from './wb/header-fit.js?v=93';
-import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=89';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=94';
+import { createPricingPanel } from './wb/settings-pricing.js?v=94';
+import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=94';
+import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=94';
+import { renderVersion } from './wb/settings-version.js?v=94';
+import { mountChat } from './wb/chat.js?v=94';
+import { mountChatSettings } from './wb/chat-settings.js?v=94';
+import { mountWorkbench } from './wb/shell.js?v=94';
+import { watchHeader } from './wb/header-fit.js?v=94';
+import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=94';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
-import { mountSchedule } from './wb/schedule.js?v=87';
-import { createUsagePage } from './wb/usage.js?v=88';
+import { mountSchedule } from './wb/schedule.js?v=94';
+import { createUsagePage } from './wb/usage.js?v=94';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { pct, resolveCpuDisplay } from './gauge-utils.js';
@@ -385,19 +385,15 @@ function applyRuntimeVisibility() {
 }
 
 // ─── Render: Info Bar ───
-// Header version + tab-bar agent name. The version is this page's own
+// Settings version + header agent name. The version is this page's own
 // dashboard component version: set once from the first payload that carries
 // it (the local server's /api/state, or the remote's own document in
 // standalone remote mode) and never overwritten — in-page remote viewing
 // swaps dashboardState to the remote agent's payload, whose version belongs
 // to a different install.
+let ownDashboardVersion = null;
 function renderIdentityChrome() {
-  const versionEl = $('#dashboard-version');
-  const version = state.dashboardState?.dashboard_version;
-  if (versionEl && version && !versionEl.textContent) {
-    versionEl.textContent = `v${version}`;
-    versionEl.hidden = false;
-  }
+  ownDashboardVersion ??= state.dashboardState?.dashboard_version ?? null;
   const nameEl = $('#tab-bar-agent-name');
   if (nameEl) {
     const name = viewedAgentName();
@@ -3970,7 +3966,7 @@ function initSettingsPage() {
   } });
   $('#wb-detail-toggle').addEventListener('change', () => {
     settingsPage.detail($('#wb-detail-toggle').checked ? 'technical' : 'plain');
-    settingsVersionRoot.hidden = !$('#wb-detail-toggle').checked;
+    refreshSettingsVersion();
     root.querySelectorAll('[data-settings-latency]').forEach(node => { node.hidden = !$('#wb-detail-toggle').checked; });
   });
   refreshSettingsVersion();
@@ -3978,8 +3974,8 @@ function initSettingsPage() {
 
 function refreshSettingsVersion() {
   if (!settingsVersionRoot) return;
-  settingsVersionRoot.hidden = document.documentElement.dataset.detail !== 'technical';
-  renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
+  renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint,
+    dashboardVersion: ownDashboardVersion, level: document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain' });
 }
 function refreshSettingsLocks() {
   if (!settingsPage) return;
@@ -4632,7 +4628,8 @@ workbench = mountWorkbench({
   },
   observerStatus: () => state.observer.status,
   observerAvailable: status => !remoteIsReadOnly() && !observerRecoveryReason(status),
-  instanceInfo: () => ({ name: viewedAgentName(), version: state.dashboardState?.dashboard_version ? 'dashboard ' + state.dashboardState.dashboard_version : null }),
+  instanceInfo: () => ({ name: viewedAgentName(), version: state.dashboardState?.dashboard_version ? 'dashboard ' + state.dashboardState.dashboard_version : null,
+    core: state.dashboardState?.runtime_info?.zylos_version ? 'core ' + state.dashboardState.runtime_info.zylos_version : null }),
 });
 initTechButton();
 watchHeader({ header: document.querySelector('.app-header') });

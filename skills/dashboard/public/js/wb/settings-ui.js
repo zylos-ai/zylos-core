@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=92';
+import { element } from './plain-text.js?v=94';
 
 export function mountThemeControl(root, { document = root.ownerDocument, t = key => key, value = 'light', onChange }) {
   const label = element(document, 'label');

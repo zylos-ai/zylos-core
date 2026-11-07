@@ -1,15 +1,15 @@
-import { element, fallbackName, icon, platformOf } from './plain-text.js?v=92';
+import { chatKind, element, fallbackName, icon, platformOf, runtimeName } from './plain-text.js?v=94';
 import { toolLabel, waitText } from './view-mode.js?v=91';
-import { activityStrip } from './activity-strip.js?v=85';
+import { activityStrip } from './activity-strip.js?v=94';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
   (a.mode === 'default' || (a.model === b.model && a.effort === b.effort));
 export function modelCell(row, t = key => key) {
   if (['running', 'starting'].includes(row.presence) && !row.launchConfig && row.target?.reason === 'launch_config_unreadable') {
-    return [row.target.runtime, t('wb.unknown')].filter(Boolean).join(' · ');
+    return [runtimeName(row.target.runtime), t('wb.unknown')].filter(Boolean).join(' · ');
   }
   const value = ['running', 'starting'].includes(row.presence) && row.launchConfig ? row.launchConfig : row.target?.runtime ? row.target : null;
-  return value ? [value.runtime, typeof value.model === 'object' ? value.model?.model : value.model ?? value.mode,
+  return value ? [runtimeName(value.runtime), typeof value.model === 'object' ? value.model?.model : value.model ?? value.mode,
     value.effort ?? value.model?.effort].filter(Boolean).join(' · ') : '—';
 }
 export function pendingModel(row) {
@@ -60,9 +60,10 @@ function nameCell(document, row, { level, single, t }) {
   cell.append(box, text);
   return cell;
 }
-function platformLabel(row, t) {
-  const platform = platformOf(row);
-  return platform === 'web-console' ? t('wb.board.webConsole') : fallbackName({ ...row, sessionGroup: platform, name: null }, t);
+export function platformLabel(row, t, { describe = true } = {}) {
+  const platform = platformOf(row), kind = chatKind(row);
+  if (platform === 'web-console' && describe) return t('wb.board.webConsole');
+  return fallbackName({ ...row, sessionGroup: platform, name: null }, t) + (kind ? ' · ' + t('wb.chat.' + kind) : '');
 }
 function nowCell(document, row, { level, t }) {
   const tool = row.tools?.[0];
@@ -77,7 +78,8 @@ function nowCell(document, row, { level, t }) {
     return current;
   }
   const text = row.wait ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t)
-    : row.preview?.text ? t('wb.board.lastReceived', { text: row.preview.text }) : '';
+    : row.preview?.text ? t('wb.board.lastReceived', { text: row.preview.text })
+      : row.state?.kind === 'not_running' && level !== 'technical' ? t('wb.board.standby') : '';
   current.append(element(document, 'span', text));
   current.title = text;
   return current;

@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
-import { renderOverview, detailNumbers, activeSubagents } from '../public/js/wb/detail-overview.js';
+import { renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
-import { createGroupConfig, fetchJson, runningText, validConfigChange } from '../public/js/wb/group-config.js';
+import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
@@ -341,25 +341,29 @@ test('technical detail header names an unreadable launch configuration instead o
   const f = detailFixture(async path => response(defaultRead(path)), { detail: () => 'technical' });
   await f.controller.open(current, { rows: [current], listKnown: true });
   const meta = allNodes(f.root).find(node => node.classList.contains('wb-detail-meta'));
-  assert.match(meta.textContent, / · codex · wb\.detail\.launchConfigUnreadable$/);
+  assert.match(meta.textContent, / · Codex · wb\.detail\.launchConfigUnreadable$/);
+  assert.equal(meta.children[0].textContent, 'telegram:a'); assert.equal(meta.children[0].classList.contains('wb-mono'), true, 'the group key is monospace');
   const config = allNodes(f.root).find(node => node.classList.contains('wb-detail-config'));
-  assert.match(config.textContent, /codex · wb\.unknown/);
+  assert.match(config.textContent, /Codex · wb\.unknown/);
   f.controller.destroy();
   const readable = row('telegram:b');
   const g = detailFixture(async path => response(defaultRead(path)), { detail: () => 'technical' });
   await g.controller.open(readable, { rows: [readable], listKnown: true });
   const readableMeta = allNodes(g.root).find(node => node.classList.contains('wb-detail-meta')).textContent;
-  assert.match(readableMeta, / · claude$/); assert.doesNotMatch(readableMeta, /launchConfigUnreadable/);
+  assert.match(readableMeta, / · Claude$/); assert.doesNotMatch(readableMeta, /launchConfigUnreadable/);
   g.controller.destroy();
 });
 
 test('plain detail header reports platform and uptime from run creation rather than state duration', async () => {
-  const current = row('telegram:private-id', { createdAt: 1000, duration: 5 });
-  const f = detailFixture(async path => response(defaultRead(path)), { now: () => 1120000 });
-  await f.controller.open(current, { rows: [current], listKnown: true });
-  const meta = allNodes(f.root).find(node => node.classList.contains('wb-detail-meta'));
-  assert.equal(meta.textContent, 'wb.platform.telegram · wb.detail.continuous {"minutes":2}');
-  f.controller.destroy();
+  // Direct or group chat comes from the group key ("<channel>:dm-<peer>"), as in the prototype.
+  for (const [key, kind] of [['telegram:dm-1001', 'dm'], ['telegram:product-team', 'group']]) {
+    const current = row(key, { createdAt: 1000, duration: 5 });
+    const f = detailFixture(async path => response(defaultRead(path)), { now: () => 1120000 });
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    const meta = allNodes(f.root).find(node => node.classList.contains('wb-detail-meta'));
+    assert.equal(meta.textContent, `wb.platform.telegram · wb.chat.${kind} · wb.detail.continuous {"minutes":2}`);
+    f.controller.destroy();
+  }
 });
 
 test('overview restores a current subagent whose start predates the five recent events', async () => {
@@ -916,4 +920,72 @@ test('the Origin lock in app.js leaves mounted drawer actions, the observer hint
     assert.equal(legacy.disabled, unavailable);
     assert.equal(observer.title, unavailable ? 'action.origin_not_running' : 'wb.observerInstall');
   }
+});
+
+test('evidence marks the sample its headline came from and says how long ago each was read', () => {
+  const snapshot = { readAt: 95000, instance: { runtimeHealth: { claude: { health: 'rate_limited', updatedAt: 40000 } } }, sources: { status: { ok: true, readAt: 99000 } } };
+  const waiting = row('telegram:a', { wait: { kind: 'rate_wait', runtime: 'claude' } });
+  const { headline, samples } = detailEvidence(waiting, snapshot);
+  assert.equal(headline, 'claude · rate_limited');
+  assert.deepEqual(samples.filter(item => item.hit).map(item => item.source), ['claude health']);
+  const fenced = detailEvidence(row('telegram:a', { wait: { kind: 'fenced', reasonCode: 'ok' } }), snapshot);
+  assert.deepEqual(fenced.samples.filter(item => item.hit).map(item => item.source), ['status'], 'otherwise the sample with the headline value');
+  const now = 1_700_000_100_000;
+  assert.equal(sampleAge(now - 1000, now, t), 'wb.detail.agoSeconds {"n":1}');
+  assert.equal(sampleAge(new Date(now - 60000).toISOString(), now, t), 'wb.detail.ago {"span":"1m00s"}');
+  assert.equal(sampleAge(null, now, t), '');
+});
+
+test('tool events name the tool: plain action words, or the tool name with its monospace argument', () => {
+  const document = createDocument();
+  const event = { event_type: 'pre_tool_use', metadata: { tool_name: 'Bash', tool_detail: 'npm test' } };
+  assert.equal(toolEventLabel(document, event, { t }).textContent, 'wb.tool.Bash');
+  assert.equal(toolEventLabel(document, { ...event, event_type: 'post_tool_failure' }, { t }).textContent, 'wb.tool.Bash · wb.event.toolFailed');
+  const technical = toolEventLabel(document, event, { t, level: 'technical' });
+  assert.equal(technical.children[0].textContent, 'Bash'); assert.equal(technical.children[1].textContent, 'npm test');
+  assert.equal(technical.children[1].classList.contains('wb-mono'), true); assert.equal(technical.title, 'pre_tool_use');
+  assert.equal(toolEventLabel(document, { event_type: 'pre_tool_use' }, { t }), null, 'without a tool name the generic label stays');
+  assert.equal(toolEventLabel(document, { event_type: 'stop', metadata: { tool_name: 'Bash' } }, { t }), null);
+});
+
+test('the configuration line says whether it is applied and where it comes from', () => {
+  const running = row('telegram:a', { launchConfig: { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' },
+    desired: { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' } });
+  assert.equal(configStatus(running), 'applied');
+  assert.equal(configText(running, 'plain', t), 'Claude · opus · wb.term.effort high');
+  assert.equal(configText(running, 'technical', t), 'Claude · opus · high');
+  assert.equal(configStatus({ ...running, desired: { ...running.desired, effort: 'xhigh' } }), 'pending');
+  assert.equal(configStatus({ ...running, presence: 'not_running', launchConfig: null }), 'not_running');
+  const document = createDocument(), root = document.createElement('div');
+  renderOverview(root, running, {}, { document, t });
+  const line = allNodes(root).find(node => node.classList.contains('wb-cfg-line'));
+  assert.match(line.textContent, /wb\.config\.state\.applied/); assert.match(line.textContent, /wb\.config\.source\.override/);
+});
+
+test('the configuration editor offers engine, model and effort as dropdowns with save and cancel, and keeps the engine switch and reset', async () => {
+  const requests = [];
+  const meta = { models: [{ id: 'opus', display_name: 'Opus' }, { id: 'sonnet' }], efforts_by_model: { opus: ['low', 'high', 'xhigh'], '*': ['low', 'medium', 'high'] } };
+  const controller = createGroupConfig({ key: 'a', t, request: async (path, options) => { requests.push([path, options?.method ?? 'GET']);
+    if (path.startsWith('/api/actions/meta')) return meta;
+    if (options?.method) return { ok: true, data: { running: { status: 'pending' } } };
+    return { runtime: { ok: true, data: { desired: { runtime: 'inherit' }, resolved: { runtime: 'claude' } } }, model: { ok: true, data: { desired: { model: 'opus', effort: 'high' } } } }; } });
+  await controller.load(); await controller.loadMeta('claude'); await controller.loadMeta('claude');
+  assert.equal(requests.filter(([path]) => path.startsWith('/api/actions/meta')).length, 1, 'the catalog is read once per engine');
+  const document = createDocument(), root = document.createElement('div'); let cancelled = 0;
+  renderGroupConfig(root, controller, { document, t, onCancel: () => cancelled++ });
+  const pair = allNodes(root).find(node => node.classList.contains('wb-cfg-controls'));
+  assert.deepEqual(pair.children.map(node => node.tagName), ['SELECT', 'SELECT', 'SELECT', 'BUTTON', 'BUTTON']);
+  const [, model, effort, save, cancel] = pair.children;
+  assert.deepEqual(model.children.map(node => node.value), ['opus', 'sonnet']); assert.equal(model.value, 'opus');
+  assert.deepEqual(effort.children.map(node => node.value), ['low', 'high', 'xhigh']); assert.equal(effort.value, 'high');
+  model.value = 'sonnet'; model.dispatch('change');
+  assert.deepEqual(effort.children.map(node => node.value), ['low', 'medium', 'high'], 'efforts follow the chosen model');
+  cancel.dispatch('click'); assert.equal(cancelled, 1);
+  save.dispatch('click'); await tick();
+  assert.deepEqual(requests.at(-1), ['/api/workbench/groups/a/config', 'POST']);
+  const more = allNodes(root).find(node => node.classList.contains('wb-cfg-more'));
+  assert.match(more.textContent, /wb\.config\.saveRuntime/); assert.match(more.textContent, /wb\.config\.resetModel/);
+  assert.deepEqual(modelChoices(meta, 'custom-model').map(item => item.value), ['custom-model', 'opus', 'sonnet'], 'a saved model missing from the catalog stays selectable');
+  assert.deepEqual(effortChoices(null, 'x', 'max'), ['low', 'medium', 'high', 'max']);
+  assert.equal(modelChoices(null, 'x'), null, 'without a catalog the model is typed');
 });

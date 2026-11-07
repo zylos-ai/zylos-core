@@ -1,5 +1,5 @@
-import { element, icon } from './plain-text.js?v=92';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=92';
+import { element, icon, runtimeName } from './plain-text.js?v=94';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=94';
 import { techOnly, toolLabel, waitText } from './view-mode.js?v=91';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=89';
 
@@ -23,12 +23,15 @@ export function detailEvidence(row, snapshot = {}) {
     ? `${runtime} · ${health.health}`
     : wait?.reasonCode ?? wait?.reason ?? wait?.fenceReason ?? row.state?.reasonCode ?? row.state?.reason ?? row.reason ?? 'no_rule';
   const samples = [];
-  if (runtime && health) samples.push({ source: `${runtime} health`, value: health.health, at: health.updatedAt });
+  const fromHealth = headline === `${runtime} · ${health?.health}`;
+  if (runtime && health) samples.push({ source: `${runtime} health`, value: health.health, at: health.updatedAt, hit: fromHealth });
   if (row.queue) samples.push({ source: 'queue', value: row.queue.known === false ? row.queue.reason : row.queue.pending?.count, at: snapshot.readAt });
   if (row.live?.status) samples.push({ source: 'status', value: row.live.status.reason ?? row.live.status.state, at: row.live.status.sampledAt });
   for (const [source, value] of Object.entries(snapshot.sources ?? {})) {
     samples.push({ source, value: value.reason ?? (value.ok ? 'ok' : 'unknown'), at: value.readAt });
   }
+  // The sample the headline came from is highlighted in the table.
+  if (!fromHealth) for (const sample of samples) sample.hit = sample.value != null && String(sample.value) === headline;
   return { headline, samples };
 }
 
@@ -39,6 +42,14 @@ export function detailNumbers(row, { backlog, now = Date.now() } = {}, t = key =
     { key: 'wb.detail.thisRun', value: row.createdAt == null ? t('wb.unknown') : t('wb.detail.runDuration', { minutes: Math.max(0, Math.floor((now - row.createdAt * 1000) / 60000)) }) },
     { key: 'wb.term.unsummarized', value: backlog?.count == null ? t('wb.unknown') : backlog.count, memory: true },
   ];
+}
+
+/** How long ago a sample was read: "12 秒前", "4m12s前"; empty when the time is unknown. */
+export function sampleAge(at, now = Date.now(), t = key => key) {
+  const time = timeValue(at);
+  if (!Number.isFinite(time)) return '';
+  const seconds = Math.max(0, Math.round((now - time) / 1000));
+  return seconds < 60 ? t('wb.detail.agoSeconds', { n: seconds }) : t('wb.detail.ago', { span: shortDuration(seconds) });
 }
 
 /** Short clock time in the event column; the full or raw value stays in the tooltip. */
@@ -60,6 +71,24 @@ export function eventKind(event) {
   if (String(type ?? '').startsWith('subagent')) return 'bot';
   return 'power';
 }
+const toolSuffix = { post_tool_use: 'wb.event.toolDone', post_tool_failure: 'wb.event.toolFailed' };
+/** Tool events name the tool: "运行命令" in plain view; the tool name and its monospace argument when technical. */
+export function toolEventLabel(document, event, { level = 'plain', t = key => key } = {}) {
+  const type = event.event_type, name = event.metadata?.tool_name;
+  if (!toolEvents.has(type) || !name) return null;
+  const node = element(document, 'span', undefined, 'wb-ev-t');
+  const suffix = toolSuffix[type] ? ' · ' + t(toolSuffix[type]) : '';
+  if (level === 'technical') {
+    node.append(element(document, 'span', name, 'wb-tool'));
+    if (event.metadata.tool_detail) node.append(element(document, 'span', event.metadata.tool_detail, 'wb-ev-args wb-mono'));
+    if (suffix) node.append(element(document, 'span', suffix, 'wb-sub'));
+    node.title = type;
+  } else {
+    const tool = toolLabel(name, 'plain', t);
+    node.textContent = type === 'permission_request' ? t('wb.event.permission_request') + ' · ' + tool : tool + suffix;
+  }
+  return node;
+}
 /** One timeline line: time | round icon | label. Shared by recent activity and the full timeline. */
 export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev' } = {}) {
   const kind = eventKind(event);
@@ -68,8 +97,25 @@ export function eventRow(document, event, { level = 'plain', t = key => key, lab
   const stamp = element(document, 'time', time.text); stamp.title = time.title;
   const mark = element(document, 'span', undefined, 'wb-ev-k');
   mark.append(icon(document, kind === 'bot' ? 'bot' : kind, 'xs'));
-  node.append(stamp, mark, element(document, 'span', label ?? eventLabel(event, level, t), 'wb-ev-t'));
+  node.append(stamp, mark, (label == null ? toolEventLabel(document, event, { level, t }) : null)
+    ?? element(document, 'span', label ?? eventLabel(event, level, t), 'wb-ev-t'));
   return node;
+}
+
+/** Whether the saved configuration is what runs: applied, pending (next safe point), not_running or unknown. */
+export function configStatus(row) {
+  if (pendingModel(row)) return 'pending';
+  if (['running', 'starting'].includes(row.presence)) return row.launchConfig ? 'applied' : 'unknown';
+  return 'not_running';
+}
+/** "Claude · opus · 思考强度 high" in plain view; the bare values when technical. */
+export function configText(row, level = 'plain', t = key => key) {
+  const running = ['running', 'starting'].includes(row.presence) && row.launchConfig;
+  const value = running ? row.launchConfig : row.target?.runtime ? row.target : null;
+  if (level === 'technical' || !value) return modelCell(row, t);
+  const model = typeof value.model === 'object' ? value.model?.model : value.model ?? value.mode;
+  const effort = value.effort ?? value.model?.effort;
+  return [runtimeName(value.runtime), model, effort ? t('wb.term.effort') + ' ' + effort : null].filter(Boolean).join(' · ');
 }
 
 function nowCard(document, row, data, { level, t, snapshot }) {
@@ -115,8 +161,10 @@ function nowCard(document, row, data, { level, t, snapshot }) {
     details.append(summary);
     const table = element(document, 'table'), body = element(document, 'tbody');
     for (const item of evidence.samples) {
-      const line = element(document, 'tr');
-      line.append(element(document, 'td', item.source), element(document, 'td', item.value == null ? '—' : String(item.value)), element(document, 'td', item.at == null ? '' : String(item.at)));
+      const line = element(document, 'tr', undefined, item.hit ? 'wb-hit' : undefined);
+      const age = element(document, 'td', sampleAge(item.at, data.now ?? Date.now(), t));
+      if (item.at != null) age.title = String(item.at);
+      line.append(element(document, 'td', item.source), element(document, 'td', item.value == null ? '—' : String(item.value)), age);
       body.append(line);
     }
     table.append(body); details.append(table); card.append(details);
@@ -158,12 +206,14 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   memory.append(line);
   const config = section('wb.detail.config', 'wb-detail-config', 'sliders');
   const cfg = element(document, 'div', undefined, 'wb-cfg-line');
-  cfg.append(element(document, 'b', modelCell(row, t)));
-  if (pendingModel(row)) {
+  const status = configStatus(row);
+  cfg.append(element(document, 'b', configText(row, level, t)));
+  if (status === 'pending') {
     const desired = row.desired;
-    cfg.append(element(document, 'span', t('wb.pending') + ' · ' + [desired?.runtime, desired?.model, desired?.effort].filter(Boolean).join(' · '), 'wb-config-pending wb-txt-warn'),
+    cfg.append(element(document, 'span', t('wb.pending') + ' · ' + [runtimeName(desired?.runtime), desired?.model, desired?.effort].filter(Boolean).join(' · '), 'wb-config-pending wb-txt-warn'),
       element(document, 'span', t('wb.config.running') + ' · ' + modelCell(row, t), 'wb-sub'));
-  }
+  } else cfg.append(element(document, 'span', t('wb.config.state.' + status), status === 'unknown' ? 'wb-txt-warn' : 'wb-cfg-state'));
+  if (level !== 'technical' && row.desired?.mode) cfg.append(element(document, 'span', '· ' + t(row.desired.mode === 'override' ? 'wb.config.source.override' : 'wb.config.source.default'), 'wb-sub'));
   const edit = element(document, 'button', t('wb.detail.modify'), 'wb-btn wb-btn-secondary wb-btn-sm'); edit.type = 'button'; edit.addEventListener('click', onConfig); cfg.append(edit);
   config.append(cfg);
   if (level === 'technical') {

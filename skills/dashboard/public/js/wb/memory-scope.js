@@ -1,4 +1,4 @@
-import { element, fallbackName } from './plain-text.js?v=92';
+import { element, fallbackName } from './plain-text.js?v=94';
 
 // Scope metadata is validated by Core's parseSessionGroup on the server.
 export function memoryScope(tree) {

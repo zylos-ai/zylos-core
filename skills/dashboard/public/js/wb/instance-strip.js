@@ -1,7 +1,6 @@
-import { element, icon } from './plain-text.js?v=92';
+import { element, icon, runtimeName } from './plain-text.js?v=94';
 import { recoveryTime } from './cooldown.js?v=89';
 const clock = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-const runtimeName = runtime => runtime.charAt(0).toUpperCase() + runtime.slice(1);
 export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);
 function meter(document, pct) {
   const bar = element(document, 'span', undefined, 'wb-meter' + (pct >= 100 ? ' wb-err' : pct >= 80 ? ' wb-warn' : ''));
@@ -16,10 +15,12 @@ function item(document, ...children) {
 export function instanceStrip(root, snapshot, { document = root.ownerDocument, t = key => key, cost = null, costSummary = null, onHost = () => {}, hostOpen = false, level = 'plain', now = Date.now() } = {}) {
   root.replaceChildren(); const instance = snapshot.instance ?? {};
   const technical = level === 'technical';
-  if (technical) {
-    const chip = element(document, 'span', snapshot.mode === 'unreadable' ? t('wb.unknown') : snapshot.mode ?? t('wb.unknown'), 'wb-mode-chip');
-    chip.title = t('wb.mode'); root.append(item(document, chip));
-  }
+  // Run mode in both views: the raw value as a chip when technical, a plain name otherwise.
+  const unreadable = snapshot.mode == null || snapshot.mode === 'unreadable';
+  const mode = technical ? element(document, 'span', unreadable ? t('wb.unknown') : snapshot.mode, 'wb-mode-chip')
+    : element(document, 'span', unreadable ? t('wb.mode') + ' · ' + t('wb.unknown')
+      : { multi: t('wb.inst.modeMulti'), single: t('wb.inst.modeSingle') }[snapshot.mode] ?? t('wb.mode') + ' · ' + snapshot.mode);
+  mode.title = t('wb.mode'); root.append(item(document, mode));
   const runtimes = new Set([snapshot.baselineRuntime, ...(snapshot.rows ?? []).map(row => row.launchConfig?.runtime ?? row.target?.runtime)].filter(Boolean));
   for (const runtime of runtimes) {
     const health = instance.runtimeHealth?.[runtime], usage = instance.accounts?.[runtime];

@@ -25,3 +25,11 @@ export function fallbackName(row, t = key => key) {
   const platform = platforms.has(component) ? t('wb.platform.' + component) : component;
   return colon < 0 ? platform : platform + ' · ' + key.slice(colon + 1);
 }
+/** Engine names read as product names: Claude, Codex. */
+export const runtimeName = runtime => runtime ? runtime.charAt(0).toUpperCase() + runtime.slice(1) : runtime;
+/** Direct or group chat, from the group key alone: channels key direct chats as "<channel>:dm-<peer>". */
+export function chatKind(row) {
+  const key = row.sessionGroup ?? '', colon = key.indexOf(':');
+  if (colon < 0 || ['web-console', 'dashboard'].includes(platformOf(row))) return null;
+  return /^dm-/.test(key.slice(colon + 1)) ? 'dm' : 'group';
+}

@@ -55,7 +55,7 @@ test('older hint appears only for strict true without an active query and focuse
   assert.equal(root.children.length, 1); assert.equal(root.textContent, 'wb.noMatch');
 });
 test('model text and pending comparison use launch identity, desired config and fence', () => {
-  const value = row('a'); assert.equal(modelCell(value), 'claude · default'); assert.equal(pendingModel(value), false);
+  const value = row('a'); assert.equal(modelCell(value), 'Claude · default', 'engine names are capitalised like the instance strip'); assert.equal(pendingModel(value), false);
   value.launchConfig = { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' };
   value.desired = { ...value.launchConfig }; assert.equal(pendingModel(value), false);
   for (const key of ['runtime', 'model', 'effort']) { value.desired = { ...value.launchConfig, [key]: 'different' }; assert.equal(pendingModel(value), true); }
@@ -66,15 +66,15 @@ test('model text and pending comparison use launch identity, desired config and 
 test('running group without a readable launch configuration shows an unknown model, not the default', () => {
   const unreadable = { ...row('a'), launchConfig: null, desired: { runtime: 'claude', mode: 'default' },
     target: { runtime: 'claude', model: null, reason: 'launch_config_unreadable' } };
-  assert.equal(modelCell(unreadable, t), 'claude · wb.unknown');
-  assert.equal(modelCell({ ...unreadable, presence: 'starting' }, t), 'claude · wb.unknown');
-  assert.equal(modelCell({ ...unreadable, target: { ...unreadable.target, runtime: 'unknown' } }, t), 'unknown · wb.unknown');
-  assert.equal(modelCell(row('b'), t), 'claude · default');
-  assert.equal(modelCell({ ...row('c'), presence: 'not_running', launchConfig: null, target: { runtime: 'codex', model: { model: 'gpt', effort: 'low' } } }, t), 'codex · gpt · low');
+  assert.equal(modelCell(unreadable, t), 'Claude · wb.unknown');
+  assert.equal(modelCell({ ...unreadable, presence: 'starting' }, t), 'Claude · wb.unknown');
+  assert.equal(modelCell({ ...unreadable, target: { ...unreadable.target, runtime: 'unknown' } }, t), 'Unknown · wb.unknown');
+  assert.equal(modelCell(row('b'), t), 'Claude · default');
+  assert.equal(modelCell({ ...row('c'), presence: 'not_running', launchConfig: null, target: { runtime: 'codex', model: { model: 'gpt', effort: 'low' } } }, t), 'Codex · gpt · low');
   assert.equal(pendingModel(unreadable), false); assert.equal(pendingModel({ ...unreadable, fence: { reason: 'model_config' } }), true);
   const document = createDocument();
   const cell = allNodes(renderRow(unreadable, { document, level: 'technical', t })).find(node => node.classList.contains('wb-model'));
-  assert.equal(cell.textContent, 'claude · wb.unknown');
+  assert.equal(cell.textContent, 'Claude · wb.unknown');
 });
 test('activity renders real string cells and timestamps, with unknown inbound distinguished', () => {
   const document = createDocument();
@@ -140,7 +140,8 @@ test('instance strip renders pool unknown or used slots, runtime union, quota an
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 4, 'a known capacity draws free slots too');
   assert.match(root.textContent, /2 \/ 4/);
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: null } } }, { document, t });
-  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-mode-chip')).length, 0, 'the mode is technical only');
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-mode-chip')).length, 0, 'the raw mode chip is technical only');
+  assert.match(root.textContent, /^wb.inst.modeMulti/, 'the plain view still names the run mode');
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 0); assert.match(root.textContent, /wb.poolwb.unknown/);
   assert.equal(root.children.at(-1).id, 'wb-host-open', 'host status stays at the right end');
 });
@@ -224,4 +225,18 @@ test('selected rows are marked and the origin row keeps its own style', () => {
   assert.equal(root.children[0].classList.contains('wb-row-origin'), true);
   assert.equal(root.children[1].classList.contains('wb-sel'), true); assert.equal(root.children[1].attributes['aria-current'], 'true');
   assert.equal(root.children[0].classList.contains('wb-sel'), false);
+});
+
+test('plain names say direct or group chat from the key, model names are capitalised and idle groups stand by', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const plainName = key => ({ ...row(key), name: null, c4: { componentName: 'telegram' } });
+  const standby = { ...row('lark:team', 'not_running'), presence: 'not_running', launchConfig: null };
+  renderBoard(root, { rows: [plainName('telegram:dm-1001'), plainName('telegram:team-7'), standby] }, { document, t });
+  const subs = allNodes(root).filter(node => node.classList.contains('wb-key')).map(node => node.textContent);
+  assert.deepEqual(subs.slice(0, 2), ['wb.platform.telegram · wb.chat.dm', 'wb.platform.telegram · wb.chat.group']);
+  const now = allNodes(root).filter(node => node.classList.contains('wb-current')).map(node => node.textContent);
+  assert.equal(now[2], 'wb.board.standby', 'a group that is not running says it starts on the next message');
+  renderBoard(root, { rows: [standby] }, { document, t, level: 'technical' });
+  assert.equal(allNodes(root).find(node => node.classList.contains('wb-current')).textContent, '');
+  assert.equal(allNodes(root).find(node => node.classList.contains('wb-model')).textContent, 'Claude · default');
 });

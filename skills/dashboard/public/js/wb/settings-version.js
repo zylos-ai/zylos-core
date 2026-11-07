@@ -1,8 +1,12 @@
-import { element } from './plain-text.js?v=92';
+import { element } from './plain-text.js?v=94';
 
-// Technical detail view. The upgrade button is the original generated action node.
-export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, onHint = () => {} } = {}) {
+// Plain view: this page's Dashboard version. Technical view adds zylos, the CLI and the upgrade
+// button (the original generated action node).
+export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, onHint = () => {},
+  dashboardVersion = null, level = 'technical' } = {}) {
   root.replaceChildren(element(document, 'h3', t('wb.settings.version')));
+  root.append(element(document, 'p', 'Dashboard · ' + (dashboardVersion ? 'v' + dashboardVersion : t('wb.unknown'))));
+  if (level !== 'technical') return;
   const ri = info ?? {};
   root.append(element(document, 'p', 'zylos · ' + (ri.zylos_version ? 'v' + ri.zylos_version : t('wb.unknown'))));
   if (ri.zylos_update) {

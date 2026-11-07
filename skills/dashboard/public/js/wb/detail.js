@@ -1,10 +1,10 @@
-import { element, fallbackName, icon } from './plain-text.js?v=92';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=94';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, statePill } from './board.js?v=92';
-import { renderOverview } from './detail-overview.js?v=92';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=92';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=92';
-import { renderNameEditor } from './name-edit.js?v=92';
+import { channelIcon, platformLabel, statePill } from './board.js?v=94';
+import { renderOverview } from './detail-overview.js?v=94';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=94';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=94';
+import { renderNameEditor } from './name-edit.js?v=94';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -144,13 +144,15 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     header.append(top);
     const previousScroll = root.querySelector?.('.wb-detail-timeline')?.scrollTop ?? 0;
     const uptime = row.createdAt == null ? t('wb.unknown') : Math.max(0, Math.floor((now() - row.createdAt * 1000) / 60000));
-    const platformKey = row.sessionGroup?.split(':')[0];
-    const platform = row.sessionGroup == null ? t('wb.single') : row.sessionGroup === 'origin' ? t('wb.term.origin')
-      : fallbackName({ ...row, sessionGroup: platformKey, name: null }, t);
-    const meta = getLevel() === 'technical'
-      ? [row.sessionGroup ?? 'origin', row.live?.runId, formatStartedAt(row.createdAt, document.documentElement?.lang), ...(row.launchConfig ? [row.launchConfig.runtime, row.launchConfig.model, row.launchConfig.effort]
-        : row.target?.reason === 'launch_config_unreadable' ? [row.target.runtime, t('wb.detail.launchConfigUnreadable')] : [])].filter(value => value != null).join(' · ')
-      : platform + ' · ' + (row.createdAt == null ? t('wb.unknown') : t('wb.detail.continuous', { minutes: uptime }));
+    const platform = row.sessionGroup == null ? t('wb.single') : row.sessionGroup === 'origin' ? t('wb.term.origin') : platformLabel(row, t, { describe: false });
+    // Technical: the group key in monospace, then run, start and launch configuration.
+    const meta = element(document, 'p', undefined, 'wb-detail-meta');
+    if (getLevel() === 'technical') {
+      meta.append(element(document, 'span', row.sessionGroup ?? 'origin', 'wb-mono'));
+      const rest = [row.live?.runId, formatStartedAt(row.createdAt, document.documentElement?.lang), ...(row.launchConfig ? [runtimeName(row.launchConfig.runtime), row.launchConfig.model, row.launchConfig.effort]
+        : row.target?.reason === 'launch_config_unreadable' ? [runtimeName(row.target.runtime), t('wb.detail.launchConfigUnreadable')] : [])].filter(value => value != null);
+      if (rest.length) meta.append(element(document, 'span', ' · ' + rest.join(' · ')));
+    } else meta.textContent = platform + ' · ' + (row.createdAt == null ? t('wb.unknown') : t('wb.detail.continuous', { minutes: uptime }));
     const tabs = element(document, 'nav', undefined, 'wb-detail-tabs');
     tabs.setAttribute('role', 'tablist');
     for (const tab of ['overview', 'timeline']) {
@@ -166,10 +168,14 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         onConfig: async () => {
           if (state.configOpen) { state.configOpen = false; draw(); return; }
           state.configOpen = true; draw();
-          try { await config.load(); } catch (error) { if (error.name !== 'AbortError') { config.state.error = error.message; draw(); } }
+          try {
+            const value = await config.load();
+            await config.loadMeta(value?.runtime?.data?.resolved?.runtime ?? 'claude');
+          } catch (error) { if (error.name !== 'AbortError') { config.state.error = error.message; draw(); } }
         },
       });
-      if (state.configOpen) renderGroupConfig(sections.config, config, { document, t, writable: getWritable() });
+      if (state.configOpen) renderGroupConfig(sections.config, config, { document, t, writable: getWritable(),
+        onCancel: () => { state.configOpen = false; draw(); } });
     } else {
       body.classList.add('wb-detail-timeline');
       renderTimeline(body, timeline, { document, t, level: getLevel() });
@@ -183,7 +189,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         onSave: value => { state.row = { ...state.row, name: value }; state.nameOpen = false; onRename(value); draw(); },
       });
     }
-    header.append(element(document, 'p', meta, 'wb-detail-meta'), tabs);
+    header.append(meta, tabs);
     root.replaceChildren(header, body);
     if (state.tab === 'timeline') body.scrollTop = previousScroll;
     if (state.error) header.append(element(document, 'p', t('wb.readFailed') + ' · ' + state.error, 'wb-detail-error'));

@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=92';
+import { element, runtimeName } from './plain-text.js?v=94';
 
 export function responseError(value, fallback = 'request_failed') {
   const error = value?.error;
@@ -30,8 +30,19 @@ export function validConfigChange(change) {
 }
 
 export function createGroupConfig({ key, request, onChange = () => {}, t = key => key, active = () => true }) {
-  const state = { value: null, result: '', error: null, busy: false };
+  const state = { value: null, result: '', error: null, busy: false, meta: {} };
   const publish = () => { if (active()) onChange(state); };
+  // Model and effort choices per engine; without them the editor falls back to free text.
+  async function loadMeta(runtime) {
+    if (!['claude', 'codex'].includes(runtime) || runtime in state.meta) return state.meta[runtime];
+    state.meta[runtime] = undefined;
+    let value = null;
+    try { value = await request('/api/actions/meta?runtime=' + runtime); } catch {}
+    if (!active()) return null;
+    state.meta[runtime] = Array.isArray(value?.models) ? value : null;
+    publish();
+    return state.meta[runtime];
+  }
   async function load() {
     const value = await request(`/api/workbench/groups/${encodeURIComponent(key)}/config`);
     if (active()) {
@@ -42,7 +53,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     return value;
   }
   return {
-    state, load,
+    state, load, loadMeta, redraw: publish,
     async save(change) {
       if (state.busy) return;
       if (!validConfigChange(change)) {
@@ -91,54 +102,75 @@ export function configSummary(value) {
   return [runtime.runtime, runtime.model, runtime.effort].filter(Boolean).join(' · ');
 }
 
-export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true } = {}) {
+/** Model choices for an engine: the catalog plus the saved value when the catalog does not list it. */
+export function modelChoices(meta, current) {
+  if (!meta) return null;
+  const list = meta.models.map(item => ({ value: item.id, label: item.display_name ?? item.id }));
+  if (current && !list.some(item => item.value === current)) list.unshift({ value: current, label: current });
+  return list;
+}
+export function effortChoices(meta, model, current) {
+  const listed = meta?.efforts_by_model?.[model] ?? meta?.efforts_by_model?.['*'];
+  const list = listed?.length ? [...listed] : ['low', 'medium', 'high'];
+  if (current && !list.includes(current)) list.push(current);
+  return list;
+}
+
+// Prototype form: engine, model and effort as one pair with save and cancel. The per-group engine
+// switch and the reset to the default model stay on a second, quieter line.
+export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true, onCancel = () => {} } = {}) {
   const { state } = controller;
   state.draft ??= {};
-  const runtime = element(document, 'select');
-  for (const value of ['inherit', 'claude', 'codex']) {
-    const option = element(document, 'option', value === 'inherit' ? t('wb.term.inherit') : value);
-    option.value = value;
-    runtime.append(option);
-  }
-  runtime.value = state.draft.runtime ?? state.value?.runtime?.data?.desired?.runtime ?? 'inherit';
-  runtime.addEventListener('change', () => { state.draft.runtime = runtime.value; });
-  runtime.disabled = !writable || state.busy;
-  const saveRuntime = element(document, 'button', t('wb.config.saveRuntime'));
-  saveRuntime.type = 'button';
-  saveRuntime.disabled = runtime.disabled;
-  saveRuntime.addEventListener('click', () => controller.save({ kind: 'runtime', value: runtime.value }));
-  const target = element(document, 'select');
-  for (const value of ['claude', 'codex']) {
-    const option = element(document, 'option', value); option.value = value; target.append(option);
-  }
-  target.value = state.draft.target ?? state.value?.runtime?.data?.resolved?.runtime ?? 'claude';
-  target.addEventListener('change', () => { state.draft.target = target.value; });
-  const model = element(document, 'input'), effort = element(document, 'input');
-  model.placeholder = t('wb.config.model'); effort.placeholder = t('wb.term.effort');
-  model.setAttribute('aria-label', t('wb.config.model')); effort.setAttribute('aria-label', t('wb.term.effort'));
-  const desired = state.value?.model?.data?.desired;
-  model.value = state.draft.model ?? desired?.model ?? ''; effort.value = state.draft.effort ?? desired?.effort ?? '';
-  model.addEventListener('input', () => { state.draft.model = model.value; });
-  effort.addEventListener('input', () => { state.draft.effort = effort.value; });
-  const saveModel = element(document, 'button', t('wb.config.saveModel'));
-  saveModel.type = 'button';
-  const reset = element(document, 'button', t('wb.config.resetModel')); reset.type = 'button';
-  for (const node of [target, model, effort, saveModel, reset]) node.disabled = !writable || state.busy;
-  saveModel.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, model: model.value, effort: effort.value }));
-  reset.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, reset: true }));
-  saveRuntime.className = saveModel.className = 'wb-btn wb-btn-primary wb-btn-sm';
-  reset.className = 'wb-btn wb-btn-sm';
-  runtime.setAttribute('aria-label', t('wb.term.runtime')); target.setAttribute('aria-label', t('wb.config.targetRuntime'));
-  // Two independent saves, one per line: the AI engine, then the model and effort pair for a chosen engine.
-  const line = (label, ...controls) => {
-    const row = element(document, 'div', undefined, 'wb-cfg-row');
-    row.append(element(document, 'span', label, 'wb-cfg-label'));
-    const box = element(document, 'div', undefined, 'wb-cfg-controls'); box.append(...controls); row.append(box);
-    return row;
+  const locked = !writable || state.busy;
+  const select = (label, choices, value) => {
+    const node = element(document, 'select'); node.setAttribute('aria-label', label);
+    for (const item of choices) { const option = element(document, 'option', item.label ?? item); option.value = item.value ?? item; node.append(option); }
+    node.value = value; node.disabled = locked; return node;
   };
+  const resolved = state.value?.runtime?.data?.resolved?.runtime ?? 'claude';
+  const target = select(t('wb.config.targetRuntime'), ['claude', 'codex'].map(value => ({ value, label: runtimeName(value) })), state.draft.target ?? resolved);
+  const meta = state.meta?.[target.value];
+  const desired = state.value?.model?.data?.desired;
+  const sameEngine = target.value === resolved;
+  const modelValue = state.draft.model ?? (sameEngine ? desired?.model : null) ?? meta?.current_model ?? '';
+  const choices = modelChoices(meta, modelValue);
+  const model = choices?.length ? select(t('wb.config.model'), choices, modelValue || choices[0].value) : element(document, 'input');
+  if (!choices?.length) {
+    model.value = modelValue; model.placeholder = t('wb.config.model'); model.setAttribute('aria-label', t('wb.config.model')); model.disabled = locked;
+  }
+  const effortValue = state.draft.effort ?? (sameEngine ? desired?.effort : null) ?? meta?.current_effort ?? '';
+  const effort = select(t('wb.term.effort'), effortChoices(meta, model.value, effortValue), effortValue || effortChoices(meta, model.value)[0]);
+  target.addEventListener('change', () => {
+    state.draft = { ...state.draft, target: target.value, model: undefined, effort: undefined };
+    void controller.loadMeta?.(target.value);
+    controller.redraw?.();
+  });
+  model.addEventListener(choices?.length ? 'change' : 'input', () => {
+    state.draft.model = model.value;
+    const options = effortChoices(meta, model.value, effort.value);
+    effort.replaceChildren(...options.map(value => { const option = element(document, 'option', value); option.value = value; return option; }));
+    if (!options.includes(effort.value)) effort.value = options[0];
+  });
+  effort.addEventListener('change', () => { state.draft.effort = effort.value; });
+  const save = element(document, 'button', t('wb.config.save'), 'wb-btn wb-btn-primary wb-btn-sm'); save.type = 'button'; save.disabled = locked;
+  save.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, model: model.value, effort: effort.value }));
+  const cancel = element(document, 'button', t('wb.cancel'), 'wb-btn wb-btn-sm'); cancel.type = 'button';
+  cancel.addEventListener('click', () => { state.draft = {}; onCancel(); });
   const form = element(document, 'div', undefined, 'wb-cfg-edit');
-  form.append(line(t('wb.term.runtime'), runtime, saveRuntime), line(t('wb.config.modelPair'), target, model, effort, saveModel, reset),
-    element(document, 'p', t('wb.config.oneAtATime'), 'wb-note'));
+  const pair = element(document, 'div', undefined, 'wb-cfg-controls');
+  pair.append(target, model, effort, save, cancel);
+  form.append(pair, element(document, 'p', t('wb.config.pairNote'), 'wb-note'));
+  // Less common: which engine this group runs on, and dropping its own model pair.
+  const runtime = select(t('wb.term.runtime'), ['inherit', 'claude', 'codex'].map(value => ({ value, label: value === 'inherit' ? t('wb.term.inherit') : runtimeName(value) })),
+    state.draft.runtime ?? state.value?.runtime?.data?.desired?.runtime ?? 'inherit');
+  runtime.addEventListener('change', () => { state.draft.runtime = runtime.value; });
+  const saveRuntime = element(document, 'button', t('wb.config.saveRuntime'), 'wb-btn wb-btn-sm'); saveRuntime.type = 'button'; saveRuntime.disabled = locked;
+  saveRuntime.addEventListener('click', () => controller.save({ kind: 'runtime', value: runtime.value }));
+  const reset = element(document, 'button', t('wb.config.resetModel'), 'wb-link-btn'); reset.type = 'button'; reset.disabled = locked;
+  reset.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, reset: true }));
+  const more = element(document, 'div', undefined, 'wb-cfg-more');
+  more.append(element(document, 'span', t('wb.term.runtime'), 'wb-cfg-label'), runtime, saveRuntime, reset);
+  form.append(more);
   root.append(form);
   if (!writable) root.append(element(document, 'p', t('wb.readOnly'), 'wb-note'));
   if (state.result) root.append(element(document, 'p', state.result, 'wb-config-result'));

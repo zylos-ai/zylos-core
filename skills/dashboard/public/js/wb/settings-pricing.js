@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=92';
+import { element } from './plain-text.js?v=94';
 import { priceWithEditedBaseRates } from '../pricing-form.js';
 
 const fields = ['input', 'output', 'cacheRead', 'cacheCreation'];
