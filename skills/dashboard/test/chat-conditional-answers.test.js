@@ -9,6 +9,7 @@ import { registerQuestion } from '../src/lib/chat/questions.js';
 import { CONTENT_PREFIX, parseC4Content, makeQuestionSummary, evaluateFormState } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
+const fieldErrors = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/form-field-errors.json', import.meta.url), 'utf8'));
 const wire = envelope => CONTENT_PREFIX + JSON.stringify(envelope);
 const clone = value => structuredClone(value);
 
@@ -74,6 +75,83 @@ for (const example of fixtures.answers) test(`saved conditional fields validate 
   assert.equal(parsed.envelope.metadata.zylos.answerId, action.id);
   assert.equal(parsed.envelope.questionSummary, q.saved.question_summary);
   assert.equal(f.store.db.prepare('SELECT state FROM chat_answer_deliveries WHERE answer_id=?').get(action.id).state, 'pending');
+});
+
+// Default, ungated Store boundary: exact field reasons and the non-field
+// refusal exclusions must run when answer validation changes. UI-only work
+// may skip. Uses only the private SQLite fixture above, without a receiver,
+// subprocess, service or network; every refusal must leave durable counts alone.
+test('saved answers expose fixed field reasons only for eligible conditional refusals', t => {
+  const f = fixture(t);
+  let durable = 0;
+  const unchanged = q => {
+    assert.equal(f.count('chat_answers'), durable);
+    assert.equal(f.count('chat_answer_deliveries'), durable);
+    if (q) assert.equal(f.answers.question(q.saved.session_group, q.saved.interrupt_id).status, 'paused');
+  };
+  const refusal = (run, code, expectedFields) => {
+    assert.throws(run, error => {
+      assert.equal(error.code, code);
+      if (expectedFields === undefined) assert.equal(Object.hasOwn(error, 'fields'), false);
+      else assert.deepEqual(error.fields, expectedFields);
+      return true;
+    });
+    unchanged();
+  };
+  const invalid = fixtures.answers.filter(example => !example.valid);
+  assert.equal(invalid.length, 11);
+  for (const example of invalid) {
+    const q = f.question();
+    refusal(() => f.accept(q, f.action(q, { values: clone(example.values) })), 'invalid_chat_answer', fieldErrors[example.name]);
+    unchanged(q);
+  }
+
+  const q = f.question();
+  const invalidValues = { customer_type: 'company', employee_count: 3 };
+  for (const change of [
+    action => { action.extra = true; },
+    action => { action.context.messageId = 'another_message'; },
+    action => { action.context.blockId = 'another_block'; },
+    action => { action.protocolVersion = '0.2'; },
+    action => { action.type = 'choice.select'; },
+    action => { action.target = 'another.handler'; },
+    action => { action.schemaVersion = 2; },
+    action => { action.context.conversationId = 'g:64617368626F6172643A6F74686572'; },
+  ]) {
+    const action = f.action(q, { values: clone(invalidValues) }); change(action);
+    refusal(() => f.accept(q, action), 'invalid_chat_answer');
+    unchanged(q);
+  }
+  refusal(() => f.answers.accept({ sessionGroup: q.saved.session_group, endpointId: 'other',
+    interruptId: q.saved.interrupt_id, action: f.action(q, { values: clone(invalidValues) }) }), 'chat_question_forbidden');
+  refusal(() => f.answers.accept({ sessionGroup: 'dashboard:other', endpointId: q.saved.endpoint_id,
+    interruptId: q.saved.interrupt_id, action: f.action(q, { values: clone(invalidValues) }) }), 'chat_question_not_found');
+  unchanged(q);
+
+  const legacy = clone(fixtures.formQuestion);
+  legacy.blocks[0].schemaVersion = 1;
+  for (const field of legacy.blocks[0].data.fields) delete field.activeWhen;
+  const old = f.question(legacy);
+  refusal(() => f.accept(old, f.action(old, { values: clone(invalidValues) })), 'invalid_chat_answer');
+  unchanged(old);
+  const denied = clone(fixtures.formQuestion); denied.interrupt.otherInput = false;
+  const noText = f.question(denied);
+  refusal(() => f.accept(noText, f.action(noText, { freeText: 'Please clarify' })), 'invalid_chat_answer');
+  unchanged(noText);
+
+  const control = f.action(q, { values: { customer_type: 'person' } }, 'durable_conditional_answer');
+  const accepted = f.accept(q, control);
+  assert.equal(accepted.created, true);
+  durable = 1;
+  unchanged();
+  assert.equal(f.accept(q, clone(control)).created, false);
+  unchanged();
+  refusal(() => f.accept(q, f.action(q, { values: clone(invalidValues) }, 'answered_invalid_fields')), 'invalid_chat_answer');
+  refusal(() => f.accept(q, f.action(q, { values: { customer_type: 'person' } }, 'answered_valid_fields')), 'chat_question_not_paused');
+  const conflict = clone(control); conflict.payload.values = { customer_type: 'partner' };
+  refusal(() => f.accept(q, conflict), 'chat_answer_conflict');
+  assert.equal(f.answers.question(q.saved.session_group, q.saved.interrupt_id).status, 'answered');
+  assert.deepEqual(f.answers.get(control.id), accepted.answer);
 });
 
 const legalView = { schemaVersion: 1, root: 'layout_root', nodes: [{ id: 'layout_root', type: 'block', blockId: 'customer_form' }] };

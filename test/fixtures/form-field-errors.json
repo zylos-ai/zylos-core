@@ -1,0 +1,16 @@
+{
+  "person_minimal": [],
+  "company_complete": [],
+  "active_multi_select": [],
+  "inactive_text_rejected": [{ "key": "company_name", "reason": "inactive" }],
+  "inactive_null_rejected": [{ "key": "company_name", "reason": "inactive" }],
+  "inactive_numeric_null_rejected": [{ "key": "employee_count", "reason": "inactive" }],
+  "company_missing_required": [{ "key": "company_name", "reason": "required" }],
+  "company_null_required": [{ "key": "company_name", "reason": "required" }],
+  "active_integer_type": [{ "key": "employee_count", "reason": "type" }],
+  "active_integer_range": [{ "key": "employee_count", "reason": "range" }],
+  "active_text_length": [{ "key": "company_name", "reason": "range" }],
+  "unknown_field": [{ "key": "unknown", "reason": "unknown" }],
+  "inactive_tag_note_null": [{ "key": "tag_note", "reason": "inactive" }],
+  "invalid_multi_select_value": [{ "key": "tags", "reason": "range" }]
+}

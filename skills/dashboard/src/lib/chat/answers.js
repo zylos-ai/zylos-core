@@ -67,8 +67,8 @@ function answerEnvelope(question, action, fallbackText) {
 
 function fieldErrors(question, envelope, action) {
   const block = envelope.blocks[0], data = block.data;
-  if (question.status !== 'paused' || block.type !== 'form_intent' || block.schemaVersion !== 2
-      || (data.state?.status ?? 'open') !== 'open' || !action || typeof action !== 'object') return null;
+  if (question.status !== 'paused' || block.type !== 'form_intent' || block.schemaVersion !== 2) return null;
+  // Mirror validateAnswer's Action shape, message/block context and type/target checks before field diagnostics.
   // Validate the original closed Action shape through the existing parser.
   // The provisional fallback uses only the authoritative saved summary.
   let parsed;

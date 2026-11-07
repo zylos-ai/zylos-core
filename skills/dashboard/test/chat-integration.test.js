@@ -15,9 +15,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { createChatApiFixture, createRemoteChatApiFixture, questionContent, assertChatProcessIsolation } from './helpers/chat-integration-api.js';
 import { acceptDelivery } from '../src/lib/chat/channel.js';
-import { makeQuestionSummary, parseC4Content, validateFormFields } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const conditionalFixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
+const expectedFieldErrors = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/form-field-errors.json', import.meta.url), 'utf8'));
 
 let assertionCount = 0;
 const assert = new Proxy(strictAssert, { get(target, key) {
@@ -108,7 +109,7 @@ for (const example of conditionalFixtures.answers) {
     if (!example.valid) {
       assert.equal(result.status, 400);
       assert.deepEqual(result.body, { error: 'invalid_chat_answer',
-        fields: validateFormFields(question.blocks[0].data.fields, example.values).errors });
+        fields: expectedFieldErrors[example.name] });
       assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
       assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 0);
       assert.equal(a.answerRows(body.action.id).length, 0);

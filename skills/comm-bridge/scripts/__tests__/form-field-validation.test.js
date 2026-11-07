@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { CONTENT_PREFIX, parseC4Content, evaluateFormState, validateAnswer, validateFormFields } from '../c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
+const expected = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/form-field-errors.json', import.meta.url), 'utf8'));
 const clone = value => structuredClone(value);
 const actionFor = (question, values) => ({ id: 'field_answer', protocolVersion: '0.1', type: 'form.submit', target: 'customer.register',
   context: { messageId: question.messageId, blockId: 'customer_form' }, payload: { values } });
@@ -11,24 +12,10 @@ const success = result => !result.formError && result.errors.length === 0;
 const diagnostics = (question, values) => validateFormFields(question.blocks[0].data.fields, values);
 
 // Pure shared-schema boundary, with static fixtures only. Run for form-field or
-// answer validation changes; unrelated transport/UI changes may skip. Parity is
-// scoped to a valid v2 question and well-formed matching form.values Action;
+// answer validation changes; unrelated transport/UI changes may skip. Fixed
+// expectations use a valid v2 question and matching form.values Action;
 // protocol, context, permissions and freeText are not field diagnostics.
-const expected = {
-  person_minimal: [], company_complete: [], active_multi_select: [],
-  inactive_text_rejected: [{ key: 'company_name', reason: 'inactive' }],
-  inactive_null_rejected: [{ key: 'company_name', reason: 'inactive' }],
-  inactive_numeric_null_rejected: [{ key: 'employee_count', reason: 'inactive' }],
-  company_missing_required: [{ key: 'company_name', reason: 'required' }],
-  company_null_required: [{ key: 'company_name', reason: 'required' }],
-  active_integer_type: [{ key: 'employee_count', reason: 'type' }],
-  active_integer_range: [{ key: 'employee_count', reason: 'range' }],
-  active_text_length: [{ key: 'company_name', reason: 'range' }],
-  unknown_field: [{ key: 'unknown', reason: 'unknown' }],
-  inactive_tag_note_null: [{ key: 'tag_note', reason: 'inactive' }],
-  invalid_multi_select_value: [{ key: 'tags', reason: 'range' }],
-};
-for (const example of fixtures.answers) test(`shared field diagnostics agree with answer acceptance for ${example.name}`, () => {
+for (const example of fixtures.answers) test(`shared field diagnostics preserve fixed reasons for ${example.name}`, () => {
   const question = clone(fixtures.formQuestion), values = clone(example.values);
   const before = JSON.stringify({ question, values });
   assert.equal(parseC4Content(CONTENT_PREFIX + JSON.stringify(question)).kind, 'envelope');
@@ -36,7 +23,7 @@ for (const example of fixtures.answers) test(`shared field diagnostics agree wit
   assert.deepEqual(result.errors, expected[example.name]);
   assert.equal(result.formError, undefined);
   assert.equal(success(result), example.valid);
-  assert.equal(success(result), validateAnswer(actionFor(question, values), question));
+  assert.equal(validateAnswer(actionFor(question, values), question), example.valid);
   assert.equal(JSON.stringify({ question, values }), before);
 });
 
