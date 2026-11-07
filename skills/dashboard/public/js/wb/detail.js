@@ -1,8 +1,8 @@
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=94';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=97';
-import { renderOverview } from './detail-overview.js?v=97';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=97';
+import { channelIcon, platformLabel, statePill } from './board.js?v=98';
+import { renderOverview } from './detail-overview.js?v=98';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=98';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=95';
 import { renderNameEditor } from './name-edit.js?v=95';
 

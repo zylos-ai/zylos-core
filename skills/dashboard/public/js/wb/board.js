@@ -1,5 +1,5 @@
 import { chatKind, element, fallbackName, icon, platformOf, runtimeName } from './plain-text.js?v=94';
-import { toolLabel, waitText } from './view-mode.js?v=97';
+import { toolLabel, waitText } from './view-mode.js?v=98';
 import { activityStrip } from './activity-strip.js?v=94';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&

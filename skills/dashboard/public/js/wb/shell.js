@@ -1,5 +1,5 @@
-import { createViewMode, observerNavEntry } from './view-mode.js?v=97';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=97';
+import { createViewMode, observerNavEntry } from './view-mode.js?v=98';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=98';
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip } from './instance-strip.js?v=94';
 import { renderAttention } from './attention-bar.js?v=94';
