@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { evaluateBeforeSend } from '../scripts/send-hook.js';
-import { CONTENT_PREFIX, MAX_CONTENT_BYTES, validateHookOutput } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, validateHookOutput } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const wire = content => {
@@ -63,4 +63,34 @@ test('Dashboard hook rejects invalid wire and wrong channel or declaration ident
     assert.equal(result.decision, 'abort');
     assert.equal(validateHookOutput(result), true);
   }
+});
+
+const viewForms = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
+
+// Producer/consumer split only; pure shared-schema/hook calls, no storage or IO.
+// Run for View degradation or BeforeSend changes; skip unrelated HTTP/UI work.
+test('Dashboard hook rejects degraded Views while the reader retains legal Content', () => {
+  for (const fixture of viewForms.views) {
+    const envelope = structuredClone(viewForms.message);
+    envelope.metadata = { view: fixture.view };
+    const content = CONTENT_PREFIX + JSON.stringify(envelope);
+    const parsed = parseC4Content(content);
+    assert.equal(parsed.kind, 'envelope', fixture.name);
+    const input = wire(content), original = JSON.stringify(input);
+    const result = evaluateBeforeSend(input);
+    assert.equal(result.decision, fixture.valid ? 'continue' : 'abort', fixture.name);
+    assert.equal(validateHookOutput(result), true);
+    assert.equal(JSON.stringify(input), original);
+    if (!fixture.valid) {
+      assert.ok(parsed.viewError, fixture.name);
+      assert.equal(result.message.includes(content), false);
+    }
+  }
+});
+
+test('Dashboard hook accepts a conditional form without View and rejects invalid definitions', () => {
+  accepts(CONTENT_PREFIX + JSON.stringify(viewForms.formQuestion));
+  const envelope = structuredClone(viewForms.formQuestion);
+  envelope.blocks.find(block => block.type === 'form_intent').data.fields = viewForms.invalidDefinitions[0].fields;
+  rejects(CONTENT_PREFIX + JSON.stringify(envelope));
 });

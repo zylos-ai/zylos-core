@@ -62,7 +62,7 @@ test('the static component list is the catalog intersection with shipped impleme
   const catalogKeys = COMPONENT_CATALOG.map(component => `${component.type}@${component.schemaVersion}`);
   for (const component of COMPONENT_CATALOG) assert.ok(BLOCK_SCHEMA.properties.type.enum.includes(component.type));
   assert.deepEqual(REGISTERED_COMPONENT_KEYS, catalogKeys.filter(key => CORE_COMPONENT_KEYS.includes(key)));
-  const restricted = createCatalogArtifacts({ implementedKeys: ['markdown@1', 'missing@1', 'form_intent@2'] });
+  const restricted = createCatalogArtifacts({ implementedKeys: ['markdown@1', 'missing@1', 'form_intent@99'] });
   assert.deepEqual(restricted.REGISTERED_COMPONENT_KEYS, ['markdown@1']);
   assert.deepEqual(restricted.COMPONENT_DEFINITIONS.map(item => item.key), ['markdown@1']);
   assert.ok(restricted.INTERACTIVE_COMPONENT_TYPES.includes('choice'));
@@ -88,4 +88,19 @@ for (const fixture of fixtures.valid) test(`catalog example is a legal message f
 });
 for (const fixture of fixtures.invalid) test(`catalog data rejects an unknown parameter for ${fixture.key}`, () => {
   assert.equal(parseC4Content(encode(fixture.envelope)).kind, 'invalid');
+});
+
+test('host definitions extend the catalog without claiming a conditional renderer', () => {
+  const conditional = COMPONENT_CATALOG.find(component => component.type === 'form_intent' && component.schemaVersion === 2);
+  assert.ok(conditional);
+  assert.equal(parseC4Content(encode(conditional.example)).kind, 'envelope');
+  assert.equal(REGISTERED_COMPONENT_KEYS.includes('form_intent@2'), false);
+  assert.equal(COMPONENT_DEFINITIONS.some(component => component.schemaVersion === 2), false);
+  assert.equal(MODEL_INSTRUCTIONS.includes('form_intent@2:'), false);
+  assert.equal(delivered.VIEW_SCHEMA.properties.schemaVersion.const, 1);
+  assert.equal(delivered.VIEW_SCHEMA.properties.nodes.maxItems, 128);
+  assert.equal(digest(delivered.BLOCK_SCHEMA.$defs.activeWhen), digest(delivered.FORM_CONDITION_SCHEMA));
+  const hypothetical = createCatalogArtifacts({ implementedKeys: ['form_intent@2'] });
+  assert.deepEqual(hypothetical.REGISTERED_COMPONENT_KEYS, ['form_intent@2']);
+  assert.deepEqual(hypothetical.COMPONENT_DEFINITIONS[0].parameters, delivered.BLOCK_SCHEMA.$defs.formIntentDataV2);
 });

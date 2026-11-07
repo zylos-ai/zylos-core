@@ -312,6 +312,71 @@ export const COMPONENT_CATALOG = [
   }
 ];
 
+// Approved host definitions extend the fixed upstream v1 definitions above.
+const HOST_SCHEMA_SOURCE = { designCommit: '74b653a', viewSchemaVersion: 1, formSchemaVersion: 2 };
+const FORM_CONDITION_SCHEMA = {
+  oneOf: [
+    { type: 'object', required: ['field', 'eq'], additionalProperties: false,
+      properties: { field: { type: 'string', pattern: '^[a-z][a-z0-9_]{0,31}$' },
+        eq: { type: ['string', 'number', 'boolean'] } } },
+    { type: 'object', required: ['field', 'in'], additionalProperties: false,
+      properties: { field: { type: 'string', pattern: '^[a-z][a-z0-9_]{0,31}$' },
+        in: { type: 'array', minItems: 1, maxItems: 20,
+          items: { type: ['string', 'number', 'boolean'] } } } },
+    { type: 'object', required: ['field', 'present'], additionalProperties: false,
+      properties: { field: { type: 'string', pattern: '^[a-z][a-z0-9_]{0,31}$' }, present: { const: true } } },
+  ],
+};
+const nodeId = { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$' };
+const childIds = { type: 'array', maxItems: 128, items: nodeId };
+const VIEW_SCHEMA = {
+  type: 'object', required: ['schemaVersion', 'root', 'nodes'], additionalProperties: false,
+  properties: { schemaVersion: { const: 1 }, root: nodeId,
+    nodes: { type: 'array', minItems: 1, maxItems: 128, items: { $ref: '#/$defs/node' } } },
+  $defs: { node: { oneOf: [
+    { type: 'object', required: ['id', 'type', 'children'], additionalProperties: false,
+      properties: { id: nodeId, type: { const: 'stack' }, children: { ...childIds, minItems: 1 }, gap: { enum: ['compact', 'normal'] } } },
+    { type: 'object', required: ['id', 'type', 'children'], additionalProperties: false,
+      properties: { id: nodeId, type: { const: 'columns' }, children: { ...childIds, minItems: 2, maxItems: 4 }, layout: { enum: ['balanced', 'sidebar'] } },
+      if: { properties: { layout: { const: 'sidebar' } }, required: ['layout'] },
+      then: { properties: { children: { minItems: 2, maxItems: 2 } } } },
+    { type: 'object', required: ['id', 'type'], additionalProperties: false,
+      properties: { id: nodeId, type: { const: 'section' }, header: childIds, body: childIds, actions: childIds },
+      anyOf: ['header', 'body', 'actions'].map(name => ({ required: [name], properties: { [name]: { minItems: 1 } } })) },
+    { type: 'object', required: ['id', 'type', 'blockId'], additionalProperties: false,
+      properties: { id: nodeId, type: { const: 'block' }, blockId: nodeId } },
+  ] } },
+};
+
+function blockSchemaWithHostDefinitions() {
+  const schema = clone(BLOCK_SCHEMA);
+  schema.properties.schemaVersion = { enum: [1, 2] };
+  const formRule = schema.allOf.find(rule => rule.if?.properties?.type?.const === 'form_intent');
+  formRule.if.properties.schemaVersion = { const: 1 };
+  schema.allOf.push({ if: { properties: { schemaVersion: { const: 2 } } },
+    then: { properties: { type: { const: 'form_intent' }, data: { $ref: '#/$defs/formIntentDataV2' } } } });
+  schema.$defs.activeWhen = clone(FORM_CONDITION_SCHEMA);
+  schema.$defs.formFieldV2 = clone(schema.$defs.formField);
+  schema.$defs.formFieldV2.properties.activeWhen = { $ref: '#/$defs/activeWhen' };
+  schema.$defs.formIntentDataV2 = clone(schema.$defs.formIntentData);
+  schema.$defs.formIntentDataV2.properties.fields.items = { $ref: '#/$defs/formFieldV2' };
+  return schema;
+}
+
+COMPONENT_CATALOG.push({ type: 'form_intent', schemaVersion: 2, dataSchema: 'formIntentDataV2', interactive: true,
+  description: 'A conditional form. Field activeWhen uses scalar eq/in or present:true; hidden upstream values are missing downstream. Submit only active keys.',
+  example: { version: 1, kind: 'message', messageId: 'conditional_form_question',
+    fallbackText: '登记主体信息；等待用户回答。', blocks: [{ id: 'question', type: 'form_intent', schemaVersion: 2,
+      data: { title: '登记主体信息', fields: [
+        { key: 'customer_type', label: '主体类型', type: 'single_select', required: true,
+          options: [{ id: 'person', label: '个人' }, { id: 'company', label: '企业' }] },
+        { key: 'company_name', label: '公司名称', type: 'text', required: true,
+          activeWhen: { field: 'customer_type', eq: 'company' } },
+      ], action: { type: 'form.submit', target: 'information.submit' } }, fallbackText: '登记主体信息' }],
+    interruptId: 'interrupt_conditional_form_question', questionSummary: '登记主体信息',
+    interrupt: { blockId: 'question', reason: 'input_required' } },
+});
+
 // Static renderer implementations shipped with this Core version. A catalog
 // entry alone is never an implementation claim. Rendering tests cover each key.
 export const CORE_COMPONENT_KEYS = ['markdown@1', 'time_series@1', 'breakdown@1',
@@ -320,11 +385,12 @@ const clone = value => JSON.parse(JSON.stringify(value));
 
 export function createCatalogArtifacts({ implementedKeys = CORE_COMPONENT_KEYS } = {}) {
   const available = new Set(implementedKeys);
+  const blockSchema = blockSchemaWithHostDefinitions();
   const definitions = COMPONENT_CATALOG.map(component => ({
     key: `${component.type}@${component.schemaVersion}`, type: component.type,
     schemaVersion: component.schemaVersion, interactive: component.interactive,
     description: component.description,
-    parameters: clone(BLOCK_SCHEMA.$defs[component.dataSchema]), example: clone(component.example),
+    parameters: clone(blockSchema.$defs[component.dataSchema]), example: clone(component.example),
   }));
   const registered = definitions.filter(component => available.has(component.key));
   const instructions = [
@@ -335,8 +401,9 @@ export function createCatalogArtifacts({ implementedKeys = CORE_COMPONENT_KEYS }
     'Parameter references resolve against BLOCK_SCHEMA.$defs or ACTION_SCHEMA.$defs in the same schema module.',
     ...registered.map(component => `${component.key}: ${component.description}\nParameters: ${JSON.stringify(component.parameters)}`),
   ].join('\n\n');
-  return { BLOCK_SCHEMA: clone(BLOCK_SCHEMA), ACTION_SCHEMA: clone(ACTION_SCHEMA),
-    CATALOG_SOURCE: clone(CATALOG_SOURCE), COMPONENT_DEFINITIONS: registered,
+  return { BLOCK_SCHEMA: blockSchema, ACTION_SCHEMA: clone(ACTION_SCHEMA),
+    CATALOG_SOURCE: clone(CATALOG_SOURCE), HOST_SCHEMA_SOURCE: clone(HOST_SCHEMA_SOURCE),
+    VIEW_SCHEMA: clone(VIEW_SCHEMA), FORM_CONDITION_SCHEMA: clone(FORM_CONDITION_SCHEMA), COMPONENT_DEFINITIONS: registered,
     INTERACTIVE_COMPONENT_TYPES: [...new Set(COMPONENT_CATALOG.filter(component => component.interactive).map(component => component.type))],
     REGISTERED_COMPONENT_KEYS: registered.map(component => component.key), MODEL_INSTRUCTIONS: instructions };
 }

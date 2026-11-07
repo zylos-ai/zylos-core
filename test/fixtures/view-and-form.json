@@ -1,0 +1,2277 @@
+{
+  "message": {
+    "version": 1,
+    "kind": "message",
+    "messageId": "combined_message",
+    "fallbackText": "Compare both plans, then choose.",
+    "blocks": [
+      {
+        "id": "plan_a",
+        "type": "markdown",
+        "schemaVersion": 1,
+        "data": {
+          "text": "Plan A"
+        }
+      },
+      {
+        "id": "plan_b",
+        "type": "markdown",
+        "schemaVersion": 1,
+        "data": {
+          "text": "Plan B"
+        }
+      },
+      {
+        "id": "question",
+        "type": "choice",
+        "schemaVersion": 1,
+        "fallbackText": "Choose a plan",
+        "data": {
+          "prompt": "Choose a plan",
+          "options": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "action": {
+            "type": "choice.select",
+            "target": "clarification.answer"
+          }
+        }
+      }
+    ],
+    "interruptId": "combined_question",
+    "questionSummary": "Choose a plan",
+    "interrupt": {
+      "blockId": "question",
+      "reason": "input_required"
+    }
+  },
+  "formQuestion": {
+    "version": 1,
+    "kind": "message",
+    "messageId": "conditional_form",
+    "fallbackText": "Enter customer details.",
+    "blocks": [
+      {
+        "id": "customer_form",
+        "type": "form_intent",
+        "schemaVersion": 2,
+        "fallbackText": "Enter customer details",
+        "data": {
+          "title": "Customer details",
+          "fields": [
+            {
+              "key": "customer_type",
+              "label": "Customer type",
+              "type": "single_select",
+              "required": true,
+              "options": [
+                {
+                  "id": "person",
+                  "label": "Person"
+                },
+                {
+                  "id": "company",
+                  "label": "Company"
+                },
+                {
+                  "id": "partner",
+                  "label": "Partner"
+                }
+              ]
+            },
+            {
+              "key": "company_name",
+              "label": "Company name",
+              "type": "text",
+              "required": true,
+              "maxLength": 40,
+              "activeWhen": {
+                "field": "customer_type",
+                "eq": "company"
+              }
+            },
+            {
+              "key": "employee_count",
+              "label": "Employee count",
+              "type": "integer",
+              "required": true,
+              "min": 1,
+              "max": 100,
+              "activeWhen": {
+                "field": "customer_type",
+                "eq": "company"
+              }
+            },
+            {
+              "key": "tags",
+              "label": "Tags",
+              "type": "multi_select",
+              "options": [
+                {
+                  "id": "urgent",
+                  "label": "Urgent"
+                },
+                {
+                  "id": "vip",
+                  "label": "VIP"
+                }
+              ]
+            },
+            {
+              "key": "tag_note",
+              "label": "Tag note",
+              "type": "text",
+              "maxLength": 20,
+              "activeWhen": {
+                "field": "tags",
+                "present": true
+              }
+            }
+          ],
+          "action": {
+            "type": "form.submit",
+            "target": "customer.register"
+          }
+        }
+      }
+    ],
+    "interruptId": "customer_interrupt",
+    "questionSummary": "Enter customer details",
+    "interrupt": {
+      "blockId": "customer_form",
+      "reason": "input_required"
+    }
+  },
+  "views": [
+    {
+      "name": "balanced_columns",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "sidebar_columns",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ],
+            "layout": "sidebar"
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "section_slots",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "section",
+            "header": [
+              "heading"
+            ],
+            "body": [
+              "body"
+            ],
+            "actions": [
+              "answer"
+            ]
+          },
+          {
+            "id": "heading",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "body",
+            "type": "block",
+            "blockId": "plan_b"
+          },
+          {
+            "id": "answer",
+            "type": "block",
+            "blockId": "question"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "stack_compact",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "stack",
+            "gap": "compact",
+            "children": [
+              "content"
+            ]
+          },
+          {
+            "id": "content",
+            "type": "block",
+            "blockId": "plan_a"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "single_block",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "block",
+            "blockId": "question"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "unknown_view_version",
+      "view": {
+        "schemaVersion": 2,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_view_field",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ],
+        "script": "no"
+      },
+      "valid": false
+    },
+    {
+      "name": "missing_root",
+      "view": {
+        "schemaVersion": 1,
+        "root": "absent",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate_node_id",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "stack",
+            "children": [
+              "left"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_node_type",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "repeat",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_block_reference",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "another_message"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate_noninteractive_block",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate_interactive_block",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "question"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "question"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate_child_edge",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "left"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "missing_child_reference",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "absent"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unreachable_node",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          },
+          {
+            "id": "unreachable",
+            "type": "block",
+            "blockId": "question"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "cycle_to_root",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "stack",
+            "children": [
+              "root"
+            ]
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "block_has_children",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a",
+            "children": [
+              "right"
+            ]
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "block_has_props",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a",
+            "props": {
+              "nested": {
+                "text": "illegal"
+              }
+            }
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "node_id_too_long",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "right"
+            ]
+          },
+          {
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "node_id_invalid_start",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "_bad",
+              "right"
+            ]
+          },
+          {
+            "id": "_bad",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "non_scalar_child",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              {
+                "id": "left"
+              },
+              "right"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "columns_one_child",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "columns_five_children",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right",
+              "left",
+              "right",
+              "left"
+            ]
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "sidebar_three_children",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right",
+              "answer"
+            ],
+            "layout": "sidebar"
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          },
+          {
+            "id": "answer",
+            "type": "block",
+            "blockId": "question"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_columns_layout",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "columns",
+            "children": [
+              "left",
+              "right"
+            ],
+            "layout": "arbitrary"
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "nested_section_slots",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "section",
+            "children": [
+              "left",
+              "right"
+            ],
+            "slots": {
+              "body": [
+                "left",
+                "right"
+              ]
+            }
+          },
+          {
+            "id": "left",
+            "type": "block",
+            "blockId": "plan_a"
+          },
+          {
+            "id": "right",
+            "type": "block",
+            "blockId": "plan_b"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "empty_stack",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "stack",
+            "children": []
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "empty_section",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "section",
+            "header": [],
+            "body": [],
+            "actions": []
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "multiple_parents",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "stack",
+            "children": [
+              "a",
+              "b"
+            ]
+          },
+          {
+            "id": "a",
+            "type": "stack",
+            "children": [
+              "shared"
+            ]
+          },
+          {
+            "id": "b",
+            "type": "section",
+            "body": [
+              "shared"
+            ]
+          },
+          {
+            "id": "shared",
+            "type": "block",
+            "blockId": "plan_a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "root_has_parent",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "type": "stack",
+            "children": [
+              "child"
+            ]
+          },
+          {
+            "id": "child",
+            "type": "stack",
+            "children": [
+              "root"
+            ]
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "empty_nodes",
+      "view": {
+        "schemaVersion": 1,
+        "root": "root",
+        "nodes": []
+      },
+      "valid": false
+    }
+  ],
+  "formStates": [
+    {
+      "name": "person_hides_company",
+      "fields": [
+        {
+          "key": "customer_type",
+          "label": "Customer type",
+          "type": "single_select",
+          "required": true,
+          "options": [
+            {
+              "id": "person",
+              "label": "Person"
+            },
+            {
+              "id": "company",
+              "label": "Company"
+            },
+            {
+              "id": "partner",
+              "label": "Partner"
+            }
+          ]
+        },
+        {
+          "key": "company_name",
+          "label": "Company name",
+          "type": "text",
+          "required": true,
+          "maxLength": 40,
+          "activeWhen": {
+            "field": "customer_type",
+            "eq": "company"
+          }
+        },
+        {
+          "key": "employee_count",
+          "label": "Employee count",
+          "type": "integer",
+          "required": true,
+          "min": 1,
+          "max": 100,
+          "activeWhen": {
+            "field": "customer_type",
+            "eq": "company"
+          }
+        },
+        {
+          "key": "tags",
+          "label": "Tags",
+          "type": "multi_select",
+          "options": [
+            {
+              "id": "urgent",
+              "label": "Urgent"
+            },
+            {
+              "id": "vip",
+              "label": "VIP"
+            }
+          ]
+        },
+        {
+          "key": "tag_note",
+          "label": "Tag note",
+          "type": "text",
+          "maxLength": 20,
+          "activeWhen": {
+            "field": "tags",
+            "present": true
+          }
+        }
+      ],
+      "values": {
+        "customer_type": "person",
+        "company_name": "stale",
+        "employee_count": 3
+      },
+      "activeKeys": [
+        "customer_type",
+        "tags"
+      ]
+    },
+    {
+      "name": "company_requires_company_fields",
+      "fields": [
+        {
+          "key": "customer_type",
+          "label": "Customer type",
+          "type": "single_select",
+          "required": true,
+          "options": [
+            {
+              "id": "person",
+              "label": "Person"
+            },
+            {
+              "id": "company",
+              "label": "Company"
+            },
+            {
+              "id": "partner",
+              "label": "Partner"
+            }
+          ]
+        },
+        {
+          "key": "company_name",
+          "label": "Company name",
+          "type": "text",
+          "required": true,
+          "maxLength": 40,
+          "activeWhen": {
+            "field": "customer_type",
+            "eq": "company"
+          }
+        },
+        {
+          "key": "employee_count",
+          "label": "Employee count",
+          "type": "integer",
+          "required": true,
+          "min": 1,
+          "max": 100,
+          "activeWhen": {
+            "field": "customer_type",
+            "eq": "company"
+          }
+        },
+        {
+          "key": "tags",
+          "label": "Tags",
+          "type": "multi_select",
+          "options": [
+            {
+              "id": "urgent",
+              "label": "Urgent"
+            },
+            {
+              "id": "vip",
+              "label": "VIP"
+            }
+          ]
+        },
+        {
+          "key": "tag_note",
+          "label": "Tag note",
+          "type": "text",
+          "maxLength": 20,
+          "activeWhen": {
+            "field": "tags",
+            "present": true
+          }
+        }
+      ],
+      "values": {
+        "customer_type": "company"
+      },
+      "activeKeys": [
+        "customer_type",
+        "company_name",
+        "employee_count",
+        "tags"
+      ]
+    },
+    {
+      "name": "tags_present",
+      "fields": [
+        {
+          "key": "customer_type",
+          "label": "Customer type",
+          "type": "single_select",
+          "required": true,
+          "options": [
+            {
+              "id": "person",
+              "label": "Person"
+            },
+            {
+              "id": "company",
+              "label": "Company"
+            },
+            {
+              "id": "partner",
+              "label": "Partner"
+            }
+          ]
+        },
+        {
+          "key": "company_name",
+          "label": "Company name",
+          "type": "text",
+          "required": true,
+          "maxLength": 40,
+          "activeWhen": {
+            "field": "customer_type",
+            "eq": "company"
+          }
+        },
+        {
+          "key": "employee_count",
+          "label": "Employee count",
+          "type": "integer",
+          "required": true,
+          "min": 1,
+          "max": 100,
+          "activeWhen": {
+            "field": "customer_type",
+            "eq": "company"
+          }
+        },
+        {
+          "key": "tags",
+          "label": "Tags",
+          "type": "multi_select",
+          "options": [
+            {
+              "id": "urgent",
+              "label": "Urgent"
+            },
+            {
+              "id": "vip",
+              "label": "VIP"
+            }
+          ]
+        },
+        {
+          "key": "tag_note",
+          "label": "Tag note",
+          "type": "text",
+          "maxLength": 20,
+          "activeWhen": {
+            "field": "tags",
+            "present": true
+          }
+        }
+      ],
+      "values": {
+        "customer_type": "person",
+        "tags": [
+          "vip"
+        ]
+      },
+      "activeKeys": [
+        "customer_type",
+        "tags",
+        "tag_note"
+      ]
+    },
+    {
+      "name": "empty_tags_absent",
+      "fields": [
+        {
+          "key": "customer_type",
+          "label": "Customer type",
+          "type": "single_select",
+          "required": true,
+          "options": [
+            {
+              "id": "person",
+              "label": "Person"
+            },
+            {
+              "id": "company",
+              "label": "Company"
+            },
+            {
+              "id": "partner",
+              "label": "Partner"
+            }
+          ]
+        },
+        {
+          "key": "company_name",
+          "label": "Company name",
+          "type": "text",
+          "required": true,
+          "maxLength": 40,
+          "activeWhen": {
+            "field": "customer_type",
+            "eq": "company"
+          }
+        },
+        {
+          "key": "employee_count",
+          "label": "Employee count",
+          "type": "integer",
+          "required": true,
+          "min": 1,
+          "max": 100,
+          "activeWhen": {
+            "field": "customer_type",
+            "eq": "company"
+          }
+        },
+        {
+          "key": "tags",
+          "label": "Tags",
+          "type": "multi_select",
+          "options": [
+            {
+              "id": "urgent",
+              "label": "Urgent"
+            },
+            {
+              "id": "vip",
+              "label": "VIP"
+            }
+          ]
+        },
+        {
+          "key": "tag_note",
+          "label": "Tag note",
+          "type": "text",
+          "maxLength": 20,
+          "activeWhen": {
+            "field": "tags",
+            "present": true
+          }
+        }
+      ],
+      "values": {
+        "customer_type": "person",
+        "tags": []
+      },
+      "activeKeys": [
+        "customer_type",
+        "tags"
+      ]
+    },
+    {
+      "name": "inactive_upstream_ignores_saved_descendant",
+      "fields": [
+        {
+          "key": "c",
+          "label": "C",
+          "type": "text",
+          "activeWhen": {
+            "field": "b",
+            "eq": "yes"
+          }
+        },
+        {
+          "key": "b",
+          "label": "B",
+          "type": "single_select",
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ],
+          "activeWhen": {
+            "field": "a",
+            "eq": true
+          }
+        },
+        {
+          "key": "a",
+          "label": "A",
+          "type": "boolean"
+        }
+      ],
+      "values": {
+        "a": false,
+        "b": "yes",
+        "c": "saved"
+      },
+      "activeKeys": [
+        "a"
+      ]
+    },
+    {
+      "name": "restored_upstream_restores_chain",
+      "fields": [
+        {
+          "key": "c",
+          "label": "C",
+          "type": "text",
+          "activeWhen": {
+            "field": "b",
+            "eq": "yes"
+          }
+        },
+        {
+          "key": "b",
+          "label": "B",
+          "type": "single_select",
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ],
+          "activeWhen": {
+            "field": "a",
+            "eq": true
+          }
+        },
+        {
+          "key": "a",
+          "label": "A",
+          "type": "boolean"
+        }
+      ],
+      "values": {
+        "a": true,
+        "b": "yes",
+        "c": "saved"
+      },
+      "activeKeys": [
+        "c",
+        "b",
+        "a"
+      ]
+    },
+    {
+      "name": "active_upstream_without_value_keeps_child_inactive",
+      "fields": [
+        {
+          "key": "c",
+          "label": "C",
+          "type": "text",
+          "activeWhen": {
+            "field": "b",
+            "eq": "yes"
+          }
+        },
+        {
+          "key": "b",
+          "label": "B",
+          "type": "single_select",
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ],
+          "activeWhen": {
+            "field": "a",
+            "eq": true
+          }
+        },
+        {
+          "key": "a",
+          "label": "A",
+          "type": "boolean"
+        }
+      ],
+      "values": {
+        "a": true
+      },
+      "activeKeys": [
+        "b",
+        "a"
+      ]
+    },
+    {
+      "name": "zero_and_false_are_present",
+      "fields": [
+        {
+          "key": "count",
+          "label": "Count",
+          "type": "number"
+        },
+        {
+          "key": "flag",
+          "label": "Flag",
+          "type": "boolean"
+        },
+        {
+          "key": "note",
+          "label": "Note",
+          "type": "text"
+        },
+        {
+          "key": "count_detail",
+          "label": "Count detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "count",
+            "present": true
+          }
+        },
+        {
+          "key": "flag_detail",
+          "label": "Flag detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "flag",
+            "present": true
+          }
+        },
+        {
+          "key": "note_detail",
+          "label": "Note detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "note",
+            "present": true
+          }
+        }
+      ],
+      "values": {
+        "count": 0,
+        "flag": false,
+        "note": ""
+      },
+      "activeKeys": [
+        "count",
+        "flag",
+        "note",
+        "count_detail",
+        "flag_detail"
+      ]
+    },
+    {
+      "name": "null_and_missing_are_absent",
+      "fields": [
+        {
+          "key": "count",
+          "label": "Count",
+          "type": "number"
+        },
+        {
+          "key": "flag",
+          "label": "Flag",
+          "type": "boolean"
+        },
+        {
+          "key": "note",
+          "label": "Note",
+          "type": "text"
+        },
+        {
+          "key": "count_detail",
+          "label": "Count detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "count",
+            "present": true
+          }
+        },
+        {
+          "key": "flag_detail",
+          "label": "Flag detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "flag",
+            "present": true
+          }
+        },
+        {
+          "key": "note_detail",
+          "label": "Note detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "note",
+            "present": true
+          }
+        }
+      ],
+      "values": {
+        "count": null,
+        "note": null
+      },
+      "activeKeys": [
+        "count",
+        "flag",
+        "note"
+      ]
+    },
+    {
+      "name": "scalar_in_matches",
+      "fields": [
+        {
+          "key": "kind",
+          "label": "Kind",
+          "type": "single_select",
+          "options": [
+            {
+              "id": "one",
+              "label": "One"
+            },
+            {
+              "id": "two",
+              "label": "Two"
+            },
+            {
+              "id": "three",
+              "label": "Three"
+            }
+          ]
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "kind",
+            "in": [
+              "one",
+              "two"
+            ]
+          }
+        }
+      ],
+      "values": {
+        "kind": "two"
+      },
+      "activeKeys": [
+        "kind",
+        "detail"
+      ]
+    },
+    {
+      "name": "scalar_in_does_not_match",
+      "fields": [
+        {
+          "key": "kind",
+          "label": "Kind",
+          "type": "single_select",
+          "options": [
+            {
+              "id": "one",
+              "label": "One"
+            },
+            {
+              "id": "two",
+              "label": "Two"
+            },
+            {
+              "id": "three",
+              "label": "Three"
+            }
+          ]
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "kind",
+            "in": [
+              "one",
+              "two"
+            ]
+          }
+        }
+      ],
+      "values": {
+        "kind": "three"
+      },
+      "activeKeys": [
+        "kind"
+      ]
+    },
+    {
+      "name": "numeric_in_uses_numbers",
+      "fields": [
+        {
+          "key": "amount",
+          "label": "Amount",
+          "type": "number"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "amount",
+            "in": [
+              0,
+              2.5
+            ]
+          }
+        }
+      ],
+      "values": {
+        "amount": 0
+      },
+      "activeKeys": [
+        "amount",
+        "detail"
+      ]
+    }
+  ],
+  "invalidDefinitions": [
+    {
+      "name": "eq_null",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "eq": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "eq_array",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "eq": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "eq_object",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "eq": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "eq_wrong_type",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "eq": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "in_empty",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "in": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "in_too_long",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "in": [
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "in_mixed_types",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "in": [
+              "x",
+              3
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "in_null",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "in": [
+              null
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "present_false",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "present": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "present_non_boolean",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "present": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "unknown_source",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "missing",
+            "eq": "x"
+          }
+        }
+      ]
+    },
+    {
+      "name": "missing_source_key",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "eq": "x"
+          }
+        }
+      ]
+    },
+    {
+      "name": "unknown_condition_key",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "eq": "x",
+            "script": "x"
+          }
+        }
+      ]
+    },
+    {
+      "name": "multiple_operators",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "eq": "x",
+            "in": [
+              "x"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "unsupported_operator",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "contains": "x"
+          }
+        }
+      ]
+    },
+    {
+      "name": "multi_select_eq",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "multi_select",
+          "options": [
+            {
+              "id": "urgent",
+              "label": "Urgent"
+            }
+          ]
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "eq": "urgent"
+          }
+        }
+      ]
+    },
+    {
+      "name": "multi_select_in",
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "multi_select",
+          "options": [
+            {
+              "id": "urgent",
+              "label": "Urgent"
+            }
+          ]
+        },
+        {
+          "key": "detail",
+          "label": "Detail",
+          "type": "text",
+          "activeWhen": {
+            "field": "source",
+            "in": [
+              "urgent"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "self_cycle",
+      "fields": [
+        {
+          "key": "a",
+          "label": "A",
+          "type": "text",
+          "activeWhen": {
+            "field": "a",
+            "present": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "two_field_cycle",
+      "fields": [
+        {
+          "key": "a",
+          "label": "A",
+          "type": "text",
+          "activeWhen": {
+            "field": "b",
+            "present": true
+          }
+        },
+        {
+          "key": "b",
+          "label": "B",
+          "type": "text",
+          "activeWhen": {
+            "field": "a",
+            "present": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "duplicate_field_key",
+      "fields": [
+        {
+          "key": "same",
+          "label": "A",
+          "type": "text"
+        },
+        {
+          "key": "same",
+          "label": "B",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "name": "person_minimal",
+      "values": {
+        "customer_type": "person"
+      },
+      "valid": true
+    },
+    {
+      "name": "inactive_text_rejected",
+      "values": {
+        "customer_type": "person",
+        "company_name": "stale"
+      },
+      "valid": false
+    },
+    {
+      "name": "inactive_null_rejected",
+      "values": {
+        "customer_type": "person",
+        "company_name": null
+      },
+      "valid": false
+    },
+    {
+      "name": "inactive_numeric_null_rejected",
+      "values": {
+        "customer_type": "person",
+        "employee_count": null
+      },
+      "valid": false
+    },
+    {
+      "name": "company_complete",
+      "values": {
+        "customer_type": "company",
+        "company_name": "Acme",
+        "employee_count": 3
+      },
+      "valid": true
+    },
+    {
+      "name": "company_missing_required",
+      "values": {
+        "customer_type": "company",
+        "employee_count": 3
+      },
+      "valid": false
+    },
+    {
+      "name": "company_null_required",
+      "values": {
+        "customer_type": "company",
+        "company_name": null,
+        "employee_count": 3
+      },
+      "valid": false
+    },
+    {
+      "name": "active_integer_type",
+      "values": {
+        "customer_type": "company",
+        "company_name": "Acme",
+        "employee_count": 1.5
+      },
+      "valid": false
+    },
+    {
+      "name": "active_integer_range",
+      "values": {
+        "customer_type": "company",
+        "company_name": "Acme",
+        "employee_count": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "active_text_length",
+      "values": {
+        "customer_type": "company",
+        "company_name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "employee_count": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_field",
+      "values": {
+        "customer_type": "person",
+        "unknown": "x"
+      },
+      "valid": false
+    },
+    {
+      "name": "active_multi_select",
+      "values": {
+        "customer_type": "person",
+        "tags": [
+          "vip"
+        ],
+        "tag_note": "Known"
+      },
+      "valid": true
+    },
+    {
+      "name": "inactive_tag_note_null",
+      "values": {
+        "customer_type": "person",
+        "tags": [],
+        "tag_note": null
+      },
+      "valid": false
+    },
+    {
+      "name": "invalid_multi_select_value",
+      "values": {
+        "customer_type": "person",
+        "tags": [
+          "unknown"
+        ]
+      },
+      "valid": false
+    }
+  ]
+}
