@@ -3,7 +3,7 @@ import { boardController, renderBoard, renderDistribution } from './board.js?v=9
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip } from './instance-strip.js?v=94';
 import { renderAttention } from './attention-bar.js?v=94';
-import { createGroupDetail } from './detail.js?v=95';
+import { createGroupDetail } from './detail.js?v=99';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=94';
 import { createHostPanel } from './host-panel.js?v=94';
 import { element, icon } from './plain-text.js?v=94';
@@ -11,7 +11,7 @@ import { element, icon } from './plain-text.js?v=94';
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
   endpoint = path => path, identity = () => endpoint('/api/workbench/groups'), openSettings = () => {},
   observerStatus = () => null, observerAvailable = () => true,
-  writable = () => true, onMemory = () => {}, instanceInfo = () => ({}),
+  writable = () => true, onMemory = () => {}, onConversation, instanceInfo = () => ({}),
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
   const board = document.querySelector('#wb-board');
   if (!board) return { openGroup: async () => {}, setViewDetail() {}, destroy() {} };
@@ -177,7 +177,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   };
   groupDetail = createGroupDetail({ root: document.querySelector('#wb-side'), document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable,
-    detail: () => mode.detailLevel(), isVisible: visible, onMemory,
+    detail: () => mode.detailLevel(), isVisible: visible, onMemory, onConversation,
     onRename: () => controller.refresh(), onClose: () => { if (!stopped) redraw(); },
   });
   hostPanel = createHostPanel({ root: document.querySelector('#wb-side'), document, t, read, identity,

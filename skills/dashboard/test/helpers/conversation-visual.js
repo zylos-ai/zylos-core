@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createChatApiFixture, protocolFixtures, questionContent } from './chat-integration-api.js';
 import { sendJson } from '../../src/lib/http.js';
+import { dataError } from '../../../comm-bridge/scripts/c4-session-group.js';
 
 // Real product entry, schema, state, API and database. No source rewriting or eval.
 export async function runConversationVisual(t, sandbox) {
@@ -13,7 +14,7 @@ export async function runConversationVisual(t, sandbox) {
   assert.ok(executablePath && fs.existsSync(executablePath));
   const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (output) fs.mkdirSync(output, { recursive: true });
-  let reads = 0;
+  let reads = 0, draftWrites = 0;
   const fixture = await createChatApiFixture(t, sandbox, { name: 'Cache design review', extraHandler(req, res, url, f) {
     if (url.pathname.startsWith('/api/chat/')) return false;
     if (!url.pathname.startsWith('/api/')) return false;
@@ -29,8 +30,11 @@ export async function runConversationVisual(t, sandbox) {
   const first = await fixture.createConversation('Compare cache approaches and keep the limits visible.');
   const localId = first.draft.localId;
   for (let i = 0; i < 65; i++) fixture.addOutbound(localId, `Discussion ${i + 1}: retain the constraints and earlier decisions while reviewing the next step. This longer paragraph makes the reading position observable.`);
+  const malformedRow = fixture.addOutbound(localId, 'Historical malformed fixture');
+  fixture.db.prepare('UPDATE conversations SET content=? WHERE id=?').run(questionContent({}) + 'trailing', malformedRow.id);
   const markdown = structuredClone(protocolFixtures.valid.find(v => v.name === 'markdown').envelope);
-  markdown.messageId += '_page'; fixture.addOutbound(localId, questionContent(markdown));
+  markdown.messageId += '_page'; const markdownRow = fixture.addOutbound(localId, questionContent(markdown));
+  fixture.db.prepare('UPDATE conversations SET timestamp=? WHERE id=?').run('2026-11-01 03:02:00', markdownRow.id);
   for (const kind of ['time_series', 'breakdown', 'category_series']) {
     const envelope = structuredClone(protocolFixtures.valid.find(v => v.name === kind).envelope);
     envelope.messageId += '_page'; fixture.addOutbound(localId, questionContent(envelope));
@@ -39,18 +43,23 @@ export async function runConversationVisual(t, sandbox) {
   choice.messageId += '_page'; choice.interruptId += '_page'; fixture.addOutbound(localId, questionContent(choice));
   const form = structuredClone(protocolFixtures.valid.find(v => v.name === 'form').envelope);
   form.messageId += '_page'; form.interruptId += '_page'; const formRow = fixture.addOutbound(localId, questionContent(form));
-  fixture.c4.insertConversation('out', 'telegram', 'external-page', 'External history remains read only.', { groupName: 'external-page' });
+  const external = fixture.c4.insertConversation('in', 'telegram', 'external-page', 'External history remains read only.', { groupName: 'external-page' });
+  fixture.db.prepare("UPDATE conversations SET status='pending' WHERE id=?").run(external.id);
   sandbox.assertIsolation();
   const { chromium } = await import(pathToFileURL(modulePath));
   const browser = await chromium.launch({ executablePath, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
   sandbox.addCleanup(() => browser.close());
-  const context = await browser.newContext({ locale: 'zh-CN' });
+  const context = await browser.newContext({ locale: 'zh-CN', timezoneId: 'Asia/Shanghai' });
   await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
   await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: fixture.cookie, domain: '127.0.0.1', path: '/', secure: true }]);
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
-  page.on('request', request => { if (new URL(request.url()).pathname.endsWith('/messages')) reads++; });
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith('/messages')) reads++;
+    if (path === '/api/chat/drafts' && request.method() === 'POST') draftWrites++;
+  });
   const errors = [], shots = [];
   let expectedDenied = false;
   page.on('pageerror', error => { if (!errors.length) errors.push(error.message); });
@@ -62,6 +71,7 @@ export async function runConversationVisual(t, sandbox) {
   };
   const screenshot = async name => {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    assert.ok(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1), 'page has no vertical document overflow');
     if (output) { const file = path.join(output, name + '.png'); await page.screenshot({ path: file, fullPage: false }); shots.push(file); }
   };
   for (const width of [1440, 390]) for (const theme of ['light', 'dark']) {
@@ -69,13 +79,30 @@ export async function runConversationVisual(t, sandbox) {
     await page.addInitScript(value => { if (window === window.top) localStorage.setItem('zylos-dashboard-theme', value); }, theme);
     await page.goto(fixture.base + '/chat');
     await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
+    if (width === 1440) await page.locator('#wb-chat .chat-message').first().waitFor();
     await select();
     assert.ok(await page.locator('#wb-chat .chat-composer').evaluate(el => el.getBoundingClientRect().bottom <= innerHeight + 1), 'composer fits the actual viewport');
     assert.equal(await page.locator('#wb-chat .chat-composer textarea').count(), 1);
     assert.equal(await page.locator('#attachmentButton').count(), 0);
+    if (width === 390) {
+      for (const selector of ['.conversation-back', '[data-action="rename"]', '[data-action="refreshMessages"]', '[data-action="refreshStatus"]', '[data-action="send"]']) {
+        const control = page.locator('#wb-chat ' + selector).first();
+        const box = await control.boundingBox();
+        assert.ok(box && box.width >= 40 && box.height >= 40, selector + ' has a usable phone target');
+      }
+    }
     await screenshot(`conversation-${width}-${theme}`);
     await page.locator('#wb-chat .chat-chart').first().scrollIntoViewIfNeeded();
     await screenshot(`blocks-${width}-${theme}`);
+    const reference = page.locator(`[data-message-id="${malformedRow.id}"] .chat-block-reference`);
+    assert.equal(await reference.isVisible(), false);
+    if (width === 1440 && theme === 'light') {
+      await page.locator('#wb-tech-btn').click();
+      assert.equal(await reference.isVisible(), true);
+      await page.locator('#wb-tech-btn').click();
+      assert.equal(await reference.isVisible(), false);
+    }
+    assert.match(await page.locator(`[data-message-id="${markdownRow.id}"] time`).innerText(), /11:02/, 'SQL UTC time displays in the browser timezone');
     assert.equal((await page.locator('#wb-chat').innerText()).includes('[C4 messageId='), false);
   }
   await page.evaluate(() => localStorage.setItem('zylos-dashboard-locale', 'en'));
@@ -135,11 +162,51 @@ export async function runConversationVisual(t, sandbox) {
   await page.locator('#wb-chat .chat-message').filter({ hasText: 'A concrete follow-up from the new page.' }).first().waitFor();
   await page.waitForFunction(() => { const el = document.querySelector('#wb-chat .chat-messages'); return el && el.scrollHeight - el.scrollTop - el.clientHeight < 2; });
   assert.ok(await stream.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 2), 'own send follows the stored message to the bottom');
+  assert.equal(await page.locator('#wb-chat .conversation-receipt').isVisible(), false, 'stored receipt does not leave a persistent banner');
+  // Creating first opens the named form; no draft write happens until submit.
+  const writesBefore = draftWrites;
+  await page.locator('#wb-chat [data-action="create"]').click();
+  assert.equal(await page.locator('#wb-chat .conversation-create-form').count(), 1);
+  assert.equal(draftWrites, writesBefore);
+  await page.locator('#wb-chat .conversation-create-form input').fill('Named browser draft');
+  await page.locator('#wb-chat [data-action="createDraft"]').click();
+  await page.locator('#wb-chat .conversation-title-line h2').filter({ hasText: 'Named browser draft' }).waitFor();
+  assert.equal(draftWrites, writesBefore + 1);
+  assert.ok((await page.locator('#wb-chat .conversation-history-notice').innerText()).length > 20, 'blank draft explains first-message creation');
+  fixture.setInvoke(() => { throw dataError('INVALID_ARGS', 'private pre-insert rejection', { persisted: [] }); });
+  await input.fill('Retain the rejected browser draft.');
+  await page.locator('#wb-chat [data-action="send"]').click();
+  const operationReceipt = page.locator('#wb-chat .conversation-receipt');
+  await page.locator('#wb-chat .conversation-receipt[data-delivery-state="not_stored"]').waitFor();
+  assert.equal(await input.inputValue(), 'Retain the rejected browser draft.');
+  assert.equal(await operationReceipt.locator('[data-action="refreshStatus"]').isVisible(), true);
+  fixture.setInvoke(null);
+  // A transport failure proves unknown-result UI without rewriting product code.
+  const sendPattern = '**/api/chat/conversations/*/send';
+  await context.route(sendPattern, route => route.abort());
+  await page.locator('#wb-chat [data-action="send"]').click();
+  await page.locator('#wb-chat .conversation-receipt[data-delivery-state="pending_reconciliation"]').waitFor();
+  assert.equal(await input.inputValue(), 'Retain the rejected browser draft.');
+  assert.equal(await page.locator('#wb-chat .chat-composer [data-action="retry"]').isDisabled(), true);
+  assert.equal(await operationReceipt.locator('[data-action="refreshStatus"]').isVisible(), true);
+  await context.unroute(sendPattern);
+  await select();
+  // The overview group drawer opens the same selected conversation, with no write.
+  await page.locator('.tab[data-tab="overview"]').click();
+  await page.locator('#wb-board [data-group]').filter({ hasText: 'Cache design review' }).first().click();
+  await page.locator('#wb-side [data-action="viewConversation"]').click();
+  await page.waitForFunction(id => document.querySelector('#wb-chat [aria-current="true"]')?.dataset.conversationId === id, first.receipt.conversationId);
+  assert.equal(await page.locator('#tab-chat').evaluate(el => el.classList.contains('active')), true);
+  assert.equal(draftWrites, writesBefore + 1);
   await page.locator('#wb-chat [data-action="external"]').click();
   await page.locator('#wb-chat [data-conversation-id]').first().click();
   await page.locator('#wb-chat .chat-message').first().waitFor();
   assert.equal(await page.locator('#wb-chat textarea').count(), 0);
   assert.equal(await page.locator('#wb-chat [data-action="send"]').count(), 0);
+  assert.equal(await page.locator('#wb-chat .conversation-message-status:visible').count(), 0, 'pending external inbound has no stale delivery label');
+  assert.equal(await page.locator('#wb-chat .conversation-read-only').isVisible(), true);
+  assert.equal(await page.locator('#wb-chat .conversation-external-section').isVisible(), true);
+  assert.match(await page.locator('#wb-chat .conversation-external-section').innerText(), /Other channels/i);
   await screenshot('external-read-only');
   fixture.setProxy(fixture);
   const allowRemote = async value => {
@@ -163,7 +230,9 @@ export async function runConversationVisual(t, sandbox) {
   await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
   await select();
   assert.equal(await page.locator('#wb-chat [data-action="create"]').isVisible(), false);
-  assert.equal(await page.locator('#wb-chat .chat-composer, #wb-chat .chat-question button').count(), 0);
+  assert.equal(await page.locator('#wb-chat .chat-composer textarea').isDisabled(), true);
+  assert.equal(await page.locator('#wb-chat .chat-composer [data-action="send"]').isDisabled(), true);
+  assert.equal(await page.locator('#wb-chat .chat-question button:not(:disabled)').count(), 0);
   assert.equal(fixture.readMode(), 'single');
   await screenshot('single-read-only');
   assert.deepEqual(errors, []);

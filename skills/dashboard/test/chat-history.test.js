@@ -88,6 +88,7 @@ test('external lists use stable bounded pages and one allowed-row scope for meta
   assert.equal(items[0].session_group, 'tg:0');
   assert.equal(items[0].count, 2);
   assert.equal(items[0].preview, 'visible latest');
+  assert.equal(items[0].previewDirection, 'in');
   assert.equal(items[0].stamp, f.db.prepare("SELECT julianday('2026-01-02 00:00:00') AS stamp").get().stamp);
   assert.deepEqual(items.slice(1).map(item => item.session_group), ['tg:1', 'tg:2', 'tg:3', 'tg:4', 'tg:5', 'tg:6']);
   assert.ok(queries.length > 1);

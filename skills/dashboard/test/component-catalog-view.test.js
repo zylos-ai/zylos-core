@@ -5,10 +5,10 @@ import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, makeQuestionSummary,
   parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 
-const browserSchema = new URL('../public/chat-schema.js?v=92', import.meta.url).href;
+const browserSchema = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
-  if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserSchema) return next(sourceSchema, context);
   return next(specifier, context);
 } });
 const { renderChatContent } = await import('../public/js/wb/chat-blocks.js');

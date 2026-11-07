@@ -1025,3 +1025,19 @@ test('the configuration editor offers engine, model and effort as dropdowns with
   assert.deepEqual(effortChoices(null, 'x', 'max'), ['low', 'medium', 'high', 'max']);
   assert.equal(modelChoices(null, 'x'), null, 'without a catalog the model is typed');
 });
+
+// Navigation is a callback only: no chat write or runtime action is launched.
+test('group details expose conversation navigation for real groups and omit origin', async () => {
+  const selected = [];
+  const f = detailFixture(async path => response(defaultRead(path)), { onConversation: value => selected.push(value) });
+  const current = row('dash-owned:example');
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const button = allNodes(f.root).find(node => node.dataset.action === 'viewConversation');
+  assert.ok(button);
+  button.dispatch('click');
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].sessionGroup, current.sessionGroup);
+  await f.controller.open(row('origin'), { rows: [], listKnown: true });
+  assert.equal(allNodes(f.root).some(node => node.dataset.action === 'viewConversation'), false);
+  f.controller.destroy();
+});

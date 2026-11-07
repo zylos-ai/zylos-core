@@ -129,12 +129,12 @@ export class ChatHistory {
         : 'c.session_group=@group', row.session_group === ''
         ? { channel: row.channel, endpoint: row.endpoint_id } : { group: row.session_group });
       const index = row.session_group === '' ? 'idx_conv_channel_endpoint' : 'idx_conv_group_id';
-      const latest = this._query(`SELECT c.id, c.content FROM conversations c INDEXED BY ${index}
+      const latest = this._query(`SELECT c.id, c.content, c.direction FROM conversations c INDEXED BY ${index}
         WHERE ${visible} AND ${where}
         ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
       const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
       const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
-      return { ...row, preview: conversationPreview(latest?.content ?? '', { external: tab === 'external' }),
+      return { ...row, previewDirection: latest?.direction ?? null, preview: conversationPreview(latest?.content ?? '', { external: tab === 'external' }),
         display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
         ...(registered ? { localId: registered.localId } : {}), draft: false };

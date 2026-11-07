@@ -79,7 +79,7 @@ export function formatStartedAt(value, locale) {
 
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
   t = key => key, writable = () => true, detail = () => 'plain', identity = () => '',
-  onClose = () => {}, onMemory = () => {}, onRename = () => {}, confirm,
+  onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm,
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
     totalEvents: 0, totalRuns: 0, currentEvents: [], error: null, lastSuccess: null,
@@ -188,6 +188,13 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         onInput: value => { state.nameDraft = value; }, onCancel: () => { state.nameOpen = false; draw(); },
         onSave: value => { state.row = { ...state.row, name: value }; state.nameOpen = false; onRename(value); draw(); },
       });
+    }
+    if (typeof onConversation === 'function' && row.sessionGroup && row.sessionGroup !== 'origin') {
+      const conversation = element(document, 'button', t('chat.page.viewConversation'), 'wb-btn wb-btn-secondary');
+      conversation.type = 'button';
+      conversation.dataset.action = 'viewConversation';
+      conversation.addEventListener('click', () => onConversation(row));
+      header.append(conversation);
     }
     header.append(meta, tabs);
     root.replaceChildren(header, body);
