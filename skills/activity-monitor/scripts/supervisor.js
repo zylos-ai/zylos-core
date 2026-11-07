@@ -44,7 +44,7 @@ export function createSupervisor(deps) {
     if(!activity || activity.runId!==scene.runId || activity.sessionId!==scene.sessionId) {
       activity?.close();activity=new SessionActivity({runDir:scene.runDir,runId:scene.runId,sessionId:scene.sessionId,runtime:scene.runtime,startedAt:scene.currentSessionTs ?? scene.createdAt,warn:log});activities.set(scene.sessionGroup,activity);
     }
-    return activity.read(now());
+    return activity.read(now(), {subagentTtlMs:(configuration?.hotTtlSeconds ?? 1800)*1000});
   };
   const listScenes=()=>scenes.observe({configuration});
   const stopScene=async scene=>{

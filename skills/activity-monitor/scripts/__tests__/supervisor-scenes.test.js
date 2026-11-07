@@ -11,14 +11,21 @@ function service(f, options = {}) {
     readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state: 'idle', idleSince: 123 }),
     readUsage: () => null, ...options });
 }
-// real observations use same target facts and distinguish runtime from tmux.
+// Boundary: real READY/process observation and activity field propagation on a
+// private tmux socket/SQLite fixture. Run for scene/activity projection changes;
+// unrelated UI work may skip. Official runner isolates HOME/ZYLOS_DIR/PM2_HOME
+// and short TMPDIR; readyTmuxTarget owns and cleans every tmux/database resource.
 test('scene joins real READY and process identity without treating configured F2 as liveness', { timeout: 15000 }, async t => {
   const f = readyTmuxTarget(t, { prefix: 'supervisor-scene-', mode: 'multi' });
-  const scenes = service(f), scene = await scenes.observeGroup('origin');
+  const facts = { state: 'idle', idleSince: 123, lastActivityAt: 100,
+    activeSubagents: [{ agentId: 'child', lastActivityAt: 456 }], lastSubagentActivityAt: 456 };
+  const scenes = service(f, { readActivity: () => facts }), scene = await scenes.observeGroup('origin');
   assert.equal(scene.ready, true); assert.equal(scene.runtime, 'claude'); assert.equal(scene.processRunning, false);
   assert.equal(scene.runId, 'run-1'); assert.equal(scene.sessionId, 'session-1');
   assert.equal(scene.currentSessionTs, 1); assert.equal(scene.createdAt % 1000, 0);
   assert.equal(scene.state, 'idle'); assert.equal(scene.idleSince, 123); assert.equal(scene.usagePercent, null);
+  assert.equal(scene.lastActivityAt, 100);
+  assert.deepEqual(scene.activeSubagents, facts.activeSubagents); assert.equal(scene.lastSubagentActivityAt, 456);
   assert.deepEqual(await scenes.bindTarget(scene), { expectedRunId: 'run-1', tmuxTarget: scene.tmuxTarget });
   assert.equal((await scenes.listRuns())[0].runId, 'run-1');
   assert.equal(typeof await scenes.readScreen(scene), 'string');

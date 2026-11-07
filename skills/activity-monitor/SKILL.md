@@ -44,6 +44,23 @@ interval after that latest activity. Once the same run is preparing for TTL
 reclaim, its own PRE_RECLAIM Sync activity does not restart or cancel that
 preparation; a new C4 message still cancels it.
 
+Subagent events with `agent_id` are tracked separately for the current run and
+session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended
+child blocks TTL and capacity eviction while its last event is less than one
+hot TTL old; at the TTL boundary it stops blocking. Child events also advance
+the reclaim activity clock, including the eviction minimum idle interval.
+They never change the main agent's `state`, `idleSince`, `tools`, or
+`lastActivityAt`, so require-idle delivery still uses only main-agent state.
+During TTL preparation, child activity is masked just like the preparing
+session's own activity: completed preparation is retained until children stop
+being active and the main agent is idle, without another PRE_RECLAIM Sync.
+Its cutoff remains available through the fence's final child-activity recheck
+and is cleared when reclaim completes; ordinary recent child activity still
+resets eligibility even if the child stops between observations.
+Other reclaim reasons are unchanged. Codex facts use the same reader when
+supplied, but current Codex hook subscriptions lack SubagentStart/Stop, so
+complete native child lifecycle coverage is not available from that source.
+
 Capacity eviction skips even idle sessions whose latest activity is less than
 `session_evict_min_idle_seconds` ago. At the boundary they become eligible for
 the existing LRU selection; if all are too recent, new groups wait in the queue.

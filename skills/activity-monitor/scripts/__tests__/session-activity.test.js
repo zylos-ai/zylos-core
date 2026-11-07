@@ -37,6 +37,104 @@ test('hook retains subagent facts and selected tool inputs without prompt/output
  assert.equal(record.runtime,'codex');assert.equal(record.agent_id,'sub');assert.deepEqual(record.tool_input,{command:'ls'});assert.equal(record.session_group,'origin');assert.equal('prompt' in record,false);
 });
 
+test('child activity stays separate from every main-agent idle and tool field',t=>{
+ for(const runtime of ['claude','codex']){
+  const main=fixture(t,runtime),child=fixture(t,runtime);
+  const mainRows=[main.row('prompt',{ts:200}),main.row('stop',{ts:300})];
+  main.activity.consume(mainRows);child.activity.consume(mainRows);
+  child.activity.consume([child.row('subagent_start',{agent_id:'worker',ts:400}),
+   child.row('pre_tool',{agent_id:'worker',tool_use_id:'shared-id',tool:'Bash',ts:9900})]);
+  const mainFields=value=>({state:value.state,idleSince:value.idleSince,tools:value.tools,lastActivityAt:value.lastActivityAt});
+  const idle=child.activity.read(10000);
+  assert.deepEqual(mainFields(idle),mainFields(main.activity.read(10000)));
+  assert.equal(idle.state,'idle');
+  assert.deepEqual(idle.activeSubagents,[{agentId:'worker',lastActivityAt:9900}]);
+  const tool=main.row('pre_tool',{tool_use_id:'shared-id',tool:'Read',ts:11000});
+  main.activity.consume([tool]);child.activity.consume([tool,
+   child.row('post_tool',{agent_id:'worker',tool_use_id:'shared-id',ts:11500}),
+   child.row('subagent_stop',{agent_id:'worker',ts:11600})]);
+  const busy=child.activity.read(12000);
+  assert.deepEqual(mainFields(busy),mainFields(main.activity.read(12000)));
+  assert.equal(busy.state,'busy');assert.equal(busy.tools.length,1);
+  assert.deepEqual(busy.activeSubagents,[]);
+ }
+});
+
+test('child lifecycles track independent latest activity and stop without resurrection',t=>{
+ const {activity,row}=fixture(t);
+ activity.consume([row('subagent_start',{agent_id:'first',ts:200}),
+  row('subagent_start',{agent_id:'second',ts:250}),
+  row('pre_tool',{agent_id:'first',ts:400}),
+  row('post_tool',{agent_id:'second',ts:350})]);
+ let result=activity.read(5000);
+ assert.deepEqual(result.activeSubagents,[{agentId:'first',lastActivityAt:400},{agentId:'second',lastActivityAt:350}]);
+ assert.equal(result.lastSubagentActivityAt,400);
+ activity.consume([row('subagent_stop',{agent_id:'first',ts:500}),
+  row('subagent_start',{agent_id:'first',ts:300}),
+  row('post_tool',{agent_id:'first',ts:550})]);
+ result=activity.read(6000);
+ assert.deepEqual(result.activeSubagents,[{agentId:'second',lastActivityAt:350}]);
+ assert.equal(result.lastSubagentActivityAt,550);
+ activity.consume([row('subagent_stop',{agent_id:'second',ts:600})]);
+ result=activity.read(7000);
+ assert.deepEqual(result.activeSubagents,[]);assert.equal(result.lastSubagentActivityAt,600);
+});
+
+test('child inactivity expires at the TTL boundary and new activity resets its clock',t=>{
+ const {activity,row}=fixture(t);
+ activity.consume([row('subagent_start',{agent_id:'worker',ts:200})]);
+ assert.equal(activity.read(1800199).activeSubagents.length,1);
+ assert.equal(activity.read(1800200).activeSubagents.length,0);
+ activity.consume([row('pre_tool',{agent_id:'worker',ts:1800201})]);
+ assert.deepEqual(activity.read(1800202).activeSubagents,[{agentId:'worker',lastActivityAt:1800201}]);
+ assert.equal(activity.read(1800450,{subagentTtlMs:250}).activeSubagents.length,1);
+ assert.equal(activity.read(1800451,{subagentTtlMs:250}).activeSubagents.length,0);
+ assert.equal(activity.read(1800451).lastSubagentActivityAt,1800201);
+});
+
+test('child aggregation rejects foreign identities and invalid timestamps and requires a start',t=>{
+ const {activity,row}=fixture(t);
+ activity.consume([row('subagent_start',{agent_id:'worker',ts:200}),
+  row('pre_tool',{agent_id:'worker',run_id:'other',ts:9000}),
+  row('pre_tool',{agent_id:'worker',session_id:'other',ts:9000}),
+  row('pre_tool',{agent_id:'worker',runtime:'codex',ts:9000}),
+  row('pre_tool',{agent_id:'worker',type:'runtime_health',ts:9000}),
+  ...[NaN,Infinity,'9000',99].map(ts=>row('pre_tool',{agent_id:'worker',ts})),
+  row('pre_tool',{agent_id:'orphan',ts:250}),
+  row('subagent_start',{agent_id:123,ts:9000})]);
+ const result=activity.read(10000);
+ assert.deepEqual(result.activeSubagents,[{agentId:'worker',lastActivityAt:200}]);
+ assert.equal(result.lastSubagentActivityAt,250);
+ assert.equal(result.lastActivityAt,100);assert.equal(result.state,'idle');
+});
+
+test('restart recovers child lifetimes across rotations and main turn boundaries',async t=>{
+ const {appendEvent,rotateEventLog}=await import('../../../../cli/lib/event-log.js');
+ for(const terminal of [false,true]){
+  const {root,activity,row}=fixture(t);const log=path.join(root,'events.jsonl'),transcript=path.join(root,'s.jsonl');
+  fs.writeFileSync(transcript,'{}\n');fs.utimesSync(transcript,0.05,0.05);
+  appendEvent(log,row('session_start',{ts:50,transcript_path:transcript}));
+  appendEvent(log,row('subagent_start',{agent_id:'worker',ts:110}));
+  rotateEventLog(log,{maxBytes:0,now:1000});
+  appendEvent(log,row('prompt',{ts:120}));
+  appendEvent(log,row('stop',{ts:130}));
+  rotateEventLog(log,{maxBytes:0,now:1001});
+  appendEvent(log,row('pre_tool',{agent_id:'worker',tool_use_id:'child-tool',ts:140}));
+  if(terminal)appendEvent(log,row('subagent_stop',{agent_id:'worker',ts:150}));
+  const result=activity.read(10000);
+  assert.equal(activity.transcriptPath,transcript);
+  assert.deepEqual(result.events.map(event=>event.event),['stop']);
+  assert.equal(result.state,'idle');assert.equal(result.lastActivityAt,130);
+  assert.deepEqual(result.tools,[]);
+  assert.deepEqual(result.activeSubagents,terminal?[]:[{agentId:'worker',lastActivityAt:140}]);
+  assert.equal(result.lastSubagentActivityAt,terminal?150:140);
+  assert.deepEqual(activity.read(11000).activeSubagents,result.activeSubagents);
+  appendEvent(log,row('subagent_stop',{agent_id:'worker',ts:160}));
+  const stopped=activity.read(12000);
+  assert.deepEqual(stopped.activeSubagents,[]);assert.equal(stopped.lastSubagentActivityAt,160);
+ }
+});
+
 test('missing native tool id remains busy until factual stop',t=>{
  const {activity,row}=fixture(t);activity.consume([row('pre_tool',{tool:'Bash'})]);assert.equal(activity.read(10000).state,'busy');activity.consume([row('stop',{ts:300})]);assert.equal(activity.read(10000).state,'idle');
 });
