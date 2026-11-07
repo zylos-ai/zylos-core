@@ -12,7 +12,7 @@ import strictAssert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
-import { createChatApiFixture, createRemoteChatApiFixture, questionContent } from './helpers/chat-integration-api.js';
+import { createChatApiFixture, createRemoteChatApiFixture, questionContent, assertChatProcessIsolation } from './helpers/chat-integration-api.js';
 
 let assertionCount = 0;
 const assert = new Proxy(strictAssert, { get(target, key) {
@@ -24,6 +24,11 @@ const enabled = chatEnabled();
 const options = { skip: !enabled, timeout: 45000 };
 const post = body => ({ method: 'POST', body });
 
+// Every registered case uses a runner-owned sandbox: private HOME, ZYLOS_DIR,
+// PM2_HOME, short TMPDIR, explicit tmux socket and both test DB paths are read
+// back before HTTP/children start. The captured process Core paths are proved
+// separately because modules imported before a case belong to the runner.
+
 export function registerIntegrationCase(name, operation) {
   test(name, options, async t => {
     const sandbox = createChatSandbox(t);
@@ -33,6 +38,7 @@ export function registerIntegrationCase(name, operation) {
   });
 }
 
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
 registerIntegrationCase('HTTP conversation, channel question and conditional answer stay in their original instance and group', async (t, sandbox) => {
   const otherSandbox = createChatSandbox(t);
   try {
@@ -78,6 +84,7 @@ registerIntegrationCase('HTTP conversation, channel question and conditional ans
   } finally { await otherSandbox.close(); }
 });
 
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
 registerIntegrationCase('receive failures and lost receipts preserve commit evidence across delivery restart without automatic sends', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox);
   a.setRoute({ decision: 'unavailable', runtime: 'claude', health: 'unavailable', reason: 'runtime_unavailable' });
@@ -120,6 +127,9 @@ registerIntegrationCase('receive failures and lost receipts preserve commit evid
   assert.equal(unknown.status, 200); assert.equal(unknown.body.delivery.stored, null);
   assert.equal(unknown.body.delivery.deliveryState, 'pending_reconciliation');
   const calls = a.counts.receive;
+  // This observes restart/next-turn behavior only; it is not evidence that a
+  // seconds-long lease elapsed. The child-process checks below independently
+  // prove unknown persistence and no startup resend across real restarts.
   await a.restartDelivery(); await delay(30);
   assert.equal(a.counts.receive, calls);
   a.setLookupUnavailable(false); a.setInvoke(null);
@@ -161,6 +171,7 @@ registerIntegrationCase('receive failures and lost receipts preserve commit evid
   } finally { await restartSandbox.close(); }
 });
 
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
 registerIntegrationCase('remote chat off, on and off enforces both direct and proxy authorization before private reads or writes', async (t, sandbox) => {
   const remoteSandbox = createChatSandbox(t);
   try {
@@ -240,6 +251,7 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
   } finally { await remoteSandbox.close(); }
 });
 
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
 registerIntegrationCase('single mode conversion retains both history tabs and rejects draft, send and answer APIs', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox);
   const active = await a.createConversation('multi history remains');
@@ -264,7 +276,57 @@ registerIntegrationCase('single mode conversion retains both history tabs and re
 
 // Consumer outlets run for projection/reader/component changes. Only the same
 // integration gate permits their private DB and child CLI setup.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
 registerIntegrationCase('all model and history consumers project structured input before exposing it', async (t, sandbox) => {
   const { runConsumerCase } = await import('./helpers/chat-consumers.js');
   await runConsumerCase(t, sandbox);
+});
+
+// Run after harness/Core configuration changes; pure presentation may skip.
+// Uses the same private runner/case proof above, with no DB or HTTP allocation.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
+registerIntegrationCase('loaded Core data and skills paths cannot escape the proven test instance', async (t, sandbox) => {
+  const proof = assertChatProcessIsolation(sandbox);
+  assert.ok(proof.loadedRoot);
+  assert.throws(() => assertChatProcessIsolation(sandbox, { env: { ...process.env, ZYLOS_DIR: '/tmp' } }), /Loaded Core instance/);
+  assert.throws(() => assertChatProcessIsolation(sandbox, { skillsDir: '/tmp/other-instance/.claude/skills' }), /skills path/);
+  assert.throws(() => assertChatProcessIsolation(sandbox, { dataDir: '/tmp/other-instance/comm-bridge' }), /data path/);
+});
+
+// Run for startup/history/question changes; CSS-only changes may skip. Uses
+// private HTTP/C4/Dashboard DBs and actual startup formatting, with no runtime,
+// checkpoint or unanswered-question adapter supplied to the startup loader.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
+registerIntegrationCase('startup loads delivered history without querying or injecting older unanswered questions', async (t, sandbox) => {
+  const a = await createChatApiFixture(t, sandbox);
+  const first = await a.createConversation('startup history original group');
+  const question = a.question('single', 'unanswered-startup-sentinel');
+  const row = a.addOutbound(first.draft.localId, questionContent(question));
+  for (let index = 0; index < 7; index++) a.c4.insertConversation('in', 'dashboard', first.draft.localId,
+    `startup ordinary tail ${index}`, { groupName: first.draft.localId });
+  a.db.prepare("UPDATE conversations SET status='delivered' WHERE session_group=?").run(row.session_group);
+  assert.equal(a.answers.question(row.session_group, question.interruptId).status, 'paused');
+  assert.equal(a.c4.getCoverageEnd(row.session_group), 0, 'No checkpoint hides this pending question');
+  const { emitC4Conversations } = await import('../../comm-bridge/scripts/c4-session-init.js');
+  const { formatConversationsForAgent } = await import('../../comm-bridge/scripts/c4-db.js');
+  const calls = [];
+  const storage = new Proxy({
+    getCoverageEnd: group => a.c4.getCoverageEnd(group),
+    getDeliveredSince: (...args) => a.c4.getDeliveredSince(...args),
+    formatConversationsForAgent,
+  }, { get(target, key) {
+    assert.ok(Object.hasOwn(target, key), `Startup attempted an unprovided query: ${String(key)}`);
+    calls.push(key); return target[key];
+  } });
+  const startup = await emitC4Conversations({}, null, {
+    withDb: async (_label, action) => action(storage),
+    scopeReader: async () => ({ mode: 'multi', sessionGroup: row.session_group,
+      scope: row.session_group, root: sandbox.paths.zylos, memoryDir: sandbox.paths.zylos + '/memory' }),
+  });
+  assert.equal(calls.join(','), 'getCoverageEnd,getDeliveredSince,formatConversationsForAgent');
+  assert.ok(startup.includes('startup ordinary tail 6'));
+  assert.ok(startup.includes('reply via:'));
+  assert.equal(startup.includes(question.interruptId), false);
+  assert.equal(startup.includes(question.questionSummary), false);
+  assert.equal(a.answers.question(row.session_group, question.interruptId).status, 'paused');
 });

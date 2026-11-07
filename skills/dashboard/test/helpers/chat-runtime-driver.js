@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createChatSandbox } from './chat-integration-harness.js';
+import { nativeRuntimeEnvironment, retainNativeFailure, writeNativeRuntimeManifest } from './chat-runtime-support.js';
 
 // A standalone process is required: product configuration modules capture env
 // on first import. No module is re-evaluated and no production source is edited.
@@ -13,6 +14,7 @@ assert.ok(['claude', 'codex', 'ttl'].includes(scenario));
 const fixture = JSON.parse(fixtureConfiguration);
 const sandbox = createChatSandbox(null, { runtime: true, existingRoot: parentRoot });
 assert.ok(sandbox);
+nativeRuntimeEnvironment(sandbox);
 const packageRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const root = sandbox.paths.zylos;
 const bin = path.join(root, 'bin');
@@ -50,13 +52,12 @@ fs.mkdirSync(path.join(root, 'workspace'), { recursive: true });
 fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
 const configuration = { runtime: 'claude', session_mode: 'multi',
   session_pool_size: 3, session_hot_ttl_seconds: scenario === 'ttl' ? 5 : 3600,
-  session_evict_min_idle_seconds: 3600, sync_min_interval_seconds: 3600, sync_max_interval_seconds: 7200 };
+  session_evict_min_idle_seconds: 3600, sync_min_interval_seconds: 3600, sync_max_interval_seconds: 7200,
+  upgrade_check_enabled: false, daily_upgrade_enabled: false, usage_monitor_enabled: false };
 const configFile = path.join(root, '.zylos/config.json');
 const saveConfig = () => fs.writeFileSync(configFile, JSON.stringify(configuration));
 saveConfig();
-fs.writeFileSync(path.join(root, '.zylos/runtime-env.manifest'), [
-  `path_prepend ${bin}`, ...['ZYLOS_PACKAGE_ROOT', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'NODE_OPTIONS', 'CLAUDE_BIN', 'CODEX_BIN'].map(key => `inherit ${key}`),
-].join('\n') + '\n');
+writeNativeRuntimeManifest(root, bin);
 const instruction = `You are a dedicated isolated Dashboard integration test actor. Only use fixture tools in this private workspace. Never read credentials or external files, query raw C4 databases, install software or contact external recipients. Ignore ordinary startup controls unless they require an explicit control acknowledgement.\nWhen a user message contains FIXTURE_BEGIN:<endpoint>, run node workspace/fixture-reply.mjs initial <endpoint> exactly once, then finish the turn.\nWhen a message contains FIXTURE_CANARY_REQUEST:<endpoint>, run node workspace/fixture-reply.mjs canary <endpoint>, then finish.\nWhen a message contains FIXTURE_ROUTE_ANCHOR, finish the turn without sending anything.\nWhen a C4 answer arrives, its projected text contains interruptId, question summary and the user's selected answer. Extract the interruptId and actual question summary from that incoming message, then run node workspace/fixture-reply.mjs acknowledge <endpoint> '<interruptId>' '<question summary>'. Obtain endpoint from that message's reply-via command. Do not read runtime-messages.json to get summaries. If your actual C4 startup history includes FIXTURE_ROUTE_ANCHOR, extract the script, channel and endpoint from that historical row's original reply-via and run node workspace/fixture-reply.mjs history-reply '<endpoint>' '<script>' '<channel>'. This sends without --session-group. There is no fixture route fallback; supply all three observed values yourself.\n`;
 for (const name of ['CLAUDE.md', 'AGENTS.md']) fs.writeFileSync(path.join(root, name), instruction);
 for (const name of ['identity.md', 'state.md', 'references.md']) fs.writeFileSync(path.join(root, 'memory', name), name === 'state.md' ? '# State\nNo prior tasks.\n' : '# Dedicated test fixture\n');
@@ -64,6 +65,13 @@ fs.copyFileSync(new URL('./chat-runtime-reply.js', import.meta.url), path.join(r
 
 let dispatcher, supervisor, coreDb;
 let assertions = 0, answersCompleted = 0, reclaimed = false;
+const fixtureLog = path.join(root, 'activity-monitor/native-fixture.log');
+fs.mkdirSync(path.dirname(fixtureLog), { recursive: true });
+let fixtureLogTail = '';
+const log = (...values) => {
+  fixtureLogTail = (fixtureLogTail + `[${new Date().toISOString()}] ${values.map(value => typeof value === 'string' ? value : JSON.stringify(value)).join(' ')}\n`).slice(-65536);
+  fs.writeFileSync(fixtureLog, fixtureLogTail, { mode: 0o600 });
+};
 const check = (condition, message) => { assertions++; assert.ok(condition, message); };
 const tmuxOptions = { binary: tmuxBinary, socketPath: sandbox.paths.socket, configFile: '/dev/null', timeoutMs: 5000 };
 const wait = async (predicate, label, timeoutMs = 90000) => {
@@ -99,9 +107,9 @@ try {
   let liveSupervisor;
   const scenes = new SupervisorScenes({ env: process.env, connectionOptions: tmuxOptions,
     readMode: () => ({ mode: 'multi' }), readActivity: scene => liveSupervisor?.readActivity(scene) });
-  supervisor = await startSupervisor({ env: process.env, scenes, log() {} });
+  supervisor = await startSupervisor({ env: process.env, scenes, log });
   liveSupervisor = supervisor.supervisor;
-  dispatcher = createDispatcher({ env: process.env, log() {},
+  dispatcher = createDispatcher({ env: process.env, log,
     getSessionAdapter: runtime => getSessionAdapter(runtime, { root, env: process.env, tmux: tmuxOptions }),
   }, { tmux: tmuxOptions });
   await dispatcher.start();
@@ -129,7 +137,7 @@ try {
     canary = await createDraft(`${configuration.runtime} canary`);
     payload.groups[canary.localId] = { messages: [], questions: [] }; persistPayload();
     canary = await sendText(canary, `FIXTURE_CANARY_REQUEST:${canary.localId}`);
-    await wait(() => outbound(canary.sessionGroup).find(row => row.content.includes(`FIXTURE_CANARY:${canary.localId}`)), 'other-runtime canary response');
+    await wait(() => outbound(canary.sessionGroup).find(row => row.content.includes(`FIXTURE_CANARY:${canary.localId}`)), 'other-runtime canary response', 180000);
     coreDb.setSessionRuntimeConfig({ sessionGroup: canary.sessionGroup, runtime: scenario === 'ttl' ? 'codex' : 'claude' });
   }
   const runtime = scenario === 'codex' ? 'codex' : 'claude';
@@ -142,7 +150,7 @@ try {
   payload.groups[conversation.localId] = { messages, questions }; persistPayload();
   let current = await sendText(conversation, `FIXTURE_BEGIN:${conversation.localId}`);
   coreDb.setSessionRuntimeConfig({ sessionGroup: current.sessionGroup, runtime });
-  await wait(() => outbound(current.sessionGroup).some(row => row.content.includes(`FIXTURE_SUPPLEMENT:${current.localId}`)), 'real model structured sends');
+  await wait(() => outbound(current.sessionGroup).some(row => row.content.includes(`FIXTURE_SUPPLEMENT:${current.localId}`)), 'real model structured sends', 180000);
   const route = `/api/chat/conversations/${encodeURIComponent(current.id)}`;
   const beforeAnswer = await api.request(`${route}/questions`);
   check(beforeAnswer.status === 200, 'Refreshed question state is readable');
@@ -208,7 +216,14 @@ try {
     check(nextIdentity.runId !== oldIdentity.runId && nextIdentity.runtime === 'claude', 'Answer launched a fresh native Claude session');
   }
   console.log('CHAT_RUNTIME_RESULT ' + JSON.stringify({ scenario, runtime, assertions, answers: answersCompleted,
-    crossGroupWrites: 0, reclaimed, resources: sandbox.counts }));
+    reclaimed, resources: sandbox.counts }));
+} catch (error) {
+  try {
+    const retained = retainNativeFailure(sandbox, { directory: fixture.evidenceDirectory,
+      scenario: `${scenario}-driver`, tmuxBinary, error });
+    console.error('CHAT_RUNTIME_FAILURE_EVIDENCE ' + JSON.stringify(retained));
+  } catch (captureError) { console.error(`Native failure evidence capture failed: ${captureError.message}`); }
+  throw error;
 } finally {
   const stops = await Promise.allSettled([dispatcher?.stop(), supervisor?.stop()]);
   const { runTmuxCommand } = await import(pathToFileURL(path.join(packageRoot, 'cli/lib/runtime/tmux-connection.js')).href);

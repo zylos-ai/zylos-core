@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { Store } from '../../src/lib/store.js';
@@ -29,7 +30,7 @@ import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
 import { receive } from '../../../comm-bridge/scripts/c4-receive.js';
 import { isDataError } from '../../../comm-bridge/scripts/c4-session-group.js';
-import { SKILLS_DIR } from '../../../comm-bridge/scripts/c4-config.js';
+import { SKILLS_DIR, DATA_DIR } from '../../../comm-bridge/scripts/c4-config.js';
 import { ModeSwitchCoordinator } from '../../../activity-monitor/scripts/mode-switch.js';
 import { createModeSwitchConverter } from '../../../activity-monitor/scripts/mode-switch-convert.js';
 import { CONTENT_PREFIX, parseC4Content } from '../../../comm-bridge/scripts/c4-content-schema.js';
@@ -38,17 +39,46 @@ const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.met
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 export const protocolFixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 
+// These imports capture environment at module load. Prove their instance is
+// owned by either the Node runner or this sandbox before creating directories.
+export function assertChatProcessIsolation(sandbox, { env = process.env, skillsDir = SKILLS_DIR, dataDir = DATA_DIR } = {}) {
+  sandbox.assertIsolation();
+  const runnerRoot = path.dirname(sandbox.paths.parentTmp || path.dirname(sandbox.root));
+  const loadedRoot = fs.realpathSync(env.ZYLOS_DIR);
+  const inside = (parent, child) => child.startsWith(parent + path.sep);
+  const realHome = fs.realpathSync(os.userInfo().homedir);
+  assert.ok(loadedRoot !== realHome && !inside(realHome, loadedRoot), 'Loaded Core instance must stay outside the real account home');
+  assert.ok(inside(runnerRoot, loadedRoot) || inside(sandbox.root, loadedRoot), 'Loaded Core instance must belong to the runner or case');
+  // macOS's runner may spell the same private root /tmp rather than /private/tmp.
+  // Compare captured paths against that spelling, and prove their real owners.
+  assert.equal(dataDir, path.join(env.ZYLOS_DIR, 'comm-bridge'), 'Loaded Core data path must match the proven process instance');
+  assert.equal(skillsDir, path.join(env.ZYLOS_DIR, '.claude/skills'), 'Loaded Core skills path must match the proven process instance');
+  if (fs.existsSync(dataDir)) assert.equal(fs.realpathSync(dataDir), path.join(loadedRoot, 'comm-bridge'), 'Core data directory cannot redirect outside its instance');
+  return { loadedRoot, skillsDir, dataDir, runnerRoot };
+}
+
 // Real HTTP/AuthGate/chat modules and two SQLite owners. Only the Core route and
 // notification adapter are controlled: no model, PM2 or tmux is launched here.
 export async function createChatApiFixture(t, sandbox, { name = 'instance', extraHandler } = {}) {
   console.log('Chat HTTP isolation:', JSON.stringify(sandbox.assertIsolation()));
+  console.log('Chat Core process isolation:', JSON.stringify(assertChatProcessIsolation(sandbox)));
   const zylos = sandbox.paths.zylos;
   const configPath = path.join(zylos, 'components/dashboard/config.json');
   for (const directory of [path.dirname(sandbox.paths.c4Db), path.dirname(sandbox.paths.dashboardDb), path.dirname(configPath), path.join(zylos, '.zylos')]) fs.mkdirSync(directory, { recursive: true });
   // receive validates the runner-owned installed channel directory before
   // calling the injected route adapter. This is not a live installation.
-  assert.ok(SKILLS_DIR.startsWith(process.env.ZYLOS_DIR + path.sep));
-  fs.mkdirSync(path.join(SKILLS_DIR, 'dashboard'), { recursive: true });
+  const installedChannel = path.join(SKILLS_DIR, 'dashboard');
+  if (!fs.existsSync(installedChannel)) {
+    // Native fixtures may symlink the installed skills to read-only sources;
+    // only create the runner's empty validation directory when no link exists.
+    const loadedRoot = fs.realpathSync(process.env.ZYLOS_DIR);
+    for (const relative of ['.claude', '.claude/skills']) {
+      const directory = path.join(loadedRoot, relative);
+      fs.mkdirSync(directory, { recursive: true });
+      assert.equal(fs.realpathSync(directory), directory, 'Writable installed-channel parents must remain private');
+    }
+    fs.mkdirSync(installedChannel);
+  }
   const db = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
   guardDatabase(db, schema);
   const store = sandbox.openDatabase(sandbox.paths.dashboardDb, filename => new Store(filename));
@@ -202,7 +232,11 @@ export async function createRemoteChatApiFixture(t, sandbox) {
   let child, info, serial = 0;
   const pending = new Map();
   async function launch({ lookupUnavailable = false } = {}) {
-    child = sandbox.startChild(process.execPath, [fileURLToPath(new URL('./chat-integration-api-child.js', import.meta.url)), ...(lookupUnavailable ? ['--lookup-unavailable'] : [])]);
+    child = sandbox.startChild(process.execPath, [fileURLToPath(new URL('./chat-integration-api-child.js', import.meta.url)), ...(lookupUnavailable ? ['--lookup-unavailable'] : [])], {
+      // This RPC process serves the whole case, including every matrix reply.
+      // The outer case's shorter deadline still owns its final teardown.
+      timeoutMs: 45000, maxOutputBytes: 1024 * 1024,
+    });
     let buffer = '', readyResolve, readyReject;
     const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
     child.stdout.on('data', chunk => {

@@ -9,6 +9,8 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 // Covers the real local index.js /chat route and base-prefixed assets after
 // login. Run for page-route/auth changes; skip before DB/HTTP/process creation
 // unless explicitly arranging isolated integration.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DB paths
+// are read back before startup; sandbox teardown reclaims child/browser/HTTP resources.
 test('local chat route serves the application with base-prefixed module URLs', { skip: !chatEnabled(), timeout: 30_000 }, async t => {
   const sandbox = createChatSandbox(t);
   await sandbox.runCase(async () => {
