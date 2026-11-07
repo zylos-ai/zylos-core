@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createChatSandbox } from './chat-integration-harness.js';
-import { retainNativeFailure, writeNativeRuntimeManifest } from './chat-runtime-support.js';
+import { prepareNativeRuntimeResources, retainNativeFailure, writeNativeRuntimeManifest } from './chat-runtime-support.js';
 
 // A standalone process is required: product configuration modules capture env
 // on first import. No module is re-evaluated and no production source is edited.
@@ -88,6 +88,10 @@ try {
   const { writeCodexConfig } = await load('cli/lib/runtime-setup.js');
   // These functions configure only the already-created private fixture homes.
   syncRuntimeHooks({ zylosDir: root, stopFailureSupported: true, log() {} });
+  const resources = prepareNativeRuntimeResources(sandbox);
+  check(resources.agents.length === 3 && resources.agents.every(name => fs.existsSync(path.join(resources.destination, name))), 'Packaged memory agents installed for native Sync');
+  check(fs.realpathSync(resources.codexSkill) === fs.realpathSync(resources.memorySkill)
+    && fs.existsSync(path.join(resources.codexSkill, 'SKILL.md')), 'Codex project skill discovery has packaged memory skill');
   check(writeCodexConfig(root, { bypassPermissions: true }), 'Native Codex test hooks configured');
   const { createChatApiFixture } = await import('./chat-integration-api.js');
   const { runtimeMessages, runtimeAnswer } = await import('./chat-runtime-messages.js');

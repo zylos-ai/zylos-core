@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
-import { retainNativeFailure, runtimeProxyNames, writeNativeRuntimeManifest } from './helpers/chat-runtime-support.js';
+import { prepareNativeRuntimeResources, retainNativeFailure, runtimeProxyNames, writeNativeRuntimeManifest } from './helpers/chat-runtime-support.js';
 
 // Claude: real Supervisor admission, Core receive/router/delivery and native
 // Claude session, then Dashboard questions/answers and same-group continuation.
@@ -106,6 +106,17 @@ test('native fixture shares Claude onboarding config and preserves proxy launch 
   const proxies = Object.fromEntries(runtimeProxyNames.map(key => [key, `http://fixture-${key}.invalid:8080`]));
   const sandbox = createChatSandbox(t, { gateEnv: { ...process.env, ...proxies } });
   const env = sandbox.env;
+  const resources = prepareNativeRuntimeResources(sandbox);
+  assert.equal(resources.agents.length, 3);
+  for (const name of ['zylos-group-sync.md', 'zylos-origin-sync.md', 'zylos-global-sync.md']) {
+    assert.ok(resources.agents.includes(name));
+    assert.equal(fs.readFileSync(path.join(resources.destination, name), 'utf8'), fs.readFileSync(path.join(resources.source, name), 'utf8'));
+  }
+  assert.equal(resources.codexSkill, path.join(sandbox.paths.zylos, '.agents/skills/zylos-memory'));
+  assert.equal(fs.realpathSync(resources.codexSkill), fs.realpathSync(resources.memorySkill));
+  const memorySkill = fs.readFileSync(path.join(resources.codexSkill, 'SKILL.md'), 'utf8');
+  assert.equal(memorySkill, fs.readFileSync(path.join(resources.memorySkill, 'SKILL.md'), 'utf8'));
+  assert.match(memorySkill, /^---\nname: zylos-memory\n/);
   assert.equal(Object.hasOwn(env, 'CLAUDE_CONFIG_DIR'), false);
   fs.mkdirSync(path.join(sandbox.paths.zylos, '.zylos'), { recursive: true });
   writeNativeRuntimeManifest(sandbox.paths.zylos, path.dirname(process.execPath));

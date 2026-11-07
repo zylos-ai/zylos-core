@@ -7,6 +7,26 @@ import { fileURLToPath } from 'node:url';
 export const runtimeProxyNames = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'];
 
+export function prepareNativeRuntimeResources(sandbox) {
+  sandbox.assertIsolation();
+  const source = path.join(packageRoot, 'skills/zylos-memory/agents');
+  assert.ok(fs.lstatSync(source).isDirectory() && !fs.lstatSync(source).isSymbolicLink(), 'Packaged memory agents must be a real directory');
+  // Match init's syncPackagedClaudeMemoryAgents source and discovery rule;
+  // deployTemplates also mutates unrelated instance configuration and templates.
+  const agents = fs.readdirSync(source).filter(name => name.endsWith('.md')).sort();
+  assert.ok(agents.length, 'Packaged memory agents must be present');
+  const destination = path.join(sandbox.paths.zylos, '.claude/agents');
+  fs.mkdirSync(destination, { recursive: true });
+  for (const name of agents) fs.copyFileSync(path.join(source, name), path.join(destination, name));
+  // Codex discovers project skills under .agents/skills, independently of
+  // Claude's .claude/skills. Link only the packaged memory skill it needs.
+  const codexSkill = path.join(sandbox.paths.zylos, '.agents/skills/zylos-memory');
+  const memorySkill = path.join(packageRoot, 'skills/zylos-memory');
+  fs.mkdirSync(path.dirname(codexSkill), { recursive: true });
+  fs.symlinkSync(memorySkill, codexSkill, 'dir');
+  return { agents, source, destination, codexSkill, memorySkill };
+}
+
 export function writeNativeRuntimeManifest(root, bin) {
   fs.writeFileSync(path.join(root, '.zylos/runtime-env.manifest'), [
     `path_prepend ${bin}`, ...['ZYLOS_PACKAGE_ROOT', 'CODEX_HOME', 'PM2_HOME', 'TMPDIR',
