@@ -1265,6 +1265,7 @@ if (window.MutationObserver) {
   new MutationObserver(() => { if (state.memory?.tree) renderMemoryPreservingEditor(renderMemory, document); })
     .observe(document.documentElement, { attributes: true, attributeFilter: ['data-detail'] });
 }
+document.addEventListener('dashboard-locale-change', () => { if (state.memory?.tree) renderMemoryPreservingEditor(renderMemory, document); });
 
 function resetMemoryState() {
   if (state.memory?.draftTimer) clearTimeout(state.memory.draftTimer);
