@@ -194,8 +194,10 @@ export function sniffImage(buffer) {
 }
 
 export function contentDisposition(disposition, filename) {
-  const safe = sanitizeDisplayName(filename, 'download').replace(/[\\"]/g, '_');
-  return `${disposition}; filename="${safe}"`;
+  const safe = sanitizeDisplayName(filename, 'download').replace(/[\\"]/g, '_').toWellFormed();
+  const fallback = safe.replace(/[^\x20-\x7e]/g, '_');
+  const encoded = encodeURIComponent(safe).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 export class UploadRegistry {

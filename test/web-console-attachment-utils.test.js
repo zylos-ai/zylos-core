@@ -168,7 +168,28 @@ describe('web-console media serving safety helpers', () => {
       extension: '.png'
     });
     expect(sniffImage(Buffer.from('MZ executable'))).toBeNull();
-    expect(contentDisposition('attachment', 'bad"name.exe')).toBe('attachment; filename="bad_name.exe"');
+    expect(contentDisposition('attachment', 'bad"name.exe')).toBe('attachment; filename="bad_name.exe"; filename*=UTF-8\'\'bad_name.exe');
+  });
+
+  test('encodes RFC 5987 punctuation after sanitizing the display name', () => {
+    const header = contentDisposition('attachment', "it's (1)*100%.txt");
+    const encoded = header.split("filename*=UTF-8''")[1];
+
+    expect(encoded).toBe('it%27s%20%281%29_100%25.txt');
+    for (const escape of ['%27', '%28', '%29', '%25']) {
+      expect(encoded).toContain(escape);
+    }
+    // Display-name sanitization replaces '*' before RFC 5987 encoding.
+    expect(decodeURIComponent(encoded)).toBe("it's (1)_100%.txt");
+  });
+
+  test('repairs a surrogate pair split by display-name truncation', () => {
+    const filename = 'a'.repeat(159) + '\u{1f600}.png';
+    let header;
+
+    expect(() => { header = contentDisposition('attachment', filename); }).not.toThrow();
+    expect(header).toContain('%EF%BF%BD');
+    expect(header.split("filename*=UTF-8''")[1]).toBe('a'.repeat(159) + '%EF%BF%BD');
   });
 });
 

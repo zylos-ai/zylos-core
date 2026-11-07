@@ -304,17 +304,32 @@ describe('web-console attachment routes', () => {
     const image = await fetch(`${ctx.baseUrl}/api/media/${imageId}`);
     expect(image.status).toBe(200);
     expect(image.headers.get('content-type')).toBe('image/png');
-    expect(image.headers.get('content-disposition')).toBe('inline; filename="out.png"');
+    expect(image.headers.get('content-disposition')).toBe('inline; filename="out.png"; filename*=UTF-8\'\'out.png');
 
     const file = await fetch(`${ctx.baseUrl}/api/media/${fileId}`);
     expect(file.status).toBe(200);
     expect(file.headers.get('content-type')).toBe('application/octet-stream');
-    expect(file.headers.get('content-disposition')).toBe('attachment; filename="out.txt"');
+    expect(file.headers.get('content-disposition')).toBe('attachment; filename="out.txt"; filename*=UTF-8\'\'out.txt');
     expect(await file.text()).toBe('download');
 
     for (const id of [999999, inRowId, wrongChannelId, wrongEndpointId, notMediaId, escapeId]) {
       const res = await fetch(`${ctx.baseUrl}/api/media/${id}`);
       expect(res.status).toBe(404);
+    }
+    for (const name of ['报告.pdf', '😀.png', 'résumé.pdf']) {
+      const filename = path.join(ctx.root, name), bytes = Buffer.from('original Unicode file bytes');
+      fs.writeFileSync(filename, bytes);
+      const mediaDb = new Database(ctx.dbPath);
+      const id = mediaDb.prepare('INSERT INTO conversations (direction, channel, endpoint_id, content, timestamp) VALUES (?, ?, ?, ?, ?)')
+        .run('out', 'web-console', 'console', `[MEDIA:file]${filename}`, new Date().toISOString()).lastInsertRowid;
+      mediaDb.close();
+      const response = await fetch(`${ctx.baseUrl}/api/media/${id}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('application/octet-stream');
+      const header = response.headers.get('content-disposition');
+      expect(header).toMatch(/^attachment; filename="[\x20-\x7e]+"; filename\*=UTF-8''/);
+      expect(decodeURIComponent(header.split("filename*=UTF-8''")[1])).toBe(name);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
     }
   });
 
@@ -338,6 +353,17 @@ describe('web-console attachment routes', () => {
     expect(txtRes.headers.get('content-type')).toBe('application/octet-stream');
     expect(txtRes.headers.get('content-disposition')).toContain('attachment');
     expect(await txtRes.text()).toBe('hello');
+
+    for (const name of ['报告.pdf', '😀.png', 'résumé.pdf']) {
+      fs.writeFileSync(path.join(mediaDir, name), pngBytes);
+      const response = await fetch(`${ctx.baseUrl}/api/inbound-media/${encodeURIComponent(name)}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('image/png');
+      const header = response.headers.get('content-disposition');
+      expect(header).toMatch(/^inline; filename="[\x20-\x7e]+"; filename\*=UTF-8''/);
+      expect(decodeURIComponent(header.split("filename*=UTF-8''")[1])).toBe(name);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(pngBytes);
+    }
 
     const missing = await fetch(`${ctx.baseUrl}/api/inbound-media/nonexistent.png`);
     expect(missing.status).toBe(404);
