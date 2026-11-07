@@ -964,7 +964,7 @@ test('the configuration line says whether it is applied and where it comes from'
   assert.match(line.textContent, /wb\.config\.state\.applied/); assert.match(line.textContent, /wb\.config\.source\.override/);
 });
 
-test('a group on the default settings starts from what it runs, or from nothing chosen, never the machine\'s model', async () => {
+test('a group on the default settings starts from nothing chosen, never the machine\'s model', async () => {
   const meta = { current_model: 'fable[1m]', current_effort: 'low', models: [{ id: 'fable[1m]' }, { id: 'opus' }, { id: 'sonnet' }], efforts_by_model: { '*': ['low', 'medium', 'high'] } };
   const open = async model => {
     const requests = [];
@@ -978,9 +978,10 @@ test('a group on the default settings starts from what it runs, or from nothing 
     const [, select, effort, save] = allNodes(root).find(node => node.classList.contains('wb-cfg-controls')).children;
     return { select, effort, save, requests };
   };
+  // Core reports a default-settings launch as { runtime, mode: 'default' } with no model or effort.
   const running = await open({ runtime: 'claude', desired: { runtime: 'claude', mode: 'default' },
-    running: { status: 'applied', launchConfig: { runtime: 'claude', mode: 'default', model: 'sonnet', effort: 'medium' } }, resolved: { runtime: 'claude', mode: 'default' } });
-  assert.deepEqual([running.select.value, running.effort.value, running.save.disabled], ['sonnet', 'medium', false], 'the running pair of this group');
+    running: { status: 'applied', launchConfig: { runtime: 'claude', mode: 'default' } }, resolved: { runtime: 'claude', mode: 'default' } });
+  assert.deepEqual([running.select.value, running.effort.value, running.save.disabled], ['', '', true], 'a running default group has no pair of its own to preselect');
   const idle = await open({ runtime: 'claude', desired: { runtime: 'claude', mode: 'default' }, running: { status: 'not_running', launchConfig: null }, resolved: { runtime: 'claude', mode: 'default' } });
   assert.equal(idle.select.children[0].value, ''); assert.equal(idle.select.children[0].textContent, 'wb.config.pickModel');
   assert.deepEqual([idle.select.value, idle.effort.value], ['', ''], 'nothing is preselected from the machine-wide model');
