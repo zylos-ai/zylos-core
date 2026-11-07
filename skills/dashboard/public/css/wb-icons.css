@@ -1,4 +1,4 @@
-/* Line icons (same set as the phase-2 prototype), drawn with currentColor through a CSS mask. */
+/* Line icons (the workbench design set), drawn with currentColor through a CSS mask. */
 .wb-ico{display:inline-block;flex:none;width:16px;height:16px;background:currentColor;-webkit-mask:var(--wb-ico) center/contain no-repeat;mask:var(--wb-ico) center/contain no-repeat;vertical-align:-3px}
 .wb-ico-xs{width:13px;height:13px;vertical-align:-2px}
 .wb-ico-send{--wb-ico:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><path d='m22 2-7 20-4-9-9-4Z'/><path d='M22 2 11 13'/></svg>")}

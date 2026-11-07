@@ -97,8 +97,9 @@ html.wb-nav-row .app-header .tab { flex: none; }
 main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 .wb-legacy>section { display: none!important; }
 .wb-layout { display: block; }
-.wb-instance { display: flex; align-items: center; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--wb-line); color: var(--text-dim); font-size: 12.5px; white-space: nowrap; overflow-x: auto; }
-.wb-inst-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; }
+/* The strip wraps item by item instead of scrolling, so the host status link is never cut off. */
+.wb-instance { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 8px 16px; border-bottom: 1px solid var(--wb-line); color: var(--text-dim); font-size: 12.5px; }
+.wb-inst-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; white-space: nowrap; }
 .wb-inst-item + .wb-inst-item { border-left: 1px solid var(--wb-line); }
 .wb-inst-item b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .wb-inst-item .wb-ico { color: var(--text-muted); }
@@ -143,7 +144,6 @@ html[data-detail=technical] .wb-grid, html[data-detail=technical] .wb-row { grid
 html[data-detail=plain] .wb-tech-col { display: none; }
 /* Narrower screens: flexible activity and model columns; below 900px the technical view leaves context and model to the drawer. */
 @media (max-width: 1179px) {
-  .wb-instance { flex-wrap: wrap; row-gap: 4px; white-space: normal; overflow: visible; }
   .wb-bh-now { gap: 6px; }
   .wb-search { flex: 0 1 150px; min-width: 0; }
   .wb-search input { width: 100%; }
@@ -234,7 +234,6 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 /* Selected row and drawer: the board yields 480px; context and model columns step aside. */
 @media (min-width: 901px) {
   #tab-overview.wb-has-side .wb-instance, #tab-overview.wb-has-side #wb-attention, #tab-overview.wb-has-side .wb-board-wrap { margin-right: 480px; }
-  #tab-overview.wb-has-side .wb-instance { flex-wrap: wrap; white-space: normal; overflow: visible; row-gap: 4px; }
   #tab-overview.wb-has-side .wb-grid, #tab-overview.wb-has-side .wb-row { grid-template-columns: minmax(170px, 1.3fr) 118px minmax(120px, 1.3fr) 252px; }
   html[data-detail=technical] #tab-overview.wb-has-side .wb-grid, html[data-detail=technical] #tab-overview.wb-has-side .wb-row { grid-template-columns: minmax(170px, 1.3fr) 118px minmax(120px, 1.3fr) 252px 52px; }
   #tab-overview.wb-has-side .wb-c-ctx, #tab-overview.wb-has-side .wb-c-model, #tab-overview.wb-has-side .wb-row > .wb-context, #tab-overview.wb-has-side .wb-row > .wb-model { display: none; }
@@ -321,7 +320,6 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-cfg-more { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--wb-line-strong); }
 .wb-cfg-more .wb-link-btn { margin-left: auto; font-size: 12px; }
 .wb-cfg-state { color: var(--text-dim); }
-.wb-cfg-edit .wb-note { margin: 0; }
 .wb-config-result { margin: 8px 0 0; color: var(--text-dim); font-size: 12px; }
 .wb-config-error { margin: 8px 0 0; font-size: 12px; }
 .wb-detail-numbers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--wb-line); background: var(--wb-panel); }
@@ -413,7 +411,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .app-header .tab-bar::-webkit-scrollbar { display: none; }
   .app-header .tab { flex: none; }
   .wb-tech-btn { margin-right: 2px; padding: 0 8px; }
-  .wb-instance { flex-wrap: wrap; gap: 2px 0; padding: 6px 12px; white-space: normal; overflow: visible; }
+  .wb-instance { gap: 2px 0; padding: 6px 12px; }
   .wb-inst-item { padding: 3px 10px 3px 0; white-space: nowrap; }
   .wb-inst-item + .wb-inst-item { border-left: 0; }
   .wb-inst-item .wb-meter { display: none; }
