@@ -75,7 +75,7 @@ argv does not carry the message body. Callers do not construct this packet.
 
 The synchronous hook permits unmarked text up to 65,536 UTF-8 bytes, including
 ordinary JSON and Core status notices. Content beginning with the exact shared
-`[C4-CONTENT]` plus LF prefix must pass the shared C4 envelope parser: version,
+`[C4-JSON]` plus LF prefix must pass the shared C4 envelope parser: version,
 block types, actions, fields and known Core suffix rules are validated without
 rewriting the original content. Malformed envelopes and any oversized message
 are rejected before storage or channel delivery. See Core's

@@ -1,6 +1,6 @@
-import { parseC4Content, CONTENT_PREFIX, validateAnswer } from '../../chat-schema.js';
+import { parseC4Content, CONTENT_PREFIX, validateAnswer } from '../../chat-schema.js?v=90';
 import { element } from './plain-text.js?v=85';
-import { receiptState } from './chat-state.js?v=89';
+import { receiptState } from './chat-state.js?v=90';
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const referenceMatches = (question, envelope, block, row) => question && row?.direction === 'out'

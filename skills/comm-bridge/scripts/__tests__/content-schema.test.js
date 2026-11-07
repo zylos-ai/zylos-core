@@ -39,6 +39,16 @@ for (const fixture of fixtures.hookOutputs) test(`hook output ${fixture.name}`, 
   assert.equal(validateHookOutput(fixture.value), fixture.valid);
 });
 
+test('the structured marker is exact and a formerly marked valid envelope remains ordinary text', () => {
+  assert.equal(CONTENT_PREFIX, '[C4-JSON]\n');
+  assert.equal(Buffer.byteLength(CONTENT_PREFIX), 10);
+  // Build the retired marker explicitly without retaining its searchable literal.
+  const formerPrefix = '[' + ['C4', 'CONTENT'].join('-') + ']\n';
+  const content = formerPrefix + JSON.stringify(fixtures.valid[0].envelope);
+  assert.equal(parseC4Content(encode(fixtures.valid[0].envelope)).kind, 'envelope');
+  assert.deepEqual(parseC4Content(content), { kind: 'text', text: content });
+});
+
 test('content byte limit includes multibyte text and framing at the exact boundary', () => {
   assert.equal(MAX_CONTENT_BYTES, 65536);
   const plain = '中'.repeat(21845) + 'a';

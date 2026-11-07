@@ -4,7 +4,7 @@ Version 1. This is a C4 transport adapter, not the full ChatWeave streaming/mess
 
 ## Framing and limits
 
-The exact first line is `[C4-CONTENT]` followed by LF. Prefix bytes in hex: `5b 43 34 2d 43 4f 4e 54 45 4e 54 5d 0a`. No BOM, leading spaces, CRLF variant, code fence or search inside the content. Without that exact prefix, content is ordinary text, including ordinary JSON. The prefix is followed by one complete JSON **object**. Standard JSON whitespace is allowed before/after that object. A string/escape-aware depth scan finds its end; never use the last `}`. JSON syntax still goes through JSON.parse.
+The exact first line is `[C4-JSON]` followed by LF. Prefix bytes in hex: `5b 43 34 2d 4a 53 4f 4e 5d 0a`. No BOM, leading spaces, CRLF variant, code fence or search inside the content. Without that exact prefix, content is ordinary text, including ordinary JSON. The prefix is followed by one complete JSON **object**. Standard JSON whitespace is allowed before/after that object. A string/escape-aware depth scan finds its end; never use the last `}`. JSON syntax still goes through JSON.parse.
 
 After JSON, only JSON whitespace or exactly one existing Core suffix is accepted:
 

@@ -13,18 +13,18 @@ test('working state projects complete envelopes before escaping and the local bo
   const envelope = structuredClone(fixtures.valid.find(item => item.name === 'markdown').envelope);
   envelope.blocks[0].data.text = 'HOST_ONLY_' + 'x'.repeat(2000);
   envelope.fallbackText = 'readable summary';
-  const content = '[C4-CONTENT]\n' + JSON.stringify(envelope);
+  const content = '[C4-JSON]\n' + JSON.stringify(envelope);
   const rows = [row(content)], before = JSON.stringify(rows);
   const text = render(rows);
   assert.ok(text.includes(escapeText(projectC4Content(content, { c4Id: 7 }))));
   assert.equal(text.includes('HOST_ONLY_'), false);
-  assert.equal(text.includes('[C4-CONTENT]'), false);
+  assert.equal(text.includes('[C4-JSON]'), false);
   assert.equal(text.includes('截断'), false);
   assert.equal(JSON.stringify(rows), before);
 });
 
 test('working state contains only invalid-content references for marked damage and preserves ordinary text', () => {
-  const content = '[C4-CONTENT]\n{"HOST_ONLY_DAMAGED":true';
+  const content = '[C4-JSON]\n{"HOST_ONLY_DAMAGED":true';
   assert.ok(render([row(content)]).includes('[C4 content invalid; c4_id=7]'));
   assert.equal(render([row(content)]).includes('HOST_ONLY_DAMAGED'), false);
   const plain = 'plain text\nwith \\ escapes';

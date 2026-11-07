@@ -58,18 +58,29 @@ async function rawRequest(origin, requestPath) {
 test('shared schema is delivered at local base and fleet module URLs', { timeout: 15000 }, async t => {
   const origin = await fixture(t), expected = fs.readFileSync(schemaPath);
   for (const prefix of ['', '/dashboard', '/fleet/Peer', '/dashboard/fleet/Peer']) {
-    const moduleUrl = origin + prefix + '/_assets/js/wb/chat-blocks.js';
-    const entry = await fetch(moduleUrl);
-    assert.equal(entry.status, 200);
-    const body = await entry.text();
-    const specifier = /from ['"]([^'"]+)['"]/.exec(body)?.[1];
-    assert.equal(specifier, '../../chat-schema.js');
-    const schemaUrl = new URL(specifier, moduleUrl);
-    assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
-    const response = await fetch(schemaUrl);
-    assert.equal(response.status, 200);
-    assert.match(response.headers.get('content-type'), /^text\/javascript; charset=utf-8$/);
-    assert.equal(Buffer.from(await response.arrayBuffer()).equals(expected), true);
+    const entryPage = await fetch(origin + prefix + '/_assets/index.html');
+    assert.equal(entryPage.status, 200);
+    const pageText = await entryPage.text();
+    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=90)"/.exec(pageText)?.[1];
+    assert.ok(appPath, 'the entry page loads the refreshed application module');
+    const application = await fetch(origin + prefix + '/_assets/' + appPath);
+    assert.equal(application.status, 200);
+    assert.match(await application.text(), /from '\.\/wb\/chat\.js\?v=90'/);
+    for (const moduleName of ['chat', 'chat-blocks', 'chat-questions']) {
+      const moduleUrl = origin + prefix + `/_assets/js/wb/${moduleName}.js?v=90`;
+      const entry = await fetch(moduleUrl);
+      assert.equal(entry.status, 200);
+      const body = await entry.text();
+      const specifier = /from ['"]([^'"]*chat-schema\.js[^'"]*)['"]/.exec(body)?.[1];
+      assert.equal(specifier, '../../chat-schema.js?v=90');
+      const schemaUrl = new URL(specifier, moduleUrl);
+      assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
+      assert.equal(schemaUrl.search, '?v=90');
+      const response = await fetch(schemaUrl);
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('content-type'), /^text\/javascript; charset=utf-8$/);
+      assert.equal(Buffer.from(await response.arrayBuffer()).equals(expected), true);
+    }
   }
 });
 

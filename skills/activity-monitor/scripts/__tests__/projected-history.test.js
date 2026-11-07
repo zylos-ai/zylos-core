@@ -12,8 +12,8 @@ const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c
 const envelope = structuredClone(fixtures.valid.find(item => item.name === 'markdown').envelope);
 envelope.blocks[0].data.text = 'HOST_ONLY_HIDDEN_' + 'x'.repeat(1800);
 envelope.fallbackText = 'readable conversion summary';
-const marked = '[C4-CONTENT]\n' + JSON.stringify(envelope);
-const damaged = '[C4-CONTENT]\n{"HOST_ONLY_DAMAGED":true';
+const marked = '[C4-JSON]\n' + JSON.stringify(envelope);
+const damaged = '[C4-JSON]\n{"HOST_ONLY_DAMAGED":true';
 
 // File/SQLite integration: real transition snapshot and converter, no coordinator,
 // runtime, PM2, tmux or network. Runner owns isolated HOME/ZYLOS_DIR/PM2_HOME/short
@@ -62,7 +62,7 @@ for (const source of ['single', 'multi']) test(`${source} conversion projects ev
     assert.ok(path.resolve(material).startsWith(root + path.sep));
     const text = fs.readFileSync(material, 'utf8');
     assert.equal(text.includes('HOST_ONLY_'), false, material);
-    assert.equal(text.includes('[C4-CONTENT]'), false, material);
+    assert.equal(text.includes('[C4-JSON]'), false, material);
     if (material.endsWith('.md') && text.startsWith('{')) {
       for (const line of text.trim().split('\n')) exportRows.push(JSON.parse(line));
     }
@@ -81,7 +81,7 @@ for (const source of ['single', 'multi']) test(`${source} conversion projects ev
     const state = path.join(scope === '*' ? memory : path.join(memory, 'session-groups', scope), 'state.md');
     const text = fs.readFileSync(state, 'utf8'); states.push(text);
     assert.equal(text.includes('HOST_ONLY_'), false);
-    assert.equal(text.includes('[C4-CONTENT]'), false);
+    assert.equal(text.includes('[C4-JSON]'), false);
   }
   const allStates = states.join('\n');
   for (const row of absorbed) assert.ok(allStates.includes(escapeText(projectC4Content(row.content, { c4Id: row.id }))), `absorbed #${row.id}`);

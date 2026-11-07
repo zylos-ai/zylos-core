@@ -24,7 +24,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-export const CONTENT_PREFIX = '[C4-CONTENT]\n';
+export const CONTENT_PREFIX = '[C4-JSON]\n';
 export const MAX_CONTENT_BYTES = 65536;
 const encoder = new TextEncoder();
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);

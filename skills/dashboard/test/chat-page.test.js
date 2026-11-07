@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick, deferred } from './fixtures/workbench-dom.js';
 // Resolve the browser's shared static-schema URL to the identical source module.
-const browserSchema = new URL('../public/chat-schema.js', import.meta.url).href;
+const browserSchema = new URL('../public/chat-schema.js?v=90', import.meta.url).href;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
@@ -39,9 +39,9 @@ function fixture({ mode = 'multi', tab = 'mine', denied = false, rows = [], draf
 
 test('message text displays plain content and only the valid envelope fallback', () => {
   assert.equal(messageText('<script>text</script>', t), '<script>text</script>');
-  assert.equal(messageText('[C4-CONTENT]\ninvalid', t), 'chat.invalidContent');
+  assert.equal(messageText('[C4-JSON]\ninvalid', t), 'chat.invalidContent');
   const envelope = { version: 1, kind: 'message', messageId: 'message-one', fallbackText: 'Visible fallback', blocks: [] };
-  assert.equal(messageText('[C4-CONTENT]\n' + JSON.stringify(envelope), t), 'Visible fallback');
+  assert.equal(messageText('[C4-JSON]\n' + JSON.stringify(envelope), t), 'Visible fallback');
 });
 
 test('page opens real state loads data and renders authoritative status without executable content', async () => {

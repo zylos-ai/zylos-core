@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick, deferred } from './fixtures/workbench-dom.js';
 import { CONTENT_PREFIX, parseC4Content, makeQuestionSummary, validateAnswer } from '../../comm-bridge/scripts/c4-content-schema.js';
-const browserSchema = new URL('../public/chat-schema.js', import.meta.url).href;
+const browserSchema = new URL('../public/chat-schema.js?v=90', import.meta.url).href;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
