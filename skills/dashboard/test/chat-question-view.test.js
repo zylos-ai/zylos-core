@@ -326,6 +326,46 @@ test('a question whose state page is not loaded does not claim missing registrat
   assert.equal(f.nodes().some(node => node.tagName === 'BUTTON'), false);
 });
 
+test('mounted later-page question stays read-only until its authority page is loaded', async () => {
+  const { mountChat } = await import('../public/js/wb/chat.js');
+  const base = fixture({ type: 'confirmation' });
+  const document = createDocument(), root = document.createElement('div'), calls = [];
+  const page = mountChat({ document, root, t, fetch: async (path, options = {}) => {
+    calls.push({ path, method: options.method || 'GET' });
+    let data;
+    if (path.includes('/questions?')) {
+      const url = new URL(path, 'http://fixture.invalid');
+      assert.equal(url.searchParams.get('limit'), '50');
+      data = url.searchParams.get('cursor') === 'later-question-page'
+        ? { items: [base.question], nextCursor: null }
+        : { items: [], nextCursor: 'later-question-page' };
+    } else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered',
+      content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
+    else if (path.includes('session-mode')) data = { data: { sessionMode: 'multi' } };
+    else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { id: 'g:AA', state: 'active' }, stored: false };
+    else data = { items: [{ id: 'g:AA' }], nextCursor: null };
+    return { ok: true, status: 200, json: async () => data };
+  } });
+  try {
+    await page.open();
+    allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click');
+    await tick(); await tick();
+    const find = key => allNodes(root).find(node => node.dataset.action === key);
+    assert.match(root.textContent, /chat.question.stateNotLoaded/);
+    assert.equal(root.textContent.includes('chat.question.unavailable'), false);
+    assert.equal(find('confirmAnswer'), undefined);
+    assert.equal(find('cancelAnswer'), undefined);
+    assert.ok(find('loadMoreQuestions'));
+    find('loadMoreQuestions').dispatch('click'); await tick(); await tick();
+    assert.ok(calls.some(call => call.path.includes('cursor=later-question-page')));
+    assert.equal(root.textContent.includes('chat.question.stateNotLoaded'), false);
+    assert.match(root.textContent, /chat.question.paused/);
+    assert.ok(find('confirmAnswer')); assert.ok(find('cancelAnswer'));
+    assert.equal(find('loadMoreQuestions'), undefined);
+    assert.equal(calls.filter(call => call.method !== 'GET').length, 0);
+  } finally { page.destroy(); }
+});
+
 test('a mounted paused question preserves a definite invalid-data rejection after refresh', async () => {
   const { mountChat } = await import('../public/js/wb/chat.js');
   const base = fixture({ type: 'confirmation' });
