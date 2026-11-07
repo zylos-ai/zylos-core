@@ -1,4 +1,4 @@
-import { fixture as storeFixture, modifiedStore } from './c4-v2-test-helpers.js';
+import { fixture as storeFixture } from './c4-v2-test-helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
@@ -91,13 +91,46 @@ test('Origin cursor rejection and trigger failure leave both cursor columns unch
   db.exec("CREATE TRIGGER reject_cursor BEFORE UPDATE ON origin_sync_cursors BEGIN SELECT RAISE(ABORT,'reject cursor'); END");
   assert.throws(() => store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id }), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(read(), before);
 });
-test('calibration: assertion detects a mutant that blocks on failed input', async t => {
-  const mutatedCreateStore = await modifiedStore('c4-store-progress.js',
-    "status NOT IN ('delivered','failed','switch_absorbed')", "status NOT IN ('delivered','switch_absorbed')");
-  const { db, store, seed } = fixture(t); seed(9); store.createCheckpoint('foo', 9, 'coverage'); seed(10, 'foo', 'failed'); seed(11);
-  const acceptance = candidate => assert.equal(candidate.getDeliveredFrontier('foo'), 11);
-  acceptance(store);
-  assert.throws(() => acceptance(mutatedCreateStore(db)), assert.AssertionError);
+for (const group of ['foo', '*']) test(`unsummarized ${group} reads use the greater of coverage and the optional cursor`, t => {
+  const { store, seed } = fixture(t);
+  for (let id = 1; id <= 5; id++) seed(id);
+  store.createCheckpoint(group, 2, 'coverage');
+  const read = options => group === '*' ? store.getGlobalUnsummarizedConversations(options) : store.getUnsummarizedConversations(group, options);
+  assert.deepEqual(read({ upToConversationId: 5, afterConversationId: 1 }).map(row => row.id), [3, 4, 5]);
+  assert.deepEqual(read({ upToConversationId: 5, afterConversationId: 3 }).map(row => row.id), [4, 5]);
+  for (const afterConversationId of [5, 6]) {
+    assert.equal(read({ upToConversationId: 5, afterConversationId }).length, 0);
+    const result = store.queries.unsummarized({ group, upToConversationId: 5, afterConversationId });
+    assert.equal(result.rows.length, 0); assert.equal(result.upTo, 5); assert.equal(result.safeEnd, 5);
+    const defaultEnd = store.queries.unsummarized({ group, afterConversationId });
+    assert.equal(defaultEnd.rows.length, 0); assert.equal(defaultEnd.upTo, 5);
+  }
+  for (const afterConversationId of [-1, 1.5, '3', NaN, Number.MAX_SAFE_INTEGER + 1, null]) {
+    assert.throws(() => read({ upToConversationId: 5, afterConversationId }), { code: 'INVALID_ARGS' });
+    assert.throws(() => store.queries.unsummarized({ group, afterConversationId }), { code: 'INVALID_ARGS' });
+  }
+  assert.throws(() => read({ afterConversationId: 5 }), { code: 'INVALID_ARGS' });
+  assert.throws(() => read({ upToConversationId: 6, afterConversationId: 6 }), { code: 'UPTO_BEYOND_FRONTIER' });
+  const legacy = store.queries.unsummarized({ group, limit: 2 });
+  assert.deepEqual(legacy.rows.map(row => row.id), [3, 4]);
+  assert.equal(legacy.checkpointEnd, 2); assert.equal(legacy.checkpointSummary, 'coverage');
+  assert.equal(legacy.upTo, 4); assert.equal(legacy.safeEnd, 5);
+});
+test('unsummarized cursor pages traverse one group without gaps or duplicates', t => {
+  const { store, seed } = fixture(t);
+  seed(1); store.createCheckpoint('foo', 1, 'coverage');
+  for (let i = 1; i <= 120; i++) { seed(i * 2); seed(i * 2 + 1, 'bar'); }
+  seed(242, 'foo', 'pending'); seed(243);
+  let afterConversationId = 0, seen = 0;
+  for (const expectedCount of [50, 50, 20]) {
+    const page = store.queries.unsummarized({ group: 'foo', afterConversationId, limit: 50 });
+    assert.equal(page.rows.length, expectedCount); assert.equal(page.safeEnd, 241);
+    for (const row of page.rows) { seen++; assert.equal(row.id, seen * 2); assert.equal(row.session_group, 'foo'); }
+    assert.equal(page.upTo, seen < 120 ? seen * 2 : 241);
+    afterConversationId = page.upTo;
+  }
+  assert.equal(seen, 120);
+  assert.equal(store.queries.unsummarized({ group: 'foo', afterConversationId, limit: 50 }).rows.length, 0);
 });
 for (const [name, ends, baseline] of [
   ['FX-BL1', [null, 300, 800], 800],

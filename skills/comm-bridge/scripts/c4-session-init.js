@@ -145,6 +145,12 @@ export async function emitC4Conversations(payload, budget = null, {
     const conversations = scope.mode === 'multi'
       ? db.getDeliveredSince(scope.sessionGroup, coverage, { limit: 6 })
       : db.getGlobalDeliveredSince(coverage, { limit: 6 });
+    let unsummarized;
+    try {
+      unsummarized = scope.mode === 'multi'
+        ? await db.getUnsummarizedRange(scope.sessionGroup)
+        : await db.getGlobalUnsummarizedRange();
+    } catch { unsummarized = null; }
     const instructions = [
       `Scope: ${scope.scope}. Working memory is not injected. Read the complete snapshot with: node ${path.join(scope.root, '.claude/skills/zylos-memory/scripts/read-work-memory.js')} --json`,
       `Before resuming work, read ${path.join(scope.memoryDir, 'handoff.md')} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`,
@@ -157,10 +163,18 @@ export async function emitC4Conversations(payload, budget = null, {
         else if (migration.state === 'unreadable') instructions.push('References migration record UNAVAILABLE; do not overwrite it.');
       } catch { instructions.push('References migration record UNAVAILABLE; do not overwrite it.'); }
     }
-    const assemble = rows => formatSection('RECENT CONVERSATIONS', instructions.join('\n') + '\n\n' + db.formatConversationsForAgent(rows, { spill: false }));
+    const lagNotice = (rows, reserve) => {
+      if (!unsummarized) return 'Unsummarized count temporarily unavailable.';
+      if (unsummarized.count <= 0 || (!reserve && rows.length && unsummarized.firstConversationId >= rows[0].id)) return '';
+      const command = `node ${path.join(scope.root, '.claude/skills/comm-bridge/scripts/c4-fetch.js')} --unsummarized${scope.mode === 'multi' ? ` --group ${scope.sessionGroup}` : ''} --limit 50`;
+      const stop = rows.length ? `until the oldest shown id ${rows[0].id}` : 'through the delivered frontier (no tail shown)';
+      return `Checkpoint covers id ${coverage}; state.md may lag (use its header coverage). About ${unsummarized.count} messages unsummarized; latest ${rows.length} shown. Before judging old tasks, promises or todos, inspect the omitted middle: ${command}. Continue with --after <previous output's round upper bound> ${stop}; reads stop at the delivered frontier.`;
+    };
+    const assemble = (rows, reserve = false) => formatSection('RECENT CONVERSATIONS',
+      [...instructions, lagNotice(rows, reserve)].filter(Boolean).join('\n') + '\n\n' + db.formatConversationsForAgent(rows, { spill: false }));
     let kept = conversations;
     const packBudget = budget && { maxChars: Math.max(0, budget.maxChars - 200), maxTokens: Math.max(0, budget.maxTokens - 60) };
-    while (kept.length && packBudget && !withinBudget(assemble(kept), packBudget)) kept = kept.slice(1);
+    while (kept.length && packBudget && !withinBudget(assemble(kept, true), packBudget)) kept = kept.slice(1);
     return assemble(kept);
   });
 }

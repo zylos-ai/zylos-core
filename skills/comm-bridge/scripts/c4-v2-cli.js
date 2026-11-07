@@ -58,8 +58,8 @@ export function createQueryHandlers(store) {
     unsummarizedRange({ group } = {}) {
       return groupScope(group) === '*' ? store.getGlobalUnsummarizedRange() : store.getUnsummarizedRange(group);
     },
-    unsummarized({ group, upToConversationId, limit } = {}) {
-      const result = store.queries.unsummarized({ group: groupScope(group), upToConversationId, limit });
+    unsummarized({ group, upToConversationId, limit, afterConversationId } = {}) {
+      const result = store.queries.unsummarized({ group: groupScope(group), upToConversationId, limit, afterConversationId });
       return { ...result, rows: result.rows.map(projectConversation) };
     },
     checkpoints({ group, after } = {}) {

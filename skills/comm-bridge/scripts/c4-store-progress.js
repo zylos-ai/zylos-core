@@ -42,10 +42,11 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     const f = scope(group), l = limitClause(limit, true);
     return all(c, `SELECT * FROM conversations WHERE id>?${f.sql} AND ${loadable} ORDER BY id DESC${l.sql}`, after, ...f.args, ...l.args).reverse();
   }
-  function unsummarized(c, group, { upToConversationId, limit } = {}) {
+  function unsummarized(c, group, { upToConversationId, limit, afterConversationId } = {}) {
     upper(c, group, upToConversationId);
+    if (afterConversationId !== undefined && (!Number.isSafeInteger(afterConversationId) || afterConversationId < 0)) throw dataError('INVALID_ARGS', 'afterConversationId must be a nonnegative integer');
     const f = scope(group), l = limitClause(limit);
-    return all(c, `SELECT * FROM conversations WHERE id>? AND id<=?${f.sql} AND status='delivered' ORDER BY id${l.sql}`, coverage(c, group), upToConversationId, ...f.args, ...l.args);
+    return all(c, `SELECT * FROM conversations WHERE id>? AND id<=?${f.sql} AND status='delivered' ORDER BY id${l.sql}`, Math.max(coverage(c, group), afterConversationId ?? 0), upToConversationId, ...f.args, ...l.args);
   }
   const groupRead = (group, operation) => { requireGroup(group); return snapshot(c => operation(c, group)); };
   const api = {
@@ -119,11 +120,11 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
       return { summaries: summaries.rows, coverageEnd: summaries.coverageEnd, checkpointId: summaries.checkpointId, rows, safeEnd: upTo, upTo: more ? rows.at(-1).id : upTo };
     });
   }
-  function unsummarizedQuery({ group = '*', upToConversationId, limit } = {}) {
+  function unsummarizedQuery({ group = '*', upToConversationId, limit, afterConversationId } = {}) {
     requireGroup(group, { global: true });
     return snapshot(c => {
       const safeEnd = frontier(c, group), requested = upToConversationId ?? safeEnd;
-      const rows = unsummarized(c, group, { upToConversationId: requested, limit });
+      const rows = unsummarized(c, group, { upToConversationId: requested, limit, afterConversationId });
       const latest = get(c, `SELECT end_conversation_id,summary FROM checkpoints WHERE session_group=? AND no_content=0${group === '*' ? '' : ' AND end_conversation_id>?'} ORDER BY id DESC LIMIT 1`, group, ...(group === '*' ? [] : [baseline(c)]));
       const f = scope(group);
       const more = rows.length && get(c, `SELECT 1 FROM conversations WHERE id>? AND id<=?${f.sql} AND status='delivered' LIMIT 1`, rows.at(-1).id, requested, ...f.args);

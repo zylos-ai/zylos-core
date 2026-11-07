@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import fs from 'node:fs';
@@ -24,7 +25,7 @@ function emitConversations(env, budget = null) {
   `;
   const result = spawnSync('node', ['--input-type=module', '-e', script], {
     env: { ...process.env, ...env, TEST_BUDGET: budget ? JSON.stringify(budget) : '' },
-    encoding: 'utf8',
+    encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024,
   });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
@@ -38,7 +39,7 @@ function emitViaRegistry(env) {
   `;
   const result = spawnSync('node', ['--input-type=module', '-e', script], {
     env: { ...process.env, ...env },
-    encoding: 'utf8',
+    encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024,
   });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
@@ -51,14 +52,18 @@ function receive(content, env) {
     db.insertConversation('out', 'system', null, ${JSON.stringify(content)}); db.close();`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     env: { ...process.env, ...env },
-    encoding: 'utf8',
+    encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024,
   });
   assert.equal(result.status, 0, result.stderr);
 }
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-conv-budget-'));
-  const env = { ZYLOS_DIR: tmpDir };
+  const env = { HOME: path.join(tmpDir, 'home'), ZYLOS_DIR: tmpDir,
+    PM2_HOME: path.join(tmpDir, 'pm2'), TMPDIR: path.join(tmpDir, 'tmp') };
+  for (const key of ['HOME', 'PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key]);
+  assert.ok(tmpDir.startsWith(process.env.TMPDIR));
+  assert.notEqual(env.ZYLOS_DIR, process.env.ZYLOS_DIR);
   // Keep the mandatory status instructions short so these cases isolate
   // conversation-tail packing, including their deliberately small budgets.
   fs.mkdirSync(path.join(tmpDir, '.zylos'));
@@ -210,7 +215,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
     });
   });
 
-  it('reads the latest six delivered messages without obsolete sync instructions', () => {
+  it('reads the latest six delivered messages with an advisory lag notice', () => {
     withTmpDir(({ env }) => {
       // Startup considers only the newest six delivered messages; the budget
       // squeezes that tail further without triggering memory synchronization.
@@ -218,7 +223,8 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
       const out = emitConversations(env, { maxChars: 3000, maxTokens: 100000 });
 
-      assert.doesNotMatch(out, /ACTION REQUIRED|unsummarized|Memory Sync/);
+      assert.doesNotMatch(out, /ACTION REQUIRED|Memory Sync/);
+      assert.match(out, /About 17 messages unsummarized; latest [0-6] shown/);
       assert.ok(out.includes(marker(17)), 'newest message must survive');
       assert.ok(!out.includes(marker(11)), 'older messages must not enter the six-message tail');
       assert.ok(out.length <= 3000);
@@ -240,5 +246,46 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
       );
       assert.ok(out.includes(marker(6)), 'newest message must survive');
     });
+  });
+});
+
+// Local component boundary: emitter + SQLite + public fetch CLI. Run when lag
+// notices, fetch scope or pagination changes; skip for unrelated runtime work.
+// Every child uses private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no tmux or services.
+for (const mode of ['single', 'multi']) it(`${mode} emitted paging command reads only its delivered scope`, () => {
+  withTmpDir(({ tmpDir, env }) => {
+    receive('warmup', env);
+    const db = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
+    try {
+      const insert = db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,'out','system',?,'delivered',?)");
+      const populate = db.transaction(() => {
+        for (let i = 1; i <= 300; i++) insert.run(i * 2, `WORK_MESSAGE_${i * 2}`, 'work');
+        for (const id of [3, 5, 7, 9]) insert.run(id, `OTHER_MESSAGE_${id}`, 'other');
+        db.prepare("INSERT INTO checkpoints(summary,end_conversation_id,session_group,no_content) VALUES('covered',1,?,0)").run(mode === 'multi' ? 'work' : '*');
+      });
+      populate();
+    } finally { db.close(); }
+    const scripts = path.join(tmpDir, '.claude/skills/comm-bridge/scripts');
+    fs.mkdirSync(scripts, { recursive: true });
+    fs.symlinkSync(fileURLToPath(new URL('../c4-fetch.js', import.meta.url)), path.join(scripts, 'c4-fetch.js'));
+    const scope = { root: tmpDir, memoryDir: path.join(tmpDir, 'memory'), mode, scope: mode === 'multi' ? 'work' : '*', sessionGroup: mode === 'multi' ? 'work' : null };
+    const source = `const {emitC4Conversations}=await import(${JSON.stringify(SESSION_INIT_URL)}); process.stdout.write(await emitC4Conversations({agent_id:'child'},null,{scopeReader:async()=>(${JSON.stringify(scope)})}));`;
+    const emitted = spawnSync(process.execPath, ['--input-type=module', '-e', source], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 });
+    assert.equal(emitted.status, 0, emitted.stderr);
+    assert.match(emitted.stdout, new RegExp(`About ${mode === 'multi' ? 300 : 304} messages unsummarized; latest 6 shown`));
+    const command = emitted.stdout.match(/inspect the omitted middle: (node .+ --limit 50)\. Continue/)[1];
+    const args = command.split(' ').slice(1);
+    assert.equal(args[0], path.join(scripts, 'c4-fetch.js'));
+    const fetched = spawnSync(process.execPath, args, { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 });
+    assert.equal(fetched.status, 0, fetched.stderr);
+    assert.match(fetched.stdout, /count=50/);
+    assert.match(fetched.stdout, /WORK_MESSAGE_2/);
+    if (mode === 'multi') {
+      assert.doesNotMatch(fetched.stdout, /OTHER_MESSAGE_/);
+      assert.match(fetched.stdout, /scope=work/);
+    } else {
+      assert.match(fetched.stdout, /OTHER_MESSAGE_3/);
+      assert.match(fetched.stdout, /scope=\*/);
+    }
   });
 });

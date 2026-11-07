@@ -53,6 +53,7 @@ export class SupervisorLifecycle {
     this.configurationSent = new Map();
     this.syncSent = new Map();
     this.syncRuns = new Map();
+    this.syncProgress = new Map();
     this.backlogSent = new Map();
     this.lastSyncCheck = null;
     this.warnings = new Set();
@@ -469,7 +470,8 @@ export class SupervisorLifecycle {
       const single = modeOf(context) === 'single';
       const kind = single ? 'global' : 'group';
       const range = single ? await this.d.db.getGlobalUnsummarizedRange() : await this.d.db.getUnsummarizedRange(scene.sessionGroup);
-      await this.syncScope(scene, kind, { count: range.count, firstAt: range.firstAt, nonempty: range.count > 0 }, context);
+      await this.syncScope(scene, kind, { count: range.count, firstAt: range.firstAt,
+        firstConversationId: range.firstConversationId, nonempty: range.count > 0 }, context);
     });
     if (modeOf(context) === 'multi' && this.allowed('origin', context)) {
       const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
@@ -500,11 +502,15 @@ export class SupervisorLifecycle {
       });
       this.backlogSent.set(key, now);
     }
-    if (!range.nonempty || this.syncSent.has(key) && now - this.syncSent.get(key) < min) return;
+    const previous = this.syncProgress.get(key);
+    const catchingUp = kind !== 'origin' && !this.ttlPreparation.has(scene.sessionGroup) &&
+      previous?.n0 > (config.syncBatchLimit ?? 200) && previous.runId === scene.runId &&
+      range.firstConversationId > previous.f0;
+    if (!range.nonempty || (!catchingUp && this.syncSent.has(key) && now - this.syncSent.get(key) < min)) return;
     const rotationThreshold = config.rotationThresholds?.[scene.runtime] ?? (scene.runtime === 'claude' ? 70 : 75);
     const due = range.count > threshold || lag >= max || kind !== 'origin' &&
       (this.syncRuns.get(key) !== scene.runId || finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold);
-    if (!due) return;
+    if (!catchingUp && !due) return;
     if (typeof this.d.readSyncMarker !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Sync marker reader is unavailable');
     const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
     if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
@@ -515,6 +521,7 @@ export class SupervisorLifecycle {
     });
     this.syncSent.set(key, now);
     this.syncRuns.set(key, scene.runId);
+    if (kind !== 'origin') this.syncProgress.set(key, { n0: range.count, f0: range.firstConversationId, runId: scene.runId });
   }
 
   async advanceRestarts(context) {
