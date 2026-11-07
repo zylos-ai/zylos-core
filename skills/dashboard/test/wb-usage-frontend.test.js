@@ -251,3 +251,15 @@ test('technical usage reads the cache hit rate for the same period and shows it 
   assert.equal(f.root.textContent.includes('wb.usage.cacheHit'), false, 'an unreadable rate leaves the line out');
   page.destroy();
 });
+test('beyond the seven days of runtime events the unknown cards take full rows and tokens fills its row', () => {
+  const f = fixture();
+  renderUsage(f.root, { ...value, rotations: null, tools: null }, { ...f, level: 'technical' });
+  const cards = allNodes(f.root).filter(node => node.classList.contains('wb-usage-chart'));
+  const unknown = cards.filter(node => node.classList.contains('wb-usage-unknown'));
+  assert.equal(unknown.length, 2);
+  assert.ok(unknown.every(node => node.classList.contains('wb-usage-wide')));
+  const tokens = cards.find(node => node.textContent.includes('wb.usage.tokens'));
+  assert.ok(tokens.classList.contains('wb-usage-wide'));
+  const cost = cards.find(node => node.textContent.includes('wb.usage.cost'));
+  assert.equal(cost.classList.contains('wb-usage-wide'), false);
+});

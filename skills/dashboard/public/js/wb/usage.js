@@ -199,9 +199,14 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   const runtimeSeries = field => ['claude', 'codex'].map(runtime => { const points = new Map((value[field] ?? []).filter(row => row.runtime === runtime).map(row => [row.at, row.value])); return { label: runtime === 'claude' ? 'Claude' : 'Codex', data: buckets.map(at => numeric(points.get(at))) }; });
   const messages = new Map((value.messages ?? []).map(row => [row.at, row]));
   const rotations = new Map((value.rotations ?? []).map(row => [row.at, row.value]));
-  const add = spec => charts.push(seriesChart(grid, { ...spec, document, t, chartFactory }));
+  const add = spec => {
+    const chart = seriesChart(grid, { ...spec, document, t, chartFactory });
+    charts.push(chart);
+    return chart;
+  };
+  // An unknown item is a short full-row card, so the charts around it keep their pairs.
   const unknown = (title, iconName, reason = null, sampledAt = null) => {
-    const card = element(document, 'section', undefined, 'wb-card wb-usage-chart');
+    const card = element(document, 'section', undefined, 'wb-card wb-usage-chart wb-usage-wide wb-usage-unknown');
     const head = element(document, 'h3');
     head.append(icon(document, iconName, 'xs'), element(document, 'span', title));
     card.append(head, element(document, 'p', t('wb.unknown')));
@@ -222,8 +227,10 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
     ], stacked: true });
   if (level === 'technical') {
     const tokens = runtimeSeries('tokensByRuntime');
-    add({ title: t('wb.usage.tokens'), iconName: 'layers', labels, datasets: tokens, stacked: true, yFormat: amount => compactCount(amount, t),
+    const tokenChart = add({ title: t('wb.usage.tokens'), iconName: 'layers', labels, datasets: tokens, stacked: true, yFormat: amount => compactCount(amount, t),
       subtitle: `${per} · ${t('wb.usage.total')} ${compactCount(totals.tokens ?? sum(tokens.flatMap(row => row.data)), t)}` });
+    // Without its rotations partner the token chart takes the whole row.
+    if (value.rotations === null) tokenChart.node.classList.add('wb-usage-wide');
     if (value.rotations === null) unknown(t('wb.usage.rotations'), 'restart');
     else add({ title: t('wb.usage.rotations'), iconName: 'restart', labels,
       subtitle: t('wb.usage.rotationsHint'),
