@@ -432,7 +432,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const ok = finished ? totals.success / finished * 100 : 0, late = finished ? totals.timeout / finished * 100 : 0;
     ring.style.setProperty('--ok', `${ok}%`);
     ring.style.setProperty('--late', `${ok + late}%`);
-    if (!finished) ring.classList.add('wb-empty');
+    if (!finished) ring.classList.add('wb-no-runs');
     const hole = element(document, 'div', undefined, 'wb-sched-ring-hole');
     hole.append(element(document, 'b', kpi.successRate7d == null ? '—' : `${Math.round(kpi.successRate7d * 100)}%`),
       element(document, 'small', t('wb.schedule.kpi.rate7d')));

@@ -465,7 +465,7 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-block > h3, .wb-sched-side .wb-detail-section > h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--text-muted); font-size: 11.5px; font-weight: 600; letter-spacing: .04em; }
 .wb-sched-week { display: grid; grid-template-columns: 96px 150px minmax(0, 440px); align-items: center; gap: 14px 22px; }
 .wb-sched-ring { position: relative; width: 92px; height: 92px; border-radius: 50%; background: conic-gradient(var(--wb-work) 0 var(--ok), var(--wb-wait) var(--ok) var(--late), var(--wb-err) var(--late) 100%); }
-.wb-sched-ring.wb-empty { background: var(--wb-off); }
+.wb-sched-ring.wb-no-runs { background: var(--wb-off); }
 .wb-sched-ring-hole { position: absolute; inset: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 50%; background: var(--bg); }
 .wb-sched-ring-hole b { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .wb-sched-ring-hole small { color: var(--text-muted); font-size: 10.5px; }
@@ -767,7 +767,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-date { position: relative; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .wb-date:focus-within { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
 .wb-date > .wb-ico { color: var(--text-muted); }
-.wb-date.wb-empty .wb-date-text { color: var(--text-muted); }
+.wb-date.wb-unset .wb-date-text { color: var(--text-muted); }
 .wb-date-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-date-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
 .wb-usage-dash { color: var(--text-muted); }

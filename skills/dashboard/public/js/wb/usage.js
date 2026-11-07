@@ -257,7 +257,7 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     const text = element(document, 'span', undefined, 'wb-date-text');
     const sync = () => {
       text.textContent = input.value ? input.value.replace('T', ' ') : t(key);
-      field.classList.toggle('wb-empty', !input.value);
+      field.classList.toggle('wb-unset', !input.value);
     };
     input.addEventListener('input', sync); input.addEventListener('change', sync);
     field.addEventListener('click', () => { try { input.showPicker?.(); } catch {} });
