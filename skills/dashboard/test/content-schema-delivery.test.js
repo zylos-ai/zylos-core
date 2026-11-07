@@ -61,11 +61,11 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=94)"/.exec(pageText)?.[1];
+    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=95)"/.exec(pageText)?.[1];
     assert.ok(appPath, 'the entry page loads the refreshed application module');
     const application = await fetch(origin + prefix + '/_assets/' + appPath);
     assert.equal(application.status, 200);
-    assert.match(await application.text(), /from '\.\/wb\/chat\.js\?v=91'/);
+    assert.match(await application.text(), /from '\.\/wb\/chat\.js\?v=94'/);
     for (const moduleName of ['chat', 'chat-blocks', 'chat-questions']) {
       const version = moduleName === 'chat-blocks' ? 90 : 91;
       const moduleUrl = origin + prefix + `/_assets/js/wb/${moduleName}.js?v=${version}`;

@@ -3,8 +3,8 @@ import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=94';
 import { renderOverview } from './detail-overview.js?v=94';
 import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=94';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=94';
-import { renderNameEditor } from './name-edit.js?v=94';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=95';
+import { renderNameEditor } from './name-edit.js?v=95';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -129,7 +129,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     for (const item of groupActionButtons(row, getWritable())) {
       const button = element(document, 'button', undefined, 'wb-icon-btn wb-act'); button.type = 'button';
       button.disabled = item.disabled || state.actionBusy;
-      // Not data-action: app.js still re-locks every [data-action="interrupt"/"chop-chop"] by the Origin state.
+      // Not data-action: origin-lock.js locks every [data-action="interrupt"/"chop-chop"] by the Origin state.
       button.dataset.wbAction = item.action;
       button.setAttribute('aria-label', t('wb.actions.' + item.action));
       // Unavailable actions stay visible and say why in their tooltip; narrow screens also show the label.

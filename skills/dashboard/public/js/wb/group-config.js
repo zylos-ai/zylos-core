@@ -116,43 +116,60 @@ export function effortChoices(meta, model, current) {
   return list;
 }
 
-// Prototype form: engine, model and effort as one pair with save and cancel. The per-group engine
+/**
+ * The pair the editor starts from for one engine: the group's own setting, else what this group is running,
+ * else what it would launch with. Never another group's or the machine's model; empty means "not chosen yet".
+ */
+export function startingPair(value, runtime) {
+  const data = value?.model?.data;
+  const candidates = [data?.desired?.mode === 'override' ? data.desired : null, data?.running?.launchConfig, data?.resolved];
+  const pair = candidates.find(item => item?.runtime === runtime && typeof item.model === 'string' && item.model);
+  return pair ? { model: pair.model, effort: typeof pair.effort === 'string' ? pair.effort : '' } : { model: '', effort: '' };
+}
+
+// Edit form: engine, model and effort as one pair with save and cancel. The per-group engine
 // switch and the reset to the default model stay on a second, quieter line.
 export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true, onCancel = () => {} } = {}) {
   const { state } = controller;
   state.draft ??= {};
   const locked = !writable || state.busy;
-  const select = (label, choices, value) => {
+  const option = (value, label = value) => { const node = element(document, 'option', label); node.value = value; return node; };
+  const select = (label, choices, value, placeholder) => {
     const node = element(document, 'select'); node.setAttribute('aria-label', label);
-    for (const item of choices) { const option = element(document, 'option', item.label ?? item); option.value = item.value ?? item; node.append(option); }
+    if (placeholder) node.append(option('', placeholder));
+    for (const item of choices) node.append(option(item.value ?? item, item.label ?? item));
     node.value = value; node.disabled = locked; return node;
   };
   const resolved = state.value?.runtime?.data?.resolved?.runtime ?? 'claude';
   const target = select(t('wb.config.targetRuntime'), ['claude', 'codex'].map(value => ({ value, label: runtimeName(value) })), state.draft.target ?? resolved);
   const meta = state.meta?.[target.value];
-  const desired = state.value?.model?.data?.desired;
-  const sameEngine = target.value === resolved;
-  const modelValue = state.draft.model ?? (sameEngine ? desired?.model : null) ?? meta?.current_model ?? '';
+  const start = startingPair(state.value, target.value);
+  const modelValue = state.draft.model ?? start.model;
   const choices = modelChoices(meta, modelValue);
-  const model = choices?.length ? select(t('wb.config.model'), choices, modelValue || choices[0].value) : element(document, 'input');
+  const model = choices?.length ? select(t('wb.config.model'), choices, modelValue, t('wb.config.pickModel')) : element(document, 'input');
   if (!choices?.length) {
     model.value = modelValue; model.placeholder = t('wb.config.model'); model.setAttribute('aria-label', t('wb.config.model')); model.disabled = locked;
   }
-  const effortValue = state.draft.effort ?? (sameEngine ? desired?.effort : null) ?? meta?.current_effort ?? '';
-  const effort = select(t('wb.term.effort'), effortChoices(meta, model.value, effortValue), effortValue || effortChoices(meta, model.value)[0]);
+  const effortValue = state.draft.effort ?? start.effort;
+  const effort = select(t('wb.term.effort'), effortChoices(meta, model.value, effortValue), effortValue, t('wb.config.pickEffort'));
   target.addEventListener('change', () => {
     state.draft = { ...state.draft, target: target.value, model: undefined, effort: undefined };
     void controller.loadMeta?.(target.value);
     controller.redraw?.();
   });
+  const save = element(document, 'button', t('wb.config.save'), 'wb-btn wb-btn-primary wb-btn-sm'); save.type = 'button';
+  // Saving writes this group's own pair, so both halves must be chosen on purpose.
+  const syncSave = () => { save.disabled = locked || !model.value.trim() || !effort.value; };
   model.addEventListener(choices?.length ? 'change' : 'input', () => {
     state.draft.model = model.value;
-    const options = effortChoices(meta, model.value, effort.value);
-    effort.replaceChildren(...options.map(value => { const option = element(document, 'option', value); option.value = value; return option; }));
-    if (!options.includes(effort.value)) effort.value = options[0];
+    const kept = effort.value;
+    const options = effortChoices(meta, model.value, kept);
+    effort.replaceChildren(option('', t('wb.config.pickEffort')), ...options.map(value => option(value)));
+    effort.value = options.includes(kept) ? kept : '';
+    syncSave();
   });
-  effort.addEventListener('change', () => { state.draft.effort = effort.value; });
-  const save = element(document, 'button', t('wb.config.save'), 'wb-btn wb-btn-primary wb-btn-sm'); save.type = 'button'; save.disabled = locked;
+  effort.addEventListener('change', () => { state.draft.effort = effort.value; syncSave(); });
+  syncSave();
   save.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, model: model.value, effort: effort.value }));
   const cancel = element(document, 'button', t('wb.cancel'), 'wb-btn wb-btn-sm'); cancel.type = 'button';
   cancel.addEventListener('click', () => { state.draft = {}; onCancel(); });

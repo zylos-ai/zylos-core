@@ -111,9 +111,7 @@
   "wb.config.resultUnknown": "结果未知",
   "wb.config.pairRequired": "模型和思考强度必须一起填写",
   "wb.config.saveRuntime": "保存 AI 引擎",
-  "wb.config.saveModel": "保存模型与强度",
   "wb.config.resetModel": "恢复默认模型",
-  "wb.config.oneAtATime": "每次只保存一项改动",
   "wb.config.model": "模型",
   "wb.config.running": "运行中的值",
   "wb.name.edit": "改名",
@@ -530,7 +528,6 @@
   "wb.detail.memorySaved": "记忆：都已存入",
   "wb.detail.groupMemory": "本组记忆",
   "wb.config.targetRuntime": "给哪个 AI 引擎设置",
-  "wb.config.modelPair": "模型与思考强度",
   "wb.timeline.messagesNote": "消息只记「收到 / 回复」，不显示原文。",
   "wb.timeline.now": "现在",
   "wb.timeline.currentRun": "当前运行",
@@ -552,5 +549,7 @@
   "wb.config.source.override": "单独设置",
   "wb.config.source.default": "用默认设置",
   "wb.config.save": "保存",
+  "wb.config.pickModel": "选择模型",
+  "wb.config.pickEffort": "选择思考强度",
   "wb.config.pairNote": "模型与思考强度一起保存，下次有消息启动时用新配置。"
 }

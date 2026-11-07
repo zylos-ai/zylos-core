@@ -5,7 +5,7 @@ import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=94';
 import { renderVersion } from './wb/settings-version.js?v=94';
 import { mountChat } from './wb/chat.js?v=94';
 import { mountChatSettings } from './wb/chat-settings.js?v=94';
-import { mountWorkbench } from './wb/shell.js?v=94';
+import { mountWorkbench } from './wb/shell.js?v=95';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=94';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
@@ -24,6 +24,7 @@ import {
 import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult } from './action-result.js';
 import { pendingDepthValue, sessionBlockTitleKey, stateTitleKey, originSessionUnavailable } from './state-presentation.js';
+import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from './origin-lock.js?v=95';
 import {
   effortOptionState,
   mergeRuntimeInfo,
@@ -425,12 +426,9 @@ function mascotClass(agentState) {
 
 function renderOriginAvailability() {
   const unavailable = originSessionUnavailable(state.dashboardState);
-  const reason = unavailable ? t('action.origin_not_running') : '';
-  for (const button of document.querySelectorAll('#observer-tab, [data-action="interrupt"], [data-action="chop-chop"]')) {
-    button.disabled = unavailable || remoteIsReadOnly() || Boolean(button.closest('.modal-body-disabled'));
-    // The observer tab keeps the workbench's install / disabled hint whenever the Origin is available.
-    button.title = reason || button.dataset.wbHint || '';
-  }
+  lockOriginButtons(document.querySelectorAll(ORIGIN_LOCK_SELECTOR), {
+    unavailable, readOnly: remoteIsReadOnly(), reason: t('action.origin_not_running'),
+  });
 }
 
 function renderState() {

@@ -1,11 +1,11 @@
 import test from 'node:test';
-import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
+import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from '../public/js/origin-lock.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
 import { renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
-import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices } from '../public/js/wb/group-config.js';
+import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
@@ -896,30 +896,32 @@ test('timeline chips combine filters: one chip uses the server filter, several f
   loader.close();
 });
 
-test('the Origin lock in app.js leaves mounted drawer actions, the observer hint and their names alone', async () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  const start = app.indexOf('function renderOriginAvailability(');
-  const source = app.slice(start, app.indexOf('function renderState(', start));
+test('the Origin lock selector never reaches drawer actions and the observer tab gets its hint back', async () => {
+  // Every selector in the list is an id or a data-action attribute, so only elements carrying those can be locked.
+  const parts = ORIGIN_LOCK_SELECTOR.split(',').map(part => part.trim());
+  assert.deepEqual(parts, ['#observer-tab', '[data-action="interrupt"]', '[data-action="chop-chop"]']);
   const f = detailFixture(async path => response(defaultRead(path)));
   await f.controller.open(row('telegram:a', { state: { kind: 'idle' } }), { rows: [], listKnown: true });
   const drawer = allNodes(f.root).filter(node => node.dataset?.wbAction);
-  const before = drawer.map(node => [node.disabled, node.title, node.attributes['aria-label']]);
-  const observer = f.document.createElement('button'); observer.id = 'observer-tab'; observer.dataset.wbHint = 'wb.observerInstall'; observer.title = 'wb.observerInstall';
-  const legacy = f.document.createElement('button'); legacy.dataset.action = 'chop-chop';
-  const mounted = [observer, legacy, ...allNodes(f.root)];
-  for (const node of mounted) node.closest = () => null;
-  // Same selector semantics as the browser: #id, or data-action (dataset.action), never data-wb-action.
-  const matches = (node, selector) => selector.startsWith('#') ? node.id === selector.slice(1)
-    : node.dataset?.action === /data-action="([^"]+)"/.exec(selector)?.[1];
-  f.document.querySelectorAll = selectors => mounted.filter(node => selectors.split(',').some(selector => matches(node, selector.trim())));
-  for (const unavailable of [true, false]) {
-    const render = new Function('document', 't', 'originSessionUnavailable', 'state', 'remoteIsReadOnly', source + '\nreturn renderOriginAvailability;')(
-      f.document, key => key, () => unavailable, { dashboardState: {} }, () => false);
-    render();
-    assert.deepEqual(drawer.map(node => [node.disabled, node.title, node.attributes['aria-label']]), before, 'drawer actions are not re-locked');
-    assert.equal(legacy.disabled, unavailable);
-    assert.equal(observer.title, unavailable ? 'action.origin_not_running' : 'wb.observerInstall');
+  assert.deepEqual(drawer.map(node => node.dataset.wbAction).sort(), ['chop-chop', 'interrupt', 'restart']);
+  for (const node of allNodes(f.root)) {
+    assert.equal(node.dataset?.action, undefined, 'no drawer element carries data-action');
+    assert.equal(node.attributes['data-action'], undefined);
+    assert.notEqual(node.id, 'observer-tab');
   }
+  const button = (fields = {}) => Object.assign(f.document.createElement('button'), { closest: () => null }, fields);
+  const observer = button({ id: 'observer-tab', title: 'wb.observerInstall' }); observer.dataset.wbHint = 'wb.observerInstall';
+  const legacy = button(); legacy.dataset.action = 'chop-chop';
+  const inDisabledModal = button({ closest: selector => selector === '.modal-body-disabled' ? {} : null }); inDisabledModal.dataset.action = 'interrupt';
+  lockOriginButtons([observer, legacy, inDisabledModal], { unavailable: true, readOnly: false, reason: 'action.origin_not_running' });
+  assert.deepEqual([observer.disabled, legacy.disabled, inDisabledModal.disabled], [true, true, true]);
+  assert.equal(observer.title, 'action.origin_not_running');
+  lockOriginButtons([observer, legacy, inDisabledModal], { unavailable: false, readOnly: false, reason: 'action.origin_not_running' });
+  assert.deepEqual([observer.disabled, legacy.disabled, inDisabledModal.disabled], [false, false, true]);
+  assert.equal(observer.title, 'wb.observerInstall', 'the workbench hint comes back once the Origin runs');
+  assert.equal(legacy.title, '');
+  lockOriginButtons([legacy], { unavailable: false, readOnly: true, reason: 'action.origin_not_running' });
+  assert.equal(legacy.disabled, true, 'a read-only remote keeps them locked');
 });
 
 test('evidence marks the sample its headline came from and says how long ago each was read', () => {
@@ -962,13 +964,44 @@ test('the configuration line says whether it is applied and where it comes from'
   assert.match(line.textContent, /wb\.config\.state\.applied/); assert.match(line.textContent, /wb\.config\.source\.override/);
 });
 
+test('a group on the default settings starts from what it runs, or from nothing chosen, never the machine\'s model', async () => {
+  const meta = { current_model: 'fable[1m]', current_effort: 'low', models: [{ id: 'fable[1m]' }, { id: 'opus' }, { id: 'sonnet' }], efforts_by_model: { '*': ['low', 'medium', 'high'] } };
+  const open = async model => {
+    const requests = [];
+    const controller = createGroupConfig({ key: 'a', t, request: async (path, options) => { requests.push([path, options?.method ?? 'GET', options?.body]);
+      if (path.startsWith('/api/actions/meta')) return meta;
+      if (options?.method) return { ok: true, data: { running: { status: 'pending' } } };
+      return { runtime: { ok: true, data: { desired: { mode: 'inherit' }, resolved: { runtime: 'claude' } } }, model: { ok: true, data: model } }; } });
+    await controller.load(); await controller.loadMeta('claude');
+    const document = createDocument(), root = document.createElement('div');
+    renderGroupConfig(root, controller, { document, t });
+    const [, select, effort, save] = allNodes(root).find(node => node.classList.contains('wb-cfg-controls')).children;
+    return { select, effort, save, requests };
+  };
+  const running = await open({ runtime: 'claude', desired: { runtime: 'claude', mode: 'default' },
+    running: { status: 'applied', launchConfig: { runtime: 'claude', mode: 'default', model: 'sonnet', effort: 'medium' } }, resolved: { runtime: 'claude', mode: 'default' } });
+  assert.deepEqual([running.select.value, running.effort.value, running.save.disabled], ['sonnet', 'medium', false], 'the running pair of this group');
+  const idle = await open({ runtime: 'claude', desired: { runtime: 'claude', mode: 'default' }, running: { status: 'not_running', launchConfig: null }, resolved: { runtime: 'claude', mode: 'default' } });
+  assert.equal(idle.select.children[0].value, ''); assert.equal(idle.select.children[0].textContent, 'wb.config.pickModel');
+  assert.deepEqual([idle.select.value, idle.effort.value], ['', ''], 'nothing is preselected from the machine-wide model');
+  assert.equal(idle.save.disabled, true, 'saving needs a chosen pair');
+  idle.select.value = 'opus'; idle.select.dispatch('change');
+  assert.equal(idle.save.disabled, true, 'a model alone is not enough');
+  idle.effort.value = 'high'; idle.effort.dispatch('change');
+  assert.equal(idle.save.disabled, false);
+  idle.save.dispatch('click'); await tick();
+  assert.deepEqual(JSON.parse(idle.requests.at(-1)[2]), { kind: 'model', runtime: 'claude', model: 'opus', effort: 'high' });
+  assert.deepEqual(startingPair({ model: { data: { desired: { runtime: 'codex', mode: 'override', model: 'gpt', effort: 'high' } } } }, 'claude'), { model: '', effort: '' },
+    'another engine\'s pair is not reused');
+});
+
 test('the configuration editor offers engine, model and effort as dropdowns with save and cancel, and keeps the engine switch and reset', async () => {
   const requests = [];
   const meta = { models: [{ id: 'opus', display_name: 'Opus' }, { id: 'sonnet' }], efforts_by_model: { opus: ['low', 'high', 'xhigh'], '*': ['low', 'medium', 'high'] } };
   const controller = createGroupConfig({ key: 'a', t, request: async (path, options) => { requests.push([path, options?.method ?? 'GET']);
     if (path.startsWith('/api/actions/meta')) return meta;
     if (options?.method) return { ok: true, data: { running: { status: 'pending' } } };
-    return { runtime: { ok: true, data: { desired: { runtime: 'inherit' }, resolved: { runtime: 'claude' } } }, model: { ok: true, data: { desired: { model: 'opus', effort: 'high' } } } }; } });
+    return { runtime: { ok: true, data: { desired: { runtime: 'inherit' }, resolved: { runtime: 'claude' } } }, model: { ok: true, data: { desired: { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' } } } }; } });
   await controller.load(); await controller.loadMeta('claude'); await controller.loadMeta('claude');
   assert.equal(requests.filter(([path]) => path.startsWith('/api/actions/meta')).length, 1, 'the catalog is read once per engine');
   const document = createDocument(), root = document.createElement('div'); let cancelled = 0;
@@ -976,10 +1009,12 @@ test('the configuration editor offers engine, model and effort as dropdowns with
   const pair = allNodes(root).find(node => node.classList.contains('wb-cfg-controls'));
   assert.deepEqual(pair.children.map(node => node.tagName), ['SELECT', 'SELECT', 'SELECT', 'BUTTON', 'BUTTON']);
   const [, model, effort, save, cancel] = pair.children;
-  assert.deepEqual(model.children.map(node => node.value), ['opus', 'sonnet']); assert.equal(model.value, 'opus');
-  assert.deepEqual(effort.children.map(node => node.value), ['low', 'high', 'xhigh']); assert.equal(effort.value, 'high');
+  assert.deepEqual(model.children.map(node => node.value), ['', 'opus', 'sonnet']); assert.equal(model.value, 'opus', 'the group\'s own pair is preselected');
+  assert.deepEqual(effort.children.map(node => node.value), ['', 'low', 'high', 'xhigh']); assert.equal(effort.value, 'high');
+  assert.equal(save.disabled, false);
   model.value = 'sonnet'; model.dispatch('change');
-  assert.deepEqual(effort.children.map(node => node.value), ['low', 'medium', 'high'], 'efforts follow the chosen model');
+  assert.deepEqual(effort.children.map(node => node.value), ['', 'low', 'medium', 'high'], 'efforts follow the chosen model');
+  assert.equal(effort.value, 'high', 'an effort the new model also offers is kept');
   cancel.dispatch('click'); assert.equal(cancelled, 1);
   save.dispatch('click'); await tick();
   assert.deepEqual(requests.at(-1), ['/api/workbench/groups/a/config', 'POST']);

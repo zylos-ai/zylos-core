@@ -111,9 +111,7 @@
   "wb.config.resultUnknown": "Result unknown",
   "wb.config.pairRequired": "Enter both model and reasoning effort.",
   "wb.config.saveRuntime": "Save AI engine",
-  "wb.config.saveModel": "Save model and effort",
   "wb.config.resetModel": "Reset model defaults",
-  "wb.config.oneAtATime": "Save one change at a time.",
   "wb.config.model": "Model",
   "wb.config.running": "Running configuration",
   "wb.name.edit": "Rename",
@@ -530,7 +528,6 @@
   "wb.detail.memorySaved": "Memory: all saved",
   "wb.detail.groupMemory": "Group memory",
   "wb.config.targetRuntime": "AI engine to configure",
-  "wb.config.modelPair": "Model and effort",
   "wb.timeline.messagesNote": "Messages record only received / replied, never the text.",
   "wb.timeline.now": "now",
   "wb.timeline.currentRun": "Current run",
@@ -552,5 +549,7 @@
   "wb.config.source.override": "Set for this group",
   "wb.config.source.default": "Uses the default",
   "wb.config.save": "Save",
+  "wb.config.pickModel": "Choose a model",
+  "wb.config.pickEffort": "Choose an effort",
   "wb.config.pairNote": "Model and effort are saved together and used from the next start."
 }
