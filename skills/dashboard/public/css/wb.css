@@ -143,12 +143,16 @@ html[data-detail=technical] .wb-grid, html[data-detail=technical] .wb-row { grid
 html[data-detail=plain] .wb-tech-col { display: none; }
 /* Narrower screens: flexible activity and model columns; below 900px the technical view leaves context and model to the drawer. */
 @media (max-width: 1179px) {
+  .wb-instance { flex-wrap: wrap; row-gap: 4px; white-space: normal; overflow: visible; }
+  .wb-bh-now { gap: 6px; }
+  .wb-search { flex: 0 1 150px; min-width: 0; }
+  .wb-search input { width: 100%; }
   .wb-grid, .wb-row { grid-template-columns: minmax(150px, 1.3fr) 118px minmax(120px, 2fr) minmax(150px, 252px); column-gap: 12px; }
   html[data-detail=technical] .wb-grid, html[data-detail=technical] .wb-row { grid-template-columns: minmax(150px, 1.3fr) 118px minmax(120px, 1.4fr) minmax(150px, 252px) 52px 46px minmax(104px, 150px); }
 }
 @media (min-width: 761px) and (max-width: 900px) {
   html[data-detail=technical] .wb-grid, html[data-detail=technical] .wb-row { grid-template-columns: minmax(150px, 1.3fr) 118px minmax(120px, 1.4fr) minmax(150px, 252px) 52px; }
-  .wb-c-ctx, .wb-c-model, .wb-row > .wb-context, .wb-row > .wb-model { display: none; }
+  .wb-bh > .wb-c-ctx, .wb-bh > .wb-c-model, .wb-row > .wb-context, .wb-row > .wb-model { display: none; }
 }
 .wb-bh { position: sticky; top: var(--wb-header-h); z-index: 5; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--wb-line); color: var(--text-muted); font-size: 11.5px; letter-spacing: .02em; }
 .wb-bh > div { min-width: 0; display: flex; align-items: center; gap: 8px; }
@@ -156,6 +160,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-dist { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
 .wb-dist-item { display: inline-flex; align-items: center; gap: 4px; }
 .wb-bh-now { justify-content: space-between; }
+.wb-bh-now > span, .wb-bh-state { white-space: nowrap; }
 .wb-bh-strip { justify-content: space-between; }
 .wb-search { height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text-muted); cursor: text; }
 .wb-search:focus-within { border-color: var(--accent); outline: 2px solid var(--wb-accent-line); }
@@ -172,7 +177,10 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-ch { width: 30px; height: 30px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: var(--wb-r); background: var(--wb-hover); color: var(--text-dim); }
 .wb-sel .wb-ch { background: var(--wb-panel); }
 .wb-name-text { display: flex; flex-direction: column; min-width: 0; }
-.wb-nm { display: flex; align-items: center; gap: 6px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-name { min-width: 0; }
+/* Block, not flex, so a long name ends in an ellipsis. */
+.wb-nm { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-nm .wb-tag { margin-left: 6px; vertical-align: 1px; }
 .wb-key { color: var(--text-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-key.wb-mono { font-size: 11.5px; }
 .wb-pill { justify-self: start; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 9px 2px 8px; border: 1px solid transparent; border-radius: 20px; background: var(--wb-hover); color: var(--text); font-size: 12px; font-weight: 550; white-space: nowrap; }
