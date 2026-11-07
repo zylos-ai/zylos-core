@@ -187,6 +187,77 @@ test('TTL preparation accepts terminal outcomes only after idle and same-run che
   await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = 'done'; f.scenes[0].state = 'busy';
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
 });
+test('completed TTL preparation waits through busy activity and idle confirmation without another Sync', async () => {
+  for (const status of ['done', 'timeout', 'superseded', 'failed', 'cancelled']) {
+    const f = fixture(); f.unsummarized = 1;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    const preparation = f.lifecycle.ttlPreparation.get('a');
+    f.controls[0].status = status; f.scenes[0].state = 'busy';
+    for (const elapsed of [1, 10_000, 90_000]) {
+      f.now = preparation.at + elapsed;
+      f.scenes[0].lastActivityAt = f.now;
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
+      assert.equal(f.fences.size, 0);
+      assert.equal(f.controls.length, 1);
+      assert.equal(f.lifecycle.ttlReset.has('a'), false);
+    }
+    f.scenes[0].state = 'idle'; f.scenes[0].idleSince = f.now;
+    f.now += 2999;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
+    assert.equal(f.fences.size, 0);
+    f.now++;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.fences.get('a')?.reason, 'ttl');
+    assert.equal(f.fences.get('a')?.runId, preparation.runId);
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+    assert.equal(f.controls.length, 1);
+    assert.equal(f.controls[0].content, 'prepare');
+    assert.equal(f.lifecycle.ttlReset.has('a'), false);
+  }
+});
+test('new C4 activity or a replacement run cancels completed TTL preparation while busy', async () => {
+  for (const change of ['message', 'replacement']) {
+    const f = fixture(); f.unsummarized = 1;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    f.controls[0].status = 'done'; f.scenes[0].state = 'busy';
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), true);
+    f.now += 10;
+    if (change === 'message') f.lastActivity = f.now; else f.scenes[0].runId = 'replacement';
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+    assert.equal(f.fences.size, 0);
+    assert.equal(f.controls.length, 1);
+    assert.equal(f.lifecycle.ttlReset.has('a'), false);
+  }
+});
+test('completed TTL preparation waits for every held Sync marker to release', async () => {
+  for (const group of ['a', 'origin']) {
+    for (const heldKind of group === 'origin' ? ['group', 'origin'] : ['group']) {
+      const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = 1;
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      const preparation = f.lifecycle.ttlPreparation.get(group);
+      f.controls[0].status = 'done';
+      f.deps.readSyncMarker = args => { f.markerReads.push(args); return { held: args.kind === heldKind, stale: false }; };
+      for (const elapsed of [1, 90_000]) {
+        f.now = preparation.at + elapsed; f.scenes[0].lastActivityAt = f.now;
+        await f.lifecycle.checkTtl(f.scenes[0], f.context);
+        assert.equal(f.lifecycle.ttlPreparation.get(group), preparation);
+        assert.equal(f.fences.size, 0);
+        assert.equal(f.controls.length, 1);
+      }
+      assert.ok(f.markerReads.some(args => args.kind === heldKind && args.currentRunId === preparation.runId));
+      f.deps.readSyncMarker = () => ({ held: false, stale: false });
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      assert.equal(f.fences.get(group)?.reason, 'ttl');
+      assert.equal(f.lifecycle.ttlPreparation.has(group), false);
+      assert.equal(f.controls.length, 1);
+      assert.equal(f.lifecycle.ttlReset.has(group), false);
+    }
+  }
+});
 test('TTL excludes starting runs; TTL still must be expired at completion', async () => {
   const f = fixture();
   f.scenes = [scene('a', { ready: false })]; await f.lifecycle.checkTtl(f.scenes[0], f.context);
@@ -260,7 +331,7 @@ test('pre-reclaim database failure leaves preparation unsaved and retries from c
   await assert.rejects(f.lifecycle.checkTtl(f.scenes[0], f.context), /database unavailable/);
   assert.equal(f.controls.length, 1); assert.equal(f.lifecycle.ttlPreparation.has('origin'), false); assert.equal(f.fences.size, 0);
 });
-test('Origin Sync ownership and outgoing activity cancel TTL reclamation', async () => {
+test('Origin Sync ownership delays TTL while outgoing activity or replacement cancels preparation', async () => {
   for (const change of ['marker', 'outbound', 'replacement']) {
     const f = fixture(); f.scenes = [scene('origin')]; f.backlog = { total: 1, groups: [{ count: 1 }] };
     await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = 'done';
@@ -268,7 +339,7 @@ test('Origin Sync ownership and outgoing activity cancel TTL reclamation', async
     if (change === 'outbound') { f.now++; f.lastActivity = f.now; }
     if (change === 'replacement') f.scenes[0].runId = 'replacement';
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
-    assert.equal(f.fences.size, 0); assert.equal(f.lifecycle.ttlPreparation.has('origin'), false); assert.deepEqual(f.stops, []);
+    assert.equal(f.fences.size, 0); assert.equal(f.lifecycle.ttlPreparation.has('origin'), change === 'marker'); assert.deepEqual(f.stops, []);
   }
 });
 test('Origin never participates in eviction candidates or in-flight capacity discount', async () => {

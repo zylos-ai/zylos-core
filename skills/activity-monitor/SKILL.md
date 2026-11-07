@@ -43,6 +43,7 @@ Missing or non-finite session activity is ignored. TTL waits for the configured
 interval after that latest activity. Once the same run is preparing for TTL
 reclaim, its own PRE_RECLAIM Sync activity does not restart or cancel that
 preparation; a new C4 message still cancels it.
+Completed preparation stays pending until the same run is idle, without restarting TTL or sending another PRE_RECLAIM Sync.
 
 Capacity eviction skips even idle sessions whose latest activity is less than
 `session_evict_min_idle_seconds` ago. At the boundary they become eligible for

@@ -352,9 +352,10 @@ export class SupervisorLifecycle {
         const control = await this.d.db.getControlById(id);
         if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
       }
+      if (!preparation.partial && !await this.idle(scene, context)) return;
       this.ttlPreparation.delete(group);
       if (preparation.partial) return;
-      if (await this.idle(scene, context)) await this.beginReclaim(scene, 'ttl', context);
+      await this.beginReclaim(scene, 'ttl', context);
       return;
     }
     const range = await this.d.db.getUnsummarizedRange(group);
