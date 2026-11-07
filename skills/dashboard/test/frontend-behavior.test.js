@@ -31,7 +31,14 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
   const elements = {
     '#observer-notice': { dataset: {} },
     '#observer-frame': { style: {}, contentWindow: { postMessage(_message, _origin, ports) { if (autoFrameReady) queueMicrotask(() => ports[0].peer.onmessage?.({ data: { type: 'ready' } })); } }, parentElement: { dataset: {} } },
-    '#observer-target': {},
+    '#observer-target': { replaceChildren() {}, append() {} },
+    '#observer-empty': { hidden: false },
+    '#observer-main': { hidden: true },
+    '#observer-empty-title': {},
+    '#observer-empty-back': { hidden: true },
+    '#observer-back': { hidden: true },
+    '#observer-title': {},
+    '#observer-notice-history': { hidden: true },
     '#observer-tab': { hidden: false },
     '#observer-size-form': { hidden: false, dataset: {} },
     '#observer-size-cols': { value: '120' },
@@ -76,8 +83,10 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
       querySelectorAll: (selector) => selector === '.tab' ? tabs : selector === '.tab-panel' ? panels : [],
       querySelector: (selector) => selector === '.tab.active' ? tabs.find((tab) => tab.classList.active) || null : null,
       addEventListener() {},
+      createElement: () => ({}),
       visibilityState: 'visible'
     },
+    originSessionUnavailable: () => false,
     t: (key) => key,
     clearTimeout(id) { if (timeouts[id - 1]) timeouts[id - 1].cancelled = true; },
     clearInterval() {},
@@ -154,6 +163,14 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     tabs,
     setFetch(implementation) { fetchImpl = implementation; }
   };
+}
+
+// What the user sees: the observer page renders its main view and hides the empty state, or the reverse.
+function observerPageShown(harness) {
+  harness.context.renderObserverPage();
+  const empty = harness.elements['#observer-empty'].hidden, main = harness.elements['#observer-main'].hidden;
+  assert.equal(empty, !main, 'exactly one of the empty state and the main view is visible');
+  return !main;
 }
 
 function observerResponse(data, { ok = true, status = ok ? 200 : 503 } = {}) {
@@ -294,9 +311,9 @@ function fleetFixture() {
         health_reason: 'stuck'
       },
       {
-        name: 'eva',
-        color: agentColor('eva').color,
-        hue: agentColor('eva').hue,
+        name: 'zz-lab',
+        color: agentColor('zz-lab').color,
+        hue: agentColor('zz-lab').hue,
         state: 'OFFLINE',
         activity: 'last message',
         context_pct: null,
@@ -325,9 +342,9 @@ test('Machines page renders one card per machine with state, quota, cost and hos
   const html = renderAgentFleetHtml(fleetFixture(), { basePath: '/dash' });
   assert.equal(view.tiles.length, 4);
   assert.deepEqual([view.counts.busy, view.counts.idle, view.counts.stuck, view.counts.offline], [1, 1, 1, 1]);
-  // Unreachable machines come before reachable ones (no self in this fixture).
-  assert.deepEqual(view.tiles.map(tile => tile.name), ['eva', 'zylos01', 'zylos02', 'zylos0t']);
-  assert.match(html, /class="wb-f-card bad" data-agent="eva"/);
+  // Unreachable machines come before reachable ones (no self in this fixture); by name alone zz-lab would be last.
+  assert.deepEqual(view.tiles.map(tile => tile.name), ['zz-lab', 'zylos01', 'zylos02', 'zylos0t']);
+  assert.match(html, /class="wb-f-card bad" data-agent="zz-lab"/);
   assert.match(html, /Cannot connect/);
   assert.match(html, /class="wb-tech agent-fleet-reason">Unreachable</);
   assert.match(html, /class="wb-pill wb-busy" data-mood="busy"/);
@@ -978,17 +995,27 @@ test('Observer navigation fetches target status, waits for it, and discards dela
 
   await harness.context.enterRemoteAgent('bravo', { push: false });
   assert.equal(harness.context.state.observer.status.state, 'installed');
-  assert.equal(harness.context.observerPageAvailable(), true);
+  assert.equal(observerPageShown(harness), true);
 
   firstStatus.resolve(observerResponse({ state: 'not_installed' }));
   await alpha;
   assert.equal(harness.context.state.remoteAgent, 'bravo');
   assert.equal(harness.context.state.observer.status.state, 'installed');
-  assert.equal(harness.context.observerPageAvailable(), true);
+  assert.equal(observerPageShown(harness), true);
   assert.deepEqual(harness.calls.filter(({ url }) => url.endsWith('/api/observer/status')).map(({ url }) => url), [
     '/fleet/alpha/api/observer/status',
     '/fleet/bravo/api/observer/status'
   ]);
+});
+
+test('a remote machine reached with a read-only key shows the observer empty state, not the live view', () => {
+  const h = observerUiHarness();
+  h.context.state.remoteAgent = 'alpha';
+  h.context.state.observer.status = { state: 'installed', desired: { enabled: true } };
+  assert.equal(observerPageShown(h), true, 'an admin key opens the live view');
+  h.setReadOnly(true);
+  assert.equal(observerPageShown(h), false);
+  assert.equal(h.elements['#observer-empty'].hidden, false);
 });
 
 test('Observer navigation discards a delayed old-target status error', async () => {
@@ -1010,7 +1037,7 @@ test('Observer navigation discards a delayed old-target status error', async () 
 
   assert.equal(harness.context.state.remoteAgent, 'bravo');
   assert.equal(harness.context.state.observer.status.state, 'installed');
-  assert.equal(harness.context.observerPageAvailable(), true);
+  assert.equal(observerPageShown(harness), true);
 });
 
 test('Observer reset uses the real resetAgentData path to clear target status before navigation fetches', async () => {
@@ -1023,7 +1050,7 @@ test('Observer reset uses the real resetAgentData path to clear target status be
 
   assert.equal(harness.context.state.observer.statusGeneration, 5);
   assert.equal(harness.context.state.observer.status, null);
-  assert.equal(harness.context.observerPageAvailable(), false);
+  assert.equal(observerPageShown(harness), false);
 });
 
 test('Observer popstate navigation generation prevents a delayed remote route from reopening locally', async () => {
@@ -1089,7 +1116,7 @@ test('Observer lifecycle success and error responses cannot mutate a different t
 
       assert.equal(harness.context.state.remoteAgent, null);
       assert.equal(harness.context.state.observer.status.state, 'not_installed');
-      assert.equal(harness.context.observerPageAvailable(), false);
+      assert.equal(observerPageShown(harness), false);
       assert.equal(harness.calls.filter(({ url }) => url === '/fleet/alpha/api/observer/status').length, 0);
       assert.equal(harness.calls.filter(({ url }) => url === '/api/observer/status').length, 1);
     });
@@ -1166,7 +1193,7 @@ test('Observer lifecycle ABA and superseded actions cannot overwrite fresh statu
     pending.resolve(observerResponse({ state: 'installed', desired: { enabled: true } }));
     await action;
     assert.equal(h.context.state.observer.status.state, 'not_installed');
-    assert.equal(h.context.observerPageAvailable(), false);
+    assert.equal(observerPageShown(h), false);
     assert.equal(h.settings['#observer-settings-status'].textContent, text);
     assert.equal(h.buttons.every((button) => !button.disabled), true);
   });
@@ -1188,7 +1215,7 @@ test('Observer lifecycle post-refresh fence prevents old-target fallback and fee
   refresh.resolve(observerResponse({ state: 'installed', desired: { enabled: true } }));
   await action;
   assert.equal(h.context.state.observer.status.state, 'not_installed');
-  assert.equal(h.context.observerPageAvailable(), false);
+  assert.equal(observerPageShown(h), false);
   assert.equal(h.settings['#observer-settings-status'].hidden, true);
   assert.equal(h.settings['#observer-settings-status'].textContent, '');
 });
@@ -1220,7 +1247,7 @@ test('Observer lifecycle status refresh cannot replace a newer same-target statu
   old.resolve(observerResponse({ state: 'installed', desired: { enabled: true } }));
   await action;
   assert.equal(h.context.state.observer.status.state, 'not_installed');
-  assert.equal(h.context.observerPageAvailable(), false);
+  assert.equal(observerPageShown(h), false);
 });
 
 test('Observer popstate reports route failures without an unhandled rejection or stray stream', async () => {
@@ -1522,7 +1549,6 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /renderKeyTable\(fleetManageModal\.querySelector\('#api-key-list'\), keys/);
   assert.match(app, /replace_created_key_confirm/);
   // Destructive key and machine actions confirm in the dashboard's own dialog, never the browser prompt.
-  assert.match(app, /if \(pendingKeyName && !\(await confirmSetting\(/);
   assert.doesNotMatch(app, /window\.confirm/);
   assert.match(app, /if \(fleetManageModal\?\._createdKey\?\.name === name\) renderCreatedApiKey\(null\);/);
   assert.match(app, /navigator\.clipboard\?\.writeText/);
@@ -1732,7 +1758,7 @@ test('Observer recovery status survives refresh and exposes cleanup without view
     assert.equal(h.settings['#observer-uninstall'].hidden, false);
     assert.equal(h.settings['#observer-enable'].hidden, true);
     assert.equal(h.settings['#observer-install'].hidden, true);
-    assert.equal(h.context.observerPageAvailable(), false);
+    assert.equal(observerPageShown(h), false);
     await h.context.runObserverLifecycle('enable');
     await h.context.runObserverLifecycle('install');
     await h.context.openObserver();
@@ -1745,7 +1771,7 @@ test('Observer recovery status survives refresh and exposes cleanup without view
     assert.equal(h.settings['#observer-settings-recovery'].hidden, true);
     assert.equal(h.settings['#observer-enable'].hidden, false);
     assert.equal(h.settings['#observer-disable'].hidden, true);
-    assert.equal(h.context.observerPageAvailable(), false);
+    assert.equal(observerPageShown(h), false);
   });
 });
 

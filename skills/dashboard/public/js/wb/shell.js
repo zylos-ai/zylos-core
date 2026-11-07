@@ -1,4 +1,4 @@
-import { createViewMode, observerNavEntry } from './view-mode.js?v=98';
+import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=99';
 import { boardController, renderBoard, renderDistribution } from './board.js?v=98';
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip } from './instance-strip.js?v=94';
@@ -178,8 +178,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   groupDetail = createGroupDetail({ root: document.querySelector('#wb-side'), document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable,
     detail: () => mode.detailLevel(), isVisible: visible, onMemory, onConversation, onObserve,
-    // The terminal observer attaches to the Origin session only (Core's observer target).
-    observable: row => observerEntry()?.target === 'observer' && (row.sessionGroup == null || row.sessionGroup === 'origin'),
+    observable: row => groupObservable(observerEntry(), row),
     onRename: () => controller.refresh(), onClose: () => { if (!stopped) redraw(); },
   });
   hostPanel = createHostPanel({ root: document.querySelector('#wb-side'), document, t, read, identity,

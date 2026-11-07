@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createViewMode, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, wbWritable, tabForPath, instanceStatusText } from '../public/js/wb/view-mode.js';
+import { createViewMode, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, groupObservable, wbWritable, tabForPath, instanceStatusText } from '../public/js/wb/view-mode.js';
 import { createDocument, storage } from './fixtures/workbench-dom.js';
 
 test('view level tolerates inaccessible storage and redraws without data requests', context => {
@@ -37,6 +37,16 @@ test('observer navigation follows detail, installation and enabled status', () =
   assert.match(observerNavEntry({ installed: false }, 'technical').label, /去设置安装/);
   assert.equal(observerNavEntry({ installed: true, enabled: false }, 'technical').target, 'settings');
   assert.equal(wbWritable(() => true), false); assert.equal(wbWritable(() => false), true);
+});
+
+test('only the Origin group offers the terminal observer, and only while the observer page is usable', () => {
+  const live = observerNavEntry({ installed: true, enabled: true }, 'technical');
+  assert.equal(groupObservable(live, { sessionGroup: 'origin' }), true);
+  assert.equal(groupObservable(live, { sessionGroup: null }), true, 'a single-session instance is its Origin');
+  for (const sessionGroup of ['oc_123', 'cron:daily', 'Origin', 'origin-2']) assert.equal(groupObservable(live, { sessionGroup }), false, sessionGroup);
+  assert.equal(groupObservable(observerNavEntry({ installed: true, enabled: false }, 'technical'), { sessionGroup: 'origin' }), false, 'disabled goes to settings instead');
+  assert.equal(groupObservable(observerNavEntry({ installed: true, enabled: true }, 'plain'), { sessionGroup: 'origin' }), false, 'plain view has no observer');
+  assert.equal(groupObservable(null, { sessionGroup: 'origin' }), false, 'unavailable, e.g. a read-only remote');
 });
 
 test('conversation navigation maps direct and fleet URLs without changing existing destinations', () => {
