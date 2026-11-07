@@ -11,7 +11,7 @@ registerHooks({ resolve(specifier, context, next) {
 } });
 const { renderQuestion } = await import('../public/js/wb/chat-questions.js');
 const t = key => key;
-function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = true, missing = false, stateAvailable = true, readOnlyExternal = false,
+function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = true, missing = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
   mutateQuestion, formState = {}, submit = async () => {} } = {}) {
   const defaults = type === 'choice' ? { prompt: 'Pick one', options: [{ id: 'a', label: 'First' }, { id: 'b', label: 'Second' }], action: { type: 'choice.select', target: 'answer.choice' } }
     : type === 'confirmation' ? { title: 'Proceed?', severity: 'normal', action: { type: 'confirmation.respond', target: 'answer.confirm' } }
@@ -26,7 +26,7 @@ function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = tru
     question_summary: envelope.questionSummary, status };
   mutateQuestion?.(question);
   const document = createDocument(), requests = [];
-  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, readOnlyExternal, t, formState,
+  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, t, formState,
     onSubmit: async (action, options) => { requests.push({ action, options }); return submit(action, options); } });
   const root = render();
   return { root, render, requests, question, envelope, formState, nodes: () => allNodes(root),
@@ -306,7 +306,8 @@ test('a failed state query preserves the last known lifecycle and explains the m
   assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
   assert.ok(f.button('answer'));
   const initial = fixture({ missing: true, canWrite: false, stateAvailable: false });
-  assert.match(initial.root.textContent, /chat.question.stateUnavailable/);
+  assert.match(initial.root.textContent, /chat.questions.unavailable/);
+  assert.equal(initial.root.textContent.includes('chat.question.stateUnavailable'), false);
   assert.equal(initial.root.textContent.includes('chat.question.unavailable'), false);
   assert.equal(initial.nodes().some(node => node.tagName === 'BUTTON'), false);
 });
@@ -316,6 +317,40 @@ test('external history explains read-only questions without claiming they are un
   assert.match(f.root.textContent, /chat.question.externalReadOnly/);
   assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
   assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'TEXTAREA'].includes(node.tagName)), false);
+});
+
+test('a question whose state page is not loaded does not claim missing registration', () => {
+  const f = fixture({ missing: true, canWrite: false, statePendingPage: true });
+  assert.match(f.root.textContent, /chat.question.stateNotLoaded/);
+  assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
+  assert.equal(f.nodes().some(node => node.tagName === 'BUTTON'), false);
+});
+
+test('a mounted paused question preserves a definite invalid-data rejection after refresh', async () => {
+  const { mountChat } = await import('../public/js/wb/chat.js');
+  const base = fixture({ type: 'confirmation' });
+  const document = createDocument(), root = document.createElement('div');
+  let posts = 0, reads = 0;
+  const page = mountChat({ document, root, t, fetch: async (path, options = {}) => {
+    if (path.endsWith('/answers')) { posts++; return { ok: false, status: 409, json: async () => ({ error: 'chat_question_unavailable' }) }; }
+    const data = path.includes('/questions?') ? (reads++, { items: [base.question], nextCursor: null })
+      : path.includes('/messages?') ? { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' }
+        : path.includes('session-mode') ? { data: { sessionMode: 'multi' } }
+          : /conversations\/g%3AAA$/.test(path) ? { conversation: { id: 'g:AA', state: 'active' }, stored: false }
+            : { items: [{ id: 'g:AA' }], nextCursor: null };
+    return { ok: true, status: 200, json: async () => data };
+  } });
+  const find = key => allNodes(root).find(node => node.dataset.action === key);
+  await page.open(); allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click'); await tick(); await tick();
+  find('confirmAnswer').dispatch('click'); await tick(); await tick();
+  assert.equal(posts, 1); assert.equal(reads, 2);
+  assert.match(root.textContent, /chat.question.invalidData/);
+  assert.equal(root.textContent.includes('chat.state.pending_reconciliation'), false);
+  assert.equal(find('confirmAnswer'), undefined);
+  find('refresh').dispatch('click'); await tick(); await tick();
+  assert.match(root.textContent, /chat.question.invalidData/);
+  assert.equal(find('confirmAnswer'), undefined); assert.equal(posts, 1);
+  page.destroy();
 });
 
 for (const error of ['chat_question_not_paused', 'chat_answer_conflict']) test(`${error} uses the server-ended explanation without inventing delivery uncertainty`, () => {

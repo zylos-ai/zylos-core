@@ -418,5 +418,7 @@
   "chat.block.failed": "Content could not be produced.",
   "chat.question.stateUnavailable": "Question state is temporarily unavailable. Showing the last known state.",
   "chat.question.externalReadOnly": "Questions in external history are read only.",
-  "chat.question.ended": "This question has already been answered or ended."
+  "chat.question.ended": "This question has already been answered or ended.",
+  "chat.question.invalidData": "The question data is invalid. This question cannot be answered.",
+  "chat.question.stateNotLoaded": "Question state has not been loaded."
 }

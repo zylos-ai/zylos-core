@@ -418,5 +418,7 @@
   "chat.block.failed": "内容生成失败。",
   "chat.question.stateUnavailable": "问题状态暂不可用，显示上次已知状态。",
   "chat.question.externalReadOnly": "外部历史中的问题只能查看。",
-  "chat.question.ended": "该问题已被回答或已结束。"
+  "chat.question.ended": "该问题已被回答或已结束。",
+  "chat.question.invalidData": "问题数据无效，无法回答。",
+  "chat.question.stateNotLoaded": "问题状态未加载。"
 }

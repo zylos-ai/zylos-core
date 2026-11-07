@@ -10,7 +10,7 @@ const referenceMatches = (question, envelope, block, row) => question && row?.di
   && question.question_summary === envelope.questionSummary && envelope.interrupt?.blockId === block.id;
 
 /** A question uses its immutable message for fields and Dashboard for its current lifecycle. */
-export function renderQuestion({ document, envelope, block, row, question, canWrite = false, stateAvailable = true, readOnlyExternal = false,
+export function renderQuestion({ document, envelope, block, row, question, canWrite = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
   t = key => key, onSubmit = null, formState = {} } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-question');
@@ -21,8 +21,9 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   root.dataset.interruptId = envelope?.interruptId || '';
   if (readOnlyExternal) root.append(node('p', t('chat.question.externalReadOnly'), 'chat-question-status'));
   else {
-    if (valid || stateAvailable) root.append(node('p', t('chat.question.' + lifecycle), 'chat-question-status'));
-    if (!stateAvailable) root.append(node('p', t('chat.question.stateUnavailable'), 'chat-notice'));
+    if (statePendingPage && !question) root.append(node('p', t('chat.question.stateNotLoaded'), 'chat-question-status'));
+    else if (valid || stateAvailable) root.append(node('p', t('chat.question.' + lifecycle), 'chat-question-status'));
+    if (!stateAvailable) root.append(node('p', t(valid ? 'chat.question.stateUnavailable' : 'chat.questions.unavailable'), 'chat-notice'));
   }
   const receipt = formState.receipt ?? (valid ? question.delivery : null);
   if (receipt) {
@@ -33,7 +34,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   const ended = ['chat_question_not_paused', 'chat_answer_conflict'].includes(formState.error);
   if (formState.error && (ended || receipt?.stored !== true)) {
     const errorKey = ended ? 'chat.question.ended'
-      : formState.error === 'chat_question_unavailable' ? 'chat.question.stateUnavailable' : 'chat.question.submitFailed';
+      : formState.error === 'chat_question_unavailable' ? 'chat.question.invalidData' : 'chat.question.submitFailed';
     const error = node('p', t(errorKey), 'chat-error');
     error.setAttribute('role', 'alert'); root.append(error);
   }

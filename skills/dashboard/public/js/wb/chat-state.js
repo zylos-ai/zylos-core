@@ -109,8 +109,9 @@ export function createChatState({ request, identity = null, onChange } = {}) {
         if (!current.questionForms.has(formKey) && row.status === 'answered' && row.action?.id === row.answer_id && !row.actionError) current.questionForms.set(formKey, {});
         const form = current.questionForms.get(formKey);
         if (form && !form.sending) {
+          const reconciling = form.receipt?.needsReconciliation === true;
           form.receipt = row.delivery ?? null;
-          if (row.status === 'paused' && !row.answer_id) {
+          if (reconciling && row.status === 'paused' && !row.answer_id) {
             if (form.locked) form.error = null;
             form.locked = false;
           }
@@ -135,7 +136,6 @@ export function createChatState({ request, identity = null, onChange } = {}) {
     if (!form || form.sending || (form.locked && !retry) || !action || (question.status !== 'paused' &&
         !(question.status === 'answered' && retry && question.answer_id === action.id))) return;
     if (retry && (question.status !== 'answered' || form.action?.id !== action.id || form.receipt?.retryAllowed !== true)) return;
-    if (!retry && question.status !== 'paused') return;
     const e = epoch, id = selectedId, currentTab = tab, sendIdentity = openedIdentity;
     const submitted = JSON.parse(JSON.stringify(action));
     // Freeze the accepted intent across network errors and explicit retries.

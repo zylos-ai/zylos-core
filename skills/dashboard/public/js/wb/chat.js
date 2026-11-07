@@ -108,6 +108,7 @@ export function mountChat({ root, document = root.ownerDocument, t = key => key,
           if (!s.questionForms.has(formKey)) s.questionForms.set(formKey, {});
           return renderQuestion({ document, envelope, block, row, question, t,
             stateAvailable: s.questionsReady && !s.questionError, readOnlyExternal: s.tab === 'external',
+            statePendingPage: !!s.questionCursor,
             canWrite: s.canWrite && s.questionsReady,
             formState: s.questionForms.get(formKey),
             onSubmit: (answer, options) => state.answer(envelope.interruptId, answer, { ...options, conversationId: s.selectedId, questionC4Id: row.id }) });

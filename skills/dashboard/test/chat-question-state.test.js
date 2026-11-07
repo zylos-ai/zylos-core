@@ -494,6 +494,27 @@ test('manual refresh of an unaccepted paused intent restores a normal submission
   f.state.destroy();
 });
 
+test('a definite rejection stays locked when the registered question is still paused', async () => {
+  let reads = 0;
+  const f = fixture({ handle: path => path.endsWith('/answers')
+    ? Promise.reject({ status: 409, code: 'chat_question_unavailable' })
+    : path.includes('/questions?') ? (reads++, { items: [question()], nextCursor: null }) : undefined });
+  await f.open(); const form = f.form(), intent = action();
+  await f.state.answer('question-one', intent);
+  assert.equal(reads, 2);
+  assert.equal(f.state.snapshot().questions[0].status, 'paused');
+  assert.equal(form.locked, true);
+  assert.equal(form.error, 'chat_question_unavailable');
+  assert.equal(form.receipt, null);
+  await f.state.refreshQuestions();
+  assert.equal(form.locked, true);
+  assert.equal(form.error, 'chat_question_unavailable');
+  await f.state.answer('question-one', intent);
+  assert.equal(posts(f.calls).length, 1);
+  assert.equal(form.values.note, 'keep this input');
+  f.state.destroy();
+});
+
 test('conflict on a later question page refreshes that bounded page and preserves earlier questions', async () => {
   let secondPageReads = 0;
   const first = question(), second = question({ c4_id: 12, interrupt_id: 'question-two' });
