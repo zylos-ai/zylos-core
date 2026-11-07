@@ -23,6 +23,24 @@ test('assembly: damaged retained while existing lifecycle loop stays scheduled',
  const reply=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'bad',reason:'upgrade'});assert.equal(reply.code,'requests_unreadable');assert.equal(fs.readFileSync(file,'utf8'),'broken');
 });
 
+// Boundary: actual Supervisor -> SessionActivity with a private event log and
+// configured hot TTL; injected scene/DB/clock avoid tmux, PM2 and network. Run
+// for child-activity/config wiring; unrelated UI changes may skip. Official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; fixture stops and cleans.
+test('assembled activity uses configured child TTL and resets on run or session replacement', async t => {
+ let now=20000;
+ const {supervisor,root}=fixture(t,{now:()=>now,readConfiguration:async()=>({mode:'multi',runtime:'claude',capacity:2,hotTtlSeconds:10})});
+ await supervisor.loop.deps.readConfiguration();
+ const file=path.join(root,'events.jsonl'),scene={sessionGroup:'a',runDir:root,runId:'r',sessionId:'s',runtime:'claude',createdAt:0};
+ fs.writeFileSync(file,JSON.stringify({run_id:'r',session_id:'s',runtime:'claude',ts:15000,event:'subagent_start',agent_id:'child'})+'\n');
+ const first=supervisor.readActivity(scene);assert.equal(first.activeSubagents.length,1);assert.equal(first.lastSubagentActivityAt,15000);
+ now=25000;assert.equal(supervisor.readActivity(scene).activeSubagents.length,0);
+ for(const replacement of [{runId:'new'},{sessionId:'new'}]){
+  const next=supervisor.readActivity({...scene,...replacement});
+  assert.equal(next.activeSubagents.length,0);assert.equal(next.lastSubagentActivityAt,null);
+ }
+});
+
 // Real createSupervisor -> lifecycle Origin Sync -> marker reader/control write.
 // Run for assembly/Sync wiring; skip unrelated UI work. Runner paths are private;
 // injected scenes/database and marker reader avoid live tmux/PM2/network. The

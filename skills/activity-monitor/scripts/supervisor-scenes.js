@@ -85,7 +85,7 @@ export class SupervisorScenes {
           const activity = await this.readActivity(scene);
           if (activity) {
             // Identity never comes from status data; only explicitly normalized state facts do.
-            for (const key of ['state', 'idleSince', 'lastActivityAt', 'transcriptMtimeMs', 'tools']) {
+            for (const key of ['state', 'idleSince', 'lastActivityAt', 'transcriptMtimeMs', 'tools', 'activeSubagents', 'lastSubagentActivityAt']) {
               if (Object.hasOwn(activity, key)) scene[key] = activity[key];
             }
           }

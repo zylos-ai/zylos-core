@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { SupervisorLifecycle, evictionDemand } from '../supervisor-lifecycle.js';
+import { SessionActivity } from '../session-activity.js';
+import { publishSessionStatus } from '../status-writer.js';
 import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createDelivery } from '../../../comm-bridge/scripts/router/delivery.js';
 import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
@@ -266,6 +271,159 @@ test('TTL excludes starting runs; TTL still must be expired at completion', asyn
   f.controls[0].status = 'done'; f.context.configuration.hotTtlSeconds = 3000;
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
 });
+test('active subagents block TTL preparation, direct fences and capacity selection without changing idle', async () => {
+  const f = fixture(); f.unsummarized = 1;
+  f.scenes[0].activeSubagents = [{ agentId: 'child', lastActivityAt: f.now - 1 }];
+  f.scenes[0].lastSubagentActivityAt = f.now - 1;
+  assert.equal(await f.lifecycle.idle(f.scenes[0], f.context), true);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 0); assert.equal(f.fences.size, 0);
+  // A recent child can stay active past the eviction minimum, until hot TTL.
+  f.now += 300_000;
+  assert.equal((await f.lifecycle.evictionCandidates(f.scenes, f.context)).length, 0);
+  for (const reason of ['ttl', 'evict']) assert.equal(await f.lifecycle.beginReclaim(f.scenes[0], reason, f.context), false);
+  assert.equal(f.fences.size, 0);
+});
+test('subagent events reset TTL and eviction clocks; stopped and expired children allow normal reclaim', async () => {
+  for (const active of [true, false]) {
+    const f = fixture(); f.context.configuration.hotTtlSeconds = 10; f.context.configuration.evictMinIdleSeconds = 5;
+    const update = () => {
+      f.scenes[0].lastSubagentActivityAt = f.now;
+      f.scenes[0].activeSubagents = active ? [{ agentId: 'child', lastActivityAt: f.now }] : [];
+    };
+    update(); f.now += 9999;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
+    update(); f.now += 4999;
+    assert.equal((await f.lifecycle.evictionCandidates(f.scenes, f.context)).length, 0);
+    f.now++;
+    assert.equal((await f.lifecycle.evictionCandidates(f.scenes, f.context)).length, active ? 0 : 1);
+    f.now += 4999;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
+    f.now++;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.fences.get('a')?.reason, 'ttl'); assert.equal(f.controls.length, 0);
+    assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
+    assert.deepEqual(f.stops, ['run-a']);
+  }
+});
+test('pre-reclaim child activity retains completed preparation until child and main agent are idle', async () => {
+  const f = fixture(); f.unsummarized = 1;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const preparation = f.lifecycle.ttlPreparation.get('a');
+  f.controls[0].status = 'done';
+  for (const elapsed of [1, 90_000]) {
+    f.now = preparation.at + elapsed;
+    f.scenes[0].lastSubagentActivityAt = f.now;
+    f.scenes[0].lastActivityAt = f.now;
+    f.scenes[0].activeSubagents = [{ agentId: 'sync-child', lastActivityAt: f.now }];
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
+    assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 1);
+  }
+  f.scenes[0].activeSubagents = []; f.scenes[0].lastSubagentActivityAt = ++f.now;
+  f.scenes[0].state = 'busy';
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
+  f.scenes[0].state = 'idle'; f.scenes[0].idleSince = f.now;
+  f.now += 2999; await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
+  f.now++; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.get('a')?.reason, 'ttl'); assert.equal(f.controls.length, 1);
+  assert.equal(f.lifecycle.ttlReset.has('a'), false);
+  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
+  assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+  assert.deepEqual(f.stops, ['run-a']);
+});
+test('preparing Sync child starting after the TTL fence delays stop without resetting preparation', async () => {
+  for (const phase of ['sample', 'final']) {
+    const f = fixture(); f.unsummarized = 1;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = 'done';
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    const preparation = f.lifecycle.ttlPreparation.get('a'), fence = f.fences.get('a');
+    f.now++;
+    const child = { activeSubagents: [{ agentId: 'sync-child', lastActivityAt: f.now }], lastSubagentActivityAt: f.now };
+    if (phase === 'sample') Object.assign(f.scenes[0], child);
+    else f.deps.observeGroup = () => ({ ...f.scenes[0], ...child });
+    assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'waiting_idle');
+    assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation); assert.equal(f.fences.get('a'), fence);
+    assert.equal(f.lifecycle.ttlReset.has('a'), false); assert.equal(f.stops.length, 0);
+    Object.assign(f.scenes[0], { activeSubagents: [], lastSubagentActivityAt: ++f.now });
+    f.deps.observeGroup = () => f.scenes[0];
+    assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false); assert.equal(f.controls.length, 1);
+  }
+});
+test('new C4 or replacement still cancels preparation while its child is active', async () => {
+  for (const change of ['message', 'replacement']) {
+    const f = fixture(); f.unsummarized = 1;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    f.controls[0].status = 'done'; f.now++;
+    f.scenes[0].activeSubagents = [{ agentId: 'sync-child', lastActivityAt: f.now }];
+    f.scenes[0].lastSubagentActivityAt = f.now;
+    if (change === 'message') f.lastActivity = f.now; else f.scenes[0].runId = 'replacement';
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false); assert.equal(f.fences.size, 0);
+    assert.equal(f.controls.length, 1);
+  }
+});
+test('fresh subagent observations guard fence creation and final TTL or eviction stop only', async () => {
+ for (const active of [true, false]) {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+    const guarded = ['ttl', 'evict'].includes(reason);
+    const f = fixture(), original = { ...f.scenes[0] };
+    f.scenes[0].activeSubagents = active ? [{ agentId: 'child', lastActivityAt: f.now }] : [];
+    f.scenes[0].lastSubagentActivityAt = f.now;
+    assert.equal(await f.lifecycle.beginReclaim(original, reason, f.context), !guarded);
+    assert.equal(f.fences.size, guarded ? 0 : 1);
+    const g = fixture(), fence = g.fence(reason);
+    g.deps.observeGroup = () => ({ ...g.scenes[0], activeSubagents: active ? [{ agentId: 'child', lastActivityAt: g.now }] : [], lastSubagentActivityAt: g.now });
+    assert.equal(await g.lifecycle.advanceReclaim(fence, g.context), guarded ? 'cancelled' : 'done');
+    assert.equal(g.stops.length, guarded ? 0 : 1);
+    const h = fixture(), row = h.fence(reason);
+    h.scenes[0].activeSubagents = active ? [{ agentId: 'child', lastActivityAt: h.now }] : [];
+    h.scenes[0].lastSubagentActivityAt = h.now;
+    assert.equal(await h.lifecycle.advanceReclaim(row, h.context), guarded ? 'cancelled' : 'done');
+    assert.equal(h.stops.length, guarded ? 0 : 1);
+  }
+ }
+});
+
+// Boundary: actual activity/status projection, C4 SQLite and require_idle delivery;
+// transport is injected, with no real tmux, runtime, PM2 or network. Run when child
+// aggregation/reclaim guards change; unrelated UI changes may skip. Official runner
+// isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; t.after closes all owned resources.
+test('require_idle control delivers from unchanged main idle state while a background child blocks reclaim', async t => {
+  const f = fixture(), c4 = c4Fixture(t, { now: () => f.now });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'child-idle-delivery-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const activity = new SessionActivity({ runDir: root, runId: 'run-a', sessionId: 'session-1', runtime: 'claude' });
+  t.after(() => activity.close());
+  const baseline = activity.read(f.now - 5000);
+  activity.consume([{ run_id: 'run-a', session_id: 'session-1', runtime: 'claude', event: 'subagent_start', agent_id: 'child', ts: f.now - 1 }]);
+  const sample = activity.read(f.now);
+  for (const field of ['state', 'idleSince', 'lastActivityAt']) assert.equal(sample[field], baseline[field]);
+  assert.deepEqual(sample.tools, baseline.tools); assert.equal(sample.activeSubagents.length, 1);
+  Object.assign(f.scenes[0], sample);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 0);
+  assert.equal((await f.lifecycle.evictionCandidates(f.scenes, f.context)).length, 0);
+  const status = publishSessionStatus({ statusFile: path.join(root, 'status.json'), scene: f.scenes[0], activity: sample, health: { health: 'ok' }, now: f.now });
+  const target = { ready: true, runtime: 'claude', runId: 'run-a', serverGeneration: '1:1', sessionId: '$1', paneId: '%1' };
+  const control = c4.store.insertControl('idle fixture', { sessionGroup: 'a', requireIdle: true, appendAckSuffix: true,
+    ackDeadlineAt: Math.floor(f.now / 1000) + 300,
+    targetBinding: { expectedRunId: 'run-a', tmuxTarget: { serverGeneration: '1:1', sessionId: '$1', paneId: '%1' } } });
+  assert.equal(c4.store.claimControl(control.id), true);
+  let sends = 0;
+  const delivery = createDelivery({ db: c4.store, getSessionMode: () => 'multi', now: () => f.now, sleep: async () => {},
+    openTmuxConnection: async () => ({ close() {}, command: async args => args.at(-1) === '#{cursor_x}' ? '2' : '0' }),
+    resolveSessionTarget: async () => target, revalidateSessionTarget: async () => {},
+    readSessionState: async () => ({ identity: target, status: { valid: true, value: status } }), readRuntimeHealth: () => ({ health: 'ok' }),
+    getSessionAdapter: () => ({ sendText: async () => { sends++; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+  }, { periodicEnabled: false, captureEnabled: false });
+  t.after(() => delivery.stop());
+  const result = await delivery.deliverControl(c4.db.prepare('SELECT * FROM control_queue WHERE id=?').get(control.id));
+  assert.equal(result.delivered, true); assert.equal(sends, 1);
+  assert.equal(c4.db.prepare('SELECT status FROM control_queue WHERE id=?').pluck().get(control.id), 'running');
+});
 test('Origin idle TTL fences and reclaims without writing a wake control; single has no TTL', async () => {
   const f = fixture(); f.scenes = [scene('origin')];
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
@@ -394,8 +552,10 @@ test('pre-reclaim Sync activity retains preparation and reclaims the same idle r
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.fences.get('a')?.reason, 'ttl');
     assert.equal(f.fences.get('a')?.runId, 'run-a');
-    assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+    assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
     assert.equal(f.controls.length, 1);
+    assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
   }
 });
 test('new C4 activity still cancels preparation after pre-reclaim Sync activity', async () => {

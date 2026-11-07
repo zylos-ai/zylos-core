@@ -237,9 +237,11 @@ export class SupervisorLifecycle {
     if (reason === 'evict' && (scene.sessionGroup === 'origin' || scene.sessionGroup === null)) return false;
     if (reason === 'ttl' && scene.sessionGroup === null) return false;
     if (!scene.present || !scene.ready || !scene.runId || scene.sessionGroup === null) return false;
+    if (this.subagentReclaimBlocked(scene, reason, context)) return false;
     if (!await this.allowed(scene.sessionGroup, context)) return false;
     const fresh = await this.observe(scene.sessionGroup, context);
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return false;
+    if (this.subagentReclaimBlocked(fresh, reason, context)) return false;
     await this.checkReclaimDependencies(fresh, context);
     if (reason === 'evict' && !(await this.evictionCandidates([fresh], context)).length) return false;
     if (!await this.beforeWrite(scene.sessionGroup, context)) return false;
@@ -253,6 +255,7 @@ export class SupervisorLifecycle {
     if (fence.reason === 'manual_restart' || !RECLAIM_REASONS.has(fence.reason)) return 'ignored';
     const group = unfenced ? null : fence.sessionGroup;
     if (group === '*') return 'ignored';
+    const preparedTtl = fence.reason === 'ttl' && this.ttlPreparation.get(group)?.runId === fence.runId;
     if (!unfenced) {
       const current = context.fences.find(item => item.sessionGroup === group);
       if (!current || current.runId !== fence.runId || current.reason !== fence.reason) return 'changed';
@@ -267,7 +270,9 @@ export class SupervisorLifecycle {
     if (scene.present && scene.runId === fence.runId) {
       if (typeof scene.processRunning !== 'boolean') return 'unknown_process';
       if (scene.processRunning !== false) {
-        if (!await this.reclaimRead(fence, () => this.idle(scene, context))) {
+        if (preparedTtl && this.activeSubagents(scene, context)) return 'waiting_idle';
+        if (this.subagentReclaimBlocked(scene, fence.reason, context) ||
+            !await this.reclaimRead(fence, () => this.idle(scene, context))) {
           if (singleAuth || fence.reason === 'model_config') return 'waiting_idle';
           if (!unfenced) await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
@@ -291,6 +296,11 @@ export class SupervisorLifecycle {
       scene = await this.reclaimRead(fence, () => this.observe(group, context));
       if (scene.present && scene.runId === fence.runId) {
         if (typeof scene.processRunning !== 'boolean') return 'unknown_process';
+        if (scene.processRunning && this.subagentReclaimBlocked(scene, fence.reason, context)) {
+          if (preparedTtl && this.activeSubagents(scene, context)) return 'waiting_idle';
+          await this.clear(fence, context);
+          return 'cancelled';
+        }
         await this.reclaimRead(fence, async () => {
           if (!unfenced) {
             const current = await this.d.db.getDrainFence(group);
@@ -324,8 +334,26 @@ export class SupervisorLifecycle {
     const reset = this.ttlReset.get(scene.sessionGroup);
     const sessionActivity = finite(scene.lastActivityAt) && scene.lastActivityAt < sessionActivityBefore
       ? scene.lastActivityAt : 0;
+    const subagentActivity = finite(scene.lastSubagentActivityAt) && scene.lastSubagentActivityAt < sessionActivityBefore
+      ? scene.lastSubagentActivityAt : 0;
     return Math.max(activityTime(await this.d.db.getLastActivity(scene.sessionGroup)), scene.createdAt,
-      reset?.runId === scene.runId ? reset.at : 0, sessionActivity);
+      reset?.runId === scene.runId ? reset.at : 0, sessionActivity, subagentActivity);
+  }
+
+  activeSubagents(scene, context) {
+    const ttl = (context.configuration.hotTtlSeconds ?? 1800) * 1000;
+    return scene.activeSubagents?.some(agent => finite(agent.lastActivityAt) && this.now() - agent.lastActivityAt < ttl) ?? false;
+  }
+
+  subagentReclaimBlocked(scene, reason, context) {
+    if (!['ttl', 'evict'].includes(reason)) return false;
+    if (this.activeSubagents(scene, context)) return true;
+    const last = scene.lastSubagentActivityAt;
+    if (!finite(last)) return false;
+    const preparation = reason === 'ttl' ? this.ttlPreparation.get(scene.sessionGroup) : null;
+    if (preparation?.runId === scene.runId && last >= preparation.at) return false;
+    const seconds = reason === 'ttl' ? context.configuration.hotTtlSeconds ?? 1800 : context.configuration.evictMinIdleSeconds ?? 300;
+    return this.now() - last < seconds * 1000;
   }
 
   prompt(name, ...args) {
@@ -364,12 +392,13 @@ export class SupervisorLifecycle {
         const control = await this.d.db.getControlById(id);
         if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
       }
-      if (!preparation.partial && !await this.idle(scene, context)) return;
-      this.ttlPreparation.delete(group);
-      if (preparation.partial) return;
+      if (!preparation.partial && (this.activeSubagents(scene, context) || !await this.idle(scene, context))) return;
+      if (preparation.partial) { this.ttlPreparation.delete(group); return; }
+      // Keep the preparation cutoff through the fence's final activity recheck.
       await this.beginReclaim(scene, 'ttl', context);
       return;
     }
+    if (this.activeSubagents(scene, context)) return;
     const range = await this.d.db.getUnsummarizedRange(group);
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
     const todo = [];
@@ -416,6 +445,7 @@ export class SupervisorLifecycle {
     for (const scene of scenes) {
       if (scene.observationError) throw scene.observationError;
       if (!scene.present || !scene.ready || !scene.sessionGroup || scene.sessionGroup === 'origin' || scene.state !== 'idle' || context.fences.some(f => f.sessionGroup === scene.sessionGroup)) continue;
+      if (this.activeSubagents(scene, context)) continue;
       const last = await this.lastActivity(scene);
       if (now - last < minIdle) continue;
       candidates.push({ ...scene, last });

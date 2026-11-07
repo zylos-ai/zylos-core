@@ -9,12 +9,36 @@ export class SessionActivity {
     Object.assign(this,{runDir,runId,sessionId,runtime,startedAt,warn});
     this.reader=new EventLogReader(path.join(runDir,'events.jsonl'),{warn});
     this.tools=new Map();this.completed=new Set();this.results=new Set();
+    this.subagents=new Map();this.lastSubagentActivityAt=null;
     this.recovered=false;this.lastActivityAt=startedAt;this.closedThrough=-Infinity;this.transcriptPath=null;
     this.transcriptFd=null;this.transcriptOffset=0;this.transcriptIdentity=null;this.turn=false;this.idleSince=null;
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
   matches(row) {
     return row.run_id===this.runId && row.session_id===this.sessionId && row.runtime===this.runtime && !row.agent_id && row.type!=='runtime_health';
+  }
+  consumeSubagent(row, reverse=false) {
+    if(row.run_id!==this.runId || row.session_id!==this.sessionId || row.runtime!==this.runtime ||
+       row.type==='runtime_health' || typeof row.agent_id!=='string' || !row.agent_id ||
+       !Number.isFinite(row.ts) || row.ts<this.startedAt)return;
+    const agent=this.subagents.get(row.agent_id) ?? {lastActivityAt:row.ts,active:false,transitionAt:-Infinity};
+    agent.lastActivityAt=Math.max(agent.lastActivityAt,row.ts);
+    if(['subagent_start','subagent_stop'].includes(row.event) &&
+       (row.ts>agent.transitionAt || (!reverse && row.ts===agent.transitionAt))) {
+      agent.active=row.event==='subagent_start';agent.transitionAt=row.ts;
+    }
+    this.subagents.set(row.agent_id,agent);
+    this.lastSubagentActivityAt=Math.max(this.lastSubagentActivityAt ?? 0,row.ts);
+  }
+  recoverSubagents() {
+    // Child lifetimes can cross main-agent turn boundaries. Recover compact
+    // per-child facts independently, without retaining the session's event list.
+    const reader=new EventLogReader(path.join(this.runDir,'events.jsonl'),{warn:this.warn});
+    try {reader.recoverTail(row=>{
+      this.consumeSubagent(row,true);
+      const current=row.run_id===this.runId && row.session_id===this.sessionId && row.runtime===this.runtime;
+      return {done:current && !row.agent_id && (row.event==='session_start' || Number.isFinite(row.ts) && row.ts<this.startedAt)};
+    });} finally {reader.close();}
   }
   associateTranscript(row) {
     if(row.event==='session_start' && typeof row.transcript_path==='string' && path.isAbsolute(row.transcript_path))this.transcriptPath=row.transcript_path;
@@ -31,6 +55,7 @@ export class SessionActivity {
   }
   consume(rows) {
     for(const row of rows) {
+      this.consumeSubagent(row);
       if(!this.matches(row))continue;
       this.associateTranscript(row);
       if(!Number.isFinite(row.ts) || row.ts<this.startedAt)continue;
@@ -70,12 +95,19 @@ export class SessionActivity {
     for(const id of this.results)this.tools.delete(id);
     return stat.mtimeMs;
   }
-  read(now=Date.now()) {
-    const events=this.recovered?this.reader.read():this.recover();this.recovered=true;this.consume(events);
+  read(now=Date.now(), {subagentTtlMs=1800000}={}) {
+    const events=this.recovered?this.reader.read():this.recover();
+    // Capture the incremental cursor first, so child events appended during
+    // independent recovery are still seen by the next tail read.
+    if(!this.recovered)this.recoverSubagents();
+    this.recovered=true;this.consume(events);
     const transcriptMtimeMs=this.readTranscript();
     if(Number.isFinite(transcriptMtimeMs))this.lastActivityAt=Math.max(this.lastActivityAt,transcriptMtimeMs);
     const busy=this.tools.size>0 || now-this.lastActivityAt<3000;
     if(busy)this.idleSince=null;else if(this.idleSince===null)this.idleSince=now;
-    return {sessionId:this.sessionId,state:busy?'busy':'idle',tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events};
+    const activeSubagents=[...this.subagents].filter(([,agent])=>agent.active && now-agent.lastActivityAt<subagentTtlMs)
+      .map(([agentId,agent])=>({agentId,lastActivityAt:agent.lastActivityAt}));
+    return {sessionId:this.sessionId,state:busy?'busy':'idle',tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
+      activeSubagents,lastSubagentActivityAt:this.lastSubagentActivityAt};
   }
 }
