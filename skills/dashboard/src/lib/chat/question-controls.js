@@ -1,7 +1,7 @@
-import fs from 'node:fs';
+import Database from 'better-sqlite3';
 import os from 'node:os';
 import path from 'node:path';
-import { Store } from '../store.js';
+import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../schema.js';
 import { ChatAnswers } from './answers.js';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 
@@ -11,14 +11,21 @@ export function recordQuestionControl(row, { env = process.env } = {}) {
   if (parsed.kind !== 'envelope' || parsed.envelope.kind !== 'control') return null;
   const zylosDir = env.ZYLOS_DIR || path.join(env.HOME || os.homedir(), 'zylos');
   const file = path.join(zylosDir, 'components/dashboard/dashboard.db');
-  let store;
+  let db;
   try {
     try {
-      if (!fs.existsSync(file)) throw new Error('Dashboard database unavailable');
-      store = new Store(file);
-      return new ChatAnswers({ store }).control({ sessionGroup: row.session_group,
+      try {
+        db = new Database(file, { fileMustExist: true });
+        db.pragma('busy_timeout = 5000');
+        if (inspectDatabase(db).currentVersion !== TARGET_SCHEMA_VERSION) {
+          throw new Error('Dashboard database version does not match the code');
+        }
+      } catch (error) {
+        throw Object.assign(new Error('Dashboard database unavailable or incompatible; complete the upgrade or restart Dashboard.', { cause: error }), { code: 'QUESTION_CONTROL_FAILED' });
+      }
+      return new ChatAnswers({ store: { db } }).control({ sessionGroup: row.session_group,
         endpointId: row.endpoint_id, envelope: parsed.envelope });
-    } finally { store?.close(); }
+    } finally { db?.close(); }
   } catch (error) {
     // The channel verified this outbound C4 row before applying its overlay.
     // Preserve the cause while distinguishing application failure from an
