@@ -165,7 +165,8 @@ export function defaultAgentFleetLabels() {
     todayWeek: 'Today / 7 days',
     groups: 'Groups',
     host: 'CPU · Memory · Disk',
-    rate7d: 'Weekly quota',
+    rate7d: 'This week',
+    quotaHead: 'Weekly quota',
     subagent: 'Subagent',
     self: 'This machine',
     modeMulti: 'Multi-session',
@@ -346,7 +347,7 @@ function renderTile(tile, labels) {
     : `<div class="wb-f-sub wb-tech"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span>${tile.offline ? '' : ` · ${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}${tile.latencyLabel ? ` · ${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}` : ''}`} ${linkChip}</div>`;
   if (tile.offline) {
     const seen = ageLabel(tile.lastSeen);
-    return `<div class="wb-f-card bad agent-tile" ${data} data-state="${escapeHtml(tile.mood)}">
+    return `<div class="wb-f-card bad" ${data} data-state="${escapeHtml(tile.mood)}">
     <div class="wb-f-top"><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i><b>${escapeHtml(tile.name)}</b><span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     <div class="wb-f-reason"><span class="wb-plain">${escapeHtml(tile.problem.short)}</span><span class="wb-tech agent-fleet-reason">${escapeHtml(tile.stateLabel)}</span><span class="wb-tech wb-mono"> · ${escapeHtml(tile.reason)}</span></div>
@@ -362,7 +363,7 @@ function renderTile(tile, labels) {
   const second = multi
     ? `<div>${escapeHtml(labels.groups)}<b>${escapeHtml(String(tile.self.groups ?? '--'))}</b></div>`
     : `<div title="${escapeHtml(labels.context)}${tile.threshold == null ? '' : ` / ${pctText(tile.threshold)}`}">${escapeHtml(labels.context)}<b class="${tile.overThreshold ? 'wb-txt-warn' : ''}">${pctText(tile.contextPct)}</b></div>`;
-  return `<div class="wb-f-card${tile.isSelf ? ' self' : ''} agent-tile" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
+  return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
     <div class="wb-f-top"><span class="wb-hdot"></span><b>${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     ${act}
@@ -387,7 +388,7 @@ function renderCompare(view) {
     return `<div class="wb-f-row">${name}${quotaBars(tile, labels)}<div class="wb-qbars">${cost}</div></div>`;
   }).join('');
   return `<section class="wb-set-card wb-tech wb-f-compare"><div class="wb-set-card-h"><h4><i class="wb-ico wb-ico-activity wb-ico-xs" aria-hidden="true"></i><span>${escapeHtml(labels.compareTitle)}</span></h4><span class="wb-set-card-sub">${escapeHtml(fill(labels.reachableN, { count: ok.length }))}${bad ? ` · <span class="wb-txt-err">${escapeHtml(fill(labels.unreachableN, { count: bad }))}</span>` : ''}</span></div>
-    <div class="wb-f-cmp"><span class="wb-f-hd">${escapeHtml(labels.instance)}</span><span class="wb-f-hd">${escapeHtml(labels.rate7d)}</span><span class="wb-f-hd">${escapeHtml(labels.todayCost)}</span>${rows}</div></section>`;
+    <div class="wb-f-cmp"><span class="wb-f-hd">${escapeHtml(labels.instance)}</span><span class="wb-f-hd">${escapeHtml(labels.quotaHead)}</span><span class="wb-f-hd">${escapeHtml(labels.todayCost)}</span>${rows}</div></section>`;
 }
 
 function renderAgentFleetViewHtml(view) {

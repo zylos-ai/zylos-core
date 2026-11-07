@@ -1111,7 +1111,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-gbar-idle { background: var(--wb-idle); }
 .wb-gbar-not_running { background: var(--wb-off); }
 .wb-qbars { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.wb-qbar { display: grid; grid-template-columns: 48px minmax(0, 1fr) 40px; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
+.wb-qbar { display: grid; grid-template-columns: 64px minmax(0, 1fr) 40px; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
 .wb-qbar-tr { position: relative; height: 7px; border-radius: 4px; background: var(--wb-off); }
 .wb-qbar-tr i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; background: var(--accent); }
 .wb-qbar-tr i.wb-sw-codex { background: color-mix(in srgb, var(--wb-work) 40%, var(--text)); }
@@ -1120,7 +1120,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-qbar b { color: var(--text); font-weight: 550; font-variant-numeric: tabular-nums; text-align: right; }
 .wb-qbar.hi b { color: var(--wb-wait); }
 .wb-qbar.full b { color: var(--wb-err); }
-.wb-f-kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; color: var(--text-muted); font-size: 11px; }
+.wb-f-kv { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--text-muted); font-size: 11px; }
 .wb-f-kv b { display: block; color: var(--text); font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wb-f-reason { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; color: var(--wb-err); font-size: 13px; }
 .wb-f-card .wb-note { margin: 0; }

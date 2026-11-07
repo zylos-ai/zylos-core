@@ -688,7 +688,7 @@
   "wb.fleet.todayWeek": "今日 / 7 天",
   "wb.fleet.groups": "组",
   "wb.fleet.host": "CPU · 内存 · 磁盘",
-  "wb.fleet.rate7d": "本周额度",
+  "wb.fleet.rate7d": "本周",
   "wb.fleet.self": "本机",
   "wb.fleet.modeMulti": "多会话",
   "wb.fleet.modeSingle": "单会话",
@@ -809,5 +809,6 @@
   "wb.settings.unsavedOne": "未保存",
   "wb.settings.unsavedRuntime": "{runtime} {count} 处",
   "wb.settings.chatTitle": "对话访问",
-  "wb.settings.unmatchedNote": "近 7 天 {tokens} token 已经记下，但没算进费用，上面的合计偏低。"
+  "wb.settings.unmatchedNote": "近 7 天 {tokens} token 已经记下，但没算进费用，上面的合计偏低。",
+  "wb.fleet.quotaHead": "本周额度"
 }

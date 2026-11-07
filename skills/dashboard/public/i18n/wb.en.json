@@ -688,7 +688,7 @@
   "wb.fleet.todayWeek": "Today / 7 days",
   "wb.fleet.groups": "Groups",
   "wb.fleet.host": "CPU · Memory · Disk",
-  "wb.fleet.rate7d": "Weekly quota",
+  "wb.fleet.rate7d": "This week",
   "wb.fleet.self": "This machine",
   "wb.fleet.modeMulti": "Multi-session",
   "wb.fleet.modeSingle": "Single session",
@@ -809,5 +809,6 @@
   "wb.settings.unsavedOne": "Unsaved",
   "wb.settings.unsavedRuntime": "{runtime} {count}",
   "wb.settings.chatTitle": "Conversations access",
-  "wb.settings.unmatchedNote": "{tokens} tokens in the last 7 days were recorded but not costed, so the totals above are low."
+  "wb.settings.unmatchedNote": "{tokens} tokens in the last 7 days were recorded but not costed, so the totals above are low.",
+  "wb.fleet.quotaHead": "Weekly quota"
 }

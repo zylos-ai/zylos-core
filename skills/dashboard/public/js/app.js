@@ -190,7 +190,7 @@ function agentFleetLabels() {
   const fleet = key => t('wb.fleet.' + key);
   return {
     ...Object.fromEntries(['title', 'subtitle', 'manage', 'shortAuth', 'shortDown', 'shortVersion', 'fixAuth', 'fixDown', 'fixVersion', 'lastSeen',
-      'todayWeek', 'groups', 'host', 'rate7d', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
+      'todayWeek', 'groups', 'host', 'rate7d', 'quotaHead', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
       'compareTitle', 'reachableN', 'unreachableN', 'instance', 'todayCost', 'groupCount', 'allIdle', 'pool', 'poolOf', 'empty'].map(key => [key, fleet(key)])),
     groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'not_running'].map(key => [key, t('wb.state.' + key)])),
     busy: t('agent_fleet.busy'),

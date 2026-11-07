@@ -327,7 +327,7 @@ test('Machines page renders one card per machine with state, quota, cost and hos
   assert.deepEqual([view.counts.busy, view.counts.idle, view.counts.stuck, view.counts.offline], [1, 1, 1, 1]);
   // Unreachable machines come before reachable ones (no self in this fixture).
   assert.deepEqual(view.tiles.map(tile => tile.name), ['eva', 'zylos01', 'zylos02', 'zylos0t']);
-  assert.match(html, /class="wb-f-card bad agent-tile" data-agent="eva"/);
+  assert.match(html, /class="wb-f-card bad" data-agent="eva"/);
   assert.match(html, /Cannot connect/);
   assert.match(html, /class="wb-tech agent-fleet-reason">Unreachable</);
   assert.match(html, /class="wb-pill wb-busy" data-mood="busy"/);
@@ -345,7 +345,7 @@ test('this machine shows the multi-session view: groups by state, running pool a
   const fleet = { agents: [{ name: 'local', self: true, state: 'BUSY', daily_cost: 1, weekly_cost: 2, cpu_pct: 1, mem_pct: 2, disk_pct: 3 }] };
   const self = { mode: 'multi', groups: 6, counts: { busy: 2, waiting: 0, error: 1, idle: 2, not_running: 1 }, pool: { used: 3, capacity: 4 }, accounts: { claude: 42, codex: 9 } };
   const html = renderAgentFleetHtml(fleet, { self });
-  assert.match(html, /wb-f-card self agent-tile/);
+  assert.match(html, /wb-f-card self"/);
   assert.match(html, /Multi-session/);
   assert.match(html, /6 groups · 2 working · 1 error · running 3\/4/);
   assert.match(html, /<i class="wb-gbar-busy" style="flex:2"><\/i>/);
@@ -589,7 +589,7 @@ test('machine context and weekly quota stay 0-100 percentages, with the 80% quot
   assert.equal(tiny.tiles[0].contextLevel, 'ok');
   assert.equal(tiny.tiles[0].rate7dPct, 1);
   const bar = pct => renderAgentFleetHtml({ agents: [{ name: 'a', state: 'IDLE', rate_limit_7d_pct: pct }] });
-  assert.match(bar(79), /class="wb-qbar"><span>Weekly quota/);
+  assert.match(bar(79), /class="wb-qbar"><span>This week/);
   assert.match(bar(80), /class="wb-qbar hi"/);
   assert.match(bar(100), /class="wb-qbar full"/);
   assert.match(bar(null), /<b>--<\/b>/);
