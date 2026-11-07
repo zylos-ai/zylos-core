@@ -1,5 +1,8 @@
 import { element, icon, runtimeName } from './plain-text.js?v=94';
 import { recoveryTime } from './cooldown.js?v=89';
+// Account quota samples are passed through as each runtime reports them: Claude uses
+// used_percentage (or utilization), Codex keeps its camelCase usedPercentage.
+export const accountUsedPercent = usage => usage?.used_percentage ?? usage?.utilization ?? usage?.usedPercentage ?? null;
 const clock = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);
 function meter(document, pct) {
@@ -34,7 +37,7 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
         : (at === null ? t('wb.recoveryUnknown') : t('wb.recovery', { time: clock(at) })), 'wb-txt-warn'));
     }
     else {
-      const pct = usage?.used_percentage ?? usage?.utilization ?? usage?.usedPercentage;
+      const pct = accountUsedPercent(usage);
       if (technical) box.append(element(document, 'span', health?.health === 'ok' ? t('wb.inst.ok') : t('wb.unknown')));
       box.append(element(document, 'span', technical ? '7d' : t('wb.week'), 'wb-inst-label'));
       if (pct != null) box.append(meter(document, pct));

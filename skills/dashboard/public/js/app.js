@@ -17,7 +17,7 @@ import { createUsagePage } from './wb/usage.js?v=96';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { renderAgentFleet } from './agent-fleet.js?v=98';
+import { fleetSelfFromSnapshot, renderAgentFleet } from './agent-fleet.js?v=99';
 import { createFleetSounds } from './fleet-sounds.js?v=98';
 import { refreshDashboardState } from './state-refresh.js?v=98';
 import { formatActionResult } from './action-result.js';
@@ -317,11 +317,7 @@ function renderFleet() {
 // This machine's card shows the multi-session view: groups by state, the running pool and both weekly quotas.
 async function refreshFleetSelf() {
   try {
-    const snapshot = await fetchJson('/api/workbench/groups');
-    const counts = snapshot?.counts ?? {};
-    state.fleetSelf = { mode: snapshot?.mode === 'multi' ? 'multi' : 'single', counts, groups: snapshot?.rows?.length ?? null,
-      pool: snapshot?.instance?.pool ?? null,
-      accounts: Object.fromEntries(['claude', 'codex'].map(runtime => [runtime, snapshot?.instance?.accounts?.[runtime]?.used_percentage ?? null])) };
+    state.fleetSelf = fleetSelfFromSnapshot(await fetchJson('/api/workbench/groups'));
   } catch { state.fleetSelf = null; }
 }
 

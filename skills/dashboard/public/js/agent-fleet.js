@@ -1,3 +1,5 @@
+import { accountUsedPercent } from './wb/instance-strip.js?v=99';
+
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline', 'stuck']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
 
@@ -304,6 +306,17 @@ export function buildAgentFleetView(fleet, options = {}) {
     counts,
     costTotals,
     updatedAt: fleet?.updated_at || null
+  };
+}
+
+// This machine's card reads the workbench groups snapshot: group count by state, the running pool and both weekly quotas.
+export function fleetSelfFromSnapshot(snapshot) {
+  return {
+    mode: snapshot?.mode === 'multi' ? 'multi' : 'single',
+    counts: snapshot?.counts ?? {},
+    groups: snapshot?.rows?.length ?? null,
+    pool: snapshot?.instance?.pool ?? null,
+    accounts: Object.fromEntries(['claude', 'codex'].map((runtime) => [runtime, accountUsedPercent(snapshot?.instance?.accounts?.[runtime])]))
   };
 }
 

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { buildAgentFleetView, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { buildAgentFleetView, fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { tabForPath } from '../public/js/wb/view-mode.js';
@@ -354,6 +354,22 @@ test('this machine shows the multi-session view: groups by state, running pool a
   const noCapacity = renderAgentFleetHtml(fleet, { self: { ...self, pool: { used: 3, capacity: null } } });
   assert.match(noCapacity, /running 3</);
   assert.match(renderAgentFleetHtml({ agents: [{ name: 'local', self: true }] }), /No other machines yet/);
+});
+
+test('this machine reads both weekly quotas from the raw groups snapshot, Claude in snake_case and Codex in camelCase', () => {
+  const snapshot = {
+    mode: 'multi', counts: { busy: 1, idle: 1 }, rows: [{}, {}],
+    instance: { pool: { used: 1, capacity: 4 }, accounts: { claude: { used_percentage: 42, resets_at: 1 }, codex: { usedPercentage: 35, windowDurationMins: 10080 } } }
+  };
+  const self = fleetSelfFromSnapshot(snapshot);
+  assert.deepEqual(self.accounts, { claude: 42, codex: 35 });
+  assert.deepEqual(fleetSelfFromSnapshot({ instance: { accounts: { claude: { utilization: 7 } } } }).accounts, { claude: 7, codex: null });
+  const html = renderAgentFleetHtml({ agents: [{ name: 'local', self: true, state: 'IDLE', daily_cost: 1 }] }, { self });
+  const card = html.slice(html.indexOf('wb-f-card self'));
+  assert.match(card, /Claude<\/span><span class="wb-qbar-tr"><i style="width:42%" class="wb-sw-claude">/);
+  assert.match(card, /Codex<\/span><span class="wb-qbar-tr"><i style="width:35%" class="wb-sw-codex">/);
+  const compare = html.slice(html.indexOf('wb-f-compare'), html.indexOf('wb-f-card'));
+  assert.match(compare, /Codex<\/span><span class="wb-qbar-tr"><i style="width:35%" class="wb-sw-codex">/);
 });
 
 test('problem cards say why in plain words, keep the precise reason for technical view and offer settings and refresh', () => {
