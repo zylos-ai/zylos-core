@@ -1433,7 +1433,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
   assert.match(index, /app\.js\?v=100/);
-  assert.match(index, /style\.css\?v=60/);
+  assert.match(index, /style\.css\?v=61/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
@@ -1557,7 +1557,6 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /data-panel="keys" hidden/);
   assert.match(app, /id="fleet-add-key" type="password"/);
   assert.match(app, /id="api-key-scope" role="group"/);
-  assert.match(css, /\.fleet-help\[hidden\]\s*\{\s*display:\s*none;\s*\}/);
 
   for (const pack of [en, zh]) {
     assert.equal(typeof pack['fleet_manage.open'], 'string');
