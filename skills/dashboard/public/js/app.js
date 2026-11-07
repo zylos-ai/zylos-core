@@ -5,11 +5,11 @@ import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=87';
 import { renderVersion } from './wb/settings-version.js?v=87';
 import { mountChat } from './wb/chat.js?v=90';
 import { mountChatSettings } from './wb/chat-settings.js?v=87';
-import { mountWorkbench } from './wb/shell.js?v=87';
-import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=87';
-import { observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=88';
+import { mountWorkbench } from './wb/shell.js?v=91';
+import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=89';
+import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
 import { mountSchedule } from './wb/schedule.js?v=87';
-import { createUsagePage } from './wb/usage.js?v=87';
+import { createUsagePage } from './wb/usage.js?v=88';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { pct, resolveCpuDisplay } from './gauge-utils.js';
@@ -4239,8 +4239,7 @@ async function refreshModeStatus() {
     if (observerTargetKey() !== targetKey) return;
     if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
     const data = result.data || {};
-    const originState = data.origin?.status?.state || data.origin?.presence || t('value.unknown');
-    if (instanceText) instanceText.textContent = t('actions.instance_status', { view: data.view || t('value.unknown'), mode: data.sessionMode || t('value.unknown'), origin: originState });
+    if (instanceText) instanceText.textContent = instanceStatusText(data, document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain', t);
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (instanceText) instanceText.textContent = error.message; }
 }
 

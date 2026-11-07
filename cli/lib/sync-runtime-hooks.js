@@ -180,10 +180,26 @@ export function detectStopFailureSupport({ execFileSyncImpl = execFileSync, bina
   } catch { return false; }
 }
 
+export function supportsSubagentHooksVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?: \(Claude Code\))?$/.exec(String(version).trim());
+  if (!match) return false;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  // SubagentStart arrived in 2.0.43; register start/stop together.
+  // https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2043
+  return major > 2 || (major === 2 && (minor > 0 || patch >= 43));
+}
+
+export function detectSubagentHooksSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {
+  try {
+    return supportsSubagentHooksVersion(execFileSyncImpl(binary, ['--version'], { encoding: 'utf8', stdio: 'pipe', timeout: 2000 }));
+  } catch { return false; }
+}
+
 export function desiredClaudeHooks({
   zylosDir = ZYLOS_DIR,
   existsSync = fs.existsSync,
   stopFailureSupported = false,
+  subagentHooksSupported = false,
 } = {}) {
   const sessionStartHooks = desiredSessionStartHooks({ zylosDir, existsSync });
   const activityHook = commandHook(
@@ -195,7 +211,8 @@ export function desiredClaudeHooks({
   return {
     SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
       matcher,
-      hooks: [{ ...healthHook }, ...sessionStartHooks.map(hook => ({ ...hook }))],
+      // Keep injection entries unchanged; activity is nonblocking and emits no context.
+      hooks: [{ ...healthHook }, ...sessionStartHooks.map(hook => ({ ...hook })), { ...activityHook }],
     })),
     UserPromptSubmit: [
       {
@@ -235,6 +252,10 @@ export function desiredClaudeHooks({
         hooks: [{ ...healthHook }, { ...activityHook }],
       },
     ],
+    ...(subagentHooksSupported ? {
+      SubagentStart: [{ hooks: [{ ...activityHook }] }],
+      SubagentStop: [{ hooks: [{ ...activityHook }] }],
+    } : {}),
     ...(stopFailureSupported ? { StopFailure: [{ hooks: [{ ...healthHook }] }] } : {}),
     Notification: [
       {
@@ -684,6 +705,7 @@ export function syncRuntimeHooks({
   zylosDir = ZYLOS_DIR,
   dryRun = false,
   stopFailureSupported = detectStopFailureSupport(),
+  subagentHooksSupported = detectSubagentHooksSupport(),
   log = console.log,
 } = {}) {
   const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
@@ -714,7 +736,7 @@ export function syncRuntimeHooks({
   }
 
   const { added, updated, removed } = syncHooks(installedSettings, templateSettings, {
-    dryRun, desiredHooks: desiredClaudeHooks({ zylosDir, stopFailureSupported }),
+    dryRun, desiredHooks: desiredClaudeHooks({ zylosDir, stopFailureSupported, subagentHooksSupported }),
     claimedKeys: claimedHookBaseKeys({ zylosDir }), zylosDir, log,
   });
   if (!stopFailureSupported) console.log('Health hooks: StopFailure unavailable or unverified; retaining screen-based fallback.');

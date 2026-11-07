@@ -10,7 +10,7 @@ import { instructionPaths, readInstructionFormatVersion, CURRENT_INSTRUCTION_FOR
 import { migrateClaudeMdToZylosMd } from './migrate.js';
 import { loadInstructionCatalog, classifyInstructionBaseline, verifyInstructionConservation,
   createMigrationBackup, renderMigrationReport, migrationPromptPath, writeMigrationPrompt } from './instruction-migration.js';
-import { desiredClaudeHooks, syncHooks, claimedHookBaseKeys, detectStopFailureSupport,
+import { desiredClaudeHooks, syncHooks, claimedHookBaseKeys, detectStopFailureSupport, detectSubagentHooksSupport,
   syncTemplateModelSetting, syncTemplateSetting } from './sync-runtime-hooks.js';
 import { removeLegacyDashboardHooks } from './upgrade-post-cutoff.js';
 import { readConfigStrict } from './config-store.js';
@@ -84,6 +84,8 @@ export function prepareUpgradeRuntime(ctx, {
   generatedAt = new Date(),
   stopFailureSupported,
   detectStopFailure = detectStopFailureSupport,
+  subagentHooksSupported,
+  detectSubagentHooks = detectSubagentHooksSupport,
   classifyBaseline = classifyInstructionBaseline,
   writePrompt = writeMigrationPrompt,
 } = {}) {
@@ -243,7 +245,8 @@ export function prepareUpgradeRuntime(ctx, {
     settings = removeLegacyDashboardHooks(settings, zylosDir);
     const existsWithStaged = file => replacements.some(item => path.join(zylosDir, item.path) === file) || fs.existsSync(file);
     syncHooks(settings, {}, { zylosDir, log: () => {}, claimedKeys: claimedHookBaseKeys({ zylosDir }),
-      desiredHooks: desiredClaudeHooks({ zylosDir, existsSync: existsWithStaged, stopFailureSupported: healthSupported }) });
+      desiredHooks: desiredClaudeHooks({ zylosDir, existsSync: existsWithStaged, stopFailureSupported: healthSupported,
+        subagentHooksSupported: subagentHooksSupported ?? detectSubagentHooks() }) });
     const templateSettings = JSON.parse(readRegular(path.join(templatesDir, '.claude/settings.json')));
     if (templateSettings.statusLine) settings.statusLine = templateSettings.statusLine;
     else delete settings.statusLine;

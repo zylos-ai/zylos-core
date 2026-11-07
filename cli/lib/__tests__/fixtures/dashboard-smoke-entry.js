@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 const execFile = (...args) => {
   const callback = args.at(-1);
   queueMicrotask(() => callback(null, '[]', ''));
-  return { kill() {} };
+  return { kill() {}, stdin: { destroy() {} } };
 };
 execFile[promisify.custom] = async () => ({ stdout: '[]', stderr: '' });
 mock.module('node:child_process', { namedExports: {

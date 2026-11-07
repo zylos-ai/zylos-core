@@ -18,7 +18,7 @@ export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } =
       ORDER BY startAt DESC, run_id LIMIT @limit`).all(params);
     const endings = store.db.prepare(`SELECT event_type, runtime, metadata FROM runtime_events
       WHERE session_group IS ? AND run_id = ?
-        AND event_type IN ('reclaim_done','crash_detected','rotate_done')
+        AND event_type IN ('reclaim_done','crash_detected','rotate_done','manual_restart_done')
       ORDER BY event_seq DESC`);
     const endReason = run => {
       if (run.runId === currentRunId) return 'running';
@@ -27,6 +27,7 @@ export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } =
         try { metadata = JSON.parse(event.metadata ?? '{}'); } catch { metadata = {}; }
         if (event.event_type === 'reclaim_done') return metadata?.reason ?? 'reclaim';
         if (event.event_type === 'crash_detected') return 'crash';
+        if (event.event_type === 'manual_restart_done') return 'manual_restart';
         if (event.runtime === 'codex' && !metadata?.oldSessionId) return 'rotate';
       }
       return 'unknown';

@@ -719,3 +719,7 @@ html[data-detail=plain] #observer-tab {
   .chat-input { flex-basis: 100%; }
   .chat-composer .action-btn { margin-inline-start: auto; }
 }
+.wb-attention-item { margin: 4px 0; padding-left: 8px; border-left: 3px solid var(--border,#ddd); }
+.wb-attention-problem { color: var(--state-stuck, #c54141); border-left-color: var(--state-stuck, #c54141); }
+.wb-attention-reminder { color: var(--text-dim); }
+.wb-attention-reminder::before { content: "\23F1\FE0E\20"; }

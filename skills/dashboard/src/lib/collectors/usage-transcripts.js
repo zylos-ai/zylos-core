@@ -36,7 +36,7 @@ export class UsageTranscripts {
           typeof row.transcript_path !== 'string' || !path.isAbsolute(row.transcript_path) ||
           !row.transcript_path.endsWith('.jsonl')) continue;
       const inserted = insert(row);
-      if (row.runtime === 'codex' && inserted.changes === 1) {
+      if (row.runtime === 'codex' && inserted.changes === 1 && ['origin', null].includes(row.session_group)) {
         const first = this.store.getUsageTranscript(row.transcript_path);
         this.store.upsertCodexRolloutPath({ sessionId: first.session_id,
           transcriptPath: first.transcript_path, lastEventAt: row.timestamp });

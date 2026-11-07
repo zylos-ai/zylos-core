@@ -18,7 +18,7 @@ import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { readLiveIdentity } from '../lib/session-state-reader.js';
 import { submit, lookupRestartRequest } from '../lib/am-sock-client.js';
-import { desiredClaudeHooks, syncHooks, detectStopFailureSupport } from '../lib/sync-runtime-hooks.js';
+import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
 import { isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
@@ -207,7 +207,7 @@ export async function runtimeHooksReady(target) {
     const settings = JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.claude', 'settings.json'), 'utf8'));
     const copy = structuredClone(settings);
     const changes = syncHooks(copy, null, { zylosDir: ZYLOS_DIR, dryRun: true, log: () => {},
-      desiredHooks: desiredClaudeHooks({ stopFailureSupported: detectStopFailureSupport() }) });
+      desiredHooks: desiredClaudeHooks({ stopFailureSupported: detectStopFailureSupport(), subagentHooksSupported: detectSubagentHooksSupport() }) });
     return { ready: changes.added + changes.updated + changes.removed === 0, pendingMigration };
   } catch { return { ready: false, pendingMigration }; }
 }

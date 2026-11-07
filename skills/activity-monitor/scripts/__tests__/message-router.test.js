@@ -161,7 +161,7 @@ test('authentication recovery uses the existing observer to prefer a ready Origi
   const store = coordinator.store('claude'), state = store.read(); state.health = 'unavailable'; store.write(state);
   const observer = new SupervisorHealthObserver({ coordinator, now: () => now, readMode: () => 'multi', listScenes: () => scenes,
     readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
-    buildTargetBinding: scene => ({ runId: scene.runId }), readState: () => ({ tools: [] }), readScreen: () => 'healthy',
+    buildTargetBinding: scene => ({ runId: scene.runId }), readState: () => ({ state: 'idle', tools: [] }), readScreen: () => 'healthy',
     insertControl: (content, options) => { controls.push({ id: controls.length + 1, content, ...options, status: 'done' }); return controls.at(-1); },
     getControlById: id => controls[id - 1] });
   t.after(() => observer.shutdown());
@@ -208,7 +208,7 @@ for (const terminal of ['failed', 'timeout']) test(`actual observer ${terminal} 
   const observer = new SupervisorHealthObserver({ coordinator, now: () => now,
     readMode: () => 'multi', listScenes: () => scenes,
     readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
-    readState: () => ({ tools: [] }), readScreen: () => 'injected failed runtime response', matchScreen: () => ({}),
+    readState: () => ({ state: 'idle', tools: [] }), readScreen: () => 'injected failed runtime response', matchScreen: () => ({}),
     buildTargetBinding: scene => ({ runId: scene.runId }),
     insertControl: (content, options) => {
       controls.push({ id: controls.length + 1, content, ...options, status: 'pending' }); return controls.at(-1);

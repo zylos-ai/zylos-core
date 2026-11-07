@@ -121,3 +121,36 @@ test('CLI list launches the bounded Core adapter with isolated root and without 
   result = invoke(['list', '--json'], { GROUP_NAME_FIXTURE_FAIL: '1' });
   assert.equal(result.status, 1); assert.equal(JSON.parse(result.stdout).error.code, 'C4_GROUPS_FAILED'); assert.equal('data' in JSON.parse(result.stdout), false);
 });
+
+// CLI persistence integration: only private SQLite files and bounded Node children.
+// Run for instance/data path changes; skip UI-only changes. HOME/ZYLOS_DIR/PM2_HOME
+// are isolated before import; no Core, tmux, service, network or live DB access.
+test('group names use the selected instance database, default home and explicit data override', t => {
+  const f = fixture(t);
+  const defaultRoot = path.join(f.env.HOME, 'zylos');
+  const defaultFile = path.join(defaultRoot, 'components/dashboard/dashboard.db');
+  const customFile = path.join(f.zylos, 'components/dashboard/dashboard.db');
+  for (const file of [defaultFile, customFile]) { const store = new Store(file); store.close(); }
+  const invoke = (env, label) => {
+    const result = spawnSync(process.execPath, [new URL('../scripts/group-name.js', import.meta.url).pathname,
+      'set', 'telegram:path', label, '--json'], { env, encoding: 'utf8', timeout: 5000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).data.displayName, label);
+  };
+  const read = file => {
+    const store = new Store(file);
+    try { return createDisplayNames({ store }).getName('telegram:path'); } finally { store.close(); }
+  };
+  const env = { ...f.env }; delete env.ZYLOS_DATA_DIR;
+  invoke(env, 'custom instance');
+  assert.equal(read(customFile)?.displayName, 'custom instance');
+  assert.equal(read(defaultFile).displayName, null);
+  assert.equal(read(f.file).displayName, null);
+  delete env.ZYLOS_DIR;
+  invoke(env, 'default instance');
+  assert.equal(read(defaultFile)?.displayName, 'default instance');
+  assert.equal(read(customFile)?.displayName, 'custom instance');
+  invoke(f.env, 'explicit data');
+  assert.equal(read(f.file)?.displayName, 'explicit data');
+  assert.equal(read(customFile)?.displayName, 'custom instance');
+});

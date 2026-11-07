@@ -226,3 +226,34 @@ test('average response matches the previous SQL on ties, channels and cutoff; ca
     assert.equal(f.reader.getAvgResponseTime(), null);
   } finally { cleanup(f); }
 });
+
+// Calendar message read boundary: owned private SQLite only, no live C4. Run
+// for interval availability changes; cleanup closes readers and the fixture DB.
+test('calendar message reads distinguish missing and failed databases from an empty history', () => {
+  const f = makeFixture(), missing = new C4Reader(path.join(f.tmpDir, 'missing'));
+  const since = '2026-11-01T00:00:00.000Z', until = '2026-11-02T00:00:00.000Z';
+  const options = { since, until, intervals: [{ at: since, since, until }] };
+  const unreadable = result => {
+    assert.equal(result.reason, 'messages_unreadable');
+    assert.equal(Number.isFinite(Date.parse(result.sampledAt)), true);
+    assert.deepEqual(result.total, { in: null, out: null });
+    assert.deepEqual(result.points, [{ at: since, in: null, out: null }]);
+  };
+  try {
+    unreadable(missing.getMessageSeries(options));
+    assert.deepEqual(missing.getMessageSeries({ since, until }), { points: [], total: { in: 0, out: 0 } });
+    const empty = f.reader.getMessageSeries(options);
+    assert.equal(empty.reason, null);
+    assert.deepEqual(empty.total, { in: 0, out: 0 });
+    assert.deepEqual(empty.points, [{ at: since, in: 0, out: 0 }]);
+    f.db.exec('DROP TABLE conversations');
+    unreadable(f.reader.getMessageSeries(options));
+    assert.deepEqual(f.reader.getMessageSeries({ since, until }), { points: [], total: { in: 0, out: 0 } });
+    f.db.exec('CREATE TABLE conversations(timestamp TEXT, direction TEXT)');
+    f.db.prepare('INSERT INTO conversations VALUES(?,?)').run(since, 'in');
+    const recovered = f.reader.getMessageSeries(options);
+    assert.equal(recovered.reason, null);
+    assert.deepEqual(recovered.total, { in: 1, out: 0 });
+    assert.deepEqual(recovered.points, [{ at: since, in: 1, out: 0 }]);
+  } finally { missing.close(); cleanup(f); }
+});

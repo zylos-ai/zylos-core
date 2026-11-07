@@ -26,7 +26,7 @@ export async function runGroupName(argv, { env = process.env, stdout = process.s
       }
     } else if (!(command === 'set' && values.length === 2 || ['get', 'clear'].includes(command) && values.length === 1)) throw invalid();
     const zylosDir = env.ZYLOS_DIR || path.join(env.HOME || os.homedir(), 'zylos');
-    const file = path.join(env.ZYLOS_DATA_DIR || path.join(env.HOME || os.homedir(), 'zylos/components/dashboard'), 'dashboard.db');
+    const file = path.join(env.ZYLOS_DATA_DIR || path.join(zylosDir, 'components', 'dashboard'), 'dashboard.db');
     if (!fs.existsSync(file)) throw Object.assign(new Error('Dashboard database not found'), { code: 'DATABASE_NOT_FOUND' });
     store = openStore(file);
     const names = createNames({ store, zylosDir });

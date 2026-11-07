@@ -61,7 +61,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=90)"/.exec(pageText)?.[1];
+    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=91)"/.exec(pageText)?.[1];
     assert.ok(appPath, 'the entry page loads the refreshed application module');
     const application = await fetch(origin + prefix + '/_assets/' + appPath);
     assert.equal(application.status, 200);

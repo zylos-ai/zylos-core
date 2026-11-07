@@ -1,5 +1,6 @@
 import { element } from './plain-text.js?v=85';
-export function instanceStrip(root, snapshot, { document = root.ownerDocument, t = key => key, cost = null, costSummary = null, onHost = () => {}, level = 'plain' } = {}) {
+import { recoveryTime } from './cooldown.js?v=89';
+export function instanceStrip(root, snapshot, { document = root.ownerDocument, t = key => key, cost = null, costSummary = null, onHost = () => {}, level = 'plain', now = Date.now() } = {}) {
   root.replaceChildren(); const instance = snapshot.instance ?? {};
   root.append(element(document, 'div', `${t('wb.mode')} · ${snapshot.mode === 'unreadable' ? t('wb.unknown') : snapshot.mode}`));
   const runtimes = new Set([snapshot.baselineRuntime, ...(snapshot.rows ?? []).map(row => row.launchConfig?.runtime ?? row.target?.runtime)].filter(Boolean));
@@ -9,8 +10,10 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
     const dot = element(document, 'i', undefined, `wb-health wb-health-${health?.health ?? 'unknown'}`);
     box.append(dot, element(document, 'strong', runtime));
     if (health?.health === 'auth_failed') box.append(element(document, 'p', t('wb.authFailed')));
-    else if (['rate_limited', 'recovering'].includes(health?.health)) box.append(element(document, 'p',
-      t('wb.recovery', { time: health.cooldownUntil == null ? t('wb.unknown') : new Date(health.cooldownUntil * 1000).toLocaleTimeString() })));
+    else if (['rate_limited', 'recovering'].includes(health?.health)) {
+      const at = recoveryTime(health.cooldownUntil, now);
+      box.append(element(document, 'p', at === null ? t('wb.recoveryUnknown') : t('wb.recovery', { time: new Date(at).toLocaleTimeString() })));
+    }
     else {
       const pct = usage?.used_percentage ?? usage?.utilization ?? usage?.usedPercentage;
       box.append(element(document, 'p', `${t('wb.week')} · ${pct == null ? t('wb.unknown') : pct + '%'}`));

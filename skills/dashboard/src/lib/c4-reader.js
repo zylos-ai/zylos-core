@@ -161,7 +161,11 @@ export class C4Reader {
   }
 
   getMessageSeries({ since, until, bucketSeconds = 3600, intervals } = {}) {
-    const empty = () => ({ points: intervals?.map(({ at }) => ({ at, in: 0, out: 0 })) ?? [], total: { in: 0, out: 0 } });
+    const sampledAt = intervals ? new Date().toISOString() : null;
+    const empty = () => intervals
+      ? { points: intervals.map(({ at }) => ({ at, in: null, out: null })),
+        total: { in: null, out: null }, reason: 'messages_unreadable', sampledAt }
+      : { points: [], total: { in: 0, out: 0 } };
     const db = this._open();
     if (!db) return empty();
     try {
@@ -191,7 +195,7 @@ export class C4Reader {
           total.in += row.msg_in;
           total.out += row.msg_out;
         }
-        return { points, total };
+        return { points, total, reason: null, sampledAt };
       }
       const sinceEpoch = Math.floor(new Date(since).getTime() / 1000);
       const untilEpoch = Math.floor(new Date(until).getTime() / 1000);

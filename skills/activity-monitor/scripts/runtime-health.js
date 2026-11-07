@@ -183,6 +183,7 @@ export class RuntimeHealthCoordinator {
       const currentHook = input.terminal !== 'done' && input.identity && state.source === 'hook' && !state.hook_ok &&
         state.session_id === input.identity.session_id && state.hook_pid === input.identity.claude_pid;
       if(currentHook) classification = state.health === 'rate_limited' ? 'rate_limited' : state.health === 'auth_failed' ? 'auth_error' : 'other';
+      if (classification === 'other' && input.waitForIdle && !currentHook) return {classification:'waiting'};
       const hookReason = state.reason;
       const priorHealth = state.health, now = Math.floor(this.now() / 1000), budget = state.scheduling;
       const linked = this.associations.get(runtime)?.runId === input.runId;

@@ -69,6 +69,17 @@ test('session rotation never hides a preceding run-ending event and the latest a
 // Integration boundary: single-mode NULL attribution in the same real event
 // store as group runs. Run when single/group routing changes; UI-only edits can
 // skip. The official runner and fixture own all paths; no live processes/DBs.
+test('a run ended by a manual restart reports the manual restart end reason', async t => {
+  const f = fixture(t);
+  f.event('restarted', 1, 'session_start');
+  f.event('restarted', 2, 'manual_restart_done', { requestId: 'request-1' });
+  f.event('current', 3, 'session_start');
+  const runs = createRuns({ store: f.store,
+    getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'current' } }] }) });
+  assert.deepEqual((await runs('telegram:a')).runs.map(row => [row.runId, row.endReason]),
+    [['current', 'running'], ['restarted', 'manual_restart']]);
+});
+
 test('single view reads only ungrouped runs while multi Origin keeps its own history', async t => {
   const f = fixture(t);
   f.event('single-old', 1, 'session_start', {}, 'claude', null);

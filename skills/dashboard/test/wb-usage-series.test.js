@@ -204,3 +204,43 @@ test('tool ranking keeps the top ten in stable order and totals include all tool
   assert.equal(result.tools[1].name, 'tool-00');
   assert.equal(result.tools[9].name, 'tool-08');
 });
+
+// Same private Store/C4 integration; unavailable messages must not affect costs,
+// tokens or runtime events, and the next successful read must recover directly.
+test('usage preserves unavailable message metadata without changing other totals', t => {
+  const f = usageFixture(t), options = { range: '7d', tz: 'UTC', now: new Date('2026-11-06T04:00:00.000Z') };
+  f.metric('2026-11-06T01:00:00.000Z', 'claude', { cost: 7, total_input: 10, output: 2 });
+  f.event('2026-11-06T01:00:00.000Z', 'rotate_done');
+  f.c4.exec('DROP TABLE conversations');
+  const failed = usageSeries(f.store, f.reader, options);
+  assert.equal(failed.messagesReason, 'messages_unreadable');
+  assert.equal(Number.isFinite(Date.parse(failed.messagesSampledAt)), true);
+  assert.deepEqual(failed.totals.messages, { in: null, out: null });
+  assert.ok(failed.messages.every(row => row.in === null && row.out === null));
+  assert.equal(failed.totals.cost, 7);
+  assert.equal(failed.totals.tokens, 12);
+  assert.equal(failed.totals.rotations, 1);
+  f.c4.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY, timestamp TEXT, direction TEXT)');
+  const empty = usageSeries(f.store, f.reader, options);
+  assert.equal(empty.messagesReason, null);
+  assert.deepEqual(empty.totals.messages, { in: 0, out: 0 });
+  assert.ok(empty.messages.every(row => row.in === 0 && row.out === 0));
+});
+
+// Calendar rotation placement: three distinct counts across Kolkata midnights;
+// pure fixture events keep the shared bucketing assertion sensitive to shifts.
+test('rotations align with each natural-day bucket across timezone boundaries', t => {
+  const f = usageFixture(t);
+  for (const timestamp of [
+    '2026-11-01T18:29:59.999Z',
+    '2026-11-01T18:30:00.000Z', '2026-11-02T18:29:59.999Z',
+    '2026-11-02T18:30:00.000Z', '2026-11-02T19:00:00.000Z', '2026-11-03T18:29:59.999Z',
+  ]) f.event(timestamp, 'rotate_done');
+  const result = usageSeries(f.store, f.reader, { range: 'custom', tz: 'Asia/Kolkata',
+    since: '2026-11-01T18:00:00.000Z', until: '2026-11-03T18:29:59.999Z', now: new Date('2026-11-04T00:00:00.000Z') });
+  assert.deepEqual(result.buckets, ['2026-10-31T18:30:00.000Z', '2026-11-01T18:30:00.000Z', '2026-11-02T18:30:00.000Z']);
+  assert.deepEqual(result.rotations, [
+    { at: result.buckets[0], value: 1 }, { at: result.buckets[1], value: 2 }, { at: result.buckets[2], value: 3 },
+  ]);
+  assert.equal(result.totals.rotations, 6);
+});

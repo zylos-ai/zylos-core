@@ -1,4 +1,5 @@
 import test from 'node:test';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { renderBoard, renderRow, modelCell, pendingModel, boardController } from '../public/js/wb/board.js';
 import { createBoardSearch } from '../public/js/wb/board-search.js';
@@ -141,6 +142,17 @@ test('attention shows both problems and recovery reminders with text-safe techni
   { document, t, level: 'technical', error: true, lastSuccess: 1000, now: 4000 });
   assert.equal(root.children.length, 4); assert.match(root.textContent, /wb.attention.rate_limited/); assert.match(root.textContent, /<img onerror=x>/);
   assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
+});
+test('attention renders problems and reminders as distinct item classes', () => {
+  const document = createDocument(), root = document.createElement('div');
+  renderAttention(root, { attention: { problems: [{ kind: 'auth_failed', runtime: 'claude', groups: ['a'] }],
+    reminders: [{ kind: 'rate_limited', runtime: 'codex', until: 0 }] } }, { document, t, now: 4000 });
+  assert.deepEqual(root.children.map(node => node.className.split(' ').sort()),
+    [['wb-attention-item', 'wb-attention-problem'], ['wb-attention-item', 'wb-attention-reminder']]);
+  assert.match(root.children[0].textContent, /^wb\.attention\.auth_failed/);
+  assert.match(root.children[1].textContent, /^wb\.attention\.rate_limited/);
+  const css = fs.readFileSync(new URL('../public/css/wb.css', import.meta.url), 'utf8');
+  assert.match(css, /\.wb-attention-reminder::before \{ content: "\\23F1\\FE0E\\20"; \}/, 'the clock keeps a space before the reminder text');
 });
 // Selection/detail boundary: run for side-panel rendering changes; skip unrelated
 // work. Injected DOM only, no live I/O or timers; runner uses temporary HOME,

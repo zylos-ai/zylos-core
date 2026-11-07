@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createViewMode, technicalKeys, techOnly, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, wbWritable, tabForPath } from '../public/js/wb/view-mode.js';
+import { createViewMode, technicalKeys, techOnly, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, wbWritable, tabForPath, instanceStatusText } from '../public/js/wb/view-mode.js';
 import { createDocument, storage } from './fixtures/workbench-dom.js';
 
 test('view level tolerates inaccessible storage and redraws without data requests', context => {
@@ -49,4 +49,13 @@ test('conversation navigation maps direct and fleet URLs without changing existi
     assert.equal(tabForPath(prefix + '/schedule'), 'schedule');
     assert.equal(tabForPath(prefix + '/usage'), 'trends');
   }
+});
+test('instance status names Origin in plain words and keeps raw values for technical detail', () => {
+  const t = (key, values) => key + (values ? ' ' + JSON.stringify(values) : '');
+  const data = { view: 'multi', sessionMode: 'multi', origin: { presence: 'not_running' } };
+  assert.equal(instanceStatusText(data, 'plain', t), 'wb.term.origin · wb.state.not_running');
+  assert.equal(instanceStatusText({ origin: { status: { state: 'busy' }, presence: 'running' } }, 'plain', t), 'wb.term.origin · wb.state.busy');
+  assert.equal(instanceStatusText({ origin: { presence: 'mystery_state' } }, 'plain', t), 'wb.term.origin · wb.state.unknown');
+  assert.equal(instanceStatusText(data, 'technical', t),
+    'actions.instance_status {"view":"multi","mode":"multi","origin":"not_running"}');
 });

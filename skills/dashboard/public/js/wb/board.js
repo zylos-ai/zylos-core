@@ -1,5 +1,5 @@
 import { element, fallbackName } from './plain-text.js?v=85';
-import { toolLabel, waitText } from './view-mode.js?v=85';
+import { toolLabel, waitText } from './view-mode.js?v=91';
 import { activityStrip } from './activity-strip.js?v=85';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&

@@ -47,7 +47,7 @@ function fixture(t, create = createSupervisor) {
     const runDir = path.join(root, runtime, group.replace(':', '-'));
     fs.mkdirSync(runDir, { recursive: true });
     const scene = { runtime, sessionGroup: group, runId: `${runtime}-run`, sessionId: `${runtime}-session`,
-      runDir, createdAt: clock, present: true, ready: true, processRunning: true };
+      runDir, createdAt: clock - 10000, present: true, ready: true, processRunning: true };
     current.push(scene); return scene;
   };
   const setHealth = (runtime, health) => {
