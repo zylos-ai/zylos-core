@@ -631,6 +631,13 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-row > .wb-sched-state { grid-column: 2; padding: 0 12px 12px 0; }
   .wb-sched-section > h3 { padding: 12px 12px 6px; }
   .wb-sched-pair { grid-template-columns: 1fr; }
+  /* Touch screens have no tooltips: drawer actions get a row of their own with their names shown. */
+  .wb-sched-detail .wb-d-top { flex-wrap: wrap; row-gap: 8px; }
+  .wb-sched-detail .wb-d-top > .wb-d-title { flex: 1 1 0; }
+  .wb-sched-detail .wb-d-acts { order: 10; flex-basis: 100%; flex-wrap: wrap; gap: 6px; }
+  .wb-sched-detail .wb-d-acts .wb-icon-btn { width: auto; height: 30px; gap: 5px; padding: 0 10px; border-color: var(--wb-line-strong); background: var(--wb-panel); color: var(--text); font-size: 12.5px; }
+  .wb-sched-detail .wb-d-acts .wb-icon-danger { color: var(--wb-err); }
+  .wb-sched-detail .wb-d-acts .wb-vh { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
 }
 
 /* ─── Memory: summary line or technical charts on top, file list on the left, file on the right ─── */

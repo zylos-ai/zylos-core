@@ -692,8 +692,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         redraw();
       }, 'wb-icon-danger'));
     }
-    acts.append(iconButton(document, 'x', t('wb.close'), close));
-    top.append(acts);
+    top.append(acts, iconButton(document, 'x', t('wb.close'), close, 'wb-sched-close'));
     const meta = element(document, 'p', undefined, 'wb-detail-meta');
     if (level() === 'technical') meta.append(element(document, 'span', `${task.id} · P${task.priority} · `, 'wb-mono wb-sched-tech'));
     meta.append(element(document, 'span', t('wb.schedule.updated', { time: time(task.updatedAt) })));

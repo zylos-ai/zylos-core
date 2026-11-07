@@ -159,9 +159,12 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   const card = element(document, 'section', undefined, 'wb-card wb-usage-summary');
   card.append(element(document, 'p', t('wb.usage.allGroups'), 'wb-usage-scope'));
   const summary = element(document, 'div', undefined, 'wb-usage-totals');
-  const addTotal = (label, amount, sub = '') => {
+  const addTotal = (label, amount, sub = '', exact = null) => {
     const box = element(document, 'div', undefined, 'wb-usage-total');
-    box.append(element(document, 'small', label), element(document, 'strong', amount));
+    const strong = element(document, 'strong', amount);
+    // Compact numbers keep the exact count in the tooltip.
+    if (exact != null) strong.title = Number(exact).toLocaleString();
+    box.append(element(document, 'small', label), strong);
     if (sub) box.append(element(document, 'small', sub, 'wb-usage-sub'));
     summary.append(box);
   };
@@ -172,11 +175,11 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   addTotal(t('wb.usage.received'), formatUsageCount(totals.messages?.in, t),
     `${t('wb.usage.sent')} ${formatUsageCount(totals.messages?.out, t)}`);
   if (level === 'technical') {
-    addTotal(t('wb.usage.tokens'), compactCount(totals.tokens, t));
+    addTotal(t('wb.usage.tokens'), compactCount(totals.tokens, t), '', totals.tokens);
     addTotal(t('wb.usage.rotations'), totals.rotations == null ? t('wb.unknown') : t('wb.usage.times', { count: totals.rotations }),
       t('wb.usage.rotationsHint'));
     addTotal(t('wb.usage.tools'), compactCount(totals.tools, t),
-      value.tools?.[0] ? t('wb.usage.topTool', { name: value.tools[0].name }) : '');
+      value.tools?.[0] ? t('wb.usage.topTool', { name: value.tools[0].name }) : '', totals.tools);
   }
   card.append(summary);
   root.append(card);
