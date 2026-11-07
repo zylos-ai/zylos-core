@@ -1,7 +1,7 @@
 import { element, fallbackName, icon } from './plain-text.js?v=94';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 import { cronText } from './cron-text.js?v=94';
-import { createForm, createPreviewer, formPayload, initialForm, intervalText, previewPath, wrapSelect } from './schedule-form.js?v=94';
+import { createForm, createPreviewer, formPayload, initialForm, intervalText, previewPath, wrapSelect } from './schedule-form.js?v=95';
 
 const ENABLED = new Set(['pending', 'running']);
 const SECTIONS = [
