@@ -1,8 +1,8 @@
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=94';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=94';
-import { renderOverview } from './detail-overview.js?v=94';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=94';
+import { channelIcon, platformLabel, statePill } from './board.js?v=97';
+import { renderOverview } from './detail-overview.js?v=97';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=97';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=95';
 import { renderNameEditor } from './name-edit.js?v=95';
 
@@ -47,13 +47,13 @@ export function groupActionText(value, t = key => key) {
 const actionIcons = { interrupt: 'stop', 'chop-chop': 'nudge', restart: 'restart' };
 
 /** In-page confirmation in the dashboard's own style; resolves true only on the explicit action. */
-export function confirmDialog(document, { title, body, ok, cancel }) {
+export function confirmDialog(document, { title, body, ok, cancel, danger = true }) {
   if (!document.body) return Promise.resolve(Boolean(globalThis.confirm?.(body)));
   return new Promise(resolve => {
     const backdrop = element(document, 'div', undefined, 'wb-modal-bg');
     const dialog = element(document, 'div', undefined, 'wb-modal');
     dialog.setAttribute('role', 'alertdialog'); dialog.setAttribute('aria-modal', 'true');
-    const no = element(document, 'button', cancel, 'wb-btn'), yes = element(document, 'button', ok, 'wb-btn wb-btn-danger');
+    const no = element(document, 'button', cancel, 'wb-btn'), yes = element(document, 'button', ok, danger ? 'wb-btn wb-btn-danger' : 'wb-btn wb-btn-primary');
     no.type = yes.type = 'button';
     const actions = element(document, 'div', undefined, 'wb-modal-acts'); actions.append(no, yes);
     dialog.append(element(document, 'h3', title), element(document, 'p', body), actions);
@@ -79,7 +79,7 @@ export function formatStartedAt(value, locale) {
 
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
   t = key => key, writable = () => true, detail = () => 'plain', identity = () => '',
-  onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm,
+  onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm, observable = () => false, onObserve = () => {},
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
     totalEvents: 0, totalRuns: 0, currentEvents: [], error: null, lastSuccess: null,
@@ -162,9 +162,10 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       button.addEventListener('click', () => { void selectTab(tab); }); tabs.append(button);
     }
     const body = element(document, 'div', undefined, 'wb-detail-body');
+    const observe = observable(row) ? view => onObserve(key, view) : null;
     if (state.tab === 'overview') {
       const sections = renderOverview(body, row, state, { document, t, level: getLevel(), snapshot: state.snapshot,
-        onTimeline: () => { void selectTab('timeline'); }, onMemory: () => onMemory(row.sessionGroup),
+        onTimeline: () => { void selectTab('timeline'); }, onMemory: () => onMemory(row.sessionGroup), onObserve: observe,
         onConfig: async () => {
           if (state.configOpen) { state.configOpen = false; draw(); return; }
           state.configOpen = true; draw();
@@ -178,7 +179,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         onCancel: () => { state.configOpen = false; draw(); } });
     } else {
       body.classList.add('wb-detail-timeline');
-      renderTimeline(body, timeline, { document, t, level: getLevel() });
+      renderTimeline(body, timeline, { document, t, level: getLevel(), onObserve: observe });
     }
     if (state.nameOpen) {
       const editor = element(document, 'div', undefined, 'wb-name-editor');

@@ -1,6 +1,6 @@
 import { element, icon, runtimeName } from './plain-text.js?v=94';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=94';
-import { techOnly, toolLabel, waitText } from './view-mode.js?v=91';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=97';
+import { toolLabel, waitText } from './view-mode.js?v=97';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=89';
 
 export function activeSubagents(events, runId) {
@@ -152,7 +152,7 @@ function nowCard(document, row, data, { level, t, snapshot }) {
     const sub = kind === 'not_running' ? t('wb.detail.standby') : row.preview?.text ? t('wb.board.lastReceived', { text: row.preview.text }) : '';
     if (sub) card.append(element(document, 'p', sub, 'wb-now-sub'));
   }
-  if (level === 'technical' && techOnly('evidence')) {
+  if (level === 'technical') {
     const evidence = detailEvidence(row, snapshot);
     const details = element(document, 'details', undefined, 'wb-detail-evidence');
     details.open = false;
@@ -173,7 +173,7 @@ function nowCard(document, row, data, { level, t, snapshot }) {
 }
 
 export function renderOverview(root, row, data = {}, { document = root.ownerDocument, t = key => key,
-  level = 'plain', snapshot = {}, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {} } = {}) {
+  level = 'plain', snapshot = {}, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {}, onObserve = null } = {}) {
   root.replaceChildren();
   const section = (key, className, glyph) => {
     const node = element(document, 'section', undefined, 'wb-detail-section ' + className);
@@ -191,6 +191,13 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
       subs.append(tag);
     }
     now.append(subs);
+  }
+  // Only when the terminal observer is installed, enabled and can attach to this group's live session.
+  if (onObserve && row.live?.runId) {
+    const foot = element(document, 'div', undefined, 'wb-now-foot');
+    const live = element(document, 'button', undefined, 'wb-btn wb-btn-sm'); live.type = 'button';
+    live.append(icon(document, 'term', 'xs'), element(document, 'span', t('wb.detail.observeLive')));
+    live.addEventListener('click', () => onObserve('live')); foot.append(live); now.append(foot);
   }
   const recent = section('wb.detail.recent', 'wb-detail-recent', 'clock');
   for (const event of data.recent ?? []) recent.append(eventRow(document, event, { level, t }));

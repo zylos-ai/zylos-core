@@ -1,6 +1,6 @@
 import { element, icon } from './plain-text.js?v=94';
 import { endReasonLabel, timeValue } from './event-labels.js?v=89';
-import { eventRow, eventTime } from './detail-overview.js?v=94';
+import { eventRow, eventTime } from './detail-overview.js?v=97';
 
 export { timeValue };
 
@@ -211,7 +211,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
 
 const scrollListeners = new WeakMap();
 
-export function renderTimeline(root, loader, { document = root.ownerDocument, t = key => key, level = 'plain' } = {}) {
+export function renderTimeline(root, loader, { document = root.ownerDocument, t = key => key, level = 'plain', onObserve = null } = {}) {
   const scrollTop = root.scrollTop ?? 0;
   const { state } = loader;
   const chips = state.chips ?? new Set(chipNames);
@@ -228,7 +228,12 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
     });
     chipRow.append(button);
   }
-  filters.append(chipRow, element(document, 'p', t('wb.timeline.messagesNote'), 'wb-note'));
+  const note = element(document, 'p', t('wb.timeline.messagesNote'), 'wb-note');
+  if (onObserve) {
+    const raw = element(document, 'button', t('wb.detail.observeHistory'), 'wb-link-btn wb-chev'); raw.type = 'button';
+    raw.addEventListener('click', () => onObserve('history')); note.append(raw);
+  }
+  filters.append(chipRow, note);
   root.append(filters);
   const showMessages = chips.has('messages'), showEvent = event => chips.has(eventChip(event));
   const messageLabel = message => t(message.direction === 'in' ? 'wb.timeline.received' : 'wb.timeline.replied');

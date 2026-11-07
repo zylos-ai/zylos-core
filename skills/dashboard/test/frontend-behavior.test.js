@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { buildAgentFleetView, liveStateMood, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { buildAgentFleetView, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { tabForPath } from '../public/js/wb/view-mode.js';
@@ -22,10 +22,10 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     slice('function activeTabName(', '// ─── Fleet view switch'),
     slice('function showFleetView(', 'function clearFleetFallback('),
     slice('function hasFleetWall(', '// Clear all per-agent data'),
-    slice('function initFleetMode(', 'function initLocaleToggle('),
+    slice('function initFleetMode(', 'async function changeLocale('),
     slice('function initTabs(', 'function initObserverControls('),
     slice('function resetAgentData(', 'function initFleetMode('),
-    slice('function observerStatusLabel(', 'function addPriceRow(')
+    slice('function observerStatusLabel(', 'let settingsPage = null;')
   ].join('\n');
   let autoFrameReady = true;
   const elements = {
@@ -160,24 +160,8 @@ function observerResponse(data, { ok = true, status = ok ? 200 : 503 } = {}) {
   return { ok, status, json: async () => data, text: async () => '<html>renderer</html>' };
 }
 
-test('prompt source transient display is capped at 5 seconds', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /const PROMPT_TRANSIENT_SECONDS = 5;/);
-  assert.match(app, /promptAge < PROMPT_TRANSIENT_SECONDS/);
-  assert.doesNotMatch(app, /promptAge < 30/);
-});
-
-test('single-agent mascot uses the octopus PNGs shared with Agent Fleet and tinted by agent hue', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
+test('/api/state exposes the agent identity colour for remote machines that still tint by it', () => {
   const index = fs.readFileSync(new URL('../src/index.js', import.meta.url).pathname, 'utf8');
-  // Reuses the Agent Fleet mood logic + mascot file map (single source of truth).
-  assert.match(app, /import \{ renderAgentFleet, liveStateMood, MASCOT_BY_MOOD \} from '\.\/agent-fleet\.js'/);
-  // Renders an <img> from the shared mascot set, not the legacy inline SVG.
-  assert.match(app, /img class="mascot-img" src="\$\{ASSET_ROOT\}\/img\/mascot\//);
-  assert.match(app, /hue-rotate\(\$\{hue\}deg\)/);
-  // Legacy pixel-art SVG mascot generator is gone.
-  assert.doesNotMatch(app, /function mascotSvg\(/);
-  // /api/state exposes the agent's identity color/hue for the tint.
   assert.match(index, /stateData\.agent = \{ \.\.\.config\.agent, \.\.\.agentColor\(config\.agent\?\.name\) \}/);
 });
 
@@ -202,13 +186,11 @@ test('runtime info upgrade badges use semver-aware comparison', () => {
   assert.doesNotMatch(index, /latest\.zylos !== zylosVersion/);
 });
 
-test('Codex runtime renders CLI update badge in settings and the preserved action loader', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+test('Codex runtime renders CLI update badge in settings', () => {
   const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
   assert.match(version, /ri\.codex_running \|\| ri\.codex_version \|\| ri\.codex_installed/);
   assert.match(version, /ri\.codex_restart \|\| ri\.codex_update/);
-  assert.match(app, /const cliUpdate = meta\.runtime_cli === 'codex' \? ri\?\.codex_restart \|\| ri\?\.codex_update : ri\?\.cc_update;/);
-  assert.match(app, /ccVer\.classList\.toggle\('action-ver-dot', !!cliUpdate\)/);
+  assert.match(version, /badge\.classList\.toggle\('action-ver-dot', !!update\)/);
 });
 
 test('zylos-core upgrade stays an agent hint in settings', () => {
@@ -338,49 +320,52 @@ function fleetFixture() {
   };
 }
 
-test('Agent Fleet fixture renders operational fields and removes deprecated Pulse Wall elements', () => {
-  const view = buildAgentFleetView(fleetFixture(), {
-    basePath: '/dash',
-    mascotRoot: '/dash/_assets/img/mascot'
-  });
-  const html = renderAgentFleetHtml(fleetFixture(), {
-    basePath: '/dash',
-    mascotRoot: '/dash/_assets/img/mascot'
-  });
-
+test('Machines page renders one card per machine with state, quota, cost and host, problems first', () => {
+  const view = buildAgentFleetView(fleetFixture(), { basePath: '/dash' });
+  const html = renderAgentFleetHtml(fleetFixture(), { basePath: '/dash' });
   assert.equal(view.tiles.length, 4);
-  assert.equal(view.counts.busy, 1);
-  assert.equal(view.counts.idle, 1);
-  assert.equal(view.counts.stuck, 1);
-  assert.equal(view.counts.offline, 1);
-  assert.match(html, /class="agent-tile agent-tile-busy/);
-  assert.match(html, /class="agent-tile agent-tile-stuck/);
-  assert.match(html, /class="agent-tile agent-tile-offline is-offline/);
-  assert.match(html, /Unreachable/);
-  assert.match(html, /agent-state mood-idle/);
-  assert.match(html, /agent-state mood-busy/);
-  assert.match(html, /agent-state mood-stuck/);
-  assert.match(html, /agent-state mood-offline/);
-  assert.match(html, /ring-warning/);
-  assert.doesNotMatch(html, /ring-critical/);
-  assert.equal((html.match(/class="agent-fleet-reason"/g) || []).length, 2);
-  assert.match(html, /href="\/dash\/fleet\/zylos01\/"/);
-  assert.match(html, /src="\/dash\/_assets\/img\/mascot\/busy\.png"/);
-  assert.match(html, new RegExp(`data-agent="zylos01"[^>]+--agent-hue:${agentColor('zylos01').hue}deg;`));
+  assert.deepEqual([view.counts.busy, view.counts.idle, view.counts.stuck, view.counts.offline], [1, 1, 1, 1]);
+  // Unreachable machines come before reachable ones (no self in this fixture).
+  assert.deepEqual(view.tiles.map(tile => tile.name), ['eva', 'zylos01', 'zylos02', 'zylos0t']);
+  assert.match(html, /class="wb-f-card bad agent-tile" data-agent="eva"/);
+  assert.match(html, /Cannot connect/);
+  assert.match(html, /class="wb-tech agent-fleet-reason">Unreachable</);
+  assert.match(html, /class="wb-pill wb-busy" data-mood="busy"/);
+  assert.match(html, /class="wb-pill wb-waiting" data-mood="stuck"/);
+  assert.match(html, /class="wb-btn agent-open" href="\/dash\/fleet\/zylos01\/" data-agent="zylos01"/);
   assert.match(html, /GPT-5 \/ medium/);
-  assert.doesNotMatch(html, /agent-upgrade-badge/);
-  assert.doesNotMatch(html, /Upgrade available/);
-  assert.match(html, /Session/);
-  assert.match(html, /Today/);
-  assert.match(html, /7 days/);
-  assert.match(html, /CPU/);
-  assert.match(html, /Memory/);
-  assert.match(html, /Disk/);
-  assert.match(html, /subagent-light is-on/);
-  assert.doesNotMatch(html, /pulse-sparkline/);
-  assert.doesNotMatch(html, /last seen/);
-  assert.doesNotMatch(html, /--pulse-rate/);
-  assert.doesNotMatch(html, /pulse-self-badge/);
+  assert.match(html, /Today \/ 7 days/);
+  assert.match(html, /CPU · Memory · Disk/);
+  assert.match(html, /21 · 43 · 65%/);
+  // Retired wall elements: mascots, rings, 5-hour quota, pulse.
+  for (const gone of [/mascot/, /fleet-mini-ring/, /rate_limit_pct|5h/, /pulse-sparkline/, /agent-upgrade-badge/]) assert.doesNotMatch(html, gone);
+});
+
+test('this machine shows the multi-session view: groups by state, running pool and both weekly quotas', () => {
+  const fleet = { agents: [{ name: 'local', self: true, state: 'BUSY', daily_cost: 1, weekly_cost: 2, cpu_pct: 1, mem_pct: 2, disk_pct: 3 }] };
+  const self = { mode: 'multi', groups: 6, counts: { busy: 2, waiting: 0, error: 1, idle: 2, not_running: 1 }, pool: { used: 3, capacity: 4 }, accounts: { claude: 42, codex: 9 } };
+  const html = renderAgentFleetHtml(fleet, { self });
+  assert.match(html, /wb-f-card self agent-tile/);
+  assert.match(html, /Multi-session/);
+  assert.match(html, /6 groups · 2 working · 1 error · running 3\/4/);
+  assert.match(html, /<i class="wb-gbar-busy" style="flex:2"><\/i>/);
+  assert.match(html, /Claude<\/span><span class="wb-qbar-tr"><i style="width:42%" class="wb-sw-claude">/);
+  assert.match(html, /Codex<\/span><span class="wb-qbar-tr"><i style="width:9%" class="wb-sw-codex">/);
+  const noCapacity = renderAgentFleetHtml(fleet, { self: { ...self, pool: { used: 3, capacity: null } } });
+  assert.match(noCapacity, /running 3</);
+  assert.match(renderAgentFleetHtml({ agents: [{ name: 'local', self: true }] }), /No other machines yet/);
+});
+
+test('problem cards say why in plain words, keep the precise reason for technical view and offer settings and refresh', () => {
+  const html = renderAgentFleetHtml({ agents: [
+    { name: 'k', state: 'UNKNOWN', health_reason: 'auth_failed', pulse_rate: 0, base_url: 'https://k.example' },
+    { name: 'v', state: 'UNKNOWN', health_reason: 'version_unsupported', pulse_rate: 0 },
+  ] });
+  assert.match(html, /<span class="wb-plain">Key no longer valid<\/span>/);
+  assert.match(html, /<span class="wb-plain">Version too old<\/span>/);
+  assert.match(html, /wb-tech wb-mono"> · auth_failed/);
+  assert.equal((html.match(/data-fleet-action="settings"/g) || []).length, 2);
+  assert.equal((html.match(/data-fleet-action="refresh"/g) || []).length, 2);
 });
 
 test('Agent Fleet tile shows subagent count badge only when subagents are active (#279)', () => {
@@ -480,30 +465,25 @@ test('fleet ↔ agent view transition is wired with a graceful fallback', () => 
   assert.match(css, /\.app-view\.v-leave-to-agent/);
 });
 
-test('self tile drills to local root and external tiles drill to /fleet/<name>/', () => {
+test('this machine opens its own workbench and others open through the fleet path', () => {
   const selfFleet = {
     updated_at: '2026-06-07T15:20:00.000Z',
     agents: [
-      { name: 'local', color: agentColor('local').color, hue: agentColor('local').hue, state: 'IDLE', context_pct: 0.2, cost: 0.01, last_seen: '2026-06-07T15:20:00.000Z', pulse_rate: 1, health_reason: 'idle', self: true },
-      { name: 'remote', color: agentColor('remote').color, hue: agentColor('remote').hue, state: 'BUSY', activity: 'work', context_pct: 0.5, cost: 0.02, last_seen: '2026-06-07T15:20:00.000Z', pulse_rate: 1, health_reason: 'ok', self: false }
+      { name: 'local', state: 'IDLE', last_seen: '2026-06-07T15:20:00.000Z', pulse_rate: 1, health_reason: 'idle', self: true },
+      { name: 'remote', state: 'BUSY', activity: 'work', last_seen: '2026-06-07T15:20:00.000Z', pulse_rate: 1, health_reason: 'ok', self: false }
     ]
   };
-  const view = buildAgentFleetView(selfFleet, {
-    basePath: '/dash'
-  });
+  const view = buildAgentFleetView(selfFleet, { basePath: '/dash' });
   const byName = Object.fromEntries(view.tiles.map((tile) => [tile.name, tile]));
   assert.equal(byName.local.isSelf, true);
   assert.equal(byName.local.href, '/dash/');
-  assert.equal(byName.remote.isSelf, false);
   assert.equal(byName.remote.href, '/dash/fleet/remote/');
-
-  const html = renderAgentFleetHtml(selfFleet, {
-    basePath: '/dash'
-  });
-  assert.match(html, /class="agent-tile agent-tile-idle is-self context-ok"/);
-  assert.match(html, /data-self="true"/);
-  assert.match(html, /href="\/dash\/"/);
-  assert.match(html, /href="\/dash\/fleet\/remote\/"/);
+  const html = renderAgentFleetHtml(selfFleet, { basePath: '/dash' });
+  assert.match(html, /class="wb-btn agent-open" href="\/dash\/" data-agent="local" data-self="true"/);
+  assert.match(html, /class="wb-btn agent-open" href="\/dash\/fleet\/remote\/" data-agent="remote">/);
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
+  assert.match(app, /const open = e\.target\.closest\('\.agent-open'\);/);
+  assert.match(app, /if \(open\.dataset\.self === 'true'\) showAgentDetail\(\);\n\s*else if \(open\.dataset\.agent\) enterRemoteAgent\(open\.dataset\.agent\);/);
 });
 
 test('back-to-fleet control is hidden via [hidden] in single-agent mode (no CSS specificity leak)', () => {
@@ -534,11 +514,6 @@ test('Agent Fleet is the top-level fleet view and pulse is gone from UI', () => 
 
 // --- Fleet tile iteration 2 rendering ---
 
-test('fleet tile renders mini ring with centered value and label below', () => {
-  const html = renderAgentFleetHtml({ agents: [{ name: 'a', state: 'IDLE', cpu_pct: 8 }] });
-  assert.match(html, /class="fleet-mini-ring-dial"><span>8%<\/span><\/span>\s*<small>CPU<\/small>/);
-});
-
 test('fleet tile renders link quality chips and granular failure reasons', () => {
   const html = renderAgentFleetHtml({
     agents: [
@@ -565,93 +540,34 @@ test('fleet tile renders link quality chips and granular failure reasons', () =>
   assert.match(html, /agent-link-chip link-slow[^>]*>1\.8s</);
   assert.match(html, /agent-link-chip link-degraded[^>]*>Link warning</);
   assert.match(html, /title="Link latency · Degraded: Timeout"/);
-  assert.match(html, /class="agent-fleet-reason">Bad payload<\/span>/);
+  assert.match(html, /class="wb-tech agent-fleet-reason">Bad payload<\/span>/);
   assert.doesNotMatch(html, /agent-link-chip link-ok/);
+  assert.doesNotMatch(html, /Link latency 0ms/, 'an unmeasured link has no latency');
 });
 
-test('fleet tile always renders 5h/7d rate rows, with -- when unreported', () => {
+test('a reachable machine card shows its running tool as the current action', () => {
   const html = renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'IDLE', rate_limit_pct: 13, rate_limit_7d_pct: null }]
+    agents: [{ name: 'a', state: 'BUSY', activity: 'older summary', activity_feed: [{ kind: 'tool', label: 'Bash: npm test', started_at: null }] }]
   });
-  assert.match(html, /class="fleet-rate-row rate-ok" aria-label="5h 13%"/);
-  assert.match(html, /aria-label="7d --"/);
-  assert.match(html, /width:13\.0%/);
-});
-
-test('fleet tile activity feed mirrors running tools with single-line rows', () => {
-  const html = renderAgentFleetHtml({
-    agents: [{
-      name: 'a',
-      state: 'BUSY',
-      activity_feed: [
-        { kind: 'tool', label: 'Bash: npm test', started_at: new Date(Date.now() - 5000).toISOString() },
-        { kind: 'tool', label: 'Read: foo.js', started_at: null }
-      ]
-    }]
-  });
-  assert.match(html, /class="fleet-feed"/);
-  assert.match(html, /Bash: npm test/);
-  assert.match(html, /class="fleet-feed-age">\d+s</);
-});
-
-test('legacy activity line-clamp does not break the last feed row flex layout (#233)', () => {
-  const css = fs.readFileSync(new URL('../public/css/style.css', import.meta.url).pathname, 'utf8');
-  // The clamp rule must target only the legacy direct-child activity span.
-  // The descendant form also matched the last .fleet-feed-row and replaced
-  // its display:flex with -webkit-box, un-aligning the elapsed-time label.
-  assert.match(css, /\.agent-activity > span:last-child \{/);
-  assert.doesNotMatch(css, /\.agent-activity span:last-child \{/);
+  assert.match(html, /<span title="Bash: npm test">Bash: npm test<\/span>/);
 });
 
 test('fleet tile activity feed falls back to legacy single-line activity', () => {
   const html = renderAgentFleetHtml({
     agents: [{ name: 'a', state: 'IDLE', activity: 'Prompt from lark', activity_feed: [] }]
   });
-  assert.doesNotMatch(html, /class="fleet-feed"/);
   assert.match(html, /Prompt from lark/);
 });
 
-test('fleet tile renders thinking feed entry from kind, not label', () => {
-  const html = renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'BUSY', activity_feed: [{ kind: 'thinking', label: null, started_at: null }] }]
-  });
-  assert.match(html, /fleet-feed-row is-thinking/);
-  assert.match(html, /Thinking…/);
-});
-
-test('fleet tile shows thinking mascot when feed has a thinking entry, counted as working', () => {
-  const fleet = {
-    agents: [{
-      name: 'a', state: 'BUSY',
-      activity: 'Prompt from lark',
-      activity_feed: [{ kind: 'thinking', label: null, started_at: null }]
-    }]
-  };
+test('a thinking feed entry counts the machine as working and labels it thinking', () => {
+  const fleet = { agents: [{ name: 'a', state: 'BUSY', activity: 'Prompt from lark', activity_feed: [{ kind: 'thinking', label: null, started_at: null }] }] };
   const view = buildAgentFleetView(fleet);
   assert.equal(view.tiles[0].mood, 'thinking');
+  assert.equal(view.tiles[0].stateLabel, 'Thinking');
   const html = renderAgentFleetHtml(fleet);
   assert.match(html, /data-state="thinking"/);
-  assert.match(html, /thinking\.png/);
+  assert.match(html, /<span class="wb-pill wb-busy" data-mood="thinking"><span class="wb-dot"><\/span>Thinking<\/span>/);
   assert.match(html, /1 Working/);
-});
-
-test('fleet tile visible state badge follows the feed-upgraded mood', () => {
-  const view = buildAgentFleetView({
-    agents: [{
-      name: 'a', state: 'BUSY',
-      activity: 'Prompt from lark',
-      activity_feed: [{ kind: 'thinking', label: null, started_at: null }]
-    }]
-  });
-  assert.equal(view.tiles[0].stateLabel, 'Thinking');
-  const html = renderAgentFleetHtml({
-    agents: [{
-      name: 'a', state: 'BUSY',
-      activity: 'Prompt from lark',
-      activity_feed: [{ kind: 'thinking', label: null, started_at: null }]
-    }]
-  });
-  assert.match(html, /<span class="agent-state mood-thinking">Thinking<\/span>/);
 });
 
 test('fleet tile thinking feed never overrides stuck/offline moods', () => {
@@ -664,66 +580,25 @@ test('fleet tile thinking feed never overrides stuck/offline moods', () => {
   assert.equal(view.tiles[0].mood, 'stuck');
 });
 
-test('fleet tile context level mirrors the single-agent bar thresholds, not new_session_threshold', () => {
-  const tile = (pct) => renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'IDLE', context_pct: pct, new_session_threshold: 30 }]
-  });
-  assert.match(tile(42), / context-ok"/);
-  assert.match(tile(50), / context-warning"/);
-  assert.match(tile(75), / context-warning"/);
-  assert.match(tile(76), / context-danger"/);
-  assert.match(tile(null), / context-ok"/);
-  // Threshold no longer drives the ring color (it stays a tick marker only):
-  // 42% over a threshold of 30 must NOT mark the tile.
-  assert.doesNotMatch(tile(42), /is-over-threshold/);
-
-  const view = buildAgentFleetView({
-    agents: [{ name: 'a', state: 'IDLE', context_pct: 60 }]
-  });
+test('machine context and weekly quota stay 0-100 percentages, with the 80% quota tick', () => {
+  const view = buildAgentFleetView({ agents: [{ name: 'a', state: 'IDLE', context_pct: 60 }] });
   assert.equal(view.tiles[0].contextLevel, 'warning');
-
   // #251: values are 0-100 percentages — never fraction-inferred. A genuine
   // 1% weekly usage must render 1%, not a full red bar.
-  const tiny = buildAgentFleetView({
-    agents: [{ name: 'a', state: 'IDLE', context_pct: 0.6, rate_limit_7d_pct: 1 }]
-  });
+  const tiny = buildAgentFleetView({ agents: [{ name: 'a', state: 'IDLE', context_pct: 0.6, rate_limit_7d_pct: 1 }] });
   assert.equal(tiny.tiles[0].contextLevel, 'ok');
   assert.equal(tiny.tiles[0].rate7dPct, 1);
-
-  // Static guard: the fraction heuristic must not creep back into any
-  // percent-typed frontend file (cache_rate ratio sites scale via an
-  // explicit unconditional * 100 instead).
-  for (const f of ['public/js/app.js', 'public/js/agent-fleet.js', 'public/js/gauge-utils.js']) {
+  const bar = pct => renderAgentFleetHtml({ agents: [{ name: 'a', state: 'IDLE', rate_limit_7d_pct: pct }] });
+  assert.match(bar(79), /class="wb-qbar"><span>Weekly quota/);
+  assert.match(bar(80), /class="wb-qbar hi"/);
+  assert.match(bar(100), /class="wb-qbar full"/);
+  assert.match(bar(null), /<b>--<\/b>/);
+  assert.match(renderAgentFleetHtml({ agents: [{ name: 'a', state: 'IDLE', context_pct: 79, new_session_threshold: 70 }] }), /<b class="wb-txt-warn">79%<\/b>/);
+  // Static guard: the fraction heuristic must not creep back into any percent-typed frontend file.
+  for (const f of ['public/js/app.js', 'public/js/agent-fleet.js']) {
     const src = fs.readFileSync(new URL('../' + f, import.meta.url).pathname, 'utf8');
     assert.doesNotMatch(src, /<=? ?1 \? [\w.]+ \* 100/, `${f} reintroduced the fraction heuristic`);
   }
-});
-
-test('liveStateMood upgrades busy-with-no-tools to thinking (detail page parity with #186)', () => {
-  assert.equal(liveStateMood({ state: 'BUSY', activity: 'Prompt from lark', running_tools: [] }), 'thinking');
-  assert.equal(liveStateMood({ state: 'BUSY', running_tools: [{ tool_name: 'Bash' }] }), 'busy');
-  assert.equal(liveStateMood({ state: 'IDLE', running_tools: [] }), 'idle');
-  assert.equal(liveStateMood({ state: 'POSSIBLY_STUCK', running_tools: [] }), 'stuck');
-  assert.equal(liveStateMood(null), 'idle');
-});
-
-test('fleet tile renders context chip with usage and threshold, no tick line', () => {
-  const html = renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'IDLE', context_pct: 42, new_session_threshold: 70 }]
-  });
-  assert.match(html, /<span class="context-chip"[^>]*>42% <small>\/ 70%<\/small><\/span>/);
-  assert.doesNotMatch(html, /context-threshold/);
-
-  const over = renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'IDLE', context_pct: 79, new_session_threshold: 70 }]
-  });
-  assert.match(over, /context-chip is-over/);
-
-  const empty = renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'IDLE', context_pct: null, new_session_threshold: null }]
-  });
-  assert.match(empty, /-- <small>\/ --<\/small>/);
-  assert.doesNotMatch(empty, /is-over/);
 });
 
 test('fleet wall pauses re-render on hover so native tooltips can appear', () => {
@@ -739,32 +614,6 @@ test('fleet wall pauses re-render on hover so native tooltips can appear', () =>
   assert.match(app, /if \(pending\) setFleet\(pending\)/);
 });
 
-test('fleet tile mascots animate per mood with a phase-locked delay across rebuilds', () => {
-  const css = fs.readFileSync(new URL('../public/css/style.css', import.meta.url).pathname, 'utf8');
-  assert.match(css, /\.agent-tile-busy \.agent-mascot \{ animation: mascot-bob 0\.8s/);
-  assert.match(css, /\.agent-tile-thinking \.agent-mascot \{ animation: mascot-tilt 3s/);
-  assert.match(css, /\.agent-tile-idle \.agent-mascot \{ animation: mascot-breathe 3s/);
-  assert.match(css, /\.agent-tile-stuck \.agent-mascot \{ animation: mascot-pulse 2s/);
-
-  const html = renderAgentFleetHtml({ agents: [{ name: 'a', state: 'BUSY' }] });
-  // Negative wall-clock-derived delay so a rebuilt tile resumes mid-cycle.
-  assert.match(html, /class="agent-mascot"[^>]*style="animation-delay:-\d+ms"/);
-});
-
-test('fleet rate rows mirror the single-agent bar thresholds, not the system ring levels', () => {
-  const row = (pct) => renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'IDLE', rate_limit_pct: pct, rate_limit_7d_pct: null }]
-  });
-  assert.match(row(42), /fleet-rate-row rate-ok/);
-  assert.match(row(50), /fleet-rate-row rate-warning/);
-  assert.match(row(75), /fleet-rate-row rate-warning/);
-  assert.match(row(76), /fleet-rate-row rate-danger/);
-  // 70 was 'warning' under the old ringLevel thresholds — still warning here,
-  // but 60 must now be warning too (was ok under ringLevel):
-  assert.match(row(60), /fleet-rate-row rate-warning/);
-  assert.match(row(null), /fleet-rate-row rate-ok/);
-});
-
 test('fleet summary shows state dots with dimmed zeros and aggregated cost tiers', () => {
   const html = renderAgentFleetHtml({
     agents: [
@@ -775,9 +624,10 @@ test('fleet summary shows state dots with dimmed zeros and aggregated cost tiers
   assert.match(html, /<span class="sum-seg"><i class="sum-dot dot-busy"><\/i>1 Working<\/span>/);
   assert.match(html, /<span class="sum-seg"><i class="sum-dot dot-idle"><\/i>1 Idle<\/span>/);
   assert.match(html, /<span class="sum-seg is-zero"><i class="sum-dot dot-stuck"><\/i>0 Possible Stuck<\/span>/);
-  assert.match(html, /<small>Session<\/small><strong>\$113\.33<\/strong>/);
-  assert.match(html, /<small>Today<\/small><strong>\$205\.58<\/strong>/);
-  assert.match(html, /<small>7 days<\/small><strong>\$1986\.55<\/strong>/);
+  assert.match(html, /<span class="sum-seg is-zero"><i class="sum-dot dot-offline"><\/i>0 Offline<\/span>/);
+  assert.match(html, /<small>Session<\/small> <strong>\$113\.33<\/strong>/);
+  assert.match(html, /<small>Today<\/small> <strong>\$205\.58<\/strong>/);
+  assert.match(html, /<small>7 days<\/small> <strong>\$1986\.55<\/strong>/);
 });
 
 test('fleet summary cost totals render -- when no agent reports a tier', () => {
@@ -840,9 +690,7 @@ test('entering and exiting a remote agent resets per-agent state and resubscribe
   // resetAgentData clears incremental DOM, not just state, so panels from two
   // agents never mix.
   const reset = app.slice(app.indexOf('function resetAgentData('), app.indexOf('function enterRemoteAgent('));
-  assert.match(reset, /prevSubagentIds\.clear\(\);/);
-  assert.match(reset, /#tool-feed/);
-  assert.match(reset, /#subagent-list/);
+  assert.match(reset, /resetMemoryState\(\);/);
   assert.match(reset, /renderAll\(\);/);
 });
 
@@ -878,11 +726,11 @@ test('popstate routes /fleet/<name> paths into remote view only on the parent do
   assert.match(app, /const path = name === 'overview' \? `\$\{prefix\}\/` : `\$\{prefix\}\/\$\{name === 'trends' \? 'usage' : name\}`;/);
 });
 
-test('fleet wall tiles enter remote agents in-page instead of full navigation', () => {
+test('machine cards enter remote agents in-page instead of full navigation', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   const fleetMode = app.indexOf('function initFleetMode(');
   const block = app.slice(fleetMode, app.indexOf("const backBtn = $('#back-to-fleet');", fleetMode));
-  assert.match(block, /if \(tile\.dataset\.agent\) \{\s*\n\s*e\.preventDefault\(\);\s*\n\s*enterRemoteAgent\(tile\.dataset\.agent\);/);
+  assert.match(block, /e\.preventDefault\(\);\s*\n\s*if \(open\.dataset\.self === 'true'\) showAgentDetail\(\);\s*\n\s*else if \(open\.dataset\.agent\) enterRemoteAgent\(open\.dataset\.agent\);/);
 });
 
 test('remote Actions/Settings are gated by access and routed through the viewed agent', () => {
@@ -1114,13 +962,13 @@ test('Observer navigation fetches target status, waits for it, and discards dela
 
   await harness.context.enterRemoteAgent('bravo', { push: false });
   assert.equal(harness.context.state.observer.status.state, 'installed');
-  assert.equal(harness.elements['#observer-tab'].hidden, false);
+  assert.equal(harness.context.observerPageAvailable(), true);
 
   firstStatus.resolve(observerResponse({ state: 'not_installed' }));
   await alpha;
   assert.equal(harness.context.state.remoteAgent, 'bravo');
   assert.equal(harness.context.state.observer.status.state, 'installed');
-  assert.equal(harness.elements['#observer-tab'].hidden, false);
+  assert.equal(harness.context.observerPageAvailable(), true);
   assert.deepEqual(harness.calls.filter(({ url }) => url.endsWith('/api/observer/status')).map(({ url }) => url), [
     '/fleet/alpha/api/observer/status',
     '/fleet/bravo/api/observer/status'
@@ -1146,7 +994,7 @@ test('Observer navigation discards a delayed old-target status error', async () 
 
   assert.equal(harness.context.state.remoteAgent, 'bravo');
   assert.equal(harness.context.state.observer.status.state, 'installed');
-  assert.equal(harness.elements['#observer-tab'].hidden, false);
+  assert.equal(harness.context.observerPageAvailable(), true);
 });
 
 test('Observer reset uses the real resetAgentData path to clear target status before navigation fetches', async () => {
@@ -1159,7 +1007,7 @@ test('Observer reset uses the real resetAgentData path to clear target status be
 
   assert.equal(harness.context.state.observer.statusGeneration, 5);
   assert.equal(harness.context.state.observer.status, null);
-  assert.equal(harness.elements['#observer-tab'].hidden, true);
+  assert.equal(harness.context.observerPageAvailable(), false);
 });
 
 test('Observer popstate navigation generation prevents a delayed remote route from reopening locally', async () => {
@@ -1225,7 +1073,7 @@ test('Observer lifecycle success and error responses cannot mutate a different t
 
       assert.equal(harness.context.state.remoteAgent, null);
       assert.equal(harness.context.state.observer.status.state, 'not_installed');
-      assert.equal(harness.elements['#observer-tab'].hidden, true);
+      assert.equal(harness.context.observerPageAvailable(), false);
       assert.equal(harness.calls.filter(({ url }) => url === '/fleet/alpha/api/observer/status').length, 0);
       assert.equal(harness.calls.filter(({ url }) => url === '/api/observer/status').length, 1);
     });
@@ -1302,7 +1150,7 @@ test('Observer lifecycle ABA and superseded actions cannot overwrite fresh statu
     pending.resolve(observerResponse({ state: 'installed', desired: { enabled: true } }));
     await action;
     assert.equal(h.context.state.observer.status.state, 'not_installed');
-    assert.equal(h.elements['#observer-tab'].hidden, true);
+    assert.equal(h.context.observerPageAvailable(), false);
     assert.equal(h.settings['#observer-settings-status'].textContent, text);
     assert.equal(h.buttons.every((button) => !button.disabled), true);
   });
@@ -1324,7 +1172,7 @@ test('Observer lifecycle post-refresh fence prevents old-target fallback and fee
   refresh.resolve(observerResponse({ state: 'installed', desired: { enabled: true } }));
   await action;
   assert.equal(h.context.state.observer.status.state, 'not_installed');
-  assert.equal(h.elements['#observer-tab'].hidden, true);
+  assert.equal(h.context.observerPageAvailable(), false);
   assert.equal(h.settings['#observer-settings-status'].hidden, true);
   assert.equal(h.settings['#observer-settings-status'].textContent, '');
 });
@@ -1356,7 +1204,7 @@ test('Observer lifecycle status refresh cannot replace a newer same-target statu
   old.resolve(observerResponse({ state: 'installed', desired: { enabled: true } }));
   await action;
   assert.equal(h.context.state.observer.status.state, 'not_installed');
-  assert.equal(h.elements['#observer-tab'].hidden, true);
+  assert.equal(h.context.observerPageAvailable(), false);
 });
 
 test('Observer popstate reports route failures without an unhandled rejection or stray stream', async () => {
@@ -1645,7 +1493,7 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /settingsModal = root; fleetManageModal = root; actionsModal = settingsPage\.actionsScope/);
   assert.match(app, /composeSettings\(root, \{ settings: oldSettings, fleet: oldFleet, actions: oldActions/);
   assert.match(app, /function renderFleetManage\(data, draft = null\)/);
-  assert.match(app, /if \(!draft\) selfInput\.value = data\?\.self\?\.name \|\| viewedAgentName\(\);/);
+  assert.match(app, /if \(!draft\) fleetManageModal\.querySelector\('#fleet-self-name'\)\.value = selfName;/);
   assert.match(app, /renderFleetManage\(value\)/);
   assert.match(app, /function setFleetAddBusy\(isBusy\)/);
   assert.match(app, /fleetManageModal\?\.querySelector\('#fleet-test'\)\?\.toggleAttribute\('disabled', isBusy\);/);
@@ -1655,45 +1503,27 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /function rotateApiKey\(name\)/);
   assert.match(app, /function hardDeleteApiKey\(name\)/);
   assert.match(app, /function purgeRevokedApiKeys\(\)/);
-  assert.match(app, /class="action-btn api-key-icon-btn api-key-rotate" type="button" title="\$\{rotateLabel\}" aria-label="\$\{rotateLabel\}"/);
-  assert.match(app, /class="action-btn api-key-icon-btn api-key-revoke" type="button" title="\$\{revokeLabel\}" aria-label="\$\{revokeLabel\}"/);
-  assert.match(app, /class="action-btn api-key-icon-btn api-key-delete" type="button" title="\$\{deleteLabel\}" aria-label="\$\{deleteLabel\}"/);
-  assert.match(app, /API_KEY_ROTATE_ICON/);
-  assert.match(app, /API_KEY_REVOKE_ICON/);
-  assert.match(app, /API_KEY_DELETE_ICON/);
+  assert.match(app, /renderKeyTable\(fleetManageModal\.querySelector\('#api-key-list'\), keys/);
   assert.match(app, /replace_created_key_confirm/);
-  assert.match(app, /if \(pendingKeyName && !window\.confirm/);
+  // Destructive key and machine actions confirm in the dashboard's own dialog, never the browser prompt.
+  assert.match(app, /if \(pendingKeyName && !\(await confirmSetting\(/);
+  assert.doesNotMatch(app, /window\.confirm/);
   assert.match(app, /if \(fleetManageModal\?\._createdKey\?\.name === name\) renderCreatedApiKey\(null\);/);
   assert.match(app, /navigator\.clipboard\?\.writeText/);
   assert.match(app, /navigator\.clipboard\.writeText\(key\)/);
   assert.match(app, /id="api-key-admin-warning" hidden/);
   assert.match(app, /finally \{\s*setFleetAddBusy\(false\);\s*\}/);
-
-  assert.match(app, /class="modal-tabs" role="tablist"/);
-  assert.match(app, /data-tab="keys"/);
   assert.match(app, /data-panel="keys" hidden/);
-  assert.match(app, /class="manage-section"/);
   assert.match(app, /id="fleet-add-key" type="password"/);
-  assert.match(app, /id="api-key-scope"/);
-  assert.match(css, /\.manage-modal/);
-  assert.match(css, /\.modal-tabs/);
+  assert.match(app, /id="api-key-scope" role="group"/);
   assert.match(css, /\.fleet-help\[hidden\]\s*\{\s*display:\s*none;\s*\}/);
-  assert.match(css, /\.api-key-created/);
-  assert.match(css, /\.api-key-actions/);
-  assert.match(css, /\.action-btn\.api-key-icon-btn/);
-  assert.match(css, /\.action-btn\.api-key-icon-btn svg/);
-  assert.match(css, /\.api-key-admin-warning/);
 
   for (const pack of [en, zh]) {
     assert.equal(typeof pack['fleet_manage.open'], 'string');
-    assert.equal(typeof pack['fleet_manage.title'], 'string');
-    assert.equal(typeof pack['fleet_manage.tab_fleet'], 'string');
-    assert.equal(typeof pack['fleet_manage.tab_keys'], 'string');
     assert.equal(typeof pack['fleet_manage.key_created_once'], 'string');
     assert.equal(typeof pack['fleet_manage.rotate_key'], 'string');
     assert.equal(typeof pack['fleet_manage.revoke_key'], 'string');
     assert.equal(typeof pack['fleet_manage.delete_key'], 'string');
-    assert.equal(typeof pack['fleet_manage.purge_revoked'], 'string');
     assert.equal(typeof pack['fleet_manage.replace_created_key_confirm'], 'string');
     assert.equal(typeof pack['fleet_manage.admin_key_warning'], 'string');
     assert.equal(typeof pack['fleet_manage.reserved_name'], 'string');
@@ -1710,7 +1540,7 @@ test('fleet management entry stays local and its controls are retained in settin
   // #239: copyable Base URL for key handoff in the API Keys tab
   assert.match(app, /function dashboardBaseUrl\(\)/);
   assert.match(app, /\$\{window\.location\.origin\}\$\{BASE_PATH\}/);
-  assert.match(app, /id="api-base-url" type="text" readonly/);
+  assert.match(app, /id="api-base-url">\$\{esc\(dashboardBaseUrl\(\)\)\}<\/span>/);
   assert.match(app, /id="api-base-url-copy"/);
   assert.match(app, /addEventListener\('click', copyDashboardBaseUrl\)/);
   for (const pack of [en, zh]) {
@@ -1727,7 +1557,7 @@ test('fleet management entry stays local and its controls are retained in settin
   // without hiding or removing the shared settings page.
   assert.match(app, /clearTimeout\(fleetManageStatusTimer\)/);
   assert.match(app, /fleetManageStatusTimer = setTimeout\(\(\) => fleetManageStatus\(''\), 5000\);/);
-  const fleetClose = app.match(/function closeFleetManageModal\(\) \{[^}]*\}/)?.[0];
+  const fleetClose = app.match(/function closeSettingsModal\(\) \{[^}]*\}/)?.[0];
   assert.ok(fleetClose);
   assert.match(fleetClose, /fleetManageStatus\(''\)/);
   assert.doesNotMatch(fleetClose, /\.hidden\s*=|\.remove\(/);
@@ -1834,12 +1664,7 @@ test('fleet sound cues use the marimba strike timbre Howard picked (#223)', () =
 });
 
 test('stale rate-limit windows stop painting after resets_at passes (#224)', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   const resolver = fs.readFileSync(new URL('../src/lib/metric-resolver.js', import.meta.url).pathname, 'utf8');
-  // Single-agent bars null out expired readings instead of showing the last value.
-  assert.match(app, /function rateWindowExpired\(resetsAt\)/);
-  assert.match(app, /const r5 = r5Expired \? null :/);
-  assert.match(app, /const r7 = r7Expired \? null :/);
   // The remaining weekly metric rejects expired account windows.
   assert.match(resolver, /if \(metricName === 'rate_limit_7d'\)[\s\S]*?const valid = Number\.isFinite\(value\) && !rateLimitWindowExpired\(dimensions, metricName\)/);
 });
@@ -1891,7 +1716,7 @@ test('Observer recovery status survives refresh and exposes cleanup without view
     assert.equal(h.settings['#observer-uninstall'].hidden, false);
     assert.equal(h.settings['#observer-enable'].hidden, true);
     assert.equal(h.settings['#observer-install'].hidden, true);
-    assert.equal(h.elements['#observer-tab'].hidden, true);
+    assert.equal(h.context.observerPageAvailable(), false);
     await h.context.runObserverLifecycle('enable');
     await h.context.runObserverLifecycle('install');
     await h.context.openObserver();
@@ -1904,7 +1729,7 @@ test('Observer recovery status survives refresh and exposes cleanup without view
     assert.equal(h.settings['#observer-settings-recovery'].hidden, true);
     assert.equal(h.settings['#observer-enable'].hidden, false);
     assert.equal(h.settings['#observer-disable'].hidden, true);
-    assert.equal(h.elements['#observer-tab'].hidden, true);
+    assert.equal(h.context.observerPageAvailable(), false);
   });
 });
 
@@ -2334,13 +2159,12 @@ test('workbench shell navigation preserves the current agent snapshot and search
 // Observer visibility and click integration: run when shell/app availability wiring
 // changes; skip server-only work. Uses the injected DOM/API/timers above; no live
 // resources. The shared teardown unmounts listeners, observers and fake timers.
-test('workbench shell hides unknown recovering and unavailable observer navigation', async context => {
+test('workbench shell hides unknown recovering and unavailable observer navigation and lets a missing observer open its page', async context => {
   let status = null, readOnly = false;
   const settings = [];
   const h = workbenchHarness(context, null, { storage: { 'zylos-dashboard-detail-level': 'technical' },
     observerStatus: () => status,
-    observerAvailable: value => !readOnly && !value?.recoveryReason,
-    openSettings: section => settings.push(section) });
+    observerAvailable: value => !readOnly && !value?.recoveryReason });
   await wbTick(); await wbTick();
   const nav = h.nodes.get('#observer-tab');
   const redraw = () => h.listeners.get('dashboard-locale-change')();
@@ -2365,10 +2189,11 @@ test('workbench shell hides unknown recovering and unavailable observer navigati
   status = { installed: false }; redraw();
   assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerInstall'); assert.equal(nav.dataset.wbHint, 'wb.observerInstall', 'app.js restores this hint after its Origin lock');
   assert.equal(nav.classList.contains('wb-tab-muted'), true);
-  assert.equal(click().prevented, 1); assert.equal(settings[0], 'observer');
+  // The observer page itself explains a missing or disabled observer and links to settings.
+  assert.equal(click().prevented, 0);
   status = { installed: true, enabled: false }; redraw();
   assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerDisabled');
-  assert.equal(click().prevented, 1); assert.equal(settings.length, 2);
+  assert.equal(click().prevented, 0); assert.equal(settings.length, 0);
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   assert.match(app, /observerAvailable: status => !remoteIsReadOnly\(\) && !observerRecoveryReason\(status\)/);
 });

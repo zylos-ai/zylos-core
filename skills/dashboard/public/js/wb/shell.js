@@ -1,5 +1,5 @@
-import { createViewMode, observerNavEntry } from './view-mode.js?v=91';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=94';
+import { createViewMode, observerNavEntry } from './view-mode.js?v=97';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=97';
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip } from './instance-strip.js?v=94';
 import { renderAttention } from './attention-bar.js?v=94';
@@ -9,8 +9,8 @@ import { createHostPanel } from './host-panel.js?v=94';
 import { element, icon } from './plain-text.js?v=94';
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
-  endpoint = path => path, identity = () => endpoint('/api/workbench/groups'), openSettings = () => {},
-  observerStatus = () => null, observerAvailable = () => true,
+  endpoint = path => path, identity = () => endpoint('/api/workbench/groups'),
+  observerStatus = () => null, observerAvailable = () => true, onObserve = () => {},
   writable = () => true, onMemory = () => {}, onConversation, instanceInfo = () => ({}),
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
   const board = document.querySelector('#wb-board');
@@ -50,7 +50,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const syncNav = () => {
     const entry = observerEntry();
     if (nav) {
-      // The page name stays fixed; an unavailable observer says why in the tooltip and opens settings.
+      // The page name stays fixed; an unavailable observer says why in the tooltip and on its page.
       const label = entry ? t('tab.observer') : '', hint = entry?.target === 'settings' ? entry.label : '';
       if (nav.hidden !== !entry) nav.hidden = !entry;
       if (nav.textContent !== label) nav.textContent = label;
@@ -177,7 +177,9 @@ export function mountWorkbench({ document = globalThis.document, window = global
   };
   groupDetail = createGroupDetail({ root: document.querySelector('#wb-side'), document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable,
-    detail: () => mode.detailLevel(), isVisible: visible, onMemory, onConversation,
+    detail: () => mode.detailLevel(), isVisible: visible, onMemory, onConversation, onObserve,
+    // The terminal observer attaches to the Origin session only (Core's observer target).
+    observable: row => observerEntry()?.target === 'observer' && (row.sessionGroup == null || row.sessionGroup === 'origin'),
     onRename: () => controller.refresh(), onClose: () => { if (!stopped) redraw(); },
   });
   hostPanel = createHostPanel({ root: document.querySelector('#wb-side'), document, t, read, identity,
@@ -289,13 +291,11 @@ export function mountWorkbench({ document = globalThis.document, window = global
     if (document.visibilityState === 'visible') controller.refresh();
     else hostPanel.close();
   };
+  // An installed-but-unavailable observer still opens its page, which explains why and links to settings.
   const observerClick = event => {
-    const entry = observerEntry();
-    if (!entry || entry.target === 'settings') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (entry) openSettings('observer');
-    }
+    if (observerEntry()) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
   };
   toggle.checked = mode.detailLevel() === 'technical';
   toggle.addEventListener('change', changeDetail);
