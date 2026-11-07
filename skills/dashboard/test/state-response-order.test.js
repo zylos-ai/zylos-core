@@ -4,7 +4,6 @@ import {
   beginStateRequest,
   applyStateResponse,
   captureMetricTarget,
-  isMetricTargetCurrent,
   isStateRequestCurrent,
 } from '../public/js/response-order.js';
 import { refreshDashboardState } from '../public/js/state-refresh.js';
@@ -59,24 +58,17 @@ test('a state request from the previous fleet target is stale', () => {
   assert.equal(isStateRequestCurrent(state, request, {}), false);
 });
 
-test('metric responses are bound to navigation and running identity', () => {
+test('the state identity follows navigation and the running run and session', () => {
   const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1' } };
   const target = captureMetricTarget(state);
-  assert.equal(isMetricTargetCurrent(state, target), true);
-  state.dashboardState = { runId: 'R2', sessionId: 'S2' };
-  assert.equal(isMetricTargetCurrent(state, target), false);
-});
-
-test('metric responses are invalidated when only the run changes', () => {
-  const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1' } };
-  const target = captureMetricTarget(state);
+  assert.equal(captureMetricTarget(state), target);
   state.dashboardState = { runId: 'R2', sessionId: 'S1' };
-  assert.equal(isMetricTargetCurrent(state, target), false);
+  assert.notEqual(captureMetricTarget(state), target);
+  state.dashboardState = { runId: 'R1', sessionId: 'S1' }; state.navigationGeneration++;
+  assert.notEqual(captureMetricTarget(state), target);
 });
 
-test('metric target recognizes raw Core SSE identity fields', () => {
-  const state = { navigationGeneration: 0, dashboardState: { run_id: 'R1', session: { session_id: 'S1' } } };
-  const target = captureMetricTarget(state);
-  state.dashboardState = { run_id: 'R2', session: { session_id: 'S2' } };
-  assert.equal(isMetricTargetCurrent(state, target), false);
+test('the state identity recognizes raw Core SSE identity fields', () => {
+  const raw = { navigationGeneration: 0, dashboardState: { run_id: 'R1', session: { session_id: 'S1' } } };
+  assert.equal(captureMetricTarget(raw), captureMetricTarget({ navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1' } }));
 });

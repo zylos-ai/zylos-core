@@ -40,7 +40,3 @@ export function captureMetricTarget(state) {
     state.dashboardState?.sessionId ?? state.dashboardState?.session?.session_id,
   ]);
 }
-
-export function isMetricTargetCurrent(state, target) {
-  return target === captureMetricTarget(state);
-}

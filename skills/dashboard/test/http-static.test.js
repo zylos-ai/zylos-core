@@ -33,14 +33,14 @@ for (const url of ['/%', '/%2', '/%GG', '/%E0%A4', '/%FF', '/_assets/js/%', 'htt
   });
 }
 
-for (const url of ['/js/gauge-utils.js', '/_assets/js/gauge-utils.js', '/js/%67auge-utils.js', '/js/gauge-utils.js?unused=%']) {
+for (const url of ['/js/state-refresh.js', '/_assets/js/state-refresh.js', '/js/%73tate-refresh.js', '/js/state-refresh.js?unused=%']) {
   test(`static handler still serves valid asset ${url}`, async () => {
     const res = response();
     assert.equal(serveStatic({ url }, res, root), true);
     await finished(res);
     assert.equal(res.status, 200);
     assert.equal(res.headers['content-type'], 'text/javascript; charset=utf-8');
-    assert.equal(res.body(), fs.readFileSync(path.join(root, 'js/gauge-utils.js'), 'utf8'));
+    assert.equal(res.body(), fs.readFileSync(path.join(root, 'js/state-refresh.js'), 'utf8'));
   });
 }
 

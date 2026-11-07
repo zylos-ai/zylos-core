@@ -1,4 +1,4 @@
-import { beginStateRequest, applyStateResponse } from './response-order.js';
+import { beginStateRequest, applyStateResponse } from './response-order.js?v=97';
 
 export async function refreshDashboardState(state, fetchState) {
   const request = beginStateRequest(state);

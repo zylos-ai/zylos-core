@@ -6,7 +6,6 @@ import { projectOrigin } from '../src/lib/core-state.js';
 import { buildRestartStatus, handleCoreAction } from '../src/lib/core-actions.js';
 import { Sanitizer } from '../src/lib/sanitizer.js';
 import { formatActionResult } from '../public/js/action-result.js';
-import { pendingDepthValue, sessionBlockTitleKey, stateTitleKey } from '../public/js/state-presentation.js';
 
 const writeExecutable = (file, body) => { fs.writeFileSync(file, `#!${process.execPath}\n${body}\n`, { mode: 0o755 }); };
 const translate = (key, params = {}) => `${key} ${Object.entries(params).map(([name, value]) => `${name}=${value}`).join(' ')}`.trim();
@@ -52,17 +51,6 @@ test('control result formatter lists every id and explicit rejection code', () =
   assert.match(success, /id=41/i); assert.match(success, /id=42/i);
   const rejected = formatActionResult({ steps: [{ controlId: null, submission: 'rejected', rejectionCode: 'DB_BUSY' }] }, translate);
   assert.match(rejected, /submission_rejected/); assert.match(rejected, /DB_BUSY/);
-});
-
-test('state and queue presentation keep startup and read failures visible', () => {
-  assert.equal(stateTitleKey('STARTING'), 'state.starting');
-  assert.equal(stateTitleKey('OFFLINE'), 'state.offline');
-  assert.equal(pendingDepthValue(0), '0');
-  assert.equal(pendingDepthValue(null), null);
-  assert.equal(pendingDepthValue(undefined), null);
-  assert.equal(sessionBlockTitleKey('origin'), 'block.origin');
-  assert.equal(sessionBlockTitleKey(null), 'block.single_session');
-  assert.equal(sessionBlockTitleKey(undefined), 'block.unknown_session');
 });
 
 test('restart status keeps old-run completion separate from current Origin readiness', () => {

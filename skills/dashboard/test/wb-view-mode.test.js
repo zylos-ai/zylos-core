@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createViewMode, technicalKeys, techOnly, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, wbWritable, tabForPath, instanceStatusText } from '../public/js/wb/view-mode.js';
+import { createViewMode, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, wbWritable, tabForPath, instanceStatusText } from '../public/js/wb/view-mode.js';
 import { createDocument, storage } from './fixtures/workbench-dom.js';
 
 test('view level tolerates inaccessible storage and redraws without data requests', context => {
@@ -16,10 +16,7 @@ test('view level persists only recognized values', () => {
   const mode = createViewMode({ document: createDocument(), storage: saved });
   assert.equal(mode.detailLevel(), 'technical'); mode.setDetailLevel('plain'); assert.equal(saved.getItem('zylos-dashboard-detail-level'), 'plain');
 });
-test('technical field list and plain language helpers follow the view level', () => {
-  const keys = 'groupKey runId errorCode queue context modelColumn evidence toolRawCommand cronText taskId taskPriority syncProgress fileBudget commitHash tokens autoRotate toolCalls projects hostCurves remoteAddress versionLatency observerNav observerSettings'.split(' ');
-  assert.equal(technicalKeys.size, keys.length); for (const key of keys) assert.equal(techOnly(key), true);
-  assert.equal(techOnly('state'), false); assert.equal(techOnly('activity'), false);
+test('plain language helpers follow the view level', () => {
   assert.equal(term('origin'), '系统助手'); assert.equal(term('origin', 'technical'), 'origin');
   assert.equal(toolLabel('Bash'), '运行命令'); assert.equal(toolLabel('Bash', 'technical'), 'Bash'); assert.equal(toolLabel('unknown'), '使用工具');
 });

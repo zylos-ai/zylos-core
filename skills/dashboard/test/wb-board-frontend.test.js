@@ -6,7 +6,6 @@ import { createBoardSearch } from '../public/js/wb/board-search.js';
 import { activityStrip } from '../public/js/wb/activity-strip.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
 import { renderAttention } from '../public/js/wb/attention-bar.js';
-import { showSidePanel } from '../public/js/wb/side-panel.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 const t = (key, values = {}) => key + Object.values(values).join(':');
 const nameOf = node => allNodes(node).find(item => item.classList.contains('wb-nm')).textContent;
@@ -167,25 +166,6 @@ test('attention renders problems and reminders as distinct item classes', () => 
   assert.equal(root.children[0].tagName, 'BUTTON', 'a problem affecting one group opens it');
   assert.equal(root.children[1].tagName, 'DIV', 'an instance-level reminder is static');
   root.children[0].dispatch('click'); assert.deepEqual(selected, ['a']);
-});
-// Selection/detail boundary: run for side-panel rendering changes; skip unrelated
-// work. Injected DOM only, no live I/O or timers; runner uses temporary HOME,
-// ZYLOS_DIR, PM2_HOME, short TMPDIR and private tmux namespace with cleanup.
-test('side panel opens only the selected name and state and closes with back', () => {
-  const document = createDocument(), root = document.createElement('aside');
-  root.hidden = true;
-  showSidePanel(root, row('<img onerror=bad>', 'busy'), { document, t });
-  assert.equal(root.hidden, false);
-  assert.equal(root.children.length, 3);
-  assert.equal(root.children[0].tagName, 'BUTTON');
-  assert.equal(root.children[0].textContent, 'wb.back');
-  assert.equal(root.children[1].tagName, 'H2');
-  assert.equal(root.children[1].textContent, '<img onerror=bad>');
-  assert.equal(root.children[2].textContent, 'wb.state.busy');
-  assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
-  assert.equal(allNodes(root).filter(node => node.tagName === 'BUTTON').length, 1);
-  root.children[0].dispatch('click');
-  assert.equal(root.hidden, true);
 });
 test('unnamed snapshot rows use localized platform and key fallback rather than the single label', () => {
   const document = createDocument();

@@ -1,37 +1,29 @@
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=94';
-import { createPricingPanel } from './wb/settings-pricing.js?v=94';
-import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=94';
-import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=94';
-import { renderVersion } from './wb/settings-version.js?v=94';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=97';
+import { createPricingPanel } from './wb/settings-pricing.js?v=97';
+import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=97';
+import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=97';
+import { keyCounts, renderCreatedKey, renderKeyTable, renderRemoteAgents } from './wb/settings-access.js?v=97';
+import { confirmDialog } from './wb/detail.js?v=97';
+import { renderVersion } from './wb/settings-version.js?v=97';
 import { mountConversationPage } from './wb/conversation-page.js?v=100';
-import { mountChatSettings } from './wb/chat-settings.js?v=94';
+import { mountChatSettings } from './wb/chat-settings.js?v=97';
 import { mountWorkbench } from './wb/shell.js?v=99';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=96';
-import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
+import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=97';
 import { mountSchedule } from './wb/schedule.js?v=96';
 import { createUsagePage } from './wb/usage.js?v=96';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
-import { pct, resolveCpuDisplay } from './gauge-utils.js';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { renderAgentFleet, liveStateMood, MASCOT_BY_MOOD } from './agent-fleet.js';
-import { createFleetSounds } from './fleet-sounds.js';
-import {
-  captureMetricTarget,
-  isMetricTargetCurrent,
-} from './response-order.js';
-import { refreshDashboardState } from './state-refresh.js';
+import { renderAgentFleet } from './agent-fleet.js?v=97';
+import { createFleetSounds } from './fleet-sounds.js?v=97';
+import { refreshDashboardState } from './state-refresh.js?v=97';
 import { formatActionResult } from './action-result.js';
-import { pendingDepthValue, sessionBlockTitleKey, stateTitleKey, originSessionUnavailable } from './state-presentation.js';
+import { originSessionUnavailable } from './state-presentation.js?v=97';
 import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from './origin-lock.js?v=95';
-import {
-  effortOptionState,
-  mergeRuntimeInfo,
-  modelOptionState,
-  submitSelectAction,
-} from './runtime-ui.js';
+import { mergeRuntimeInfo } from './runtime-ui.js?v=97';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
 const ASSET_ROOT = `${BASE_PATH}/_assets`;
@@ -46,35 +38,20 @@ const REMOTE_AGENT = REMOTE_AGENT_MATCH ? decodeURIComponent(REMOTE_AGENT_MATCH[
 const PARENT_DASHBOARD_PATH = REMOTE_AGENT ? `${BASE_PATH.slice(0, REMOTE_AGENT_MATCH.index)}/` : null;
 const REMOTE_ACCESS = document.documentElement.dataset.remoteAccess === 'admin' ? 'admin' : 'read';
 
-const METRICS = ['context_pct', 'rate_limit', 'rate_limit_7d', 'session_cost', 'ttft', 'turn_duration'];
 const THEMES = ['light', 'dark', 'system'];
 const THEME_KEY = 'zylos-dashboard-theme';
-const PROMPT_TRANSIENT_SECONDS = 5;
 function effortLabel(level) { return t(`effort.${level}`) || level?.charAt(0).toUpperCase() + level?.slice(1) || ''; }
 
 const state = {
   dashboardState: null,
-  metrics: new Map(),
-  health: null,
-  system: null,
-  summary: null,
-  communication: null,
   fleet: null,
-  timeline: null,
+  fleetSelf: null,
   sourceUpdatedAt: null,
-  metricsUpdatedAt: null,
-  healthUpdatedAt: null,
-  summaryUpdatedAt: null,
-  commUpdatedAt: null,
-  timelineUpdatedAt: null,
-  timer: null,
   pollTimer: null,
   fleetFallbackTimer: null,
   fleetHoverPaused: false,
   pendingFleet: null,
   eventSource: null,
-  charts: {},
-  lastCpuPct: null,
   multiAgent: false,
   fleetViewActive: false,
   fleetModeInitialized: false,
@@ -178,30 +155,6 @@ function initTheme(theme) {
   }
 }
 
-// ─── Formatting ───
-// Input is always a 0-100 percentage (statusline, Codex percent_used, system
-// metrics). No fraction inference — 0.5 means 0.5%, not 50% (#251).
-function barPct(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(100, n));
-}
-
-function barColor(pctValue) {
-  const p = barPct(pctValue);
-  if (p < 50) return '';
-  if (p <= 75) return 'bar-warning';
-  return 'bar-danger';
-}
-
-// Input is a 0-1 ratio (cache_hit_rate is computed as read/total). Always
-// scale; do not pass 0-100 percentages here.
-function pctDecimal(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '--';
-  return `${Math.max(0, Math.min(100, n * 100)).toFixed(1)}%`;
-}
-
 function tok(v) {
   const n = Number(v);
   if (!Number.isFinite(n) || n === 0) return '--';
@@ -209,30 +162,6 @@ function tok(v) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
   return String(Math.round(n));
-}
-
-function usd(v) {
-  if (v == null) return '--';
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '--';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency', currency: 'USD', maximumFractionDigits: n < 1 ? 4 : 2
-  }).format(n);
-}
-
-function bytes(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '--';
-  if (n >= 1073741824) return `${(n / 1073741824).toFixed(1)} GB`;
-  return `${Math.round(n / 1048576)} MB`;
-}
-
-function dur(seconds) {
-  const s = Math.max(0, Math.floor(Number(seconds) || 0));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 function ageSec(ts) {
@@ -253,34 +182,17 @@ function fmtAge(ts) {
   return m > 0 ? t('time.hours', { h, m }) : t('time.hours_exact', { h });
 }
 
-function rateWindowExpired(resetsAt) {
-  const ts = Number(resetsAt);
-  if (!Number.isFinite(ts) || ts <= 0) return false;
-  const ms = ts < 1e12 ? ts * 1000 : ts;
-  return ms <= Date.now();
-}
-
-function fmtResetTime(unixSeconds) {
-  const ts = Number(unixSeconds);
-  if (!Number.isFinite(ts) || ts <= 0) return '';
-  const ms = ts < 1e12 ? ts * 1000 : ts;
-  const diff = ms - Date.now();
-  if (diff <= 0) return t('reset.now');
-  const h = Math.floor(diff / 3600000);
-  const m = Math.floor((diff % 3600000) / 60000);
-  if (h > 24) { const d = Math.floor(h / 24); return t('reset.days', { d, h: h % 24 }); }
-  if (h > 0) return t('reset.hours', { h, m });
-  return t('reset.minutes', { m });
-}
-
 function esc(v) {
   return String(v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
 function agentFleetLabels() {
+  const fleet = key => t('wb.fleet.' + key);
   return {
-    title: t('agent_fleet.title'),
-    subtitle: t('agent_fleet.subtitle'),
+    ...Object.fromEntries(['title', 'subtitle', 'manage', 'shortAuth', 'shortDown', 'shortVersion', 'fixAuth', 'fixDown', 'fixVersion', 'lastSeen',
+      'todayWeek', 'groups', 'host', 'rate7d', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
+      'compareTitle', 'reachableN', 'unreachableN', 'instance', 'todayCost', 'groupCount', 'allIdle', 'pool', 'poolOf', 'empty'].map(key => [key, fleet(key)])),
+    groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'not_running'].map(key => [key, t('wb.state.' + key)])),
     busy: t('agent_fleet.busy'),
     thinking: t('agent_fleet.thinking'),
     idle: t('agent_fleet.idle'),
@@ -303,88 +215,14 @@ function agentFleetLabels() {
     },
     noActivity: t('agent_fleet.no_activity'),
     context: t('label.context'),
-    contextChipTitle: t('agent_fleet.context_chip_title'),
     model: t('agent_fleet.model'),
     sessionCost: t('cost.session'),
     dailyCost: t('cost.today'),
     weeklyCost: t('cost.7d'),
-    cpu: t('label.cpu'),
-    memory: t('label.memory'),
-    disk: t('label.disk'),
-    rate5h: t('agent_fleet.rate_5h'),
-    rate7d: t('agent_fleet.rate_7d'),
-    thinkingActivity: t('activity.thinking'),
-    subagent: t('label.subagents'),
-    empty: t('agent_fleet.empty')
+    subagent: t('label.subagents')
   };
 }
 
-// ─── State helpers ───
-function normState(v) { return String(v || 'UNKNOWN').toUpperCase(); }
-
-function stateClass(v) { return `state-${normState(v).toLowerCase().replaceAll('_', '-')}`; }
-
-function latestTool(tools = []) {
-  return [...tools].sort((a, b) => new Date(b.started_at) - new Date(a.started_at))[0] || null;
-}
-
-function stateTitle(p, mood) {
-  return t(stateTitleKey(p?.state, mood));
-}
-
-
-function confLabel(v) {
-  if (!v) return '--';
-  const key = `confidence.${String(v).toLowerCase()}`;
-  const r = t(key);
-  return r === key ? String(v) : r;
-}
-
-function srcLabel(m) {
-  if (!m || metVal(m) === null) return t('confidence.unavailable');
-  const src = m.selected_source || m.source || '';
-  const friendly = {
-    'core-session-reader': t('metric.current_session'),
-    statusline: t('metric.current_session'),
-    statusline_current_usage: t('metric.current_session'),
-    jsonl_usage: t('source.jsonl_usage'),
-    rollout: t('source.rollout'),
-    token_price_estimated: t('source.estimated'),
-    derived_token_estimate: t('source.estimated'),
-    hook_postToolUse: t('source.tool_hooks')
-  };
-  return friendly[src] || src || t('confidence.unavailable');
-}
-
-function metVal(m) {
-  if (!m) return null;
-  if (m.value && typeof m.value === 'object') return m.value;
-  return m.value ?? m.current ?? m.percent ?? null;
-}
-
-// ─── Runtime Visibility ───
-let _lastRuntimeApplied = null;
-
-function applyRuntimeVisibility() {
-  const rt = state.dashboardState?.runtime_info?.runtime || 'claude';
-  if (rt === _lastRuntimeApplied) return;
-  _lastRuntimeApplied = rt;
-  const runtimeCard = $('.runtime-card');
-  const capacityCard = $('[aria-labelledby="capacity-title"]');
-  const timelineCard = $('.timeline-card');
-  const trendsTab = $('[data-tab="trends"]');
-  const trendsPanel = $('#tab-trends');
-
-  if (runtimeCard) runtimeCard.hidden = false;
-  if (capacityCard) capacityCard.hidden = false;
-  if (timelineCard) timelineCard.hidden = false;
-  if (trendsTab) trendsTab.hidden = false;
-
-  const latencyCard = $('.latency-card');
-  if (latencyCard) latencyCard.hidden = rt !== 'codex';
-
-  if (trendsPanel && trendsTab?.classList.contains('active')) trendsPanel.hidden = false;
-}
 
 // ─── Render: Info Bar ───
 // Settings version + header agent name. The version is this page's own
@@ -410,21 +248,6 @@ function renderInfoBar() {
 }
 
 // ─── Render: State ───
-const FEED_MAX = 5;
-const prevToolIds = new Set();
-
-function mascotClass(agentState) {
-  const s = normState(agentState);
-  if (s === 'BUSY') return 'mascot-busy';
-  if (['IDLE', 'SLEEPING', 'WAKING', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(s)) return 'mascot-idle';
-  if (['AUTH_WAIT', 'WAKE_OVERDUE'].includes(s)) return 'mascot-stuck';
-  if (s === 'OFFLINE') return 'mascot-offline';
-  if (s === 'WAITING_HUMAN') return 'mascot-waiting';
-  if (s === 'POSSIBLY_STUCK') return 'mascot-possibly-stuck';
-  if (s === 'STUCK') return 'mascot-stuck';
-  return '';
-}
-
 function renderOriginAvailability() {
   const unavailable = originSessionUnavailable(state.dashboardState);
   lockOriginButtons(document.querySelectorAll(ORIGIN_LOCK_SELECTOR), {
@@ -432,691 +255,6 @@ function renderOriginAvailability() {
   });
 }
 
-function renderState() {
-  const title = $('#runtime-title');
-  if (title) {
-    title.removeAttribute('data-i18n');
-    title.textContent = t(sessionBlockTitleKey(state.dashboardState?.sessionGroup));
-  }
-  const p = state.dashboardState;
-  // Same octopus mascot set + mood logic as Agent Fleet (busy with no visible
-  // tool = thinking), so the agent looks identical in its tile and its detail.
-  const mood = liveStateMood(p);
-  const dot = $('#state-dot');
-  if (dot) dot.className = `state-dot ${stateClass(p?.state)}`;
-  $('#state-title').textContent = p ? stateTitle(p, mood) : t('state.unknown_simple');
-  const mascotArea = $('#mascot-area');
-  if (mascotArea) {
-    mascotArea.className = `mascot-area ${mascotClass(p?.state)}`;
-    const sprite = $('#mascot-sprite');
-    if (sprite) {
-      const file = MASCOT_BY_MOOD[mood] || MASCOT_BY_MOOD.idle;
-      const hue = Number(p?.agent?.hue) || 0;
-      sprite.innerHTML = `<img class="mascot-img" src="${ASSET_ROOT}/img/mascot/${file}" alt="" style="filter:hue-rotate(${hue}deg)">`;
-    }
-  }
-  $('#state-updated').textContent = fmtAge(p?.updated_at || state.sourceUpdatedAt);
-
-  const tools = p?.running_tools || [];
-
-  renderOriginAvailability();
-  renderToolFeed(tools, p);
-  renderSubagents(p);
-  renderAssistantMessage(p);
-}
-
-function renderToolFeed(tools, p) {
-  const feed = $('#tool-feed');
-  const currentIds = new Set(tools.map((t) => t.tool_use_id));
-  const s = normState(p?.state);
-
-  // Render prompt source as a transient feed item
-  const promptId = '_prompt';
-  const existingPrompt = feed.querySelector(`[data-tool-id="${promptId}"]`);
-  const lp = p?.last_prompt;
-  if (lp && lp.timestamp) {
-    const promptAge = ageSec(lp.timestamp) ?? 0;
-    const isNewPrompt = existingPrompt && existingPrompt.dataset.promptTs !== lp.timestamp;
-    if (isNewPrompt) {
-      existingPrompt.remove();
-    }
-    const current = isNewPrompt ? null : existingPrompt;
-    if (promptAge < PROMPT_TRANSIENT_SECONDS) {
-      if (!current) {
-        const el = document.createElement('div');
-        el.className = 'tool-feed-item prompt-source';
-        el.dataset.toolId = promptId;
-        el.dataset.promptTs = lp.timestamp;
-        el.dataset.addedAt = String(Date.now());
-        el.innerHTML = `<span class="mono tool-detail">${esc(lp.summary)}</span><span class="tool-status">${dur(promptAge)}</span>`;
-        feed.prepend(el);
-      } else {
-        current.querySelector('.tool-status').textContent = dur(promptAge);
-      }
-    } else if (current && !current.classList.contains('done')) {
-      current.classList.add('done');
-      setTimeout(() => {
-        if (current.parentNode) {
-          current.classList.add('removing');
-          current.addEventListener('animationend', () => current.remove(), { once: true });
-        }
-      }, 5000);
-    }
-  } else if (existingPrompt) {
-    existingPrompt.remove();
-  }
-
-  for (const id of prevToolIds) {
-    if (!currentIds.has(id)) {
-      const el = feed.querySelector(`[data-tool-id="${id}"]`);
-      if (el && !el.classList.contains('done')) {
-        const statusEl = el.querySelector('.tool-status');
-        if (statusEl) statusEl.textContent = '✓';
-        const age = Date.now() - (Number(el.dataset.addedAt) || 0);
-        const greyDelay = Math.max(0, 2000 - age);
-        setTimeout(() => {
-          el.classList.add('done');
-          setTimeout(() => {
-            if (el.parentNode) {
-              el.classList.add('removing');
-              el.addEventListener('animationend', () => el.remove(), { once: true });
-            }
-          }, 10000);
-        }, greyDelay);
-      }
-    }
-  }
-
-  for (const tool of tools) {
-    let el = feed.querySelector(`[data-tool-id="${tool.tool_use_id}"]`);
-    const elapsed = ageSec(tool.started_at) ?? tool.duration_s ?? 0;
-    const detail = tool.tool_detail ? `: ${esc(tool.tool_detail)}` : '';
-    const label = `${esc(tool.tool_name || 'tool')}${detail}`;
-
-    if (!el) {
-      el = document.createElement('div');
-      el.className = 'tool-feed-item';
-      el.dataset.toolId = tool.tool_use_id;
-      el.dataset.addedAt = String(Date.now());
-      el.innerHTML = `<span class="mono tool-detail">${label}</span><span class="tool-status">${dur(elapsed)}</span>`;
-      feed.appendChild(el);
-    } else if (!el.classList.contains('done')) {
-      el.querySelector('.tool-status').textContent = dur(elapsed);
-    }
-  }
-
-  const thinkingId = '_thinking';
-  const existingThinking = feed.querySelector(`[data-tool-id="${thinkingId}"]`);
-  const shouldThink = s === 'BUSY' && tools.length === 0;
-  if (shouldThink) {
-    if (!existingThinking) {
-      const el = document.createElement('div');
-      el.className = 'tool-feed-item thinking';
-      el.dataset.toolId = thinkingId;
-      el.dataset.startedAt = new Date().toISOString();
-      el.innerHTML = `<span class="mono tool-detail">${esc(t('activity.thinking'))}</span><span class="tool-status">0s</span>`;
-      feed.appendChild(el);
-    } else {
-      const thinkAge = ageSec(existingThinking.dataset.startedAt) ?? 0;
-      existingThinking.querySelector('.tool-status').textContent = dur(thinkAge);
-    }
-  } else if (existingThinking) {
-    existingThinking.remove();
-  }
-
-  trimFeed(feed);
-
-  const fallback = $('#activity-fallback');
-  const hasItems = feed.querySelector('.tool-feed-item') !== null;
-  if (hasItems || s === 'IDLE') {
-    fallback.hidden = true;
-  } else {
-    fallback.hidden = false;
-    if (['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(s)) fallback.textContent = t(`activity.${s.toLowerCase()}`);
-    else if (s === 'OFFLINE') fallback.textContent = t('activity.offline');
-    else if (s === 'WAITING_HUMAN') fallback.textContent = t('activity.waiting');
-    else fallback.textContent = p?.reason || t('value.unavailable');
-  }
-
-  prevToolIds.clear();
-  for (const id of currentIds) prevToolIds.add(id);
-}
-
-function trimFeed(feed) {
-  const items = feed.querySelectorAll('.tool-feed-item');
-  if (items.length <= FEED_MAX) return;
-  const doneItems = [...items].filter((el) => el.classList.contains('done'));
-  let excess = items.length - FEED_MAX;
-  for (const el of doneItems) {
-    if (excess <= 0) break;
-    el.classList.add('removing');
-    el.addEventListener('animationend', () => el.remove(), { once: true });
-    excess--;
-  }
-}
-
-// ─── Render: Assistant Message ───
-function renderAssistantMessage(p) {
-  const el = $('#assistant-message');
-  const msg = p?.last_message;
-  if (msg?.text) {
-    el.textContent = msg.text;
-    el.hidden = false;
-  } else {
-    el.hidden = true;
-  }
-}
-
-// ─── Render: Subagents ───
-const prevSubagentIds = new Set();
-
-function subagentDiagnosticParts(agent) {
-  const parts = [];
-  if (agent.wait_timed_out || agent.failure_reason) {
-    parts.push(t(`subagent.reason.${agent.failure_reason}`) || agent.failure_reason || t('subagent.wait_timed_out'));
-  }
-  if (agent.status === 'waiting' && agent.wait_duration_s != null) {
-    parts.push(`${t('subagent.waiting_for')} ${dur(agent.wait_duration_s)}`);
-  }
-  if (agent.wait_timeout_ms != null) {
-    parts.push(`${t('subagent.timeout')} ${fmtDuration(agent.wait_timeout_ms)}`);
-  }
-  if (agent.wait_latency_ms != null) {
-    parts.push(`${t('subagent.wait_latency')} ${fmtDuration(agent.wait_latency_ms)}`);
-  }
-  return parts;
-}
-
-function subagentActivityHtml(agent) {
-  const items = (agent.recent_activity || []).slice(-3);
-  if (items.length === 0) return '';
-  return `<div class="subagent-activity">${items.map((item) => {
-    const age = item.timestamp ? fmtAge(item.timestamp) : '';
-    return `<div class="subagent-activity-item"><span>${esc(item.summary || '')}</span><span>${esc(age)}</span></div>`;
-  }).join('')}</div>`;
-}
-
-function compactSubagentText(value, limit = 80) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  if (text.length <= limit) return text;
-  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
-function renderSubagents(p) {
-  const agents = p?.active_subagents || [];
-  const section = $('#subagent-section');
-  const list = $('#subagent-list');
-  const badge = $('#subagent-count');
-
-  const currentAgentIds = new Set(agents.map((a) => a.agent_id));
-
-  const hasContent = agents.length > 0 ||
-    list.querySelector('.subagent-group') !== null;
-  section.classList.toggle('visible', hasContent);
-  section.closest('.runtime-split')?.classList.toggle('has-subagents', hasContent);
-  badge.textContent = String(agents.length);
-  badge.hidden = agents.length === 0;
-
-  for (const id of prevSubagentIds) {
-    if (!currentAgentIds.has(id)) {
-      const grp = list.querySelector(`[data-agent-id="${id}"]`);
-      if (grp && !grp.classList.contains('done')) {
-        const timeEl = grp.querySelector('.subagent-group-time');
-        if (timeEl) timeEl.textContent = '✓';
-        grp.classList.add('done');
-        setTimeout(() => {
-          if (grp.parentNode) {
-            grp.classList.add('removing');
-            grp.addEventListener('animationend', () => {
-              grp.remove();
-              if (!list.querySelector('.subagent-group')) {
-                section.classList.remove('visible');
-                section.closest('.runtime-split')?.classList.remove('has-subagents');
-              }
-            }, { once: true });
-          }
-        }, 10000);
-      }
-    }
-  }
-
-  for (const agent of agents) {
-    let grp = list.querySelector(`[data-agent-id="${agent.agent_id}"]`);
-    const label = compactSubagentText(agent.nickname || agent.description || agent.agent_type || t('activity.subagent'), 32);
-    const shortId = agent.agent_id.slice(0, 7);
-    const subtitleParts = [];
-    if (agent.nickname && agent.description) subtitleParts.push(compactSubagentText(agent.description, 64));
-    if (agent.agent_type && (agent.nickname || agent.description)) subtitleParts.push(agent.agent_type);
-    if (agent.status && agent.status !== 'running') subtitleParts.push(agent.status);
-    if (agent.last_activity && agent.last_activity !== 'Subagent started') subtitleParts.push(compactSubagentText(agent.last_activity, 48));
-    const subtitle = compactSubagentText(subtitleParts.length ? subtitleParts.join(' · ') : shortId, 96);
-    const labelHtml = `<span class="subagent-label-main">${esc(label)}</span><span class="subagent-label-sub">${esc(subtitle)}</span>`;
-    const diagnostics = subagentDiagnosticParts(agent);
-    const diagnosticsHtml = diagnostics.length
-      ? `<div class="subagent-diagnostics">${diagnostics.map((part) => `<span>${esc(part)}</span>`).join('')}</div>`
-      : '';
-
-    if (!grp) {
-      grp = document.createElement('div');
-      grp.className = 'subagent-group';
-      grp.dataset.agentId = agent.agent_id;
-      grp.innerHTML =
-        `<div class="subagent-group-head">` +
-          `<span class="subagent-group-label">${labelHtml}</span>` +
-          `<span class="subagent-group-time">${dur(agent.duration_s || 0)}</span>` +
-        `</div>` +
-        `<div class="subagent-diagnostics-slot">${diagnosticsHtml}</div>` +
-        `<div class="subagent-activity-slot">${subagentActivityHtml(agent)}</div>` +
-        `<div class="tool-feed"></div>`;
-      list.appendChild(grp);
-    } else if (!grp.classList.contains('done')) {
-      grp.querySelector('.subagent-group-label').innerHTML = labelHtml;
-      grp.querySelector('.subagent-group-time').textContent = dur(agent.duration_s || 0);
-      grp.querySelector('.subagent-diagnostics-slot').innerHTML = diagnosticsHtml;
-      grp.querySelector('.subagent-activity-slot').innerHTML = subagentActivityHtml(agent);
-    }
-
-    if (!grp.classList.contains('done')) {
-      const feed = grp.querySelector('.tool-feed');
-      const tools = agent.running_tools || [];
-      const currentToolIds = new Set(tools.map((t) => t.tool_use_id));
-      const existingItems = feed.querySelectorAll('.tool-feed-item');
-      for (const el of existingItems) {
-        if (!currentToolIds.has(el.dataset.toolId) && !el.classList.contains('done')) {
-          const statusEl = el.querySelector('.tool-status');
-          if (statusEl) statusEl.textContent = '✓';
-          el.classList.add('done');
-          setTimeout(() => {
-            if (el.parentNode) {
-              el.classList.add('removing');
-              el.addEventListener('animationend', () => el.remove(), { once: true });
-            }
-          }, 5000);
-        }
-      }
-      for (const tool of tools) {
-        let el = feed.querySelector(`[data-tool-id="${tool.tool_use_id}"]`);
-        const elapsed = ageSec(tool.started_at) ?? tool.duration_s ?? 0;
-        const detail = tool.tool_detail ? `: ${esc(tool.tool_detail)}` : '';
-        const toolLabel = `${esc(tool.tool_name || 'tool')}${detail}`;
-        if (!el) {
-          el = document.createElement('div');
-          el.className = 'tool-feed-item';
-          el.dataset.toolId = tool.tool_use_id;
-          el.innerHTML = `<span class="mono tool-detail">${toolLabel}</span><span class="tool-status">${dur(elapsed)}</span>`;
-          feed.appendChild(el);
-        } else if (!el.classList.contains('done')) {
-          el.querySelector('.tool-status').textContent = dur(elapsed);
-        }
-      }
-      trimFeed(feed);
-    }
-  }
-
-  prevSubagentIds.clear();
-  currentAgentIds.forEach((id) => prevSubagentIds.add(id));
-}
-
-// ─── Render: Metrics ───
-function renderMetrics() {
-  const ctx = state.metrics.get('context_pct');
-  const rate = state.metrics.get('rate_limit');
-  const cost = state.metrics.get('session_cost') || state.metrics.get('daily_cost');
-
-  const cv = metVal(ctx);
-  const rv = metVal(rate);
-  const ro = rv && typeof rv === 'object';
-  const rate7d = state.metrics.get('rate_limit_7d');
-  // A rate-limit reading whose window already reset is stale by definition —
-  // statusline stops updating while the agent idles, so without this check a
-  // final "100%" would keep painting red long after the quota refreshed (#224).
-  const r5Expired = rateWindowExpired(rate?.dimensions?.rate_limit_resets_at ?? rate?.dimensions?.resets_at ?? rate?.resets_at);
-  const r7Expired = rateWindowExpired(rate7d?.dimensions?.rate_limit_7d_resets_at ?? rate7d?.dimensions?.resets_at ?? rate7d?.resets_at);
-  const r5 = r5Expired ? null : (ro ? (rv['5h'] ?? rv.five_hour ?? rv.short ?? rv.value) : rv);
-  const r7 = r7Expired ? null : (metVal(rate7d) ?? (ro ? (rv['7d'] ?? rv.seven_day ?? rv.long) : null));
-
-  $('#metric-context-value').textContent = pct(cv);
-  const ctxBar = $('#metric-context-bar');
-  const threshold = state.newSessionThreshold || 70;
-  const cvNum = Number(cv);
-  const cvAbs = Number.isFinite(cvNum) ? barPct(cvNum) : 0;
-  ctxBar.style.width = `${barPct(cv)}%`;
-  ctxBar.className = `progress-fill ${barColor(cv)}`;
-  const thresholdMarker = $('#metric-context-threshold');
-  if (thresholdMarker) {
-    thresholdMarker.hidden = false;
-    thresholdMarker.style.left = `${threshold}%`;
-    thresholdMarker.title = t('metric.threshold_at', { value: threshold });
-  }
-  const thresholdLabel = $('#metric-context-threshold-label');
-  if (thresholdLabel) {
-    thresholdLabel.textContent = `${threshold}%`;
-    thresholdLabel.style.left = `${threshold}%`;
-  }
-  $('#metric-context-source').textContent = srcLabel(ctx);
-
-  $('#metric-rate-5h-value').textContent = r5 == null ? '--' : pct(r5);
-  const r5Bar = $('#metric-rate-5h-bar');
-  r5Bar.style.width = `${barPct(r5)}%`;
-  r5Bar.className = `progress-fill ${barColor(r5)}`;
-
-  $('#metric-rate-7d-value').textContent = r7 == null ? '--' : pct(r7);
-  const r7Bar = $('#metric-rate-7d-bar');
-  r7Bar.style.width = `${barPct(r7)}%`;
-  r7Bar.className = `progress-fill ${barColor(r7)}`;
-
-  // statusline_summary dims (post-#149 aggregation) use window-prefixed keys;
-  // bare resets_at covers pre-aggregation rows still in the DB.
-  const r5Reset = rate?.dimensions?.rate_limit_resets_at ?? rate?.dimensions?.resets_at ?? rate?.resets_at;
-  const r7Reset = rate7d?.dimensions?.rate_limit_7d_resets_at ?? rate7d?.dimensions?.resets_at ?? rate7d?.resets_at;
-  $('#metric-rate-5h-reset').textContent = r5Reset ? t('metric.resets', { time: fmtResetTime(r5Reset) }) : '';
-  $('#metric-rate-7d-reset').textContent = r7Reset ? t('metric.resets', { time: fmtResetTime(r7Reset) }) : '';
-
-  const agg = state.aggregated || {};
-  const hasCostSession = agg.cost_session != null;
-  $('#metric-cost-session').textContent = hasCostSession ? usd(agg.cost_session) : usd(metVal(cost));
-  $('#metric-cost-today').textContent = agg.cost_today != null ? usd(agg.cost_today) : '--';
-  $('#metric-cost-7d').textContent = agg['cost_7d'] != null ? usd(agg['cost_7d']) : '--';
-
-  const costSessionLabel = $('#metric-cost-session-label');
-  if (costSessionLabel) costSessionLabel.textContent = t('cost.session');
-
-  // Tokens — stacked bar + cache ring
-  const ts = agg.tokens_session;
-  const tt = agg.tokens_today;
-  const t7 = agg['tokens_7d'];
-  const ttft = state.metrics.get('ttft');
-  const turnDuration = state.metrics.get('turn_duration');
-
-  // Session input/output stacked bar
-  $('#metric-tokens-input').textContent = ts ? tok(ts.input) : '--';
-  $('#metric-tokens-output').textContent = ts ? tok(ts.output) : '--';
-  setTokenBar('tokens-bar', ts);
-
-  // Cache hit ring
-  const CACHE_RING_C = 2 * Math.PI * 22;
-  const cacheEl = $('#cache-ring');
-  if (cacheEl) {
-    const cr = ts?.cache_rate; // 0-1 ratio by construction
-    const cv = cr != null ? Math.max(0, Math.min(100, cr * 100)) : 0;
-    cacheEl.style.strokeDasharray = CACHE_RING_C;
-    cacheEl.style.strokeDashoffset = CACHE_RING_C * (1 - Math.min(100, cv) / 100);
-  }
-  $('#metric-tokens-cache').textContent = ts ? pctDecimal(ts.cache_rate) : '--';
-
-  // Today / 7d rows
-  const tokLine = (t) => t ? `↑${tok(t.input)} ↓${tok(t.output)}` : '--';
-  $('#metric-tokens-today').textContent = tokLine(tt);
-  $('#metric-tokens-7d').textContent = tokLine(t7);
-  setTokenBar('tokens-bar-today', tt);
-  setTokenBar('tokens-bar-7d', t7);
-
-  const ttftEl = $('#metric-ttft');
-  if (ttftEl) ttftEl.textContent = metVal(ttft) == null ? '--' : fmtDuration(metVal(ttft));
-  const turnEl = $('#metric-turn-duration');
-  if (turnEl) turnEl.textContent = metVal(turnDuration) == null ? '--' : fmtDuration(metVal(turnDuration));
-
-  $('#metrics-updated').textContent = fmtAge(state.metricsUpdatedAt);
-}
-
-function setTokenBar(id, tokData) {
-  const el = $(`#${id}`);
-  if (!el || !tokData) return;
-  const inp = Number(tokData.input) || 0;
-  const out = Number(tokData.output) || 0;
-  const total = inp + out;
-  if (total === 0) return;
-  const inputEl = el.querySelector('.tokens-bar-input');
-  const outputEl = el.querySelector('.tokens-bar-output');
-  if (inputEl) inputEl.style.width = `${(inp / total) * 100}%`;
-  if (outputEl) outputEl.style.width = `${(out / total) * 100}%`;
-}
-
-// ─── Render: Health ───
-const RING_CIRCUMFERENCE = 2 * Math.PI * 34; // r=34 → ~213.63
-
-function ringLevel(pctVal) {
-  if (pctVal >= 90) return 'level-danger';
-  if (pctVal >= 70) return 'level-warn';
-  return 'level-ok';
-}
-
-function ringLevelInverse(pctVal) {
-  if (pctVal <= 50) return 'level-danger';
-  if (pctVal <= 80) return 'level-warn';
-  return 'level-ok';
-}
-
-function setRing(id, pctVal, levelFn) {
-  const el = $(`#${id}`);
-  if (!el) return;
-  const v = Math.max(0, Math.min(100, pctVal));
-  const offset = RING_CIRCUMFERENCE * (1 - v / 100);
-  el.style.strokeDashoffset = offset;
-  el.className.baseVal = `ring-fill ${(levelFn || ringLevel)(v)}`;
-}
-
-function renderHealth() {
-  const sysResp = state.system || {};
-  const sys = sysResp.system || sysResp;
-  const pm2 = sysResp.pm2 || sys.pm2 || sys.pm2_services || sys.services || [];
-  const svcs = Array.isArray(pm2) ? pm2 : (pm2.services || []);
-  const svcStatus = (s) => String(s.status || s.pm2_env?.status || '').toLowerCase();
-  const running = svcs.filter((s) => ['online', 'running', 'ok'].includes(svcStatus(s))).length;
-  const total = svcs.length || Number(pm2.total) || 0;
-  const downSvcs = svcs.filter((s) => !['online', 'running', 'ok'].includes(svcStatus(s)));
-
-  const cpuVal = sys.cpu?.percent ?? sys.cpu_pct ?? sys.cpu;
-  const memUsed = sys.memory?.used_bytes ?? sys.mem_used_bytes ?? sys.memory?.used ?? sys.memory;
-  const memTotal = sys.memory?.total_bytes ?? sys.mem_total_bytes ?? sys.memory?.total;
-  const diskVal = sys.disk?.used_pct ?? sys.disk_used_pct ?? sys.disk_pct ?? sys.disk?.percent ?? sys.disk;
-
-  // PM2 — ring shows fraction (inverse color: green=high, red=low)
-  const pm2Pct = total ? (running / total) * 100 : 0;
-  $('#system-pm2').textContent = total ? `${running}/${total}` : '--';
-  setRing('pm2-ring', pm2Pct, ringLevelInverse);
-  const downList = $('#pm2-down-list');
-  if (downList) {
-    if (downSvcs.length > 0) {
-      downList.textContent = '↓ ' + downSvcs.map((s) => s.name).join(', ');
-      downList.className = 'gauge-detail alert';
-    } else {
-      downList.textContent = '';
-      downList.className = 'gauge-detail';
-    }
-  }
-
-  // CPU — retain last valid value when data is transiently missing
-  const cpuResolved = resolveCpuDisplay(cpuVal, state.lastCpuPct);
-  state.lastCpuPct = cpuResolved.lastGood;
-  $('#system-cpu').textContent = cpuResolved.display;
-  if (cpuResolved.lastGood !== null) {
-    setRing('cpu-ring', cpuResolved.lastGood); // 0-100 percent; setRing clamps
-  }
-
-  // Memory — ring shows %, detail shows used/total
-  const memDetail = $('#mem-detail');
-  if (typeof memUsed === 'number' && memUsed > 100 && typeof memTotal === 'number' && memTotal > 0) {
-    const memPctVal = (memUsed / memTotal) * 100;
-    $('#system-memory').textContent = `${Math.round(memPctVal)}%`;
-    setRing('mem-ring', memPctVal);
-    if (memDetail) memDetail.textContent = `${bytes(memUsed)} / ${bytes(memTotal)}`;
-  } else {
-    $('#system-memory').textContent = typeof memUsed === 'number' && memUsed > 100 ? bytes(memUsed) : pct(memUsed);
-    setRing('mem-ring', 0);
-    if (memDetail) memDetail.textContent = '';
-  }
-
-  // Disk
-  const diskPct = Number(diskVal);
-  $('#system-disk').textContent = pct(diskVal);
-  if (Number.isFinite(diskPct)) setRing('disk-ring', diskPct); // 0-100 percent; setRing clamps
-
-  // Scheduler — timeline of upcoming tasks
-  const sched = sysResp.scheduler;
-  const schedCount = $('#scheduler-count');
-  const schedTimeline = $('#scheduler-timeline');
-  if (schedCount) {
-    schedCount.textContent = sched?.pending ? t('sched.pending', { count: sched.pending }) : '';
-  }
-  if (schedTimeline) {
-    const tasks = sched?.upcoming || [];
-    if (tasks.length === 0) {
-      schedTimeline.innerHTML = `<span class="gauge-detail">${esc(t('sched.no_pending'))}</span>`;
-    } else {
-      const now = Date.now();
-      schedTimeline.innerHTML = tasks.map((task, i) => {
-        const runAt = new Date(task.run_at);
-        const isOverdue = runAt.getTime() < now;
-        const time = runAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const cls = isOverdue ? ' overdue' : '';
-        const line = i < tasks.length - 1 ? '<div class="sched-line"></div>' : '';
-        return `<div class="sched-item${cls}"><div class="sched-dot"></div><div class="sched-info"><div class="sched-time">${esc(time)}</div><div class="sched-name">${esc(task.name)}</div></div></div>${line}`;
-      }).join('');
-    }
-  }
-
-  $('#health-updated').textContent = fmtAge(state.healthUpdatedAt);
-}
-
-// ─── Render: Timeline ───
-function fmtTime(ts) {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return '--';
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-function timelineDotType(eventType) {
-  if (eventType === 'session_start' || eventType === 'session_end') return 'session';
-  if (eventType === 'turn_complete') return 'turn';
-  if (eventType === 'user_prompt_submit') return 'prompt';
-  if (eventType === 'assistant_message') return 'assistant';
-  if (eventType === 'stop') return 'turn';
-  if (eventType === 'permission_request') return 'permission';
-  if (eventType === 'post_compact') return 'compact';
-  if (eventType?.startsWith('subagent_')) return 'subagent';
-  if (eventType === 'tool_call' || eventType === 'tool_result' || eventType === 'post_tool_use') return 'tool';
-  return '';
-}
-
-function fmtDuration(ms) {
-  if (ms == null || !Number.isFinite(Number(ms))) return '';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function timelineKind(event) {
-  const type = event?.event_type || '';
-  if (type === 'turn_complete') return t('timeline.kind.turn');
-  if (type === 'session_start' || type === 'session_end') return t('timeline.kind.session');
-  if (type === 'assistant_message') return t('timeline.kind.reply');
-  if (type === 'user_prompt_submit') return t('timeline.kind.prompt');
-  if (type === 'post_compact') return t('timeline.kind.compact');
-  if (type === 'permission_request') return t('timeline.kind.permission');
-  if (type === 'stop') return t('timeline.kind.turn');
-  if (type === 'tool_call' || type === 'post_tool_use') return t('timeline.kind.tool');
-  if (type === 'tool_result') return t('timeline.kind.done');
-  if (type === 'subagent_start') return t('timeline.kind.subagent');
-  if (type === 'subagent_update') return t('timeline.kind.subagent');
-  if (type === 'subagent_stop') return t('timeline.kind.subagent');
-  return type ? type.replace(/_/g, ' ') : '';
-}
-
-function timelineItemClass(event) {
-  const type = event?.event_type || '';
-  const classes = ['timeline-item'];
-  const dot = timelineDotType(type);
-  if (dot) classes.push(`timeline-item-${dot}`);
-  if (type === 'turn_complete' || type === 'stop' || type === 'session_start' || type === 'session_end') {
-    classes.push('timeline-boundary');
-  }
-  return classes.join(' ');
-}
-
-function renderTimeline() {
-  const events = state.timeline || [];
-  const gaps = state.timelineGaps || [];
-  const container = $('#timeline-list');
-  if (!events.length && !gaps.length) {
-    container.innerHTML = `<p class="empty-state">${t('timeline.empty')}</p>`;
-    return;
-  }
-  container.replaceChildren(...events.slice(0, 50).map((e) => {
-    const el = document.createElement('div');
-    el.className = timelineItemClass(e);
-    const durStr = fmtDuration(e.duration_ms);
-    const kind = timelineKind(e);
-    el.innerHTML =
-      `<span class="timeline-time">${fmtTime(e.timestamp)}</span>` +
-      `<span class="timeline-dot" data-type="${timelineDotType(e.event_type)}"></span>` +
-      `<span class="timeline-kind">${esc(kind)}</span>` +
-      `<span class="timeline-summary">${esc(e.summary || e.event_type)}</span>` +
-      `<span class="timeline-duration">${esc(durStr)}</span>`;
-    return el;
-  }));
-  for (const gap of gaps) {
-    const notice = document.createElement('p');
-    notice.className = 'empty-state';
-    notice.textContent = t('timeline.source_gap', { source: gap.name || gap.stream || 'Core', reason: gap.extra?.reason || gap.reason || 'unknown' });
-    container.prepend(notice);
-  }
-  $('#timeline-updated').textContent = fmtAge(state.timelineUpdatedAt);
-}
-
-
-// ─── Render: Communication (inside Runtime) ───
-const COMM_COLORS = ['#0d9488', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
-
-function ageClass(ts) {
-  const a = ageSec(ts);
-  if (a === null) return 'age-normal';
-  if (a < 60) return 'age-fresh';
-  if (a < 3600) return 'age-normal';
-  if (a < 86400) return 'age-stale';
-  return 'age-old';
-}
-
-function renderComm() {
-  const c = state.communication;
-  const container = $('#comm-channels');
-  if (!c || !Object.keys(c.channels || {}).length) {
-    container.innerHTML = `<p class="empty-state">${t('comm.empty')}</p>`;
-    $('#comm-pending').innerHTML = '';
-    return;
-  }
-
-  const lastOb = c.last_outbound || {};
-  const entries = Object.entries(c.channels).sort(([, a], [, b]) => (b.in + b.out) - (a.in + a.out));
-  const maxTotal = Math.max(...entries.map(([, v]) => v.in + v.out), 1);
-
-  container.replaceChildren(...entries.map(([ch, counts], i) => {
-    const el = document.createElement('div');
-    el.className = 'comm-row';
-    const lastTs = lastOb[ch];
-    const ageStr = lastTs ? fmtAge(lastTs) : '--';
-    const total = counts.in + counts.out;
-    const inPct = total ? (counts.in / total) * 100 : 50;
-    const outPct = 100 - inPct;
-    const color = COMM_COLORS[i % COMM_COLORS.length];
-    el.innerHTML =
-      `<span class="comm-dot" style="background:${color}"></span>` +
-      `<span class="comm-channel">${esc(ch)}</span>` +
-      `<span class="comm-bar-wrap">${counts.in}/${counts.out} <span class="comm-bar"><span class="comm-bar-in" style="width:${inPct}%"></span><span class="comm-bar-out" style="width:${outPct}%"></span></span></span>` +
-      `<span class="comm-age ${ageClass(lastTs)}">${ageStr}</span>`;
-    return el;
-  }));
-
-  const pendingEl = $('#comm-pending');
-  const avgStr = c.avg_response_s != null ? `${t('comm.avg_response')}: ${dur(c.avg_response_s)}` : '';
-  const pendingDepth = pendingDepthValue(c.pending_depth);
-  const pendingStr = pendingDepth !== null && Number(pendingDepth) > 0
-    ? `<span class="${c.pending_oldest_age_s > 300 ? 'warn' : ''}">${t('comm.pending')}: ${c.pending_depth}</span>` +
-      (c.pending_oldest_age_s != null ? ` · ${t('comm.oldest')}: ${dur(c.pending_oldest_age_s)}` : '')
-    : pendingDepth === '0' ? `${t('comm.pending')}: 0` : `${t('comm.pending')}: ${t('value.unknown')}`;
-  pendingEl.innerHTML = [avgStr, pendingStr].filter(Boolean).join(' · ');
-
-  $('#comm-updated').textContent = fmtAge(state.commUpdatedAt);
-}
 
 // Native title tooltips (e.g. the context chip) need the element under the
 // cursor to survive ~1s, but the wall re-renders about once per second while
@@ -1135,6 +273,8 @@ function setFleet(payload) {
     return;
   }
   renderFleet();
+  // Settings shows each remote machine's connection state from the same poller records.
+  if (fleetManageModal?._agents) renderFleetManage({ self: { name: fleetManageModal.querySelector('#fleet-self-label').textContent }, agents: fleetManageModal._agents }, true);
 }
 
 let fleetSounds = null;
@@ -1166,12 +306,23 @@ function renderFleet() {
   if (!container) return;
   renderAgentFleet(container, state.fleet, {
     basePath: BASE_PATH,
-    mascotRoot: `${ASSET_ROOT}/img/mascot`,
-    labels: agentFleetLabels()
+    labels: agentFleetLabels(),
+    self: state.fleetSelf
   });
   const updated = $('#fleet-updated');
   if (updated) updated.textContent = fmtAge(state.fleet?.updated_at);
   fleetSounds?.refreshLabels();
+}
+
+// This machine's card shows the multi-session view: groups by state, the running pool and both weekly quotas.
+async function refreshFleetSelf() {
+  try {
+    const snapshot = await fetchJson('/api/workbench/groups');
+    const counts = snapshot?.counts ?? {};
+    state.fleetSelf = { mode: snapshot?.mode === 'multi' ? 'multi' : 'single', counts, groups: snapshot?.rows?.length ?? null,
+      pool: snapshot?.instance?.pool ?? null,
+      accounts: Object.fromEntries(['claude', 'codex'].map(runtime => [runtime, snapshot?.instance?.accounts?.[runtime]?.used_percentage ?? null])) };
+  } catch { state.fleetSelf = null; }
 }
 
 function renderConnection(mode) {
@@ -1190,15 +341,9 @@ function renderAll() {
     settingsPage.detail(document.documentElement.dataset.detail);
     refreshSettingsVersion();
   }
-  _lastRuntimeApplied = null;
-  applyRuntimeVisibility();
-  updateChartLabels();
   renderInfoBar();
-  renderState();
-  renderMetrics();
-  renderHealth();
-  renderTimeline();
-  renderComm();
+  renderOriginAvailability();
+  renderObserverPage();
   renderFleet();
   renderMemory();
 }
@@ -1415,12 +560,6 @@ function preferredMemoryPath(root) {
 }
 
 // Feather chevrons-down-up / chevrons-up-down for the fold-all toggle.
-const API_KEY_ROTATE_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.74-5.95L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.74 5.95L3 16"/><path d="M3 21v-5h5"/></svg>';
-const API_KEY_REVOKE_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>';
-const API_KEY_DELETE_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
 
 let markdownRenderer = null;
 
@@ -1858,71 +997,9 @@ async function refreshState() {
   if (data.new_session_threshold) {
     state.newSessionThreshold = data.new_session_threshold;
   }
-  applyRuntimeVisibility();
   renderInfoBar();
-  renderState();
-  renderHealth();
-}
-
-async function refreshMetrics() {
-  const target = captureMetricTarget(state);
-  const stillCurrent = () => isMetricTargetCurrent(state, target);
-  const results = await Promise.allSettled(METRICS.map(async (n) => [n, await fetchJson(`/api/metrics/${n}`)]));
-  if (!stillCurrent()) return;
-  let changed = false;
-  for (const r of results) {
-    if (r.status === 'fulfilled') { state.metrics.set(r.value[0], r.value[1]); changed = true; }
-  }
-  try {
-    const aggKeys = [
-      ['cost', 'session'], ['cost', 'today'], ['cost', '7d'],
-      ['tokens', 'session'], ['tokens', 'today'], ['tokens', '7d']
-    ];
-    const aggResults = await Promise.allSettled(aggKeys.map(([m, p]) => fetchJson(`/api/metrics/aggregate?metric=${m}&period=${p}`)));
-    if (!stillCurrent()) return;
-    state.aggregated = {};
-    aggKeys.forEach(([m, p], i) => {
-      const r = aggResults[i];
-      state.aggregated[`${m}_${p}`] = r.status === 'fulfilled' ? (r.value?.value ?? null) : null;
-    });
-    changed = true;
-  } catch { /* aggregation endpoints not available yet */ }
-  if (changed) {
-    state.metricsUpdatedAt = new Date().toISOString();
-    renderMetrics();
-  }
-}
-
-async function refreshHealth() {
-  const [h, s] = await Promise.allSettled([fetchJson('/api/health'), fetchJson('/api/system')]);
-  if (h.status === 'fulfilled') state.health = h.value;
-  if (s.status === 'fulfilled') state.system = s.value;
-  state.healthUpdatedAt = new Date().toISOString();
-  renderHealth();
-}
-
-async function refreshTimeline() {
-  const since = new Date(Date.now() - 30 * 60_000).toISOString();
-  const data = await fetchJson(`/api/timeline?since=${since}&limit=200&order=desc`);
-  if (!data || typeof data !== 'object') return;
-  state.timelineGaps = data.gaps || [];
-  state.timeline = (data.events || []).filter((e) => (
-    e.event_type !== 'pre_tool_use' &&
-    e.event_type !== 'tool_result'
-  ));
-  state.timelineUpdatedAt = new Date().toISOString();
-  renderTimeline();
-}
-
-async function refreshSummary() {
-  state.summary = await fetchJson('/api/summary');
-  state.summaryUpdatedAt = new Date().toISOString();
-}
-
-async function refreshComm() {
-  state.communication = await fetchJson('/api/communication');
-  state.commUpdatedAt = new Date().toISOString();
-  renderComm();
+  renderOriginAvailability();
+  renderObserverPage();
 }
 
 function isSseOpen() {
@@ -1931,7 +1008,7 @@ function isSseOpen() {
 
 async function refreshFleet() {
   try {
-    const fleet = await fetchJson('/api/fleet');
+    const [fleet] = await Promise.all([fetchJson('/api/fleet'), state.fleetViewActive ? refreshFleetSelf() : null]);
     setFleet(fleet);
     renderConnection(isSseOpen() ? 'live' : 'polling');
     return fleet;
@@ -1946,6 +1023,43 @@ function setObserverNotice(message, status = 'idle') {
   if (!notice) return;
   notice.textContent = message;
   notice.dataset.state = status;
+}
+
+// Observer page frame: empty state when the component is missing or disabled; otherwise the title row
+// (Origin is the only group Core's observer attaches to), the scope note and the no-session notice.
+function observerPageAvailable(status = state.observer.status) {
+  return status?.state === 'installed' && status.desired?.enabled === true && !observerRecoveryReason(status) && !remoteIsReadOnly();
+}
+function renderObserverPage() {
+  const status = state.observer.status, available = observerPageAvailable(status), focus = state.observer.focus;
+  const empty = $('#observer-empty'), main = $('#observer-main');
+  if (!empty || !main) return;
+  empty.hidden = available; main.hidden = !available;
+  $('#observer-empty-title').textContent = t(observerRecoveryReason(status) ? 'wb.observer.recovery' : status?.state === 'installed' ? 'wb.observer.disabled' : 'wb.observer.notInstalled');
+  $('#observer-empty-back').hidden = !focus;
+  $('#observer-back').hidden = !focus;
+  const shown = state.dashboardState;
+  const groupName = t('wb.term.origin');
+  $('#observer-title').textContent = t(focus ? 'wb.observer.focusTitle' : 'wb.observer.pageTitle', { name: groupName });
+  const target = $('#observer-target');
+  target.replaceChildren();
+  const run = shown?.runId;
+  if (run) { const id = document.createElement('span'); id.className = 'wb-mono'; id.textContent = run; target.append(t('wb.observer.run') + ' ', id, ' · '); }
+  const key = document.createElement('span'); key.className = 'wb-mono'; key.textContent = shown?.sessionGroup ?? 'origin'; target.append(key);
+  const idle = available && originSessionUnavailable(shown) && !state.observer.historyMode;
+  $('#observer-notice-history').hidden = !idle;
+  if (idle && !state.observer.lease) setObserverNotice(t('wb.observer.noSession'), 'idle');
+}
+function leaveObserverFocus() {
+  const key = state.observer.focus;
+  state.observer.focus = null;
+  if (key) openWorkbenchGroup(key).catch(() => {});
+}
+/** From a group's detail: observe only that group, with a way back to its detail. */
+function openObserverFor(key, view = 'live') {
+  state.observer.focus = key;
+  document.querySelector(`[data-observer-view="${view === 'history' ? 'history' : 'live'}"]`)?.click();
+  document.querySelector('.tab[data-tab="observer"]')?.click();
 }
 
 function observerTargetKey() {
@@ -2226,8 +1340,7 @@ async function openObserver() {
         recoverObserver(error).catch(() => {});
       });
     }, 10_000);
-    const target = $('#observer-target');
-    if (target) target.textContent = t('observer.target', { name: viewedAgentName() || t('value.unknown') });
+    renderObserverPage();
   } catch (error) {
     if (!observerSessionCurrent(generation, targetKey)) return;
     await recoverObserver(error);
@@ -2380,8 +1493,7 @@ function syncFleetSubscription() {
 
 async function refreshAll() {
   const stateResult = await Promise.allSettled([refreshState()]);
-  const fetches = [refreshHealth(), refreshComm(), refreshMetrics(), refreshTimeline(), refreshSummary()];
-  if (state.fleetViewActive) fetches.push(refreshFleet());
+  const fetches = state.fleetViewActive ? [refreshFleet()] : [];
   const restResults = await Promise.allSettled(fetches);
   const all = [...stateResult, ...restResults];
   const ok = all.some((r) => r.status === 'fulfilled');
@@ -2391,39 +1503,20 @@ async function refreshAll() {
 
 // ─── SSE ───
 function applySse(name, data) {
-  if (name === 'history_changed') { refreshTimeline().catch(() => {}); return; }
   if (!data || typeof data !== 'object') return;
   // A remote agent's stream describes its own fleet; never let it clobber ours.
   if (name === 'fleet' && state.remoteAgent) return;
   if (name === 'state_change') {
     const previousState = state.dashboardState;
     const nextRuntimeInfo = mergeRuntimeInfo(previousState, data);
-    // The SSE state payload carries only raw state — the agent identity color
-    // (hue) is added by /api/state, not by the broadcast. Preserve it across SSE
-    // updates so the single-agent mascot stays tinted to match its Agent Fleet
-    // tile instead of falling back to the untinted base art on every update.
+    // The SSE state payload carries only raw state; /api/state adds the agent identity. Keep it across updates.
     const prevAgent = state.dashboardState?.agent;
     state.dashboardState = data;
     if (nextRuntimeInfo) state.dashboardState.runtime_info = nextRuntimeInfo;
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     if (data.new_session_threshold) state.newSessionThreshold = data.new_session_threshold;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
-    applyRuntimeVisibility();
-    renderInfoBar(); renderState(); renderHealth(); updateRestartDot();
-    refreshTimeline();
-  } else if (name === 'metric_update') {
-    const mn = data.metric_name || data.name;
-    if (mn) {
-      const previous = state.metrics.get(mn);
-      const next = data.dimensions ? data : { ...data, dimensions: previous?.dimensions ?? null };
-      state.metrics.set(mn, next);
-      state.metricsUpdatedAt = new Date().toISOString();
-      renderMetrics();
-    }
-  } else if (name === 'system_update') {
-    state.system = data; state.healthUpdatedAt = new Date().toISOString(); renderHealth();
-  } else if (name === 'health_update') {
-    state.health = data; state.healthUpdatedAt = new Date().toISOString(); renderHealth();
+    renderInfoBar(); renderOriginAvailability(); renderObserverPage();
   } else if (name === 'fleet') {
     setFleet(data);
     clearFleetFallback();
@@ -2447,7 +1540,6 @@ function connectSse() {
     state.sseRetries = 0;
     renderConnection('live');
     refreshState().catch(() => {});
-    refreshTimeline().catch(() => {});
   };
 
   source.onerror = () => {
@@ -2516,8 +1608,10 @@ function initTabs() {
     refreshUsage();
     refreshChat();
     if (name === 'memory') loadMemoryTree().catch(() => {});
+    if (name !== 'observer') state.observer.focus = null;
     if (name === 'observer') {
-      openObserver().catch(() => {});
+      renderObserverPage();
+      if (observerPageAvailable()) openObserver().catch(() => {});
       if (state.observer.historyMode) state.observer.history?.setActive(true);
     }
     if (push) {
@@ -2575,16 +1669,21 @@ function initObserverControls() {
         state.observer.historyMode = historyMode;
         historyRoot.hidden = !historyMode;
         $('#observer-frame').parentElement.hidden = historyMode;
-        $('#observer-notice').hidden = historyMode;
+        $('#observer-notice').parentElement.hidden = historyMode;
         document.querySelectorAll('[data-observer-view]').forEach(control => {
           control.setAttribute('aria-pressed', String(control === button));
         });
         state.observer.history.setActive(historyMode);
         renderObserverSizeForm();
+        renderObserverPage();
       });
     });
   }
   $('#observer-size-form')?.addEventListener('submit', (event) => { applyObserverSize(event).catch(() => {}); });
+  $('#observer-back')?.addEventListener('click', leaveObserverFocus);
+  $('#observer-empty-back')?.addEventListener('click', leaveObserverFocus);
+  $('#observer-empty-settings')?.addEventListener('click', () => openSettingsModal('observer'));
+  $('#observer-notice-history')?.addEventListener('click', () => document.querySelector('[data-observer-view="history"]')?.click());
 
 }
 
@@ -2700,27 +1799,8 @@ function resetAgentData() {
     observerStatus.textContent = '';
   }
   state.dashboardState = null;
-  state.metrics = new Map();
-  state.aggregated = {};
-  state.health = null;
-  state.system = null;
-  state.summary = null;
-  state.communication = null;
-  state.timeline = null;
   state.sourceUpdatedAt = null;
-  state.metricsUpdatedAt = null;
-  state.healthUpdatedAt = null;
-  state.summaryUpdatedAt = null;
-  state.commUpdatedAt = null;
-  state.timelineUpdatedAt = null;
   resetMemoryState();
-  prevSubagentIds.clear();
-  const feed = $('#tool-feed');
-  if (feed) feed.innerHTML = '';
-  const subs = $('#subagent-list');
-  if (subs) subs.innerHTML = '';
-  const msg = $('#assistant-message');
-  if (msg) { msg.hidden = true; msg.textContent = ''; }
   // Local-only modals must not survive a switch (e.g. browser-back into a
   // remote view while the Actions modal is open).
   closeActionsModal();
@@ -2759,25 +1839,25 @@ function exitRemoteAgent({ push = true } = {}) {
 }
 
 function initFleetMode() {
-  // Intercept self-tile clicks: switch to the agent dashboard instead of a
-  // full navigation that would just reload the wall. External tiles navigate
-  // normally to /fleet/<name>/.
+  // This machine opens its own workbench in place; other machines open through the
+  // in-page fleet proxy. Problem cards link to settings or re-read the fleet.
   const root = $('#agent-fleet-root');
   if (root) {
     root.addEventListener('click', (e) => {
-      const tile = e.target.closest('.agent-tile');
-      if (!tile) return;
-      if (tile.dataset.self === 'true') {
-        e.preventDefault();
-        showAgentDetail();
+      const action = e.target.closest('[data-fleet-action]');
+      if (action?.dataset.fleetAction) {
+        if (action.dataset.fleetAction === 'settings') openSettingsModal('fleet');
+        else refreshFleet().catch(() => {});
         return;
       }
-      if (tile.dataset.agent) {
-        e.preventDefault();
-        enterRemoteAgent(tile.dataset.agent);
-      }
+      const open = e.target.closest('.agent-open');
+      if (!open) return;
+      e.preventDefault();
+      if (open.dataset.self === 'true') showAgentDetail();
+      else if (open.dataset.agent) enterRemoteAgent(open.dataset.agent);
     });
   }
+  $('#fleet-manage-open')?.addEventListener('click', () => openSettingsModal('fleet'));
   const backBtn = $('#back-to-fleet');
   if (backBtn) {
     backBtn.addEventListener('click', () => {
@@ -2794,14 +1874,12 @@ function initFleetMode() {
   }
 }
 
-function initLocaleToggle() {
-  $('#locale-toggle').addEventListener('click', async () => {
-    await initI18n(getLocale() === 'zh' ? 'en' : 'zh');
-    renderAll();
-    refreshCharts();
-    refreshSettingsPage();
-    usagePage?.setViewDetail();
-  });
+async function changeLocale(locale) {
+  if (locale === getLocale()) return;
+  await initI18n(locale);
+  renderAll();
+  refreshSettingsPage();
+  usagePage?.setViewDetail();
 }
 
 function initLogout() {
@@ -2813,426 +1891,83 @@ function initLogout() {
   });
 }
 
-function initTips() {
-  const tipPairs = [
-    ['#confidence-tip', '#confidence-popover'],
-    ['#cost-tip', '#cost-popover'],
-    ['#cost-trend-tip', '#cost-trend-popover'],
-    ['#projects-tip', '#projects-popover'],
-    ['#context-tip', '#context-popover'],
-    ['#latency-tip', '#latency-popover']
-  ];
-  const allPops = [];
-
-  for (const [btnSel, popSel] of tipPairs) {
-    const btn = $(btnSel);
-    const srcPop = $(popSel);
-    if (!btn || !srcPop) continue;
-
-    const pop = srcPop.cloneNode(true);
-    pop.removeAttribute('id');
-    pop.hidden = true;
-    document.body.appendChild(pop);
-    srcPop.remove();
-    allPops.push(pop);
-
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const wasHidden = pop.hidden;
-      allPops.forEach((p) => { p.hidden = true; });
-      if (wasHidden) {
-        const rect = btn.getBoundingClientRect();
-        pop.style.top = `${rect.bottom + 6}px`;
-        const left = Math.max(8, rect.left - 120);
-        const maxLeft = window.innerWidth - 280 - 8;
-        pop.style.left = `${Math.min(left, Math.max(8, maxLeft))}px`;
-        pop.hidden = false;
-      }
-    });
-  }
-
-  document.addEventListener('click', () => { allPops.forEach((p) => { p.hidden = true; }); });
-}
-
-// ─── Charts ───
-const CHART_COLORS = {
-  accent: '#0d9488',
-  accentBg: 'rgba(13, 148, 136, 0.35)',
-  purple: '#6366f1',
-  purpleBg: 'rgba(99, 102, 241, 0.35)',
-  green: '#059669',
-  greenBg: 'rgba(5, 150, 105, 0.35)',
-  orange: '#ea580c',
-  orangeBg: 'rgba(234, 88, 12, 0.35)',
-  blue: '#3b82f6',
-  blueBg: 'rgba(59, 130, 246, 0.35)',
-  pink: '#ec4899',
-  pinkBg: 'rgba(236, 72, 153, 0.35)',
-  grid: 'rgba(15, 118, 110, 0.06)',
-  text: '#7a8794'
-};
-
-function barChartOpts(yCallback, stacked) {
-  return {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: { mode: 'index', intersect: false },
-    plugins: {
-      legend: { display: true, position: 'top', labels: { boxWidth: 10, font: { size: 11 }, padding: 8 } },
-      tooltip: { backgroundColor: '#101827', titleFont: { size: 11 }, bodyFont: { size: 11 }, padding: 8, cornerRadius: 6 }
-    },
-    scales: {
-      x: {
-        type: 'time',
-        time: { tooltipFormat: 'MMM d HH:mm', displayFormats: { hour: 'HH:mm', day: 'MMM d' } },
-        grid: { display: false },
-        ticks: { font: { size: 10 }, color: CHART_COLORS.text, maxTicksLimit: 8 },
-        stacked: !!stacked
-      },
-      y: {
-        min: 0,
-        grid: { color: CHART_COLORS.grid },
-        ticks: { font: { size: 10 }, color: CHART_COLORS.text, callback: yCallback || undefined },
-        border: { display: false },
-        stacked: !!stacked
-      }
-    }
-  };
-}
-
-function horizontalBarOpts() {
-  return {
-    responsive: true,
-    maintainAspectRatio: false,
-    indexAxis: 'y',
-    interaction: { mode: 'index', intersect: false },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: '#101827', titleFont: { size: 11 }, bodyFont: { size: 11 }, padding: 8, cornerRadius: 6,
-        callbacks: { label: (ctx) => `${ctx.dataset.label}: ${tok(ctx.raw)}` }
-      }
-    },
-    scales: {
-      x: {
-        min: 0,
-        grid: { color: CHART_COLORS.grid },
-        ticks: { font: { size: 10 }, color: CHART_COLORS.text, callback: (v) => tok(v) },
-        border: { display: false }
-      },
-      y: {
-        grid: { display: false },
-        ticks: { font: { size: 11 }, color: CHART_COLORS.text }
-      }
-    }
-  };
-}
-
-function initCharts() {
-  if (!window.Chart) return;
-  try {
-    // 1. Token Usage — stacked bar (input vs output)
-    const tokensCtx = document.getElementById('chart-tokens');
-    if (tokensCtx) {
-      state.charts.tokens = new Chart(tokensCtx, {
-        type: 'bar',
-        data: {
-          datasets: [
-            { label: t('trends.input'), data: [], backgroundColor: CHART_COLORS.accent, stack: 'tokens' },
-            { label: t('trends.output'), data: [], backgroundColor: CHART_COLORS.purple, stack: 'tokens' }
-          ]
-        },
-        options: barChartOpts((v) => tok(v), true)
-      });
-    }
-
-    // 2. Cost — bar chart
-    const costCtx = document.getElementById('chart-cost');
-    if (costCtx) {
-      state.charts.cost = new Chart(costCtx, {
-        type: 'bar',
-        data: {
-          datasets: [{ label: t('trends.cost'), data: [], backgroundColor: CHART_COLORS.orange }]
-        },
-        options: barChartOpts((v) => `$${v}`)
-      });
-    }
-
-    // 3. Message Throughput — stacked bar (in vs out)
-    const msgCtx = document.getElementById('chart-messages');
-    if (msgCtx) {
-      state.charts.messages = new Chart(msgCtx, {
-        type: 'bar',
-        data: {
-          datasets: [
-            { label: t('trends.msg_in'), data: [], backgroundColor: CHART_COLORS.blue, stack: 'msgs' },
-            { label: t('trends.msg_out'), data: [], backgroundColor: CHART_COLORS.pink, stack: 'msgs' }
-          ]
-        },
-        options: barChartOpts(undefined, true)
-      });
-    }
-
-    // 4. Project Distribution — horizontal bar
-    const projCtx = document.getElementById('chart-projects');
-    if (projCtx) {
-      state.charts.projects = new Chart(projCtx, {
-        type: 'bar',
-        data: {
-          labels: [],
-          datasets: [{ label: t('trends.output_tokens'), data: [], backgroundColor: CHART_COLORS.green }]
-        },
-        options: horizontalBarOpts()
-      });
-    }
-  } catch { /* chart init failed — overview still works */ }
-}
-
-function updateChartLabels() {
-  if (!window.Chart) return;
-  if (state.charts.tokens) {
-    state.charts.tokens.data.datasets[0].label = t('trends.input');
-    state.charts.tokens.data.datasets[1].label = t('trends.output');
-    state.charts.tokens.update('none');
-  }
-  if (state.charts.cost) {
-    state.charts.cost.data.datasets[0].label = t('trends.cost');
-    state.charts.cost.update('none');
-  }
-  if (state.charts.messages) {
-    state.charts.messages.data.datasets[0].label = t('trends.msg_in');
-    state.charts.messages.data.datasets[1].label = t('trends.msg_out');
-    state.charts.messages.update('none');
-  }
-  if (state.charts.projects) {
-    state.charts.projects.data.datasets[0].label = t('trends.output_tokens');
-    state.charts.projects.update('none');
-  }
-}
-
-function getTrendRange() {
-  const active = document.querySelector('.range-btn.active[data-range]');
-  return active ? active.dataset.range : '24h';
-}
-
-function rangeToSince() {
-  const range = getTrendRange();
-  const now = Date.now();
-  const ms = { '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
-  return new Date(now - (ms[range] || ms['24h'])).toISOString();
-}
-
-function autoBucket(sinceMs, untilMs) {
-  const diffDays = (untilMs - sinceMs) / 86400000;
-  if (diffDays <= 2) return 3600;
-  if (diffDays <= 60) return 86400;
-  return 604800;
-}
-
-async function refreshCharts() {
-  if (!window.Chart) return;
-
-  let since, until, bucket;
-  const customStart = $('#trend-start')?.value;
-  const customEnd = $('#trend-end')?.value;
-  const isCustom = customStart && customEnd;
-
-  if (isCustom) {
-    since = new Date(customStart + 'T00:00:00').toISOString();
-    until = new Date(customEnd + 'T23:59:59').toISOString();
-    bucket = autoBucket(new Date(since).getTime(), new Date(until).getTime());
-  } else {
-    since = rangeToSince();
-    until = new Date().toISOString();
-    const range = getTrendRange();
-    bucket = { '24h': 3600, '7d': 86400, '30d': 86400 }[range] || 3600;
-  }
-
-  const qp = `since=${since}&until=${until}&bucket=${bucket}`;
-
-  const [tokensData, costData, msgData, projData] = await Promise.allSettled([
-    fetchJson(`/api/metrics/series?metric=tokens&${qp}`),
-    fetchJson(`/api/metrics/series?metric=cost&${qp}`),
-    fetchJson(`/api/metrics/series?metric=messages&${qp}`),
-    fetchJson(`/api/metrics/series?metric=projects&since=${since}&until=${until}`)
-  ]);
-
-  // 1. Token Usage — stacked bar
-  if (state.charts.tokens && tokensData.status === 'fulfilled') {
-    const pts = tokensData.value.points || [];
-    state.charts.tokens.data.datasets[0].data = pts.map((p) => ({ x: p.bucket_start * 1000, y: p.input_sum }));
-    state.charts.tokens.data.datasets[1].data = pts.map((p) => ({ x: p.bucket_start * 1000, y: p.output_sum }));
-    state.charts.tokens.update('none');
-    const totalInput = pts.reduce((s, p) => s + (p.input_sum || 0), 0);
-    const totalOutput = pts.reduce((s, p) => s + (p.output_sum || 0), 0);
-    const tokensTotalEl = $('#chart-tokens-total');
-    if (tokensTotalEl) tokensTotalEl.textContent = t('metric.total_tokens', { total: tok(totalInput + totalOutput), input: tok(totalInput), output: tok(totalOutput) });
-  }
-
-  // 2. Cost — bar
-  if (state.charts.cost && costData.status === 'fulfilled') {
-    const pts = costData.value.points || [];
-    state.charts.cost.data.datasets[0].data = pts.map((p) => ({ x: p.bucket_start * 1000, y: p.cost_sum }));
-    state.charts.cost.update('none');
-    const totalCost = pts.reduce((s, p) => s + (p.cost_sum || 0), 0);
-    const costTotalEl = $('#chart-cost-total');
-    if (costTotalEl) costTotalEl.textContent = t('metric.total_cost', { total: usd(totalCost) });
-  }
-
-  // 3. Message Throughput — stacked bar
-  if (state.charts.messages && msgData.status === 'fulfilled') {
-    const pts = msgData.value.points || [];
-    state.charts.messages.data.datasets[0].data = pts.map((p) => ({ x: p.bucket_start * 1000, y: p.msg_in }));
-    state.charts.messages.data.datasets[1].data = pts.map((p) => ({ x: p.bucket_start * 1000, y: p.msg_out }));
-    state.charts.messages.update('none');
-  }
-
-  // 4. Project Distribution — horizontal bar
-  if (state.charts.projects && projData.status === 'fulfilled') {
-    const items = projData.value.items || [];
-    items.sort((a, b) => (b.outputTokens || 0) - (a.outputTokens || 0));
-    state.charts.projects.data.labels = items.map((i) => i.name);
-    state.charts.projects.data.datasets[0].data = items.map((i) => i.outputTokens || 0);
-    state.charts.projects.update('none');
-  }
-}
-
-function initTrendControls() {
-  // Range buttons
-  document.querySelectorAll('.range-btn[data-range]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.range-btn[data-range]').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      // Clear custom date inputs when a preset is selected
-      const startEl = $('#trend-start');
-      const endEl = $('#trend-end');
-      if (startEl) startEl.value = '';
-      if (endEl) endEl.value = '';
-      refreshCharts();
-    });
-  });
-
-  // Custom date range
-  const customBtn = $('#trend-custom');
-  if (customBtn) {
-    customBtn.addEventListener('click', () => {
-      const startEl = $('#trend-start');
-      const endEl = $('#trend-end');
-      if (startEl?.value && endEl?.value) {
-        // Deactivate preset buttons
-        document.querySelectorAll('.range-btn[data-range]').forEach((b) => b.classList.remove('active'));
-        refreshCharts();
-      }
-    });
-  }
-}
-
 // ─── Settings Modal ───
 let fleetManageModal = null;
 
 function createFleetManageModal() {
   if (fleetManageModal) return fleetManageModal;
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
   overlay.id = 'fleet-manage-modal';
   overlay.hidden = true;
+  const head = (iconName, key, extra = '') => `<div class="wb-set-card-h"><h4><i class="wb-ico wb-ico-${iconName} wb-ico-xs" aria-hidden="true"></i><span data-i18n="${key}">${esc(t(key))}</span></h4>${extra}</div>`;
   overlay.innerHTML = `
-<div class="modal manage-modal">
-  <div class="modal-head">
-    <h2>${esc(t('fleet_manage.title'))}</h2>
-    <button class="modal-close" type="button" aria-label="Close">&times;</button>
-  </div>
-  <div class="modal-tabs" role="tablist">
-    <button class="modal-tab active" type="button" data-tab="fleet">${esc(t('fleet_manage.tab_fleet'))}</button>
-    <button class="modal-tab" type="button" data-tab="keys">${esc(t('fleet_manage.tab_keys'))}</button>
-  </div>
-  <div class="modal-body">
     <div class="manage-panel" data-panel="fleet">
-      <section class="manage-section">
-        <span class="action-group-label" data-i18n="fleet_manage.local_agent">${esc(t('fleet_manage.local_agent'))}</span>
-        <div class="fleet-self-row">
-          <input class="action-input" id="fleet-self-name" type="text" autocomplete="off" />
-          <button class="action-btn action-btn-sm" id="fleet-rename-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
+      <div class="wb-set-card">
+        ${head('server', 'wb.settings.fleet.localName')}
+        <div class="wb-set-inline" id="fleet-self-view"><b class="wb-self-name" id="fleet-self-label"></b>
+          <button class="wb-btn" id="fleet-rename-open" type="button"><i class="wb-ico wb-ico-edit wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.rename">${esc(t('wb.settings.fleet.rename'))}</span></button></div>
+        <div class="wb-set-inline fleet-self-row" id="fleet-self-edit" hidden>
+          <input class="wb-input" id="fleet-self-name" type="text" autocomplete="off" maxlength="32" />
+          <button class="wb-btn wb-btn-primary" id="fleet-rename-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
+          <button class="wb-btn" id="fleet-rename-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button></div>
+        <p class="wb-note"><span data-i18n="wb.settings.fleetNameNote">${esc(t('wb.settings.fleetNameNote'))}</span> · <span data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</span></p>
+      </div>
+      <div class="wb-set-card">
+        ${head('fleet', 'wb.settings.fleet.remotes', `<span class="wb-set-card-sub" id="fleet-agent-count"></span><span class="wb-set-card-acts"><button class="wb-btn" id="fleet-add-open" type="button"><i class="wb-ico wb-ico-plus wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.add">${esc(t('wb.settings.fleet.add'))}</span></button></span>`)}
+        <div id="fleet-agent-list"></div>
+        <div class="wb-addform" id="fleet-add-form" hidden>
+          <input class="wb-input" id="fleet-add-name" type="text" autocomplete="off" placeholder="${esc(t('fleet_manage.name'))}" aria-label="${esc(t('fleet_manage.name'))}" />
+          <input class="wb-input" id="fleet-add-url" type="url" autocomplete="off" placeholder="${esc(t('wb.settings.fleet.urlPlaceholder'))}" aria-label="${esc(t('fleet_manage.base_url'))}" />
+          <input class="wb-input" id="fleet-add-key" type="password" autocomplete="off" placeholder="${esc(t('wb.settings.fleet.keyPlaceholder'))}" aria-label="${esc(t('fleet_manage.read_key'))}" />
+          <div class="wb-set-inline wb-nowrap">
+            <button class="wb-btn" id="fleet-test" type="button" data-i18n="fleet_manage.test">${esc(t('fleet_manage.test'))}</button>
+            <button class="wb-btn wb-btn-primary" id="fleet-add-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
+            <button class="wb-btn" id="fleet-add-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button></div>
+          <small class="wb-addform-hint" data-i18n="wb.settings.fleet.addHint">${esc(t('wb.settings.fleet.addHint'))}</small>
         </div>
-        <small class="fleet-help" data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</small>
-      </section>
-      <section class="manage-section">
-        <span class="action-group-label" data-i18n="fleet_manage.remote_agents">${esc(t('fleet_manage.remote_agents'))}</span>
-        <div class="fleet-agent-list" id="fleet-agent-list"></div>
-      </section>
-      <section class="manage-section">
-        <span class="action-group-label" data-i18n="fleet_manage.add_agent">${esc(t('fleet_manage.add_agent'))}</span>
-        <small class="fleet-help" data-i18n="fleet_manage.add_key_hint">${esc(t('fleet_manage.add_key_hint'))}</small>
-        <div class="action-field">
-          <label class="action-field-label" for="fleet-add-name" data-i18n="fleet_manage.name">${esc(t('fleet_manage.name'))}</label>
-          <input class="action-input" id="fleet-add-name" type="text" autocomplete="off" placeholder="zylos01" />
-        </div>
-        <div class="action-field">
-          <label class="action-field-label" for="fleet-add-url" data-i18n="fleet_manage.base_url">${esc(t('fleet_manage.base_url'))}</label>
-          <input class="action-input" id="fleet-add-url" type="url" autocomplete="off" placeholder="https://agent.example/dashboard" />
-        </div>
-        <div class="action-field">
-          <label class="action-field-label" for="fleet-add-key" data-i18n="fleet_manage.read_key">${esc(t('fleet_manage.read_key'))}</label>
-          <input class="action-input" id="fleet-add-key" type="password" autocomplete="off" />
-        </div>
-        <div class="action-row">
-          <button class="action-btn" id="fleet-test" type="button" data-i18n="fleet_manage.test">${esc(t('fleet_manage.test'))}</button>
-          <button class="action-btn action-btn-primary" id="fleet-add-save" type="button" data-i18n="fleet_manage.save_agent">${esc(t('fleet_manage.save_agent'))}</button>
-        </div>
-      </section>
+      </div>
     </div>
     <div class="manage-panel" data-panel="keys" hidden>
-      <section class="manage-section">
-        <span class="action-group-label" data-i18n="fleet_manage.api_keys">${esc(t('fleet_manage.api_keys'))}</span>
-        <small class="fleet-help" data-i18n="fleet_manage.keys_hint">${esc(t('fleet_manage.keys_hint'))}</small>
-        <div class="action-field">
-          <label class="action-field-label" for="api-base-url" data-i18n="fleet_manage.base_url">${esc(t('fleet_manage.base_url'))}</label>
-          <div class="api-key-copy-row">
-            <input class="action-input api-base-url" id="api-base-url" type="text" readonly value="${esc(dashboardBaseUrl())}" />
-            <button class="action-btn action-btn-sm" id="api-base-url-copy" type="button" data-i18n="fleet_manage.copy_key">${esc(t('fleet_manage.copy_key'))}</button>
-          </div>
-        </div>
-        <small class="fleet-help" data-i18n="fleet_manage.base_url_hint">${esc(t('fleet_manage.base_url_hint'))}</small>
-        <div class="action-row">
-          <button class="action-btn action-btn-sm" id="api-key-purge-revoked" type="button" hidden data-i18n="fleet_manage.purge_revoked">${esc(t('fleet_manage.purge_revoked'))}</button>
-        </div>
-        <div class="fleet-agent-list" id="api-key-list"></div>
-      </section>
-      <section class="manage-section">
-        <span class="action-group-label" data-i18n="fleet_manage.create_key">${esc(t('fleet_manage.create_key'))}</span>
-        <div class="action-field">
-          <label class="action-field-label" for="api-key-name" data-i18n="fleet_manage.name">${esc(t('fleet_manage.name'))}</label>
-          <input class="action-input" id="api-key-name" type="text" autocomplete="off" placeholder="producer-read" />
-        </div>
-        <div class="action-field">
-          <label class="action-field-label" for="api-key-scope" data-i18n="fleet_manage.scope">${esc(t('fleet_manage.scope'))}</label>
-          <select class="action-select" id="api-key-scope">
-            <option value="read" data-i18n="fleet_manage.scope_read">${esc(t('fleet_manage.scope_read'))}</option>
-            <option value="admin" data-i18n="fleet_manage.scope_admin">${esc(t('fleet_manage.scope_admin'))}</option>
-          </select>
-        </div>
-        <small class="fleet-help api-key-admin-warning" id="api-key-admin-warning" hidden data-i18n="fleet_manage.admin_key_warning">${esc(t('fleet_manage.admin_key_warning'))}</small>
-        <div class="api-key-created" id="api-key-created" hidden></div>
-        <div class="action-row">
-          <button class="action-btn action-btn-primary" id="api-key-create" type="button" data-i18n="fleet_manage.create_key_button">${esc(t('fleet_manage.create_key_button'))}</button>
-        </div>
-      </section>
+      <div class="wb-set-card">
+        ${head('server', 'wb.settings.keys.address')}
+        <div class="wb-set-inline api-key-copy-row"><span class="wb-mono wb-addr" id="api-base-url">${esc(dashboardBaseUrl())}</span>
+          <button class="wb-btn" id="api-base-url-copy" type="button"><i class="wb-ico wb-ico-copy wb-ico-xs" aria-hidden="true"></i><span data-i18n="fleet_manage.copy_key">${esc(t('fleet_manage.copy_key'))}</span></button></div>
+        <p class="wb-note" data-i18n="fleet_manage.base_url_hint">${esc(t('fleet_manage.base_url_hint'))}</p>
+      </div>
+      <div class="wb-set-card">
+        ${head('plus', 'fleet_manage.create_key')}
+        <div class="wb-set-inline">
+          <input class="wb-input wb-input-name" id="api-key-name" type="text" autocomplete="off" placeholder="${esc(t('wb.settings.keys.namePlaceholder'))}" aria-label="${esc(t('fleet_manage.name'))}" />
+          <div class="wb-seg2" id="api-key-scope" role="group" aria-label="${esc(t('wb.settings.keys.scope'))}">
+            <button type="button" data-scope="read" aria-pressed="true" data-i18n="fleet_manage.scope_read">${esc(t('fleet_manage.scope_read'))}</button><button type="button" data-scope="admin" aria-pressed="false" data-i18n="fleet_manage.scope_admin">${esc(t('fleet_manage.scope_admin'))}</button></div>
+          <button class="wb-btn wb-btn-primary" id="api-key-create" type="button" data-i18n="wb.settings.keys.create">${esc(t('wb.settings.keys.create'))}</button></div>
+        <p class="wb-note wb-txt-err api-key-admin-warning" id="api-key-admin-warning" hidden><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i> <span data-i18n="fleet_manage.admin_key_warning">${esc(t('fleet_manage.admin_key_warning'))}</span></p>
+        <div class="wb-once api-key-created" id="api-key-created" hidden></div>
+      </div>
+      <div class="wb-set-card">
+        ${head('key', 'wb.settings.keys.existing', `<span class="wb-set-card-sub" id="api-key-count"></span><span class="wb-set-card-acts"><button class="wb-btn" id="api-key-purge-revoked" type="button" hidden></button></span>`)}
+        <div class="wb-tscroll" id="api-key-list"></div>
+      </div>
     </div>
-  </div>
-  <div class="modal-status" id="fleet-manage-status" hidden></div>
-</div>`;
+  <div class="wb-note" id="fleet-manage-status" role="status" hidden></div>`;
   document.body.appendChild(overlay);
   fleetManageModal = overlay;
-  overlay.querySelector('.modal-close').addEventListener('click', closeFleetManageModal);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeFleetManageModal(); });
-  overlay.querySelectorAll('.modal-tab').forEach(tab => {
-    tab.addEventListener('click', () => switchFleetManageTab(tab.dataset.tab));
-  });
-  overlay.querySelector('#fleet-rename-save').addEventListener('click', saveFleetSelfName);
+  // Handlers look nodes up through fleetManageModal: the settings page moves them out of this overlay.
+  const $m = selector => fleetManageModal.querySelector(selector);
+  const selfEdit = editing => { $m('#fleet-self-view').hidden = editing; $m('#fleet-self-edit').hidden = !editing; if (editing) $m('#fleet-self-name').focus(); };
+  overlay.querySelector('#fleet-rename-open').addEventListener('click', () => selfEdit(true));
+  overlay.querySelector('#fleet-rename-cancel').addEventListener('click', () => { $m('#fleet-self-name').value = $m('#fleet-self-label').textContent; selfEdit(false); });
+  overlay.querySelector('#fleet-rename-save').addEventListener('click', async () => { if (await saveFleetSelfName()) selfEdit(false); });
+  const addForm = open => { $m('#fleet-add-form').hidden = !open; $m('#fleet-add-open').hidden = open; if (open) $m('#fleet-add-name').focus(); };
+  overlay.querySelector('#fleet-add-open').addEventListener('click', () => addForm(true));
+  overlay.querySelector('#fleet-add-cancel').addEventListener('click', () => addForm(false));
   overlay.querySelector('#fleet-test').addEventListener('click', testFleetAgent);
-  overlay.querySelector('#fleet-add-save').addEventListener('click', saveFleetAgent);
+  overlay.querySelector('#fleet-add-save').addEventListener('click', async () => { if (await saveFleetAgent()) addForm(false); });
   overlay.querySelector('#api-key-create').addEventListener('click', createApiKey);
-  overlay.querySelector('#api-key-scope').addEventListener('change', updateApiKeyScopeWarning);
+  overlay.querySelectorAll('#api-key-scope button').forEach(button => button.addEventListener('click', () => {
+    fleetManageModal.querySelectorAll('#api-key-scope button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    updateApiKeyScopeWarning();
+  }));
   overlay.querySelector('#api-base-url-copy').addEventListener('click', copyDashboardBaseUrl);
   overlay.querySelector('#api-key-purge-revoked').addEventListener('click', purgeRevokedApiKeys);
   return overlay;
@@ -3248,7 +1983,6 @@ async function copyDashboardBaseUrl() {
     await navigator.clipboard.writeText(dashboardBaseUrl());
     fleetManageStatus(t('fleet_manage.base_url_copied'), 'success');
   } catch {
-    fleetManageModal?.querySelector('#api-base-url')?.select();
     fleetManageStatus(t('fleet_manage.copy_failed'), 'error');
   }
 }
@@ -3261,7 +1995,7 @@ function fleetManageStatus(message, kind = '') {
   clearTimeout(fleetManageStatusTimer);
   fleetManageStatusTimer = null;
   status.textContent = message;
-  status.className = `modal-status ${kind}`.trim();
+  status.className = `wb-note wb-status-${kind || 'plain'}`;
   status.hidden = !message;
   // #242: success feedback auto-dismisses; errors stay until the next action.
   if (message && kind === 'success') {
@@ -3290,10 +2024,14 @@ function fleetFormValues() {
   };
 }
 
+function apiKeyScope() {
+  return fleetManageModal?.querySelector('#api-key-scope [aria-pressed="true"]')?.dataset.scope === 'admin' ? 'admin' : 'read';
+}
+
 function apiKeyFormValues() {
   return {
     name: fleetManageModal.querySelector('#api-key-name').value.trim(),
-    scope: fleetManageModal.querySelector('#api-key-scope').value
+    scope: apiKeyScope()
   };
 }
 
@@ -3304,104 +2042,41 @@ function fleetManageError(code, fallback) {
   return translated === key ? (fallback || code) : translated;
 }
 
-function switchFleetManageTab(tabName) {
-  const target = tabName === 'keys' ? 'keys' : 'fleet';
-  fleetManageModal.querySelectorAll('.modal-tab').forEach(tab => {
-    tab.classList.toggle('active', tab.dataset.tab === target);
-  });
-  fleetManageModal.querySelectorAll('.manage-panel').forEach(panel => {
-    panel.hidden = panel.dataset.panel !== target;
-  });
-  if (target === 'keys') loadApiKeys();
-}
-
 function updateApiKeyScopeWarning() {
   const warning = fleetManageModal?.querySelector('#api-key-admin-warning');
-  const scope = fleetManageModal?.querySelector('#api-key-scope')?.value;
-  if (warning) warning.hidden = scope !== 'admin';
+  if (warning) warning.hidden = apiKeyScope() !== 'admin';
 }
 
 function renderFleetManage(data, draft = null) {
-  const selfInput = fleetManageModal.querySelector('#fleet-self-name');
-  if (!draft) selfInput.value = data?.self?.name || viewedAgentName();
-  const list = fleetManageModal.querySelector('#fleet-agent-list');
+  const selfName = data?.self?.name || viewedAgentName();
+  fleetManageModal.querySelector('#fleet-self-label').textContent = selfName;
+  if (!draft) fleetManageModal.querySelector('#fleet-self-name').value = selfName;
   const agents = data?.agents || [];
-  if (!agents.length) {
-    list.innerHTML = `<p class="empty-state">${esc(t('fleet_manage.empty'))}</p>`;
-    return;
-  }
-  list.replaceChildren(...agents.map((agent) => {
-    const row = document.createElement('div');
-    row.className = 'fleet-agent-row';
-    row.innerHTML = `
-      <div class="fleet-agent-meta">
-        <strong>${esc(agent.name)}</strong>
-        <span>${esc(agent.base_url || '')}</span>
-        <small>${esc(agent.key_masked || '')} · ${esc(agent.access || 'read')}</small>
-      </div>
-      <button class="settings-remove-btn fleet-agent-remove" type="button" title="${esc(t('btn.remove'))}">&times;</button>`;
-    const latency = state.fleet?.agents?.find(item => item.name === agent.name)?.latency?.samples;
-    if (latency) { const chart = renderLatency(row, latency, { t }); chart.dataset.settingsLatency = ''; chart.hidden = document.documentElement.dataset.detail !== 'technical'; }
-    row.querySelector('.fleet-agent-remove').addEventListener('click', () => removeFleetAgent(agent.name));
-    return row;
-  }));
+  fleetManageModal._agents = agents;
+  fleetManageModal.querySelector('#fleet-agent-count').textContent = t('wb.settings.fleet.count', { count: agents.length });
+  renderRemoteAgents(fleetManageModal.querySelector('#fleet-agent-list'), agents, { t, records: state.fleet?.agents ?? [],
+    technical: document.documentElement.dataset.detail === 'technical', latency: (root, samples) => renderLatency(root, samples, { t }), onRemove: removeFleetAgent });
 }
 
 function renderApiKeys(data) {
-  const list = fleetManageModal.querySelector('#api-key-list');
   const keys = data?.keys || [];
-  const hasRevoked = keys.some(key => (key.status || (key.revoked_at ? 'revoked' : 'active')) === 'revoked');
+  const counts = keyCounts(keys);
   const purgeBtn = fleetManageModal.querySelector('#api-key-purge-revoked');
-  if (purgeBtn) purgeBtn.hidden = !hasRevoked;
-  if (!keys.length) {
-    list.innerHTML = `<p class="empty-state">${esc(t('fleet_manage.keys_empty'))}</p>`;
-    return;
-  }
-  list.replaceChildren(...keys.map((key) => {
-    const row = document.createElement('div');
-    row.className = `fleet-agent-row api-key-row ${key.status === 'revoked' ? 'revoked' : ''}`.trim();
-    const status = key.status || (key.revoked_at ? 'revoked' : 'active');
-    const rotateLabel = esc(t('fleet_manage.rotate_key'));
-    const revokeLabel = esc(t('fleet_manage.revoke_key'));
-    const deleteLabel = esc(t('fleet_manage.delete_key'));
-    row.innerHTML = `
-      <div class="fleet-agent-meta">
-        <strong>${esc(key.name)}</strong>
-        <span>${esc(key.scope || 'read')} · ${esc(t(`fleet_manage.key_${status}`))}</span>
-        <small>${esc(t('fleet_manage.key_created', { date: key.created_at || '-' }))} · ${esc(t('fleet_manage.key_last_used', { date: key.last_used_at || t('value.none') }))}</small>
-      </div>
-      <div class="api-key-actions">
-        ${status === 'active' ? `<button class="action-btn api-key-icon-btn api-key-rotate" type="button" title="${rotateLabel}" aria-label="${rotateLabel}">${API_KEY_ROTATE_ICON}</button>` : ''}
-        ${status === 'active' ? `<button class="action-btn api-key-icon-btn api-key-revoke" type="button" title="${revokeLabel}" aria-label="${revokeLabel}">${API_KEY_REVOKE_ICON}</button>` : ''}
-        ${status === 'revoked' ? `<button class="action-btn api-key-icon-btn api-key-delete" type="button" title="${deleteLabel}" aria-label="${deleteLabel}">${API_KEY_DELETE_ICON}</button>` : ''}
-      </div>`;
-    row.querySelector('.api-key-rotate')?.addEventListener('click', () => rotateApiKey(key.name));
-    row.querySelector('.api-key-revoke')?.addEventListener('click', () => revokeApiKey(key.name));
-    row.querySelector('.api-key-delete')?.addEventListener('click', () => hardDeleteApiKey(key.name));
-    return row;
-  }));
+  if (purgeBtn) { purgeBtn.hidden = !counts.revoked; purgeBtn.textContent = t('wb.settings.keys.purge', { count: counts.revoked }); }
+  fleetManageModal.querySelector('#api-key-count').textContent = t('wb.settings.keys.counts', counts);
+  renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys, { t, onAction: (action, name) => ({ rotate: rotateApiKey, revoke: revokeApiKey, delete: hardDeleteApiKey })[action](name) });
 }
 
 function renderCreatedApiKey(createdKey) {
   const panel = fleetManageModal.querySelector('#api-key-created');
   fleetManageModal._createdKey = createdKey || null;
-  if (!createdKey) {
-    panel.hidden = true;
-    panel.replaceChildren();
-    return;
-  }
-  panel.hidden = false;
-  panel.innerHTML = `
-    <strong>${esc(t('fleet_manage.key_created_once'))}</strong>
-    <div class="api-key-copy-row">
-      <input class="action-input api-key-plaintext" type="text" readonly value="${esc(createdKey.plaintext_key || '')}" />
-      <button class="action-btn action-btn-sm api-key-copy" type="button">${esc(t('fleet_manage.copy_key'))}</button>
-      <button class="settings-remove-btn api-key-dismiss" type="button" title="${esc(t('btn.remove'))}">&times;</button>
-    </div>
-    <small class="fleet-help">${esc(t('fleet_manage.key_once_hint'))}</small>`;
-  panel.querySelector('.api-key-copy').addEventListener('click', copyCreatedApiKey);
-  panel.querySelector('.api-key-dismiss').addEventListener('click', () => renderCreatedApiKey(null));
-  panel.scrollIntoView({ block: 'nearest' });
+  renderCreatedKey(panel, createdKey, { t, onCopy: copyCreatedApiKey, onDismiss: () => renderCreatedApiKey(null) });
+  if (createdKey) panel.scrollIntoView({ block: 'nearest' });
+}
+
+/** Settings confirmations share the dashboard's own dialog instead of the browser prompt. */
+function confirmSetting(body, { title = t('wb.settings.confirmTitle'), ok = t('btn.confirm'), danger = true } = {}) {
+  return confirmDialog(document, { title, body, ok, cancel: t('btn.cancel'), danger });
 }
 
 async function copyCreatedApiKey() {
@@ -3412,7 +2087,6 @@ async function copyCreatedApiKey() {
     await navigator.clipboard.writeText(key);
     fleetManageStatus(t('fleet_manage.key_copied'), 'success');
   } catch {
-    fleetManageModal.querySelector('.api-key-plaintext')?.select();
     fleetManageStatus(t('fleet_manage.copy_failed'), 'error');
   }
 }
@@ -3427,8 +2101,6 @@ async function loadApiKeys() {
     fleetManageStatus(err.message, 'error');
   }
 }
-
-function closeFleetManageModal() { fleetManageStatus(''); }
 
 async function testFleetAgent() {
   const body = fleetFormValues();
@@ -3472,15 +2144,17 @@ async function saveFleetAgent() {
     renderFleetManage(data.agents ? data : await (await fetch(api('/api/fleet/agents'), { cache: 'no-store' })).json());
     fleetManageStatus(t('fleet_manage.saved'), 'success');
     await refreshFleet();
+    return true;
   } catch (err) {
     fleetManageStatus(err.message, 'error');
+    return false;
   } finally {
     setFleetAddBusy(false);
   }
 }
 
 async function removeFleetAgent(name) {
-  if (!window.confirm(t('fleet_manage.remove_confirm', { name }))) return;
+  if (!(await confirmSetting(t('fleet_manage.remove_confirm', { name }), { ok: t('wb.settings.fleet.remove') }))) return;
   fleetManageStatus(t('fleet_manage.removing'), 'running');
   try {
     const resp = await fetch(api(`/api/fleet/agents/${encodeURIComponent(name)}`), { method: 'DELETE' });
@@ -3497,7 +2171,7 @@ async function removeFleetAgent(name) {
 async function createApiKey() {
   const body = apiKeyFormValues();
   const pendingKeyName = fleetManageModal?._createdKey?.name;
-  if (pendingKeyName && !window.confirm(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }))) return;
+  if (pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { danger: false }))) return;
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.creating_key'), 'running');
   try {
@@ -3521,8 +2195,8 @@ async function createApiKey() {
 
 async function rotateApiKey(name) {
   const pendingKeyName = fleetManageModal?._createdKey?.name;
-  if (pendingKeyName && !window.confirm(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }))) return;
-  if (!window.confirm(t('fleet_manage.rotate_confirm', { name }))) return;
+  if (pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { danger: false }))) return;
+  if (!(await confirmSetting(t('fleet_manage.rotate_confirm', { name }), { ok: t('wb.settings.keys.rotate') }))) return;
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.rotating_key'), 'running');
   try {
@@ -3540,7 +2214,7 @@ async function rotateApiKey(name) {
 }
 
 async function revokeApiKey(name) {
-  if (!window.confirm(t('fleet_manage.revoke_confirm', { name }))) return;
+  if (!(await confirmSetting(t('fleet_manage.revoke_confirm', { name }), { ok: t('wb.settings.keys.revoke') }))) return;
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.revoking_key'), 'running');
   try {
@@ -3558,7 +2232,7 @@ async function revokeApiKey(name) {
 }
 
 async function hardDeleteApiKey(name) {
-  if (!window.confirm(t('fleet_manage.delete_confirm', { name }))) return;
+  if (!(await confirmSetting(t('fleet_manage.delete_confirm', { name }), { ok: t('wb.settings.keys.delete') }))) return;
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.deleting_key'), 'running');
   try {
@@ -3576,7 +2250,7 @@ async function hardDeleteApiKey(name) {
 }
 
 async function purgeRevokedApiKeys() {
-  if (!window.confirm(t('fleet_manage.purge_revoked_confirm'))) return;
+  if (!(await confirmSetting(t('fleet_manage.purge_revoked_confirm'), { ok: t('wb.settings.keys.purgeOk') }))) return;
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.purging_revoked'), 'running');
   try {
@@ -3609,8 +2283,11 @@ async function saveFleetSelfName() {
     fleetManageStatus(t('fleet_manage.saved'), 'success');
     await refreshState();
     await refreshFleet();
+    fleetManageModal.querySelector('#fleet-self-label').textContent = name;
+    return true;
   } catch (err) {
     fleetManageStatus(err.message, 'error');
+    return false;
   }
 }
 
@@ -3619,92 +2296,56 @@ let settingsModal = null;
 function createSettingsModal() {
   if (settingsModal) return settingsModal;
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
   overlay.id = 'settings-modal';
   overlay.hidden = true;
+  const head = (iconName, key, sub = '', id = '') => `<div class="wb-set-card-h"><h4><i class="wb-ico wb-ico-${iconName} wb-ico-xs" aria-hidden="true"></i><span${id ? ` id="${id}"` : ''} data-i18n="${key}">${esc(t(key))}</span></h4>${sub}<span class="wb-set-card-acts"></span></div>`;
+  const priceHead = (cost) => `<thead><tr><th data-i18n="wb.settings.colModel">${esc(t('wb.settings.colModel'))}</th><th data-i18n="settings.col_input">${esc(t('settings.col_input'))}</th><th data-i18n="settings.col_output">${esc(t('settings.col_output'))}</th><th data-i18n="settings.col_cache_read">${esc(t('settings.col_cache_read'))}</th><th data-i18n="settings.col_cache_write">${esc(t('settings.col_cache_write'))}</th>${cost ? `<th data-i18n="wb.settings.col7d">${esc(t('wb.settings.col7d'))}</th>` : ''}<th></th></tr></thead>`;
+  const addButton = id => `<button class="wb-btn" id="${id}" type="button"><i class="wb-ico wb-ico-plus wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.addModel">${esc(t('wb.settings.addModel'))}</span></button>`;
   overlay.innerHTML = `
-<div class="modal">
-  <div class="modal-head">
-    <h2>${esc(t('settings.title'))}</h2>
-    <button class="modal-close" type="button" aria-label="Close">&times;</button>
-  </div>
-  <div class="modal-body">
-    <div class="action-group" id="settings-model-pricing-group">
-      <span class="action-group-label" id="settings-pricing-label"><span data-i18n="settings.model_pricing">${esc(t('settings.model_pricing'))}</span>
-        <button class="tip-btn tip-btn-inline" id="pricing-tip" type="button" aria-label="Pricing info">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </button>
-        <div class="tip-popover" id="pricing-popover" hidden>
-          <p data-i18n="tip.pricing">${t('tip.pricing')}</p>
-          <p data-i18n="settings.base_rates_note">${esc(t('settings.base_rates_note'))}</p>
-        </div>
-      </span>
-      <div class="settings-table-scroll">
-      <table class="settings-price-table" id="settings-price-table">
-        <thead>
-          <tr><th data-i18n="settings.col_prefix">${esc(t('settings.col_prefix'))}</th><th data-i18n="settings.col_input">${esc(t('settings.col_input'))}</th><th data-i18n="settings.col_output">${esc(t('settings.col_output'))}</th><th data-i18n="settings.col_cache_read">${esc(t('settings.col_cache_read'))}</th><th data-i18n="settings.col_cache_write">${esc(t('settings.col_cache_write'))}</th><th></th></tr>
-        </thead>
-        <tbody id="settings-price-rows"></tbody>
-      </table>
-      </div>
-      <button class="action-btn action-btn-sm" id="settings-add-model" type="button" data-i18n="btn.add_model">${esc(t('btn.add_model'))}</button>
+    <div class="wb-set-card" id="settings-model-pricing-group">
+      <div class="wb-set-card-h"><h4><span id="settings-price-title"></span></h4>
+        <span class="wb-set-card-sub wb-tip-anchor"><button class="wb-link-btn wb-sub-link" id="pricing-tip" type="button" data-i18n="wb.settings.howMatch">${esc(t('wb.settings.howMatch'))}</button>
+        <span class="tip-popover" id="pricing-popover" hidden><span data-i18n="tip.pricing">${t('tip.pricing')}</span> <span data-i18n="settings.base_rates_note">${esc(t('settings.base_rates_note'))}</span></span></span></div>
+      <div class="settings-table-scroll"><table class="wb-ptable" id="settings-price-table">${priceHead(true)}<tbody id="settings-price-rows"></tbody></table></div>
+      <div class="wb-more-row" id="settings-price-more">${addButton('settings-add-model')}</div>
     </div>
-    <div class="action-group" id="settings-priority-pricing-group" hidden>
-      <span class="action-group-label" data-i18n="settings.priority_model_pricing">${esc(t('settings.priority_model_pricing'))}</span>
-      <div class="settings-table-scroll">
-      <table class="settings-price-table" id="settings-priority-price-table">
-        <thead>
-          <tr><th data-i18n="settings.col_prefix">${esc(t('settings.col_prefix'))}</th><th data-i18n="settings.col_input">${esc(t('settings.col_input'))}</th><th data-i18n="settings.col_output">${esc(t('settings.col_output'))}</th><th data-i18n="settings.col_cache_read">${esc(t('settings.col_cache_read'))}</th><th data-i18n="settings.col_cache_write">${esc(t('settings.col_cache_write'))}</th><th></th></tr>
-        </thead>
-        <tbody id="settings-priority-price-rows"></tbody>
-      </table>
-      </div>
-      <button class="action-btn action-btn-sm" id="settings-add-priority-model" type="button" data-i18n="btn.add_model">${esc(t('btn.add_model'))}</button>
+    <div class="wb-set-card" id="settings-priority-pricing-group" hidden>
+      ${head('clock', 'settings.priority_model_pricing', `<span class="wb-set-card-sub" data-i18n="wb.settings.prioritySub">${esc(t('wb.settings.prioritySub'))}</span>`)}
+      <div class="settings-table-scroll"><table class="wb-ptable" id="settings-priority-price-table">${priceHead(false)}<tbody id="settings-priority-price-rows"></tbody></table></div>
+      <div class="wb-more-row">${addButton('settings-add-priority-model')}</div>
     </div>
-    <div class="action-group" id="settings-fast-mode-group">
-      <span class="action-group-label" data-i18n="settings.fast_mode">${esc(t('settings.fast_mode'))}</span>
-      <div class="action-field">
-        <label class="action-field-label" data-i18n="settings.fast_override">${esc(t('settings.fast_override'))}</label>
-        <div class="action-threshold-wrap">
-          <input id="settings-fast-multiplier" class="action-input action-threshold-input" type="number" min="0.1" step="0.1" />
-          <span class="action-threshold-unit">x</span>
-        </div>
-      </div>
-      <p class="modal-status" data-i18n="settings.fast_defaults_note">${esc(t('settings.fast_defaults_note'))}</p>
+    <div class="wb-set-card" id="settings-fast-mode-group">
+      ${head('clock', 'settings.fast_mode', `<span class="wb-set-card-sub" data-i18n="wb.settings.fastSub">${esc(t('wb.settings.fastSub'))}</span>`)}
+      <label class="wb-set-inline"><span data-i18n="settings.fast_override">${esc(t('settings.fast_override'))}</span>
+        <input id="settings-fast-multiplier" class="wb-input wb-input-num" type="number" min="0.1" step="0.1" /><span>×</span></label>
+      <p class="wb-note" data-i18n="settings.fast_defaults_note">${esc(t('settings.fast_defaults_note'))}</p>
     </div>
-    <div class="action-group observer-settings" id="observer-settings-group">
-      <span class="action-group-label" data-i18n="observer.settings_title">${esc(t('observer.settings_title'))}</span>
-      <p class="fleet-help" data-i18n="observer.settings_help">${esc(t('observer.settings_help'))}</p>
-      <div class="observer-settings-state">
-        <strong id="observer-settings-state">${esc(t('status.loading'))}</strong>
-        <span id="observer-settings-platform"></span>
+    <div class="wb-set-card" id="observer-settings-group">
+      <div class="wb-obs-state"><span class="wb-hdot" id="observer-settings-dot"></span><b id="observer-settings-state">${esc(t('status.loading'))}</b><small id="observer-settings-platform"></small></div>
+      <p class="wb-note" id="observer-settings-recovery" hidden></p>
+      <div class="wb-set-inline observer-settings-actions">
+        <button class="wb-btn wb-btn-primary" id="observer-install" type="button" data-i18n="observer.install_enable">${esc(t('observer.install_enable'))}</button>
+        <button class="wb-btn wb-btn-primary" id="observer-enable" type="button" data-i18n="observer.enable">${esc(t('observer.enable'))}</button>
+        <button class="wb-btn" id="observer-disable" type="button">${esc(t('observer.disable'))}</button>
+        <button class="wb-btn wb-btn-danger-text" id="observer-uninstall" type="button">${esc(t('observer.uninstall'))}</button>
       </div>
-      <p class="modal-status" id="observer-settings-recovery" hidden></p>
-      <div class="action-row observer-settings-actions">
-        <button class="action-btn action-btn-primary" id="observer-install" type="button" data-i18n="observer.install_enable">${esc(t('observer.install_enable'))}</button>
-        <button class="action-btn" id="observer-enable" type="button" data-i18n="observer.enable">${esc(t('observer.enable'))}</button>
-        <button class="action-btn" id="observer-disable" type="button">${esc(t('observer.disable'))}</button>
-        <button class="action-btn" id="observer-uninstall" type="button">${esc(t('observer.uninstall'))}</button>
-      </div>
-      <p class="modal-status" id="observer-settings-status" hidden></p>
+      <p class="wb-note" id="observer-settings-status" role="status" hidden></p>
+      <p class="wb-note" data-i18n="wb.settings.observerNote">${esc(t('wb.settings.observerNote'))}</p>
     </div>
-  </div>
-  <div class="modal-status" id="settings-readonly-note" hidden></div>
-  <div class="modal-status" id="settings-status" hidden></div>
-  <div class="settings-footer">
-    <button class="action-btn" id="settings-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button>
-    <button class="action-btn action-btn-primary" id="settings-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
-  </div>
-</div>`;
+  <div class="wb-note" id="settings-readonly-note" hidden></div>
+  <div class="wb-note" id="settings-status" role="status" hidden></div>
+  <div class="wb-savebar settings-footer" hidden>
+    <span id="settings-dirty"></span><span class="wb-grow"></span>
+    <button class="wb-btn" id="settings-cancel" type="button" data-i18n="wb.settings.revert">${esc(t('wb.settings.revert'))}</button>
+    <button class="wb-btn wb-btn-primary" id="settings-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
+  </div>`;
   document.body.appendChild(overlay);
   settingsModal = overlay;
 
-  overlay.querySelector('.modal-close').addEventListener('click', closeSettingsModal);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeSettingsModal(); });
   overlay.querySelector('#settings-cancel').addEventListener('click', () => refreshSettingsPage());
   overlay.querySelector('#settings-save').addEventListener('click', saveSettings);
-  overlay.querySelector('#settings-add-model').addEventListener('click', () => addPriceRow('', { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, false));
-  overlay.querySelector('#settings-add-priority-model').addEventListener('click', () => addPriceRow('', { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, false, 'settings-priority-price-rows'));
+  overlay.querySelector('#settings-add-model').addEventListener('click', () => settingsPricing?.addRow(false));
+  overlay.querySelector('#settings-add-priority-model').addEventListener('click', () => settingsPricing?.addRow(true));
   overlay.querySelector('#observer-install').addEventListener('click', () => runObserverLifecycle('install'));
   overlay.querySelector('#observer-enable').addEventListener('click', () => runObserverLifecycle('enable'));
   overlay.querySelector('#observer-disable').addEventListener('click', () => runObserverLifecycle('disable'));
@@ -3757,13 +2398,14 @@ function observerRecoveryReason(status) {
 
 function renderObserverStatus(status = state.observer.status) {
   const recoveryReason = observerRecoveryReason(status);
-  const tab = $('#observer-tab');
-  const available = status?.state === 'installed' && status.desired?.enabled === true && !recoveryReason && !remoteIsReadOnly();
-  if (tab) tab.hidden = !available;
+  const available = observerPageAvailable(status);
   renderObserverSizeForm(status);
   const stateEl = settingsModal?.querySelector('#observer-settings-state');
   const platformEl = settingsModal?.querySelector('#observer-settings-platform');
   if (stateEl) stateEl.textContent = observerStatusLabel(status);
+  const dot = settingsModal?.querySelector('#observer-settings-dot');
+  if (dot) dot.className = 'wb-hdot' + (available ? '' : status?.state === 'installed' && !recoveryReason ? ' warn' : ' err');
+  renderObserverPage();
   const recoveryEl = settingsModal?.querySelector('#observer-settings-recovery');
   if (recoveryEl) {
     recoveryEl.hidden = !recoveryReason;
@@ -3872,23 +2514,6 @@ async function runObserverLifecycle(action) {
   }
 }
 
-function addPriceRow(prefix, prices, builtIn, rowsId = 'settings-price-rows') {
-  const tbody = document.getElementById(rowsId);
-  const tr = document.createElement('tr');
-  tr._originalPrice = prices;
-  tr.innerHTML = `
-    <td><input class="settings-input settings-prefix" type="text" value="${esc(prefix)}" ${builtIn ? 'readonly' : ''} /></td>
-    <td><input class="settings-input settings-num" type="number" step="0.01" min="0" value="${prices.input}" /></td>
-    <td><input class="settings-input settings-num" type="number" step="0.01" min="0" value="${prices.output}" /></td>
-    <td><input class="settings-input settings-num" type="number" step="0.01" min="0" value="${prices.cacheRead}" /></td>
-    <td><input class="settings-input settings-num" type="number" step="0.01" min="0" value="${prices.cacheCreation}" /></td>
-    <td>${builtIn ? '' : `<button class="settings-remove-btn" type="button" title="${esc(t('btn.remove'))}">&times;</button>`}</td>`;
-  if (!builtIn) {
-    tr.querySelector('.settings-remove-btn').addEventListener('click', () => tr.remove());
-  }
-  tbody.appendChild(tr);
-}
-
 let settingsPage = null;
 let settingsLoader = null;
 let settingsPricing = null;
@@ -3902,19 +2527,18 @@ let settingsChat = null;
 function initSettingsPage() {
   const root = $('#tab-settings');
   const oldSettings = createSettingsModal(), oldFleet = createFleetManageModal(), oldActions = createActionsModal();
-  const controls = ['#locale-toggle', '#fleet-sound-toggle', '#wb-detail-toggle', '#logout-btn', '#connection-status'].map(selector => {
+  const controls = ['#wb-detail-toggle', '#fleet-sound-toggle', '#connection-status', '#logout-btn'].map(selector => {
     const node = $(selector); return selector === '#wb-detail-toggle' ? node?.closest('label') : node;
   });
   settingsPage = composeSettings(root, { settings: oldSettings, fleet: oldFleet, actions: oldActions, controls, t });
   oldSettings.remove(); oldFleet.remove(); oldActions.remove();
   settingsModal = root; fleetManageModal = root; actionsModal = settingsPage.actionsScope;
   settingsUpgrade = root.querySelector('[data-action="upgrade-cc"]');
-  settingsVersionRoot = document.createElement('section'); settingsVersionRoot.id = 'settings-version'; settingsPage.sections.ui.append(settingsVersionRoot);
+  settingsVersionRoot = document.createElement('div'); settingsVersionRoot.id = 'settings-version'; settingsPage.prefs.version.prepend(settingsVersionRoot);
   let theme = 'light'; try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
-  mountThemeControl(settingsPage.sections.ui, { t, value: theme, onChange: initTheme });
-  const observerNote = document.createElement('p'); observerNote.dataset.i18n = 'wb.settings.observerNote'; observerNote.textContent = t('wb.settings.observerNote'); settingsPage.sections.observer.prepend(observerNote);
-  const fleetNote = document.createElement('p'); fleetNote.dataset.i18n = 'wb.settings.fleetNameNote'; fleetNote.textContent = t('wb.settings.fleetNameNote'); settingsPage.sections.fleet.prepend(fleetNote);
-  const defaults = document.createElement('div'); defaults.id = 'settings-defaults'; settingsPage.sections.defaults.prepend(defaults);
+  mountThemeControl(settingsPage.prefs.theme, { t, value: theme, onChange: initTheme });
+  mountLanguageControl(settingsPage.prefs.lang, { t, value: getLocale(), onChange: changeLocale });
+  const defaults = root.querySelector('#settings-defaults');
   settingsChat = mountChatSettings(settingsPage.sections.defaults, { t,
     local: () => !REMOTE_AGENT && !state.remoteAgent,
     read: () => requestAgentJson('/api/chat/settings'),
@@ -3929,7 +2553,7 @@ function initSettingsPage() {
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
-        data: value.prices, usage: value.usage, t, formatTokens: tok, writable: () => !remoteIsReadOnly(),
+        data: value.prices, usage: value.usage, t, formatTokens: tok, writable: () => !remoteIsReadOnly(), onDirty: count => settingsPage.badge('pricing', count),
         write: body => requestAgentJson('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
     } else { const status = root.querySelector('#settings-status'); status.hidden = false; status.textContent = t('wb.readFailed'); }
     const active = value.prices?.active ?? value.snapshot?.baselineRuntime;
@@ -3940,7 +2564,7 @@ function initSettingsPage() {
   $('#wb-detail-toggle').addEventListener('change', () => {
     settingsPage.detail($('#wb-detail-toggle').checked ? 'technical' : 'plain');
     refreshSettingsVersion();
-    root.querySelectorAll('[data-settings-latency]').forEach(node => { node.hidden = !$('#wb-detail-toggle').checked; });
+    if (fleetManageModal?._agents) renderFleetManage({ self: { name: fleetManageModal.querySelector('#fleet-self-label').textContent }, agents: fleetManageModal._agents }, true);
   });
   refreshSettingsVersion();
 }
@@ -3948,13 +2572,14 @@ function initSettingsPage() {
 function refreshSettingsVersion() {
   if (!settingsVersionRoot) return;
   renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint,
-    dashboardVersion: ownDashboardVersion, level: document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain' });
+    dashboardVersion: ownDashboardVersion });
 }
 function refreshSettingsLocks() {
   if (!settingsPage) return;
   applySettingsReadOnly(remoteIsReadOnly());
   if (!settingsPricing) { for (const node of settingsModal.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier')) node.disabled = true; }
   for (const node of settingsPage.sections.defaults.querySelectorAll('#action-mode, #action-threshold, #action-threshold-apply')) node.disabled = remoteIsReadOnly();
+  syncModeSegment();
   settingsDefaults?.refreshLocks();
   refreshSettingsVersion();
 }
@@ -3986,6 +2611,7 @@ function openSettingsModal(section = 'defaults') {
 }
 function closeSettingsModal() {
   settingsLoader?.invalidate();
+  fleetManageStatus('');
   settingsChat?.invalidate();
   settingsDefaults?.destroy(); settingsDefaults = null;
   settingsPricing?.destroy(); settingsPricing = null; settingsSnapshot = null;
@@ -3995,149 +2621,40 @@ async function saveSettings() { return settingsPricing?.save(); }
 
 // ─── Actions Modal ───
 let actionsModal = null;
-let modeStatusTimer = null;
 let pendingManualRestart = null;
 
 function createActionsModal() {
   if (actionsModal) return actionsModal;
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
   overlay.id = 'actions-modal';
   overlay.hidden = true;
   overlay.innerHTML = `
-<div class="modal">
-  <div class="modal-head">
-    <h2>${esc(t('actions.title'))}</h2>
-    <button class="modal-close" type="button" aria-label="Close">&times;</button>
-  </div>
-  <div class="modal-body">
-    <div class="action-group">
-      <span class="action-group-label">${esc(t('actions.agent_control'))}</span>
-      <div class="action-row">
-        <button class="action-btn" data-action="chop-chop" type="button">${esc(t('actions.chop_chop'))}</button>
-        <button class="action-btn action-warn" data-action="restart-session" type="button">${esc(t('actions.restart'))}</button>
-      </div>
-    </div>
-    <div class="action-group">
-      <span class="action-group-label">${esc(t('actions.configuration'))}</span>
-      <div class="action-field"><label class="action-field-label" data-i18n="actions.session_mode">${esc(t('actions.session_mode'))}</label><select id="action-mode" class="action-select"><option value="single">single</option><option value="multi">multi</option></select></div>
-      <p id="action-mode-status" class="modal-status" style="overflow-wrap:anywhere"></p>
-      <p id="action-instance-status" class="modal-status" style="overflow-wrap:anywhere"></p>
-      <p id="action-restart-status" class="modal-status" style="overflow-wrap:anywhere"></p>
-      <div class="action-field">
-        <label class="action-field-label">${esc(t('actions.runtime'))}</label>
-        <select id="action-runtime" class="action-select">
-          <option value="claude">Claude</option>
-          <option value="codex">Codex</option>
-        </select>
-      </div>
-      <div class="action-field" id="action-model-field">
-        <label class="action-field-label">${esc(t('actions.model'))}</label>
-        <div class="action-model-wrap">
-          <select id="action-model" class="action-select"></select>
-          <input id="action-model-custom" class="action-input" type="text" placeholder="${esc(t('actions.model_placeholder'))}" hidden />
-          <button id="action-model-apply" class="action-btn action-btn-sm" type="button" hidden>${esc(t('btn.apply'))}</button>
-        </div>
-      </div>
-      <div class="action-field" id="action-effort-field">
-        <label class="action-field-label">${esc(t('actions.effort'))}</label>
-        <select id="action-effort" class="action-select"></select>
-      </div>
-      <div class="action-field">
-        <label class="action-field-label" data-i18n="actions.threshold">${esc(t('actions.threshold'))}</label>
-        <button class="tip-btn tip-btn-inline" id="threshold-tip" type="button" aria-label="Threshold info">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v4M8 5.5v0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </button>
-        <div class="tip-popover" id="threshold-popover" hidden>
-          <p data-i18n="tip.threshold">${t('tip.threshold')}</p>
-        </div>
-        <div class="action-threshold-wrap">
-          <input id="action-threshold" class="action-input action-threshold-input" type="number" min="10" max="95" step="5" />
-          <span class="action-threshold-unit">%</span>
-          <button class="action-btn action-btn-sm" id="action-threshold-apply" type="button" data-i18n="btn.apply">${esc(t('btn.apply'))}</button>
-        </div>
-      </div>
-    </div>
-    <div class="action-group">
-      <span class="action-group-label">${esc(t('actions.upgrade'))}</span>
-      <div class="action-row">
-        <button class="action-btn" data-action="upgrade-cc" type="button">
-          <span id="action-cli-label">${esc(t('actions.upgrade_cc'))}</span><span class="action-ver" id="action-cc-ver"></span>
-        </button>
-      </div>
-    </div>
-  </div>
-  <div class="modal-status" id="action-status" hidden></div>
-  <div class="modal-confirm" id="action-confirm" hidden>
-    <p id="action-confirm-text"></p>
-    <div class="modal-confirm-buttons">
-      <button class="action-btn" id="action-confirm-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button>
-      <button class="action-btn danger" id="action-confirm-ok" type="button" data-i18n="btn.confirm">${esc(t('btn.confirm'))}</button>
-    </div>
-  </div>
-</div>`;
+    <div class="action-field wb-fld"><label class="wb-fld-l" for="action-mode" data-i18n="actions.session_mode">${esc(t('actions.session_mode'))}</label>
+      <div class="wb-seg2" id="action-mode-seg" role="group" aria-label="${esc(t('actions.session_mode'))}"><button type="button" data-mode="multi">${esc(t('wb.settings.session.multi'))}</button><button type="button" data-mode="single">${esc(t('wb.settings.session.single'))}</button></div>
+      <select id="action-mode" class="wb-vh" tabindex="-1" aria-hidden="true"><option value="single">single</option><option value="multi">multi</option></select></div>
+    <p id="action-mode-status" class="wb-note"></p>
+    <p id="action-instance-status" class="wb-note"></p>
+    <p id="action-restart-status" class="wb-note"></p>
+    <div class="action-field wb-fld"><label class="wb-fld-l" for="action-threshold" data-i18n="actions.threshold">${esc(t('actions.threshold'))}</label>
+      <div class="wb-set-inline"><input id="action-threshold" class="wb-input wb-input-num" type="number" min="10" max="95" step="5" /><span>%</span>
+        <button class="wb-btn" id="action-threshold-apply" type="button" data-i18n="btn.apply">${esc(t('btn.apply'))}</button></div>
+      <small class="wb-note" data-i18n="tip.threshold">${t('tip.threshold')}</small></div>
+    <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_cc'))}</span><span class="action-ver" id="action-cc-ver"></span></button>
+  <div class="wb-note" id="action-status" role="status" hidden></div>`;
   document.body.appendChild(overlay);
   actionsModal = overlay;
 
-  overlay.querySelector('.modal-close').addEventListener('click', closeActionsModal);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeActionsModal(); });
-
-  overlay.querySelectorAll('.action-btn[data-action]').forEach((btn) => {
-    btn.addEventListener('click', () => execAction(btn.dataset.action));
-  });
-
-  overlay.querySelector('#action-mode').addEventListener('change', async event => { await execAction('switch-mode', { mode: event.target.value }); await refreshModeStatus(); });
-  async function selectAction(sel, action, key) {
-    const accepted = await submitSelectAction(sel, action, key, execAction);
-    if (accepted !== false && action === 'switch-effort') sel._currentEffort = sel.value;
-    return accepted;
-  }
-
-  const modelSel = overlay.querySelector('#action-model');
-  const modelCustom = overlay.querySelector('#action-model-custom');
-  const modelApply = overlay.querySelector('#action-model-apply');
-  function setCustomModelMode(on) {
-    modelCustom.hidden = !on;
-    modelApply.hidden = !on;
-    modelSel.classList.toggle('action-select-narrow', on);
-  }
-  modelSel.addEventListener('change', async () => {
-    if (modelSel.value === '__custom__') {
-      setCustomModelMode(true);
-      modelCustom.focus();
-    } else {
-      const wasCustom = modelSel._prevValue === '__custom__';
-      setCustomModelMode(false);
-      if (actionsModal?._renderEffortOptions) actionsModal._renderEffortOptions(modelSel.value);
-      await selectAction(modelSel, 'switch-model', 'model');
-      if (actionsModal?._renderEffortOptions) {
-        actionsModal._renderEffortOptions(modelSel.value === '__custom__' ? modelCustom.value.trim() : modelSel.value);
-      }
-      if (wasCustom && modelSel.value === '__custom__') setCustomModelMode(true);
-    }
-  });
-  async function submitCustomModel() {
-    const val = modelCustom.value.trim();
-    if (!val) return;
-    const ok = await execAction('switch-model', { model: val });
-    if (ok !== false) {
-      modelSel._prevValue = '__custom__';
-      if (actionsModal?._renderEffortOptions) actionsModal._renderEffortOptions(val);
-    }
-  }
-  modelCustom.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submitCustomModel();
-  });
-  modelApply.addEventListener('click', submitCustomModel);
-
-  const runtimeSel = overlay.querySelector('#action-runtime');
-  runtimeSel.addEventListener('change', () => {
-    selectAction(runtimeSel, 'switch-runtime', 'runtime');
-  });
-
-  const effortSel = overlay.querySelector('#action-effort');
-  effortSel.addEventListener('change', () => {
-    selectAction(effortSel, 'switch-effort', 'effort');
+  overlay.querySelector('[data-action="upgrade-cc"]').addEventListener('click', () => execAction('upgrade-cc'));
+  const modeSelect = overlay.querySelector('#action-mode');
+  // The segmented buttons drive the original select so its change listener stays the single entry point.
+  overlay.querySelectorAll('#action-mode-seg button').forEach(button => button.addEventListener('click', () => {
+    if (button.disabled || modeSelect.value === button.dataset.mode) return;
+    modeSelect.value = button.dataset.mode; modeSelect.dispatchEvent(new Event('change'));
+  }));
+  modeSelect.addEventListener('change', async event => {
+    const previous = modeSelect._current ?? null;
+    if (await execAction('switch-mode', { mode: event.target.value }) === false && previous) modeSelect.value = previous;
+    syncModeSegment(); await refreshModeStatus();
   });
 
   const thresholdApply = overlay.querySelector('#action-threshold-apply');
@@ -4146,40 +2663,21 @@ function createActionsModal() {
     const val = parseInt(thresholdInput.value, 10);
     if (!val || val < 10 || val > 95) return;
     const result = await execAction('set-threshold', { value: val });
-    if (result !== false) {
-      state.newSessionThreshold = val;
-      renderMetrics();
-    }
+    if (result !== false) state.newSessionThreshold = val;
   });
   thresholdInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') thresholdApply.click();
   });
-
-  const thresholdTipBtn = overlay.querySelector('#threshold-tip');
-  const thresholdPop = overlay.querySelector('#threshold-popover');
-  if (thresholdTipBtn && thresholdPop) {
-    const pop = thresholdPop.cloneNode(true);
-    pop.removeAttribute('id');
-    pop.hidden = true;
-    document.body.appendChild(pop);
-    thresholdPop.remove();
-    thresholdTipBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (pop.hidden) {
-        const rect = thresholdTipBtn.getBoundingClientRect();
-        pop.style.top = `${rect.bottom + 6}px`;
-        const left = Math.max(8, rect.left - 120);
-        const maxLeft = window.innerWidth - 280 - 8;
-        pop.style.left = `${Math.min(left, Math.max(8, maxLeft))}px`;
-        pop.hidden = false;
-      } else {
-        pop.hidden = true;
-      }
-    });
-    document.addEventListener('click', () => { pop.hidden = true; });
-  }
-
   return overlay;
+}
+
+function syncModeSegment() {
+  const select = actionsModal?.querySelector('#action-mode');
+  if (!select) return;
+  actionsModal.querySelectorAll('#action-mode-seg button').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.mode === select.value));
+    button.disabled = select.disabled;
+  });
 }
 
 async function refreshModeStatus() {
@@ -4201,8 +2699,8 @@ async function refreshModeStatus() {
     if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
     const data = result.data;
     const mode = ['single', 'multi'].includes(data.sessionMode) ? data.sessionMode : null;
-    if (mode) actionsModal.querySelector('#action-mode').value = mode;
-    text.textContent = [mode || t('value.unknown'), data.transition?.phase, data.transition?.reason, data.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', data.blocked?.since ? t('actions.blocked_since', { time: data.blocked.since }) : ''].filter(Boolean).join(' · ');
+    if (mode) { const select = actionsModal.querySelector('#action-mode'); select.value = mode; select._current = mode; syncModeSegment(); }
+    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), data.transition?.phase, data.transition?.reason, data.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', data.blocked?.since ? t('actions.blocked_since', { time: data.blocked.since }) : ''].filter(Boolean).join(' · ');
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {
@@ -4214,118 +2712,16 @@ async function refreshModeStatus() {
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (instanceText) instanceText.textContent = error.message; }
 }
 
-async function openActionsModal() {
-  if (remoteIsReadOnly()) return;
-  const modal = createActionsModal();
-  modal.hidden = false;
-  refreshModeStatus();
-  renderOriginAvailability();
-  clearInterval(modeStatusTimer);
-  modeStatusTimer = setInterval(refreshModeStatus, 2000);
-
-  const statusEl = modal.querySelector('#action-status');
-  statusEl.hidden = true;
-  updateRestartDot();
-  try {
-    const meta = await fetchJson('/api/actions/meta');
-    const runtimeSel = modal.querySelector('#action-runtime');
-    runtimeSel.value = meta.runtime;
-
-    const modelField = modal.querySelector('#action-model-field');
-    const modelSel = modal.querySelector('#action-model');
-    const effortField = modal.querySelector('#action-effort-field');
-    const effortSel = modal.querySelector('#action-effort');
-
-    if (modelField) modelField.hidden = false;
-    if (effortField) effortField.hidden = false;
-
-    const modelState = modelOptionState(meta);
-    modelSel.innerHTML = '';
-    for (const option of modelState.options) {
-      const opt = document.createElement('option');
-      opt.value = option.value;
-      opt.textContent = option.labelKey ? t(option.labelKey) : option.label;
-      opt.disabled = Boolean(option.disabled);
-      opt.selected = Boolean(option.selected);
-      modelSel.appendChild(opt);
-    }
-    const modelCustomEl = modal.querySelector('#action-model-custom');
-    const modelApplyEl = modal.querySelector('#action-model-apply');
-    if (modelState.custom) {
-      modelSel.value = '__custom__';
-      modelCustomEl.value = modelState.customValue;
-      modelCustomEl.hidden = false;
-      modelApplyEl.hidden = false;
-      modelSel.classList.add('action-select-narrow');
-    } else {
-      modelCustomEl.hidden = true;
-      modelApplyEl.hidden = true;
-      modelSel.classList.remove('action-select-narrow');
-    }
-
-    effortSel._currentEffort = meta.current_effort;
-    modal._renderEffortOptions = (modelId) => {
-      const effortState = effortOptionState(meta, modelId, effortSel._currentEffort, effortLabel);
-      effortSel.innerHTML = '';
-      effortSel.disabled = effortState.disabled;
-      effortField.hidden = effortState.hidden;
-      for (const option of effortState.options) {
-        const opt = document.createElement('option');
-        opt.value = option.value;
-        opt.textContent = option.labelKey
-          ? t(option.labelKey, option.labelParams)
-          : effortLabel(option.value);
-        opt.disabled = Boolean(option.disabled);
-        opt.selected = Boolean(option.selected);
-        effortSel.appendChild(opt);
-      }
-      effortSel._prevValue = effortSel.value;
-    };
-    modal._renderEffortOptions(modelSel.value === '__custom__' ? meta.current_model : modelSel.value);
-
-    const ri = state.dashboardState?.runtime_info;
-    const ccVer = modal.querySelector('#action-cc-ver');
-    const cliLabel = modal.querySelector('#action-cli-label');
-    if (cliLabel) cliLabel.textContent = meta.runtime_cli === 'codex' ? t('actions.upgrade_codex') : t('actions.upgrade_cc');
-    ccVer.textContent = meta.cc_version ? ` v${meta.cc_version}` : '';
-    const cliUpdate = meta.runtime_cli === 'codex' ? ri?.codex_restart || ri?.codex_update : ri?.cc_update;
-    ccVer.classList.toggle('action-ver-dot', !!cliUpdate);
-    ccVer.title = cliUpdate ? t('info.version_available', { version: cliUpdate }) : '';
-
-    runtimeSel._prevValue = runtimeSel.value;
-    modelSel._prevValue = modelSel.value;
-    effortSel._prevValue = effortSel.value;
-
-    const thresholdInput = modal.querySelector('#action-threshold');
-    if (thresholdInput) thresholdInput.value = meta.new_session_threshold || state.newSessionThreshold || 70;
-  } catch { /* meta unavailable, modal still usable */ }
-}
-
 function closeActionsModal() {
-  clearInterval(modeStatusTimer);
-  modeStatusTimer = null;
   if (!actionsModal) return;
-  if (pendingConfirmCancel) { pendingConfirmCancel(); pendingConfirmCancel = null; }
-  if (!settingsPage) actionsModal.hidden = true;
-  const confirm = actionsModal.querySelector('#action-confirm');
-  if (confirm) confirm.hidden = true;
   const status = actionsModal.querySelector('#action-status');
   if (status) status.hidden = true;
   setModalBodyDisabled(false);
 }
 
-function updateRestartDot() {
-  const btn = actionsModal?.querySelector('.action-btn[data-action="restart-session"]');
-  if (!btn) return;
-  const pending = !!state.dashboardState?.runtime_info?.pending_restart;
-  btn.classList.toggle('action-btn-pending', pending);
-  btn.title = pending ? t('info.pending_restart') : '';
-}
-
 const CONFIRM_ACTIONS = new Set(['switch-mode', 'interrupt', 'chop-chop', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
 
 let countdownTimer = null;
-let pendingConfirmCancel = null;
 
 function startCountdownAndReload(seconds, statusEl, healthPath = '/api/health', prefix = '') {
   if (countdownTimer) clearInterval(countdownTimer);
@@ -4371,35 +2767,14 @@ function setModalBodyDisabled(disabled) {
   if (!body) return;
   body.classList.toggle('modal-body-disabled', disabled);
   body.querySelectorAll('button, select, input').forEach(el => { el.disabled = disabled; });
+  syncModeSegment();
   if (!disabled) renderOriginAvailability();
 }
 
-function showConfirm(text) {
-  if (pendingConfirmCancel) pendingConfirmCancel();
-  return new Promise((resolve) => {
-    const box = actionsModal?.querySelector('#action-confirm');
-    const msg = actionsModal?.querySelector('#action-confirm-text');
-    const okBtn = actionsModal?.querySelector('#action-confirm-ok');
-    const cancelBtn = actionsModal?.querySelector('#action-confirm-cancel');
-    if (!box || !msg || !okBtn || !cancelBtn) { resolve(false); return; }
-
-    msg.textContent = [text, settingsActionDescription].filter(Boolean).join('\n');
-    box.hidden = false;
-    setModalBodyDisabled(true);
-
-    function cleanup() {
-      pendingConfirmCancel = null;
-      box.hidden = true;
-      setModalBodyDisabled(false);
-      okBtn.removeEventListener('click', onOk);
-      cancelBtn.removeEventListener('click', onCancel);
-    }
-    function onOk() { cleanup(); resolve(true); }
-    function onCancel() { cleanup(); resolve(false); }
-    pendingConfirmCancel = onCancel;
-    okBtn.addEventListener('click', onOk);
-    cancelBtn.addEventListener('click', onCancel);
-  });
+async function showConfirm(text) {
+  setModalBodyDisabled(true);
+  try { return await confirmSetting([text, settingsActionDescription].filter(Boolean).join('\n')); }
+  finally { setModalBodyDisabled(false); }
 }
 
 async function execAction(action, body) {
@@ -4534,13 +2909,11 @@ function initTechButton() {
 
 // ─── Timers ───
 function startTimers() {
-  state.timer = setInterval(() => { renderState(); renderMetrics(); renderHealth(); }, 1000);
   state.pollTimer = setInterval(refreshAll, 30_000);
   syncFleetSubscription();
 }
 
 window.addEventListener('beforeunload', () => {
-  clearInterval(state.timer);
   clearInterval(state.pollTimer);
   clearFleetFallback();
   clearTimeout(state.sseReconnectTimer);
@@ -4558,9 +2931,7 @@ await refreshObserverStatus({ quiet: true });
 initSettingsPage();
 initTabs();
 initFleetMode();
-initLocaleToggle();
 initLogout();
-initTips();
 initInfoBarButtons();
 initFleetManageButton();
 initMemoryControls();
@@ -4568,8 +2939,6 @@ initObserverControls();
 initFleetHoverPause();
 initFleetSounds();
 renderAll();
-initCharts();
-initTrendControls();
 connectSse();
 // Fetch the fleet early to choose the landing view (Agent Fleet vs single agent).
 try {
@@ -4590,10 +2959,6 @@ workbench = mountWorkbench({
   t,
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
-  openSettings: section => {
-    openSettingsModal(section === 'observer' ? 'observer' : 'defaults');
-    if (section === 'observer') document.querySelector('#observer-settings-group')?.scrollIntoView({ block: 'center' });
-  },
   writable: () => wbWritable(remoteIsReadOnly),
   onMemory: key => {
     memoryScopeView.selectGroup(key);
@@ -4605,6 +2970,7 @@ workbench = mountWorkbench({
   },
   observerStatus: () => state.observer.status,
   observerAvailable: status => !remoteIsReadOnly() && !observerRecoveryReason(status),
+  onObserve: openObserverFor,
   instanceInfo: () => ({ name: viewedAgentName(), version: state.dashboardState?.dashboard_version ? 'dashboard ' + state.dashboardState.dashboard_version : null,
     core: state.dashboardState?.runtime_info?.zylos_version ? 'core ' + state.dashboardState.runtime_info.zylos_version : null }),
 });

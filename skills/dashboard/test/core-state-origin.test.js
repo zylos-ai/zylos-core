@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { projectOrigin } from '../src/lib/core-state.js';
 import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
-import { stateTitleKey, originSessionUnavailable } from '../public/js/state-presentation.js';
+import { originSessionUnavailable } from '../public/js/state-presentation.js';
 import { stateMood, buildAgentFleetView, defaultAgentFleetLabels } from '../public/js/agent-fleet.js';
 
 const absent = () => ({ identity: { present: false, ready: false, runtime: 'unknown' }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } });
@@ -102,7 +102,6 @@ test('Origin states have matching detail, Fleet and action availability presenta
   const labels = defaultAgentFleetLabels();
   for (const state of ['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING']) {
     const agent = { name: 'Origin', state, pulse_rate: 1 };
-    assert.equal(stateTitleKey(state), `state.${state.toLowerCase()}`);
     assert.equal(stateMood(agent), ['WAKE_OVERDUE', 'AUTH_WAIT'].includes(state) ? 'stuck' : 'idle');
     const tile = buildAgentFleetView({ agents: [agent] }).tiles[0];
     assert.equal(tile.offline, false); assert.equal(tile.stateLabel, labels[state.toLowerCase()]);

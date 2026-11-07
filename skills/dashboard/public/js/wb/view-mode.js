@@ -1,12 +1,5 @@
 import { recoveryTime } from './cooldown.js?v=89';
 const KEY = 'zylos-dashboard-detail-level';
-export const technicalKeys = new Set([
-  'groupKey', 'runId', 'errorCode', 'queue', 'context', 'modelColumn', 'evidence',
-  'toolRawCommand', 'cronText', 'taskId', 'taskPriority', 'syncProgress', 'fileBudget',
-  'commitHash', 'tokens', 'autoRotate', 'toolCalls', 'projects', 'hostCurves',
-  'remoteAddress', 'versionLatency', 'observerNav', 'observerSettings',
-]);
-export const techOnly = key => technicalKeys.has(key);
 
 export function createViewMode({ storage = globalThis.localStorage, document = globalThis.document } = {}) {
   let value = 'plain';
