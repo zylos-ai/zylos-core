@@ -6,6 +6,7 @@ import { renderVersion } from './wb/settings-version.js?v=87';
 import { mountChat } from './wb/chat.js?v=91';
 import { mountChatSettings } from './wb/chat-settings.js?v=87';
 import { mountWorkbench } from './wb/shell.js?v=92';
+import { watchHeader } from './wb/header-fit.js?v=93';
 import { createMemoryScope, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=89';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=91';
 import { mountSchedule } from './wb/schedule.js?v=87';
@@ -4634,6 +4635,7 @@ workbench = mountWorkbench({
   instanceInfo: () => ({ name: viewedAgentName(), version: state.dashboardState?.dashboard_version ? 'dashboard ' + state.dashboardState.dashboard_version : null }),
 });
 initTechButton();
+watchHeader({ header: document.querySelector('.app-header') });
 export function openWorkbenchGroup(key) {
   document.querySelector('.tab[data-tab="overview"]')?.click();
   return workbench.openGroup(key);

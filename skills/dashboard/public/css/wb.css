@@ -15,7 +15,8 @@
   --wb-off: color-mix(in srgb, var(--text) 14%, transparent);
   --wb-h: 32px;
   --wb-r: 8px;
-  --wb-header-h: 49px;
+  /* Set from the measured header (wb/header-fit.js); 48px until the first measurement. */
+  --wb-header-h: var(--wb-header-measured, 48px);
   --wb-shadow: 0 12px 32px rgba(16, 24, 40, .12);
 }
 :root[data-theme="dark"] { --wb-shadow: 0 12px 34px rgba(0, 0, 0, .5); }
@@ -81,6 +82,13 @@ html[data-detail=technical] .wb-tech-btn i { background: var(--accent); }
 html[data-detail=technical] .wb-tech-btn i::after { left: 12px; }
 .wb-tech-btn:focus-visible, .wb-icon-btn:focus-visible, .wb-btn:focus-visible, .wb-link-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 
+/* Navigation on its own scrollable row: phones always, wider screens when the one row does not fit. */
+html.wb-nav-row .app-header { flex-wrap: wrap; height: auto; min-height: 48px; column-gap: 6px; row-gap: 0; }
+html.wb-nav-row .app-header .header-left { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+html.wb-nav-row .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -16px; padding: 0 12px 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+html.wb-nav-row .app-header .tab-bar::-webkit-scrollbar { display: none; }
+html.wb-nav-row .app-header .tab { flex: none; }
+
 /* ─── Overview page: edge to edge, the drawer takes the right 480px ─── */
 main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 .wb-legacy>section { display: none!important; }
@@ -129,6 +137,15 @@ button.wb-attention-item:hover { background: var(--wb-hover); }
 .wb-grid, .wb-row { display: grid; grid-template-columns: minmax(190px, 1.3fr) 128px minmax(150px, 2fr) 252px; align-items: center; column-gap: 14px; }
 html[data-detail=technical] .wb-grid, html[data-detail=technical] .wb-row { grid-template-columns: minmax(190px, 1.3fr) 128px minmax(150px, 1.6fr) 252px 62px 50px 168px; }
 html[data-detail=plain] .wb-tech-col { display: none; }
+/* Narrower screens: flexible activity and model columns; below 900px the technical view leaves context and model to the drawer. */
+@media (max-width: 1179px) {
+  .wb-grid, .wb-row { grid-template-columns: minmax(150px, 1.3fr) 118px minmax(120px, 2fr) minmax(150px, 252px); column-gap: 12px; }
+  html[data-detail=technical] .wb-grid, html[data-detail=technical] .wb-row { grid-template-columns: minmax(150px, 1.3fr) 118px minmax(120px, 1.4fr) minmax(150px, 252px) 52px 46px minmax(104px, 150px); }
+}
+@media (min-width: 761px) and (max-width: 900px) {
+  html[data-detail=technical] .wb-grid, html[data-detail=technical] .wb-row { grid-template-columns: minmax(150px, 1.3fr) 118px minmax(120px, 1.4fr) minmax(150px, 252px) 52px; }
+  .wb-c-ctx, .wb-c-model, .wb-row > .wb-context, .wb-row > .wb-model { display: none; }
+}
 .wb-bh { position: sticky; top: var(--wb-header-h); z-index: 5; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--wb-line); color: var(--text-muted); font-size: 11.5px; letter-spacing: .02em; }
 .wb-bh > div { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .wb-bh-name { flex-wrap: wrap; }
@@ -209,6 +226,16 @@ html[data-detail=plain] .wb-tech-col { display: none; }
   #tab-overview.wb-has-side .wb-grid, #tab-overview.wb-has-side .wb-row { grid-template-columns: minmax(170px, 1.3fr) 118px minmax(120px, 1.3fr) 252px; }
   html[data-detail=technical] #tab-overview.wb-has-side .wb-grid, html[data-detail=technical] #tab-overview.wb-has-side .wb-row { grid-template-columns: minmax(170px, 1.3fr) 118px minmax(120px, 1.3fr) 252px 52px; }
   #tab-overview.wb-has-side .wb-c-ctx, #tab-overview.wb-has-side .wb-c-model, #tab-overview.wb-has-side .wb-row > .wb-context, #tab-overview.wb-has-side .wb-row > .wb-model { display: none; }
+}
+/* Drawer open on a medium screen: what is left of the board uses the stacked phone row. */
+@media (min-width: 901px) and (max-width: 1279px) {
+  #tab-overview.wb-has-side .wb-bh { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+  #tab-overview.wb-has-side .wb-bh > .wb-bh-state, #tab-overview.wb-has-side .wb-bh > .wb-tech-col, #tab-overview.wb-has-side .wb-bh-now > span, #tab-overview.wb-has-side .wb-bh-right { display: none !important; }
+  #tab-overview.wb-has-side .wb-bh-name { flex: 1 1 100%; }
+  #tab-overview.wb-has-side .wb-bh-now { flex: 1 1 auto; }
+  #tab-overview.wb-has-side .wb-row, html[data-detail=technical] #tab-overview.wb-has-side .wb-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+  #tab-overview.wb-has-side .wb-row > .wb-current, #tab-overview.wb-has-side .wb-row > .wb-activity { grid-column: 1 / -1; }
+  #tab-overview.wb-has-side .wb-row > .wb-queue { display: none; }
 }
 #wb-side[hidden], .wb-auto-name-dialog[hidden] { display: none; }
 #wb-side { position: fixed; top: var(--wb-header-h); right: 0; bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: -8px 0 24px -18px rgba(0, 0, 0, .25); overflow-wrap: anywhere; }
