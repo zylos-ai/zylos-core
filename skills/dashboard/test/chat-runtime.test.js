@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
-import { prepareNativeRuntimeResources, retainNativeFailure, runtimeProxyNames, writeNativeRuntimeManifest } from './helpers/chat-runtime-support.js';
+import { prepareNativeRuntimeResources, retainNativeFailure, runtimeProxyNames, waitForTtlRunEnding, writeNativeRuntimeManifest } from './helpers/chat-runtime-support.js';
 
 // Claude: real Supervisor admission, Core receive/router/delivery and native
 // Claude session, then Dashboard questions/answers and same-group continuation.
@@ -102,6 +102,130 @@ for (const [name, scenario, accounts] of [
 // failure collection. They use private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB
 // paths from the same proven sandbox, no model/auth/HTTP/default tmux server.
 // Run for native environment/evidence changes; absent integration gate skips.
+test('bounded Sync checkpoints retain a genuine startup route while full coverage removes it', { skip: !chatEnabled() }, async t => {
+  const sandbox = createChatSandbox(t);
+  const { default: Database } = await import('better-sqlite3');
+  const { guardDatabase } = await import('../../comm-bridge/scripts/sqlite-schema.js');
+  const schema = await import('../../comm-bridge/scripts/c4-schema.js');
+  const { createStore } = await import('../../comm-bridge/scripts/c4-v2-store.js');
+  const { emitC4Conversations } = await import('../../comm-bridge/scripts/c4-session-init.js');
+  const { formatConversationsForAgent } = await import('../../comm-bridge/scripts/c4-db.js');
+  const { buildReplyViaSuffix } = await import('../../comm-bridge/scripts/c4-utils.js');
+  const database = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
+  guardDatabase(database, schema);
+  const store = createStore(database, { validateComponent: () => true,
+    readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
+  const endpoint = 'startup-route-fixture';
+  const insertInput = content => {
+    const row = store.insertConversation('in', 'dashboard', endpoint, content, { groupName: endpoint });
+    assert.equal(store.claimConversation(row.id), true);
+    assert.equal(store.markDelivered(row.id, { sessionId: 'private-native-session' }), true);
+    return row;
+  };
+  const initial = insertInput('FIXTURE_BEGIN:startup-route-fixture');
+  const sessionGroup = initial.session_group;
+  const oldQuestion = { summary: 'original question summary must not reach startup', interruptId: 'original-interrupt-sentinel' };
+  const questionRow = store.insertConversation('out', 'dashboard', endpoint,
+    `${oldQuestion.summary}; ${oldQuestion.interruptId}`, { groupName: endpoint });
+  assert.equal(store.getUnsummarizedRange(sessionGroup).safeEnd, questionRow.id);
+  store.createCheckpoint(sessionGroup, questionRow.id, 'Dedicated fixture history processed; no pending business.');
+  const anchors = Array.from({ length: 5 }, (_, index) => insertInput(`FIXTURE_ROUTE_ANCHOR:bounded:${index}`));
+  for (let batch = 0; batch < 2; batch++) {
+    const result = store.queries.unsummarized({ group: sessionGroup, limit: 2 });
+    assert.equal(result.rows.length, 2);
+    assert.equal(result.rows[0].id, anchors[batch * 2].id, 'Actual bounded query starts at the oldest uncovered row');
+    assert.equal(result.upTo, anchors[batch * 2 + 1].id, 'Checkpoint target is the returned batch end, not the safe frontier');
+    assert.equal(result.safeEnd, anchors[4].id);
+    store.createCheckpoint(sessionGroup, result.upTo, 'Summary-free ordinary route anchors processed.');
+  }
+  const readStartup = () => emitC4Conversations({}, null, {
+    withDb: async (_label, action) => action({
+      getCoverageEnd: group => store.getCoverageEnd(group),
+      getDeliveredSince: (...args) => store.getDeliveredSince(...args),
+      formatConversationsForAgent,
+    }),
+    scopeReader: async () => ({ mode: 'multi', sessionGroup, scope: sessionGroup,
+      root: sandbox.paths.zylos, memoryDir: path.join(sandbox.paths.zylos, 'memory/session-groups', sessionGroup) }),
+  });
+  assert.equal(store.getCoverageEnd(sessionGroup), anchors[3].id);
+  const retained = store.getDeliveredSince(sessionGroup, store.getCoverageEnd(sessionGroup), { limit: 6 });
+  assert.equal(retained.length, 1);
+  assert.equal(retained[0].id, anchors[4].id);
+  const startup = await readStartup();
+  assert.ok(startup.includes(anchors[4].content));
+  assert.ok(startup.includes(buildReplyViaSuffix('dashboard', endpoint)));
+  assert.equal(startup.includes('--session-group'), false);
+  for (const value of [oldQuestion.summary, oldQuestion.interruptId]) assert.equal(startup.includes(value), false);
+  // Negative control reproduces the former one-anchor premise: real full
+  // coverage legitimately leaves no route-bearing C4 input in startup.
+  const remainder = store.queries.unsummarized({ group: sessionGroup, limit: 2 });
+  assert.equal(remainder.rows.length, 1);
+  store.createCheckpoint(sessionGroup, remainder.upTo, 'All ordinary history processed.');
+  const coveredStartup = await readStartup();
+  assert.equal(store.getDeliveredSince(sessionGroup, store.getCoverageEnd(sessionGroup), { limit: 6 }).length, 0);
+  assert.equal(coveredStartup.includes('FIXTURE_ROUTE_ANCHOR:'), false);
+  assert.equal(coveredStartup.includes('---- reply via:'), false);
+});
+
+test('TTL completion waits for the durable ending after the native identity disappears', { skip: !chatEnabled(), timeout: 5000 }, async t => {
+  const sandbox = createChatSandbox(t);
+  const { default: Database } = await import('better-sqlite3');
+  const { guardDatabase } = await import('../../comm-bridge/scripts/sqlite-schema.js');
+  const schema = await import('../../comm-bridge/scripts/c4-schema.js');
+  const { createStore } = await import('../../comm-bridge/scripts/c4-v2-store.js');
+  const { SupervisorLifecycle } = await import('../../activity-monitor/scripts/supervisor-lifecycle.js');
+  const database = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
+  guardDatabase(database, schema);
+  const store = createStore(database, { validateComponent: () => true,
+    readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
+  const sessionGroup = 'dashboard:ttl-support', runId = 'current-native-run';
+  store.recordRunEnd(sessionGroup, { runId: 'previous-native-run', reason: 'ttl' });
+  store.takeSlot(sessionGroup, { runId, k: 1 });
+  store.setDrainFence(sessionGroup, { runId, reason: 'ttl' });
+  const scene = { sessionGroup, runId, sessionId: 'native-session', runtime: 'claude',
+    present: true, ready: true, processRunning: true, state: 'idle', idleSince: 0 };
+  let identity = scene, releaseEnding, stopped;
+  const endingBarrier = new Promise(resolve => { releaseEnding = resolve; });
+  const stopObserved = new Promise(resolve => { stopped = resolve; });
+  const lifecycle = new SupervisorLifecycle({ db: store, observeGroup: () => identity,
+    stop: () => { identity = { sessionGroup, present: false }; },
+    intentionalStop: async () => { stopped(); await endingBarrier; },
+    readSyncMarker: () => ({ held: false, stale: false }) }, { now: () => 10000 });
+  const context = { configuration: { mode: 'multi' }, scenes: [scene],
+    fences: store.listDrainFences(), restartRequests: [], transition: null };
+  const reclaim = lifecycle.advanceReclaim(store.getDrainFence(sessionGroup), context);
+  let waiter;
+  try {
+    await Promise.race([stopObserved, reclaim.then(() => assert.fail('Reclaim finished without reaching the stopped-before-ending barrier'))]);
+    assert.equal(identity.present, false, 'The actual lifecycle already stopped the observed run');
+    assert.equal(store.listRunEndings([sessionGroup]).some(row => row.runId === runId), false);
+    assert.equal(store.listSlotOccupancy().some(row => row.runId === runId), true, 'The durable reclaim is not complete yet');
+    let reads = 0, settled = false;
+    waiter = waitForTtlRunEnding({ listRunEndings: groups => { reads++; return store.listRunEndings(groups); } },
+      sessionGroup, runId, { timeoutMs: 1000 });
+    waiter.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 1);
+    assert.equal(settled, false, 'Identity disappearance and an older ending cannot satisfy the wait');
+    releaseEnding();
+    assert.equal(await reclaim, 'done');
+    const ending = await waiter;
+    assert.equal(ending.runId, runId);
+    assert.equal(ending.reason, 'ttl');
+    assert.equal(store.listSlotOccupancy().length, 0);
+    assert.equal(store.getDrainFence(sessionGroup), null);
+    store.recordRunEnd(sessionGroup, { runId: 'unexpected-native-run', reason: 'unexpected' });
+    await assert.rejects(waitForTtlRunEnding(store, sessionGroup, 'unexpected-native-run'), /outside the real TTL path/);
+    await assert.rejects(waitForTtlRunEnding(store, sessionGroup, 'absent-native-run', { timeoutMs: 1 }), /Timed out waiting/);
+  } finally {
+    releaseEnding();
+    await reclaim.catch(() => {});
+    await waiter?.catch(() => {});
+  }
+});
+
+// Integration-gated private files and real launch preparation only; no model,
+// default socket, external history or live instance is accessed.
 test('native fixture shares Claude onboarding config and preserves proxy launch environment', { skip: !chatEnabled() }, async t => {
   const proxies = Object.fromEntries(runtimeProxyNames.map(key => [key, `http://fixture-${key}.invalid:8080`]));
   const sandbox = createChatSandbox(t, { gateEnv: { ...process.env, ...proxies } });

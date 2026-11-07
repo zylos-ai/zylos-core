@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createChatSandbox } from './chat-integration-harness.js';
-import { prepareNativeRuntimeResources, retainNativeFailure, writeNativeRuntimeManifest } from './chat-runtime-support.js';
+import { prepareNativeRuntimeResources, retainNativeFailure, waitForTtlRunEnding, writeNativeRuntimeManifest } from './chat-runtime-support.js';
 
 // A standalone process is required: product configuration modules capture env
 // on first import. No module is re-evaluated and no production source is edited.
@@ -50,7 +50,8 @@ fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
 fs.mkdirSync(path.join(root, 'workspace'), { recursive: true });
 fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
 const configuration = { runtime: 'claude', session_mode: 'multi',
-  session_pool_size: 3, session_hot_ttl_seconds: scenario === 'ttl' ? 5 : 3600,
+  session_pool_size: 3, session_hot_ttl_seconds: scenario === 'ttl' ? 60 : 3600,
+  sync_batch_limit: scenario === 'ttl' ? 2 : 200,
   session_evict_min_idle_seconds: 3600, sync_min_interval_seconds: 3600, sync_max_interval_seconds: 7200,
   upgrade_check_enabled: false, daily_upgrade_enabled: false, usage_monitor_enabled: false };
 const configFile = path.join(root, '.zylos/config.json');
@@ -164,23 +165,75 @@ try {
   let oldIdentity = await scenes.readIdentity(current.sessionGroup);
   check(oldIdentity.ready && oldIdentity.runtime === runtime, 'Real native runtime reached READY in multi group');
   if (scenario === 'ttl') {
+    const { GROUP_SYNC_PROMPT, PRE_RECLAIM_SYNC_PROMPT } = await load('skills/zylos-memory/scripts/sync-prompts.js');
+    const { readSyncMarker } = await load('skills/zylos-memory/scripts/sync-lock.js');
+    const { emitC4Conversations } = await load('skills/comm-bridge/scripts/c4-session-init.js');
+    const { groupRunDir } = await load('cli/lib/session-group-paths.js');
+    const controls = prompt => api.db.prepare('SELECT id,status FROM control_queue WHERE session_group=? AND raw_content=? ORDER BY id')
+      .all(current.sessionGroup, prompt);
+    const assertPreparing = async () => {
+      assert.equal(controls(PRE_RECLAIM_SYNC_PROMPT).length, 0, 'TTL preparation started before route-history fixture was ready');
+      const identity = await scenes.readIdentity(current.sessionGroup);
+      assert.ok(identity.present && identity.runId === oldIdentity.runId, 'Native run changed during route-history preparation');
+    };
+    await wait(async () => {
+      await assertPreparing();
+      return api.db.prepare("SELECT id FROM conversations WHERE session_group=? AND direction='in' AND content=? AND status='delivered'")
+        .get(current.sessionGroup, `FIXTURE_BEGIN:${current.localId}`);
+    }, 'initial input delivery before fixture checkpoint');
     // Keep fixture bookkeeping out of model context while exercising the real
-    // TTL lifecycle. The checkpoint contains no question summaries, so a new
-    // runtime can learn each summary only from the incoming answer itself.
-    const range = coreDb.getUnsummarizedRange(current.sessionGroup);
-    coreDb.createCheckpoint(current.sessionGroup, range.safeEnd, 'Dedicated fixture history processed; no pending business.');
-    // Startup history excludes pending inputs. Deliver a summary-free anchor
-    // after the checkpoint, so the next startup has a real historical route
-    // while the old questions remain outside its loaded history.
-    const anchor = `FIXTURE_ROUTE_ANCHOR:${nonce}`;
-    current = await sendText(current, anchor);
-    await wait(() => api.db.prepare("SELECT id FROM conversations WHERE session_group=? AND direction='in' AND content=? AND status='delivered'")
-      .get(current.sessionGroup, anchor), 'route anchor delivered before TTL');
-    oldIdentity = await scenes.readIdentity(current.sessionGroup);
-    check(oldIdentity.present && oldIdentity.ready, 'Route anchor belongs to a running native session');
-    await wait(async () => !(await scenes.readIdentity(current.sessionGroup)).present, 'Supervisor TTL reclamation', 120000);
-    const ending = coreDb.listRunEndings([current.sessionGroup]).find(row => row.runId === oldIdentity.runId);
-    check(ending?.reason === 'ttl', 'The original run ended through the real TTL path');
+    // TTL lifecycle. The fixture checkpoint contains no question summaries;
+    // the actual C4 startup readback below proves they are absent from its tail.
+    await wait(async () => {
+      await assertPreparing();
+      const ordinary = controls(GROUP_SYNC_PROMPT);
+      assert.ok(ordinary.length <= 1, 'Unexpected repeated ordinary Group Sync during fixture preparation');
+      const marker = readSyncMarker({ runDir: groupRunDir(current.sessionGroup), kind: 'group', currentRunId: oldIdentity.runId });
+      // Control delivery alone does not mean its background worker finished.
+      // A real checkpoint followed by marker removal proves checkpoint/release.
+      // If no control exists yet, checkpoint synchronously before it can launch
+      // a worker and fetch the old range. Do not await between this read/write.
+      if (ordinary.length && (ordinary[0].status !== 'done' || coreDb.getCoverageEnd(current.sessionGroup) === 0 || marker.reason !== 'missing')) return false;
+      if (!ordinary.length && marker.reason !== 'missing') return false;
+      assert.equal(controls(PRE_RECLAIM_SYNC_PROMPT).length, 0, 'TTL preparation overtook the fixture checkpoint');
+      const range = coreDb.getUnsummarizedRange(current.sessionGroup);
+      const questionEnd = Math.max(...outbound(current.sessionGroup).map(row => row.id));
+      check(range.safeEnd >= questionEnd, 'Fixture checkpoint frontier covers the original question outputs');
+      coreDb.createCheckpoint(current.sessionGroup, range.safeEnd, 'Dedicated fixture history processed; no pending business.');
+      check(coreDb.getCoverageEnd(current.sessionGroup) >= questionEnd, 'Original question history is outside the startup tail');
+      return true;
+    }, 'initial Group Sync checkpoint and released marker before fixture checkpoint', 240000);
+    // Existing Sync procedures consume one bounded oldest-first batch. At most
+    // one ordinary batch and one pre-TTL batch of two leave one of five genuine
+    // delivered inputs available to startup. Final readback verifies the result.
+    const anchors = Array.from({ length: 5 }, (_, index) => `FIXTURE_ROUTE_ANCHOR:${nonce}:${index}`);
+    for (const anchor of anchors) {
+      await assertPreparing();
+      current = await sendText(current, anchor);
+    }
+    await wait(async () => {
+      await assertPreparing();
+      return anchors.every(anchor => api.db.prepare("SELECT id FROM conversations WHERE session_group=? AND direction='in' AND content=? AND status='delivered'")
+        .get(current.sessionGroup, anchor));
+    }, 'all ordinary route anchors delivered before TTL');
+    await assertPreparing();
+    const preparedIdentity = await scenes.readIdentity(current.sessionGroup);
+    check(preparedIdentity.present && preparedIdentity.ready && preparedIdentity.runId === oldIdentity.runId, 'All route anchors belong to the original ready native session');
+    const ending = await waitForTtlRunEnding(coreDb, current.sessionGroup, oldIdentity.runId);
+    check(ending.reason === 'ttl' && !(await scenes.readIdentity(current.sessionGroup)).present, 'The original run completed the real TTL path');
+    const coverage = coreDb.getCoverageEnd(current.sessionGroup);
+    const tail = coreDb.getDeliveredSince(current.sessionGroup, coverage, { limit: 6 });
+    check(tail.some(row => row.direction === 'in' && anchors.includes(row.content)), 'Real Sync leaves a delivered route anchor above actual coverage');
+    // Assertion only: never feed this readback or a saved route to the model.
+    const startup = await emitC4Conversations({}, null, {
+      withDb: async (_label, action) => action(coreDb),
+      scopeReader: async () => ({ mode: 'multi', sessionGroup: current.sessionGroup,
+        scope: current.sessionGroup, root, memoryDir: path.join(root, 'memory/session-groups', current.sessionGroup) }),
+    });
+    check(anchors.some(anchor => startup.includes(anchor)), 'Actual startup formatter includes retained ordinary history');
+    check(startup.includes(`reply via: node ${path.join(packageRoot, 'skills/comm-bridge/scripts/c4-send.js')} "dashboard" "${current.localId}"`)
+      && !startup.includes('--session-group'), 'Actual startup retains the historical endpoint-only reply route');
+    check(questions.every(question => !startup.includes(question.questionSummary) && !startup.includes(question.interruptId)), 'Actual startup contains no original pending question summary or interrupt ID');
     const restored = await api.request(`${route}/questions`);
     check(restored.body.items.length === 4 && restored.body.items.every(item => item.status === 'paused'), 'TTL preserves question lifecycle');
     reclaimed = true;

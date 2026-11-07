@@ -3,9 +3,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export const runtimeProxyNames = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'];
+
+// Runtime disappearance precedes the durable ending receipt during reclaim.
+// Wait for that exact run's committed result before sending work to a successor.
+export async function waitForTtlRunEnding(store, sessionGroup, runId, { timeoutMs = 240_000 } = {}) {
+  assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, 'Run-ending wait must be bounded');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ending = store.listRunEndings([sessionGroup]).find(row => row.runId === runId);
+    if (ending) {
+      assert.equal(ending.reason, 'ttl', 'The original run ended outside the real TTL path');
+      return ending;
+    }
+    await delay(100);
+  }
+  throw Error('Timed out waiting for Supervisor TTL reclamation run ending');
+}
 
 export function prepareNativeRuntimeResources(sandbox) {
   sandbox.assertIsolation();
