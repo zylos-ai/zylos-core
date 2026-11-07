@@ -11,6 +11,7 @@ import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-con
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const example = name => structuredClone(fixtures.valid.find(item => item.name === name).envelope);
+const questionKeys = ['c4Id', 'messageId', 'interruptId', 'questionSummary', 'constraints', 'status', 'answerId', 'action', 'actionError', 'delivery'].sort();
 const canonical = group => `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
 
 // Real Dashboard Store + U validation, private fixture database only. Run for
@@ -261,17 +262,46 @@ test('question pages are bounded, group scoped and preserve answered and stopped
   f.answers.control({ sessionGroup: stopped.group, endpointId: stopped.endpoint, envelope: control(stopped, 'stop') });
   const first = f.answers.listQuestions(q.group, { limit: 1 });
   assert.equal(first.items.length, 1); assert.equal(first.items[0].status, 'answered');
+  assert.deepEqual(Object.keys(first.items[0]).sort(), questionKeys);
+  assert.equal(first.items[0].answerId, 'answer_action_01');
+  assert.equal(first.items[0].c4Id, q.id);
+  assert.deepEqual(first.items[0].constraints, { block: q.envelope.blocks[0], interrupt: q.envelope.interrupt });
   assert.equal(first.nextCursor, 'a_question');
   const second = f.answers.listQuestions(q.group, { limit: 1, cursor: first.nextCursor });
   assert.equal(second.items.length, 1); assert.equal(second.items[0].status, 'stopped');
   const last = f.answers.listQuestions(q.group, { limit: 1, cursor: second.nextCursor });
-  assert.equal(last.items.length, 1); assert.equal(last.items[0].interrupt_id, 'c_question'); assert.equal(last.nextCursor, null);
+  assert.equal(last.items.length, 1); assert.equal(last.items[0].interruptId, 'c_question'); assert.equal(last.nextCursor, null);
   const reopened = new Store(f.file);
   try {
     const answers = new ChatAnswers({ store: reopened });
     assert.equal(answers.question(q.group, q.envelope.interruptId).answer_id, 'answer_action_01');
     assert.equal(answers.question(stopped.group, stopped.envelope.interruptId).control_operation, 'stop');
   } finally { reopened.close(); }
+});
+
+
+test('question projection preserves large IDs and isolates malformed constraints without changing cursors', t => {
+  const f = fixture(t), bad = f.question('single', { interruptId: 'a_question' });
+  const good = f.question('single', { interruptId: 'b_question' });
+  const largeId = '9223372036854775807';
+  f.store.db.prepare('UPDATE chat_questions SET c4_id=? WHERE c4_id=?').run(largeId, good.id);
+  f.store.db.prepare('UPDATE chat_questions SET constraints=? WHERE c4_id=?').run('{broken', bad.id);
+  const first = f.answers.listQuestions(bad.group, { limit: 1 });
+  assert.equal(first.items.length, 1);
+  assert.deepEqual(Object.keys(first.items[0]).sort(), [...questionKeys, 'questionError'].sort());
+  assert.equal(first.items[0].questionError, 'chat_question_unavailable');
+  assert.equal(first.items[0].constraints, null);
+  assert.equal(first.nextCursor, 'a_question');
+  const next = f.answers.listQuestions(good.group, { limit: 1, cursor: first.nextCursor });
+  assert.equal(next.items.length, 1);
+  assert.deepEqual(Object.keys(next.items[0]).sort(), questionKeys);
+  assert.equal(typeof next.items[0].c4Id, 'string');
+  assert.equal(next.items[0].c4Id, largeId);
+  assert.equal(next.items[0].interruptId, good.envelope.interruptId);
+  assert.deepEqual(next.items[0].constraints, { block: good.envelope.blocks[0], interrupt: good.envelope.interrupt });
+  assert.equal(next.items[0].answerId, null);
+  for (const field of ['action', 'actionError', 'delivery']) assert.equal(next.items[0][field], null);
+  assert.equal(next.nextCursor, null);
 });
 
 // Migration fixture removes only this additive schema's tables and version,

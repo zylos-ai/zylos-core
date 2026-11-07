@@ -1,13 +1,13 @@
 import { parseC4Content, CONTENT_PREFIX, validateAnswer } from '../../chat-schema.js?v=90';
 import { element } from './plain-text.js?v=85';
-import { receiptState } from './chat-state.js?v=90';
+import { receiptState } from './chat-state.js?v=91';
 
 const clone = value => JSON.parse(JSON.stringify(value));
-const referenceMatches = (question, envelope, block, row) => question && row?.direction === 'out'
+const referenceMatches = (question, envelope, block, row) => question && !question.questionError && row?.direction === 'out'
   && /^[1-9][0-9]*$/.test(String(row.id))
-  && String(question.c4_id) === String(row.id)
-  && question.message_id === envelope.messageId && question.interrupt_id === envelope.interruptId
-  && question.question_summary === envelope.questionSummary && envelope.interrupt?.blockId === block.id;
+  && String(question.c4Id) === String(row.id)
+  && question.messageId === envelope.messageId && question.interruptId === envelope.interruptId
+  && question.questionSummary === envelope.questionSummary && envelope.interrupt?.blockId === block.id;
 
 /** A question uses its immutable message for fields and Dashboard for its current lifecycle. */
 export function renderQuestion({ document, envelope, block, row, question, canWrite = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
@@ -39,8 +39,8 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     error.setAttribute('role', 'alert'); root.append(error);
   }
   const actionUnavailable = lifecycle === 'answered' && (question.actionError ||
-    (question.action && (question.action.id !== question.answer_id || !validateAnswer(question.action, envelope))) ||
-    (formState.action && (formState.action.id !== question.answer_id || !validateAnswer(formState.action, envelope))));
+    (question.action && (question.action.id !== question.answerId || !validateAnswer(question.action, envelope))) ||
+    (formState.action && (formState.action.id !== question.answerId || !validateAnswer(formState.action, envelope))));
   if (actionUnavailable) root.append(node('p', t('chat.question.actionUnavailable'), 'chat-error'));
   const writable = canWrite && !readOnlyExternal && valid && !actionUnavailable && typeof onSubmit === 'function';
   const controls = [];
@@ -71,7 +71,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         context: { messageId: envelope.messageId, blockId: block.id }, payload };
     void submit(action);
   };
-  const retryAccepted = lifecycle === 'answered' && question.answer_id === formState.action?.id && receipt?.retryAllowed === true;
+  const retryAccepted = lifecycle === 'answered' && question.answerId === formState.action?.id && receipt?.retryAllowed === true;
   if (writable && formState.action && validateAnswer(formState.action, envelope) && retryAccepted) {
     root.append(button(t('chat.retry'), () => { void submit(formState.action, true); }, 'retryAnswer'), status);
     return root;

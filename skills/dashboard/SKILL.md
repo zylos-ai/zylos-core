@@ -212,13 +212,21 @@ naming and message submission; question answers and UI actions have separate con
 ### Questions, answers and delivery recovery
 
 `GET /api/chat/conversations/:id/questions?limit=50&cursor=…` returns a bounded
-`items` page with `nextCursor`. Each item preserves the original question
-references, summary and constraints, its Dashboard lifecycle state, any accepted
-`answer_id`, its saved `action` and its delivery receipt. After refresh, retry
-by posting that item's `action` unchanged with its `interrupt_id` as `interruptId`
-and `retry: true` when `delivery.retryAllowed` is true. A saved action that cannot
-be parsed as an object returns `actionError: "chat_answer_action_invalid"` on that
-item instead of `action`; other items remain readable. Opening or refreshing the
+`items` page with `nextCursor`, ordered by `interruptId`; the cursor is the
+last returned interrupt ID when more rows remain. Each item has only `c4Id`
+(a decimal string), `messageId`, `interruptId`, `questionSummary`,
+`constraints` (the parsed block/interrupt object), `status`, `answerId`,
+`action`, `actionError` and `delivery`. Unset answer/action/error/delivery
+values are `null`. Endpoint/group routing, creation timestamps and internal
+control columns are not returned; `status` already conveys stopped/superseded.
+Invalid saved constraints affect only that item: `constraints: null` and
+`questionError: "chat_question_unavailable"` make it unavailable for answering,
+while other items and the page cursor remain readable.
+After refresh, retry by posting that item's `action` unchanged with its
+`interruptId` and `retry: true` when `delivery.retryAllowed` is true.
+A saved action that cannot be parsed as an object returns
+`actionError: "chat_answer_action_invalid"` and `action: null` on that item;
+other items remain readable. Opening or refreshing the
 group checks only unresolved answer deliveries in bounded batches, using the same selection
 as startup recovery. A confirmed delivery with a saved C4 ID reads that row's
 status directly; it does not rescan the group's messages or replace its saved

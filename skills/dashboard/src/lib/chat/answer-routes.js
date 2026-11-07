@@ -1,3 +1,4 @@
+import { projectQuestion } from './answers.js';
 import { requireChatAccess, requireChatWrite } from './access.js';
 import { readJsonBody, sendJson } from '../http.js';
 
@@ -48,10 +49,10 @@ export async function handleChatAnswers(req, res, url, { auth, config, answers, 
       const currentAccess = requireChatAccess(req, auth, config);
       if (currentAccess) { respondDenied(res, currentAccess); return true; }
       sendJson(res, 200, { ...page, items: page.items.map(question => {
-        if (!question.answer_id) return question;
-        const { action, actionError } = answers.get(question.answer_id);
-        return { ...question, ...(actionError ? { actionError } : { action }),
-          delivery: delivery.receipt(question.answer_id) };
+        if (!question.answerId) return projectQuestion(question);
+        const { action, actionError } = answers.get(question.answerId);
+        return projectQuestion(question, { action, actionError,
+          delivery: delivery.receipt(question.answerId) });
       }) });
       return true;
     }

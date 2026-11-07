@@ -135,7 +135,7 @@ registerIntegrationCase('receive failures and lost receipts preserve commit evid
   a.setLookupUnavailable(false); a.setInvoke(null);
   await a.restartDelivery();
   const reopened = await a.request(first.route + '/questions');
-  const pending = reopened.body.items.find(item => item.interrupt_id === unknownQ.interruptId);
+  const pending = reopened.body.items.find(item => item.interruptId === unknownQ.interruptId);
   assert.equal(pending.delivery.stored, false); assert.equal(pending.delivery.retryAllowed, true);
   assert.equal(a.counts.receive, calls);
   const retried = await a.request(first.route + '/answers', post({ ...unknownBody, retry: true }));
@@ -161,7 +161,7 @@ registerIntegrationCase('receive failures and lost receipts preserve commit evid
     assert.notEqual(secondRestart.previousPid, secondRestart.pid);
     const reopened = await processFixture.request(active.route + '/questions');
     assert.equal(reopened.status, 200); assert.equal(reopened.body.items.length, 1);
-    assert.equal(reopened.body.items[0].answer_id, answer.action.id);
+    assert.equal(reopened.body.items[0].answerId, answer.action.id);
     assert.equal(reopened.body.items[0].delivery.stored, false); assert.equal(reopened.body.items[0].delivery.retryAllowed, true);
     assert.equal((await processFixture.snapshot()).receive, 0);
     const retry = await processFixture.request(active.route + '/answers', post({ ...answer, retry: true }));

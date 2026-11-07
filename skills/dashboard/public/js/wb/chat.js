@@ -1,8 +1,8 @@
 import { element } from './plain-text.js?v=85';
-import { createChatState, messageState, receiptState } from './chat-state.js?v=90';
+import { createChatState, messageState, receiptState } from './chat-state.js?v=91';
 import { parseC4Content } from '../../chat-schema.js?v=90';
 import { renderChatContent } from './chat-blocks.js?v=90';
-import { renderQuestion } from './chat-questions.js?v=90';
+import { renderQuestion } from './chat-questions.js?v=91';
 
 export function messageText(content, t = key => key) {
   const parsed = parseC4Content(content);
@@ -103,7 +103,7 @@ export function mountChat({ root, document = root.ownerDocument, t = key => key,
         const message = node('article', undefined, 'chat-message ' + (row.direction === 'in' ? 'chat-in' : 'chat-out'));
         message.dataset.messageId = String(row.id);
         const content = renderChatContent({ document, row, t, renderQuestion: ({ envelope, block }) => {
-          const question = s.questions.find(item => String(item.c4_id) === String(row.id) && item.interrupt_id === envelope.interruptId);
+          const question = s.questions.find(item => String(item.c4Id) === String(row.id) && item.interruptId === envelope.interruptId);
           const formKey = `${row.id}:${envelope.interruptId}`;
           if (!s.questionForms.has(formKey)) s.questionForms.set(formKey, {});
           return renderQuestion({ document, envelope, block, row, question, t,

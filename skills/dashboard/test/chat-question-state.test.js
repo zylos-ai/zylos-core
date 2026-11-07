@@ -9,8 +9,9 @@ const pending = () => {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 };
-const question = (overrides = {}) => ({ c4_id: 11, message_id: 'question-message',
-  interrupt_id: 'question-one', question_summary: 'Choose a route', status: 'paused', ...overrides });
+const question = (overrides = {}) => ({ c4Id: '11', messageId: 'question-message',
+  interruptId: 'question-one', questionSummary: 'Choose a route', constraints: { block: {}, interrupt: {} },
+  status: 'paused', answerId: null, action: null, actionError: null, delivery: null, ...overrides });
 const action = (overrides = {}) => ({ id: 'answer-intent-1', protocolVersion: '0.1',
   type: 'choice.select', target: 'route.choose', context: { messageId: 'question-message', blockId: 'choice' },
   payload: { selected: ['first'] }, ...overrides });
@@ -33,7 +34,7 @@ function fixture({ handle = () => undefined, mode = 'multi', identity } = {}) {
     return { conversation: { id, state: 'active' }, conversationId: id, stored: false };
   } });
   const form = (row = state.snapshot().questions[0], values = {}) => {
-    const forms = state.snapshot().questionForms, key = `${row.c4_id}:${row.interrupt_id}`;
+    const forms = state.snapshot().questionForms, key = `${row.c4Id}:${row.interruptId}`;
     if (!forms.has(key)) forms.set(key, { values: { note: 'keep this input' }, action: null,
       sending: false, locked: false, receipt: null, error: null, ...values });
     return forms.get(key);
@@ -50,11 +51,11 @@ test('question pages use bounded cursors and manual refresh replaces the page', 
     assert.equal(url.searchParams.get('limit'), '50');
     if (url.searchParams.has('cursor')) {
       assert.equal(url.searchParams.get('cursor'), 'next question');
-      return { items: [question({ status: 'answered', answer_id: 'accepted-one' }),
-        question({ c4_id: 12, interrupt_id: 'question-two' })], nextCursor: null };
+      return { items: [question({ status: 'answered', answerId: 'accepted-one' }),
+        question({ c4Id: '12', interruptId: 'question-two' })], nextCursor: null };
     }
     return ++round === 1 ? { items: [question()], nextCursor: 'next question' }
-      : { items: [question({ c4_id: 13, interrupt_id: 'replacement' })], nextCursor: null };
+      : { items: [question({ c4Id: '13', interruptId: 'replacement' })], nextCursor: null };
   } });
   await f.open();
   assert.equal(f.state.snapshot().questionsReady, true);
@@ -67,7 +68,7 @@ test('question pages use bounded cursors and manual refresh replaces the page', 
   assert.equal(f.calls.length, count);
   await f.state.refreshQuestions();
   assert.equal(f.state.snapshot().questions.length, 1);
-  assert.equal(f.state.snapshot().questions[0].interrupt_id, 'replacement');
+  assert.equal(f.state.snapshot().questions[0].interruptId, 'replacement');
   assert.equal(f.calls.at(-1).path.includes('cursor='), false);
   assert.equal(posts(f.calls).length, 0);
   f.state.destroy();
@@ -76,7 +77,7 @@ test('question pages use bounded cursors and manual refresh replaces the page', 
 test('a delayed question page from another conversation cannot replace the selected questions', async () => {
   const wait = pending();
   const f = fixture({ handle: path => path.includes('g%3AA/questions?') ? wait.promise
-    : path.includes('g%3AB/questions?') ? { items: [question({ c4_id: 22, interrupt_id: 'question-B' })], nextCursor: null } : undefined });
+    : path.includes('g%3AB/questions?') ? { items: [question({ c4Id: '22', interruptId: 'question-B' })], nextCursor: null } : undefined });
   await f.state.open();
   const first = f.state.select('g:A');
   await f.state.select('g:B');
@@ -84,7 +85,7 @@ test('a delayed question page from another conversation cannot replace the selec
   await first;
   assert.equal(f.state.snapshot().selectedId, 'g:B');
   assert.equal(f.state.snapshot().questions.length, 1);
-  assert.equal(f.state.snapshot().questions[0].interrupt_id, 'question-B');
+  assert.equal(f.state.snapshot().questions[0].interruptId, 'question-B');
   assert.equal(f.state.snapshot().error, null);
   f.state.destroy();
 });
@@ -137,7 +138,7 @@ test('drafts and unregistered questions never gain answer authority', async () =
 test('manual refresh overlays lifecycle and delivery without resending or modifying source messages', async () => {
   let refreshed = false;
   const f = fixture({ handle: path => path.includes('/questions?') ? { items: [question(refreshed
-    ? { status: 'answered', answer_id: 'saved-answer', delivery: { stored: true, deliveryState: 'failed', retryAllowed: false } }
+    ? { status: 'answered', answerId: 'saved-answer', delivery: { stored: true, deliveryState: 'failed', retryAllowed: false } }
     : {})], nextCursor: null } : undefined });
   await f.open();
   const original = f.state.snapshot().messages[0];
@@ -222,7 +223,7 @@ test('explicit retry uses the original action only after authority permits it', 
 
 for (const lifecycle of ['stopped', 'superseded']) test(`${lifecycle} questions cannot submit or retry`, async () => {
   const f = fixture({ handle: path => path.includes('/questions?') ? { items: [question({ status: lifecycle,
-    answer_id: 'answer-intent-1', delivery: { stored: false, retryAllowed: true } })], nextCursor: null } : undefined });
+    answerId: 'answer-intent-1', delivery: { stored: false, retryAllowed: true } })], nextCursor: null } : undefined });
   await f.open(); f.form(undefined, { action: action(), receipt: { stored: false, retryAllowed: true } });
   await f.state.answer('question-one', action());
   await f.state.answer('question-one', action(), { retry: true });
@@ -253,7 +254,7 @@ test('unknown answer outcome locks its intent without discarding question author
   let reconciled = false;
   const f = fixture({ handle: (path, options) => path.endsWith('/answers')
     ? Promise.reject(new Error('network lost'))
-    : path.includes('/questions?') ? { items: [question(reconciled ? { status: 'answered', answer_id: 'answer-intent-1',
+    : path.includes('/questions?') ? { items: [question(reconciled ? { status: 'answered', answerId: 'answer-intent-1',
       delivery: { stored: null, needsReconciliation: true, retryAllowed: false } } : {})], nextCursor: null } : undefined });
   await f.open(); const form = f.form(), intent = action();
   await f.state.answer('question-one', intent);
@@ -307,7 +308,7 @@ test('a question refresh during submission cannot hide the accepted answer respo
   wait.resolve(answerResult(intent)); await sending;
   assert.equal(form.receipt.stored, true);
   assert.equal(f.state.snapshot().questions[0].status, 'answered');
-  assert.equal(f.state.snapshot().questions[0].answer_id, intent.id);
+  assert.equal(f.state.snapshot().questions[0].answerId, intent.id);
   await f.state.answer('question-one', intent);
   assert.equal(posts(f.calls).length, 1);
   f.state.destroy();
@@ -359,7 +360,7 @@ test('a pending question read cannot restore paused after the answer was accepte
   questionWait.resolve({ items: [question()], nextCursor: null }); await refreshing;
   assert.equal(form.receipt.stored, true);
   assert.equal(f.state.snapshot().questions[0].status, 'answered');
-  assert.equal(f.state.snapshot().questions[0].answer_id, intent.id);
+  assert.equal(f.state.snapshot().questions[0].answerId, intent.id);
   assert.equal(f.state.snapshot().questionsLoading, false);
   assert.equal(posts(f.calls).length, 1);
   f.state.destroy();
@@ -367,7 +368,7 @@ test('a pending question read cannot restore paused after the answer was accepte
 
 test('failed question refresh preserves last known lifecycle and controls while reporting a separate read error', async () => {
   let failQuestions = false;
-  const rows = [question(), question({ c4_id: 12, interrupt_id: 'question-ended', status: 'stopped' })];
+  const rows = [question(), question({ c4Id: '12', interruptId: 'question-ended', status: 'stopped' })];
   const f = fixture({ handle: path => path.includes('/questions?')
     ? failQuestions ? Promise.reject({ code: 'chat_core_unavailable', status: 502 }) : { items: rows, nextCursor: null } : undefined });
   await f.open(); const form = f.form();
@@ -400,7 +401,7 @@ test('first question read failure has no authority and cannot submit an answer',
 });
 
 test('a lost answer request locks only that form and allows another question to submit', async () => {
-  const rows = [question(), question({ c4_id: 12, interrupt_id: 'question-two', message_id: 'second-message' })];
+  const rows = [question(), question({ c4Id: '12', interruptId: 'question-two', messageId: 'second-message' })];
   const f = fixture({ handle: (path, options) => path.includes('/questions?') ? { items: rows, nextCursor: null }
     : path.endsWith('/answers') && options.body.interruptId === 'question-one' ? Promise.reject(new Error('network lost')) : undefined });
   await f.open(); const first = f.form(rows[0]), second = f.form(rows[1]);
@@ -422,9 +423,9 @@ test('a lost answer request locks only that form and allows another question to 
 for (const [code, status] of [['chat_question_not_paused', 'stopped'], ['chat_answer_conflict', 'answered']]) {
   test(`${code} reconciles lifecycle with one read and never fabricates an unknown delivery`, async () => {
     let reads = 0;
-    const first = question(), second = question({ c4_id: 12, interrupt_id: 'question-two' });
+    const first = question(), second = question({ c4Id: '12', interruptId: 'question-two' });
     const f = fixture({ handle: (path, options) => path.includes('/questions?')
-      ? { items: [++reads === 1 ? first : { ...first, status, ...(status === 'answered' ? { answer_id: 'another-answer' } : {}) }, second], nextCursor: null }
+      ? { items: [++reads === 1 ? first : { ...first, status, ...(status === 'answered' ? { answerId: 'another-answer' } : {}) }, second], nextCursor: null }
       : path.endsWith('/answers') ? Promise.reject({ status: 409, code }) : undefined });
     await f.open(); const form = f.form(first), unaffected = f.form(second);
     await f.state.answer('question-one', action());
@@ -445,7 +446,7 @@ for (const [code, status] of [['chat_question_not_paused', 'stopped'], ['chat_an
 
 test('failed conflict reconciliation retains known questions and only locks the failed answer form', async () => {
   let reads = 0;
-  const first = question(), second = question({ c4_id: 12, interrupt_id: 'question-two' });
+  const first = question(), second = question({ c4Id: '12', interruptId: 'question-two' });
   const f = fixture({ handle: (path, options) => path.includes('/questions?')
     ? ++reads === 1 ? { items: [first, second], nextCursor: null } : Promise.reject({ code: 'chat_core_unavailable', status: 502 })
     : path.endsWith('/answers') && options.body.interruptId === 'question-one'
@@ -477,11 +478,15 @@ test('manual refresh of an unaccepted paused intent restores a normal submission
   await f.open(); const form = f.form(), intent = action();
   await f.state.answer('question-one', intent);
   assert.equal(form.locked, true);
+  assert.equal(form.error, 'chat_request_failed');
+  assert.equal(form.receipt.needsReconciliation, true);
   await f.state.answer('question-one', intent);
   assert.equal(posts(f.calls).length, 1);
   await f.state.refreshQuestions();
   assert.equal(f.state.snapshot().questions[0].status, 'paused');
+  assert.equal(f.state.snapshot().questions[0].answerId, null);
   assert.equal(form.locked, false);
+  assert.equal(form.error, null);
   assert.deepEqual(form.action, intent);
   assert.equal(form.values.note, 'keep this input');
   assert.equal(form.receipt, null);
@@ -517,7 +522,7 @@ test('a definite rejection stays locked when the registered question is still pa
 
 test('conflict on a later question page refreshes that bounded page and preserves earlier questions', async () => {
   let secondPageReads = 0;
-  const first = question(), second = question({ c4_id: 12, interrupt_id: 'question-two' });
+  const first = question(), second = question({ c4Id: '12', interruptId: 'question-two' });
   const f = fixture({ handle: (path, options) => {
     if (path.includes('/questions?')) {
       const url = new URL(path, 'http://fixture.invalid');
@@ -541,13 +546,71 @@ test('conflict on a later question page refreshes that bounded page and preserve
   assert.equal(posts(f.calls).length, 1);
   const s = f.state.snapshot();
   assert.equal(s.questions.length, 2);
-  assert.equal(s.questions.find(row => row.interrupt_id === 'question-one').status, 'paused');
-  assert.equal(s.questions.find(row => row.interrupt_id === 'question-two').status, 'stopped');
+  assert.equal(s.questions.find(row => row.interruptId === 'question-one').status, 'paused');
+  assert.equal(s.questions.find(row => row.interruptId === 'question-two').status, 'stopped');
   assert.equal(s.questionCursor, 'page-three');
   assert.equal(s.questionsReady, true);
   assert.equal(s.canWrite, true);
   assert.equal(firstForm.locked, false);
   assert.equal(secondForm.locked, true);
   assert.equal(secondForm.error, 'chat_question_not_paused');
+  f.state.destroy();
+});
+
+test('conflict on the first question page preserves the cursor after a later page was loaded', async () => {
+  let firstPageReads = 0;
+  const first = question(), second = question({ c4Id: '12', interruptId: 'question-two' });
+  const f = fixture({ handle: path => {
+    if (path.includes('/questions?')) {
+      const cursor = new URL(path, 'http://fixture.invalid').searchParams.get('cursor');
+      if (cursor === 'page-two') return { items: [second], nextCursor: 'page-three' };
+      firstPageReads++;
+      return { items: [{ ...first, status: firstPageReads === 1 ? 'paused' : 'stopped' }], nextCursor: 'page-two' };
+    }
+    if (path.endsWith('/answers')) return Promise.reject({ status: 409, code: 'chat_question_not_paused' });
+    return undefined;
+  } });
+  await f.open(); f.form(first);
+  await f.state.loadMoreQuestions();
+  assert.equal(f.state.snapshot().questionCursor, 'page-three');
+  const before = f.calls.filter(call => call.path.includes('/questions?')).length;
+  await f.state.answer(first.interruptId, action());
+  const reads = f.calls.filter(call => call.path.includes('/questions?'));
+  assert.equal(reads.length, before + 1);
+  assert.equal(new URL(reads.at(-1).path, 'http://fixture.invalid').searchParams.get('cursor'), null);
+  const s = f.state.snapshot();
+  assert.equal(s.questionCursor, 'page-three');
+  assert.equal(s.questions.find(row => row.interruptId === first.interruptId).status, 'stopped');
+  assert.equal(s.questions.find(row => row.interruptId === second.interruptId).status, 'paused');
+  assert.equal(posts(f.calls).length, 1);
+  f.state.destroy();
+});
+
+test('conflict reconciliation restores another accepted action and its authoritative delivery', async () => {
+  let reads = 0;
+  const submitted = action(), saved = action({ id: 'another-accepted-answer', payload: { selected: ['second'] } });
+  const delivery = { stored: true, deliveryState: 'running', retryAllowed: false, needsReconciliation: false };
+  const f = fixture({ handle: path => path.includes('/questions?')
+    ? { items: [question(++reads === 1 ? {} : { status: 'answered', answerId: saved.id, action: saved, delivery })], nextCursor: null }
+    : path.endsWith('/answers') ? Promise.reject({ status: 409, code: 'chat_answer_conflict' }) : undefined });
+  await f.open(); const form = f.form();
+  await f.state.answer('question-one', submitted);
+  assert.equal(reads, 2);
+  assert.equal(posts(f.calls).length, 1);
+  assert.equal(form.locked, true);
+  assert.deepEqual(form.action, saved);
+  assert.notEqual(form.action.id, submitted.id);
+  assert.deepEqual(form.receipt, delivery);
+  assert.equal(f.state.snapshot().questions[0].answerId, saved.id);
+  f.state.destroy();
+});
+
+test('an unavailable saved question cannot submit an answer from a retained form', async () => {
+  const f = fixture({ handle: path => path.includes('/questions?')
+    ? { items: [question({ constraints: null, questionError: 'chat_question_unavailable' })], nextCursor: null } : undefined });
+  await f.open(); f.form();
+  await f.state.answer('question-one', action());
+  assert.equal(posts(f.calls).length, 0);
+  assert.equal(f.state.snapshot().questionsReady, true);
   f.state.destroy();
 });

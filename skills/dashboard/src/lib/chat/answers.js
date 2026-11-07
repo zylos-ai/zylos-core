@@ -19,10 +19,32 @@ const projectAnswer = row => ({ answerId: row.answer_id, questionC4Id: row.quest
   sessionGroup: row.session_group, endpointId: row.endpoint_id, content: row.content,
   ...storedAction(row.action), createdAt: row.created_at });
 
-const questionSelect = `SELECT q.*, a.answer_id, c.operation AS control_operation,
-  c.replacement_interrupt_id, c.control_message_id FROM chat_questions q
+const questionSelect = `SELECT q.c4_id, q.session_group, q.endpoint_id, q.message_id,
+  q.interrupt_id, q.question_summary, q.constraints, q.status, q.created_at,
+  a.answer_id, c.operation AS control_operation, c.replacement_interrupt_id,
+  c.control_message_id FROM chat_questions q
   LEFT JOIN chat_answers a ON a.question_c4_id=q.c4_id
   LEFT JOIN chat_question_controls c ON c.question_c4_id=q.c4_id`;
+const questionPageSelect = `SELECT CAST(q.c4_id AS TEXT) AS c4Id,
+  q.message_id AS messageId, q.interrupt_id AS interruptId,
+  q.question_summary AS questionSummary, q.constraints, q.status,
+  a.answer_id AS answerId FROM chat_questions q
+  LEFT JOIN chat_answers a ON a.question_c4_id=q.c4_id`;
+
+/** The question-page contract is independent of storage and delivery columns. */
+export function projectQuestion(item, { action = null, actionError = null, delivery = null } = {}) {
+  let constraints, questionError;
+  try {
+    constraints = typeof item.constraints === 'string' ? JSON.parse(item.constraints) : item.constraints;
+    if (!constraints || typeof constraints !== 'object' || Array.isArray(constraints)) throw new Error('Invalid constraints');
+  } catch {
+    constraints = null;
+    questionError = 'chat_question_unavailable';
+  }
+  return { c4Id: String(item.c4Id), messageId: item.messageId, interruptId: item.interruptId,
+    questionSummary: item.questionSummary, constraints, status: item.status, answerId: item.answerId ?? null,
+    action, actionError, delivery, ...(questionError ? { questionError } : {}) };
+}
 
 function savedEnvelope(question) {
   let constraints;
@@ -81,11 +103,11 @@ export class ChatAnswers {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100 || (cursor !== null && (typeof cursor !== 'string' || cursor.length > 128))) {
       throw fail('invalid_chat_question_page');
     }
-    const rows = this.db.prepare(`${questionSelect}
+    const rows = this.db.prepare(`${questionPageSelect}
       WHERE q.session_group=@sessionGroup AND (@cursor IS NULL OR q.interrupt_id > @cursor)
       ORDER BY q.interrupt_id LIMIT @limit`).all({ sessionGroup, cursor, limit: limit + 1 });
-    const items = rows.slice(0, limit);
-    return { items, nextCursor: rows.length > limit ? items.at(-1).interrupt_id : null };
+    const items = rows.slice(0, limit).map(item => projectQuestion(item));
+    return { items, nextCursor: rows.length > limit ? items.at(-1).interruptId : null };
   }
 
   accept({ sessionGroup, endpointId, interruptId, action }) {

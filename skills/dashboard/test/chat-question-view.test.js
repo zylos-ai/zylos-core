@@ -22,8 +22,9 @@ function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = tru
   envelope.questionSummary = makeQuestionSummary(envelope);
   assert.equal(parseC4Content(CONTENT_PREFIX + JSON.stringify(envelope)).kind, 'envelope');
   const row = { id: 12, direction: 'out' };
-  const question = missing ? null : { c4_id: 12, message_id: envelope.messageId, interrupt_id: envelope.interruptId,
-    question_summary: envelope.questionSummary, status };
+  const question = missing ? null : { c4Id: '12', messageId: envelope.messageId, interruptId: envelope.interruptId,
+    questionSummary: envelope.questionSummary, constraints: { block, interrupt: envelope.interrupt },
+    status, answerId: null, action: null, actionError: null, delivery: null };
   mutateQuestion?.(question);
   const document = createDocument(), requests = [];
   const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, t, formState,
@@ -64,10 +65,10 @@ for (const status of ['answered', 'stopped', 'superseded', 'unknown']) test(`${s
 
 for (const reason of ['readonly', 'unregistered', 'wrong-c4', 'wrong-message', 'wrong-interrupt', 'wrong-summary']) test(`${reason} cannot submit a historical question`, () => {
   const f = fixture({ canWrite: reason !== 'readonly', missing: reason === 'unregistered', mutateQuestion(q) {
-    if (reason === 'wrong-c4') q.c4_id = 99;
-    if (reason === 'wrong-message') q.message_id = 'different-message';
-    if (reason === 'wrong-interrupt') q.interrupt_id = 'different-question';
-    if (reason === 'wrong-summary') q.question_summary = 'Different summary';
+    if (reason === 'wrong-c4') q.c4Id = '99';
+    if (reason === 'wrong-message') q.messageId = 'different-message';
+    if (reason === 'wrong-interrupt') q.interruptId = 'different-question';
+    if (reason === 'wrong-summary') q.questionSummary = 'Different summary';
   } });
   assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName)), false);
   assert.equal(f.requests.length, 0);
@@ -134,7 +135,7 @@ test('double click has one in-flight answer and explicit retry keeps the origina
   const confirm = f.button('confirmAnswer'); confirm.dispatch('click'); confirm.dispatch('click');
   assert.equal(f.requests.length, 1); assert.equal(confirm.disabled, true);
   f.formState.receipt = { stored: false, retryAllowed: true, deliveryState: 'not_stored' }; f.formState.locked = true;
-  f.question.status = 'answered'; f.question.answer_id = f.formState.action.id;
+  f.question.status = 'answered'; f.question.answerId = f.formState.action.id;
   pending.resolve(); await tick();
   const redrawn = f.render(); const retry = allNodes(redrawn).find(node => node.dataset.action === 'retryAnswer');
   assert.ok(retry); assert.equal(allNodes(redrawn).some(node => node.dataset.action === 'cancelAnswer'), false);
@@ -179,7 +180,7 @@ test('full mounted page posts an answer, then exposes an enabled explicit retry 
     let data;
     if (path.endsWith('/answers')) {
       const body = JSON.parse(options.body);
-      q = { ...q, status: 'answered', answer_id: body.action.id, delivery: receipt };
+      q = { ...q, status: 'answered', answerId: body.action.id, delivery: receipt };
       data = { answer: { answerId: body.action.id }, delivery: receipt };
     } else if (path.includes('/questions?')) data = { items: [q], nextCursor: null };
     else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
@@ -214,7 +215,7 @@ test('unknown answer restores normal same-action submission after manual refresh
       const body = JSON.parse(options.body); posts.push(body);
       if (posts.length === 1) throw new Error('response lost');
       data = { answer: { answerId: body.action.id }, delivery: { stored: true, deliveryState: 'pending', retryAllowed: false } };
-    } else if (path.includes('/questions?')) { questionReads++; data = { items: [{ ...base.question, status: 'paused', answer_id: null }], nextCursor: null }; }
+    } else if (path.includes('/questions?')) { questionReads++; data = { items: [{ ...base.question, status: 'paused', answerId: null }], nextCursor: null }; }
     else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
     else if (path.includes('/status?')) data = { items: [] };
     else if (path.includes('/api/session-mode')) data = { data: { sessionMode: 'multi' } };
@@ -251,7 +252,7 @@ test('valid saved accepted action exposes an exact explicit retry', async () => 
   const action = { id: 'answer-saved-one', protocolVersion: '0.1', type: 'confirmation.respond', target: 'answer.confirm',
     context: { messageId: base.envelope.messageId, blockId: 'question' }, payload: { outcome: 'cancel' } };
   const f = fixture({ type: 'confirmation', status: 'answered', formState: { action, locked: true }, mutateQuestion(q) {
-    q.answer_id = action.id; q.action = action; q.delivery = { stored: false, retryAllowed: true };
+    q.answerId = action.id; q.action = action; q.delivery = { stored: false, retryAllowed: true };
   } });
   const retry = f.button('retryAnswer'); assert.ok(retry); retry.dispatch('click'); await tick();
   assert.equal(f.requests.length, 1); assert.deepEqual(f.requests[0], { action, options: { retry: true } });
@@ -263,7 +264,7 @@ for (const problem of ['actionError', 'malformed', 'different-id']) test(`saved 
     context: { messageId: 'message-one', blockId: 'question' }, payload: { outcome: 'confirm' } };
   if (problem === 'malformed') action.context.blockId = 'wrong';
   const f = fixture({ type: 'confirmation', status: 'answered', formState: { action, locked: true }, mutateQuestion(q) {
-    q.answer_id = problem === 'different-id' ? 'answer-different' : action.id;
+    q.answerId = problem === 'different-id' ? 'answer-different' : action.id;
     q.action = action; q.delivery = { stored: false, retryAllowed: true };
     if (problem === 'actionError') q.actionError = 'chat_answer_action_invalid';
   } });
@@ -282,7 +283,7 @@ test('opening an answered question hydrates its stored action and retries exactl
     if (path.endsWith('/answers')) {
       const body = JSON.parse(options.body); posts.push(body);
       data = { answer: { answerId: action.id }, delivery: { stored: true, deliveryState: 'pending', retryAllowed: false } };
-    } else if (path.includes('/questions?')) data = { items: [{ ...base.question, status: 'answered', answer_id: action.id, action,
+    } else if (path.includes('/questions?')) data = { items: [{ ...base.question, status: 'answered', answerId: action.id, action,
       delivery: { accepted: true, stored: false, deliveryState: null, retryAllowed: true } }], nextCursor: null };
     else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
     else if (path.includes('/status?')) data = { items: [] };
@@ -412,7 +413,7 @@ async function mountedQuestions({ mode = 'multi', saved = false, retryAllowed, f
     if (path.endsWith('/answers')) { posts.push(JSON.parse(options.body)); throw new Error('response lost'); }
     if (path.includes('/questions?')) {
       if (queryFailed) return { ok: false, status: 502, json: async () => ({ error: 'chat_question_unavailable' }) };
-      data = { items: [{ ...base.question, ...(saved ? { status: 'answered', answer_id: action.id, action,
+      data = { items: [{ ...base.question, ...(saved ? { status: 'answered', answerId: action.id, action,
         delivery: { stored: false, retryAllowed } } : {}) }], nextCursor: null };
     } else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
     else if (path.includes('/status?')) data = { items: [] };
@@ -442,10 +443,25 @@ for (const retryAllowed of [false, null, undefined]) test(`mounted saved answer 
 
 test('mounted failed question query retains paused status and its valid controls', async () => {
   const f = await mountedQuestions();
+  const before = allNodes(f.root).find(node => node.className === 'chat-main');
+  assert.equal(before.children.some(node => node.className === 'chat-notice' && node.textContent === 'chat.questions.unavailable'), false);
   f.failQueries(); allNodes(f.root).find(node => node.dataset.action === 'refreshMessages').dispatch('click'); await tick(); await tick();
   const card = allNodes(f.root).find(node => node.className === 'chat-question');
   assert.match(card.textContent, /chat.question.paused/); assert.match(card.textContent, /chat.question.stateUnavailable/);
   assert.equal(card.textContent.includes('chat.question.unavailable'), false);
   assert.ok(allNodes(card).find(node => node.dataset.action === 'confirmAnswer'));
+  const main = allNodes(f.root).find(node => node.className === 'chat-main');
+  const notice = main.children.find(node => node.className === 'chat-notice' && node.textContent === 'chat.questions.unavailable');
+  assert.ok(notice);
+  assert.equal(allNodes(card).includes(notice), false);
   assert.equal(f.posts.length, 0); f.page.destroy();
+});
+
+test('a saved question with invalid constraints displays unavailable without answer controls', () => {
+  const f = fixture({ mutateQuestion(q) {
+    q.constraints = null; q.questionError = 'chat_question_unavailable';
+  } });
+  assert.match(f.root.textContent, /chat.question.unavailable/);
+  assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName)), false);
+  assert.equal(f.requests.length, 0);
 });

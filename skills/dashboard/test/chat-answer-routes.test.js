@@ -17,6 +17,7 @@ const protocol = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-c
 const envelope = name => structuredClone(protocol.valid.find(item => item.name === name).envelope);
 const group = 'dashboard-owned:local-chat';
 const conversationId = `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
+const questionKeys = ['c4Id', 'messageId', 'interruptId', 'questionSummary', 'constraints', 'status', 'answerId', 'action', 'actionError', 'delivery'].sort();
 const error = (code, statusCode) => Object.assign(new Error(code), { code, statusCode });
 
 // Boundary: actual HTTP route, AuthGate and conditional Dashboard transactions.
@@ -220,6 +221,14 @@ test('question pages show lifecycle and delivery overlays while every refresh re
   assert.equal(page.status, 200);
   assert.equal(page.body.items.length, 1);
   assert.equal(page.body.items[0].status, 'answered');
+  assert.deepEqual(Object.keys(page.body.items[0]).sort(), questionKeys);
+  assert.equal(typeof page.body.items[0].c4Id, 'string');
+  assert.deepEqual(page.body.items[0].constraints, { block: first.blocks[0], interrupt: first.interrupt });
+  assert.equal(page.body.items[0].messageId, first.messageId);
+  assert.equal(page.body.items[0].questionSummary, first.questionSummary);
+  assert.equal(page.body.items[0].answerId, 'http_answer');
+  assert.equal(page.body.items[0].action.id, 'http_answer');
+  assert.equal(page.body.items[0].actionError, null);
   assert.equal(page.body.items[0].delivery.stored, true);
   assert.equal(page.body.items[0].delivery.deliveryState, 'pending');
   assert.equal(page.body.nextCursor, first.interruptId);
@@ -231,9 +240,11 @@ test('question pages show lifecycle and delivery overlays while every refresh re
   const second = await f.request(`/questions?limit=1&cursor=${encodeURIComponent(page.body.nextCursor)}`, { method: 'GET' });
   assert.equal(second.status, 200);
   assert.equal(second.body.items.length, 1);
-  assert.equal(second.body.items[0].interrupt_id, next.interruptId);
+  assert.equal(second.body.items[0].interruptId, next.interruptId);
   assert.equal(second.body.items[0].status, 'paused');
-  assert.equal(Object.hasOwn(second.body.items[0], 'delivery'), false);
+  assert.deepEqual(Object.keys(second.body.items[0]).sort(), questionKeys);
+  assert.equal(second.body.items[0].answerId, null);
+  for (const field of ['action', 'actionError', 'delivery']) assert.equal(second.body.items[0][field], null);
   assert.equal(second.body.nextCursor, null);
   assert.equal(f.calls.reconciliations.length, 3);
   assert.equal(f.calls.deliveries.length, 1, 'refreshing questions cannot dispatch an answer');
@@ -300,11 +311,11 @@ test('a refreshed question exposes its saved action for one explicit retry after
   const item = page.body.items[0];
   const saved = JSON.parse(engine.store.db.prepare('SELECT action FROM chat_answers WHERE answer_id=?').get(answerId).action);
   assert.deepEqual(item.action, saved);
-  assert.equal(item.action.id, item.answer_id);
-  assert.equal(Object.hasOwn(item, 'actionError'), false);
+  assert.equal(item.action.id, item.answerId);
+  assert.equal(item.actionError, null);
   assert.equal(item.delivery.retryAllowed, true);
   assert.equal(engine.counts.receive, 0, 'refresh never sends the accepted answer');
-  const body = { interruptId: item.interrupt_id, action: item.action, retry: true };
+  const body = { interruptId: item.interruptId, action: item.action, retry: true };
   assert.equal((await f.request('/answers', { body })).status, 403);
   assert.equal(engine.counts.receive, 0, 'read-only mode can read the action but cannot retry');
   f.setMode('multi');
@@ -342,17 +353,17 @@ for (const corrupted of ['{broken', 'null', '[]']) {
     const page = await f.request('/questions', { method: 'GET' });
     assert.equal(page.status, 200);
     assert.equal(page.body.items.length, 3);
-    const broken = page.body.items.find(item => item.answer_id === bad.answerId);
+    const broken = page.body.items.find(item => item.answerId === bad.answerId);
     assert.equal(broken.actionError, 'chat_answer_action_invalid');
-    assert.equal(Object.hasOwn(broken, 'action'), false);
+    assert.equal(broken.action, null);
     assert.equal(broken.delivery.retryAllowed, true);
-    const intact = page.body.items.find(item => item.answer_id === good.answerId);
+    const intact = page.body.items.find(item => item.answerId === good.answerId);
     assert.deepEqual(intact.action, good.action);
-    assert.equal(Object.hasOwn(intact, 'actionError'), false);
+    assert.equal(intact.actionError, null);
     assert.equal(intact.delivery.retryAllowed, true);
-    const paused = page.body.items.find(item => item.interrupt_id === unanswered.envelope.interruptId);
+    const paused = page.body.items.find(item => item.interruptId === unanswered.envelope.interruptId);
     assert.equal(paused.status, 'paused');
-    for (const field of ['action', 'actionError', 'delivery']) assert.equal(Object.hasOwn(paused, field), false);
+    for (const field of ['action', 'actionError', 'delivery']) assert.equal(paused[field], null);
     const attempted = await f.request('/answers', { body: {
       interruptId: badQuestion.envelope.interruptId, action: bad.action, retry: true,
     } });
@@ -363,3 +374,33 @@ for (const corrupted of ['{broken', 'null', '[]']) {
     assert.equal(engine.answerRows(good.answerId).length, 0);
   });
 }
+
+
+test('question HTTP projection marks only bad constraints and preserves exact string IDs and pagination', async t => {
+  const f = await fixture(t);
+  f.seed('single', { messageId: 'bad_question', interruptId: 'a_question' });
+  const good = f.seed('single', { messageId: 'good_question', interruptId: 'b_question' });
+  const largeId = '9223372036854775807';
+  f.store.db.prepare('UPDATE chat_questions SET c4_id=? WHERE interrupt_id=?').run(largeId, good.interruptId);
+  f.store.db.prepare('UPDATE chat_questions SET constraints=? WHERE interrupt_id=?').run('{broken', 'a_question');
+  const first = await f.request('/questions?limit=1', { method: 'GET' });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.items.length, 1);
+  const broken = first.body.items[0];
+  assert.deepEqual(Object.keys(broken).sort(), [...questionKeys, 'questionError'].sort());
+  assert.equal(broken.questionError, 'chat_question_unavailable');
+  assert.equal(broken.constraints, null);
+  assert.equal(first.body.nextCursor, 'a_question');
+  const next = await f.request('/questions?limit=1&cursor=a_question', { method: 'GET' });
+  assert.equal(next.status, 200);
+  assert.equal(next.body.items.length, 1);
+  const item = next.body.items[0];
+  assert.deepEqual(Object.keys(item).sort(), questionKeys);
+  assert.equal(item.c4Id, largeId);
+  assert.equal(typeof item.c4Id, 'string');
+  assert.equal(item.interruptId, good.interruptId);
+  assert.deepEqual(item.constraints, { block: good.blocks[0], interrupt: good.interrupt });
+  assert.equal(item.answerId, null);
+  assert.equal(next.body.nextCursor, null);
+  assert.equal(f.calls.deliveries.length, 0);
+});
