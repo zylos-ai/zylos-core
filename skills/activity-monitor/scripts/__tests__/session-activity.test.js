@@ -108,6 +108,10 @@ test('child aggregation rejects foreign identities and invalid timestamps and re
  assert.equal(result.lastActivityAt,100);assert.equal(result.state,'idle');
 });
 
+// Boundary: real event files, rotation and child recovery across main turns.
+// Run for activity/recovery changes; unrelated UI work may skip. The official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; fixture closes readers
+// and removes its private files. No tmux, PM2, runtime or network is started.
 test('restart recovers child lifetimes across rotations and main turn boundaries',async t=>{
  const {appendEvent,rotateEventLog}=await import('../../../../cli/lib/event-log.js');
  for(const terminal of [false,true]){
