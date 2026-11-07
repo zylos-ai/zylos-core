@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 25;
+export const TARGET_SCHEMA_VERSION = 26;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -90,6 +90,8 @@ export function inspectDatabase(db) {
   if (!Number.isInteger(currentVersion) || currentVersion < 0) throw new Error('Unsupported Dashboard schema version');
   if (currentVersion === TARGET_SCHEMA_VERSION) {
     const required = {
+      chat_attachments: 'id local_id namespace storage_name name size mime kind source principal created_at c4_watermark scanned_c4_id scan_upper_id next_check_at',
+      chat_attachment_messages: 'attachment_id c4_id',
       chat_answers: 'answer_id question_c4_id session_group endpoint_id content action created_at',
       chat_answer_deliveries: 'answer_id state c4_id error updated_at',
       chat_question_controls: 'question_c4_id operation replacement_interrupt_id control_message_id created_at',
@@ -112,6 +114,24 @@ export function inspectDatabase(db) {
     };
     for (const [table, columns] of Object.entries(required)) {
       db.prepare(`SELECT ${columns.split(' ').join(', ')} FROM ${table} LIMIT 0`).all();
+    }
+    for (const [table, expected] of [
+      ['chat_attachments', 'id'], ['chat_attachment_messages', 'attachment_id,c4_id'],
+    ]) {
+      const actual = db.pragma(`table_info(${table})`).filter(column => column.pk)
+        .sort((a, b) => a.pk - b.pk).map(column => column.name).join(',');
+      if (actual !== expected) throw new Error('Unsupported Dashboard attachment identity');
+    }
+    for (const [table, name, expected] of [
+      ['chat_attachments', 'idx_chat_attachments_due', 'next_check_at,id'],
+      ['chat_attachments', 'idx_chat_attachments_conversation', 'namespace,local_id,id'],
+      ['chat_attachment_messages', 'idx_chat_attachment_messages_row', 'c4_id,attachment_id'],
+    ]) {
+      const index = db.pragma(`index_list(${table})`).find(item => item.name === name);
+      if (!index || index.unique || index.partial
+          || db.pragma(`index_info(${name})`).map(column => column.name).join(',') !== expected) {
+        throw new Error('Unsupported Dashboard attachment lookup index');
+      }
     }
     const questionKey = db.pragma('table_info(chat_questions)').filter(column => column.pk).map(column => column.name);
     const questionReference = db.pragma('index_list(chat_questions)').some(index => index.unique
@@ -505,6 +525,38 @@ export function migrateDatabase(db) {
             created_at INTEGER NOT NULL
           );
           INSERT OR IGNORE INTO schema_migrations(version) VALUES(25);
+        `);
+      })();
+    }
+    if (currentVersion < 26) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE chat_attachments (
+            id TEXT PRIMARY KEY NOT NULL,
+            local_id TEXT NOT NULL,
+            namespace TEXT NOT NULL,
+            storage_name TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            size INTEGER NOT NULL CHECK(size >= 0),
+            mime TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('image','file')),
+            source TEXT NOT NULL CHECK(source IN ('user','agent')),
+            principal TEXT,
+            created_at INTEGER NOT NULL,
+            c4_watermark INTEGER NOT NULL CHECK(c4_watermark >= 0),
+            scanned_c4_id INTEGER NOT NULL CHECK(scanned_c4_id >= c4_watermark),
+            scan_upper_id INTEGER,
+            next_check_at INTEGER NOT NULL
+          );
+          CREATE INDEX idx_chat_attachments_due ON chat_attachments(next_check_at,id);
+          CREATE INDEX idx_chat_attachments_conversation ON chat_attachments(namespace,local_id,id);
+          CREATE TABLE chat_attachment_messages (
+            attachment_id TEXT NOT NULL,
+            c4_id INTEGER NOT NULL,
+            PRIMARY KEY(attachment_id,c4_id)
+          );
+          CREATE INDEX idx_chat_attachment_messages_row ON chat_attachment_messages(c4_id,attachment_id);
+          INSERT INTO schema_migrations(version) VALUES(26);
         `);
       })();
     }

@@ -19,6 +19,8 @@ import { ChatAnswers } from './lib/chat/answers.js';
 import { ChatAnswerDelivery } from './lib/chat/delivery.js';
 import { handleChatAnswers } from './lib/chat/answer-routes.js';
 import { handleChatConversations } from './lib/chat/write-routes.js';
+import { ChatAttachments } from './lib/chat/attachments.js';
+import { handleChatAttachments } from './lib/chat/attachment-routes.js';
 import { browserBaseFromRequest } from './lib/browser-base.js';
 import { mutateConfig } from './lib/config-mutation.js';
 import {
@@ -1660,13 +1662,14 @@ async function handleMemoryApi(req, res, pathname, url) {
 
 export function createServer() {
   const conversations = new ChatConversations({ store, isUsed: localId => isChatLocalIdUsed(c4Reader, localId) });
-  const sender = new ChatSender({ conversations, c4Reader, zylosDir: config.zylosDir });
+  const attachments = new ChatAttachments({ store, c4Reader, zylosDir: config.zylosDir });
+  const sender = new ChatSender({ conversations, c4Reader, zylosDir: config.zylosDir, attachments });
   const answers = new ChatAnswers({ store });
   const answerDelivery = new ChatAnswerDelivery({ answers, sender, c4Reader });
   const answersReady = answerDelivery.recover().catch(() => {
     console.error('[chat] Answer delivery recovery remains pending.');
   });
-  const history = new ChatHistory({ c4Reader, conversations });
+  const history = new ChatHistory({ c4Reader, conversations, attachments });
   const rootDir = publicDir();
   const fleetProxy = new FleetProxy({ config, rootDir, poller: fleetPoller, authGate: auth });
 
@@ -1707,6 +1710,8 @@ export function createServer() {
     }
 
     if (await handleChatSettings(req, res, url, { auth, config })) return;
+    if (await handleChatAttachments(req, res, url, { auth, config, sender, attachments,
+      readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
     if (pathname.startsWith('/api/chat/conversations/')) {
       await answersReady;
       if (await handleChatAnswers(req, res, url, { auth, config, answers, delivery: answerDelivery, sender,
@@ -1875,6 +1880,25 @@ export function createServer() {
       sendText(res, 404, 'not found');
     }
   });
+  let collecting = null;
+  const collect = () => {
+    if (!collecting) collecting = attachments.gc().catch(() => {
+      console.error('[chat] Attachment cleanup remains pending.');
+    }).finally(() => { collecting = null; });
+  };
+  collect();
+  const attachmentTimer = setInterval(collect, 5 * 60 * 1000);
+  attachmentTimer.unref();
+  let attachmentClose = null;
+  server.closeAttachments = () => {
+    clearInterval(attachmentTimer);
+    return attachmentClose ??= attachments.close();
+  };
+  server.on('close', () => {
+    server.closeAttachments().catch(() => {
+      console.error('[chat] Attachment cleanup did not close cleanly.');
+    });
+  });
   server.on('upgrade', (req, socket, head) => {
     let url;
     try { url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`); } catch {
@@ -2009,6 +2033,7 @@ if (isMain && process.argv.includes('--smoke')) {
         process.stderr.write(`[observer] shutdown failed: ${code}\n`);
       }
       await coreLogImporter.stop();
+      await server.closeAttachments();
       c4Reader.close();
       store.close();
       process.exit(exitCode);

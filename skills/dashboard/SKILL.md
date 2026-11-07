@@ -276,3 +276,51 @@ immutable. If application fails after storage, the channel reports the original
 error code and that the message is already stored/read-only and must not be
 resent. Confirmation `cancel` remains an accepted answer. Ordinary new chat
 messages leave paused questions unchanged.
+
+### Sending and reading attachments
+
+On the target instance, prepare a private copy before sending an image or file:
+
+```bash
+node <skills-dir>/dashboard/scripts/attachments.js register --conversation <local-id> --kind file --path /absolute/path/to/report.pdf
+node <skills-dir>/dashboard/scripts/attachments.js resolve --conversation <local-id> --id <attachment-id>
+```
+
+Take the local conversation ID from the current Dashboard reply route. `register`
+accepts only ordinary readable files under the resolved instance's
+`components/dashboard/media`, `workspace`, or `/tmp`. `--kind image` requires
+PNG, JPEG, GIF or WebP magic bytes. The private copy survives moving or deleting
+the source. Both services and this command read `WEB_CONSOLE_MAX_UPLOAD_MB` from
+the actual instance's `.env`; invalid or missing values use 20 MiB. Each file is
+limited independently, with at most 20 attachments per message.
+
+Registration succeeds with
+`{ok:true,attachmentId,name,kind,expiresAt}`. The expiry is the roughly 25-minute
+deadline for sending an unlinked attachment, not its deletion time. `resolve`
+returns `{ok:true,path}` for a readable copy in the same conversation, including
+a prepared but not yet linked copy. Failures exit nonzero and return
+`{ok:false,error:{code,message}}` without a usable ID or another group's details.
+The browser cannot download a prepared attachment until a real message links it.
+Linked copies remain readable after login expiry, runtime expiry or 30 minutes.
+
+Use the returned ID and filename in the original message envelope:
+
+Image/file blocks require a Core schema and Dashboard BeforeSend validator
+that support `x-zylos.image` and `x-zylos.file`. Registration and resolution do
+not add that protocol support. A Core without it rejects the whole envelope,
+including when reading existing history; do not send these blocks until the
+compatible schema and validator are deployed on all readers.
+
+```json
+{"id":"report","type":"x-zylos.file","schemaVersion":1,"data":{"attachmentId":"<returned-id>","nameSnapshot":"report.pdf"},"fallbackText":"File: report.pdf (attachment <returned-id>)"}
+```
+
+For images use `x-zylos.image` and a registered `image` ID. The block contains no
+source path, URL, bytes, size or MIME claims. Send the complete envelope through
+the **original reply-via command unchanged**, with content on stdin; preserve
+all original flags, including `--session-group` and absorbed-reply routing.
+There is no attachment send subcommand. Plain `[MEDIA:...]` text does not
+register or copy a file. Registration alone does not send a message; follow the
+original send-result contract before deciding whether to retry. A failed send
+does not consume the ID, and an already linked same-conversation ID can be
+reused after its preparation deadline.

@@ -51,6 +51,14 @@ EOF
 Always pipe messages via stdin heredoc — never pass as CLI arguments. See [c4-send](references/c4-send.md) for full reference.
 Treat the heredoc wrapper as fixed shell syntax: only the message body goes between the start line and the closing terminator line, and the terminator itself must never be copied into the actual outgoing message.
 
+For Dashboard image/file replies, first read the attachment commands in
+`skills/dashboard/SKILL.md`. Register the source on the target instance, then
+put its returned ID in an `x-zylos.image` or `x-zylos.file` block. Send the complete
+envelope on stdin through the original reply-via command unchanged, preserving
+its session-group and absorbed-reply flags. Plain `[MEDIA:...]` text does not
+register or copy files. Use Dashboard's same-conversation `resolve` command to
+read a previously registered private copy.
+
 ## Messages Between Session Threads
 
 In multi-session mode, use `internal` to ask another thread a question or tell

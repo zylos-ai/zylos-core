@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { isDataError as localDataError, parseSessionGroup, validateGroupName, validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
 import { MAX_CONTENT_BYTES } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { deliveryState } from './history.js';
+import { buildAnnotatedContent } from '../../../../web-console/scripts/attachment-utils.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const canonicalId = row => `g:${Buffer.from(`${row.namespace}:${row.localId}`).toString('hex').toUpperCase()}`;
@@ -24,10 +25,11 @@ export function classifyReceiveResult(result, failure, isDataError = localDataEr
 
 /** One process-local sender; persistence records uncertainty, never a retry lease. */
 export class ChatSender {
-  constructor({ conversations, c4Reader, loadCore, zylosDir }) {
+  constructor({ conversations, c4Reader, loadCore, zylosDir, attachments = null }) {
     this.conversations = conversations;
     this.c4Reader = c4Reader;
     this.zylosDir = zylosDir;
+    this.attachments = attachments;
     this.inflight = new Map();
     this.loadCore = loadCore ?? (async () => {
       const scripts = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts');
@@ -82,6 +84,16 @@ export class ChatSender {
   async resolve(id) {
     const row = this._record(id);
     if (row.namespace) this._binding(row);
+    return row;
+  }
+
+  async prepareAttachmentConversation(row, { authorize } = {}) {
+    const core = await this.loadCore();
+    const denied = await authorize?.(row);
+    if (denied) throw fail(denied.error || 'chat_conversation_forbidden', denied.status || 403);
+    const binding = await core.ensureChannelNamespace('dashboard');
+    if (binding?.componentName !== 'dashboard' || !validNamespace(binding.namespace)
+        || (row.namespace && row.namespace !== binding.namespace)) throw fail('chat_conversation_forbidden', 403);
     return row;
   }
 
@@ -161,11 +173,15 @@ export class ChatSender {
     return this._receipt(row, { initial: true });
   }
 
-  async send(id, { content, retry = false } = {}, { authorize } = {}) {
-    if (typeof content !== 'string' || !content.trim() || Buffer.byteLength(content) > MAX_CONTENT_BYTES || typeof retry !== 'boolean') {
+  async send(id, { content = '', retry = false, attachments = [] } = {}, { authorize, principal } = {}) {
+    if (typeof content !== 'string' || typeof retry !== 'boolean' || !Array.isArray(attachments)
+        || (attachments.length && !this.attachments)) {
       throw fail('invalid_chat_content');
     }
     let row = await this.resolve(id);
+    const records = this.attachments?.prepareSend(row, attachments, principal) ?? [];
+    if (records.length) content = buildAnnotatedContent(content, records);
+    if (!content.trim() || Buffer.byteLength(content) > MAX_CONTENT_BYTES) throw fail('invalid_chat_content');
     const initial = id.startsWith('d:');
     if (initial && row.state === 'active') return this._initialReceipt(row, content);
     if (this.inflight.has(row.localId)) return { ...this._receipt(row, { initial }), retryAllowed: false, preserveInput: true };
@@ -204,6 +220,12 @@ export class ChatSender {
           '--session-group', row.localId, '--content', content]);
       } catch (error) { failure = error; }
       const { id: savedId, ...outcome } = classifyReceiveResult(result, failure, core.isDataError ?? localDataError);
+      if (savedId && records.length) {
+        try {
+          const saved = this._db().prepare('SELECT * FROM conversations WHERE id=?').get(savedId);
+          if (saved) this.attachments.linkRow(saved);
+        } catch { /* Historical reads and bounded collection repair late links. */ }
+      }
       if (outcome.kind === 'committed') {
         this.conversations.markCommitted(row.localId, { id: savedId });
         row = this.conversations.saveOutcome(row.localId, { content: failure || outcome.action === 'suppressed' ? content : null,

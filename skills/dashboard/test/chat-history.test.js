@@ -133,8 +133,8 @@ test('list previews project structured content before applying the character bud
   f.add({ id: 4, session_group: 'tg:long', content: 'a'.repeat(200) });
   const items = f.history.list({ tab: 'external' }).items;
   const preview = group => items.find(item => item.session_group === group).preview;
-  assert.equal(preview('tg:valid'), `${envelope.fallbackText}\n[C4 messageId=${envelope.messageId}; c4_id=1]`);
-  assert.equal(preview('tg:invalid'), '[C4 content invalid; c4_id=2]');
+  assert.equal(preview('tg:valid'), envelope.fallbackText);
+  assert.equal(preview('tg:invalid'), '无法显示的消息');
   assert.equal(preview('tg:plain'), 'ordinary text');
   assert.equal(preview('tg:long'), 'a'.repeat(160));
   for (const item of items) {

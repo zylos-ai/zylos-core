@@ -228,6 +228,7 @@ module.exports = {
       cwd: HOME,
       env: {
         PATH: ENHANCED_PATH,
+        ZYLOS_DIR,
         NODE_ENV: 'production'
       },
       autorestart: true,

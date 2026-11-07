@@ -23,6 +23,9 @@ function withoutLegacyRoute(content, row) {
 
 export function formatConversation(row, { scriptPath = sendPath } = {}) {
   const content = withoutLegacyRoute(projectC4Content(row.content || '', { c4Id: row.id }), row);
-  const suffix = row.endpoint_id ? ` ${replyVia(row, scriptPath)}` : '';
+  const attachmentHint = row.channel === 'dashboard' && row.direction === 'in'
+    ? `\nDashboard attachments: read ${path.join(SKILLS_DIR, 'dashboard', 'SKILL.md')} before registering files; send with the original reply-via command unchanged.\n`
+    : '';
+  const suffix = row.endpoint_id ? `${attachmentHint} ${replyVia(row, scriptPath)}` : '';
   return truncateForDelivery(content, suffix, row.id);
 }
