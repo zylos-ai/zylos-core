@@ -1,6 +1,6 @@
 import { element, fallbackName, icon } from './plain-text.js?v=94';
 import { createFetchGuard } from './fetch-guard.js?v=85';
-import { cronText } from './cron-text.js?v=85';
+import { cronText } from './cron-text.js?v=94';
 import { createForm, createPreviewer, formPayload, initialForm, intervalText, previewPath, wrapSelect } from './schedule-form.js?v=94';
 
 const ENABLED = new Set(['pending', 'running']);
@@ -467,7 +467,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     return box;
   }
   function renderTimeline() {
-    const box = element(document, 'section', undefined, 'wb-sched-block');
+    const box = element(document, 'section', undefined, 'wb-sched-block wb-sched-lane');
     box.append(sectionHead(document, 'clock', t('wb.schedule.kpi.next24h')));
     const lane = element(document, 'div', undefined, 'wb-sched-timeline');
     const axis = element(document, 'div', undefined, 'wb-sched-axis');
@@ -477,9 +477,9 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       const line = element(document, 'i', undefined, 'wb-sched-tick');
       line.style.setProperty('left', `${tick.left}%`);
       lane.append(line);
-      // Narrow screens keep every other label; a label right next to "now" is dropped.
+      // A narrow lane keeps every other label; labels close to "now" are dropped so they never overlap it.
       const label = element(document, 'span', tick.midnight ? t('wb.schedule.day.tomorrow', { time: '00:00' }) : `${tick.hour}:00`,
-        [index % 2 ? 'wb-odd' : '', tick.left < 6 ? 'wb-near' : ''].filter(Boolean).join(' ') || undefined);
+        [index % 2 ? 'wb-odd' : '', tick.left < 6 ? 'wb-near' : tick.left < 12 ? 'wb-near2' : ''].filter(Boolean).join(' ') || undefined);
       label.style.setProperty('left', `${tick.left}%`);
       axis.append(label);
     });
@@ -571,6 +571,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     name.append(title, element(document, 'small', firstSentence(task.prompt)));
     const rule = element(document, 'span', scheduleText(task, { t, locale: locale() }), 'wb-sched-rule');
     if (level() === 'technical' && task.cron) rule.append(element(document, 'small', task.cron, 'wb-mono'));
+    // The original rule stays reachable in plain view, including rules that are not put into words.
+    if (task.cron) rule.title = task.cron;
     const upcoming = nextRun(task);
     const next = element(document, 'span', task.nextRuns?.unavailable ? t('wb.schedule.noPreview')
       : upcoming == null ? '—' : untilText(upcoming, now(), t), 'wb-sched-next');
@@ -805,6 +807,24 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     if (task && confirmFor === task.id) nodes.push(renderConfirm(task));
     root.className = 'wb-schedule' + (side ? ' wb-has-side' : '');
     root.replaceChildren(...nodes);
+    fitAxis();
+  }
+  /** After layout, drop lane labels that would touch the one before them (long words such as "Tomorrow 00:00"). */
+  function fitAxis() {
+    const frame = window?.requestAnimationFrame;
+    if (!frame) return;
+    frame(() => {
+      const axis = root.querySelector?.('.wb-sched-axis');
+      if (!axis?.getBoundingClientRect) return;
+      let last = null;
+      for (const label of axis.children) {
+        label.classList.remove('wb-crowded');
+        if (getComputedStyle(label).display === 'none') continue;
+        const box = label.getBoundingClientRect();
+        if (last !== null && box.left < last + 6) label.classList.add('wb-crowded');
+        else last = box.right;
+      }
+    });
   }
   const visibility = () => {
     if (document.visibilityState === 'visible') refresh();
@@ -833,6 +853,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   document.addEventListener('keydown', keydown);
   toggle?.addEventListener('change', redrawLater);
   window?.addEventListener('popstate', visibility);
+  window?.addEventListener('resize', fitAxis);
   const timer = setInterval(refresh, 30000);
   refresh();
   return () => {
@@ -846,5 +867,6 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     document.removeEventListener('keydown', keydown);
     toggle?.removeEventListener('change', redrawLater);
     window?.removeEventListener('popstate', visibility);
+    window?.removeEventListener('resize', fitAxis);
   };
 }

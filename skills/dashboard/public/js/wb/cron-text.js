@@ -10,6 +10,7 @@ const words = {
     minutes: k => `每 ${k} 分钟`,
     hours: k => `每 ${k} 小时`,
     days: ['日', '一', '二', '三', '四', '五', '六'],
+    timeJoin: '、',
   },
   en: {
     daily: time => `Every day at ${time}`,
@@ -20,6 +21,7 @@ const words = {
     minutes: k => `Every ${k} minutes`,
     hours: k => `Every ${k} hours`,
     days: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+    timeJoin: ', ',
   },
 };
 
@@ -46,9 +48,10 @@ export function cronText(expr, locale = 'zh') {
   const hours = step(hour);
   if (minute === '0' && hours && [day, month, weekday].every(field => field === '*')) return lang.hours(hours);
   const m = integer(minute, 0, 59);
-  const h = integer(hour, 0, 23);
-  if (m === null || h === null) return text;
-  const time = `${pad(h)}:${pad(m)}`;
+  // A short hour list ("0,12") reads as several times a day: 每天 00:00、12:00.
+  const hours24 = hour.split(',').map(value => integer(value, 0, 23));
+  if (m === null || hours24.includes(null) || hours24.length > 6) return text;
+  const time = [...new Set(hours24)].sort((a, b) => a - b).map(h => `${pad(h)}:${pad(m)}`).join(lang.timeJoin);
   if (day === '*' && month === '*' && weekday === '*') return lang.daily(time);
   if (day === '*' && month === '*') {
     if (weekday === '1-5') return lang.weekdays(time);

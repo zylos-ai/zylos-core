@@ -213,10 +213,16 @@ test('range buttons and the always-visible custom dates choose what is read', as
   assert.deepEqual(pressed(), ['7d']);
   nodes.find(node => node.dataset.range === '24h').dispatch('click'); await tick();
   assert.match(paths.at(-1), /range=24h$/); assert.deepEqual(pressed(), ['24h']);
-  nodes.find(node => node.id === 'wb-usage-since').value = '2026-11-01T00:00';
+  // The visible field shows the page-language label until a time is chosen, then the chosen time.
+  const shown = () => nodes.filter(node => node.classList.contains('wb-date-text')).map(node => node.textContent);
+  assert.deepEqual(shown(), ['wb.usage.since', 'wb.usage.until']);
+  const since = nodes.find(node => node.id === 'wb-usage-since');
+  since.value = '2026-11-01T00:00'; since.dispatch('input');
   nodes.find(node => node.id === 'wb-usage-until').value = '2026-11-03T00:00';
+  assert.deepEqual(shown(), ['2026-11-01 00:00', 'wb.usage.until']);
   nodes.find(node => node.id === 'wb-usage-apply').dispatch('click'); await tick();
   assert.match(paths.at(-1), /range=custom&since=.*&until=/); assert.deepEqual(pressed(), []);
+  assert.deepEqual(shown(), ['2026-11-01 00:00', '2026-11-03 00:00']);
   page.destroy();
 });
 

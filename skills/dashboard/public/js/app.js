@@ -1432,6 +1432,9 @@ let markdownRenderer = null;
 function getMarkdownRenderer() {
   if (!markdownRenderer && typeof window.markdownit === 'function') {
     markdownRenderer = window.markdownit({ html: false, linkify: true });
+    // Only explicit links (scheme or www.) become links; bare file names such as
+    // identity.md or state.md would otherwise turn into links to a .md domain.
+    markdownRenderer.linkify.set({ fuzzyLink: false });
     const renderToken = (tokens, idx, options, env, self) => self.renderToken(tokens, idx, options);
     const defaultLinkOpen = markdownRenderer.renderer.rules.link_open || renderToken;
     markdownRenderer.renderer.rules.link_open = (tokens, idx, options, env, self) => {

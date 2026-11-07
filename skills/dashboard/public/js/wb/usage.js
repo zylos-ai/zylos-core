@@ -248,11 +248,27 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     const button = element(document, 'button', t('wb.usage.range.' + name)); button.type = 'button'; button.dataset.range = name;
     button.addEventListener('click', () => choose(name)); seg.append(button); return button;
   });
-  const since = element(document, 'input', undefined, 'wb-input'); since.type = 'datetime-local'; since.id = 'wb-usage-since'; since.setAttribute('aria-label', t('wb.usage.since'));
-  const until = element(document, 'input', undefined, 'wb-input'); until.type = 'datetime-local'; until.id = 'wb-usage-until'; until.setAttribute('aria-label', t('wb.usage.until'));
+  const since = element(document, 'input', undefined, 'wb-date-native'); since.type = 'datetime-local'; since.id = 'wb-usage-since'; since.setAttribute('aria-label', t('wb.usage.since'));
+  const until = element(document, 'input', undefined, 'wb-date-native'); until.type = 'datetime-local'; until.id = 'wb-usage-until'; until.setAttribute('aria-label', t('wb.usage.until'));
+  // The native field shows its format in the browser's language (mm/dd/yyyy on an English browser);
+  // a styled field shows the page language instead and still opens the native picker.
+  const dateField = (input, key) => {
+    const field = element(document, 'label', undefined, 'wb-input wb-date');
+    const text = element(document, 'span', undefined, 'wb-date-text');
+    const sync = () => {
+      text.textContent = input.value ? input.value.replace('T', ' ') : t(key);
+      field.classList.toggle('wb-empty', !input.value);
+    };
+    input.addEventListener('input', sync); input.addEventListener('change', sync);
+    field.addEventListener('click', () => { try { input.showPicker?.(); } catch {} });
+    field.append(icon(document, 'clock', 'xs'), text, input);
+    sync();
+    return { field, sync };
+  };
+  const sinceField = dateField(since, 'wb.usage.since'), untilField = dateField(until, 'wb.usage.until');
   const dash = element(document, 'span', '—', 'wb-usage-dash');
   const apply = element(document, 'button', t('wb.usage.apply'), 'wb-btn'); apply.type = 'button'; apply.id = 'wb-usage-apply';
-  controls.append(seg, since, dash, until, apply);
+  controls.append(seg, sinceField.field, dash, untilField.field, apply);
   const status = element(document, 'p', undefined, 'wb-usage-status'); status.id = 'wb-usage-status'; status.setAttribute('role', 'status');
   const body = element(document, 'div'); body.id = 'wb-usage-body'; root.replaceChildren(title, controls, status, body);
   const mark = () => choices.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.range === range)));
@@ -261,6 +277,7 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     for (const button of choices) button.textContent = t('wb.usage.range.' + button.dataset.range);
     seg.setAttribute('aria-label', t('wb.usage.range'));
     since.setAttribute('aria-label', t('wb.usage.since')); until.setAttribute('aria-label', t('wb.usage.until')); apply.textContent = t('wb.usage.apply');
+    sinceField.sync(); untilField.sync();
     mark();
     rendered?.destroy(); rendered = renderUsage(body, data, { document, t, level: detail(), chartFactory }); };
   const clear = () => { data = null; draw(); };

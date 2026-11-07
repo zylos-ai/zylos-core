@@ -493,7 +493,13 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-axis { position: relative; height: 22px; color: var(--text-muted); font-size: 10.5px; }
 .wb-sched-axis span { position: absolute; top: 5px; transform: translateX(-50%); white-space: nowrap; }
 .wb-sched-axis .wb-sched-axis-now { left: 0; transform: none; }
+.wb-sched-axis .wb-near, .wb-sched-axis .wb-crowded { visibility: hidden; }
 .wb-sched-axis .wb-near { display: none; }
+.wb-sched-lane { container-type: inline-size; }
+@container (max-width: 760px) {
+  .wb-sched-axis .wb-odd, .wb-sched-axis .wb-near2 { display: none; }
+  .wb-sched-axis span:not(.wb-sched-axis-now) { font-size: 10px; }
+}
 .wb-sched-filters { position: sticky; top: var(--wb-header-h); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--wb-line); background: var(--bg); }
 .wb-sched-filters .wb-search { height: var(--wb-h); }
 .wb-sched-filters .wb-search input { width: 170px; font-size: 12.5px; }
@@ -614,8 +620,6 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-top { padding: 12px 12px 4px; }
   .wb-sched-kpi { gap: 8px 20px; }
   .wb-sched-kpi-item b { font-size: 17px; }
-  .wb-sched-axis .wb-odd { display: none; }
-  .wb-sched-axis span:not(.wb-sched-axis-now) { font-size: 10px; }
   .wb-sched-filters { position: static; padding: 10px 12px; }
   .wb-sched-filters .wb-seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .wb-sched-filters .wb-select-wrap, .wb-sched-filters .wb-search { flex: 1 1 140px; width: auto; }
@@ -760,6 +764,12 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-usage-title { margin: 0 0 12px; font-size: 18px; font-weight: 650; letter-spacing: -.01em; }
 .wb-usage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .wb-usage-controls .wb-input { height: var(--wb-h); width: 196px; }
+.wb-date { position: relative; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.wb-date:focus-within { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
+.wb-date > .wb-ico { color: var(--text-muted); }
+.wb-date.wb-empty .wb-date-text { color: var(--text-muted); }
+.wb-date-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-date-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
 .wb-usage-dash { color: var(--text-muted); }
 .wb-usage-status { margin: 8px 0 0; color: var(--text-dim); font-size: 12.5px; }
 .wb-usage-status:empty { display: none; }

@@ -18,6 +18,7 @@ function loadVendoredMarkdownIt() {
 function buildRenderer() {
   const markdownit = loadVendoredMarkdownIt();
   const md = markdownit({ html: false, linkify: true });
+  md.linkify.set({ fuzzyLink: false });
   const renderToken = (tokens, idx, options, env, self) => self.renderToken(tokens, idx, options);
   const defaultLinkOpen = md.renderer.rules.link_open || renderToken;
   md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
@@ -49,6 +50,8 @@ test('links render with target=_blank and rel=noopener noreferrer', () => {
   // linkify: bare URLs become links with the same hardening.
   const bare = md.render('see https://example.com');
   assert.match(bare, /<a href="https:\/\/example\.com" target="_blank" rel="noopener noreferrer">/);
+  // Memory file names are not domains: identity.md stays plain text, in headings too.
+  assert.doesNotMatch(md.render('# identity.md\n\nsee state.md'), /<a /);
 });
 
 test('tables and blockquotes render', () => {
@@ -85,6 +88,7 @@ test('headings and fenced code blocks still render as before', () => {
 test('app.js uses the vendored renderer with html disabled and a safe fallback', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   assert.match(app, /window\.markdownit\(\{ html: false, linkify: true \}\)/);
+  assert.match(app, /markdownRenderer\.linkify\.set\(\{ fuzzyLink: false \}\)/);
   assert.match(app, /attrSet\('target', '_blank'\)/);
   assert.match(app, /attrSet\('rel', 'noopener noreferrer'\)/);
   // Fallback keeps content visible (escaped) if the vendored script is missing.
