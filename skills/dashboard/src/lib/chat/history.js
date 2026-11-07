@@ -129,7 +129,7 @@ export class ChatHistory {
         ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
       const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
       const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
-      return { ...row, preview: chatAttachmentPreview(latest?.content ?? '', { c4Id: latest?.id, external: tab === 'external' }).slice(0, 160),
+      return { ...row, preview: chatAttachmentPreview(latest?.content ?? '', { external: tab === 'external' }).slice(0, 160),
         display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
         ...(registered ? { localId: registered.localId } : {}), draft: false };

@@ -1880,11 +1880,10 @@ export function createServer() {
       sendText(res, 404, 'not found');
     }
   });
-  let collecting = null;
   const collect = () => {
-    if (!collecting) collecting = attachments.gc().catch(() => {
+    attachments.gc().catch(() => {
       console.error('[chat] Attachment cleanup remains pending.');
-    }).finally(() => { collecting = null; });
+    });
   };
   collect();
   const attachmentTimer = setInterval(collect, 5 * 60 * 1000);

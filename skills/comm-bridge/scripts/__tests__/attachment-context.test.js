@@ -57,19 +57,41 @@ test('plain attachment annotations survive projection and general agent history 
   assert.equal(databaseOpens, 0);
 });
 
-test('Dashboard inbound attachment hint retains the exact original reply route and session group', () => {
+test('Dashboard inbound attachment hint retains the exact original reply route and session group', t => {
   const original = replyVia(row, sendPath);
   assert.ok(original.endsWith('--session-group original:dialog'));
   const output = formatConversation(row);
-  assert.ok(output.includes(content));
-  assert.ok(output.includes(path.join(SKILLS_DIR, 'dashboard/SKILL.md')));
-  assert.ok(output.includes('send with the original reply-via command unchanged.'));
-  assert.ok(output.endsWith(original));
-  assert.equal(output.split(original).length - 1, 1);
-  assert.equal(output.includes('--session-group local-dialog'), false);
+  const directory = path.join(ATTACHMENTS_DIR, `conv-${row.id}`);
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const spill = path.join(directory, 'message.txt');
+  const complete = fs.existsSync(spill) ? fs.readFileSync(spill, 'utf8') : output;
+  assert.ok(complete.includes(content));
+  assert.ok(complete.includes(path.join(SKILLS_DIR, 'dashboard/SKILL.md')));
+  assert.ok(complete.includes('Attachments:'));
+  assert.ok(complete.endsWith(original));
+  assert.equal(complete.split(original).length - 1, 1);
+  assert.equal(complete.includes('--session-group local-dialog'), false);
   const external = formatConversation({ ...row, channel: 'telegram' });
-  assert.equal(external.includes('Dashboard attachments:'), false);
+  assert.equal(external.includes('Attachments:'), false);
   assert.equal(databaseOpens, 0);
+});
+
+test('ordinary Dashboard text retains its paste budget without an attachment hint', t => {
+  const scriptPath = '/c4-send.js';
+  const suffix = ` ${replyVia(row, scriptPath)}`;
+  const maximum = 800 - suffix.length;
+  assert.ok(maximum >= 640);
+  for (const [index, length] of [640, maximum].entries()) {
+    const plain = { ...row, id: 910010 + index, content: 'x'.repeat(length) };
+    const directory = path.join(ATTACHMENTS_DIR, `conv-${plain.id}`);
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const output = formatConversation(plain, { scriptPath });
+    assert.equal(output, plain.content + suffix);
+    assert.equal(output.includes('TRUNCATED'), false);
+    assert.equal(fs.existsSync(path.join(directory, 'message.txt')), false);
+  }
+  assert.equal(formatConversation({ ...row, content: '[MEDIA:/tmp/source.png]' }, { scriptPath })
+    .includes('Attachments:'), false);
 });
 
 // Output integration boundary: real spill writer, formatter and isolated files.

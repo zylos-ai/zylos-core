@@ -74,6 +74,9 @@ test('attachment schema migrates an existing database without removing custom ob
   assert.equal(inspectDatabase(f.store.db).currentVersion, 25);
   migrateDatabase(f.store.db);
   assert.equal(inspectDatabase(f.store.db).currentVersion, 26);
+  f.store.db.exec('DELETE FROM schema_migrations WHERE version=26');
+  migrateDatabase(f.store.db);
+  assert.equal(inspectDatabase(f.store.db).currentVersion, 26);
   assert.equal(f.store.db.prepare('SELECT value FROM custom_attachment_owner').get().value, 'keep');
   f.store.db.exec('DROP INDEX idx_chat_attachments_due');
   assert.throws(() => inspectDatabase(f.store.db), /attachment lookup index/);
@@ -153,11 +156,14 @@ test('agent register checks roots, kind, magic bytes and preserves an independen
   const source = path.join(f.root, 'workspace', 'picture.png');
   fs.writeFileSync(source, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
   fs.utimesSync(source, new Date(0), new Date(0));
+  const before = f.add('before registration');
   const result = await f.attachments.register(f.a, { kind: 'image', path: source });
   assert.equal(result.ok, true);
   assert.equal(result.kind, 'image');
   assert.equal(result.expiresAt, f.getTime() + ATTACHMENT_SEND_WINDOW_MS);
   assert.equal(f.saved(result.attachmentId).source, 'agent');
+  assert.equal(f.saved(result.attachmentId).c4_watermark, before.id);
+  assert.equal(f.saved(result.attachmentId).scanned_c4_id, before.id);
   assert.ok(fs.statSync(f.attachments.resolve(f.a.localId, result.attachmentId)).mtimeMs > 0);
   assert.throws(() => f.attachments.prepareSend(f.a, [result.attachmentId], 'owner-session'));
   fs.unlinkSync(source);
@@ -208,6 +214,32 @@ test('watermark, foreign groups, substrings, malformed and nonmanaged annotation
   f.advance(ATTACHMENT_TTL_MS);
   await f.attachments.gc();
   assert.equal(f.saved(result.id), undefined);
+});
+
+test('pasted inbound annotations cannot link an unlinked agent attachment', async t => {
+  const f = fixture(t);
+  const source = path.join(f.root, 'workspace', 'report.txt');
+  fs.writeFileSync(source, 'agent report');
+  const registered = await f.attachments.register(f.a, { kind: 'file', path: source });
+  const file = f.attachments.resolve(f.a.localId, registered.attachmentId);
+  const annotation = buildAnnotatedContent('', [{ kind: 'file', name: registered.name, path: file, size: 12 }]);
+  const row = f.add(annotation);
+  assert.equal(f.attachments.linkRow(row)[0].available, false);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachment_messages WHERE attachment_id=?').get(registered.attachmentId).n, 0);
+  assert.throws(() => f.attachments.download(f.a.localId, registered.attachmentId), { code: 'chat_attachment_unavailable' });
+});
+
+test('downloads reject vanished authoritative rows and collection preserves newly linked records', async t => {
+  const f = fixture(t), uploaded = await f.upload();
+  const record = f.saved(uploaded.id);
+  const row = f.add(f.annotation(uploaded));
+  assert.equal(f.attachments.linkRow(row)[0].available, true);
+  await f.attachments._remove(record);
+  assert.ok(f.saved(uploaded.id));
+  assert.equal(f.attachments.download(f.a.localId, uploaded.id).id, uploaded.id);
+  f.core.prepare('DELETE FROM conversations WHERE id=?').run(row.id);
+  assert.throws(() => f.attachments.download(f.a.localId, uploaded.id), { code: 'chat_attachment_unavailable' });
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachment_messages WHERE attachment_id=?').get(uploaded.id).n, 1);
 });
 
 test('a history batch repairs late links without Core N+1 reads and retries failed association', async t => {
@@ -270,16 +302,20 @@ test('GC waits thirty minutes and recovers an unacknowledged authoritative refer
 
 test('GC persists a two-page scan, keeps its first upper bound and resumes after reopen', async t => {
   const f = fixture(t), result = await f.upload();
-  for (let i = 0; i < 250; i++) f.add(`irrelevant-${i}`);
+  for (let i = 0; i < 450; i++) f.add(`irrelevant-${i}`);
   f.advance(ATTACHMENT_TTL_MS);
   await f.attachments.gc();
   assert.equal(f.saved(result.id).scanned_c4_id, 200);
-  assert.equal(f.saved(result.id).scan_upper_id, 250);
+  assert.equal(f.saved(result.id).scan_upper_id, 450);
   assert.equal(f.saved(result.id).next_check_at, f.getTime() + ATTACHMENT_GC_INTERVAL_MS);
   f.add('beyond fixed scan');
   await f.attachments.gc();
   assert.equal(f.saved(result.id).scanned_c4_id, 200);
   const reopened = f.reopen();
+  f.advance(ATTACHMENT_GC_INTERVAL_MS);
+  await reopened.gc();
+  assert.equal(f.saved(result.id).scanned_c4_id, 400);
+  assert.equal(f.saved(result.id).scan_upper_id, 450);
   f.advance(ATTACHMENT_GC_INTERVAL_MS);
   await reopened.gc();
   assert.equal(f.saved(result.id), undefined);

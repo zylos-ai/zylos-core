@@ -393,8 +393,6 @@ test('draft migration can be replayed without replacing registrations or names',
   const db = new Database(file); t.after(() => db.close());
   db.exec(`INSERT INTO chat_conversations(local_id,display_name,created_at,updated_at) VALUES('saved','Saved draft',1,1);
     INSERT INTO group_display_names(session_group,display_name,source) VALUES('dashboard:old','Human name','human');
-    DROP TABLE chat_attachment_messages;
-    DROP TABLE chat_attachments;
     DELETE FROM schema_migrations WHERE version>=24;`);
   assert.deepEqual(owner.migrate(db), { currentVersion: TARGET_SCHEMA_VERSION, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: false });
   assert.equal(db.prepare('SELECT display_name FROM chat_conversations WHERE local_id=?').get('saved').display_name, 'Saved draft');

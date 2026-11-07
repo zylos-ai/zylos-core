@@ -58,6 +58,9 @@ envelope on stdin through the original reply-via command unchanged, preserving
 its session-group and absorbed-reply flags. Plain `[MEDIA:...]` text does not
 register or copy files. Use Dashboard's same-conversation `resolve` command to
 read a previously registered private copy.
+Do not send these blocks until the Core schema and Dashboard BeforeSend
+validator support them on all readers; registration alone does not add protocol
+support, and an incompatible Core rejects the entire envelope.
 
 ## Messages Between Session Threads
 

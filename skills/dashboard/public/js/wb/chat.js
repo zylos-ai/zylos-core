@@ -1,8 +1,8 @@
 import { element } from './plain-text.js?v=94';
 import { createChatState, messageState, receiptState } from './chat-state.js?v=91';
-import { parseC4Content } from '../../chat-schema.js?v=90';
-import { renderChatContent } from './chat-blocks.js?v=94';
-import { renderQuestion } from './chat-questions.js?v=94';
+import { parseC4Content } from '../../chat-schema.js?v=91';
+import { renderChatContent } from './chat-blocks.js?v=95';
+import { renderQuestion } from './chat-questions.js?v=95';
 
 export function messageText(content, t = key => key) {
   const parsed = parseC4Content(content);

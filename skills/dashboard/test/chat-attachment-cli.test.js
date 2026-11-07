@@ -124,7 +124,7 @@ test('CLI enforces target dotenv limits, source roots, image bytes and conversat
   const image = f.register(png, 'image');
   assert.equal(image.status, 0);
   assert.equal(image.result.kind, 'image');
-  const outside = path.join(f.root, 'outside.txt'); fs.writeFileSync(outside, 'outside');
+  const outside = '/etc/hosts';
   f.reject(f.register(outside), 'chat_attachment_source_forbidden');
   const symlink = path.join(f.zylosDir, 'workspace', 'escape.txt'); fs.symlinkSync(outside, symlink);
   f.reject(f.register(symlink), 'chat_attachment_source_forbidden');
@@ -147,4 +147,28 @@ test('CLI refuses missing or outdated Dashboard storage and never migrates it', 
   f.reject(f.register(source), 'attachment_command_failed');
   assert.equal(f.store.db.prepare('SELECT max(version) AS version FROM schema_migrations').get().version, version);
   assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM chat_attachments').get().n, 0);
+});
+
+test('register rejects a FIFO promptly without waiting for a writer', t => {
+  const f = fixture(t);
+  const fifo = path.join(f.zylosDir, 'workspace', 'source.fifo');
+  const made = spawnSync('mkfifo', [fifo], { encoding: 'utf8', timeout: 1000 });
+  assert.equal(made.status, 0, made.stderr);
+  f.reject(f.register(fifo), 'chat_attachment_source_forbidden');
+  assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM chat_attachments').get().n, 0);
+  assert.equal(fs.readdirSync(path.join(f.zylosDir, 'components', 'dashboard', 'media')).length, 0);
+});
+
+test('register accepts a private source under literal tmp while rejecting a system file', t => {
+  const f = fixture(t);
+  const sourceRoot = fs.mkdtempSync('/tmp/attachment-cli-source-');
+  t.after(() => fs.rmSync(sourceRoot, { recursive: true, force: true }));
+  const source = path.join(sourceRoot, 'report.txt');
+  fs.writeFileSync(source, 'temporary source', { mode: 0o600 });
+  const result = f.register(source);
+  assert.equal(result.status, 0);
+  const resolved = f.resolve(result.result.attachmentId);
+  assert.equal(resolved.status, 0);
+  assert.equal(fs.readFileSync(resolved.result.path, 'utf8'), 'temporary source');
+  f.reject(f.register('/etc/hosts'), 'chat_attachment_source_forbidden');
 });

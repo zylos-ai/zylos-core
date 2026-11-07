@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
 import { ChatAttachments } from '../src/lib/chat/attachments.js';
@@ -84,7 +85,7 @@ async function fixture(t) {
   const form = (bytes = Buffer.from('hello'), name = 'report.txt', type = 'text/plain') => {
     const body = new FormData(); body.append('file', new Blob([bytes], { type }), name); return body;
   };
-  return { root, db, store, draft, sender, attachments, config, request, form,
+  return { root, base, route, db, store, draft, sender, attachments, config, request, form,
     setMode: value => { mode = value; }, receives: () => receives, addDuringBody: () => { duringBody = true; },
     lastRequestHeaders: () => requestHeaders };
 }
@@ -98,6 +99,88 @@ const filePart = (name = 'report.txt', headers = []) => ({ headers: [
   `Content-Disposition: form-data; name="file"; filename="${name}"`, 'Content-Type: text/plain', ...headers,
 ], body: 'hello' });
 const textPart = (name = 'label', body = 'value') => ({ headers: [`Content-Disposition: form-data; name="${name}"`], body });
+
+async function waitFor(check) {
+  const deadline = Date.now() + 3000;
+  while (!check()) {
+    assert.ok(Date.now() < deadline, 'streaming condition timed out');
+    await delay(10);
+  }
+}
+
+function openUpload(t, f) {
+  let request;
+  const response = new Promise((resolve, reject) => {
+    request = http.request(f.base + f.route + '/uploads', { method: 'POST',
+      headers: { origin: f.base, 'content-type': 'multipart/form-data; boundary=streaming-upload' } }, res => {
+      const chunks = [];
+      let size = 0;
+      res.on('data', chunk => {
+        size += chunk.length;
+        if (size > 4096) res.destroy(new Error('unexpected upload response size'));
+        else chunks.push(chunk);
+      });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString()) }));
+      res.on('error', reject);
+    });
+    request.on('error', reject);
+    request.setTimeout(5000, () => request.destroy(new Error('upload timeout')));
+  });
+  response.catch(() => {});
+  t.after(() => request.destroy());
+  request.write('--streaming-upload\r\nContent-Disposition: form-data; name="file"; filename="stream.txt"\r\nContent-Type: text/plain\r\n\r\n');
+  return { request, response };
+}
+
+const partialFiles = f => fs.readdirSync(f.attachments.mediaDir).filter(name => name.endsWith('.part'));
+
+test('upload writes and grows its private partial file before the chunked request ends', async t => {
+  const f = await fixture(t);
+  const { request, response } = openUpload(t, f);
+  request.write(Buffer.alloc(32768, 97));
+  await waitFor(() => partialFiles(f).some(name => fs.statSync(path.join(f.attachments.mediaDir, name)).size > 0));
+  const name = partialFiles(f)[0];
+  const file = path.join(f.attachments.mediaDir, name);
+  const size = fs.statSync(file).size;
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 0);
+  request.write(Buffer.alloc(32768, 98));
+  await waitFor(() => fs.statSync(file).size > size);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 0);
+  request.end('\r\n--streaming-upload--\r\n');
+  const result = await response;
+  assert.equal(result.status, 201);
+  assert.equal(result.body.size, 65536);
+  assert.equal(partialFiles(f).length, 0);
+  const row = f.store.db.prepare('SELECT * FROM chat_attachments WHERE id=?').get(result.body.id);
+  const bytes = fs.readFileSync(path.join(f.attachments.mediaDir, row.storage_name));
+  assert.equal(bytes.subarray(0, 32768).equals(Buffer.alloc(32768, 97)), true);
+  assert.equal(bytes.subarray(32768).equals(Buffer.alloc(32768, 98)), true);
+});
+
+test('malformed trailing multipart fields cannot publish the already streamed file', async t => {
+  const f = await fixture(t);
+  const { request, response } = openUpload(t, f);
+  request.write(Buffer.alloc(32768));
+  await waitFor(() => partialFiles(f).length === 1);
+  request.end('\r\n--streaming-upload\r\nContent-Disposition: form-data; name="label"\r\n\r\nunterminated');
+  const result = await response;
+  assert.equal(result.status, 400);
+  assert.equal(Object.hasOwn(result.body, 'id'), false);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 0);
+  assert.equal(fs.readdirSync(f.attachments.mediaDir).length, 0);
+});
+
+test('disconnecting an upload cleans its partial file without registering an attachment', async t => {
+  const f = await fixture(t);
+  const { request, response } = openUpload(t, f);
+  request.write(Buffer.alloc(32768));
+  await waitFor(() => partialFiles(f).length === 1);
+  request.destroy();
+  await assert.rejects(response);
+  await waitFor(() => fs.readdirSync(f.attachments.mediaDir).length === 0);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 0);
+});
 
 test('upload and config gate authentication, remote access, mode and registered ownership', async t => {
   const f = await fixture(t);
@@ -148,12 +231,26 @@ test('multipart accepts eight bounded text fields and rejects excess counts or U
   assert.equal((await post([filePart('a'.repeat(255)), ...fields])).status, 201);
   assert.equal((await post([filePart(), ...fields, textPart('extra')])).status, 400);
   assert.equal((await post([filePart(), textPart('label', '\u00e9'.repeat(513))])).status, 400);
+  assert.equal((await post([filePart(), { headers: ['Content-Disposition: form-data'], body: 'missing name' }])).status, 400);
+  assert.equal((await post([filePart(), { headers: ['X-Unknown: skipped'], body: 'missing disposition' }])).status, 400);
+  assert.equal((await post([filePart(), { headers: ['Content-Disposition: attachment; name="label"'], body: 'wrong disposition' }])).status, 400);
   assert.equal((await post([filePart(), textPart('\u00e9'.repeat(128))])).status, 400);
   assert.equal((await post([filePart('\u00e9'.repeat(128))])).status, 400);
+  const extended = filePart();
+  extended.headers[0] = `Content-Disposition: form-data; name="file"; filename*=UTF-8''${'a'.repeat(256)}`;
+  assert.equal((await post([extended])).status, 400);
   assert.equal((await post([filePart('a'.repeat(256) + '/report.txt')])).status, 400);
   assert.equal((await post([textPart()])).status, 400);
   const wrong = filePart(); wrong.headers[0] = 'Content-Disposition: form-data; name="other"; filename="report.txt"';
   assert.equal((await post([wrong])).status, 400);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 1);
+});
+
+test('ignored text field names stay literal and do not expand bracket paths into arrays', async t => {
+  const f = await fixture(t);
+  const { body, contentType } = multipart([filePart(), textPart('a[4294967294]'), textPart('a[x]')]);
+  const response = await f.request('/uploads', { method: 'POST', body, headers: { 'content-type': contentType } });
+  assert.equal(response.status, 201);
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 1);
 });
 

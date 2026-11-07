@@ -531,7 +531,7 @@ export function migrateDatabase(db) {
     if (currentVersion < 26) {
       db.transaction(() => {
         db.exec(`
-          CREATE TABLE chat_attachments (
+          CREATE TABLE IF NOT EXISTS chat_attachments (
             id TEXT PRIMARY KEY NOT NULL,
             local_id TEXT NOT NULL,
             namespace TEXT NOT NULL,
@@ -548,14 +548,14 @@ export function migrateDatabase(db) {
             scan_upper_id INTEGER,
             next_check_at INTEGER NOT NULL
           );
-          CREATE INDEX idx_chat_attachments_due ON chat_attachments(next_check_at,id);
-          CREATE INDEX idx_chat_attachments_conversation ON chat_attachments(namespace,local_id,id);
-          CREATE TABLE chat_attachment_messages (
+          CREATE INDEX IF NOT EXISTS idx_chat_attachments_due ON chat_attachments(next_check_at,id);
+          CREATE INDEX IF NOT EXISTS idx_chat_attachments_conversation ON chat_attachments(namespace,local_id,id);
+          CREATE TABLE IF NOT EXISTS chat_attachment_messages (
             attachment_id TEXT NOT NULL,
             c4_id INTEGER NOT NULL,
             PRIMARY KEY(attachment_id,c4_id)
           );
-          CREATE INDEX idx_chat_attachment_messages_row ON chat_attachment_messages(c4_id,attachment_id);
+          CREATE INDEX IF NOT EXISTS idx_chat_attachment_messages_row ON chat_attachment_messages(c4_id,attachment_id);
           INSERT INTO schema_migrations(version) VALUES(26);
         `);
       })();

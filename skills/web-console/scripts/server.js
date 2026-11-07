@@ -13,6 +13,7 @@ import { WebSocketServer } from 'ws';
 import multer from 'multer';
 import crypto from 'crypto';
 import path from 'path';
+import os from 'os';
 import fs from 'fs';
 import { spawn } from 'child_process';
 import Database from 'better-sqlite3';
@@ -26,7 +27,6 @@ import {
   parseMediaContent,
   readUploadLimit,
   resolveAllowedPathSync,
-  resolveUploadRoot,
   sanitizeDisplayName,
   sniffImage,
   splitContentAndAttachments,
@@ -50,8 +50,8 @@ const wss = new WebSocketServer({ server });
 const PORT = process.env.WEB_CONSOLE_PORT || 3456;
 
 // Paths
-const ZYLOS_DIR = resolveUploadRoot();
-const SKILLS_DIR = process.env.WEB_CONSOLE_SKILLS_DIR || path.join(ZYLOS_DIR, '.claude', 'skills');
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const SKILLS_DIR = process.env.WEB_CONSOLE_SKILLS_DIR || path.join(os.homedir(), 'zylos', '.claude', 'skills');
 const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DB_DIR, 'c4.db');
 const MEDIA_DIR = path.join(ZYLOS_DIR, 'web-console', 'media');

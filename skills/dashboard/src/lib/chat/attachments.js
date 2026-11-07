@@ -145,16 +145,30 @@ export class ChatAttachments {
     if (!['image', 'file'].includes(kind) || typeof sourcePath !== 'string' || !path.isAbsolute(sourcePath)) {
       throw fail('invalid_chat_attachment');
     }
-    const resolved = resolveAllowedPathSync(sourcePath, [this.mediaDir, path.join(this.zylosDir, 'workspace'), '/tmp']);
+    const roots = [this.mediaDir, path.join(this.zylosDir, 'workspace'), '/tmp'];
+    const resolved = resolveAllowedPathSync(sourcePath, roots);
     if (!resolved) throw fail('chat_attachment_source_forbidden', 403);
+    const watermark = this._watermark();
     let handle;
     try {
-      handle = await fs.promises.open(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      handle = await fs.promises.open(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       const stat = await handle.stat();
       if (!stat.isFile()) throw fail('chat_attachment_source_forbidden', 403);
+      if (process.platform === 'linux') {
+        const openedPath = await fs.promises.realpath(`/proc/self/fd/${handle.fd}`);
+        if (resolveAllowedPathSync(openedPath, roots) !== openedPath) throw fail('chat_attachment_source_forbidden', 403);
+      } else {
+        // Platforms without procfs must still prove that the allowed path
+        // resolves to the same file opened above after traversing its parents.
+        const current = resolveAllowedPathSync(resolved, roots);
+        const currentStat = current && await fs.promises.stat(current);
+        if (!currentStat || currentStat.dev !== stat.dev || currentStat.ino !== stat.ino) {
+          throw fail('chat_attachment_source_forbidden', 403);
+        }
+      }
       if (stat.size > this.maxUploadBytes) throw fail('chat_attachment_too_large', 413);
       const result = await this._copy(group, { name: path.basename(sourcePath), mime: 'application/octet-stream',
-        kind, source: 'agent', principal: null, stream: handle.createReadStream({ autoClose: false }) });
+        kind, source: 'agent', principal: null, stream: handle.createReadStream({ autoClose: false }), watermark });
       return { ok: true, attachmentId: result.id, name: result.name, kind: result.kind, expiresAt: result.expiresAt };
     } catch (error) {
       if (error.statusCode) throw error;
@@ -280,14 +294,16 @@ export class ChatAttachments {
   }
 
   async _remove(record) {
-    for (const suffix of ['', '.part']) {
-      try { await fs.promises.unlink(path.join(this.mediaDir, record.storage_name + suffix)); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
-    }
+    // Hold the writer lock over the final reference check and both bounded
+    // file removals so another process cannot link a file during deletion.
     this.db.transaction(() => {
-      this.db.prepare('DELETE FROM chat_attachment_messages WHERE attachment_id=?').run(record.id);
+      if (this.db.prepare('SELECT 1 FROM chat_attachment_messages WHERE attachment_id=? LIMIT 1').get(record.id)) return;
+      for (const suffix of ['', '.part']) {
+        try { fs.unlinkSync(path.join(this.mediaDir, record.storage_name + suffix)); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
       this.db.prepare('DELETE FROM chat_attachments WHERE id=?').run(record.id);
-    })();
+    }).immediate();
   }
 
   async _collect(record, now) {
@@ -326,7 +342,7 @@ export class ChatAttachments {
       try {
         const stat = await fs.promises.lstat(candidate);
         if (!stat.isDirectory() && now - stat.mtimeMs >= ATTACHMENT_TTL_MS) await fs.promises.unlink(candidate);
-      } catch (error) { if (error.code !== 'ENOENT') continue; }
+      } catch { /* Retry unreadable entries on the next directory pass. */ }
     }
   }
 

@@ -12,6 +12,7 @@ const SQLITE_MODULE = path.resolve('skills/web-console/node_modules/better-sqlit
 
 let ctx;
 const testRoots = new Set();
+const testServers = new Set();
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -71,13 +72,17 @@ db.close();
   fs.writeFileSync(path.join(scriptDir, 'c4-send.js'), '');
 }
 
-async function startServer({ maxUploadMb = 20 } = {}) {
+// Real WC HTTP/WS boundary with private DB/media and fake C4 receive only.
+// Run for WC route/shared-limit changes; unrelated Dashboard UI may skip.
+// The Jest runner isolates HOME/ZYLOS_DIR/PM2_HOME; provide a short private
+// TMPDIR before starting Jest. No runtime, PM2 or tmux is launched.
+async function startServer({ maxUploadMb = 20, processMaxUploadMb = 37 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wc-routes-'));
   testRoots.add(root);
   const dbPath = path.join(root, 'comm-bridge', 'c4.db');
   const skillsDir = path.join(root, 'skills');
   fs.mkdirSync(path.join(root, 'activity-monitor'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.env'), '');
+  fs.writeFileSync(path.join(root, '.env'), `WEB_CONSOLE_MAX_UPLOAD_MB=${maxUploadMb}\n`);
   fs.writeFileSync(path.join(root, 'activity-monitor', 'agent-status.json'), '{"state":"idle"}');
   createDb(dbPath);
   createFakeC4Receive(skillsDir, dbPath);
@@ -91,35 +96,52 @@ async function startServer({ maxUploadMb = 20 } = {}) {
       WEB_CONSOLE_SKILLS_DIR: skillsDir,
       WEB_CONSOLE_PORT: String(port),
       WEB_CONSOLE_BIND: '127.0.0.1',
-      WEB_CONSOLE_MAX_UPLOAD_MB: String(maxUploadMb)
+      WEB_CONSOLE_MAX_UPLOAD_MB: String(processMaxUploadMb)
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
   let output = '';
-  child.stdout.on('data', (chunk) => { output += chunk.toString(); });
-  child.stderr.on('data', (chunk) => { output += chunk.toString(); });
+  const capture = chunk => { output = (output + chunk.toString()).slice(-16384); };
+  child.stdout.on('data', capture);
+  child.stderr.on('data', capture);
 
   const baseUrl = `http://127.0.0.1:${port}`;
+  const active = { root, dbPath, skillsDir, port, baseUrl, child };
+  testServers.add(active);
+  console.log(JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR,
+    database: dbPath, media: path.join(root, 'web-console/media'),
+    tmuxSocket: path.join(root, 'private-tmux.sock'), runtimeLaunches: 0, pm2Launches: 0,
+    configuredLimitMb: maxUploadMb, processLimitMb: processMaxUploadMb }));
   const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`server exited early: ${output}`);
-    try {
-      const res = await fetch(`${baseUrl}/api/health`);
-      if (res.ok) return { root, dbPath, skillsDir, port, baseUrl, child };
-    } catch {
-      // Retry until server is listening.
+  try {
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) throw new Error(`server exited early: ${output}`);
+      try {
+        const res = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(1000) });
+        if (res.ok) return active;
+      } catch {
+        // Retry until server is listening.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    throw new Error(`server did not start: ${output}`);
+  } catch (error) {
+    await stopServer(active);
+    throw error;
   }
-
-  child.kill('SIGTERM');
-  throw new Error(`server did not start: ${output}`);
 }
 
-function stopServer(active) {
+async function stopServer(active) {
   if (!active) return;
-  active.child.kill('SIGTERM');
+  if (active.child.exitCode === null && active.child.signalCode === null) {
+    const exited = new Promise(resolve => active.child.once('close', resolve));
+    const timer = setTimeout(() => active.child.kill('SIGKILL'), 1000);
+    active.child.kill('SIGTERM');
+    try { await exited; } finally { clearTimeout(timer); }
+  }
+  testServers.delete(active);
   fs.rmSync(active.root, { recursive: true, force: true });
   testRoots.delete(active.root);
 }
@@ -151,11 +173,12 @@ beforeEach(() => {
   ctx = null;
 });
 
-afterEach(() => {
-  stopServer(ctx);
+afterEach(async () => {
+  await stopServer(ctx);
 });
 
-afterAll(() => {
+afterAll(async () => {
+  for (const active of testServers) await stopServer(active);
   for (const root of testRoots) fs.rmSync(root, { recursive: true, force: true });
   testRoots.clear();
 });
@@ -189,6 +212,15 @@ describe('web-console attachment routes', () => {
 
     expect(res.status).toBe(413);
     expect(body.error).toBe('upload_too_large');
+  });
+
+  test('POST /api/upload uses the target dotenv limit despite a smaller process limit', async () => {
+    ctx = await startServer({ maxUploadMb: 2, processMaxUploadMb: 1 });
+    const { res, body } = await uploadFile(ctx, { content: 'x'.repeat(1024 * 1024 + 1) });
+
+    expect(res.status).toBe(200);
+    expect(body.size).toBe(1024 * 1024 + 1);
+    expect(fs.readFileSync(path.join(ctx.root, '.env'), 'utf8')).toBe('WEB_CONSOLE_MAX_UPLOAD_MB=2\n');
   });
 
   test('HTTP attachment-only send queues verbatim annotation content', async () => {

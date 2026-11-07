@@ -7,6 +7,7 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { serveStatic } from '../src/lib/http.js';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
+import { COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const publicRoot = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const schemaPath = fileURLToPath(new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
@@ -57,26 +58,29 @@ async function rawRequest(origin, requestPath) {
 // changes; skip unrelated UI/business changes. No live DB/PM2/tmux/remote calls.
 test('shared schema is delivered at local base and fleet module URLs', { timeout: 15000 }, async t => {
   const origin = await fixture(t), expected = fs.readFileSync(schemaPath);
+  assert.ok(expected.includes(Buffer.from('export const COMPONENT_DEFINITIONS = ' + JSON.stringify(COMPONENT_DEFINITIONS))));
+  assert.ok(expected.includes(Buffer.from('export const REGISTERED_COMPONENT_KEYS = ' + JSON.stringify(REGISTERED_COMPONENT_KEYS))));
+  assert.doesNotMatch(expected.toString(), /^import\s/m, 'browser schema remains one generated-data module without runtime imports');
   for (const prefix of ['', '/dashboard', '/fleet/Peer', '/dashboard/fleet/Peer']) {
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=95)"/.exec(pageText)?.[1];
+    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=96)"/.exec(pageText)?.[1];
     assert.ok(appPath, 'the entry page loads the refreshed application module');
     const application = await fetch(origin + prefix + '/_assets/' + appPath);
     assert.equal(application.status, 200);
-    assert.match(await application.text(), /from '\.\/wb\/chat\.js\?v=94'/);
+    assert.match(await application.text(), /from '\.\/wb\/chat\.js\?v=95'/);
     for (const moduleName of ['chat', 'chat-blocks', 'chat-questions']) {
-      const version = moduleName === 'chat-blocks' ? 90 : 91;
+      const version = 95;
       const moduleUrl = origin + prefix + `/_assets/js/wb/${moduleName}.js?v=${version}`;
       const entry = await fetch(moduleUrl);
       assert.equal(entry.status, 200);
       const body = await entry.text();
       const specifier = /from ['"]([^'"]*chat-schema\.js[^'"]*)['"]/.exec(body)?.[1];
-      assert.equal(specifier, '../../chat-schema.js?v=90');
+      assert.equal(specifier, '../../chat-schema.js?v=91');
       const schemaUrl = new URL(specifier, moduleUrl);
       assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
-      assert.equal(schemaUrl.search, '?v=90');
+      assert.equal(schemaUrl.search, '?v=91');
       const response = await fetch(schemaUrl);
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type'), /^text\/javascript; charset=utf-8$/);
@@ -90,7 +94,8 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
 test('schema alias does not open neighboring scripts or traversal paths', { timeout: 15000 }, async t => {
   const origin = await fixture(t), secretSource = fs.readFileSync(new URL('../../comm-bridge/scripts/c4-config.js', import.meta.url));
   for (const prefix of ['', '/dashboard', '/fleet/Peer']) {
-    for (const suffix of ['/_assets/c4-config.js', '/_assets/chat-schema.js/extra', '/_assets/chat-schema.js.map',
+    for (const suffix of ['/_assets/c4-config.js', '/_assets/c4-component-catalog.js', '/comm-bridge/scripts/c4-component-catalog.js',
+      '/_assets/../comm-bridge/scripts/c4-component-catalog.js', '/_assets/chat-schema.js/extra', '/_assets/chat-schema.js.map',
       '/_assets/../comm-bridge/scripts/c4-config.js', '/_assets/%2e%2e/%2e%2e/comm-bridge/scripts/c4-config.js',
       '/_assets/..%2f..%2fcomm-bridge/scripts/c4-config.js', '/_assets/%252e%252e/c4-config.js']) {
       const response = await rawRequest(origin, prefix + suffix);
