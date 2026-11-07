@@ -15,6 +15,7 @@ export async function runConversationVisual(t, sandbox) {
   const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (output) fs.mkdirSync(output, { recursive: true });
   let reads = 0, draftWrites = 0;
+  const messageRequests = [];
   const fixture = await createChatApiFixture(t, sandbox, { name: 'Cache design review', extraHandler(req, res, url, f) {
     if (url.pathname.startsWith('/api/chat/')) return false;
     if (!url.pathname.startsWith('/api/')) return false;
@@ -43,8 +44,25 @@ export async function runConversationVisual(t, sandbox) {
   choice.messageId += '_page'; choice.interruptId += '_page'; fixture.addOutbound(localId, questionContent(choice));
   const form = structuredClone(protocolFixtures.valid.find(v => v.name === 'form').envelope);
   form.messageId += '_page'; form.interruptId += '_page'; const formRow = fixture.addOutbound(localId, questionContent(form));
+  fixture.db.prepare('UPDATE conversations SET timestamp=? WHERE session_group=? AND id<>?').run(new Date(Date.now() - 7200000).toISOString(), first.receipt.namespace + ':' + localId, markdownRow.id);
   const external = fixture.c4.insertConversation('in', 'telegram', 'external-page', 'External history remains read only.', { groupName: 'external-page' });
   fixture.db.prepare("UPDATE conversations SET status='pending' WHERE id=?").run(external.id);
+  const externalName = '运维群-测试';
+  const unicodeExternal = fixture.c4.insertConversation('in', 'telegram', 'unicode-external', 'Unicode external history outside the first page.', { groupName: 'unicode-external' });
+  // Historical imports may contain UTF-8 keys that current new-write validation rejects.
+  const validExternalGroup = unicodeExternal.session_group;
+  const legacyGroup = 'telegram:' + externalName;
+  fixture.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run(legacyGroup, unicodeExternal.id);
+  fixture.db.prepare('UPDATE group_heads SET session_group=? WHERE session_group=?').run(legacyGroup, unicodeExternal.session_group);
+  unicodeExternal.session_group = legacyGroup;
+  fixture.db.prepare('UPDATE conversations SET timestamp=? WHERE id=?').run(new Date(Date.now() - 3600000).toISOString(), unicodeExternal.id);
+  for (let index = 0; index < 55; index++) fixture.c4.insertConversation('in', 'telegram', 'newer-' + index, 'Newer external history.', { groupName: 'newer-' + index });
+  const externalGroup = unicodeExternal.session_group;
+  const externalId = 'g:' + Buffer.from(externalGroup).toString('hex').toUpperCase();
+  const externalFirstPage = await fixture.request('/api/chat/conversations?tab=external&limit=50');
+  assert.equal(externalFirstPage.status, 200);
+  assert.equal(externalFirstPage.body.items.some(row => row.id === externalId), false);
+
   sandbox.assertIsolation();
   const { chromium } = await import(pathToFileURL(modulePath));
   const browser = await chromium.launch({ executablePath, headless: true, env: sandbox.env,
@@ -57,7 +75,7 @@ export async function runConversationVisual(t, sandbox) {
   page.setDefaultTimeout(10_000);
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
-    if (path.endsWith('/messages')) reads++;
+    if (path.endsWith('/messages')) { reads++; messageRequests.push(request.url()); }
     if (path === '/api/chat/drafts' && request.method() === 'POST') draftWrites++;
   });
   const errors = [], shots = [];
@@ -91,6 +109,15 @@ export async function runConversationVisual(t, sandbox) {
         assert.ok(box && box.width >= 40 && box.height >= 40, selector + ' has a usable phone target');
       }
     }
+    assert.match(await page.locator(`#wb-chat [data-conversation-id="${first.receipt.conversationId}"] .conversation-list-time`).innerText(), /\d{1,2}:\d{2}/, 'same-day older list entry uses a clock time');
+    if (width === 390) {
+      await page.locator('#wb-chat .conversation-back').click();
+      for (const selector of ['.conversation-tabs [data-action="mine"]', '.conversation-tabs [data-action="external"]', '[data-action="create"]']) {
+        const box = await page.locator('#wb-chat ' + selector).boundingBox();
+        assert.ok(box && box.height >= 40, selector + ' has a 40px phone height');
+      }
+      await select();
+    }
     await screenshot(`conversation-${width}-${theme}`);
     await page.locator('#wb-chat .chat-chart').first().scrollIntoViewIfNeeded();
     await screenshot(`blocks-${width}-${theme}`);
@@ -111,6 +138,19 @@ export async function runConversationVisual(t, sandbox) {
   await select();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en');
   await screenshot('conversation-390-english');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Hold a workbench read without returning it. Message polling must remain independent.
+  let releaseGroup, observeGroup;
+  const groupObserved = new Promise(resolve => { observeGroup = resolve; });
+  const heldGroup = new Promise(resolve => { releaseGroup = resolve; });
+  const groupPattern = '**/api/workbench/groups';
+  await context.route(groupPattern, async route => { observeGroup(); await heldGroup; await route.continue().catch(() => {}); });
+  sandbox.addCleanup(() => releaseGroup());
+  await select();
+  let groupObservationTimer;
+  try {
+    await Promise.race([groupObserved, new Promise((_, reject) => { groupObservationTimer = setTimeout(() => reject(Error('selected group status request was not observed')), 3000); })]);
+  } finally { clearTimeout(groupObservationTimer); }
   // Actual scheduled after-cursor request; hold live control references so a hidden redraw fails.
   await page.setViewportSize({ width: 1440, height: 900 });
   const input = page.locator('#wb-chat .chat-composer textarea');
@@ -122,7 +162,9 @@ export async function runConversationVisual(t, sandbox) {
   const firstNode = await page.locator('#wb-chat .chat-message').first().elementHandle();
   const beforeReads = reads;
   const incoming = fixture.addOutbound(localId, 'The new response arrives without replacing your draft.');
-  await page.locator(`#wb-chat [data-message-id="${incoming.id}"]`).waitFor({ timeout: 15_000 });
+  await page.locator(`#wb-chat [data-message-id="${incoming.id}"]`).waitFor({ timeout: 6500 });
+  releaseGroup();
+  await context.unroute(groupPattern);
   assert.ok(reads > beforeReads, 'a real background request fetched the message');
   assert.equal(await input.inputValue(), 'Keep this draft and caret while reading.');
   assert.equal(await input.getAttribute('data-identity-probe'), 'same-input');
@@ -172,6 +214,7 @@ export async function runConversationVisual(t, sandbox) {
   await page.locator('#wb-chat [data-action="createDraft"]').click();
   await page.locator('#wb-chat .conversation-title-line h2').filter({ hasText: 'Named browser draft' }).waitFor();
   assert.equal(draftWrites, writesBefore + 1);
+  const browserDraftId = await page.locator('#wb-chat [aria-current="true"]').getAttribute('data-conversation-id');
   assert.ok((await page.locator('#wb-chat .conversation-history-notice').innerText()).length > 20, 'blank draft explains first-message creation');
   fixture.setInvoke(() => { throw dataError('INVALID_ARGS', 'private pre-insert rejection', { persisted: [] }); });
   await input.fill('Retain the rejected browser draft.');
@@ -180,6 +223,7 @@ export async function runConversationVisual(t, sandbox) {
   await page.locator('#wb-chat .conversation-receipt[data-delivery-state="not_stored"]').waitFor();
   assert.equal(await input.inputValue(), 'Retain the rejected browser draft.');
   assert.equal(await operationReceipt.locator('[data-action="refreshStatus"]').isVisible(), true);
+  assert.equal(await page.locator('#wb-chat .conversation-notices > .chat-error').isVisible(), false, 'operation receipt replaces duplicate top error');
   fixture.setInvoke(null);
   // A transport failure proves unknown-result UI without rewriting product code.
   const sendPattern = '**/api/chat/conversations/*/send';
@@ -189,6 +233,7 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await input.inputValue(), 'Retain the rejected browser draft.');
   assert.equal(await page.locator('#wb-chat .chat-composer [data-action="retry"]').isDisabled(), true);
   assert.equal(await operationReceipt.locator('[data-action="refreshStatus"]').isVisible(), true);
+  assert.equal(await page.locator('#wb-chat .conversation-notices > .chat-error').isVisible(), false, 'operation receipt replaces duplicate top error');
   await context.unroute(sendPattern);
   await select();
   // The overview group drawer opens the same selected conversation, with no write.
@@ -198,6 +243,22 @@ export async function runConversationVisual(t, sandbox) {
   await page.waitForFunction(id => document.querySelector('#wb-chat [aria-current="true"]')?.dataset.conversationId === id, first.receipt.conversationId);
   assert.equal(await page.locator('#tab-chat').evaluate(el => el.classList.contains('active')), true);
   assert.equal(draftWrites, writesBefore + 1);
+  // UTF-8 external group is absent from the first list page; its drawer metadata must seed the header.
+  await page.locator('.tab[data-tab="overview"]').click();
+  await page.locator('#wb-board [data-group]').filter({ hasText: externalName }).first().click();
+  const beforeExternalRead = messageRequests.length;
+  await page.locator('#wb-side [data-action="viewConversation"]').click();
+  await page.locator('#wb-chat .chat-message').filter({ hasText: 'Unicode external history outside the first page.' }).waitFor();
+  assert.equal(await page.locator('#wb-chat [data-action="external"]').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#wb-chat .conversation-title-line h2').innerText(), externalGroup);
+  assert.match(await page.locator('#wb-chat .conversation-subtitle').innerText(), /Telegram/);
+  assert.equal(await page.locator('#wb-chat [data-action="page.groupInfo"]').isVisible(), true);
+  assert.equal(await page.locator('#wb-chat .conversation-channel-icon .wb-ico-send').count(), 1);
+  assert.equal(await page.locator('#wb-chat textarea').count(), 0);
+  const targetReads = messageRequests.slice(beforeExternalRead).map(value => new URL(value));
+  assert.ok(targetReads.some(url => decodeURIComponent(url.pathname.split('/').at(-2)) === externalId && url.searchParams.get('tab') === 'external'));
+  assert.equal(draftWrites, writesBefore + 1);
+  await page.locator('#wb-chat [data-action="mine"]').click();
   await page.locator('#wb-chat [data-action="external"]').click();
   await page.locator('#wb-chat [data-conversation-id]').first().click();
   await page.locator('#wb-chat .chat-message').first().waitFor();
@@ -208,6 +269,11 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await page.locator('#wb-chat .conversation-external-section').isVisible(), true);
   assert.match(await page.locator('#wb-chat .conversation-external-section').innerText(), /Other channels/i);
   await screenshot('external-read-only');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#wb-chat .conversation-back').click();
+  const loadMoreBox = await page.locator('#wb-chat [data-action="loadMore"]').boundingBox();
+  assert.ok(loadMoreBox && loadMoreBox.height >= 40, 'load more has a 40px phone height');
+  await page.setViewportSize({ width: 1440, height: 900 });
   fixture.setProxy(fixture);
   const allowRemote = async value => {
     const result = await fixture.request('/api/chat/settings', { method: 'PUT', body: { allowRemote: value } });
@@ -225,16 +291,27 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal((await page.locator('#wb-chat').innerText()).includes('Compare cache approaches'), false);
   await screenshot('remote-closed');
   expectedDenied = false;
+  // Restore the historical-only UTF-8 fixture before exercising ordinary mode conversion.
+  // This page case does not claim converter support for legacy non-ASCII group keys.
+  fixture.db.prepare('UPDATE conversations SET session_group=? WHERE session_group=?').run(validExternalGroup, legacyGroup);
+  fixture.db.prepare('UPDATE group_heads SET session_group=? WHERE session_group=?').run(validExternalGroup, legacyGroup);
   await fixture.convertToSingle();
   await page.goto(fixture.base + '/chat');
   await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
   await select();
-  assert.equal(await page.locator('#wb-chat [data-action="create"]').isVisible(), false);
+  assert.equal(await page.locator('#wb-chat [data-action="create"]').isVisible(), true);
+  assert.equal(await page.locator('#wb-chat [data-action="create"]').isDisabled(), true);
+  assert.equal(await page.locator('#wb-chat .conversation-single-warning .wb-ico-lock').count(), 1);
   assert.equal(await page.locator('#wb-chat .chat-composer textarea').isDisabled(), true);
   assert.equal(await page.locator('#wb-chat .chat-composer [data-action="send"]').isDisabled(), true);
   assert.equal(await page.locator('#wb-chat .chat-question button:not(:disabled)').count(), 0);
   assert.equal(fixture.readMode(), 'single');
   await screenshot('single-read-only');
+  await page.locator(`[data-conversation-id="${browserDraftId}"]`).click();
+  const staleReceipt = page.locator('#wb-chat .conversation-receipt[data-delivery-state="not_stored"]');
+  await staleReceipt.waitFor();
+  assert.doesNotMatch(await staleReceipt.innerText(), /can retry|retry sending/i);
+  assert.equal(await page.locator('#wb-chat .chat-composer textarea').isDisabled(), true);
   assert.deepEqual(errors, []);
   if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, base: fixture.base }, null, 2));
   t.diagnostic(`conversation browser: ${shots.length} screenshots, ${reads} actual message reads, no page errors`);

@@ -357,7 +357,7 @@
   "chat.refreshStatus": "Check delivery status",
   "chat.empty": "No conversations yet",
   "chat.select": "Select a conversation to read its history",
-  "chat.single": "History is read only in single mode. Switch to multi mode to chat.",
+  "chat.single": "Single mode is active. You can only view history; switch to multi mode to continue the conversation.",
   "chat.remoteDisabled": "This instance has not enabled remote conversation access.",
   "chat.loading": "Loading…",
   "chat.input": "Message",
@@ -637,7 +637,6 @@
   "chat.page.back": "Back to conversations",
   "chat.page.blankPreview": "Blank conversation · created after your first message",
   "chat.page.cancel": "Cancel",
-  "chat.page.dashboard": "Dashboard",
   "chat.page.groupInfo": "Group details",
   "chat.page.historyGap": "More new messages are missing in between.",
   "chat.page.loadGap": "Load missing messages",
@@ -657,7 +656,6 @@
   "chat.page.selfCreated": "My conversation",
   "chat.page.justNow": "Just now",
   "chat.page.minutesAgo": "{count} min ago",
-  "chat.page.hoursAgo": "{count} h ago",
   "chat.page.daysAgo": "{count} d ago",
   "chat.page.draftExplanation": "Blank conversation\nThis is a draft: the conversation is created and AI starts processing after your first message. You can rename it at any time.",
   "chat.page.remoteExplanation": "Conversation data is available only after the other instance enables remote conversation viewing. Overview and search remain available.",
@@ -675,5 +673,7 @@
   "chat.page.delivery.pending_reconciliation": "Status needs checking · check before deciding whether to retry",
   "chat.page.receipt.not_stored": "Not stored. Your input is preserved; you can retry sending.",
   "chat.page.receipt.pending_reconciliation": "Send result needs checking. Your input is preserved; do not resend.",
-  "chat.page.receipt.stored_pending_reconciliation": "Stored · delivery needs checking; do not resend"
+  "chat.page.emptyMine": "No conversations yet.\nCreate one to discuss something with AI.",
+  "chat.page.emptyExternal": "No external chat history yet",
+  "chat.page.receipt.notStoredReadOnly": "Not stored. Your input is preserved; sending is unavailable in single mode."
 }

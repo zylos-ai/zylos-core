@@ -71,6 +71,7 @@ export function mountConversationPage({
   const request = async (path, options = {}) => {
     const response = await fetcher(endpoint(path), {
       method: options.method ?? 'GET',
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.body === undefined ? {} : {
         headers: {
           'Content-Type': 'application/json'
@@ -102,7 +103,8 @@ export function mountConversationPage({
     document,
     t
   });
-  const nameOf = row => row?.displayName ?? row?.display_name ?? t('chat.unnamed');
+  const nameOf = (row, external = false) => row?.displayName ?? row?.display_name
+    ?? (external ? row?.sessionGroup ?? row?.session_group : null) ?? t('chat.unnamed');
   const channelOf = row => row?.channel ?? (row?.sessionGroup ?? row?.session_group ?? '').split(':')[0] ?? '';
   const isDraft = s => s.selectedId?.startsWith('d:') || s.conversation?.state === 'draft' || s.conversation?.draft === true;
   const channelLabel = channel => {
@@ -119,8 +121,11 @@ export function mountConversationPage({
   };
   const relativeTime = date => {
     const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-    const key = seconds < 60 ? 'justNow' : seconds < 3600 ? 'minutesAgo' : seconds < 86400 ? 'hoursAgo' : 'daysAgo';
-    const count = seconds < 3600 ? Math.floor(seconds / 60) : seconds < 86400 ? Math.floor(seconds / 3600) : Math.floor(seconds / 86400);
+    if (seconds >= 3600 && seconds < 86400) {
+      return date.toLocaleTimeString(document.documentElement?.lang || undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+    const key = seconds < 60 ? 'justNow' : seconds < 3600 ? 'minutesAgo' : 'daysAgo';
+    const count = seconds < 3600 ? Math.floor(seconds / 60) : Math.floor(seconds / 86400);
     return t('chat.page.' + key).replace('{count}', String(count));
   };
   async function selectFirstDesktop() {
@@ -193,6 +198,7 @@ export function mountConversationPage({
   const list = node('div', undefined, 'conversation-items');
   const listNotice = node('p', undefined, 'chat-notice conversation-list-notice');
   const more = action('loadMore', () => state.loadMore());
+  more.classList.add('conversation-load-more');
   sidebar.append(listToolbar, create, createForm, externalSection, list, listNotice, more);
   const detail = node('section', undefined, 'conversation-detail');
   detail.setAttribute('aria-label', t('chat.history'));
@@ -245,8 +251,10 @@ export function mountConversationPage({
     }
   });
   const notices = node('div', undefined, 'conversation-notices');
-  const accessNotice = node('p', undefined, 'chat-notice'),
+  const accessNotice = node('p', undefined, 'chat-notice conversation-single-warning'),
     errorNotice = node('p', undefined, 'chat-error');
+  const accessText = node('span', t('chat.single'));
+  accessNotice.append(icon(document, 'lock'), accessText);
   errorNotice.setAttribute('role', 'alert');
   const updateNotice = node('p', t('chat.page.updateRetry'), 'conversation-update-error');
   updateNotice.setAttribute('role', 'status');
@@ -730,7 +738,7 @@ export function mountConversationPage({
       creating = false;
       createName.value = '';
     }
-    create.hidden = !s.canCreate || creating;
+    create.hidden = s.tab !== 'mine' || creating || !s.canCreate && s.mode !== 'single';
     create.disabled = !s.canCreate || !!s.loading || !!s.creatingDraft || creationPending;
     createForm.hidden = !creating || !s.canCreate;
     createSubmit.disabled = !s.canCreate || !!s.creatingDraft || creationPending;
@@ -811,14 +819,17 @@ export function mountConversationPage({
     more.hidden = !s.nextCursor;
     more.disabled = !!s.loading;
     listNotice.hidden = !!s.items.length && !s.loading;
-    text(listNotice, t(s.loading ? 'chat.loading' : 'chat.empty'));
+    text(listNotice, t(s.loading ? 'chat.loading' : s.tab === 'mine' ? 'chat.page.emptyMine' : 'chat.page.emptyExternal'));
     accessNotice.hidden = s.mode !== 'single' || s.tab !== 'mine';
-    text(accessNotice, t('chat.single'));
-    errorNotice.hidden = !s.error || s.receipt?.stored === true && s.error === s.receipt.error;
+    text(accessText, t('chat.single'));
+    const outcome = receiptState(s.receipt);
+    const showReceipt = !!s.receipt && ['not_stored', 'pending_reconciliation'].includes(outcome);
+    const duplicateSendError = showReceipt && ['chat.error.requestFailed', 'chat.error.sendUnknown'].includes(conversationErrorKey(s.error));
+    errorNotice.hidden = !s.error || duplicateSendError || s.receipt?.stored === true && s.error === s.receipt.error;
     text(errorNotice, s.error ? t(conversationErrorKey(s.error)) : '');
     updateNotice.hidden = !s.updateError;
     const current = s.conversation ?? s.items.find(item => item.id === s.selectedId);
-    text(title, nameOf(current));
+    text(title, nameOf(current, s.tab === 'external'));
     running.hidden = s.groupPresence !== true;
     text(running.lastElementChild, t('chat.page.running'));
     const channel = channelOf(current);
@@ -873,10 +884,11 @@ export function mountConversationPage({
     send.dataset.action = s.retryRequired ? 'retry' : 'send';
     text(send.label, t(s.retryRequired ? 'chat.retry' : 'chat.send'));
     send.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry || !s.input.trim();
-    const outcome = receiptState(s.receipt);
-    receipt.hidden = !s.receipt || !['not_stored', 'pending_reconciliation'].includes(outcome);
+    receipt.hidden = !showReceipt;
     receipt.dataset.deliveryState = outcome || '';
-    text(receiptText, outcome ? t('chat.page.receipt.' + outcome) : '');
+    const receiptKey = outcome === 'not_stored' && s.mode === 'single'
+      ? 'chat.page.receipt.notStoredReadOnly' : 'chat.page.receipt.' + outcome;
+    text(receiptText, outcome ? t(receiptKey) : '');
     for (const reference of root.querySelectorAll('.chat-block-reference')) {
       reference.hidden = technicalDetails() !== true;
     }
@@ -906,7 +918,9 @@ export function mountConversationPage({
       }
       const matched = state.snapshot().items.find(item => (item.sessionGroup ?? item.session_group) === sessionGroup);
       const hex = [...new TextEncoder().encode(sessionGroup)].map(byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
-      await state.select(matched?.id ?? 'g:' + hex);
+      const id = matched?.id ?? 'g:' + hex;
+      const fallback = { id, session_group: sessionGroup, channel: channel ?? sessionGroup.split(':')[0] };
+      await state.select(id, matched ?? fallback);
       mobileDetail(true);
       scheduleFit();
       return !state.snapshot().error;

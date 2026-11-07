@@ -1084,14 +1084,14 @@ test('conversation read failure immediately after storing a send cannot make del
   assert.equal(f.calls.filter(c => c.path.endsWith('/send')).length, 1);
   f.state.destroy();
 });
-test('creating a draft ignores duplicate clicks while the original request is pending', async () => {
+test('creating a draft ignores duplicate clicks while the original request is pending', { timeout: 2000 }, async () => {
   const pending = deferred();
   let creates = 0;
   const f = fixture(u => u.pathname === '/api/chat/drafts' ? (creates++, pending.promise) : undefined);
   await f.state.open();
   const first = f.state.createDraft('Named conversation');
   assert.equal(f.state.snapshot().creatingDraft, true);
-  await f.state.createDraft('Duplicate');
+  void f.state.createDraft('Duplicate');
   assert.equal(creates, 1);
   pending.resolve({
     conversation: {
@@ -1143,7 +1143,7 @@ test('unparseable incremental previews use the injected locale fallback', async 
   f.state.destroy();
 });
 function groupFixture(readGroup) {
-  return fixture(u => {
+  return fixture((u, options) => {
     if (u.pathname === '/api/chat/conversations/g%3AA') return {
       conversation: {
         id: 'g:A',
@@ -1152,7 +1152,7 @@ function groupFixture(readGroup) {
       },
       stored: false
     };
-    if (u.pathname === '/api/workbench/groups') return readGroup();
+    if (u.pathname === '/api/workbench/groups') return readGroup(options);
   });
 }
 const groupSnapshot = (presence, extra = {}) => ({
@@ -1182,7 +1182,7 @@ test('running marker uses the exact group and clears after an unreadable workben
   assert.equal(f.state.snapshot().groupPresence, true);
   assert.equal(f.state.snapshot().groupPresenceReadAt, 1000);
   fail = true;
-  await f.timer.advance(5000);
+  await f.timer.advance(30000);
   assert.equal(f.state.snapshot().groupPresence, null);
   assert.equal(f.state.snapshot().groupPresenceReadAt, null);
   assert.equal(f.state.snapshot().updateError, null);
@@ -1218,7 +1218,7 @@ test('non-running group status is authoritative and stale identity responses can
   await f.state.open();
   await f.state.select('g:A');
   assert.equal(f.state.snapshot().groupPresence, false);
-  await f.timer.advance(5000);
+  await f.timer.advance(30000);
   f.state.close();
   f.setIdentity('another');
   await f.state.open();
@@ -1227,5 +1227,101 @@ test('non-running group status is authoritative and stale identity responses can
   assert.equal(f.state.snapshot().groupPresence, null);
   assert.equal(f.state.snapshot().items.some(item => item.id === 'g:A'), true);
   assert.equal(f.state.snapshot().selectedId, null);
+  f.state.destroy();
+});
+
+
+test('a hanging group status request cannot block selection or five-second message reads', { timeout: 2000 }, async () => {
+  let signal;
+  const pending = deferred();
+  const f = fixture((u, options) => {
+    if (u.pathname === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
+    if (u.pathname === '/api/workbench/groups') {
+      signal = options.signal;
+      signal.addEventListener('abort', () => pending.reject({ code: 'aborted' }), { once: true });
+      return pending.promise;
+    }
+    if (u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after') {
+      return { items: [{ id: 11, direction: 'out', status: 'delivered', content: 'New reply despite hung group status' }], afterCursor: 'a11' };
+    }
+  });
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    assert.equal(f.state.snapshot().messages.length, 1);
+    assert.equal(f.state.snapshot().groupPresence, null);
+    await f.timer.advance(4999);
+    assert.equal(f.reads().length, 0);
+    await f.timer.advance(1);
+    assert.equal(f.reads().length, 1);
+    assert.equal(f.state.snapshot().messages.at(-1).id, 11);
+    assert.equal(f.calls.filter(c => c.path === '/api/workbench/groups').length, 1);
+  } finally {
+    f.state.destroy();
+    assert.equal(signal.aborted, true);
+    await flush();
+    assert.equal(f.timer.count(), 0);
+  }
+});
+
+test('accelerated sends keep group status on the thirty-second list cadence', { timeout: 2000 }, async () => {
+  const f = fixture(u => {
+    if (u.pathname === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
+    if (u.pathname === '/api/workbench/groups') return groupSnapshot('running');
+    if (u.pathname.endsWith('/send')) return { stored: true, conversationId: 'g:A' };
+  });
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    const groupReads = () => f.calls.filter(c => c.path === '/api/workbench/groups').length;
+    assert.equal(groupReads(), 1);
+    f.state.setInput('hello');
+    await f.state.send();
+    const initialReads = f.reads().length;
+    await f.timer.advance(12000);
+    assert.equal(f.reads().length, initialReads + 6);
+    assert.equal(groupReads(), 1);
+    await f.timer.advance(18000);
+    assert.equal(groupReads(), 2);
+    await f.timer.advance(30000);
+    assert.equal(groupReads(), 3);
+  } finally {
+    f.state.destroy();
+  }
+});
+
+test('thirty-second list refresh deduplicates a pending optional group status read', { timeout: 2000 }, async () => {
+  const pending = deferred();
+  let reads = 0;
+  const f = groupFixture(() => ++reads === 1 ? pending.promise : groupSnapshot('running'));
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    await f.timer.advance(60000);
+    assert.equal(reads, 1);
+    assert.equal(f.reads().length, 12);
+    pending.resolve(groupSnapshot('running'));
+    await flush();
+    await f.timer.advance(30000);
+    assert.equal(reads, 2);
+    assert.equal(f.state.snapshot().groupPresence, true);
+  } finally {
+    pending.resolve(groupSnapshot('unknown'));
+    f.state.destroy();
+  }
+});
+
+test('external selection outside the first page preserves supplied group metadata without a detail request', async () => {
+  const f = fixture();
+  await f.state.open();
+  await f.state.setTab('external');
+  const metadata = { id: 'g:74656C656772616D3AE8BF90E7BBB4E7BEA42DE6B58BE8AF95', session_group: 'telegram:运维群-测试', channel: 'telegram' };
+  await f.state.select(metadata.id, metadata);
+  assert.equal(f.state.snapshot().tab, 'external');
+  assert.equal(f.state.snapshot().selectedId, metadata.id);
+  assert.equal(f.state.snapshot().conversation.session_group, metadata.session_group);
+  assert.equal(f.state.snapshot().conversation.channel, 'telegram');
+  assert.equal(f.calls.some(c => c.path === '/api/chat/conversations/' + metadata.id), false);
+  assert.equal(f.calls.some(c => c.options?.method), false);
   f.state.destroy();
 });

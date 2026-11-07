@@ -357,7 +357,7 @@
   "chat.refreshStatus": "核对投递状态",
   "chat.empty": "暂无对话",
   "chat.select": "选择对话以查看历史",
-  "chat.single": "single 模式下仅可查看历史，切换 multi 后可对话。",
+  "chat.single": "当前是 single 模式，只能查看历史；切换到 multi 后可以继续对话。",
   "chat.remoteDisabled": "对方实例未开放远端查看对话",
   "chat.loading": "加载中…",
   "chat.input": "消息",
@@ -637,7 +637,6 @@
   "chat.page.back": "返回对话列表",
   "chat.page.blankPreview": "空白对话 · 发出第一条消息后才创建",
   "chat.page.cancel": "取消",
-  "chat.page.dashboard": "Dashboard",
   "chat.page.groupInfo": "组详情",
   "chat.page.historyGap": "中间还有更早的新消息",
   "chat.page.loadGap": "补读中间消息",
@@ -657,7 +656,6 @@
   "chat.page.selfCreated": "自建对话",
   "chat.page.justNow": "刚刚",
   "chat.page.minutesAgo": "{count} 分钟前",
-  "chat.page.hoursAgo": "{count} 小时前",
   "chat.page.daysAgo": "{count} 天前",
   "chat.page.draftExplanation": "空白对话\n这是草稿：发出第一条消息后才会真正创建，AI 才会开始处理。名字可以随时改。",
   "chat.page.remoteExplanation": "对话页的数据只在对方本机打开「允许远端查看对话」后才给；总览和搜索不受影响。",
@@ -675,5 +673,7 @@
   "chat.page.delivery.pending_reconciliation": "状态待核对 · 请先核对再决定重试",
   "chat.page.receipt.not_stored": "未入库，输入已保留；可以重试发送。",
   "chat.page.receipt.pending_reconciliation": "发送结果待核对，输入已保留；请勿重发。",
-  "chat.page.receipt.stored_pending_reconciliation": "已入库 · 投递待核对，不要重发"
+  "chat.page.emptyMine": "还没有对话。\n新建一个，和 AI 单独聊一件事。",
+  "chat.page.emptyExternal": "暂无外部聊天记录",
+  "chat.page.receipt.notStoredReadOnly": "未入库，输入已保留；single 模式下不能发送。"
 }

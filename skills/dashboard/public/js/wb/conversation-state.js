@@ -39,6 +39,7 @@ export function createConversationState({
     error = null,
     loading = false,
     creatingDraft = false;
+  let groupPresenceRead = null;
   const cells = new Map(),
     listeners = new Set(onChange ? [onChange] : []);
   const key = id => `${tab}:${id}`;
@@ -152,7 +153,9 @@ export function createConversationState({
         }
       } catch (err) {
         if (!valid(e)) return;
-        if ((err?.code || err?.payload?.error) === 'remote_chat_disabled') failure(err, e);else {
+        if ((err?.code || err?.payload?.error) === 'remote_chat_disabled') {
+          failure(err, e);
+        } else {
           updateError = err?.code || 'chat_request_failed';
           emit();
         }
@@ -179,6 +182,7 @@ export function createConversationState({
     const code = err?.code || err?.payload?.error || err?.message || 'chat_request_failed';
     if (code === 'remote_chat_disabled') {
       stopTimer();
+      cancelGroupPresenceRead();
       updateError = null;
       epoch++;
       blocked = true;
@@ -231,6 +235,7 @@ export function createConversationState({
       if (more) listDepth++;
       if (!quiet || listDepth === 1) nextCursor = data.nextCursor ?? null;
       if (!more) lastListAt = now();
+      if (quiet && !more && cell()) readGroupPresence(cell(), currentTab, e);
       emit();
     } catch (err) {
       if (quiet) throw err;
@@ -242,7 +247,7 @@ export function createConversationState({
       }
     }
   }
-  async function select(id) {
+  async function select(id, fallbackMetadata) {
     if (!active || blocked) return;
     selectedId = id;
     selectedVersion++;
@@ -252,7 +257,12 @@ export function createConversationState({
       e = epoch;
     const version = selectedVersion;
     current.error = null;
-    current.conversation ||= items.find(item => item.id === id) || null;
+    current.conversation ||= items.find(item => item.id === id)
+      || (fallbackMetadata?.id === id ? {
+        id, session_group: fallbackMetadata.session_group, channel: fallbackMetadata.channel,
+      } : null);
+    current.groupPresence = null;
+    current.groupPresenceReadAt = null;
     emit();
     if (currentTab === 'mine') {
       current.ownershipResolved = false;
@@ -273,7 +283,8 @@ export function createConversationState({
       }, e, current);
     }
     if (!valid(e) || version !== selectedVersion || currentTab !== tab || id.startsWith('d:')) return;
-    await Promise.all([history(current, id, currentTab, 'initial', e), questions(current, id, currentTab, false, e), readGroupPresence(current, currentTab, e)]);
+    readGroupPresence(current, currentTab, e);
+    await Promise.all([history(current, id, currentTab, 'initial', e), questions(current, id, currentTab, false, e)]);
   }
   function applyQuestions(current, rows, cursor) {
     const existing = new Map(current.questions.map(row => [row.interruptId, row]));
@@ -332,7 +343,11 @@ export function createConversationState({
         };
         token = nextCursor;
       }
-      if (allPages) current.questionPageCursors = refreshed;else if (!current.questionPageCursors.includes(cursor)) current.questionPageCursors.push(cursor);
+      if (allPages) {
+        current.questionPageCursors = refreshed;
+      } else if (!current.questionPageCursors.includes(cursor)) {
+        current.questionPageCursors.push(cursor);
+      }
       if (!targetId) current.questionCursor = nextCursor;
       current.questionError = null;
       emit();
@@ -519,34 +534,49 @@ export function createConversationState({
     } : row);
     emit();
   }
-  async function readGroupPresence(current, currentTab, e) {
+  function cancelGroupPresenceRead() {
+    if (!groupPresenceRead) return;
+    groupPresenceRead.current.groupPresenceVersion++;
+    groupPresenceRead.controller.abort();
+  }
+  function readGroupPresence(current, currentTab, e) {
     const sessionGroup = current.conversation?.sessionGroup ?? current.conversation?.session_group;
-    const version = ++current.groupPresenceVersion;
     if (currentTab !== 'mine' || typeof sessionGroup !== 'string' || !sessionGroup) {
       current.groupPresence = null;
       current.groupPresenceReadAt = null;
       return;
     }
-    try {
-      const data = await request('/api/workbench/groups');
-      if (!valid(e) || version !== current.groupPresenceVersion) return;
-      const group = Array.isArray(data?.rows) ? data.rows.find(row => row.sessionGroup === sessionGroup) : null;
-      const trusted = data?.listKnown === true && data?.sources?.status?.ok === true;
-      current.groupPresence = trusted && group?.presence === 'running' ? true : trusted && group?.presence === 'not_running' ? false : null;
-      current.groupPresenceReadAt = trusted && Number.isFinite(data.sources.status.readAt) ? data.sources.status.readAt : null;
-    } catch {
-      if (!valid(e) || version !== current.groupPresenceVersion) return;
-      // Workbench status is optional. An unreadable source must not leave a stale running marker.
-      current.groupPresence = null;
-      current.groupPresenceReadAt = null;
-    }
-    if (valid(e)) emit();
+    // One optional status request may be pending. It never joins the message
+    // reading promise or creates a timer, including when its transport hangs.
+    if (groupPresenceRead) return;
+    const version = ++current.groupPresenceVersion, navigation = selectedVersion;
+    const record = { current, controller: new AbortController(), promise: null };
+    groupPresenceRead = record;
+    current.groupPresence = null;
+    current.groupPresenceReadAt = null;
+    const stillCurrent = () => valid(e) && navigation === selectedVersion && version === current.groupPresenceVersion;
+    record.promise = (async () => {
+      try {
+        const data = await request('/api/workbench/groups', { signal: record.controller.signal });
+        if (!stillCurrent()) return;
+        const group = Array.isArray(data?.rows) ? data.rows.find(row => row.sessionGroup === sessionGroup) : null;
+        const trusted = data?.listKnown === true && data?.sources?.status?.ok === true;
+        current.groupPresence = trusted && group?.presence === 'running' ? true : trusted && group?.presence === 'not_running' ? false : null;
+        current.groupPresenceReadAt = trusted && Number.isFinite(data.sources.status.readAt) ? data.sources.status.readAt : null;
+      } catch {
+        if (!stillCurrent()) return;
+        // An unreadable optional source must not leave a stale running marker.
+        current.groupPresence = null;
+        current.groupPresenceReadAt = null;
+      } finally {
+        if (groupPresenceRead === record) groupPresenceRead = null;
+        if (stillCurrent()) emit();
+      }
+    })();
   }
   async function syncCurrent(current, id, currentTab, e) {
     if (current.syncing) return current.syncing;
     current.syncing = (async () => {
-      await readGroupPresence(current, currentTab, e);
-      if (!valid(e)) return;
       await history(current, id, currentTab, 'after', e, true);
       if (!valid(e)) return;
       await statuses(current, id, currentTab, e);
@@ -563,7 +593,9 @@ export function createConversationState({
   }
   async function syncAfterSend(current, id, currentTab, e) {
     try {
-      if (current.afterCursor) await syncCurrent(current, id, currentTab, e);else {
+      if (current.afterCursor) {
+        await syncCurrent(current, id, currentTab, e);
+      } else {
         await history(current, id, currentTab, 'initial', e);
         if (valid(e) && currentTab === 'mine') {
           current.pendingQuestionRefresh = true;
@@ -577,7 +609,9 @@ export function createConversationState({
       }
     } catch (err) {
       if (!valid(e)) return;
-      if (err?.code === 'remote_chat_disabled') failure(err, e);else {
+      if (err?.code === 'remote_chat_disabled') {
+        failure(err, e);
+      } else {
         updateError = err?.code || 'chat_request_failed';
         emit();
         const wait = retryDelay;
@@ -808,7 +842,9 @@ export function createConversationState({
           };
         }
       }
-      if ((err?.code || err?.payload?.error) === 'remote_chat_disabled') failure(err, e);else if (sendIdentity === openedIdentity && !blocked) {
+      if ((err?.code || err?.payload?.error) === 'remote_chat_disabled') {
+        failure(err, e);
+      } else if (sendIdentity === openedIdentity && !blocked) {
         current.error = err?.code || err?.payload?.error || err?.message || 'chat_request_failed';
         if (valid(e)) emit();
       }
@@ -829,6 +865,7 @@ export function createConversationState({
       if (active && nextIdentity === openedIdentity) return;
       stopTimer();
       if (nextIdentity !== openedIdentity) {
+        cancelGroupPresenceRead();
         openedIdentity = nextIdentity;
         cells.clear();
         items = [];
@@ -849,12 +886,14 @@ export function createConversationState({
       schedule();
     },
     close() {
+      cancelGroupPresenceRead();
       active = false;
       epoch++;
       loading = false;
       stopTimer();
     },
     destroy() {
+      cancelGroupPresenceRead();
       active = false;
       destroyed = true;
       epoch++;
@@ -875,12 +914,12 @@ export function createConversationState({
       await list();
       schedule();
     },
-    select: async id => {
+    select: async (id, fallbackMetadata) => {
       stopTimer();
       fastUntil = 0;
       updateError = null;
       retryDelay = 5000;
-      await select(id);
+      await select(id, fallbackMetadata);
       schedule();
     },
     createDraft,
@@ -912,7 +951,9 @@ export function createConversationState({
         await syncCurrent(cell(), selectedId, tab, epoch);
         updateError = null;
       } catch (err) {
-        if (err?.code === 'remote_chat_disabled') failure(err, epoch);else {
+        if (err?.code === 'remote_chat_disabled') {
+          failure(err, epoch);
+        } else {
           updateError = err?.code || 'chat_request_failed';
           emit();
         }

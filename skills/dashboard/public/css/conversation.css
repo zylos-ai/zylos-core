@@ -888,3 +888,27 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
     min-height:40px
   }
 }
+
+.conversation-list-notice {
+  white-space:pre-line
+}
+.conversation-single-warning {
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:10px 12px;
+  border:1px solid color-mix(in srgb,var(--wb-wait) 35%,var(--wb-line));
+  border-radius:8px;
+  background:color-mix(in srgb,var(--wb-wait) 8%,var(--wb-panel));
+  color:var(--wb-wait)
+}
+.conversation-single-warning>.wb-ico {
+  flex:none
+}
+@media(max-width:760px) {
+  .conversation-page .conversation-tabs .wb-btn,
+  .conversation-page .conversation-create,
+  .conversation-page .conversation-load-more {
+    min-height:40px
+  }
+}
