@@ -17,6 +17,7 @@ export function evaluateBeforeSend(input) {
   if (content.startsWith(CONTENT_PREFIX)) {
     const parsed = parseC4Content(content);
     if (parsed.kind !== 'envelope') return abort('Invalid Dashboard structured content.');
+    if (parsed.viewError) return abort('Invalid Dashboard view: ' + parsed.viewError);
   }
   return { version: 1, decision: 'continue' };
 }

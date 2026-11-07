@@ -308,7 +308,7 @@ test('GC persists a two-page scan, keeps its first upper bound and resumes after
   assert.equal(f.saved(result.id).scanned_c4_id, 200);
   assert.equal(f.saved(result.id).scan_upper_id, 450);
   assert.equal(f.saved(result.id).next_check_at, f.getTime() + ATTACHMENT_GC_INTERVAL_MS);
-  f.add('beyond fixed scan');
+  for (let i = 0; i < 250; i++) f.add(`beyond fixed scan-${i}`);
   await f.attachments.gc();
   assert.equal(f.saved(result.id).scanned_c4_id, 200);
   const reopened = f.reopen();

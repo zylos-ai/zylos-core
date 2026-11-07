@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { CONTENT_PREFIX, makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 // Resolve the browser alias to the same shared source; never evaluate source text.
-const browserSchema = new URL('../public/chat-schema.js?v=91', import.meta.url).href;
+const browserSchema = new URL('../public/chat-schema.js?v=92', import.meta.url).href;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
@@ -178,4 +179,17 @@ test('answers controls and empty message envelopes display their validated fallb
   const control = render({ version: 1, kind: 'control', messageId: 'control-message', interruptId: 'interrupt-one', fallbackText: 'Question stopped', control: { operation: 'stop', messageId: 'message-one' } });
   assert.equal(control.textContent, 'Question stopped');
   assert.equal(allNodes(control).some(node => node.tagName === 'BUTTON'), false);
+});
+
+// Known schema versions without a shipped renderer stay inert; no v2 UI here.
+test('a conditional form without a shipped renderer uses fallback and never requests controls', () => {
+  const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
+  const source = structuredClone(fixtures.formQuestion);
+  assert.equal(parseC4Content(CONTENT_PREFIX + JSON.stringify(source)).kind, 'envelope');
+  let calls = 0;
+  const root = render(source, { renderQuestion() { calls++; return createDocument().createElement('button'); } });
+  assert.equal(calls, 0);
+  assert.ok(root.textContent.includes(source.blocks[0].fallbackText));
+  assert.equal(allNodes(root).some(node => ['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'DL'].includes(node.tagName)), false);
+  assert.equal(allNodes(root).some(node => node.className?.includes('chat-block-error')), false);
 });

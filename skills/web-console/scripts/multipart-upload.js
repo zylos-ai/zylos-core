@@ -37,10 +37,6 @@ function envelopeGuard(boundary, maximum) {
               if (!/^content-disposition:/i.test(line)) continue;
               const disposition = new MIMEType(`x/${line.slice(line.indexOf(':') + 1).trim()}`);
               if (++dispositions > 1 || disposition.essence !== 'x/form-data' || disposition.params.get('name') === null) throw invalid();
-              for (const key of ['name', 'filename']) {
-                const value = disposition.params.get(key);
-                if (value !== null && Buffer.byteLength(value) > 255) throw invalid();
-              }
             }
             if (dispositions !== 1) throw invalid();
             pending = pending.subarray(end + 4);
@@ -101,7 +97,6 @@ export async function receiveMultipartFile(req, { maxBytes, writeFile, authorize
       async function* validatedFile() {
         yield* file.stream;
         await envelope;
-        if (req.aborted) throw invalid();
         await authorize();
       }
       writing = Promise.resolve().then(() => writeFile({ name: file.originalname, mime: file.mimetype, stream: validatedFile() }));
@@ -132,10 +127,19 @@ export async function receiveMultipartFile(req, { maxBytes, writeFile, authorize
     },
   }).single('file');
   try {
-    await new Promise((resolve, reject) => middleware(req, {}, error => {
-      middlewareDone = true;
-      if (error) { rejectEnvelope(normalize(error)); reject(normalize(error)); } else resolve();
-    }));
+    await new Promise((resolve, reject) => {
+      middleware(req, {}, error => {
+        middlewareDone = true;
+        if (error) { rejectEnvelope(normalize(error)); reject(normalize(error)); } else resolve();
+      });
+      if (!parser) {
+        // Older Multer versions pipe to their own parser and ignore streamHandler.
+        req.unpipe();
+        const error = invalid();
+        abort(error);
+        reject(error);
+      }
+    });
     if (!result) throw invalid();
     return result;
   } finally {

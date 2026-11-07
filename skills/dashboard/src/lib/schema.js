@@ -556,7 +556,7 @@ export function migrateDatabase(db) {
             PRIMARY KEY(attachment_id,c4_id)
           );
           CREATE INDEX IF NOT EXISTS idx_chat_attachment_messages_row ON chat_attachment_messages(c4_id,attachment_id);
-          INSERT INTO schema_migrations(version) VALUES(26);
+          INSERT OR IGNORE INTO schema_migrations(version) VALUES(26);
         `);
       })();
     }

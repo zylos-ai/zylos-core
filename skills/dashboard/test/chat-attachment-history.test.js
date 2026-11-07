@@ -61,7 +61,7 @@ test('unknown attachment blocks retain a generic invalid-message preview', () =>
   const raw = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: 'message-1',
     fallbackText: 'SECRET_ID_REFERENCE', blocks: [{ id: 'file-1', type: 'x-zylos.file', schemaVersion: 1,
       data: { attachmentId: 'SECRET_ID_REFERENCE', nameSnapshot: 'report.pdf' }, fallbackText: 'file' }] });
-  assert.equal(chatAttachmentPreview(raw, { c4Id: 7 }), '无法显示的消息');
+  assert.equal(chatAttachmentPreview(raw), '无法显示的消息');
 });
 
 test('history uses one metadata batch and refreshes unavailable rows without a new message', t => {

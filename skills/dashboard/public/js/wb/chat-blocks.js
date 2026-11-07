@@ -1,8 +1,8 @@
-import { parseC4Content } from '../../chat-schema.js?v=91';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=92';
 import { element } from './plain-text.js?v=94';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=91';
+export { validateAnswer } from '../../chat-schema.js?v=92';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 
@@ -139,6 +139,8 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
           part.append(reference());
         }
         else text(part, t('chat.block.pending'), 'chat-message-status');
+      } else if (!REGISTERED_COMPONENT_KEYS.includes(`${block.type}@${block.schemaVersion}`)) {
+        text(part, block.fallbackText || envelope.fallbackText);
       } else if (block.type === 'markdown') text(part, block.data.text || block.fallbackText || envelope.fallbackText, 'chat-message-text');
       else if (['time_series', 'breakdown', 'category_series'].includes(block.type)) part.append(chart(block));
       else if (interactive.has(block.type)) {

@@ -158,6 +158,20 @@ test('upload writes and grows its private partial file before the chunked reques
   assert.equal(bytes.subarray(32768).equals(Buffer.alloc(32768, 98)), true);
 });
 
+test('permission loss before the upload finishes rejects without publishing the streamed file', async t => {
+  const f = await fixture(t);
+  const { request, response } = openUpload(t, f);
+  request.write(Buffer.alloc(32768));
+  await waitFor(() => partialFiles(f).length === 1);
+  f.setMode('single');
+  request.end('\r\n--streaming-upload--\r\n');
+  const result = await response;
+  assert.equal(result.status, 403);
+  assert.equal(Object.hasOwn(result.body, 'id'), false);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 0);
+  assert.equal(fs.readdirSync(f.attachments.mediaDir).length, 0);
+});
+
 test('malformed trailing multipart fields cannot publish the already streamed file', async t => {
   const f = await fixture(t);
   const { request, response } = openUpload(t, f);

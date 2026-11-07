@@ -7,7 +7,7 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { serveStatic } from '../src/lib/http.js';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
-import { COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, VIEW_SCHEMA, FORM_CONDITION_SCHEMA, HOST_SCHEMA_SOURCE } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const publicRoot = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const schemaPath = fileURLToPath(new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
@@ -60,27 +60,31 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
   const origin = await fixture(t), expected = fs.readFileSync(schemaPath);
   assert.ok(expected.includes(Buffer.from('export const COMPONENT_DEFINITIONS = ' + JSON.stringify(COMPONENT_DEFINITIONS))));
   assert.ok(expected.includes(Buffer.from('export const REGISTERED_COMPONENT_KEYS = ' + JSON.stringify(REGISTERED_COMPONENT_KEYS))));
+  for (const [name, value] of Object.entries({ VIEW_SCHEMA, FORM_CONDITION_SCHEMA, HOST_SCHEMA_SOURCE })) {
+    assert.ok(expected.includes(Buffer.from(`export const ${name} = ${JSON.stringify(value)}`)), name);
+  }
+  assert.ok(expected.includes(Buffer.from('export function evaluateFormState(fields, values)')));
   assert.doesNotMatch(expected.toString(), /^import\s/m, 'browser schema remains one generated-data module without runtime imports');
   for (const prefix of ['', '/dashboard', '/fleet/Peer', '/dashboard/fleet/Peer']) {
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=96)"/.exec(pageText)?.[1];
+    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=97)"/.exec(pageText)?.[1];
     assert.ok(appPath, 'the entry page loads the refreshed application module');
     const application = await fetch(origin + prefix + '/_assets/' + appPath);
     assert.equal(application.status, 200);
-    assert.match(await application.text(), /from '\.\/wb\/chat\.js\?v=95'/);
+    assert.match(await application.text(), /from '\.\/wb\/chat\.js\?v=96'/);
     for (const moduleName of ['chat', 'chat-blocks', 'chat-questions']) {
-      const version = 95;
+      const version = 96;
       const moduleUrl = origin + prefix + `/_assets/js/wb/${moduleName}.js?v=${version}`;
       const entry = await fetch(moduleUrl);
       assert.equal(entry.status, 200);
       const body = await entry.text();
       const specifier = /from ['"]([^'"]*chat-schema\.js[^'"]*)['"]/.exec(body)?.[1];
-      assert.equal(specifier, '../../chat-schema.js?v=91');
+      assert.equal(specifier, '../../chat-schema.js?v=92');
       const schemaUrl = new URL(specifier, moduleUrl);
       assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
-      assert.equal(schemaUrl.search, '?v=91');
+      assert.equal(schemaUrl.search, '?v=92');
       const response = await fetch(schemaUrl);
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type'), /^text\/javascript; charset=utf-8$/);

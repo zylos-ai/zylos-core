@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick, deferred } from './fixtures/workbench-dom.js';
 // Resolve the browser's shared static-schema URL to the identical source module.
-const browserSchema = new URL('../public/chat-schema.js?v=91', import.meta.url).href;
+const browserSchema = new URL('../public/chat-schema.js?v=92', import.meta.url).href;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).href === browserSchema) return next(sourceSchema, context);
