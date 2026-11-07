@@ -843,8 +843,9 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     fitAxis();
   }
   /**
-   * After layout, drop lane labels that would touch the one before them or reach past the lane's right edge
-   * (long words such as "Tomorrow 00:00"). On a collision "Tomorrow 00:00" stays and the other label goes.
+   * After layout, keep every lane label inside the lane: a label crossing an edge is aligned to that edge,
+   * and one that still touches the label before it is dropped (long words such as "Tomorrow 00:00").
+   * On a collision "Tomorrow 00:00" stays and the other label goes.
    */
   function fitAxis() {
     const frame = window?.requestAnimationFrame;
@@ -852,13 +853,20 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     frame(() => {
       const axis = root.querySelector?.('.wb-sched-axis');
       if (!axis?.getBoundingClientRect) return;
-      const edge = axis.getBoundingClientRect().right;
+      const lane = axis.getBoundingClientRect();
       let last = null;
       for (const label of axis.children) {
-        label.classList.remove('wb-crowded');
+        label.classList.remove('wb-crowded', 'wb-fit-start', 'wb-fit-end');
         if (getComputedStyle(label).display === 'none') continue;
-        const box = label.getBoundingClientRect();
-        if (box.right > edge + 0.5) label.classList.add('wb-crowded');
+        let box = label.getBoundingClientRect();
+        if (box.left < lane.left - 0.5) {
+          label.classList.add('wb-fit-start');
+          box = label.getBoundingClientRect();
+        } else if (box.right > lane.right + 0.5) {
+          label.classList.add('wb-fit-end');
+          box = label.getBoundingClientRect();
+        }
+        if (box.right > lane.right + 0.5) label.classList.add('wb-crowded');
         else if (last && box.left < last.box.right + 6) {
           if (label.classList.contains('wb-midnight')) {
             last.label.classList.add('wb-crowded');

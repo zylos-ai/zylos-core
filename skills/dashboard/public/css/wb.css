@@ -490,11 +490,11 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-dot:hover { background: var(--text); transform: scale(1.25); }
 .wb-sched-dot.wb-p1 { background: var(--wb-wait); }
 .wb-sched-dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--wb-accent-soft); }
-.wb-sched-axis { position: relative; height: 22px; color: var(--text-muted); font-size: 10.5px; }
+.wb-sched-axis { position: relative; height: 22px; overflow: clip; color: var(--text-muted); font-size: 10.5px; }
 .wb-sched-axis span { position: absolute; top: 5px; transform: translateX(-50%); white-space: nowrap; }
 .wb-sched-axis .wb-sched-axis-now { left: 0; transform: none; }
-.wb-sched-axis span.wb-start { transform: none; }
-.wb-sched-axis span.wb-end { transform: translateX(-100%); }
+.wb-sched-axis span.wb-start, .wb-sched-axis span.wb-fit-start { transform: none; }
+.wb-sched-axis span.wb-end, .wb-sched-axis span.wb-fit-end { transform: translateX(-100%); }
 .wb-sched-axis .wb-near, .wb-sched-axis .wb-crowded { visibility: hidden; }
 .wb-sched-axis .wb-near { display: none; }
 .wb-sched-lane { container-type: inline-size; }
