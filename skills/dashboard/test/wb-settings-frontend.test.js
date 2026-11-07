@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
 import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
 import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
-import { keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
+import { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
 import { renderVersion } from '../public/js/wb/settings-version.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
@@ -383,6 +383,22 @@ test('remote machine rows show the poller connection state and remove through th
   assert.match(rows[1].textContent, /wb\.settings\.fleet\.auth/); assert.match(rows[2].textContent, /wb\.settings\.fleet\.down/); assert.match(rows[3].textContent, /wb\.settings\.fleet\.unknown/);
   await rows[1].querySelector('.fleet-agent-remove').dispatch('click'); assert.deepEqual(removed, ['auth']);
   renderRemoteAgents(root, [], { document, t }); assert.equal(root.textContent, 'fleet_manage.empty');
+});
+
+test('revoking, rotating and deleting a key each ask first, and cancelling sends nothing', async () => {
+  const document = documentFixture(), root = document.createElement('div'), asked = [], ran = [];
+  let answer = false;
+  const keys = [{ name: 'ops', scope: 'admin', status: 'active' }, { name: 'old', scope: 'read', status: 'revoked' }];
+  renderKeyTable(root, keys, { document, t: (key, params) => params ? key + ':' + params.name : key,
+    confirm: async (text, options) => { asked.push([text, options.ok]); return answer; }, onAction: (action, name) => ran.push([action, name]) });
+  const click = selector => root.querySelector(selector).dispatch('click');
+  await click('.api-key-revoke');
+  assert.deepEqual(asked.at(-1), ['fleet_manage.revoke_confirm:ops', 'wb.settings.keys.revoke']); assert.deepEqual(ran, [], 'cancel sends nothing');
+  answer = true; await click('.api-key-revoke'); assert.deepEqual(ran, [['revoke', 'ops']]);
+  answer = false; await click('.api-key-rotate'); assert.deepEqual(asked.at(-1), ['fleet_manage.rotate_confirm:ops', 'wb.settings.keys.rotate']); assert.equal(ran.length, 1);
+  answer = false; await click('.api-key-delete'); assert.deepEqual(asked.at(-1), ['fleet_manage.delete_confirm:old', 'wb.settings.keys.delete']); assert.equal(ran.length, 1);
+  answer = true; await click('.api-key-delete'); assert.deepEqual(ran.at(-1), ['delete', 'old']);
+  assert.equal(keyActionConfirmation('copy', 'ops'), null);
 });
 
 test('key table lists active keys before revoked ones with their own text actions', async () => {

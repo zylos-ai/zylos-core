@@ -2060,7 +2060,7 @@ function renderApiKeys(data) {
   const purgeBtn = fleetManageModal.querySelector('#api-key-purge-revoked');
   if (purgeBtn) { purgeBtn.hidden = !counts.revoked; purgeBtn.textContent = t('wb.settings.keys.purge', { count: counts.revoked }); }
   fleetManageModal.querySelector('#api-key-count').textContent = t('wb.settings.keys.counts', counts);
-  renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys, { t, onAction: (action, name) => ({ rotate: rotateApiKey, revoke: revokeApiKey, delete: hardDeleteApiKey })[action](name) });
+  renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys, { t, confirm: confirmSetting, onAction: (action, name) => ({ rotate: rotateApiKey, revoke: revokeApiKey, delete: hardDeleteApiKey })[action](name) });
 }
 
 function renderCreatedApiKey(createdKey) {
@@ -2189,10 +2189,10 @@ async function createApiKey() {
   }
 }
 
+// The key table has already confirmed the action itself; rotating still asks before replacing a key shown only once.
 async function rotateApiKey(name) {
   const pendingKeyName = fleetManageModal?._createdKey?.name;
   if (pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { danger: false }))) return;
-  if (!(await confirmSetting(t('fleet_manage.rotate_confirm', { name }), { ok: t('wb.settings.keys.rotate') }))) return;
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.rotating_key'), 'running');
   try {
@@ -2210,7 +2210,6 @@ async function rotateApiKey(name) {
 }
 
 async function revokeApiKey(name) {
-  if (!(await confirmSetting(t('fleet_manage.revoke_confirm', { name }), { ok: t('wb.settings.keys.revoke') }))) return;
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.revoking_key'), 'running');
   try {
@@ -2228,7 +2227,6 @@ async function revokeApiKey(name) {
 }
 
 async function hardDeleteApiKey(name) {
-  if (!(await confirmSetting(t('fleet_manage.delete_confirm', { name }), { ok: t('wb.settings.keys.delete') }))) return;
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.deleting_key'), 'running');
   try {

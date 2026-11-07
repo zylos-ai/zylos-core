@@ -3,8 +3,14 @@ import { element, icon } from './plain-text.js?v=94';
 const keyStatus = key => key.status || (key.revoked_at ? 'revoked' : 'active');
 const dateText = (value, t) => value ? String(value).replace('T', ' ').replace(/\.\d+Z?$|Z$/, '').slice(0, 16) : t('wb.settings.keys.never');
 
-/** API keys as a table: name, scope badge, status, created, last used and text actions. */
-export function renderKeyTable(root, keys = [], { document = root.ownerDocument, t = key => key, onAction = () => {} } = {}) {
+/** What each key action asks before it runs: rotating and revoking break machines using the key, deleting is permanent. */
+export function keyActionConfirmation(action, name, t = key => key) {
+  const label = { rotate: 'wb.settings.keys.rotate', revoke: 'wb.settings.keys.revoke', delete: 'wb.settings.keys.delete' }[action];
+  return label ? { text: t('fleet_manage.' + action + '_confirm', { name }), ok: t(label) } : null;
+}
+
+/** API keys as a table: name, scope badge, status, created, last used and text actions; each action confirms first. */
+export function renderKeyTable(root, keys = [], { document = root.ownerDocument, t = key => key, confirm = async () => true, onAction = () => {} } = {}) {
   if (!keys.length) { root.replaceChildren(element(document, 'p', t('fleet_manage.keys_empty'), 'wb-note')); return; }
   const table = element(document, 'table', undefined, 'wb-ktable');
   const head = element(document, 'tr');
@@ -22,7 +28,12 @@ export function renderKeyTable(root, keys = [], { document = root.ownerDocument,
     const acts = element(document, 'td'), box = element(document, 'div', undefined, 'wb-k-acts');
     const action = (name, label, className) => {
       const button = element(document, 'button', t(label), 'wb-btn wb-btn-sm api-key-' + name + (className ? ' ' + className : '')); button.type = 'button';
-      button.addEventListener('click', () => onAction(name, key.name)); box.append(button);
+      button.addEventListener('click', async () => {
+        const ask = keyActionConfirmation(name, key.name, t);
+        if (ask && !(await confirm(ask.text, { ok: ask.ok }))) return;
+        onAction(name, key.name);
+      });
+      box.append(button);
     };
     if (status === 'active') { action('rotate', 'wb.settings.keys.rotate'); action('revoke', 'wb.settings.keys.revoke', 'wb-btn-danger-text'); }
     else action('delete', 'wb.settings.keys.delete', 'wb-btn-danger-text');
