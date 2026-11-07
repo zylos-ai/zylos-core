@@ -15,7 +15,7 @@ after(() => { c4.close(); environment.cleanup(); });
 
 // Integration boundary: real C4 insert/read, private SQLite, observer, health
 // coordinator and durable HealthStore. Run for recovery control return shape,
-// acknowledgement polling or retry-budget changes; skip unrelated runtime I/O.
+// idle eligibility, acknowledgement polling or retry-budget changes; skip unrelated runtime I/O.
 // The official runner supplies private paths; this file creates another private
 // HOME/ZYLOS_DIR/PM2_HOME before importing modules that capture those paths, so
 // config writes and control-row cleanup never touch the runner's shared root.
@@ -47,7 +47,7 @@ function fixture(t, runtime = 'codex') {
   coordinator.markProbeQueued = runtime => { queued++; return markQueued(runtime); };
   const observer = new SupervisorHealthObserver({ coordinator, now: () => clock,
     readMode: () => 'multi', listScenes: () => [scene], readIdentity: () => scene,
-    readState: () => ({ tools: [] }), readScreen: () => '', matchScreen: () => ({}),
+    readState: () => ({ state: 'idle', tools: [] }), readScreen: () => '', matchScreen: () => ({}),
     insertControl: c4.insertControl, getControlById: c4.getControlById,
     buildTargetBinding: () => ({ expectedRunId: scene.runId,
       tmuxTarget: { serverGeneration: 'private-generation', sessionId: '$1', paneId: '%1' } }),

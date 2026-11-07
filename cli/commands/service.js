@@ -1,3 +1,4 @@
+import { readInstanceConfigurationIssue } from '../lib/instance-config-status.js';
 import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
 import { resolveTargetRuntime } from '../lib/session-state-reader.js';
 /**
@@ -88,42 +89,52 @@ export function collectHostStatus({ exec = execFileSync, disk = () => fs.statfsS
   return result;
 }
 
-export async function showStatus(args = [], { collect, host = collectHostStatus, resolveRuntime = resolveTargetRuntime, load = () => import('../lib/status-view.js'), alertNotice = alertTargetNotice } = {}) {
+export async function showStatus(args = [], { collect, host = collectHostStatus, resolveRuntime = resolveTargetRuntime, load = () => import('../lib/status-view.js'), alertNotice = alertTargetNotice, configIssue = readInstanceConfigurationIssue } = {}) {
   const json = args.includes('--json');
   let result;
   if (args.some(arg => arg !== '--json') || args.filter(arg => arg === '--json').length > 1) {
     result = { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Usage: zylos status [--json]', persisted: [] } };
   } else {
     try { result = { ok: true, data: await (collect || (await load()).collectStatus)() }; }
-    catch (error) { result = { ok: false, error: { code: 'STATUS_UNAVAILABLE', message: error.message, persisted: [] } }; }
+    catch (error) {
+      const configurationIssue = configIssue();
+      result = { ok: false, error: { code: 'STATUS_UNAVAILABLE', message: error.message, persisted: [] },
+        ...(configurationIssue ? { configurationIssue } : {}) };
+    }
   }
+  const configurationIssue = result.data?.configurationIssue ?? result.configurationIssue;
   if (json) console.log(JSON.stringify(result));
-  else if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
   else {
-    console.log(heading('Zylos Status'));
-    console.log(`Session mode: ${result.data.sessionMode ?? 'single'}`);
-    let targetRuntime = null;
-    if (result.data.view === 'multi') {
-      try { targetRuntime = await resolveRuntime('origin'); } catch { /* Health cannot be attributed without a target. */ }
+    if (configurationIssue) console.log(configurationIssue.notice);
+    if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
+    else {
+      console.log(heading('Zylos Status'));
+      console.log(`Session mode: ${result.data.sessionMode ?? 'single'}`);
+      let targetRuntime = null;
+      if (result.data.view === 'multi') {
+        try { targetRuntime = await resolveRuntime('origin'); } catch { /* Health cannot be attributed without a target. */ }
+      }
+      for (const row of [result.data.origin, ...result.data.groups]) {
+        const description = row === result.data.origin && result.data.view === 'multi'
+          ? describeOrigin({ ...result.data, targetRuntime, nowSec: Math.floor(result.data.readAt / 1000) }) : null;
+        const message = description && formatOriginDescription(description, targetRuntime, result.data.originNeed);
+        console.log(message ? `  origin: ${message}` : `  ${row.sessionGroup ?? 'single'}: ${row.presence} (${row.runtime ?? 'unknown'})`);
+        if (row.status.valid) console.log(`    ${row.status.state}; idle: ${row.status.idleSeconds ?? 'unknown'}s`);
+        if (row.error) console.error(`    ${row.error.message}`);
+      }
+      if (result.data.groupListError) console.error(`Groups unavailable: ${result.data.groupListError.message}`);
+      for (const [runtime, health] of Object.entries(result.data.runtimeHealth)) console.log(`  ${runtime}: ${health.health ?? 'unknown'}`);
     }
-    for (const row of [result.data.origin, ...result.data.groups]) {
-      const description = row === result.data.origin && result.data.view === 'multi'
-        ? describeOrigin({ ...result.data, targetRuntime, nowSec: Math.floor(result.data.readAt / 1000) }) : null;
-      const message = description && formatOriginDescription(description, targetRuntime, result.data.originNeed);
-      console.log(message ? `  origin: ${message}` : `  ${row.sessionGroup ?? 'single'}: ${row.presence} (${row.runtime ?? 'unknown'})`);
-      if (row.status.valid) console.log(`    ${row.status.state}; idle: ${row.status.idleSeconds ?? 'unknown'}s`);
-      if (row.error) console.error(`    ${row.error.message}`);
+    if (result.ok || configurationIssue) {
+      const machine = host();
+      console.log(heading('Services (PM2):'));
+      if (machine.services === null) console.log('  unavailable');
+      else if (!machine.services.length) console.log('  No services running');
+      else for (const item of machine.services) console.log(`  ${item.name}: ${item.status}`);
+      console.log(machine.disk ? `Disk: ${Math.round(machine.disk.available / 1024 ** 3)} GiB available / ${Math.round(machine.disk.total / 1024 ** 3)} GiB total` : 'Disk: unavailable');
+      const notice = alertNotice();
+      if (notice.kind !== 'ready') console.log(formatAlertTargetNotice(notice));
     }
-    if (result.data.groupListError) console.error(`Groups unavailable: ${result.data.groupListError.message}`);
-    for (const [runtime, health] of Object.entries(result.data.runtimeHealth)) console.log(`  ${runtime}: ${health.health ?? 'unknown'}`);
-    const machine = host();
-    console.log(heading('Services (PM2):'));
-    if (machine.services === null) console.log('  unavailable');
-    else if (!machine.services.length) console.log('  No services running');
-    else for (const item of machine.services) console.log(`  ${item.name}: ${item.status}`);
-    console.log(machine.disk ? `Disk: ${Math.round(machine.disk.available / 1024 ** 3)} GiB available / ${Math.round(machine.disk.total / 1024 ** 3)} GiB total` : 'Disk: unavailable');
-    const notice = alertNotice();
-    if (notice.kind !== 'ready') console.log(formatAlertTargetNotice(notice));
   }
   if (!result.ok) process.exitCode = 1;
   return result;
