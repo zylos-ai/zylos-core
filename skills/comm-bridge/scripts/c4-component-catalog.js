@@ -336,6 +336,7 @@ export function createCatalogArtifacts({ implementedKeys = CORE_COMPONENT_KEYS }
     ...registered.map(component => `${component.key}: ${component.description}\nParameters: ${JSON.stringify(component.parameters)}`),
   ].join('\n\n');
   return { BLOCK_SCHEMA: clone(BLOCK_SCHEMA), ACTION_SCHEMA: clone(ACTION_SCHEMA),
-    CATALOG_SOURCE: clone(CATALOG_SOURCE), COMPONENT_DEFINITIONS: definitions,
+    CATALOG_SOURCE: clone(CATALOG_SOURCE), COMPONENT_DEFINITIONS: registered,
+    INTERACTIVE_COMPONENT_TYPES: [...new Set(COMPONENT_CATALOG.filter(component => component.interactive).map(component => component.type))],
     REGISTERED_COMPONENT_KEYS: registered.map(component => component.key), MODEL_INSTRUCTIONS: instructions };
 }

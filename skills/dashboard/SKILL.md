@@ -220,7 +220,7 @@ node ~/zylos/.claude/skills/dashboard/scripts/components.js example choice@1
 ```
 
 `list` reports only catalog entries implemented by this Core. `describe` returns
-its parameters and generated model instructions; `example` prints a complete
+its parameters (including transitive definitions in `parameters.$defs`) and generated model instructions; `example` prints a complete
 `[C4-JSON]` message suitable for stdin to the original reply-via command. Keep
 that command's routing and session-group arguments unchanged. `example --json`
 returns `{ok:true,data:<message>}` for inspection; send the raw example, not this

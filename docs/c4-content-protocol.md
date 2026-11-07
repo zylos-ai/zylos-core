@@ -139,6 +139,8 @@ All six fields are required; no extras. c4_id is a positive safe integer or cano
 
 `skills/comm-bridge/scripts/c4-content-schema.js` is one ESM file with **zero imports**, using only standard JavaScript/Web globals. Node and browser import these same bytes. Public exact alias `/_assets/chat-schema.js` maps only this file; it does not expose the scripts directory. The client adapter at `/_assets/js/wb/chat-blocks.js` imports `../../chat-schema.js`, so root, base and fleet prefixes stay local and are not doubled. A missing source file fails rather than using a copied schema.
 
+The schema machine-data region is generated from `skills/comm-bridge/scripts/c4-component-catalog.js` by `node scripts/generate-component-catalog.js`; edit the catalog rather than the generated region.
+
 Fleet pages use the local Dashboard's schema source, not the remote instance's code. Version mismatch degrades to existing readable fallback/error without actions. Do not fetch remote schema or execute remote components.
 
 Consumers share parse results: hook rejects invalid tagged content; projection emits only fallback and safe references; registration/reconciliation use validated IDs and the authoritative row; rendering supplies fallback/error and no actions for invalid/unsupported content. Projection, persistence, access control, runtime hooks, migrations and UI rendering are separate tasks. This definition does not activate structured production.
