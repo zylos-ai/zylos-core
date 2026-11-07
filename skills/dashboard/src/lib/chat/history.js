@@ -31,6 +31,11 @@ export function chatAttachmentPreview(content, { external = false } = {}) {
   return [body, ...split.attachments.map(readableAttachment)].filter(Boolean).join('\n');
 }
 
+/** The same bounded human summary is used by lists and incremental message reads. */
+export function conversationPreview(content, options = {}) {
+  return Array.from(chatAttachmentPreview(content, options)).slice(0, 160).join('');
+}
+
 export function deliveryState(row) {
   if (row.direction === 'out') return row.status === 'delivered' ? 'stored' : 'pending_reconciliation';
   if (['pending', 'running', 'delivered', 'switch_absorbed'].includes(row.status)) return row.status;
@@ -129,7 +134,7 @@ export class ChatHistory {
         ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
       const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
       const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
-      return { ...row, preview: chatAttachmentPreview(latest?.content ?? '', { external: tab === 'external' }).slice(0, 160),
+      return { ...row, preview: conversationPreview(latest?.content ?? '', { external: tab === 'external' }),
         display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
         ...(registered ? { localId: registered.localId } : {}), draft: false };
@@ -232,7 +237,7 @@ export class ChatHistory {
         available: false, external: true,
       })) : metadata.get(row.id) ?? [];
     const items = (direction === 'before' ? page.reverse() : page).map(row => ({ ...row,
-      deliveryState: deliveryState(row), attachments: rowAttachments(row) }));
+      deliveryState: deliveryState(row), preview: conversationPreview(row.content, { external: tab === 'external' }), attachments: rowAttachments(row) }));
     const newest = items.at(-1)?.id ?? position?.id ?? 0;
     return { items, nextCursor: more ? this._token({ scope: `messages:${tab}:${id}:${direction}`, id: next }) : null,
       afterCursor: this._token({ scope: `messages:${tab}:${id}:after`, id: newest }),

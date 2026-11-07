@@ -4,7 +4,7 @@ import { createPricingPanel } from './wb/settings-pricing.js?v=94';
 import { renderDefaults, runtimeConfirmation } from './wb/settings-defaults.js?v=94';
 import { mountThemeControl, renderLatency } from './wb/settings-ui.js?v=94';
 import { renderVersion } from './wb/settings-version.js?v=94';
-import { mountChat } from './wb/chat.js?v=96';
+import { mountConversationPage as mountChat } from './wb/conversation-page.js?v=99';
 import { mountChatSettings } from './wb/chat-settings.js?v=94';
 import { mountWorkbench } from './wb/shell.js?v=95';
 import { watchHeader } from './wb/header-fit.js?v=94';
@@ -4624,6 +4624,7 @@ window.addEventListener('pagehide', stopSchedule);
 chatPage = mountChat({ root: document.querySelector('#wb-chat'), t,
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
+  onOpenGroup: conversation => openWorkbenchGroup(conversation.sessionGroup ?? conversation.session_group),
 });
 const chatLocaleChange = () => chatPage.redraw();
 document.addEventListener('dashboard-locale-change', chatLocaleChange);

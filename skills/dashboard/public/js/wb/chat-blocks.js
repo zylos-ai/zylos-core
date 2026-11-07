@@ -7,7 +7,7 @@ export { validateAnswer } from '../../chat-schema.js?v=92';
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 
 /** Render the validated shared protocol as inert DOM; the host owns answers. */
-export function renderChatContent({ document, row, t = key => key, renderQuestion } = {}) {
+export function renderChatContent({ document, row, t = key => key, renderQuestion, supportsBlock } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-message-content');
   const reference = () => node('span', `${t('chat.block.reference')} ${String(row.id)}`, 'chat-block-reference');
@@ -139,7 +139,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
           part.append(reference());
         }
         else text(part, t('chat.block.pending'), 'chat-message-status');
-      } else if (!REGISTERED_COMPONENT_KEYS.includes(`${block.type}@${block.schemaVersion}`)) {
+      } else if (!REGISTERED_COMPONENT_KEYS.includes(`${block.type}@${block.schemaVersion}`) || supportsBlock?.(block) === false) {
         text(part, block.fallbackText || envelope.fallbackText);
       } else if (block.type === 'markdown') text(part, block.data.text || block.fallbackText || envelope.fallbackText, 'chat-message-text');
       else if (['time_series', 'breakdown', 'category_series'].includes(block.type)) part.append(chart(block));

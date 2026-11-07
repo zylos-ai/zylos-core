@@ -28,10 +28,14 @@ test('fleet conversation page serves the shared frontend and schema under the br
   assert.match(html, /data-base-path="\/dashboard\/fleet\/Remote"/);
   assert.match(html, /id="tab-chat"/);
   assert.match(html, /data-tab="chat"/);
-  for (const asset of ['js/wb/chat.js', 'js/wb/chat-state.js', 'chat-schema.js']) {
+  for (const asset of ['js/wb/conversation-page.js', 'js/wb/conversation-state.js', 'chat-schema.js']) {
     const result = await fetch(origin + '/fleet/Remote/_assets/' + asset);
     assert.equal(result.status, 200, asset);
     assert.match(result.headers.get('content-type'), /javascript/);
   }
+  const stylesheet = await fetch(origin + '/fleet/Remote/_assets/css/conversation.css');
+  assert.equal(stylesheet.status, 200);
+  assert.match(stylesheet.headers.get('content-type'), /css/);
+  assert.match(html, /css\/conversation\.css/);
   assert.equal(upstream, 0);
 });
