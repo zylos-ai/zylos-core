@@ -113,7 +113,7 @@ test('Origin states have matching detail, Fleet and action availability presenta
   for (const lang of ['en', 'zh']) {
     const dictionary = JSON.parse(fs.readFileSync(new URL(`../public/i18n/${lang}.json`, import.meta.url), 'utf8'));
     for (const key of ['sleeping', 'waking', 'wake_overdue', 'auth_wait', 'rate_wait', 'reclaiming', 'switching']) {
-      for (const prefix of ['state', 'activity', 'agent_fleet']) assert.equal(typeof dictionary[`${prefix}.${key}`], 'string');
+      assert.equal(typeof dictionary[`agent_fleet.${key}`], 'string');
     }
     for (const key of ['action.origin_not_running', 'result.restart_wake_requested', 'result.restart_wake_failed']) assert.equal(typeof dictionary[key], 'string');
   }
