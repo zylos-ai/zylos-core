@@ -5,8 +5,12 @@ const halfDay = 12 * 60 * 60 * 1000;
 
 const dayFormats = new Map();
 
-/** Year, month (0-based) and day of an instant in a time zone; an unknown or missing zone reads UTC. */
+/**
+ * Year, month (0-based) and day of an instant in a time zone; an unknown or missing zone reads UTC. An instant outside
+ * the Date range (for example nanoseconds written as milliseconds) has no day, so only that point is left out.
+ */
 function zoneDay(epoch, timeZone) {
+  if (!Number.isFinite(new Date(epoch).getTime())) return [NaN, NaN, NaN];
   const zone = timeZone || 'UTC';
   let format = dayFormats.get(zone);
   if (!format) {
@@ -24,9 +28,9 @@ function zoneDay(epoch, timeZone) {
 
 /**
  * The calendar day a daily point names, as local midnight for the day axis. A plain YYYY-MM-DD, or a date-time
- * without an offset, is read by the date it writes. Epoch milliseconds and date-times with Z or an offset name an
- * instant, so they are read as the calendar day in the instance time zone (`timeZone`, the TZ the agent runs in),
- * not in the browser's zone or UTC; without a known instance zone they fall back to UTC. A date that does not exist
+ * without an offset, is read by the date it writes. Epoch milliseconds and date-times with Z or an offset (±hh:mm or
+ * ±hhmm) name an instant, so they are read as the calendar day in the instance time zone (`timeZone`, the TZ the agent
+ * runs in), not in the browser's zone or UTC; without a known instance zone they fall back to UTC. A date that does not exist
  * (2026-02-30, 2026-13-01) gives NaN, so Chart.js leaves the point out instead of drawing it on another day.
  */
 export function chartDay(value, timeZone) {
@@ -38,8 +42,9 @@ export function chartDay(value, timeZone) {
       const written = new Date(Date.UTC(2000, parts[1], parts[2]));
       written.setUTCFullYear(parts[0]);
       if (written.getUTCFullYear() !== parts[0] || written.getUTCMonth() !== parts[1] || written.getUTCDate() !== parts[2]) return NaN;
-      if (/T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
-        const instant = Date.parse(value);
+      if (/T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) {
+        // ±hhmm gets its colon first: not every browser parses the short form.
+        const instant = Date.parse(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
         parts = Number.isFinite(instant) ? zoneDay(instant, timeZone) : undefined;
         if (!parts) return NaN;
       }

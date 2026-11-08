@@ -139,6 +139,8 @@ const ZONED = [
   [Date.UTC(2026, 10, 2, 23, 30), { 'Asia/Shanghai': 3, 'America/Los_Angeles': 2, UTC: 2 }],
   ['2026-11-02T00:00:00+08:00', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 1, UTC: 1 }],
   ['2026-11-01T20:00:00-08:00', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 1, UTC: 2 }],
+  ['2026-11-02T00:00:00+0800', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 1, UTC: 1 }],
+  ['2026-11-01T20:00:00-0800', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 1, UTC: 2 }],
   ['2026-11-02T23:30:00Z', { 'Asia/Shanghai': 3, 'America/Los_Angeles': 2, UTC: 2 }],
   ['2026-11-02T23:30:00.250Z', { 'Asia/Shanghai': 3, 'America/Los_Angeles': 2, UTC: 2 }],
   ['2026-11-02', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 2, UTC: 2 }],
@@ -186,6 +188,9 @@ test('the daily axis labels, points and tooltip follow the instance time zone', 
 
 test('dates that do not exist are left out without moving the axis', () => {
   for (const bad of ['2026-02-30', '2026-13-01', '2026-00-10']) assert.ok(Number.isNaN(chartDay(bad)), bad);
+  for (const bad of ['2026-02-30T10:00:00Z', '2026-02-30T10:00:00+08:00', '2026-13-01T00:00:00-0800']) {
+    for (const zone of ['Asia/Shanghai', 'America/Los_Angeles', undefined]) assert.ok(Number.isNaN(chartDay(bad, zone)), `${bad} ${zone}`);
+  }
   assert.equal(chartDay('2024-02-29'), new Date(2024, 1, 29).getTime(), 'a real leap day stays');
   const xs = ['2026-02-27', '2026-02-30', '2026-02-28', '2026-13-01', '2026-02-28garbage', '2026-03-01'];
   const config = conversationChartConfig(block('date', xs), { locale: 'zh-CN' });
@@ -210,4 +215,16 @@ test('hourly data keeps the automatic time axis and default tooltip', () => {
   assert.ok(['hour', 'minute'].includes(axis.unit), `unit ${axis.unit}`);
   assert.ok(axis.labels.length > 1);
   for (const label of axis.labels) assert.match(label, /^\d{1,2}(:\d\d)?\s?[ap]\.?m\.?$/i);
+});
+
+test('an instant outside the date range leaves out only its own point', () => {
+  const huge = 1_793_584_800_000_000_000; // nanoseconds written where milliseconds belong
+  for (const zone of ['Asia/Shanghai', undefined]) assert.ok(Number.isNaN(chartDay(huge, zone)), String(zone));
+  const config = conversationChartConfig(block('date', ['2026-11-01', huge, '2026-11-03']), { locale: 'zh-CN', timeZone: 'Asia/Shanghai' });
+  config.options.responsive = false; config.options.devicePixelRatio = 1;
+  const chart = new Chart(canvas(900), config);
+  try {
+    assert.deepEqual(chart.scales.x.getLabelItems().map(item => item.label), ['11月1日', '11月3日']);
+    assert.deepEqual(chart.getDatasetMeta(0).data.map(point => !point.skip && Number.isFinite(point.x)), [true, false, true]);
+  } finally { chart.destroy(); }
 });

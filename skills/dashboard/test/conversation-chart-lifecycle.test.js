@@ -118,6 +118,12 @@ test('daily chart points use the instance time zone from the message history, no
   f.setTz('UTC'); await f.refresh();
   assert.equal(f.instances.length, 1, 'the same chart is redrawn');
   assert.deepEqual(f.instances[0].data.datasets[0].data.map(point => localDay(point.x)), [[11, 1, 0], [11, 5, 0]]);
+  f.setTz('Asia/Shanghai'); await f.refresh();
+  assert.deepEqual(f.instances[0].data.datasets[0].data.map(point => localDay(point.x)), [[11, 2, 0], [11, 5, 0]]);
+  f.setTz(null); await f.refresh();
+  assert.equal(f.instances.length, 1, 'the same chart is redrawn when the zone becomes unknown');
+  assert.deepEqual(f.instances[0].data.datasets[0].data.map(point => localDay(point.x)), [[11, 1, 0], [11, 5, 0]],
+    'a zone that can no longer be read falls back to UTC');
 });
 
 test('a message history without a time zone (an older instance) reads daily points in UTC', async t => {
