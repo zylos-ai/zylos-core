@@ -185,10 +185,19 @@ async function writeConfig(configPath, config) {
   }
 }
 
-export async function mutateConfig(configPath, mutator, options = {}) {
-  if (typeof mutator !== 'function') throw new TypeError('mutator must be a function');
+export async function withConfigLock(configPath, operation, options = {}) {
+  if (typeof operation !== 'function') throw new TypeError('operation must be a function');
   const lock = await acquireLock(configPath, options);
   try {
+    return await operation();
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+export async function mutateConfig(configPath, mutator, options = {}) {
+  if (typeof mutator !== 'function') throw new TypeError('mutator must be a function');
+  return withConfigLock(configPath, async () => {
     const config = await readConfig(configPath);
     const result = await mutator(config);
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
@@ -196,7 +205,5 @@ export async function mutateConfig(configPath, mutator, options = {}) {
     }
     await writeConfig(configPath, config);
     return { config, result };
-  } finally {
-    await releaseLock(lock);
-  }
+  }, options);
 }

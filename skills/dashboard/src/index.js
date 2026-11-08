@@ -86,6 +86,7 @@ import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-sn
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
+import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneRestart } from './lib/instance-timezone.js';
 import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
 import { buildRestartStatus } from './lib/core-actions.js';
 import { createCoreStateChangePublisher } from './lib/core-state-publisher.js';
@@ -415,6 +416,9 @@ const displayNames = createDisplayNames({ store, zylosDir: config.zylosDir, sani
 const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames,
   readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
   readPm2: () => pm2Collector.getLatestPM2Data() });
+const instanceTimezone = createInstanceTimezone({ zylosDir: config.zylosDir,
+  readTimezone: scheduleTz,
+  readPm2: async () => ({ processes: JSON.parse(await pm2Collector._execPm2Jlist()) }) });
 const getDetailSnapshot = () => workbench.getCachedSnapshot() ?? workbench.getSnapshot();
 const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
@@ -1754,6 +1758,10 @@ export function createServer() {
       await handleApi(req, res, pathname, url);
       return;
     }
+
+    if (await handleInstanceTimezone(req, res, url, { auth, timezone: instanceTimezone })) return;
+    if (await handleInstanceTimezoneRestart(req, res, url, { auth, timezone: instanceTimezone,
+      runAction: body => handleAction('restart-timezone-services', body, { zylosDir: config.zylosDir }, { timezone: instanceTimezone }) })) return;
 
     if (pathname.startsWith('/api/actions/') && req.method === 'POST') {
       const action = pathname.slice('/api/actions/'.length);

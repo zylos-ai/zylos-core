@@ -1711,3 +1711,31 @@ test('fleet workbench write allowlist admits every registered method and path', 
     assert.equal(res.status, 200); assert.equal(calls, route.attachment ? 2 : 1);
   }
 });
+
+// Permission integration: only the real proxy and injected fetch are used. Run
+// when timezone routes or proxy write authorization change; skip display-only
+// changes. No DB or child process; every relay is awaited before returning.
+test('fleet timezone writes retain local admin and cookie origin proof', async () => {
+  let calls = 0;
+  const agent = { name: 'Remote', base_url: 'https://remote.invalid' };
+  const proxy = new FleetProxy({ config: { fleet: { agents: [agent] } },
+    poller: { getSessionToken: async () => 'remote-fixture' },
+    fetch: async () => { calls++; return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }); },
+  });
+  for (const [method, suffix] of [['PUT', '/api/settings/timezone'], ['POST', '/api/actions/restart-timezone-services']]) {
+    for (const [kind, scope, sameOrigin, allowed] of [
+      ['api', 'read', false, false], ['cookie', 'admin', false, false],
+      ['cookie', 'admin', true, true], ['api', 'admin', false, true],
+    ]) {
+      const req = Readable.from([Buffer.from('{"tz":"UTC","confirm":true}')]);
+      req.method = method; req.headers = { 'content-type': 'application/json', ...(sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}) };
+      req._authContext = { kind, scope, principalId: 'fixture' };
+      const res = Object.assign(new EventEmitter(), { status: null,
+        writeHead(status) { this.status = status; }, end() { this.writableFinished = true; } });
+      const before = calls;
+      await proxy.proxyApi(req, res, agent, suffix, '');
+      assert.equal(res.status, allowed ? 200 : 403);
+      assert.equal(calls - before, allowed ? 1 : 0);
+    }
+  }
+});

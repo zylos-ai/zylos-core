@@ -9,6 +9,7 @@ import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=117';
 import { renderVersion } from './wb/settings-version.js?v=104';
 import { mountConversationPage } from './wb/conversation-page.js?v=126';
 import { mountChatSettings } from './wb/chat-settings.js?v=113';
+import { mountTimezoneSettings } from './wb/settings-timezone.js?v=1';
 import { mountWorkbench } from './wb/shell.js?v=116';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=104';
@@ -1679,7 +1680,7 @@ function initTabs() {
     if (name === 'usage') name = 'trends';
     // Leaving settings closes its phone drawer; the drawer's history entry becomes the new page's entry.
     const reuseEntry = name !== 'settings' && Boolean(settingsPage?.drawer.leave());
-    if (name !== 'settings') settingsLoader?.invalidate();
+    if (name !== 'settings') { settingsLoader?.invalidate(); settingsTimezone?.invalidate(); }
     if (push) state.navigationGeneration += 1;
     if (name !== 'observer') state.observer.selectionGeneration += 1;
     if (name === 'memory' && remoteIsReadOnly()) name = 'overview';
@@ -2569,6 +2570,7 @@ let settingsDefaults = null;
 let settingsUpgrade = null;
 let settingsVersionRoot = null;
 let settingsChat = null;
+let settingsTimezone = null;
 
 function initSettingsPage() {
   const root = $('#tab-settings');
@@ -2589,6 +2591,13 @@ function initSettingsPage() {
     local: () => !REMOTE_AGENT && !state.remoteAgent,
     read: () => requestAgentJson('/api/chat/settings'),
     write: body => requestAgentJson('/api/chat/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  });
+  settingsTimezone = mountTimezoneSettings(settingsPage.sections.defaults, { t,
+    read: () => requestAgentJson('/api/settings/timezone'),
+    write: body => requestAgentJson('/api/settings/timezone', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    restart: body => requestAgentJson('/api/actions/restart-timezone-services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    confirm: confirmSetting, writable: () => !remoteIsReadOnly(), available: () => countdownTimer === null,
+    identity: observerTargetKey, target: viewedRemoteTarget, onSaved: () => refreshState().catch(() => {}),
   });
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
@@ -2622,12 +2631,14 @@ function refreshSettingsLocks() {
   for (const node of settingsPage.sections.defaults.querySelectorAll('#action-mode')) node.disabled = remoteIsReadOnly();
   syncModeSegment();
   settingsDefaults?.refreshLocks();
+  settingsTimezone?.refreshLocks();
   refreshSettingsVersion();
 }
 function refreshSettingsPage() {
   closeSettingsModal();
   settingsLoader?.open();
   settingsChat?.refresh();
+  settingsTimezone?.refresh();
   refreshObserverStatus({ quiet: true }).catch(() => {});
   refreshModeStatus().catch(() => {});
   if (!REMOTE_AGENT) {
@@ -2649,6 +2660,7 @@ function closeSettingsModal() {
   settingsLoader?.invalidate();
   fleetManageStatus('');
   settingsChat?.invalidate();
+  settingsTimezone?.invalidate();
   settingsDefaults?.destroy(); settingsDefaults = null;
   settingsPricing?.destroy(); settingsPricing = null;
   if (settingsModal) resetSettingsDrafts(settingsModal);

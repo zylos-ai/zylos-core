@@ -97,7 +97,7 @@ function isDuplicate(action, body) {
   return false;
 }
 
-export async function handleAction(action, body, config) {
+export async function handleAction(action, body, config, { timezone } = {}) {
   const reqId = crypto.randomBytes(3).toString('hex');
   const zylosDir = config.zylosDir || path.join(os.homedir(), 'zylos');
   log(reqId, `=> ${action} ${JSON.stringify(body || {})}`);
@@ -110,6 +110,7 @@ export async function handleAction(action, body, config) {
   let result;
   try {
     switch (action) {
+      case 'restart-timezone-services': result = timezone ? await timezone.restart(body) : { ok: false, error: 'service_discovery_unavailable', status: 503 }; break;
       case 'interrupt':
       case 'chop-chop':
       case 'restart-session':

@@ -302,7 +302,7 @@ function needsAdminApiAccess(pathname, method) {
   pathname = pathname.replace(/\/{2,}/g, '/');
   if (pathname === '/api/observer' || pathname.startsWith('/api/observer/')) return true;
   if (pathname.startsWith('/api/actions')) return true;
-  if (pathname === '/api/settings' && method === 'PUT') return true;
+  if (['/api/settings', '/api/settings/timezone'].includes(pathname) && method === 'PUT') return true;
   if (pathname === '/api/fleet/agents' || pathname.startsWith('/api/fleet/agents/')) return true;
   if (pathname === '/api/agent/name') return true;
   if (['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(pathname)) return true;
@@ -321,7 +321,7 @@ function needsAdminApiAccess(pathname, method) {
     method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(remotePath) ||
     isScheduleWrite(method, remotePath) ||
     method === 'POST' && remotePath.startsWith('/api/actions/') ||
-    method === 'PUT' && remotePath === '/api/settings';
+    method === 'PUT' && ['/api/settings', '/api/settings/timezone'].includes(remotePath);
 }
 
 export function generateApiKey() {

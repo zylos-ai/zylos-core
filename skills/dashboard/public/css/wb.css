@@ -953,6 +953,11 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-fld-l { color: var(--text-dim); font-size: 13px; }
 .wb-input-num { width: 84px; }
 .wb-input-name { width: 220px; }
+.wb-timezone-controls .wb-input { width: min(100%, 280px); min-width: 0; flex: 1 1 180px; }
+.wb-timezone-controls .wb-btn { flex: none; }
+.wb-timezone-pending { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--wb-line); }
+.wb-timezone-pending[hidden] { display: none; }
+.wb-timezone-pending ul { margin: 8px 0; padding-left: 20px; color: var(--text-dim); font-size: 13px; line-height: 1.8; }
 /* Settings controls share one height: text fields, selects and buttons line up on a row. */
 .wb-set-body :is(.wb-input, .wb-select, .wb-btn) { height: var(--wb-h); }
 .wb-seg2 { display: inline-flex; height: var(--wb-h); border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); overflow: hidden; background: var(--wb-panel); }

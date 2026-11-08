@@ -6,7 +6,7 @@ import { parse } from 'dotenv';
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const ENV_PATH = path.join(ZYLOS_DIR, '.env');
 
-function isValidTimezone(timezone) {
+export function isValidTimezone(timezone) {
   try {
     Intl.DateTimeFormat(undefined, { timeZone: timezone });
     return true;

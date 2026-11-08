@@ -92,6 +92,17 @@ describe('PM2 ecosystem restart helpers', () => {
     ]);
   });
 
+  it('refreshes a named process environment only when explicitly requested', () => {
+    const calls = [];
+    const { restartManagedProcess } = createPm2Helpers({ exec: cmd => calls.push(cmd) });
+    restartManagedProcess('scheduler');
+    restartManagedProcess('scheduler', { updateEnv: true });
+    assert.deepEqual(calls, [
+      'pm2 restart "scheduler" 2>/dev/null',
+      'pm2 restart "scheduler" --update-env 2>/dev/null',
+    ]);
+  });
+
   it('recreates the process from ecosystem when ecosystem restart execution fails', () => {
     const calls = [];
     let startAttempts = 0;

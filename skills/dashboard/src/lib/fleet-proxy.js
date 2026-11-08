@@ -81,7 +81,7 @@ function isAllowedProxyWrite(method, suffix) {
     method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(suffix) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/schedule\/[^/]+$/.test(suffix) ||
     method === 'POST' && /^\/api\/actions\/[^/]+$/.test(suffix) ||
-    method === 'PUT' && (suffix === '/api/settings' || suffix === '/api/memory/file') ||
+    method === 'PUT' && (suffix === '/api/settings' || suffix === '/api/settings/timezone' || suffix === '/api/memory/file') ||
     method === 'POST' && (
       /^\/api\/observer\/(?:install|enable|disable|leases|agent-size)$/.test(suffix) ||
       /^\/api\/observer\/leases\/[A-Za-z0-9_-]{32}\/(?:renew|release)$/.test(suffix)
@@ -355,6 +355,14 @@ export class FleetProxy {
   }
 
   async proxyApi(req, res, agent, suffix, search) {
+    if (req.method === 'PUT' && suffix === '/api/settings/timezone' ||
+        req.method === 'POST' && suffix === '/api/actions/restart-timezone-services') {
+      const context = req._authContext;
+      if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'admin_required' }); return; }
+      if (context.kind === 'cookie' && !isSameOriginRequest(req)) {
+        sendJson(res, 403, { error: 'same_origin_required' }); return;
+      }
+    }
     const chatStream = suffix === '/api/stream' && new URLSearchParams(search).has('chat');
     if (suffix.startsWith('/api/chat/') || chatStream) {
       const context = req._authContext;

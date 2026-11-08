@@ -438,6 +438,27 @@ caller's environment but does not restart Dashboard.
 This is the authoritative scope rule for this variable; the reclaim settings
 reference is in [activity-monitor](skills/activity-monitor/SKILL.md#multi-session-reclaim-configuration).
 
+
+### Instance time zone
+
+Dashboard Settings reads the instance time zone from `.env` `TZ`. Admins can
+save a valid IANA time zone there; the writer preserves other assignments,
+comments and formatting and keeps `.env` private (0600). Saving does not restart
+anything. A second confirmation restarts only discovered, running services from
+this instance: scheduler and web-console, plus zylos-openmax when installed and
+running. Their startup-cached time zone requires a restart. The list is advisory;
+unknown process discovery disables restart. Dashboard reads the file on each
+request and needs no restart. Existing runtime sessions keep running and take
+the new time zone on their next launch. Memory log dates may cross a new day
+boundary after the change.
+
+Read-only Fleet connections can view the setting; admin connections write and
+restart through the remote instance's own endpoints. A deployment can explicitly
+disable manual changes by setting `"timezone_managed": true` in
+`.zylos/config.json`. This is a deployment declaration, not platform-name
+detection. The field may be absent or false to allow editing; unreadable config
+or a non-boolean declaration makes the setting read-only until repaired.
+
 ---
 
 ## Communication Channels
