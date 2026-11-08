@@ -100,10 +100,38 @@ test('post-install — never downloads or changes an existing Observer installat
   };
   fs.writeFileSync(configPath(tmpDir), `${JSON.stringify(existing, null, 2)}\n`);
   runPostInstall(tmpDir);
-  assert.deepEqual(JSON.parse(fs.readFileSync(configPath(tmpDir), 'utf8')), existing);
+  const saved = JSON.parse(fs.readFileSync(configPath(tmpDir), 'utf8'));
+  assert.match(saved.auth.password, /^scrypt:/);
+  delete saved.auth.password;
+  assert.deepEqual(saved, existing);
   assert.equal(fs.existsSync(path.join(dashboardDir, 'observer')), false);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+for (const auth of [undefined, { enabled: true }, { enabled: true, password: null },
+  { enabled: true, password: '', allowUrlTokenOnLocalhost: false }]) {
+  test(`post-install repairs a missing password while preserving configured fields (${JSON.stringify(auth)})`, t => {
+    const tmpDir = freshTmpDir();
+    t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+    const existing = { port: 3491, host: '127.0.0.1', observer: { enabled: true }, custom: 'preserved',
+      ...(auth ? { auth } : {}) };
+    fs.mkdirSync(path.dirname(configPath(tmpDir)), { recursive: true });
+    fs.writeFileSync(configPath(tmpDir), JSON.stringify(existing));
+    const output = runPostInstall(tmpDir);
+    const bytes = fs.readFileSync(configPath(tmpDir), 'utf8');
+    const saved = JSON.parse(bytes);
+    assert.match(saved.auth.password, /^scrypt:[a-f0-9]{64}:[a-f0-9]{128}$/);
+    assert.equal(saved.auth.enabled, true);
+    assert.equal(fs.statSync(configPath(tmpDir)).mode & 0o777, 0o600);
+    assert.doesNotMatch(output, /scrypt:|[a-f0-9]{32}/);
+    delete saved.auth.password;
+    const expected = { ...existing, auth: { enabled: true, ...auth } };
+    delete expected.auth.password;
+    assert.deepEqual(saved, expected);
+    runPostInstall(tmpDir);
+    assert.equal(fs.readFileSync(configPath(tmpDir), 'utf8'), bytes, 'second install must retain the repaired password');
+  });
+}
 
 test('post-install — leaves both runtime hooks and custom statusLine untouched', () => {
   const tmpDir = freshTmpDir();

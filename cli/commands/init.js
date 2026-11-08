@@ -1091,7 +1091,7 @@ export function startCoreServices(webPassword = null) {
   } catch (err) { console.log(`  ${warn(`Dashboard configuration failed: ${err.message}`)}`); }
   initializeDatabases();
   const dashboardRoute = applyDashboardRoute({ zylosDir: ZYLOS_DIR });
-  if (dashboardRoute.state !== 'done') console.log(`  ${warn('Dashboard route requires attention: ' + dashboardRoute.error?.message)}`);
+  if (dashboardRoute.state === 'failed') console.log(`  ${warn('Dashboard route requires attention: ' + (dashboardRoute.error?.message || 'route setup failed'))}`);
 
   const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
   if (!fs.existsSync(ecosystemPath)) {

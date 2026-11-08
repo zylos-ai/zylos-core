@@ -216,7 +216,7 @@ function htmlEscape(value) {
     .replace(/>/g, '&gt;');
 }
 
-function loginPageHtml(base, error = '', next = '') {
+function loginPageHtml(base, error = '', next = '', configured = true) {
   const safeNext = next && isPathWithinBase(next, base) ? next : '';
   return `<!doctype html>
 <html lang="en">
@@ -246,11 +246,11 @@ function loginPageHtml(base, error = '', next = '') {
         <p class="eyebrow">Zylos</p>
         <h1>Dashboard</h1>
         ${error ? `<p class="login-error">${htmlEscape(error)}</p>` : ''}
-        <label class="login-label" for="password">Password</label>
+        ${configured ? `<label class="login-label" for="password">Password</label>
         <input class="login-input" id="password" name="password" type="password" autocomplete="current-password" autofocus required>
         ${safeNext ? `<input type="hidden" name="next" value="${htmlEscape(safeNext)}">` : ''}
         <label class="login-remember"><input type="checkbox" name="remember"> Remember me</label>
-        <button class="login-button" type="submit">Sign in</button>
+        <button class="login-button" type="submit">Sign in</button>` : ''}
       </form>
     </main>
   </body>
@@ -380,7 +380,7 @@ export class AuthGate {
   }
 
   get enabled() {
-    return Boolean(this.config.auth?.enabled) && Boolean(this.config.auth?.password);
+    return Boolean(this.config.auth?.enabled);
   }
 
   getApiAuth(req) {
@@ -403,7 +403,7 @@ export class AuthGate {
   }
 
   resolveAuthContext(req) {
-    if (!this.enabled) return null;
+    if (!this.enabled || !this.config.auth?.password) return null;
     const cookieAuth = validateSession(getSessionCookie(req));
     if (cookieAuth) {
       req._authContext = cookieAuth;
@@ -413,7 +413,7 @@ export class AuthGate {
   }
 
   revalidateAuthContext(context) {
-    if (!this.enabled || !context || context.scope !== 'admin') return null;
+    if (!this.enabled || !this.config.auth?.password || !context || context.scope !== 'admin') return null;
     if (context.kind === 'cookie') {
       const refreshed = validateSessionHash(context.principalId);
       return refreshed?.principalId === context.principalId ? refreshed : null;
@@ -464,7 +464,7 @@ export class AuthGate {
       return false;
     }
 
-    if (pathname === '/api/auth/token' && req.method === 'POST') {
+    if (this.config.auth?.password && pathname === '/api/auth/token' && req.method === 'POST') {
       return false;
     }
 
@@ -481,6 +481,12 @@ export class AuthGate {
   async handleLogin(req, res, base, url) {
     if (!this.enabled) {
       redirect(res, browserRoot(base));
+      return true;
+    }
+
+    if (!this.config.auth?.password) {
+      sendHtml(res, req.method === 'GET' || req.method === 'HEAD' ? 200 : 503,
+        loginPageHtml(base, 'Dashboard password is not configured. Set a password before signing in.', '', false));
       return true;
     }
 

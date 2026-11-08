@@ -1690,6 +1690,10 @@ export function createServer() {
     }
     let pathname = url.pathname;
 
+    if (await auth.handle(req, res, url)) {
+      return;
+    }
+
     if (pathname === '/api/auth/token' && req.method === 'POST') {
       const bearer = req.headers.authorization;
       if (!bearer || !bearer.startsWith('Bearer zylos_ak_')) {
@@ -1702,10 +1706,6 @@ export function createServer() {
         return;
       }
       sendJson(res, 200, result);
-      return;
-    }
-
-    if (await auth.handle(req, res, url)) {
       return;
     }
 

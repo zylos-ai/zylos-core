@@ -95,6 +95,53 @@ function loginCookies(response, { base = '', markerBase = base, maxAge = 86400, 
   return session;
 }
 
+// Actual HTTP entry + loaded config + AuthGate. Run for authentication/config
+// changes; unrelated UI may skip. Runner must isolate HOME/ZYLOS_DIR/PM2_HOME,
+// short temp/tmux socket and DBs; each server/root is closed in teardown.
+for (const auth of [undefined, { enabled: true }, { enabled: true, password: null }, { enabled: true, password: '' }]) {
+  test(`missing Dashboard password rejects protected HTTP requests (${JSON.stringify(auth)})`, { timeout: 15_000 }, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-no-password-'));
+    let server;
+    t.after(async () => {
+      if (server) { server.closeAllConnections(); await closeServer(server); }
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const dir = path.join(root, 'components/dashboard');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ port: 3491, ...(auth ? { auth } : {}) }));
+    console.log('Missing-password HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
+      PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: process.env.TMUX_TMPDIR,
+      db: path.join(dir, 'dashboard.db') }));
+    const running = await makeServerWithDir(root);
+    server = running.server;
+    const { origin } = running;
+    for (const route of ['/api/workbench/usage', '/api/chat/conversations', '/api/state', '/api/stream', '/observer/frame']) {
+      const response = await fetch(origin + route, { headers: { 'X-Forwarded-Prefix': '/dashboard' } });
+      assert.equal(response.status, 401, route);
+      await response.text();
+    }
+    const store = new Store(path.join(dir, 'dashboard.db'));
+    const key = generateApiKey();
+    try { store.insertApiKey({ name: 'existing-admin', keyHash: hashApiKey(key), scope: 'admin' }); }
+    finally { store.close(); }
+    const token = await fetch(`${origin}/api/auth/token`, { method: 'POST', headers: { Authorization: `Bearer ${key}` } });
+    assert.equal(token.status, 401);
+    const page = await fetch(`${origin}/`, { redirect: 'manual', headers: { 'X-Forwarded-Prefix': '/dashboard' } });
+    assert.equal(page.status, 302);
+    assert.equal(page.headers.get('location'), '/dashboard/login?next=%2Fdashboard%2F');
+    const login = await fetch(`${origin}/login`);
+    assert.equal(login.status, 200);
+    const html = await login.text();
+    assert.match(html, /Set a password before signing in/);
+    assert.doesNotMatch(html, /type="password"|type="submit"/);
+    const attempt = await fetch(`${origin}/login`, { method: 'POST', redirect: 'manual', body: form({ password: '' }) });
+    assert.equal(attempt.status, 503);
+    assert.equal(attempt.headers.get('set-cookie'), null);
+    assert.match(await attempt.text(), /Set a password before signing in/);
+    assert.equal((await fetch(`${origin}/api/health`)).status, 200);
+  });
+}
+
 test('auth protects API and renders proxy-prefixed login URLs', async () => {
   const { origin, server } = await makeServer();
   try {

@@ -52,6 +52,28 @@ test('auth-disabled mode has no canonical Observer principal', () => {
   assert.equal(gate.resolveAuthContext({ headers: {} }), null);
 });
 
+test('missing password rejects existing cookie and API principals and their revalidation', t => {
+  const now = Date.now(), token = `zylos_st_${'c'.repeat(64)}`;
+  const config = { auth: { enabled: true, password: 'configured' } };
+  const gate = new AuthGate(config, {
+    getSession: () => ({ created_at: now, last_activity_at: now, remember: 0 }),
+    touchSession() {},
+    getApiSession: () => ({ api_key_id: 9, scope: 'admin', expires_at: now + 60_000, key_revoked_at: null }),
+    cleanupSessions() {}, cleanupExpiredApiSessions() {},
+  });
+  t.after(() => clearInterval(gate._cleanupTimer));
+  for (const headers of [{ cookie: '__Secure-zylos_dashboard_session=existing' }, { authorization: `Bearer ${token}` }]) {
+    const context = gate.resolveAuthContext({ headers });
+    assert.ok(context);
+    config.auth.password = null;
+    assert.equal(gate.enabled, true);
+    assert.equal(gate.isAuthenticated({ headers }), false);
+    assert.equal(gate.resolveAuthContext({ headers }), null);
+    assert.equal(gate.revalidateAuthContext(context), null);
+    config.auth.password = 'configured';
+  }
+});
+
 // Permission integration: real AuthGate with in-memory API sessions only. Run
 // for workbench proxy/admin classification; skip UI-only changes. No network,
 // DB or children; each gate's cleanup timer is removed in test teardown.

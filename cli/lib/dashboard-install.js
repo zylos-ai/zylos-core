@@ -56,7 +56,7 @@ export function applyDashboardRegistration({ zylosDir }) {
     // Core's service phase publishes the shared template and records creation
     // intent. Registration consumes that artifact without rewriting it.
     if (!fs.existsSync(loc.ecosystem)) throw Error('Core ecosystem has not been published');
-    // The hook only provisions a missing config; it no longer touches runtime hooks.
+    // The hook provisions Dashboard authentication; it does not touch runtime hooks.
     try { run(process.execPath, [path.join(loc.code, 'hooks/post-install.js')], zylosDir); }
     catch (error) {
       // Exit metadata is useful without relaying hook output, which may contain
