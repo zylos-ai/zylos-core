@@ -311,12 +311,18 @@ test('attachment hook rejects unknown fields URLs missing IDs cross-group kind a
     const result = f.hook(content(block(registered, { data })));
     assert.equal(result.decision, 'abort'); assert.match(result.message, /target machine/);
   }
-  assert.equal(f.hook(content(block(registered, { type: 'x-zylos.image' }))).decision, 'abort');
-  assert.equal(f.hook(content(block(registered), { ...block(registered), id: 'duplicate_reference' })).decision, 'abort');
+  for (const value of [content(block(registered, { type: 'x-zylos.image' })),
+    content(block(registered), { ...block(registered), id: 'duplicate_reference' })]) {
+    const result = f.hook(value);
+    assert.equal(result.decision, 'abort');
+    assert.match(result.message, /register again on the target machine/);
+  }
   assertAudit(f, before);
   fs.unlinkSync(f.attachments.resolve(f.a, registered.id));
   const missingBefore = audit(f);
-  assert.equal(f.hook(content(block(registered))).decision, 'abort');
+  const unreadable = f.hook(content(block(registered)));
+  assert.equal(unreadable.decision, 'abort');
+  assert.match(unreadable.message, /register again on the target machine/);
   assertAudit(f, missingBefore);
 });
 
@@ -331,7 +337,9 @@ test('unlinked agent references have a strict window and unlinked user reference
   for (const age of [ATTACHMENT_SEND_WINDOW_MS, ATTACHMENT_SEND_WINDOW_MS + 1, -60_000]) {
     f.age(registered.id, age);
     const before = audit(f);
-    assert.equal(f.hook(value).decision, 'abort');
+    const result = f.hook(value);
+    assert.equal(result.decision, 'abort');
+    assert.match(result.message, /register again on the target machine/);
     assertAudit(f, before);
   }
 });
@@ -341,7 +349,9 @@ test('attachment hook accepts twenty distinct IDs and rejects a twenty-first wit
   for (let i = 0; i < 21; i++) records.push(await f.register('file', `report-${i}.txt`));
   const before = audit(f);
   assert.equal(f.hook(content(...records.slice(0, 20).map(record => block(record)))).decision, 'continue');
-  assert.equal(f.hook(content(...records.map(record => block(record)))).decision, 'abort');
+  const excess = f.hook(content(...records.map(record => block(record))));
+  assert.equal(excess.decision, 'abort');
+  assert.match(excess.message, /register again on the target machine/);
   assertAudit(f, before);
 });
 
@@ -467,3 +477,28 @@ test('attachment hook keeps the destination hint when the Dashboard binding is a
   assert.doesNotMatch(result.message, /register|service unavailable/);
   assertAudit(f, before);
 });
+
+// Boundary: real missing/corrupt Dashboard storage reaches the actual hook.
+// Run for attachment diagnostic/storage-open changes; unrelated UI may skip.
+// Only private fixture files are moved/replaced; no process or service starts.
+for (const state of ['missing', 'corrupt']) {
+  test(`attachment hook reports service unavailable when Dashboard storage is ${state}`, async t => {
+    const f = fixture(t), registered = await f.register(), value = content(block(registered));
+    f.store.close();
+    const before = audit(f), file = path.join(f.root, 'components/dashboard/dashboard.db');
+    fs.renameSync(file, file + '-hidden');
+    if (state === 'corrupt') fs.writeFileSync(file, 'This is not a SQLite database.');
+    try {
+      const result = f.hook(value);
+      assert.equal(result.decision, 'abort');
+      assert.equal(result.message, 'Dashboard attachment service unavailable.');
+      assert.doesNotMatch(result.message, /register/);
+      if (state === 'missing') assert.equal(fs.existsSync(file), false, 'hook never creates missing storage');
+      else assert.equal(fs.readFileSync(file, 'utf8'), 'This is not a SQLite database.');
+    } finally {
+      if (state === 'corrupt') fs.unlinkSync(file);
+      fs.renameSync(file + '-hidden', file);
+    }
+    assertAudit(f, before);
+  });
+}

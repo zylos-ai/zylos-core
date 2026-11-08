@@ -45,10 +45,8 @@ export function evaluateBeforeSend(input, { env = process.env } = {}) {
         });
       } catch (error) {
         if (error.code === 'invalid_chat_attachment_destination') return replyVia();
-        if (['chat_attachment_core_unavailable', 'chat_attachment_schema_unavailable'].includes(error.code)) {
-          return abort('Dashboard attachment service unavailable.');
-        }
-        return registerAgain();
+        if (['invalid_chat_attachments', 'chat_attachment_unavailable'].includes(error.code)) return registerAgain();
+        return abort('Dashboard attachment service unavailable.');
       }
     }
   }
