@@ -203,8 +203,9 @@ SQLite 命令应输出 `2`。打开 init 输出的 Dashboard URL，确认登录�
 默认本地端口可用 `curl --fail --location http://127.0.0.1:3470/` 检查，修改过端口则使用实际端口。
 数据库检查需要安装 SQLite CLI。安装提示本身不会完成上述初始化。
 
-npm 可能隐藏成功的 postinstall 输出；诊断时可加 `--foreground-scripts` 查看。
-即使 npm 没有显示提示，也应执行上述恢复检查。
+stdout 是终端时提示直接输出到 stdout；否则尝试 `/dev/tty`，使交互式 npm 安装
+在捕获 hook 输出时仍能显示提示。没有可用终端（包括不支持 `/dev/tty` 的平台）时
+保留 stdout 输出，npm 可能隐藏它。即使没有显示提示，也应执行上述恢复检查。
 
 <details>
 <summary>Docker 部署</summary>

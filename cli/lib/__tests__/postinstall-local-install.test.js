@@ -52,6 +52,7 @@ function runPostinstall(zylosDir, npmEnv = {}, extraEnv = {}, scriptPath = POSTI
   return execFileSync(process.execPath, [scriptPath], {
     encoding: 'utf8',
     timeout: 30000,
+    detached: true,
     stdio: 'pipe',
     env: {
       ...env,

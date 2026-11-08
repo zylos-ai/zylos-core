@@ -230,8 +230,11 @@ Dashboard port, `curl --fail --location http://127.0.0.1:3470/` checks that page
 configured port if different. SQLite CLI must be installed for the database
 check. A notice alone does not complete this setup.
 
-npm can hide successful postinstall output; `--foreground-scripts` exposes it
-for diagnostics. Follow the recovery checks even if npm displayed no notice.
+The notice uses stdout when it is a terminal; otherwise it tries `/dev/tty`
+so interactive npm installs can show it even when npm captures hook output.
+If no terminal is available (including platforms without `/dev/tty`), it falls
+back to stdout, which npm may hide. Follow the recovery checks even if npm
+displayed no notice.
 
 <details>
 <summary>Docker deployment</summary>

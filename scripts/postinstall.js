@@ -19,6 +19,7 @@ import { smartSync, formatMergeResult } from '../cli/lib/smart-merge.js';
 import { copyTree } from '../cli/lib/fs-utils.js';
 import { generateManifest, saveManifest, saveOriginals } from '../cli/lib/manifest.js';
 import { deployUpgradeBootstrap } from '../cli/lib/upgrade-protection.js';
+import { printInitializationNotice } from '../cli/lib/postinstall-notice.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
@@ -153,7 +154,7 @@ function main() {
 
   if (initialized && process.env.npm_lifecycle_event === 'postinstall'
       && process.env.ZYLOS_SKIP_POSTINSTALL !== '1') {
-    console.log('\nThis machine has already been initialized. Run "zylos init" to finish service, dependency and data initialization. For normal upgrades, use "zylos upgrade --self".');
+    printInitializationNotice();
   }
 }
 
