@@ -8,9 +8,9 @@ import { instanceStrip } from '../public/js/wb/instance-strip.js';
 import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
-// Times are written in the instance zone, never the browser's. Chatham (UTC+12:45/+13:45) differs from every zone
-// these tests run under, so an expectation in the instance zone fails if the page falls back to the browser zone.
-const ZONE = 'Pacific/Chatham';
+import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
+// Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
+const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);
 const t = (key, values = {}) => key + Object.values(values).join(':');
 const nameOf = node => allNodes(node).find(item => item.classList.contains('wb-nm')).textContent;

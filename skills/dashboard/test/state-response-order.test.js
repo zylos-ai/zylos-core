@@ -84,5 +84,16 @@ test('a state refresh sets the instance time zone the server reports for every p
   assert.equal(instanceZone(), 'America/Los_Angeles', 'a changed zone applies on the next refresh');
   await refreshDashboardState(state, reply({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:03Z', tz: null }));
   assert.equal(instanceZone(), 'UTC', 'a server that cannot read its zone reads UTC, never the browser zone');
+
+  // A response that arrives after a newer state was applied (e.g. from the previous Fleet target) is discarded and
+  // must not set its zone on the page either.
+  await refreshDashboardState(state, reply({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:04Z', tz: 'Asia/Tokyo' }));
+  assert.equal(instanceZone(), 'Asia/Tokyo');
+  let resolveLate;
+  const late = refreshDashboardState(state, () => new Promise(resolve => { resolveLate = resolve; }));
+  state.dashboardState = { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:06Z' };
+  resolveLate({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:05Z', tz: 'Europe/London' });
+  assert.equal(await late, null, 'the late response is discarded');
+  assert.equal(instanceZone(), 'Asia/Tokyo', 'a discarded response leaves the zone unchanged');
   setInstanceZone(null);
 });

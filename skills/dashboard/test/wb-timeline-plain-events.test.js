@@ -11,9 +11,9 @@ import { createGroupDetail } from '../public/js/wb/detail.js';
 import { recentRows, recentWindow } from '../public/js/wb/timeline-rows.js';
 import { repeatRow } from '../public/js/wb/detail-overview.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
-// Times are written in the instance zone, never the browser's. Chatham (UTC+12:45/+13:45) differs from every zone
-// these tests run under, so an expectation in the instance zone fails if the page falls back to the browser zone.
-const ZONE = 'Pacific/Chatham';
+import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
+// Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
+const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);
 
 // Boundary: a real Store (private SQLite in a temporary directory) and the real run listing answer the

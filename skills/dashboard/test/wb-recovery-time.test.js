@@ -6,9 +6,9 @@ import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { waitText } from '../public/js/wb/view-mode.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
-// Times are written in the instance zone, never the browser's. Chatham (UTC+12:45/+13:45) differs from every zone
-// these tests run under, so an expectation in the instance zone fails if the page falls back to the browser zone.
-const ZONE = 'Pacific/Chatham';
+import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
+// Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
+const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);
 
 // Direct product imports with injected DOM and clock. Run for recovery-time,

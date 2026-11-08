@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../src/lib/store.js';
+import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
 
 // Actual HTTP entry with a temporary installation whose .env sets TZ. Covers the overview cost tiers in /api/state
 // (today and 7 days, from the metric resolver the server wires to the instance zone) and the pricing page's 7-day
@@ -12,9 +13,8 @@ import { Store } from '../src/lib/store.js';
 // cached per process, so this needs a fresh process. The runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; ZYLOS_DIR
 // points at the temporary installation for the whole test, and the server and installation are removed in teardown.
 
-// Chatham (UTC+12:45/+13:45): its midnight is a quarter past an hour in UTC, so it differs from the midnight of every
-// zone the tests run under, and a count from the wrong midnight comes out different.
-const ZONE = 'Pacific/Chatham';
+// Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
+const ZONE = INSTANCE_TEST_ZONE;
 const dayOf = (at, timeZone) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
   .format(new Date(at));
 
