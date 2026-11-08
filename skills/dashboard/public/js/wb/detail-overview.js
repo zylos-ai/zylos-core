@@ -2,7 +2,7 @@ import { element, icon, runtimeName } from './plain-text.js?v=103';
 import { modelCell, pendingModel, shortDuration } from './board.js?v=103';
 import { toolLabel, waitText } from './view-mode.js?v=99';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=89';
-import { recentRows } from './timeline-rows.js?v=104';
+import { recentRows } from './timeline-rows.js?v=105';
 
 export function activeSubagents(events, runId) {
   const agents = new Map();
@@ -116,14 +116,18 @@ export function eventRow(document, event, { level = 'plain', t = key => key, lab
 
 /**
  * One row for a run of identical events: the newest one, and when it repeats, how many times and
- * from when to when ("600 次 · 09:58 – 10:08"); full or raw times stay in the tooltip.
+ * from when to when ("600 次 · 09:58 – 10:08", one time when both fall in the same minute). An `open`
+ * group may continue before what was read: "100+ 次 · 至 10:08". Full or raw times stay in the tooltip.
  */
 export function repeatRow(document, group, { level = 'plain', t = key => key, className = 'wb-ev', now = null } = {}) {
-  if (group.count < 2) return eventRow(document, group.newest.event, { level, t, className, now });
+  if (group.count < 2 && !group.open) return eventRow(document, group.newest.event, { level, t, className, now });
   const lang = document.documentElement?.lang;
   const from = eventTime(group.oldest.event.timestamp, level, lang, now), to = eventTime(group.newest.event.timestamp, level, lang, now);
-  const repeat = element(document, 'span', t('wb.timeline.repeated', { count: group.count, from: from.text, to: to.text }), 'wb-ev-rep');
-  repeat.title = `${from.title} – ${to.title}`;
+  const text = group.open ? t('wb.timeline.repeatedUntil', { count: group.count, to: to.text })
+    : from.text === to.text ? t('wb.timeline.repeatedAt', { count: group.count, at: to.text })
+      : t('wb.timeline.repeated', { count: group.count, from: from.text, to: to.text });
+  const repeat = element(document, 'span', text, 'wb-ev-rep');
+  repeat.title = group.open ? to.title : from.title === to.title ? to.title : `${from.title} – ${to.title}`;
   const node = eventRow(document, group.newest.event, { level, t, className, now, after: repeat });
   node.classList.add('wb-ev-merged');
   return node;

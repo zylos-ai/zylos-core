@@ -55,7 +55,17 @@ export function mergeRepeats(rows) {
   return groups;
 }
 
-/** Recent activity: the newest events first, with repeats merged. */
-export function recentRows(events) {
-  return mergeRepeats(newestFirst(events.map(event => ({ at: timeValue(event.timestamp), event }))));
+// Recent activity reads this many of the newest events and shows this many rows of them.
+export const recentWindow = 100;
+export const recentLimit = 5;
+
+/**
+ * Recent activity: the newest events first, with repeats merged, the first `limit` rows. When the read
+ * filled its window, the oldest group may continue before it: that group is marked `open`, so its count
+ * is a lower bound and its first time is unknown.
+ */
+export function recentRows(events, { window = recentWindow, limit = recentLimit } = {}) {
+  const groups = mergeRepeats(newestFirst(events.map(event => ({ at: timeValue(event.timestamp), event }))));
+  if (events.length >= window && groups.length) groups.at(-1).open = true;
+  return groups.slice(0, limit);
 }

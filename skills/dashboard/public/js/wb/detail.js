@@ -1,9 +1,9 @@
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=103';
 import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=103';
-import { groupEventCount, renderOverview } from './detail-overview.js?v=104';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=104';
-import { eventTypesFor } from './timeline-rows.js?v=104';
+import { groupEventCount, renderOverview } from './detail-overview.js?v=105';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=105';
+import { eventTypesFor, recentWindow } from './timeline-rows.js?v=105';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=103';
 import { renderNameEditor } from './name-edit.js?v=103';
 
@@ -292,7 +292,8 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const gen = generation, key = state.row.sessionGroup ?? 'origin', runId = state.row.live?.runId;
     // Recent activity and the event counts cover plain events only, unless technical detail is on.
     const level = state.level = readLevel(), types = eventTypesFor('all', level);
-    const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', order: 'desc', limit: '5' });
+    // Read a window larger than the rows shown so merged repeats count every event in it.
+    const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', order: 'desc', limit: String(recentWindow) });
     const runsQuery = new URLSearchParams({ limit: '3' });
     if (types?.length) { query.set('types', types.join(',')); runsQuery.set('types', types.join(',')); }
     const task = (async () => {

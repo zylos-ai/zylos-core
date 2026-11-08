@@ -1,7 +1,7 @@
 import { element, icon } from './plain-text.js?v=103';
 import { endReasonLabel, timeValue } from './event-labels.js?v=89';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=104';
-import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=104';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=105';
+import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=105';
 
 export { timeValue };
 
@@ -89,12 +89,14 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     state.unattributed = value.unattributed ?? 0;
   }
   // Run segments always span all their events; in plain view the counts cover plain events only.
-  async function loadRuns(before, gen = generation, { limit = 3, replace = false } = {}) {
+  // A read started for an earlier level (`filterGen` given and since superseded) is dropped on arrival.
+  async function loadRuns(before, gen = generation, { limit = 3, replace = false, filterGen = null } = {}) {
     const query = new URLSearchParams({ limit: String(limit) });
     if (before != null) query.set('before', before);
     const types = eventTypesFor('all', state.level);
     if (types?.length) query.set('types', types.join(','));
     const value = await read(path('runs') + '?' + query, gen);
+    if (filterGen != null && filterGen !== filterGeneration) return;
     if (replace) state.runs = [];
     updateRuns(value);
     await loadMessages(gen);
@@ -125,7 +127,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     state.events.clear();
     state.currentEvents = [];
     await guarded(async () => {
-      const results = await Promise.allSettled([alongside(), ...[...state.expanded].map(runId => runEvents(runId, gen, filterGen))]);
+      const results = await Promise.allSettled([alongside(filterGen), ...[...state.expanded].map(runId => runEvents(runId, gen, filterGen))]);
       const failure = results.find(result => result.status === 'rejected');
       if (failure) throw failure.reason;
     });
@@ -194,7 +196,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     async setLevel() {
       if (!state.open || level() === state.level) { state.level = level(); return; }
       state.level = level();
-      await reload(() => loadRuns(null, generation, { limit: Math.min(1000, Math.max(3, state.runs.length)), replace: true }));
+      await reload(filterGen => loadRuns(null, generation, { limit: Math.min(1000, Math.max(3, state.runs.length)), replace: true, filterGen }));
     },
     close() {
       controller?.abort();
