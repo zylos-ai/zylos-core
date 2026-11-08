@@ -113,3 +113,57 @@ test('a foreground question read releases its loader while a newer quiet read is
   quiet.resolve({ items: [question('fresh')], nextCursor: null }); await flush();
   assert.equal(f.state.snapshot().questions.some(row => row.interruptId === 'fresh'), true);
 });
+
+test('an older foreground list cannot release the loading owner of a newer tab list', options, async t => {
+  const older = deferred(), newer = deferred(); let lists = 0;
+  const f = loadingFixture(t, createConversationState, url => {
+    if (url.pathname !== '/api/chat/conversations') return;
+    if (++lists === 2) return older.promise;
+    if (lists === 3) return newer.promise;
+  });
+  await f.open(); const first = f.state.refresh(); await flush();
+  const second = f.state.setTab('external'); await flush();
+  assert.equal(lists, 3); assert.equal(f.state.snapshot().loading, true);
+  older.resolve({ items: [{ id: 'g:OLD' }], nextCursor: null }); await first;
+  assert.equal(f.state.snapshot().loading, true, 'new tab still owns its pending foreground loader');
+  assert.equal(f.state.snapshot().tab, 'external');
+  assert.equal(f.state.snapshot().items.length, 0, 'old tab response remains ignored');
+  newer.resolve({ items: [{ id: 'g:NEW' }], nextCursor: null }); await second;
+  assert.equal(f.state.snapshot().loading, false);
+  assert.equal(f.state.snapshot().items[0].id, 'g:NEW');
+});
+
+test('an older foreground question read cannot release a newer foreground loading owner', options, async t => {
+  const older = deferred(), newer = deferred(); let reads = 0;
+  const f = loadingFixture(t, createConversationState, url => {
+    if (!url.pathname.endsWith('/questions')) return;
+    if (++reads === 2) return older.promise;
+    if (reads === 3) return newer.promise;
+  });
+  await f.open(); const first = f.state.refreshQuestions(); await flush();
+  const second = f.state.refreshQuestions(); await flush();
+  assert.equal(reads, 3); assert.equal(f.state.snapshot().questionsLoading, true);
+  older.resolve({ items: [question('stale')], nextCursor: null }); await first;
+  assert.equal(f.state.snapshot().questionsLoading, true, 'new foreground request still owns its loader');
+  assert.equal(f.state.snapshot().questions.some(row => row.interruptId === 'stale'), false);
+  newer.resolve({ items: [question('fresh')], nextCursor: null }); await second;
+  assert.equal(f.state.snapshot().questionsLoading, false);
+  assert.equal(f.state.snapshot().questions.some(row => row.interruptId === 'fresh'), true);
+});
+
+test('a stale foreground question error cannot overwrite a newer successful result', options, async t => {
+  const older = deferred(); let reads = 0;
+  const f = loadingFixture(t, createConversationState, url => {
+    if (!url.pathname.endsWith('/questions')) return;
+    if (++reads === 2) return older.promise;
+    return { items: [question('fresh')], nextCursor: null };
+  });
+  await f.open(); const first = f.state.refreshQuestions(); await flush();
+  await f.state.refreshQuestions();
+  assert.equal(f.state.snapshot().questionError, null);
+  older.reject({ code: 'stale_question_failure' }); await first;
+  assert.equal(f.state.snapshot().questionError, null, 'superseded question errors remain ignored');
+  assert.equal(f.state.snapshot().questionsLoading, false);
+  assert.equal(f.state.snapshot().questions.some(row => row.interruptId === 'fresh'), true);
+  assert.equal(f.state.snapshot().blocked, false);
+});

@@ -1935,3 +1935,27 @@ test('clock advancement rejects a timer that endlessly reschedules without delay
   repeat();
   await assert.rejects(timer.advance(1), /clock advance exceeded 1000 timer callbacks/);
 });
+
+test('a continuing send retains the accelerated deadline installed when sending starts', async t => {
+  const pending = deferred();
+  const f = await selected(url => url.pathname.endsWith('/send') ? pending.promise : undefined);
+  t.after(() => f.state.destroy());
+  assert.equal(f.state.snapshot().afterCursor, 'after10');
+  const started = f.timer.now();
+  f.state.setInput('continuing message'); const sending = f.state.send();
+  await f.timer.advance(1000);
+  pending.resolve({ stored: true, conversationId: 'g:A', deliveryState: 'pending' });
+  await sending;
+  assert.equal(f.timer.now(), started + 1000);
+  const afterReturn = f.reads().length;
+  assert.equal(afterReturn, 1, 'send completion synchronizes current history immediately');
+  await f.timer.advance(999);
+  assert.equal(f.reads().length, afterReturn);
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, afterReturn + 1, 'scheduled read remains at send start plus two seconds');
+  assert.equal(f.reads().at(-1).time, started + 2000);
+  await f.timer.advance(1000);
+  assert.equal(f.reads().length, afterReturn + 1, 'return plus two seconds does not create an extra deadline');
+  await f.timer.advance(1000);
+  assert.equal(f.reads().at(-1).time, started + 4000);
+});
