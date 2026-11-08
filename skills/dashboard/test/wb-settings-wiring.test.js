@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { confirmedRunner, wireSettingsConfirmations } from '../public/js/wb/settings-wiring.js';
+import { confirmedRunner, keyActionRequest, wireSettingsConfirmations } from '../public/js/wb/settings-wiring.js';
+import { createActionRunner } from '../public/js/wb/action-runner.js';
 import { fleetPageOptions, renderFleetPage } from '../public/js/agent-fleet.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
 
@@ -25,10 +26,8 @@ function page({ answer = true } = {}) {
   return result;
 }
 
-// Records what each key action would send; nothing is sent unless the action is called.
-function keyActions(sent) {
-  return Object.fromEntries(['rotate', 'revoke', 'delete'].map(action => [action, name => { sent.push([action, name]); }]));
-}
+// Records each key request the table sends, as method and path.
+const keyRequests = sent => (request, name) => { sent.push([request.method, request.path, name]); };
 
 const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low', 'minimal'] } });
 const defaultsValue = () => ({
@@ -36,16 +35,19 @@ const defaultsValue = () => ({
   page: { runtimeTotal: 1 }, metadata: { claude: meta('claude'), codex: meta('codex') },
 });
 
-// The page's action runner as the app gives it: it performs the action and never asks.
-const recordingRun = sent => async (action, body) => { sent.push({ action, body }); return true; };
+// The page's real action runner, recording what it sends and every time it asks.
+function recordingRunner(sent, asked = []) {
+  return createActionRunner({ t, readOnly: () => false, confirmText: action => action,
+    confirm: async text => { asked.push(text); return true; }, send: async (action, body) => { sent.push({ action, body }); return true; } });
+}
 
 function wired(p, options = {}) {
-  return wireSettingsConfirmations({ document: p.document, t, keyActions: keyActions([]), run: recordingRun([]), writable: () => true, ...options });
+  return wireSettingsConfirmations({ document: p.document, t, sendKeyRequest: keyRequests([]), runner: recordingRunner([]), writable: () => true, ...options });
 }
 
 test('revoking a key opens the in-page dialog, and cancelling it sends nothing', async () => {
   const p = page({ answer: false }), sent = [];
-  const wiring = wired(p, { keyActions: keyActions(sent) });
+  const wiring = wired(p, { sendKeyRequest: keyRequests(sent) });
   const root = node(p.document, 'div');
   wiring.renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }, { name: 'old', scope: 'read', status: 'revoked' }]);
 
@@ -63,12 +65,39 @@ test('revoking a key opens the in-page dialog, and cancelling it sends nothing',
   await root.querySelector('.api-key-revoke').dispatch('click');
   await root.querySelector('.api-key-delete').dispatch('click');
   assert.equal(p.dialogs.length, 4);
-  assert.deepEqual(sent, [['revoke', 'ops'], ['delete', 'old']], 'confirming runs exactly the asked action');
+  assert.deepEqual(sent, [['DELETE', '/api/keys/ops', 'ops'], ['DELETE', '/api/keys/old?permanent=1', 'old']],
+    'confirming sends exactly the asked action: revoking keeps the key, only deleting removes it for good');
+});
+
+test('each key action sends its own request after the table confirms it', async () => {
+  const p = page(), sent = [];
+  const wiring = wired(p, { sendKeyRequest: keyRequests(sent) });
+  const root = node(p.document, 'div');
+  wiring.renderKeyTable(root, [{ name: 'ops/1', scope: 'admin', status: 'active' }, { name: 'old', scope: 'read', status: 'revoked' }]);
+  await root.querySelector('.api-key-rotate').dispatch('click');
+  await root.querySelector('.api-key-revoke').dispatch('click');
+  await root.querySelector('.api-key-delete').dispatch('click');
+  assert.equal(p.dialogs.length, 3);
+  assert.deepEqual(sent, [
+    ['POST', '/api/keys/ops%2F1/rotate', 'ops/1'],
+    ['DELETE', '/api/keys/ops%2F1', 'ops/1'],
+    ['DELETE', '/api/keys/old?permanent=1', 'old'],
+  ]);
+});
+
+test('key requests: revoking keeps the key, deleting removes it for good, rotating shows the new key once', () => {
+  assert.deepEqual(keyActionRequest('revoke', 'a b'), { method: 'DELETE', path: '/api/keys/a%20b',
+    status: { running: 'fleet_manage.revoking_key', failed: 'fleet_manage.revoke_failed', done: 'fleet_manage.key_revoked_status' } });
+  assert.deepEqual(keyActionRequest('delete', 'a b'), { method: 'DELETE', path: '/api/keys/a%20b?permanent=1',
+    status: { running: 'fleet_manage.deleting_key', failed: 'fleet_manage.delete_failed', done: 'fleet_manage.key_deleted_status' } });
+  assert.deepEqual(keyActionRequest('rotate', 'a b'), { method: 'POST', path: '/api/keys/a%20b/rotate', showsNewKey: true,
+    status: { running: 'fleet_manage.rotating_key', failed: 'fleet_manage.rotate_failed', done: 'fleet_manage.key_rotated_status' } });
+  assert.equal(keyActionRequest('purge', 'a'), null, 'an unknown action sends nothing');
 });
 
 test('saving model and effort for both engines asks once, then runs every change without asking again', async () => {
-  const p = page(), sent = [], busy = [];
-  const wiring = wired(p, { run: recordingRun(sent), setBusy: value => busy.push(value) });
+  const p = page(), sent = [], busy = [], asked = [];
+  const wiring = wired(p, { runner: recordingRunner(sent, asked), setBusy: value => busy.push(value) });
   const root = node(p.document, 'div');
   wiring.renderDefaults(root, defaultsValue(), async () => ({}));
   for (const runtime of ['claude', 'codex']) {
@@ -80,11 +109,12 @@ test('saving model and effort for both engines asks once, then runs every change
   assert.match(p.dialogs[0].body, /^wb\.settings\.confirmModels/);
   assert.deepEqual(busy, [true, false], 'the page is locked only while asking');
   assert.deepEqual(sent.map(item => item.action).sort(), ['switch-effort', 'switch-effort', 'switch-model', 'switch-model']);
+  assert.deepEqual(asked, [], 'the card hands its confirmed changes to the runner\'s no-ask path');
 });
 
 test('cancelling the model save sends nothing', async () => {
   const p = page({ answer: false }), sent = [];
-  const wiring = wired(p, { run: recordingRun(sent) });
+  const wiring = wired(p, { runner: recordingRunner(sent) });
   const root = node(p.document, 'div');
   wiring.renderDefaults(root, defaultsValue(), async () => ({}));
   const model = root.querySelector('#settings-model-claude'); model.value = 'two'; await model.dispatch('change');
@@ -95,7 +125,7 @@ test('cancelling the model save sends nothing', async () => {
 
 test('switching the default engine asks once and names the remote machine it acts on', async () => {
   const p = page(), sent = [];
-  const wiring = wired(p, { run: recordingRun(sent), remoteTarget: () => 'lab' });
+  const wiring = wired(p, { runner: recordingRunner(sent), remoteTarget: () => 'lab' });
   const root = node(p.document, 'div');
   wiring.renderDefaults(root, defaultsValue(), async () => ({}));
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -107,7 +137,7 @@ test('switching the default engine asks once and names the remote machine it act
 });
 
 test('the card\'s executor runs an action only when the card says it was confirmed', async () => {
-  const sent = [], execute = confirmedRunner(recordingRun(sent));
+  const sent = [], execute = confirmedRunner(async (action, body) => { sent.push({ action, body }); return true; });
   assert.equal(await execute('switch-model', { model: 'two' }), false);
   assert.equal(await execute('switch-model', { model: 'two' }, { confirmed: false }), false);
   assert.equal(await execute('switch-model', { model: 'two' }, { confirmed: 'yes' }), false);

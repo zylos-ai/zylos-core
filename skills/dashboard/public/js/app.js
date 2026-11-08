@@ -12,6 +12,7 @@ import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=96';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=99';
 import { observerPageUsable, observerRecoveryReason } from './wb/observer-page.js?v=1';
+import { createActionRunner } from './wb/action-runner.js?v=1';
 import { mountSchedule } from './wb/schedule.js?v=96';
 import { createUsagePage } from './wb/usage.js?v=97';
 import { ObserverHistory } from './observer-history.js?v=2';
@@ -1020,7 +1021,7 @@ function setObserverNotice(message, status = 'idle') {
 // Observer page frame: empty state when the component is missing or disabled; otherwise the title row
 // (Origin is the only group Core's observer attaches to), the scope note and the no-session notice.
 function observerPageAvailable(status = state.observer.status) {
-  return observerPageUsable(status, { readOnly: remoteIsReadOnly() });
+  return observerPageUsable(status, { viewingRemote: Boolean(state.remoteAgent || REMOTE_AGENT), access: remoteAccess() });
 }
 function renderObserverPage() {
   const status = state.observer.status, available = observerPageAvailable(status), focus = state.observer.focus;
@@ -2055,9 +2056,8 @@ function renderCreatedApiKey(createdKey) {
 /** Settings confirmations share the dashboard's own dialog instead of the browser prompt. */
 function settingsWiring() {
   return settingsWiring.value ??= wireSettingsConfirmations({
-    document, t, run: runConfirmedAction, setBusy: setModalBodyDisabled,
-    remoteTarget: () => (state.remoteAgent || REMOTE_AGENT ? viewedAgentName() : null),
-    keyActions: { rotate: rotateApiKey, revoke: revokeApiKey, delete: hardDeleteApiKey },
+    document, t, runner: actionRunner(), setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
+    sendKeyRequest: sendApiKeyRequest,
     writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup,
   });
 }
@@ -2179,53 +2179,21 @@ async function createApiKey() {
   }
 }
 
-// The key table has already confirmed the action itself; rotating still asks before replacing a key shown only once.
-async function rotateApiKey(name) {
+// Sends one key-table request (built by keyActionRequest after the table confirmed the action). A request that
+// shows a new key still asks before replacing a key that is shown only once.
+async function sendApiKeyRequest(request, name) {
   const pendingKeyName = fleetManageModal?._createdKey?.name;
-  if (pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { danger: false }))) return;
+  if (request.showsNewKey && pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { danger: false }))) return;
   setApiKeyBusy(true);
-  fleetManageStatus(t('fleet_manage.rotating_key'), 'running');
+  fleetManageStatus(t(request.status.running), 'running');
   try {
-    const resp = await fetch(api(`/api/keys/${encodeURIComponent(name)}/rotate`), { method: 'POST' });
+    const resp = await fetch(api(request.path), { method: request.method });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.rotate_failed')));
+    if (!resp.ok) throw new Error(fleetManageError(data.error, t(request.status.failed)));
     renderApiKeys(data);
-    renderCreatedApiKey({ name: data.key?.name || name, plaintext_key: data.plaintext_key });
-    fleetManageStatus(t('fleet_manage.key_rotated_status'), 'success');
-  } catch (err) {
-    fleetManageStatus(err.message, 'error');
-  } finally {
-    setApiKeyBusy(false);
-  }
-}
-
-async function revokeApiKey(name) {
-  setApiKeyBusy(true);
-  fleetManageStatus(t('fleet_manage.revoking_key'), 'running');
-  try {
-    const resp = await fetch(api(`/api/keys/${encodeURIComponent(name)}`), { method: 'DELETE' });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.revoke_failed')));
-    renderApiKeys(data);
-    if (fleetManageModal?._createdKey?.name === name) renderCreatedApiKey(null);
-    fleetManageStatus(t('fleet_manage.key_revoked_status'), 'success');
-  } catch (err) {
-    fleetManageStatus(err.message, 'error');
-  } finally {
-    setApiKeyBusy(false);
-  }
-}
-
-async function hardDeleteApiKey(name) {
-  setApiKeyBusy(true);
-  fleetManageStatus(t('fleet_manage.deleting_key'), 'running');
-  try {
-    const resp = await fetch(api(`/api/keys/${encodeURIComponent(name)}?permanent=1`), { method: 'DELETE' });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.delete_failed')));
-    renderApiKeys(data);
-    if (fleetManageModal?._createdKey?.name === name) renderCreatedApiKey(null);
-    fleetManageStatus(t('fleet_manage.key_deleted_status'), 'success');
+    if (request.showsNewKey) renderCreatedApiKey({ name: data.key?.name || name, plaintext_key: data.plaintext_key });
+    else if (fleetManageModal?._createdKey?.name === name) renderCreatedApiKey(null);
+    fleetManageStatus(t(request.status.done), 'success');
   } catch (err) {
     fleetManageStatus(err.message, 'error');
   } finally {
@@ -2689,8 +2657,6 @@ function closeActionsModal() {
   setModalBodyDisabled(false);
 }
 
-const CONFIRM_ACTIONS = new Set(['switch-mode', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
-
 let countdownTimer = null;
 
 function startCountdownAndReload(seconds, statusEl, healthPath = '/api/health', prefix = '') {
@@ -2747,38 +2713,45 @@ async function showConfirm(text) {
   finally { setModalBodyDisabled(false); }
 }
 
-async function execAction(action, body, { confirmed = false } = {}) {
-  if (remoteIsReadOnly()) return false;
-  if (action === 'restart-session') {
-    const shown = state.dashboardState;
-    body = { ...body, sessionGroup: shown?.sessionGroup, runId: shown?.runId, sessionId: shown?.sessionId };
-  }
-  if (CONFIRM_ACTIONS.has(action) && !confirmed) {
-    const labels = {
-      'switch-mode': t('confirm.switch_mode', { mode: body?.mode }),
-      'restart-session': t('confirm.restart'),
-      'switch-runtime': body?.runtime === 'codex'
-        ? t('confirm.switch_runtime_codex')
-        : t('confirm.switch_runtime', { value: body?.runtime }),
-      'switch-model': t('confirm.switch_model', { value: body?.model }),
-      'switch-effort': t('confirm.switch_effort', { value: effortLabel(body?.effort) }),
-      'upgrade-zylos': t('confirm.upgrade_zylos'),
-      'upgrade-cc': state.dashboardState?.runtime_info?.runtime === 'codex'
-        ? t('confirm.upgrade_codex')
-        : t('confirm.upgrade_cc')
-    };
-    let message = labels[action] || t('confirm.fallback', { action });
-    if (state.remoteAgent || REMOTE_AGENT) {
-      message = `${message}\n${t('confirm.remote_target', { agent: viewedAgentName() })}`;
-    }
-    if (!(await showConfirm(message))) return false;
-  }
-  return runConfirmedAction(action, body);
+// The machine a confirmation names when another machine is being viewed, or null for this one.
+function viewedRemoteTarget() {
+  return state.remoteAgent || REMOTE_AGENT ? viewedAgentName() : null;
 }
 
-// Runs a dashboard action that has already been confirmed (or needs no confirmation); it never asks.
-async function runConfirmedAction(action, body) {
-  if (remoteIsReadOnly()) return false;
+function actionConfirmText(action, body) {
+  const labels = {
+    'switch-mode': () => t('confirm.switch_mode', { mode: body?.mode }),
+    'restart-session': () => t('confirm.restart'),
+    'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),
+    'switch-model': () => t('confirm.switch_model', { value: body?.model }),
+    'switch-effort': () => t('confirm.switch_effort', { value: effortLabel(body?.effort) }),
+    'upgrade-zylos': () => t('confirm.upgrade_zylos'),
+    'upgrade-cc': () => state.dashboardState?.runtime_info?.runtime === 'codex' ? t('confirm.upgrade_codex') : t('confirm.upgrade_cc'),
+  };
+  return labels[action]?.() || t('confirm.fallback', { action });
+}
+
+// A manual restart names the session the page is showing.
+function prepareAction(action, body) {
+  if (action !== 'restart-session') return body;
+  const shown = state.dashboardState;
+  return { ...body, sessionGroup: shown?.sessionGroup, runId: shown?.runId, sessionId: shown?.sessionId };
+}
+
+function actionRunner() {
+  return actionRunner.value ??= createActionRunner({
+    t, send: sendAction, confirm: showConfirm, confirmText: actionConfirmText,
+    readOnly: () => Boolean(remoteIsReadOnly()), remoteTarget: viewedRemoteTarget, prepare: prepareAction,
+  });
+}
+
+// Asks first for actions that change the running agent; see createActionRunner.
+function execAction(action, body) {
+  return actionRunner().exec(action, body);
+}
+
+// Sends a dashboard action. Only the action runner calls this, after it has checked access and asked when needed.
+async function sendAction(action, body) {
   const actionPath = agentPath(`/api/actions/${action}`);
   const healthPath = agentPath('/api/health');
   const statusEl = actionsModal?.querySelector('#action-status');

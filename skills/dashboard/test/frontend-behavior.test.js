@@ -127,6 +127,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     observerEndpoint: (suffix) => `${context.state.remoteAgent ? `/fleet/${context.state.remoteAgent}` : ''}${suffix}`,
     viewedAgentName: () => context.state.remoteAgent || 'self',
     remoteIsReadOnly: () => readOnly,
+    remoteAccess: () => (readOnly ? 'read' : 'admin'),
     connectSse() {},
     transitionView() {},
     refreshFleet: async () => {},
@@ -816,7 +817,8 @@ test('remote Actions/Settings are gated by access and routed through the viewed 
   assert.match(version, /remote\.actions_read_only_tooltip/);
   assert.match(app, /write: body => requestAgentJson\('\/api\/settings'/);
   assert.match(app, /applySettingsReadOnly\(remoteIsReadOnly\(\)\)/);
-  assert.match(app, /if \(remoteIsReadOnly\(\)\) return false/);
+  // The action runner refuses to send for a read-only key (wb-action-runner tests); the app tells it when that is.
+  assert.match(app, /readOnly: \(\) => Boolean\(remoteIsReadOnly\(\)\)/);
   assert.match(app, /const actionPath = agentPath\(`\/api\/actions\/\$\{action\}`\);/);
   assert.match(app, /const healthPath = agentPath\('\/api\/health'\);/);
   assert.match(app, /startCountdownAndReload\(15, statusEl, healthPath, summary\);/);
@@ -1552,9 +1554,8 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /fetch\(api\('\/api\/agent\/name'\), \{/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{/);
-  assert.match(app, /fetch\(api\(`\/api\/keys\/\$\{encodeURIComponent\(name\)\}`\), \{ method: 'DELETE' \}\)/);
-  assert.match(app, /fetch\(api\(`\/api\/keys\/\$\{encodeURIComponent\(name\)\}\/rotate`\), \{ method: 'POST' \}\)/);
-  assert.match(app, /fetch\(api\(`\/api\/keys\/\$\{encodeURIComponent\(name\)\}\?permanent=1`\), \{ method: 'DELETE' \}\)/);
+  // Which request each key action makes is decided by keyActionRequest (wb-settings-wiring tests); the app sends it as built.
+  assert.match(app, /fetch\(api\(request\.path\), \{ method: request\.method \}\)/);
   assert.match(app, /fetch\(api\('\/api\/keys\/purge-revoked'\), \{ method: 'POST' \}\)/);
   assert.doesNotMatch(app, /agentPath\('\/api\/fleet\/agents/);
   assert.doesNotMatch(app, /agentPath\('\/api\/agent\/name/);
@@ -1573,8 +1574,7 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /function setApiKeyBusy\(isBusy\)/);
   assert.match(app, /function renderCreatedApiKey\(createdKey\)/);
   assert.match(app, /fleetManageModal\._createdKey = createdKey \|\| null/);
-  assert.match(app, /function rotateApiKey\(name\)/);
-  assert.match(app, /function hardDeleteApiKey\(name\)/);
+  assert.match(app, /function sendApiKeyRequest\(request, name\)/);
   assert.match(app, /function purgeRevokedApiKeys\(\)/);
   assert.match(app, /renderKeyTable\(fleetManageModal\.querySelector\('#api-key-list'\), keys/);
   assert.match(app, /replace_created_key_confirm/);

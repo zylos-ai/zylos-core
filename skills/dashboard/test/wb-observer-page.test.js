@@ -5,16 +5,18 @@ import { observerPageUsable, observerRecoveryReason } from '../public/js/wb/obse
 const healthy = { state: 'installed', desired: { enabled: true } };
 
 test('the observer page shows the live view only for a healthy observer reached with a key that may control it', () => {
-  assert.equal(observerPageUsable(healthy, { readOnly: false }), true, 'an admin key opens the live view');
-  assert.equal(observerPageUsable(healthy, { readOnly: true }), false, 'a read-only key shows the empty state');
-  assert.equal(observerPageUsable(healthy), false, 'without being told the key may control it, the page stays read-only');
-  assert.equal(observerPageUsable(healthy, {}), false);
+  assert.equal(observerPageUsable(healthy, { viewingRemote: false, access: 'read' }), true, 'this machine needs no remote key');
+  assert.equal(observerPageUsable(healthy, { viewingRemote: true, access: 'admin' }), true, 'an admin key opens the live view');
+  assert.equal(observerPageUsable(healthy, { viewingRemote: true, access: 'read' }), false, 'a read-only key shows the empty state');
+  assert.equal(observerPageUsable(healthy, { viewingRemote: true }), false, 'an unknown access level counts as read-only');
+  assert.equal(observerPageUsable(healthy, { access: 'read' }), false, 'without being told it is this machine, the view counts as remote');
+  assert.equal(observerPageUsable(healthy), false);
 });
 
 test('a missing, disabled or broken observer never opens the live view', () => {
-  assert.equal(observerPageUsable(null, { readOnly: false }), false);
-  assert.equal(observerPageUsable({ state: 'not_installed' }, { readOnly: false }), false);
-  assert.equal(observerPageUsable({ state: 'installed', desired: { enabled: false } }, { readOnly: false }), false);
+  assert.equal(observerPageUsable(null, { viewingRemote: false }), false);
+  assert.equal(observerPageUsable({ state: 'not_installed' }, { viewingRemote: false }), false);
+  assert.equal(observerPageUsable({ state: 'installed', desired: { enabled: false } }, { viewingRemote: false }), false);
   const broken = [
     { ...healthy, runtime: { state: 'blocked' } },
     { ...healthy, startupError: 'spawn_failed' },
@@ -24,7 +26,7 @@ test('a missing, disabled or broken observer never opens the live view', () => {
   ];
   for (const status of broken) {
     assert.ok(observerRecoveryReason(status), JSON.stringify(status));
-    assert.equal(observerPageUsable(status, { readOnly: false }), false, JSON.stringify(status));
+    assert.equal(observerPageUsable(status, { viewingRemote: false }), false, JSON.stringify(status));
   }
   assert.equal(observerRecoveryReason({ ...healthy, runtime: { state: 'blocked', error: 'kill_failed' } }), 'kill_failed');
   assert.equal(observerRecoveryReason({ ...healthy, runtime: { state: 'blocked' } }), 'teardown_failed');
