@@ -8,6 +8,10 @@ import { GROUP, GROUP_FILE, LONG_FILE, workbenchAnswer } from '../fixtures/workb
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const PAGES = ['/', '/index.html', '/memory', '/schedule', '/usage', '/settings'];
+// Share of the memory page (the screen under the app header and page tabs) that an open file's text fills on a
+// 390x844 phone. Measured 0.84, also with a wider font that wraps the app header onto two rows; putting the back
+// button on a row of its own above the file name brings it to 0.77-0.78.
+const MEMORY_SHARE = 0.81;
 
 // The real page, stylesheets and modules, served the way the dashboard serves them, with fixed API answers
 // (fixtures/workbench-browser-api.js). Dashboard actions are recorded and answered as done; nothing runs.
@@ -66,11 +70,15 @@ function measure() {
   }
   const box = selector => { const found = visible(document.querySelector(selector)); return found && { top: found.top, bottom: found.bottom, left: found.left, right: found.right }; };
   const content = visible(document.querySelector('#memory-content'));
+  // The memory page starts under the app header and page tabs. Their height follows the fonts the machine has
+  // (a wider fallback font wraps the header), so the file screen is measured from the top of the memory page.
+  const memoryPage = visible(document.querySelector('#tab-memory'));
   const kpi = [...document.querySelectorAll('.wb-sched-kpi .wb-sched-kpi-item')].map(item => visible(item)).filter(Boolean).map(item => Math.round(item.top));
   return {
     // Compared with the screen width the case set: a phone browser widens its layout viewport to fit content.
     small, documentWidth: document.documentElement.scrollWidth, scrollY,
-    memoryShare: content ? (Math.min(innerHeight, content.bottom) - Math.max(0, content.top)) / innerHeight : null,
+    memoryShare: content && memoryPage ? (Math.min(innerHeight, content.bottom) - Math.max(memoryPage.top, content.top)) / (innerHeight - memoryPage.top) : null,
+    memoryPageTop: memoryPage && Math.round(memoryPage.top),
     kpiRows: [...new Set(kpi)].map(top => kpi.filter(value => value === top).length),
     title: box('.wb-d-top .wb-d-title'), state: box('.wb-d-top .wb-d-sub > :first-child'), actions: box('.wb-d-top .wb-d-acts'),
   };
@@ -90,10 +98,19 @@ export async function runWorkbenchBrowser(t, sandbox) {
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
   sandbox.addCleanup(() => browser.close());
 
+  // Pages a step opened are closed when the step ends, also when it fails: a failed step must not leave pages
+  // holding the browser's shared memory, which would fail the steps after it for an unrelated reason.
+  const live = new Set();
+  const step = (name, fn) => t.test(name, async () => {
+    try { await fn(); } finally { await Promise.all([...live].map(context => context.close().catch(() => {}))); }
+  });
+
   async function open(width, height, route, options = {}) {
     const phone = width < 761;
     const context = await browser.newContext({ viewport: { width, height }, locale: 'zh-CN', timezoneId: 'UTC',
       ...(phone ? { isMobile: true, hasTouch: true } : {}), ...options });
+    live.add(context);
+    context.on('close', () => live.delete(context));
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', request => request.request().url().startsWith(base + '/') ? request.continue() : request.abort());
     await context.addInitScript(() => {
@@ -192,12 +209,12 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   }
 
-  await t.test('asking before upgrading the CLI or switching the session mode, on a phone and a desktop screen', async () => {
+  await step('asking before upgrading the CLI or switching the session mode, on a phone and a desktop screen', async () => {
     await settings(390, 844);
     await settings(1280, 800);
   });
 
-  await t.test('phone pages: 40px controls, no sideways scrolling, two-row detail header, memory list and file screens, schedule numbers 3+3', async () => {
+  await step('phone pages: 40px controls, no sideways scrolling, two-row detail header, memory list and file screens, schedule numbers 3+3', async () => {
     const { page, context, errors, shot } = await open(390, 844, '/memory');
     const check = async name => {
       const layout = await page.evaluate(measure);
@@ -216,7 +233,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await page.waitForFunction(() => document.querySelector('#memory-content')?.textContent.includes('Week 10'));
     const file = await check('memory-file');
     assert.equal(file.scrollY, 0, 'the open file starts at the top');
-    assert.ok(file.memoryShare >= 0.73, `the file text fills at least 73% of the first screen (was ${file.memoryShare.toFixed(3)})`);
+    assert.ok(file.memoryShare >= MEMORY_SHARE, `the file text fills at least ${MEMORY_SHARE * 100}% of the screen under the app header (was ${file.memoryShare.toFixed(3)}, page top ${file.memoryPageTop})`);
     assert.ok(await page.locator('#memory-tree').evaluate(node => node.getBoundingClientRect().height === 0 || getComputedStyle(node).display === 'none'), 'the list is not on the file screen');
 
     // Overview and group detail: the title has the first row; state and actions start under the title text.
@@ -232,8 +249,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
     // From the group detail into this group's memory: the list of the group's files, not the file left open.
     await page.locator('.wb-detail-memory .wb-link-btn').click();
     await page.locator('#tab-memory').waitFor({ state: 'visible' });
-    await page.locator(`#memory-tree .memory-file`).first().waitFor({ state: 'visible' });
     assert.equal(await page.locator('#tab-memory.memory-file-open').count(), 0, 'the group memory opens on its file list');
+    await page.locator(`#memory-tree .memory-file`).first().waitFor({ state: 'visible' });
     const files = await page.locator('#memory-tree .memory-file').allTextContents();
     assert.ok(files.some(name => name.includes('handoff.md')) && !files.some(name => name.includes('note-01')), `only the group's files are listed (${files.length})`);
     assert.ok(GROUP_FILE.startsWith(`session-groups/${GROUP}/`));
@@ -249,10 +266,32 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   });
 
+  // A phone on its side keeps the phone layout with a screen shorter than the memory loading view, so opening a
+  // file from further down the list must bring the window back to the top: the back button and the file name
+  // are on screen.
+  await step('memory on a phone on its side: an opened file starts at the top', async () => {
+    for (const [width, height] of [[667, 375], [568, 320]]) {
+      const { page, context, errors } = await open(width, height, '/memory');
+      await page.locator('#memory-tree .memory-file').first().waitFor();
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      assert.ok(await page.evaluate(() => scrollY) > height, `${width}x${height}: the file list is taller than the screen`);
+      await page.locator(`#memory-tree .memory-file[data-path="${LONG_FILE}"], #memory-tree .memory-file:has-text("${LONG_FILE}")`).first().evaluate(node => node.click());
+      await page.locator('#tab-memory.memory-file-open').waitFor();
+      await page.waitForFunction(() => document.querySelector('#memory-content')?.textContent.includes('Week 10'));
+      const top = await page.evaluate(() => {
+        const inView = selector => { const box = document.querySelector(selector).getBoundingClientRect(); return box.height > 0 && box.top >= 0 && box.bottom <= innerHeight; };
+        return { scrollY, back: inView('#memory-back'), name: inView('#memory-file-title'), phone: (tree => tree.getBoundingClientRect().height === 0 || getComputedStyle(tree).display === 'none')(document.querySelector('#memory-tree')) };
+      });
+      assert.deepEqual(top, { scrollY: 0, back: true, name: true, phone: true }, `${width}x${height}: the open file starts at the top`);
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
   // Every way of closing the phone drawer: a section, the same section, the backdrop, Escape, the close button
   // and Back. Each one returns focus to the button, lifts the inert background and leaves no drawer entry in
   // history; Back closes the drawer without reloading settings and one more Back leaves settings.
-  await t.test('phone settings drawer: opening, every way of closing, focus and history', async () => {
+  await step('phone settings drawer: opening, every way of closing, focus and history', async () => {
     const { page, context, errors, shot } = await open(390, 844, '/');
     await page.locator('#wb-board .wb-row').first().waitFor();
     // Arrive from the overview so one Back too many would show up as leaving settings.
@@ -329,7 +368,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   });
 
-  await t.test('phone settings drawer: switching page or leaving the phone layout closes it and removes its history entry', async () => {
+  await step('phone settings drawer: switching page or leaving the phone layout closes it and removes its history entry', async () => {
     const start = async () => {
       const opened = await open(390, 844, '/');
       await opened.page.locator('#wb-board .wb-row').first().waitFor();
@@ -368,7 +407,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   });
 
-  await t.test('phone settings drawer: no sliding when the system asks for reduced motion', async () => {
+  await step('phone settings drawer: no sliding when the system asks for reduced motion', async () => {
     const { page, context, errors } = await open(390, 844, '/settings', { reducedMotion: 'reduce' });
     await page.locator('.wb-set-drawer-btn').waitFor({ state: 'visible' });
     const durations = () => page.evaluate(() => ['.wb-set-nav', '.wb-set-scrim'].map(selector => getComputedStyle(document.querySelector(selector)).transitionDuration));
@@ -381,7 +420,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   });
 
-  await t.test('a desktop screen keeps the detail header on one row', async () => {
+  await step('a desktop screen keeps the detail header on one row', async () => {
     const { page, context, errors } = await open(1280, 800, '/');
     await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
     await page.locator('.wb-d-top .wb-d-sub').waitFor({ state: 'attached' });
