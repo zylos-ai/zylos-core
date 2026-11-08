@@ -254,7 +254,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
   await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="drafts_interrupt"] [data-field-key] input,[data-interrupt-id="drafts_interrupt"] [data-field-key] select')].every(control=>control.disabled&&control.value===''));
   assert.equal(await page.evaluate(() => Object.keys(sessionStorage).some(key => key.startsWith('zylos-dashboard-form-draft:') && key.includes('drafts_message'))), false);
   assert.deepEqual(errors, []);
-  if (output) fs.writeFileSync(path.join(output, 'conversation-genui-browser.json'), JSON.stringify({ isolation, shots, prototypeShots, measurements, reads, errors,
+  if (output) fs.writeFileSync(path.join(output, 'conversation-genui-browser.json'), JSON.stringify({ sourceHead: process.env.ZYLOS_CHAT_SOURCE_HEAD || null, isolation, shots, prototypeShots, measurements, reads, errors,
     prototype: 'd17ffdbfb94eb094a4f80d89edc1b48bf85ca166', prototypeSourceBlob: prototypeSource ? '77d676e8735904aa4c223e8d1d98551a9e7d3f37' : null, simulatedErrors: ['HTTP400 field-error response only; final acceptance and second-client answer use actual API'], base: fixture.base }, null, 2));
   t.diagnostic(`GenUI browser: ${shots.length} screenshots, ${reads} real message reads, no page errors`);
 }
