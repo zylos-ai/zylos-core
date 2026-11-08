@@ -38,6 +38,8 @@ const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
 const VERSION_CHECK_CONCURRENCY = 3;
 const CLAUDE_FIX_TIMEOUT = 300000; // 5 minutes
 
+export const isDiagnosticOnlyIssue = issue => issue.id.startsWith('origin_') || issue.id.startsWith('session_mode_');
+
 // ── Logging ──────────────────────────────────────────────────────
 
 let _logDirReady = false;
@@ -942,8 +944,7 @@ export async function doctorCommand(args, upstreamSource) {
     process.exit(0);
   }
 
-  const diagnosticOnly = issue => issue.id.startsWith('origin_') || issue.id.startsWith('session_mode_');
-  const fixable = diagnostic.issues.filter(issue => !diagnosticOnly(issue));
+  const fixable = diagnostic.issues.filter(issue => !isDiagnosticOnlyIssue(issue));
   const claudeReady = !checkOnly && isClaudeReady(diag) && fixable.length > 0;
 
   // Show issues — hide hints when Claude will auto-fix
@@ -951,7 +952,7 @@ export async function doctorCommand(args, upstreamSource) {
   for (let i = 0; i < diagnostic.issues.length; i++) {
     const issue = diagnostic.issues[i];
     console.log(`\n  ${bold(`[${i + 1}]`)} ${issue.label}`);
-    if ((!claudeReady || diagnosticOnly(issue)) && issue.hint) console.log(`      ${dim(issue.hint)}`);
+    if ((!claudeReady || isDiagnosticOnlyIssue(issue)) && issue.hint) console.log(`      ${dim(issue.hint)}`);
   }
 
   // Layer 2: attempt auto-fix via Claude

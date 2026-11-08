@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { collectDiagnostics, buildDiagnosticJson, readDoctorSessionModeStatus,
-  formatDoctorSessionModeStatus } from '../../commands/doctor.js';
+  formatDoctorSessionModeStatus, isDiagnosticOnlyIssue } from '../../commands/doctor.js';
 import { readSessionModeStatus } from '../session-mode-status.js';
 
 const row = { run_id: 'legacy-switch', source_mode: 'single', target_mode: 'multi',
@@ -19,6 +19,25 @@ const healthy = sessionModeStatus => ({
   services: { running: true, total: 1, procs: [{ name: 'activity-monitor', pm2_env: { status: 'online' } }], session: false },
 });
 const version = { success: true, version: '1.0.0' };
+
+test('doctor keeps session mode diagnostics out of automatic fixes', async () => {
+  const blocked = await readDoctorSessionModeStatus({ databaseExists: () => true,
+    readStatus: () => readSessionModeStatus(statusOptions()) });
+  const unavailable = await readDoctorSessionModeStatus({ databaseExists: () => true,
+    readStatus: () => { throw new Error('database held'); } });
+  for (const value of [blocked, unavailable]) {
+    const diag = healthy(value);
+    diag.system.tmux.installed = false;
+    const issues = buildDiagnosticJson(diag, version).issues;
+    const modeIssue = issues.find(issue => issue.id.startsWith('session_mode_'));
+    assert.ok(modeIssue);
+    assert.equal(isDiagnosticOnlyIssue(modeIssue), true);
+    const fixable = issues.filter(issue => !isDiagnosticOnlyIssue(issue));
+    assert.ok(fixable.length > 0, 'ordinary installation issues remain fixable');
+    assert.equal(fixable.some(issue => issue.id.startsWith('session_mode_')), false);
+  }
+  assert.equal(isDiagnosticOnlyIssue({ id: 'origin_unavailable' }), true);
+});
 
 test('doctor collector retains authoritative gating phase and blocker', async () => {
   let reads = 0;
