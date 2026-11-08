@@ -9,8 +9,11 @@ export async function handleChatHistory(req, res, url, { auth, config, history }
   if (req.method !== 'GET') { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
   try {
     const options = Object.fromEntries(url.searchParams);
-    const permitted = match[2] === 'status' ? ['tab', 'ids'] : match[2] === 'messages' ? ['tab', 'limit', 'cursor', 'direction', 'recheckIds'] : ['tab', 'limit', 'cursor'];
+    const permitted = match[2] === 'status' ? ['tab', 'ids'] : match[2] === 'messages' ? ['tab', 'limit', 'cursor', 'direction', 'recheckIds', 'locale'] : ['tab', 'limit', 'cursor', 'locale'];
     if ([...url.searchParams.keys()].some(key => !permitted.includes(key) || url.searchParams.getAll(key).length !== 1)) {
+      sendJson(res, 400, { error: 'invalid_chat_parameters' }); return true;
+    }
+    if (options.locale !== undefined && !['zh', 'en'].includes(options.locale)) {
       sendJson(res, 400, { error: 'invalid_chat_parameters' }); return true;
     }
     let id;

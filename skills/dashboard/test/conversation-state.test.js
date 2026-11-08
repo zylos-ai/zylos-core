@@ -1494,3 +1494,18 @@ test('external selection outside the first page preserves supplied group metadat
   assert.equal(f.calls.some(c => c.options?.method), false);
   f.state.destroy();
 });
+
+
+test('conversation list and incremental reads request previews in the current page language', async () => {
+  const f = fixture();
+  f.document.documentElement = { lang: 'en' };
+  await f.state.open(); await f.state.select('g:A');
+  await f.timer.advance(5000);
+  const reads = f.calls.filter(call => /^\/api\/chat\/conversations(?:\?|\/[^/]+\/messages\?)/.test(call.path));
+  assert.ok(reads.length >= 3);
+  for (const call of reads) assert.equal(new URL(call.path, 'http://fixture').searchParams.get('locale'), 'en');
+  f.document.documentElement.lang = 'zh';
+  await f.timer.advance(30000);
+  assert.equal(new URL(f.calls.filter(call => call.path.includes('/messages?')).at(-1).path, 'http://fixture').searchParams.get('locale'), 'zh');
+  f.state.destroy(); assert.equal(f.timer.count(), 0);
+});

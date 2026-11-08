@@ -1,3 +1,4 @@
+import { markdownPreview } from './markdown-preview.js';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../comm-bridge/scripts/attachment-annotations.js';
@@ -8,32 +9,37 @@ const visible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin
 const identity = `CASE WHEN c.session_group = '' THEN 'l:' || hex(c.channel) || ':' || hex(c.endpoint_id)
   ELSE 'g:' || hex(c.session_group) END`;
 
-const readableAttachment = attachment => `${attachment.kind === 'image' ? '[图片]' : '[文件]'} ${sanitizeDisplayName(attachment.name)}`;
+const previewLabels = locale => locale === 'en'
+  ? { image: '[Image]', file: '[File]', chart: '[Chart]', component: '[Component]', media: '[Media] Original-channel attachment', invalid: 'Unable to display message' }
+  : { image: '[图片]', file: '[文件]', chart: '[图表]', component: '[组件]', media: '[媒体] 原渠道附件', invalid: '无法显示的消息' };
+const readableAttachment = (attachment, locale = 'zh') => `${previewLabels(locale)[attachment.kind === 'image' ? 'image' : 'file']} ${sanitizeDisplayName(attachment.name)}`;
 
 /** Browser summaries contain attachment names, never storage/model references. */
-export function chatAttachmentPreview(content, { external = false } = {}) {
+export function chatAttachmentPreview(content, { external = false, locale = 'zh' } = {}) {
   const parsed = parseC4Content(content);
-  if (parsed.kind === 'invalid') return '无法显示的消息';
+  const labels = previewLabels(locale);
+  if (parsed.kind === 'invalid') return labels.invalid;
   if (parsed.kind === 'envelope') {
     const blocks = parsed.envelope.blocks ?? [];
-    if (!blocks.some(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type))) {
+    if (!blocks.some(block => block.type !== 'markdown')) {
       return parsed.envelope.fallbackText;
     }
     return blocks.map(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type)
-      ? readableAttachment({ kind: block.type === 'x-zylos.image' ? 'image' : 'file', name: block.data.nameSnapshot })
-      : block.fallbackText).filter(Boolean).join('\n');
+      ? readableAttachment({ kind: block.type === 'x-zylos.image' ? 'image' : 'file', name: block.data.nameSnapshot }, locale)
+      : block.type === 'markdown' ? block.fallbackText ?? block.data.text
+        : ['time_series', 'breakdown', 'category_series'].includes(block.type) ? labels.chart : labels.component).filter(Boolean).join('\n');
   }
   const split = splitContentAndAttachments(content);
   if (!split.attachments.length) {
-    return external ? content.replace(/^\[MEDIA:[^\r\n]*$/gm, '[媒体] 原渠道附件') : content;
+    return external ? content.replace(/^\[MEDIA:[^\r\n]*$/gm, labels.media) : content;
   }
-  const body = external ? split.content.replace(/^\[MEDIA:[^\r\n]*$/gm, '[媒体] 原渠道附件') : split.content;
-  return [body, ...split.attachments.map(readableAttachment)].filter(Boolean).join('\n');
+  const body = external ? split.content.replace(/^\[MEDIA:[^\r\n]*$/gm, labels.media) : split.content;
+  return [body, ...split.attachments.map(attachment => readableAttachment(attachment, locale))].filter(Boolean).join('\n');
 }
 
 /** The same bounded human summary is used by lists and incremental message reads. */
 export function conversationPreview(content, options = {}) {
-  return Array.from(chatAttachmentPreview(content, options)).slice(0, 160).join('');
+  return Array.from(markdownPreview(chatAttachmentPreview(content, options), options)).slice(0, 160).join('');
 }
 
 export function deliveryState(row) {
@@ -103,7 +109,7 @@ export class ChatHistory {
     )`;
   }
 
-  list({ tab = 'mine', limit, cursor } = {}) {
+  list({ tab = 'mine', limit, cursor, locale = 'zh' } = {}) {
     this._tab(tab);
     limit = this._limit(limit);
     const scope = `list:${tab}`;
@@ -134,7 +140,7 @@ export class ChatHistory {
         ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
       const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
       const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
-      return { ...row, previewDirection: latest?.direction ?? null, preview: conversationPreview(latest?.content ?? '', { external: tab === 'external' }),
+      return { ...row, previewDirection: latest?.direction ?? null, preview: conversationPreview(latest?.content ?? '', { external: tab === 'external', locale }),
         display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
         ...(registered ? { localId: registered.localId } : {}), draft: false };
@@ -204,7 +210,7 @@ export class ChatHistory {
     return range;
   }
 
-  messages(id, { tab = 'mine', limit, cursor, direction = 'before', recheckIds } = {}) {
+  messages(id, { tab = 'mine', limit, cursor, direction = 'before', recheckIds, locale = 'zh' } = {}) {
     limit = this._limit(limit);
     if (!['before', 'after'].includes(direction)) throw fail('invalid_chat_direction');
     if (direction === 'after' && cursor == null) throw fail('invalid_chat_cursor');
@@ -237,7 +243,7 @@ export class ChatHistory {
         available: false, external: true,
       })) : metadata.get(row.id) ?? [];
     const items = (direction === 'before' ? page.reverse() : page).map(row => ({ ...row,
-      deliveryState: deliveryState(row), preview: conversationPreview(row.content, { external: tab === 'external' }), attachments: rowAttachments(row) }));
+      deliveryState: deliveryState(row), preview: conversationPreview(row.content, { external: tab === 'external', locale }), attachments: rowAttachments(row) }));
     const newest = items.at(-1)?.id ?? position?.id ?? 0;
     return { items, nextCursor: more ? this._token({ scope: `messages:${tab}:${id}:${direction}`, id: next }) : null,
       afterCursor: this._token({ scope: `messages:${tab}:${id}:after`, id: newest }),

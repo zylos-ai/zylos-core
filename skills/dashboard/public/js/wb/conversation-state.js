@@ -225,6 +225,7 @@ export function createConversationState({
     try {
       const data = await request(`${base}?${query({
         tab: currentTab,
+        locale: document?.documentElement?.lang?.startsWith('en') ? 'en' : 'zh',
         limit: 50,
         cursor
       })}`);
@@ -499,6 +500,7 @@ export function createConversationState({
     const rechecking = unavailable.slice(start, start + 100);
     const data = await request(`${pathFor(id)}/messages?${query({
       tab: currentTab,
+      locale: document?.documentElement?.lang?.startsWith('en') ? 'en' : 'zh',
       limit: 50,
       direction,
       cursor,

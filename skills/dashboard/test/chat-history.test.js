@@ -431,7 +431,14 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
       else assert.ok(reads > before);
     }
   }
-  for (const suffix of ['tab=external&tab=mine', 'tab=external&extra=1', 'limit=', 'limit=0', 'limit=101', 'cursor=garbage'])
+  f.db.prepare('UPDATE conversations SET content=? WHERE id=3').run('**Result**\n\n```js\nsecret()\n```');
+  for (const locale of ['zh', 'en']) {
+    const expected = 'Result\n' + (locale === 'en' ? '[Code]' : '[代码]');
+    assert.equal((await request(`/api/chat/conversations?tab=external&locale=${locale}`)).body.items[0].preview, expected);
+    const messages = await request(`/api/chat/conversations/${id}/messages?tab=external&locale=${locale}`);
+    assert.equal(messages.body.items.find(row => row.id === 3).preview, expected);
+  }
+  for (const suffix of ['locale=fr', 'locale=en&locale=zh', 'tab=external&tab=mine', 'tab=external&extra=1', 'limit=', 'limit=0', 'limit=101', 'cursor=garbage'])
     assert.equal((await request(`/api/chat/conversations?${suffix}`)).status, 400);
   for (const suffix of ['tab=external&ids=1&ids=3', 'tab=external&ids=1,1', 'tab=external&ids=1x', 'tab=external&ids=', 'tab=external&ids=999'])
     assert.ok((await request(`/api/chat/conversations/${id}/status?${suffix}`)).status >= 400);
