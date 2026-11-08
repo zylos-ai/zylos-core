@@ -270,6 +270,82 @@ export async function runConversationVisual(t, sandbox) {
     resizeMeasurements.push({ reading, before, after });
     await editor.fill('');
   }
+  // The group detail sits beside the conversation only where about 600px of it remain (from 1440px with the
+  // conversation list shown, from 1120px with it collapsed); otherwise it covers the conversation, which keeps its
+  // width. Opening and closing it (button, then Esc) must keep the reading position, or the pin to the bottom, in
+  // both layouts; the fake DOM of the unit tests has no layout, so only a real browser shows a jump here.
+  const sideMeasurements = [];
+  const groupInfo = page.locator('#wb-chat [data-action="page.groupInfo"]');
+  const groupSide = page.locator('#wb-chat .wb-group-side');
+  const listToggle = page.locator('#wb-chat [data-action="listToggle"]');
+  const detailWidth = () => page.locator('#wb-chat .conversation-detail').evaluate(el => el.getBoundingClientRect().width);
+  const setList = async collapsed => {
+    if ((await listToggle.getAttribute('aria-expanded')) === String(collapsed)) await listToggle.click();
+    assert.equal(await listToggle.getAttribute('aria-expanded'), String(!collapsed));
+    await settleLayout();
+  };
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await settleLayout();
+  const listShownWidth = await detailWidth();
+  await setList(true);
+  assert.ok((await detailWidth()) > listShownWidth + 200, 'collapsing the conversation list widens the conversation');
+  await setList(false);
+  assert.equal(await detailWidth(), listShownWidth, 'showing the list again restores the conversation width');
+  for (const { width, collapsed, beside } of [
+    { width: 1440, collapsed: false, beside: true },
+    { width: 1280, collapsed: false, beside: false },
+    { width: 1280, collapsed: true, beside: true },
+    { width: 1000, collapsed: false, beside: false },
+  ]) {
+    await page.setViewportSize({ width, height: 900 });
+    await setList(collapsed);
+    for (const reading of [false, true]) {
+      const before = await page.locator('#wb-chat .chat-messages').evaluate((el, reading) => {
+        el.scrollTop = reading ? Math.round((el.scrollHeight - el.clientHeight) / 2) : el.scrollHeight;
+        const bounds = el.getBoundingClientRect();
+        const anchor = [...el.querySelectorAll('[data-message-id]')].find(row => row.getBoundingClientRect().bottom > bounds.top + 1);
+        return { anchor: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top,
+          gap: el.scrollHeight - el.scrollTop - el.clientHeight, width: document.querySelector('#wb-chat .conversation-detail').getBoundingClientRect().width };
+      }, reading);
+      const label = `${width} ${collapsed ? 'list collapsed' : 'list shown'} ${reading ? 'reading' : 'bottom'}`;
+      if (!reading) assert.ok(before.gap <= 2, `${label}: starts pinned to the bottom`);
+      const measure = () => page.locator('#wb-chat .chat-messages').evaluate((el, anchor) => ({
+        gap: el.scrollHeight - el.scrollTop - el.clientHeight,
+        top: el.querySelector(`[data-message-id="${anchor}"]`).getBoundingClientRect().top,
+        width: document.querySelector('#wb-chat .conversation-detail').getBoundingClientRect().width }), before.anchor);
+      // Each opening and closing is compared with the position just before it: the scroll offset snaps to whole
+      // pixels, so a message on a fractional line may move under a pixel per change.
+      const rounds = [];
+      let previous = before;
+      for (let round = 0; round < 2; round++) {
+        await groupInfo.click();
+        await groupSide.waitFor({ state: 'visible' });
+        await settleLayout();
+        const opened = await measure();
+        if (beside) {
+          assert.ok(opened.width < before.width - 400, `${label}: the conversation narrows beside the group detail`);
+          assert.ok(opened.width >= 590, `${label}: about 600px of conversation remain beside it`);
+        } else assert.equal(opened.width, before.width, `${label}: the group detail covers the conversation without narrowing it`);
+        await page.keyboard.press('Escape');
+        await groupSide.waitFor({ state: 'hidden' });
+        await settleLayout();
+        const closed = await measure();
+        const step = `${label} round ${round}`;
+        if (reading) {
+          assert.ok(Math.abs(opened.top - previous.top) < 2, `${step}: opening the group detail keeps the message being read in place`);
+          assert.ok(Math.abs(closed.top - previous.top) < 2, `${step}: closing it puts the message back where it was`);
+        } else {
+          assert.ok(opened.gap <= 2, `${step}: opening the group detail keeps the history pinned to the bottom`);
+          assert.ok(closed.gap <= 2, `${step}: closing it keeps the history pinned to the bottom`);
+        }
+        rounds.push({ opened, closed });
+        previous = closed;
+      }
+      sideMeasurements.push({ width, collapsed, beside, reading, before, rounds });
+    }
+  }
+  // The list state is remembered across reloads; later steps use the list.
+  await setList(false);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => localStorage.setItem('zylos-dashboard-locale', 'en'));
   await page.reload();
@@ -453,6 +529,6 @@ export async function runConversationVisual(t, sandbox) {
   assert.doesNotMatch(await staleReceipt.innerText(), /can retry|retry sending/i);
   assert.equal(await page.locator('#wb-chat .chat-composer textarea').isDisabled(), true);
   assert.deepEqual(errors, []);
-  if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, composerMeasurements, resizeMeasurements, typingMeasurements, placeholderMeasurements, base: fixture.base }, null, 2));
+  if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, composerMeasurements, resizeMeasurements, typingMeasurements, sideMeasurements, placeholderMeasurements, base: fixture.base }, null, 2));
   t.diagnostic(`conversation browser: ${shots.length} screenshots, ${reads} actual message reads, no page errors`);
 }

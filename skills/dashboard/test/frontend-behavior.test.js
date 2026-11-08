@@ -2268,7 +2268,8 @@ test('workbench shell hides unknown recovering and unavailable observer navigati
   assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerDisabled');
   assert.equal(click().prevented, 0); assert.equal(settings.length, 0);
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  assert.match(app, /observerAvailable: status => !remoteIsReadOnly\(\) && !observerRecoveryReason\(status\)/);
+  assert.match(app, /observerAvailable: observerOpenable,/);
+  assert.match(app, /function observerOpenable\(status\) \{\n  return !remoteIsReadOnly\(\) && !observerRecoveryReason\(status\);\n\}/);
 });
 
 // Detail mounting boundary: real shell row selection and injected transport only;

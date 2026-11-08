@@ -719,7 +719,8 @@
   border-radius:3px;
   white-space:nowrap
 }
-.conversation-page .wb-icon-btn>span {
+/* The conversation's own icon buttons hide their text; the group detail beside it keeps the overview's. */
+:is(.conversation-sidebar, .conversation-detail) .wb-icon-btn>span {
   display:none
 }
 .conversation-tabs .wb-btn {
@@ -1001,3 +1002,104 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-page .conversation-compose-box>.conversation-send[data-action=send] { width:var(--conversation-control-height); min-width:var(--conversation-control-height); height:var(--conversation-control-height); min-height:var(--conversation-control-height); padding:0; justify-content:center; }
 .conversation-page .conversation-send[data-action=send]>span { display:none; }
 .conversation-page .conversation-compose-box>.wb-btn .wb-ico,.conversation-page .conversation-compose-box>.wb-icon-btn .wb-ico { width:18px; height:18px; }
+
+/* The group detail opens over the conversation from the right, like the overview's drawer, unless the
+   conversation keeps about 600px beside it (see the two breakpoints below); on phones it covers the page. */
+.conversation-page > .wb-group-side {
+  position:fixed;
+  top:var(--wb-header-h);
+  right:0;
+  bottom:0;
+  z-index:15;
+  width:480px;
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+  border-left:1px solid var(--wb-line);
+  background:var(--wb-side);
+  box-shadow:var(--wb-shadow);
+  overflow-wrap:anywhere
+}
+.wb-group-side:focus {
+  outline:none
+}
+.wb-group-side-detail {
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  min-height:0
+}
+.wb-group-side-bar {
+  display:none
+}
+/* Beside the conversation, which narrows to make room, only where about 600px of it remain next to the 480px
+   panel (24px page margins): from 1440px with the conversation list shown, from 1120px with it collapsed.
+   These two breakpoints are the only place this rule lives. */
+@media(min-width:1440px) {
+  .conversation-page > .wb-group-side {
+    position:static;
+    flex:none;
+    box-shadow:none
+  }
+  .conversation-has-side .conversation-header-actions .wb-btn {
+    font-size:0;
+    width:28px;
+    padding:0;
+    justify-content:center;
+    gap:0
+  }
+  .conversation-has-side .conversation-header-actions .wb-ico {
+    width:15px;
+    height:15px
+  }
+}
+@media(min-width:1120px) {
+  .conversation-list-collapsed > .wb-group-side {
+    position:static;
+    flex:none;
+    box-shadow:none
+  }
+  .conversation-list-collapsed.conversation-has-side .conversation-header-actions .wb-btn {
+    font-size:0;
+    width:28px;
+    padding:0;
+    justify-content:center;
+    gap:0
+  }
+  .conversation-list-collapsed.conversation-has-side .conversation-header-actions .wb-ico {
+    width:15px;
+    height:15px
+  }
+}
+@media(max-width:900px) {
+  .conversation-page > .wb-group-side {
+    position:fixed;
+    inset:0;
+    z-index:55;
+    width:auto;
+    border-left:0;
+    box-shadow:none
+  }
+  .wb-group-side-bar {
+    display:flex;
+    flex:none;
+    align-items:center;
+    padding:max(8px, env(safe-area-inset-top)) 12px 0
+  }
+  .wb-group-side-bar + .wb-group-side-detail .wb-detail-header {
+    padding-top:8px
+  }
+}
+/* The conversation list can be collapsed on wider screens (phones switch between the list and the conversation);
+   the button sits at the start of the conversation header. */
+.conversation-header .conversation-list-toggle {
+  display:none
+}
+@media(min-width:761px) {
+  .conversation-header .conversation-list-toggle {
+    display:inline-flex
+  }
+  .conversation-list-collapsed > .conversation-sidebar {
+    display:none
+  }
+}

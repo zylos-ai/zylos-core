@@ -6,12 +6,12 @@ import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/set
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=103';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=112';
 import { renderVersion } from './wb/settings-version.js?v=103';
-import { mountConversationPage } from './wb/conversation-page.js?v=107';
+import { mountConversationPage } from './wb/conversation-page.js?v=108';
 import { mountChatSettings } from './wb/chat-settings.js?v=112';
 import { mountWorkbench } from './wb/shell.js?v=112';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=103';
-import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=99';
+import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=99';
 import { observerPageUsable, observerRecoveryReason, viewedAccess } from './wb/observer-page.js?v=103';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=103';
@@ -2855,24 +2855,29 @@ workbench = mountWorkbench({
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   writable: () => wbWritable(remoteIsReadOnly),
-  onMemory: key => {
-    // Show the group's file list, not a file left open from before.
-    state.memory.filePaneOpen = false;
-    memoryScopeView.selectGroup(key);
-    document.querySelector('.tab[data-tab="memory"]')?.click();
-  },
+  onMemory: openGroupMemory,
   onConversation: row => {
     document.querySelector('.tab[data-tab="chat"]')?.click();
     return chatPage?.openGroup(row.sessionGroup, { channel: row.c4?.componentName });
   },
   observerStatus: () => state.observer.status,
-  observerAvailable: status => !remoteIsReadOnly() && !observerRecoveryReason(status),
+  observerAvailable: observerOpenable,
   onObserve: openObserverFor,
   instanceInfo: () => ({ name: viewedAgentName(), version: state.dashboardState?.dashboard_version ? 'dashboard ' + state.dashboardState.dashboard_version : null,
     core: state.dashboardState?.runtime_info?.zylos_version ? 'core ' + state.dashboardState.runtime_info.zylos_version : null }),
 });
 initTechButton();
 watchHeader({ header: document.querySelector('.app-header') });
+// Whether the observer can be opened from a group detail, on the overview and beside the conversation alike.
+function observerOpenable(status) {
+  return !remoteIsReadOnly() && !observerRecoveryReason(status);
+}
+function openGroupMemory(key) {
+  // Show the group's file list, not a file left open from before.
+  state.memory.filePaneOpen = false;
+  memoryScopeView.selectGroup(key);
+  document.querySelector('.tab[data-tab="memory"]')?.click();
+}
 export function openWorkbenchGroup(key) {
   document.querySelector('.tab[data-tab="overview"]')?.click();
   return workbench.openGroup(key);
@@ -2894,7 +2899,17 @@ chatPage = mountConversationPage({ root: document.querySelector('#wb-chat'), t,
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   technicalDetails: () => document.documentElement.dataset.detail === 'technical',
-  onOpenGroup: conversation => openWorkbenchGroup(conversation.sessionGroup ?? conversation.session_group),
+  // The group detail on the conversation page links out exactly as the overview's does.
+  groupLinks: {
+    writable: () => wbWritable(remoteIsReadOnly),
+    detail: () => document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain',
+    onMemory: openGroupMemory,
+    onObserve: openObserverFor,
+    observable: row => {
+      const status = state.observer.status;
+      return groupObservable(observerOpenable(status) ? observerNavEntry(status, document.documentElement.dataset.detail, t) : null, row);
+    },
+  },
 });
 const chatLocaleChange = () => chatPage.redraw();
 document.addEventListener('dashboard-locale-change', chatLocaleChange);

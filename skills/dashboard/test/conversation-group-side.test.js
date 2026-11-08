@@ -1,0 +1,342 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
+import { createDocument, allNodes, tick, deferred } from './helpers/conversation-dom.js';
+
+const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
+const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === schemaPath) return next(sourceSchema, context);
+    return next(specifier, context);
+  }
+});
+const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
+
+// The conversation page's group detail side panel, through the real page, panel and group detail modules on the
+// injected DOM (in-memory fetch; no browser, sockets, storage, subprocesses or network). The overview is never
+// mounted here, so every group read comes from the panel itself. Pixel layout (the narrowed conversation, the
+// full-screen panel on phones) is covered by the screenshots, not here. Run for changes to the panel, the
+// conversation page header or the group detail component.
+const sessionGroup = 'dashboard:42';
+const conversationId = 'g:' + Buffer.from(sessionGroup).toString('hex').toUpperCase();
+const otherGroup = 'dashboard:43';
+const otherId = 'g:' + Buffer.from(otherGroup).toString('hex').toUpperCase();
+const listedRow = { sessionGroup, name: { displayName: 'Release room' }, state: 'idle', presence: 'running',
+  live: { runId: 'run-1', sessionId: 's-1' }, createdAt: 1, c4: { componentName: 'dashboard' } };
+
+function eventDocument() {
+  const document = createDocument();
+  const listeners = new Map();
+  Object.assign(document, {
+    visibilityState: 'visible',
+    documentElement: { dataset: {}, lang: 'en' },
+    addEventListener(name, handler) { listeners.set(name, [...(listeners.get(name) ?? []), handler]); },
+    removeEventListener(name, handler) { listeners.set(name, (listeners.get(name) ?? []).filter(fn => fn !== handler)); },
+    listenerCount: name => (listeners.get(name) ?? []).length,
+    key(key) {
+      let prevented = false;
+      const event = { key, get defaultPrevented() { return prevented; }, preventDefault() { prevented = true; } };
+      for (const handler of listeners.get('keydown') ?? []) handler(event);
+      return prevented;
+    },
+  });
+  return document;
+}
+
+// In-memory stand-in for localStorage, so no test reads or writes the real one.
+function memoryStorage(entries = {}) {
+  const values = new Map(Object.entries(entries));
+  return { values, getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, String(value)); } };
+}
+
+async function fixture(testContext, { storage = memoryStorage(), open = true } = {}) {
+  const document = eventDocument(), root = document.createElement('div');
+  const reads = [], links = { memory: [], observe: [] };
+  // Timers the panel started and has not cleared, by id: the panel's 5s re-read of the group list.
+  const timers = new Map();
+  let groupFailures = 0, groupHold = null, nextTimer = 0;
+  const json = body => ({ ok: true, status: 200, json: async () => body });
+  const fetch = async path => {
+    reads.push(path);
+    if (path === '/api/workbench/groups') {
+      if (groupFailures > 0) { groupFailures--; return { ok: false, status: 500, json: async () => ({}) }; }
+      if (groupHold) await groupHold.promise;
+      return json({ rows: [listedRow], listKnown: true });
+    }
+    if (path.startsWith('/api/timeline')) return json({ events: [] });
+    if (path.includes('/backlog')) return json({ pending: 0 });
+    if (path.includes('/runs')) return json({ totalEvents: 0, totalRuns: 0, unattributed: 0, runs: [] });
+    if (path.includes('session-mode')) return json({ data: { sessionMode: 'multi' } });
+    if (path.startsWith('/api/chat/conversations?')) return json({ items: [
+      { id: conversationId, sessionGroup, display_name: 'Release room', channel: 'dashboard' },
+      { id: otherId, sessionGroup: otherGroup, display_name: 'Other room', channel: 'dashboard' },
+    ], nextCursor: null });
+    const match = /\/api\/chat\/conversations\/([^/?]+)$/.exec(path);
+    if (match) {
+      const id = decodeURIComponent(match[1]);
+      return json({ conversation: { id, sessionGroup: id === otherId ? otherGroup : sessionGroup, state: 'active', displayName: 'Room' } });
+    }
+    return json({ items: [], nextCursor: null, afterCursor: 'after' });
+  };
+  const page = mountConversationPage({ root, document, t: key => key, fetch, endpoint: path => path, storage,
+    groupLinks: { onMemory: key => links.memory.push(key), onObserve: key => links.observe.push(key),
+      setTimer: fn => { timers.set(++nextTimer, fn); return nextTimer; }, clearTimer: id => { timers.delete(id); } } });
+  testContext.after(() => page.destroy());
+  if (open) assert.equal(await page.openGroup(sessionGroup), true);
+  await tick();
+  const find = predicate => allNodes(root).find(predicate);
+  const side = () => find(node => node.classList.contains('wb-group-side'));
+  const groupButton = () => find(node => node.dataset.action === 'page.groupInfo');
+  const pageNode = () => find(node => node.classList.contains('conversation-page'));
+  const stream = () => find(node => node.classList.contains('conversation-stream'));
+  const input = () => find(node => node.tagName === 'TEXTAREA');
+  const title = () => side() && allNodes(side()).find(node => node.tagName === 'H2')?.textContent;
+  const openSide = async () => { groupButton().dispatch('click'); await tick(); await tick(); await tick(); };
+  // The page reads the group list for its own header too; fail only the reads made after this call.
+  const failGroupReads = count => { groupFailures = count; };
+  // Holds the group-list reads made after this call until the returned release() is called.
+  const holdGroupReads = () => { const hold = groupHold = deferred(); return () => { groupHold = null; hold.resolve(); }; };
+  const listToggle = () => find(node => node.dataset.action === 'listToggle');
+  return { document, root, page, reads, links, storage, listToggle, side, groupButton, pageNode, stream, input, title, openSide, find, failGroupReads,
+    holdGroupReads, timers: () => timers.size,
+    poll: async () => { for (const fn of [...timers.values()]) await fn(); await tick(); await tick(); } };
+}
+
+test('the group detail opens beside the conversation, showing that group, and the page stays the conversation', async testContext => {
+  const f = await fixture(testContext);
+  assert.equal(f.side().hidden, true, 'closed until asked for');
+  await f.openSide();
+  assert.equal(f.side().hidden, false, 'the side panel is open');
+  assert.equal(f.pageNode().hidden, false, 'the conversation page is still shown');
+  assert.ok(f.pageNode().classList.contains('conversation-has-side'), 'the conversation makes room for it');
+  assert.equal(f.title(), 'Release room', 'it shows the group of the conversation');
+  assert.ok(f.reads.includes('/api/workbench/groups'), 'the panel read the group list itself');
+  assert.equal(f.groupButton().attributes['aria-expanded'], 'true');
+  assert.ok(f.document.activeElement === f.side(), 'the focus moved into the side panel');
+});
+
+test('without the overview, a failed first group read still opens the group, and the listed row replaces it later', async testContext => {
+  const f = await fixture(testContext);
+  f.failGroupReads(1);
+  await f.openSide();
+  assert.equal(f.side().hidden, false);
+  assert.ok(f.title(), 'the panel is not blank');
+  assert.notEqual(f.title(), 'Release room', 'without the list the group is shown by its key');
+  assert.equal(allNodes(f.side()).some(node => node.classList.contains('wb-detail-error')), false, 'no read error is shown');
+  await f.poll();
+  assert.equal(f.title(), 'Release room', 'the next read shows the listed group');
+});
+
+test('while the first group read is still on its way the panel already shows the group, then the listed row', async testContext => {
+  const f = await fixture(testContext);
+  const release = f.holdGroupReads();
+  await f.openSide();
+  assert.equal(f.side().hidden, false);
+  assert.ok(f.title(), 'the panel is not blank while the list is read');
+  assert.notEqual(f.title(), 'Release room', 'before the list arrives the group is shown by its key');
+  release();
+  await tick(); await tick(); await tick();
+  assert.equal(f.title(), 'Release room', 'the listed row replaces it once the read completes');
+  assert.equal(f.timers(), 1, 'the panel then re-reads the list on a timer');
+});
+
+test('a group that is not on the known list shows as not running once the list arrives', async testContext => {
+  const f = await fixture(testContext);
+  assert.equal(await f.page.openGroup(otherGroup), true);
+  await tick();
+  const release = f.holdGroupReads();
+  await f.openSide();
+  const standby = () => allNodes(f.side()).some(node => node.textContent === 'wb.detail.standby');
+  assert.equal(standby(), false, 'before the list arrives the state is not known');
+  release();
+  await tick(); await tick(); await tick();
+  assert.equal(standby(), true, 'the known list without this group means it is not running');
+});
+
+test('closing the side panel during the first group read starts no re-reading', async testContext => {
+  const f = await fixture(testContext);
+  const release = f.holdGroupReads();
+  await f.openSide();
+  f.groupButton().dispatch('click');
+  assert.equal(f.side().hidden, true);
+  release();
+  await tick(); await tick(); await tick();
+  assert.equal(f.timers(), 0, 'no timer was started for the closed panel');
+});
+
+test('the group button closes the open side panel', async testContext => {
+  const f = await fixture(testContext);
+  await f.openSide();
+  f.groupButton().dispatch('click');
+  await tick();
+  assert.equal(f.side().hidden, true);
+  assert.equal(f.groupButton().attributes['aria-expanded'], 'false');
+  assert.equal(f.pageNode().classList.contains('conversation-has-side'), false);
+});
+
+test('Esc while renaming the group only leaves the name editor', async testContext => {
+  const f = await fixture(testContext);
+  await f.openSide();
+  allNodes(f.side()).find(node => node.attributes['aria-label'] === 'wb.name.edit').dispatch('click');
+  const editors = () => allNodes(f.side()).filter(node => node.tagName === 'INPUT').length;
+  assert.equal(editors(), 1, 'the name editor is open');
+  assert.equal(f.document.key('Escape'), true);
+  assert.equal(editors(), 0, 'Esc left the name editor');
+  assert.equal(f.side().hidden, false, 'the panel stays open');
+  assert.equal(f.document.key('Escape'), true);
+  assert.equal(f.side().hidden, true, 'the next Esc closes it');
+});
+
+test('opening and closing the panel again and again leaves one re-read timer while open and none once closed', async testContext => {
+  const f = await fixture(testContext);
+  for (let round = 0; round < 3; round++) {
+    await f.openSide();
+    assert.equal(f.timers(), 1, `round ${round}: one timer while open`);
+    f.groupButton().dispatch('click');
+    await tick();
+    assert.equal(f.timers(), 0, `round ${round}: none once closed`);
+  }
+  await f.openSide();
+  f.page.destroy();
+  assert.equal(f.timers(), 0, 'destroying the page clears it');
+});
+
+for (const [how, close] of [
+  ['Esc', f => { assert.equal(f.document.key('Escape'), true, 'Esc was handled'); }],
+  ['its close button', f => allNodes(f.side()).find(node => node.attributes['aria-label'] === 'wb.close').dispatch('click')],
+  ['the back button', f => allNodes(f.side()).find(node => node.classList.contains('wb-group-side-back')).dispatch('click')],
+]) test(`closing the side panel with ${how} keeps the reading position and the draft and returns the focus`, async testContext => {
+  const f = await fixture(testContext);
+  const stream = f.stream();
+  stream.scrollHeight = 2000; stream.clientHeight = 400; stream.scrollTop = 600;
+  f.input().value = 'half-written reply'; f.input().dispatch('input');
+  await f.openSide();
+  close(f);
+  await tick();
+  assert.equal(f.side().hidden, true);
+  assert.equal(f.pageNode().classList.contains('conversation-has-side'), false);
+  assert.equal(stream.scrollTop, 600, 'the reading position is unchanged');
+  assert.equal(f.input().value, 'half-written reply', 'the draft is unchanged');
+  assert.ok(f.document.activeElement === f.groupButton(), 'the focus is back on the group button');
+  assert.equal(f.groupButton().attributes['aria-expanded'], 'false');
+});
+
+test('Esc does nothing while the side panel is closed or the conversation page is hidden', async testContext => {
+  const f = await fixture(testContext);
+  assert.equal(f.document.key('Escape'), false);
+  await f.openSide();
+  f.document.visibilityState = 'hidden';
+  assert.equal(f.document.key('Escape'), false);
+  assert.equal(f.side().hidden, false);
+});
+
+test('the link to this group\'s conversation only closes the side panel', async testContext => {
+  const f = await fixture(testContext);
+  await f.openSide();
+  const before = f.reads.length;
+  allNodes(f.side()).find(node => node.dataset.action === 'viewConversation').dispatch('click');
+  await tick();
+  assert.equal(f.side().hidden, true);
+  assert.equal(f.reads.slice(before).some(path => path.startsWith('/api/chat/')), false, 'the conversation was not reloaded');
+  assert.ok(f.document.activeElement === f.groupButton());
+});
+
+test('links that lead to another page still go there', async testContext => {
+  const f = await fixture(testContext);
+  await f.openSide();
+  allNodes(f.side()).find(node => node.textContent === 'wb.detail.memoryLink' && node.tagName === 'BUTTON').dispatch('click');
+  assert.deepEqual(f.links.memory, [sessionGroup]);
+});
+
+test('choosing another conversation or leaving the page closes the side panel without taking the focus', async testContext => {
+  const f = await fixture(testContext);
+  await f.openSide();
+  f.input().focus();
+  f.find(node => node.dataset.conversationId === otherId).dispatch('click');
+  await tick(); await tick();
+  assert.equal(f.side().hidden, true, 'another conversation closes it');
+  assert.ok(f.document.activeElement !== f.groupButton(), 'the focus was left alone');
+  await f.page.openGroup(sessionGroup);
+  await f.openSide();
+  assert.equal(f.timers(), 1);
+  f.page.close();
+  assert.equal(f.side().hidden, true, 'leaving the page closes it');
+  assert.equal(f.timers(), 0, 'and stops its re-reading');
+  f.page.destroy();
+  assert.equal(f.document.listenerCount('keydown'), 0, 'destroying the page removes its Esc handler');
+});
+
+test('the dashboard opens the group detail on the conversation page instead of switching to the overview', () => {
+  const app = readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const mount = app.slice(app.indexOf('chatPage = mountConversationPage('), app.indexOf('const chatLocaleChange'));
+  assert.match(mount, /groupLinks: \{/);
+  assert.doesNotMatch(mount, /openWorkbenchGroup|onOpenGroup/);
+  assert.match(mount, /onMemory: openGroupMemory/);
+  assert.match(mount, /onObserve: openObserverFor/);
+});
+
+test('both languages name the way back from the side panel', () => {
+  for (const locale of ['zh', 'en']) {
+    const pack = JSON.parse(readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
+    assert.equal(typeof pack['chat.page.backToConversation'], 'string', locale);
+    assert.notEqual(pack['chat.page.backToConversation'], pack['chat.page.back'], `${locale}: not the way back to the list`);
+  }
+});
+
+test('the list button collapses and shows the conversation list again, and the choice is remembered', async testContext => {
+  const f = await fixture(testContext);
+  const collapsed = () => f.pageNode().classList.contains('conversation-list-collapsed');
+  assert.equal(collapsed(), false);
+  assert.equal(f.listToggle().attributes['aria-expanded'], 'true');
+  assert.equal(f.listToggle().attributes['aria-label'], 'chat.page.hideList');
+  f.listToggle().dispatch('click');
+  assert.equal(collapsed(), true, 'the list is collapsed');
+  assert.equal(f.listToggle().attributes['aria-expanded'], 'false');
+  assert.equal(f.listToggle().attributes['aria-label'], 'chat.page.showList');
+  assert.equal(f.storage.values.get('zylos-dashboard-conversation-list'), 'collapsed');
+  f.listToggle().dispatch('click');
+  assert.equal(collapsed(), false, 'the list is shown again');
+  assert.equal(f.listToggle().attributes['aria-expanded'], 'true');
+  assert.equal(f.storage.values.get('zylos-dashboard-conversation-list'), 'shown');
+});
+
+test('a remembered collapsed list starts collapsed, but stays shown while no conversation is open', async testContext => {
+  const f = await fixture(testContext, { storage: memoryStorage({ 'zylos-dashboard-conversation-list': 'collapsed' }), open: false });
+  const collapsed = () => f.pageNode().classList.contains('conversation-list-collapsed');
+  assert.equal(collapsed(), false, 'with nothing open the list (and the way back to it) stays visible');
+  assert.equal(await f.page.openGroup(sessionGroup), true);
+  await tick();
+  assert.equal(collapsed(), true, 'an open conversation gets the remembered collapsed list');
+  assert.equal(f.listToggle().attributes['aria-expanded'], 'false');
+});
+
+test('the group detail sits beside the conversation only where about 600px of it remain, otherwise over it', () => {
+  const css = readFileSync(new URL('../public/css/conversation.css', import.meta.url), 'utf8');
+  const block = query => {
+    const start = css.indexOf(`@media(${query})`);
+    assert.ok(start >= 0, query);
+    let depth = 0, index = css.indexOf('{', start);
+    for (let at = index; at < css.length; at++) {
+      if (css[at] === '{') depth++;
+      else if (css[at] === '}' && --depth === 0) return css.slice(index, at);
+    }
+    return '';
+  };
+  const rule = (text, selector) => new RegExp(`${selector.replace(/[.>]/g, m => '\\' + m)}\\s*\\{([^}]*)\\}`).exec(text)?.[1] ?? '';
+  const base = rule(css, '.conversation-page > .wb-group-side');
+  assert.match(base, /position:fixed/, 'by default the panel covers the conversation');
+  const sideWidth = Number(/width:(\d+)px/.exec(base.replace(/min-height[^;]*;/, ''))?.[1]);
+  const listWidth = Number(/width:(\d+)px/.exec(rule(css, '.conversation-sidebar'))?.[1]);
+  const margins = 48; // the page's 24px margins on each side, as measured in the browser
+  for (const [query, selector, list] of [
+    ['min-width:1440px', '.conversation-page > .wb-group-side', listWidth],
+    ['min-width:1120px', '.conversation-list-collapsed > .wb-group-side', 0],
+  ]) {
+    assert.match(rule(block(query), selector), /position:static/, `${query}: beside the conversation`);
+    const width = Number(/\d+/.exec(query)[0]);
+    const left = width - margins - list - sideWidth;
+    assert.ok(left >= 590 && left < 610, `${query}: about 600px of conversation remain beside the panel (${left})`);
+  }
+});

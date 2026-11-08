@@ -7,6 +7,7 @@ import { createConversationState } from './conversation-state.js?v=104';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=103';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=106';
+import { createGroupSide } from './group-side.js?v=1';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -37,6 +38,7 @@ export function composerKeySends(event, { touch = false } = {}) {
 export function touchFirst(view) {
   return view?.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches === true;
 }
+const LIST_KEY = 'zylos-dashboard-conversation-list';
 /** A persistent page: polling reconciles keyed rows and delivery labels, never the editor. */
 export function mountConversationPage({
   root,
@@ -47,8 +49,9 @@ export function mountConversationPage({
   identity,
   draftStore = null,
   draftScope = () => null,
-  onOpenGroup,
-  technicalDetails = () => false
+  groupLinks = null,
+  technicalDetails = () => false,
+  storage = globalThis.localStorage
 } = {}) {
   let destroyed = false,
     currentSnapshot,
@@ -271,9 +274,15 @@ export function mountConversationPage({
   const headerActions = node('div', undefined, 'conversation-header-actions');
   const readNew = action('refreshMessages', () => state.refreshMessages(), 'restart');
   const statusCheck = action('refreshStatus', () => state.refreshStatus(), 'check');
-  const group = action('chat.page.groupInfo', () => onOpenGroup?.(currentSnapshot.conversation ?? currentSnapshot.items.find(item => item.id === currentSnapshot.selectedId)), 'chev');
+  const group = action('chat.page.groupInfo', () => toggleGroupSide(), 'chev');
   headerActions.append(readNew, statusCheck, group);
-  header.append(back, headerIcon, heading, headerActions);
+  // Collapses the conversation list on wider screens; remembered like the dashboard's other view preferences.
+  const listToggle = action('chat.page.hideList', () => toggleList(), 'menu', 'wb-icon-btn conversation-list-toggle');
+  listToggle.dataset.action = 'listToggle';
+  const listEntry = actions.at(-1);
+  let listCollapsed = false;
+  try { listCollapsed = storage?.getItem(LIST_KEY) === 'collapsed'; } catch {}
+  header.append(listToggle, back, headerIcon, heading, headerActions);
   const renameForm = node('form', undefined, 'conversation-rename');
   renameForm.hidden = true;
   const renameInput = node('input', undefined, 'wb-input');
@@ -387,6 +396,49 @@ export function mountConversationPage({
   });
   detail.append(header, renameForm, notices, history, composer, readOnlyFooter);
   page.append(sidebar, detail);
+  // The group's detail opens beside the conversation (over it on narrow screens), never on the overview.
+  let groupSideFor = null;
+  const groupSide = groupLinks ? createGroupSide({ document, t, fetch: fetcher, endpoint, identity: () => typeof identity === 'function' ? identity() : identity,
+    ...groupLinks, isVisible: () => !destroyed && !page.hidden && document.visibilityState !== 'hidden',
+    // The panel only shows the open conversation's group, whose conversation is this one: going to it just closes.
+    onConversation: () => groupSide.close(),
+    onClose: ({ focus, hide }) => {
+      groupSideFor = null;
+      // Hiding inside the preserved change keeps the reading position (or the pin to the bottom) as the column widens.
+      preserveAttachmentLayout(() => { hide(); page.classList.toggle('conversation-has-side', false); });
+      group.setAttribute('aria-expanded', 'false');
+      if (focus && !group.hidden) group.focus();
+    } }) : null;
+  if (groupSide) {
+    page.append(groupSide.element);
+    group.setAttribute('aria-expanded', 'false');
+  }
+  // The list stays shown while no conversation is open: the button to show it again is in the conversation header.
+  function applyList() {
+    page.classList.toggle('conversation-list-collapsed', listCollapsed && !header.hidden);
+    listEntry.key = listCollapsed ? 'chat.page.showList' : 'chat.page.hideList';
+    text(listEntry.title, label(listEntry.key));
+    listToggle.setAttribute('aria-label', label(listEntry.key));
+    listToggle.title = label(listEntry.key);
+    listToggle.setAttribute('aria-expanded', String(!listCollapsed));
+  }
+  function toggleList() {
+    listCollapsed = !listCollapsed;
+    try { storage?.setItem(LIST_KEY, listCollapsed ? 'collapsed' : 'shown'); } catch {}
+    // The conversation widens or narrows: keep the reading position, as for the side panel.
+    preserveAttachmentLayout(applyList);
+  }
+  function toggleGroupSide() {
+    if (!groupSide) return;
+    if (groupSide.open) { groupSide.close(); return; }
+    const current = currentSnapshot.conversation ?? currentSnapshot.items.find(item => item.id === currentSnapshot.selectedId);
+    const key = current?.sessionGroup ?? current?.session_group;
+    if (!key) return;
+    groupSideFor = currentSnapshot.selectedId;
+    // The panel appears inside the preserved change, so the position measured before is the one before it opened.
+    preserveAttachmentLayout(() => { void groupSide.show(key); page.classList.toggle('conversation-has-side', true); });
+    group.setAttribute('aria-expanded', 'true');
+  }
   root.replaceChildren(page);
   function updateInputPlaceholder(mode = currentSnapshot?.mode) {
     const key = mode === 'single' ? 'chat.page.singlePlaceholder'
@@ -880,6 +932,7 @@ export function mountConversationPage({
     page.classList.toggle('conversation-blocked', !!s.blocked);
     sidebar.hidden = !!s.blocked;
     header.hidden = !s.selectedId || s.blocked;
+    applyList();
     history.hidden = !!s.blocked;
     if (!s.canCreate) {
       creating = false;
@@ -997,7 +1050,9 @@ export function mountConversationPage({
     statusCheck.hidden = !s.selectedId || isDraft(s) || s.tab === 'external';
     readNew.disabled = !!s.loading;
     statusCheck.disabled = !!s.loading;
-    group.hidden = typeof onOpenGroup !== 'function' || !(current?.sessionGroup ?? current?.session_group) || isDraft(s);
+    group.hidden = !groupSide || !(current?.sessionGroup ?? current?.session_group) || isDraft(s);
+    // The side panel belongs to the conversation it was opened from.
+    if (groupSide?.open && (group.hidden || s.selectedId !== groupSideFor)) groupSide.close({ focus: false });
     older.hidden = !s.messageCursor;
     older.disabled = !!s.loading;
     gap.hidden = !s.gap;
@@ -1106,12 +1161,14 @@ export function mountConversationPage({
       return !state.snapshot().error;
     },
     close() {
+      groupSide?.close({ focus: false });
       page.hidden = true;
       state.close();
     },
-    redraw,
+    redraw() { redraw(); groupSide?.redraw(); },
     clearDrafts(scope) { uploadTray.clearForAuthentication(scope?.instance ? { instance: scope.instance } : undefined); state.clearDrafts(scope); },
     destroy() {
+      groupSide?.destroy();
       destroyed = true;
       uploadTray.destroy();
       for (const resource of trayResources.values()) resource.destroy();
