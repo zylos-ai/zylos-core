@@ -1,8 +1,9 @@
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=103';
 import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=103';
-import { groupEventCount, renderOverview } from './detail-overview.js?v=103';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=103';
+import { groupEventCount, renderOverview } from './detail-overview.js?v=104';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=104';
+import { eventTypesFor } from './timeline-rows.js?v=104';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=103';
 import { renderNameEditor } from './name-edit.js?v=103';
 
@@ -82,12 +83,13 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm, observable = () => false, onObserve = () => {},
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
-    totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null,
+    totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null, level: null,
     configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
   let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
   const getWritable = () => typeof writable === 'function' ? writable() : writable;
   const getLevel = () => typeof detail === 'function' ? detail() : detail;
+  const readLevel = () => getLevel() === 'technical' ? 'technical' : 'plain';
   const active = gen => !stopped && controller != null && !controller.signal.aborted && generation === gen && owner === identity();
   function invalidateOwner() {
     if (controller && owner !== identity()) close();
@@ -99,7 +101,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (!active(gen)) { invalidateOwner(); throw Object.assign(new Error('view_changed'), { name: 'AbortError' }); }
     return value;
   }
-  const timeline = createTimelineLoader({ request, now, active: () => active(generation),
+  const timeline = createTimelineLoader({ request, now, active: () => active(generation), detail: readLevel,
     onChange(value) {
       state.totalEvents = value.totalEvents;
       state.totalRuns = value.totalRuns;
@@ -288,15 +290,19 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (!controller || !active(generation) || !isVisible()) return Promise.resolve();
     if (refreshTask) return refreshTask;
     const gen = generation, key = state.row.sessionGroup ?? 'origin', runId = state.row.live?.runId;
+    // Recent activity and the event counts cover plain events only, unless technical detail is on.
+    const level = state.level = readLevel(), types = eventTypesFor('all', level);
     const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', order: 'desc', limit: '5' });
+    const runsQuery = new URLSearchParams({ limit: '3' });
+    if (types?.length) { query.set('types', types.join(',')); runsQuery.set('types', types.join(',')); }
     const task = (async () => {
       const values = await Promise.allSettled([
         request('/api/timeline?' + query),
         request(`/api/workbench/groups/${encodeURIComponent(key)}/backlog`),
-        request(`/api/workbench/groups/${encodeURIComponent(key)}/runs?limit=3`),
+        request(`/api/workbench/groups/${encodeURIComponent(key)}/runs?` + runsQuery),
         loadSubagents(),
       ]);
-      if (!active(gen) || state.row.live?.runId !== runId) return;
+      if (!active(gen) || state.row.live?.runId !== runId || readLevel() !== level) return;
       if (values[0].status === 'fulfilled') {
         state.recent = values[0].value.events ?? [];
       }
@@ -326,7 +332,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     resetSubagents();
     refreshTask = null;
     state.row = null; state.tab = 'overview'; state.recent = []; state.currentEvents = [];
-    state.totalEvents = state.totalRuns = state.unattributed = 0; state.backlog = null; state.error = null;
+    state.totalEvents = state.totalRuns = state.unattributed = 0; state.backlog = null; state.error = null; state.level = null;
     state.configOpen = state.nameOpen = false;
     state.actionResult = ''; state.actionBusy = false;
     root.hidden = true; root.replaceChildren(); onClose();
@@ -363,7 +369,14 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       draw();
       await refresh();
     },
-    setViewDetail() { draw(); },
+    setViewDetail() {
+      draw();
+      // Technical detail changes which events are read: reread recent activity, counts and the timeline.
+      if (!controller || !state.row || readLevel() === state.level) return;
+      void timeline.setLevel();
+      const again = () => refresh();
+      void (refreshTask ? refreshTask.then(again, again) : again());
+    },
     destroy() { close(); stopped = true; },
   };
 }

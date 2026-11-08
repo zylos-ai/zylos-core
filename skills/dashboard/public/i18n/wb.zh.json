@@ -529,6 +529,7 @@
   "wb.timeline.now": "现在",
   "wb.timeline.currentRun": "当前运行",
   "wb.timeline.count": "{count} 条",
+  "wb.timeline.repeated": "{count} 次 · {from} – {to}",
   "wb.timeline.empty": "没有符合筛选的事件",
   "wb.timeline.noEarlier": "没有更早的记录了",
   "wb.chat.dm": "私聊",

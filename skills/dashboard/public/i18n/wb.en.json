@@ -529,6 +529,7 @@
   "wb.timeline.now": "now",
   "wb.timeline.currentRun": "Current run",
   "wb.timeline.count": "{count} events",
+  "wb.timeline.repeated": "{count} times · {from} – {to}",
   "wb.timeline.empty": "No events match the filter",
   "wb.timeline.noEarlier": "No earlier records",
   "wb.chat.dm": "Direct message",

@@ -2,6 +2,7 @@ import { element, icon, runtimeName } from './plain-text.js?v=103';
 import { modelCell, pendingModel, shortDuration } from './board.js?v=103';
 import { toolLabel, waitText } from './view-mode.js?v=99';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=89';
+import { recentRows } from './timeline-rows.js?v=104';
 
 export function activeSubagents(events, runId) {
   const agents = new Map();
@@ -95,16 +96,36 @@ export function toolEventLabel(document, event, { level = 'plain', t = key => ke
   }
   return node;
 }
-/** One timeline line: time | round icon | label. Shared by recent activity and the full timeline. */
-export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev', now = null } = {}) {
+/**
+ * One timeline line: time | round icon | label. Shared by recent activity and the full timeline.
+ * `after` (a repeat count, for one) follows the label on the same line.
+ */
+export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev', now = null, after = null } = {}) {
   const kind = eventKind(event);
   const node = element(document, 'div', undefined, `${className} wb-ev-${kind}${badEvents.has(event.event_type) ? ' wb-ev-bad' : ''}`);
   const time = eventTime(event.timestamp, level, document.documentElement?.lang, now);
   const stamp = element(document, 'time', time.text); stamp.title = time.title;
   const mark = element(document, 'span', undefined, 'wb-ev-k');
   mark.append(icon(document, kind === 'bot' ? 'bot' : kind, 'xs'));
-  node.append(stamp, mark, (label == null ? toolEventLabel(document, event, { level, t }) : null)
-    ?? element(document, 'span', label ?? eventLabel(event, level, t), 'wb-ev-t'));
+  const text = (label == null ? toolEventLabel(document, event, { level, t }) : null)
+    ?? element(document, 'span', label ?? eventLabel(event, level, t), 'wb-ev-t');
+  if (after) text.append(after);
+  node.append(stamp, mark, text);
+  return node;
+}
+
+/**
+ * One row for a run of identical events: the newest one, and when it repeats, how many times and
+ * from when to when ("600 次 · 09:58 – 10:08"); full or raw times stay in the tooltip.
+ */
+export function repeatRow(document, group, { level = 'plain', t = key => key, className = 'wb-ev', now = null } = {}) {
+  if (group.count < 2) return eventRow(document, group.newest.event, { level, t, className, now });
+  const lang = document.documentElement?.lang;
+  const from = eventTime(group.oldest.event.timestamp, level, lang, now), to = eventTime(group.newest.event.timestamp, level, lang, now);
+  const repeat = element(document, 'span', t('wb.timeline.repeated', { count: group.count, from: from.text, to: to.text }), 'wb-ev-rep');
+  repeat.title = `${from.title} – ${to.title}`;
+  const node = eventRow(document, group.newest.event, { level, t, className, now, after: repeat });
+  node.classList.add('wb-ev-merged');
   return node;
 }
 
@@ -210,8 +231,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   }
   // Newest first, dated when not from today. The count covers the same events: those in runs and those in none.
   const recent = section('wb.detail.recent', 'wb-detail-recent', 'clock');
-  const newestFirst = [...(data.recent ?? [])].sort((a, b) => (timeValue(b.timestamp) || 0) - (timeValue(a.timestamp) || 0));
-  for (const event of newestFirst) recent.append(eventRow(document, event, { level, t, now: currentTime }));
+  for (const group of recentRows(data.recent ?? [])) recent.append(repeatRow(document, group, { level, t, now: currentTime }));
   const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: groupEventCount(data), runs: data.totalRuns ?? 0 }), 'wb-link-btn wb-chev');
   timeline.type = 'button'; timeline.addEventListener('click', onTimeline); recent.append(timeline);
   const memory = section('wb.detail.memory', 'wb-detail-memory', 'book');

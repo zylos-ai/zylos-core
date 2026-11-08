@@ -4,11 +4,11 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=103';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=103';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=103';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=104';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=105';
 import { renderVersion } from './wb/settings-version.js?v=103';
 import { mountConversationPage } from './wb/conversation-page.js?v=106';
 import { mountChatSettings } from './wb/chat-settings.js?v=103';
-import { mountWorkbench } from './wb/shell.js?v=103';
+import { mountWorkbench } from './wb/shell.js?v=104';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=103';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=99';

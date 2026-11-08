@@ -159,7 +159,7 @@ test('recent activity lists newest first, dates events from another day, and cou
   const now = Date.parse('2026-11-08T03:00:00.000Z');
   const at = hoursAgo => new Date(now - hoursAgo * 3600e3).toISOString();
   // Read in the order the server sent them; one event belongs to no run.
-  const data = { recent: [{ timestamp: at(30), event_type: 'stop' }, { timestamp: at(1), event_type: 'user_prompt_submit' }, { timestamp: at(2), event_type: 'stop', run_id: null }],
+  const data = { recent: [{ timestamp: at(30), event_type: 'session_start' }, { timestamp: at(1), event_type: 'user_prompt_submit' }, { timestamp: at(2), event_type: 'stop', run_id: null }],
     totalEvents: 2, totalRuns: 1, unattributed: 1 };
   renderOverview(root, row('a', { state: { kind: 'idle' } }), data, { document, t, level: 'plain', currentTime: now });
   const times = allNodes(root.children[1]).filter(node => node.tagName === 'TIME');
@@ -633,10 +633,12 @@ test('subagent initial read paginates its typed stream and later snapshots consu
   f.controller.destroy();
 });
 
+// The filter-race cases below read in technical detail, where the unfiltered view asks for every event type
+// (no types parameter), so a read without types is the old unfiltered array.
 test('filter reload excludes refresh append until the new filtered array is authoritative', async () => {
   const oldPage = deferred(), toolsPage = deferred(), calls = [];
   let phase = 'initial';
-  const loader = createTimelineLoader({ request: async path => {
+  const loader = createTimelineLoader({ detail: () => 'technical', request: async path => {
     const url = new URL(path, 'http://fixture'); calls.push(url);
     if (url.pathname.endsWith('/runs')) return { runs: [run('r')], totalRuns: 1, totalEvents: 4 };
     if (url.pathname.endsWith('/messages')) return { messages: [] };
@@ -758,7 +760,7 @@ test('a failed tools reload discards the old unfiltered array and recovers only 
     event_type: index % 2 ? 'stop' : 'post_tool_use' }));
   const tools = all.filter(event => event.event_type === 'post_tool_use'), reads = [];
   let failReload = true;
-  const loader = createTimelineLoader({ request: async path => {
+  const loader = createTimelineLoader({ detail: () => 'technical', request: async path => {
     const url = new URL(path, 'http://fixture');
     if (url.pathname.endsWith('/runs')) return { runs: [run('r'), run('old', -1000, 0)], totalRuns: 2, totalEvents: all.length * 2 };
     if (url.pathname.endsWith('/messages')) return { messages: [] };
@@ -792,7 +794,7 @@ test('a failed tools reload discards the old unfiltered array and recovers only 
 test('a completed tools reload rejects an older all-events append that arrives afterward', async () => {
   const oldAppend = deferred();
   let phase = 'initial';
-  const loader = createTimelineLoader({ request: async path => {
+  const loader = createTimelineLoader({ detail: () => 'technical', request: async path => {
     const url = new URL(path, 'http://fixture');
     if (url.pathname.endsWith('/runs')) return { runs: [run('r')], totalRuns: 1, totalEvents: 3 };
     if (url.pathname.endsWith('/messages')) return { messages: [] };
@@ -924,11 +926,11 @@ test('timeline chips combine filters: one chip uses the server filter, several f
   const document = createDocument(), root = document.createElement('div');
   const labels = () => allNodes(root).filter(node => node.classList.contains('wb-ev-t')).map(node => node.textContent);
   renderTimeline(root, loader, { document, t, level: 'technical' });
-  assert.deepEqual(labels(), ['session_start', 'wb.timeline.received', 'pre_tool_use'], 'events and messages interleave by time');
+  assert.deepEqual(labels(), ['pre_tool_use', 'wb.timeline.received', 'session_start'], 'events and messages interleave by time, newest first');
   await loader.setChips(['messages', 'lifecycle']);
   assert.equal(loader.state.filter, 'all');
   renderTimeline(root, loader, { document, t, level: 'technical' });
-  assert.deepEqual(labels(), ['session_start', 'wb.timeline.received']);
+  assert.deepEqual(labels(), ['wb.timeline.received', 'session_start']);
   await loader.setChips(['tools']);
   assert.equal(loader.state.filter, 'tools');
   renderTimeline(root, loader, { document, t, level: 'technical' });
