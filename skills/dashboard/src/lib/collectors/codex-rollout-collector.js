@@ -26,7 +26,8 @@ export class CodexRolloutCollector {
     this._subagentStartedAt = new Map();
     this._subagentWaitByCallId = new Map();
     this._codeModeWrapsByCallId = new Map();
-    // Code-mode execs that spawn and have not answered yet, and the threads Codex reported they spawned.
+    // Code-mode execs that spawn and have not answered yet (by rollout file), and the threads Codex reported they
+    // spawned.
     this._pendingSpawnExecs = [];
     this._spawnedThreadsByCallId = new Map();
     this._onEvent = null;
@@ -360,10 +361,12 @@ export class CodexRolloutCollector {
       if (item.kind === 'completed') return this._insertSubagentStop(agentId, timestamp, mapping, 'subagent_activity', position);
       return 0;
     }
-    if (item.type === 'CollabAgentToolCall' && item.tool === 'spawn_agent' && this._pendingSpawnExecs.length) {
+    const pending = item.type === 'CollabAgentToolCall' && item.tool === 'spawn_agent'
+      ? this._pendingSpawnExecs.findIndex(entry => entry.path === mapping.transcript_path) : -1;
+    if (pending >= 0) {
       const threads = uniqueStrings([...(Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids : []),
         ...(Array.isArray(item.receiver_agents) ? item.receiver_agents.map(agent => agent?.thread_id) : [])]);
-      if (threads.length) this._spawnedThreadsByCallId.set(this._pendingSpawnExecs.shift(), threads);
+      if (threads.length) this._spawnedThreadsByCallId.set(this._pendingSpawnExecs.splice(pending, 1)[0].callId, threads);
     }
     return 0;
   }
@@ -558,7 +561,9 @@ export class CodexRolloutCollector {
     if (callId && !isOutput && normalizedName === 'exec') {
       const wraps = codeModeAgentCalls(item.input ?? item.arguments ?? payload.input ?? payload.arguments);
       if (wraps.length) this._codeModeWrapsByCallId.set(callId, wraps);
-      if (wraps.includes('spawn_agent') && !this._pendingSpawnExecs.includes(callId)) this._pendingSpawnExecs.push(callId);
+      if (wraps.includes('spawn_agent') && !this._pendingSpawnExecs.some(entry => entry.callId === callId)) {
+        this._pendingSpawnExecs.push({ path: mapping.transcript_path, callId });
+      }
     }
     const wraps = normalizedName === 'exec' && callId ? this._codeModeWrapsByCallId.get(callId) ?? null : null;
 
@@ -759,7 +764,7 @@ export class CodexRolloutCollector {
     let written = 0;
     const printed = printedObjects(output);
     if (wraps.includes('spawn_agent')) {
-      this._pendingSpawnExecs = this._pendingSpawnExecs.filter(id => id !== callId);
+      this._pendingSpawnExecs = this._pendingSpawnExecs.filter(entry => entry.callId !== callId);
       const reported = this._spawnedThreadsByCallId.get(callId) || [];
       this._spawnedThreadsByCallId.delete(callId);
       // The printed result names the agent; else the threads Codex reported spawning; else the exec call itself.
