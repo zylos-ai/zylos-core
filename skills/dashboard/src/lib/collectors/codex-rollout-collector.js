@@ -351,7 +351,9 @@ export class CodexRolloutCollector {
   /**
    * Codex reports subagent activity as completed items: multi-agent v2 writes `SubAgentActivity` (`started` /
    * `completed` / `interrupted` / `interacted`, naming the agent by its task path); code mode writes
-   * `CollabAgentToolCall` for the agent tools an `exec` called, naming the threads it spawned.
+   * `CollabAgentToolCall` for the agent tools an `exec` called, naming the threads it spawned. Other items, such as
+   * the `CommandExecution` of a command finishing inside a still-running code-mode cell, are neither steps nor ends,
+   * and nothing of them (command, directory, output) is kept.
    */
   _ingestItemCompleted(item, timestamp, mapping, position = {}) {
     if (!item || typeof item !== 'object') return 0;

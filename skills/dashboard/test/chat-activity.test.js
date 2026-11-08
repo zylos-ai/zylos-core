@@ -17,8 +17,9 @@ import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, codeModeYieldedCommand, v1ChildRollout, v1LongChildRollout, v1ParentTurn,
-  v1YieldedWaitTurn, v2CompletedTurn, v2InterruptedTurn, v2TimedOutTurn } from './fixtures/codex-multi-agent-rollout.js';
+import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, cellEndingAs, rebase, v1ChildRollout,
+  v1LongChildRollout, v1ParentTurn, v1YieldedWaitTurn, v2CompletedTurn, v2InterruptedTurn, v2TimedOutTurn }
+  from './fixtures/codex-multi-agent-rollout.js';
 
 const GROUP = 'dash-owned:a';
 const ID = `g:${Buffer.from(GROUP).toString('hex').toUpperCase()}`;
@@ -646,16 +647,36 @@ test('a long Codex subagent thread rollout read over several passes still neithe
   assert.equal(round.end, timeOf(parent, line => line.payload.type === 'task_complete'), 'nor is its turn end the parent turn end');
 });
 
-test('a code-mode command that yields stays one running step until a wait on its cell sees it finish', async t => {
-  const lines = codeModeYieldedCommand(at(1));
-  const live = await codexRound(t, lines.slice(0, 4), { ended: false });
-  live.f.clock.now = at(25);
-  assert.deepEqual(describe(roundOf(read(live.f, [1]), 1)), ['tool:runCommand:running'], 'yielded and still running after a wait');
-  const { round } = await codexRound(t, lines);
-  assert.deepEqual(describe(round), ['tool:runCommand:done'], 'the waits on its cell are not steps of their own');
-  assert.equal(steps(round)[0].end, Date.parse(lines.at(-1).timestamp), 'it ends when a wait reports the script finished');
-  const failed = await codexRound(t, codeModeYieldedCommand(at(1), { exitCode: 1 }));
-  assert.deepEqual(describe(failed.round), ['tool:runCommand:failed'], 'the finishing output decides whether it failed');
+test('a recorded code-mode command that yields is one step from its exec to the wait that sees it finish', async t => {
+  for (const [name, recorded] of [['0.153.4', CELL_A_LINES], ['0.166.0 with inner commands', CELL_B_LINES], ['0.166.0', CELL_C_LINES]]) {
+    const lines = rebase(recorded, at(1));
+    const finish = lines.findLastIndex(line => line.payload.type === 'function_call_output');
+    const live = await codexRound(t, lines.slice(0, finish), { ended: false });
+    live.f.clock.now = Date.parse(lines[finish].timestamp);
+    assert.deepEqual(describe(roundOf(read(live.f, [1]), 1)), ['tool:runCommand:running'], `${name}: running while every wait says so`);
+    const { f, round } = await codexRound(t, lines, { replyAt: 120 });
+    assert.deepEqual(describe(round), ['tool:runCommand:done'], `${name}: its waits and inner commands are not steps`);
+    const [step] = steps(round);
+    assert.equal(step.start, Date.parse(lines[0].timestamp), `${name}: starts at the exec call`);
+    assert.equal(step.end, Date.parse(lines[finish].timestamp), `${name}: ends at the result that says the script finished`);
+    assertNothingPrivate(round, name);
+    const inner = lines.filter(line => line.payload.item?.type === 'CommandExecution');
+    for (const line of inner) {
+      const kept = f.store.db.prepare('SELECT COUNT(*) FROM runtime_events WHERE timestamp = ? OR metadata LIKE ? OR metadata LIKE ?')
+        .pluck().get(line.timestamp, `%${line.payload.item.id}%`, `%${line.payload.item.process_id}%`);
+      assert.equal(kept, 0, `${name}: nothing is kept of the inner command ${line.payload.item.id}`);
+    }
+  }
+});
+
+test('a code-mode command whose script failed or was terminated is a failed step', async t => {
+  for (const header of ['Script failed', 'Script terminated']) {
+    const lines = rebase(cellEndingAs(header), at(1));
+    const { round } = await codexRound(t, lines);
+    assert.deepEqual(describe(round), ['tool:runCommand:failed'], header);
+    assert.equal(steps(round)[0].end, Date.parse(lines.at(-1).timestamp), header);
+    assertNothingPrivate(round, header);
+  }
 });
 
 test('a Codex v1 subtask whose wait yielded ends when a wait on that cell reads its result', async t => {

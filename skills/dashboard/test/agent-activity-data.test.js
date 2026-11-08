@@ -146,6 +146,14 @@ test('Codex failure reading joins the text of content-array outputs, the shape e
   assert.equal(codexToolOutputFailed([{ type: 'input_text', text: 'Script started' }, { type: 'input_text', text: 'Process exited with code 1' }]), true);
   assert.equal(codexToolOutputFailed([{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }]), false);
   assert.equal(codexToolOutputFailed({ content: [{ type: 'text', text: 'denied' }], isError: true }), true);
+  // A code-mode script reports its end in the header: failed or terminated is a failed call, also as a plain string.
+  const script = (header, ...parts) => [{ type: 'input_text', text: `${header}\nWall time 0.0 seconds\nOutput:\n` },
+    ...parts.map(text => ({ type: 'input_text', text }))];
+  assert.equal(codexToolOutputFailed(script('Script failed', 'Script error: boom')), true);
+  assert.equal(codexToolOutputFailed(script('Script terminated')), true);
+  assert.equal(codexToolOutputFailed('Script failed\nWall time 0.1 seconds\nOutput:\n'), true);
+  assert.equal(codexToolOutputFailed(script('Script completed', 'Script failed')), false, 'a script printing the words does not fail it');
+  assert.equal(codexToolOutputFailed('Script running with cell ID 3\nWall time 1.0 seconds\nOutput:\n'), false);
   assert.equal(codexToolOutputFailed({ content: [{ type: 'text', text: 'Process exited with code 4' }] }), true);
   assert.equal(codexToolOutputFailed({ content: [{ type: 'text', text: 'fine' }] }), false);
   assert.equal(codexToolOutputFailed({ exit_code: 3 }), true);

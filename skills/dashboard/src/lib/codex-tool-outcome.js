@@ -3,7 +3,8 @@
 // Outputs come as a string, or as a content array (`[{ type: 'input_text', text }]`, the shape `exec` writes);
 // only the text parts are read, and only the verdict is kept by callers.
 // The exit line is read only in the result header (before `Output:`), so a command's own output cannot fake it.
-const FAILED_HEADER = /(?:Process exited with code [1-9]|^Exit code: [1-9])/m;
+// A code-mode script reports its own end in that header: `Script completed`, `Script failed` or `Script terminated`.
+const FAILED_HEADER = /(?:Process exited with code [1-9]|^Exit code: [1-9]|^Script (?:failed|terminated)$)/m;
 const FAILED_MARKER = /(?:"exit_code"\s*:\s*[1-9]|"isError"\s*:\s*true)/;
 
 /** The text parts of a Codex tool output (a string, a content array or an object carrying them). */

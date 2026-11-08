@@ -120,51 +120,81 @@ export function v1ChildRollout(startMs) {
   return [...lines, exec, end];
 }
 
-// Code mode lets an `exec` yield while its script still runs (`Script running with cell ID …`); `wait` with that
-// `cell_id` then returns more output, until a result reports `Script completed`. No such lines were recorded: they are
-// built from the recorded v1 exec lines above, with the output header, the `wait` tool name and its arguments
-// (`cell_id`, `yield_time_ms`) as the Codex 0.167.0 binary describes them.
-const CELL = '7';
-const runningOutput = (seconds = 10) => [{ type: 'input_text', text: `Script running with cell ID ${CELL}\nWall time ${seconds}.0 seconds\nOutput:\n` }];
-function waitLines(callId, at, doneAt, output) {
-  const call = clone(V1_PARENT_LINES[1]);
-  call.timestamp = at;
-  call.payload = { type: 'function_call', status: 'completed', name: 'wait', arguments: JSON.stringify({ cell_id: CELL, yield_time_ms: 10000 }),
-    call_id: callId, internal_chat_message_metadata_passthrough: call.payload.internal_chat_message_metadata_passthrough };
-  const result = clone(V1_PARENT_LINES[3]);
-  result.timestamp = doneAt;
-  result.payload = { ...result.payload, type: 'function_call_output', call_id: callId, output };
-  delete result.payload.id;
-  return [call, result];
-}
-const stamp = (startMs, seconds) => new Date(startMs + seconds * 1000).toISOString();
+// Code mode lets an `exec` yield while its script still runs: its result, and every `wait` result while the script
+// still runs, is the string `Script running with cell ID N…`; a `function_call` named `wait` with that `cell_id` reads
+// more, and the result that ends the cell is a content array whose first part is the header `Script completed`,
+// `Script failed` or `Script terminated`. Recorded, redacted (script, command, directory and output text replaced;
+// structure, field names, times, ordinals, call ids and output headers as recorded), from real Codex sessions.
+
+/** Recorded, redacted: Codex 0.153.4, cell 49, the exec and four waits (the last one sees it finish). */
+export const CELL_A_LINES = [
+  {"timestamp":"2026-09-08T01:04:25.499Z","ordinal":611,"type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_04eb984e11149bb7016a9f5f1809dc87d0bc3592dd9290ea12","status":"completed","call_id":"call_MGuLCSNzXmS4pLJDljVEaF1r","name":"exec","input":"<redacted js: await tools.exec_command({\"cmd\": \"...\", ...}); text(...)>","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829459.267587}}},
+  {"timestamp":"2026-09-08T01:04:26.512Z","ordinal":613,"type":"response_item","payload":{"type":"custom_tool_call_output","id":"ctco_01a07e8b-7f90-7672-9120-e2e69c0df240","call_id":"call_MGuLCSNzXmS4pLJDljVEaF1r","output":"Script running with cell ID 49\nWall time 1.0 seconds\nOutput:\n","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829466.512527}}},
+  {"timestamp":"2026-09-08T01:04:33.518Z","ordinal":617,"type":"response_item","payload":{"type":"function_call","id":"fc_04eb984e11149bb7016a9f5f208c7487d098185128fd8b366c","name":"wait","arguments":"{\"cell_id\":\"49\",\"yield_time_ms\":1000,\"max_tokens\":1000}","call_id":"call_nMhsArCNzjJD2RhhAY4H3LVa","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829468.22767}}},
+  {"timestamp":"2026-09-08T01:04:34.522Z","ordinal":619,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a07e8b-9eda-71e1-a215-ee37f3091a12","call_id":"call_nMhsArCNzjJD2RhhAY4H3LVa","output":"Script running with cell ID 49\nWall time 1.0 seconds\nOutput:\n","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829474.52244}}},
+  {"timestamp":"2026-09-08T01:04:43.095Z","ordinal":623,"type":"response_item","payload":{"type":"function_call","id":"fc_04eb984e11149bb7016a9f5f2a73a887d092289e5e5720233a","name":"wait","arguments":"{\"cell_id\":\"49\",\"yield_time_ms\":1000,\"max_tokens\":1000}","call_id":"call_9gBWfvgoyk1WfOPPe6juHJDE","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829477.364432}}},
+  {"timestamp":"2026-09-08T01:04:44.099Z","ordinal":625,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a07e8b-c443-78d1-9866-5b9537b5417c","call_id":"call_9gBWfvgoyk1WfOPPe6juHJDE","output":"Script running with cell ID 49\nWall time 1.0 seconds\nOutput:\n","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829484.0999193}}},
+  {"timestamp":"2026-09-08T01:04:52.680Z","ordinal":631,"type":"response_item","payload":{"type":"function_call","id":"fc_04eb984e11149bb7016a9f5f33fa1487d0a813ad5221dbcc9d","name":"wait","arguments":"{\"cell_id\":\"49\",\"yield_time_ms\":10000,\"max_tokens\":1000}","call_id":"call_7Ugj2EbAQPkpVfwzrbENetDQ","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829485.927019}}},
+  {"timestamp":"2026-09-08T01:05:03.686Z","ordinal":633,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a07e8c-10c6-7aa0-afcf-ae4bc6883d5c","call_id":"call_7Ugj2EbAQPkpVfwzrbENetDQ","output":"Script running with cell ID 49\nWall time 11.0 seconds\nOutput:\n","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829503.6861277}}},
+  {"timestamp":"2026-09-08T01:05:36.248Z","ordinal":642,"type":"response_item","payload":{"type":"function_call","id":"fc_04eb984e11149bb7016a9f5f5f63e087d0a8cd39de0e53cdc8","name":"wait","arguments":"{\"cell_id\":\"49\",\"yield_time_ms\":1000,\"max_tokens\":1000}","call_id":"call_zWozsLOexoCQ6UxmAhTO4xYc","internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829531.121015}}},
+  {"timestamp":"2026-09-08T01:05:36.547Z","ordinal":644,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a07e8c-9123-7ff2-b569-ea11e11b3848","call_id":"call_zWozsLOexoCQ6UxmAhTO4xYc","output":[{"type":"input_text","text":"Script completed\nWall time 0.0 seconds\nOutput:\n"},{"type":"input_text","text":"<redacted output part>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"01a07e87-851c-72c0-a396-24a37846666f","create_time":1788829536.547119}}},
+];
 
 /**
- * A command run from code mode that yields twice: the exec, a wait still running, a wait that sees it finish. The
- * script prints the command's result; `exitCode` sets its exit code.
+ * Recorded, redacted: Codex 0.166.0, cell 69, the exec and three waits; two `CommandExecution` items between them are
+ * commands finishing inside the cell, not its end.
  */
-export function codeModeYieldedCommand(startMs, { exitCode = 0 } = {}) {
-  const exec = clone(V1_PARENT_LINES[1]);
-  exec.timestamp = stamp(startMs, 0);
-  exec.payload = { ...exec.payload, call_id: 'call_cell_exec', input: 'const r = await tools.exec_command({cmd: "<redacted>"});\ntext(JSON.stringify(r));\n' };
-  const yielded = clone(V1_PARENT_LINES[3]);
-  yielded.timestamp = stamp(startMs, 10);
-  yielded.payload = { ...yielded.payload, call_id: 'call_cell_exec', output: runningOutput() };
-  const finished = [{ type: 'input_text', text: 'Script completed\nWall time 4.2 seconds\nOutput:\n' },
-    { type: 'input_text', text: JSON.stringify({ exit_code: exitCode, output: '<redacted>' }) }];
-  return [exec, yielded,
-    ...waitLines('call_cell_wait_1', stamp(startMs, 11), stamp(startMs, 21), runningOutput()),
-    ...waitLines('call_cell_wait_2', stamp(startMs, 22), stamp(startMs, 26), finished)];
+export const CELL_B_LINES = [
+  {"timestamp":"2026-11-01T03:05:12.627Z","ordinal":606,"type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_0619224da6bd5bb3016ae6ac685bf48191ba1d010f9683fb73","status":"completed","call_id":"call_4188f032691b4fdc9154a3afab50e32a","name":"exec","input":"<redacted js: await tools.exec_command({\"cmd\": \"...\", ...}); text(...)>","internal_chat_message_metadata_passthrough":{"turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","create_time":1793502312.3616178}}},
+  {"timestamp":"2026-11-01T03:05:13.253Z","ordinal":608,"type":"response_item","payload":{"type":"custom_tool_call_output","id":"ctco_01a19511-7b25-7263-ba49-8952bc783eae","call_id":"call_4188f032691b4fdc9154a3afab50e32a","output":"Script running with cell ID 69\nWall time 0.6 seconds\nOutput:\n","internal_chat_message_metadata_passthrough":{"turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","create_time":1793502313.2533584}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+  {"timestamp":"2026-11-01T03:05:14.576Z","ordinal":614,"type":"response_item","payload":{"type":"function_call","status":"completed","id":"fc_0619224da6bd5bb3016ae6ac6a688c819183372eecaa18292c","name":"wait","arguments":"{\"cell_id\":\"69\",\"yield_time_ms\":1000,\"max_tokens\":6000}","call_id":"call_c364e4c478594b9997fc50c4ce1ae4fd","internal_chat_message_metadata_passthrough":{"turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","create_time":1793502314.4108431}},"metadata":{"client_authored":false,"user_input_order":26}},
+  {"timestamp":"2026-11-01T03:05:15.579Z","ordinal":616,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a19511-843b-74f1-ac7b-5634abc6cfd2","call_id":"call_c364e4c478594b9997fc50c4ce1ae4fd","output":"Script running with cell ID 69\nWall time 1.0 seconds\nOutput:\n","internal_chat_message_metadata_passthrough":{"turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","create_time":1793502315.5794084}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+  {"timestamp":"2026-11-01T03:05:17.029Z","ordinal":620,"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a19507-68ea-7790-b2d8-0443be585414","turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","item":{"type":"CommandExecution","id":"exec-70336337-1f42-486f-b091-e94d29475e13","process_id":"36310","command":"<redacted>","cwd":"<redacted>","parsed_cmd":"<redacted>","source":"unified_exec_startup","status":"completed","aggregated_output":"<redacted>","exit_code":0,"duration":{"secs":0,"nanos":13376}},"started_at_ms":1793502317029,"completed_at_ms":1793502317029}},
+  {"timestamp":"2026-11-01T03:05:18.569Z","ordinal":625,"type":"response_item","payload":{"type":"function_call","status":"completed","id":"fc_0619224da6bd5bb3016ae6ac6e624c8191a03126b9cfb82d41","name":"wait","arguments":"{\"cell_id\":\"69\",\"yield_time_ms\":30000,\"max_tokens\":6000}","call_id":"call_a8d9b5ad903348a3bee08c11b57fba21","internal_chat_message_metadata_passthrough":{"turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","create_time":1793502318.3860478}},"metadata":{"client_authored":false,"user_input_order":27}},
+  {"timestamp":"2026-11-01T03:05:20.992Z","ordinal":627,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a19511-9960-7380-ae3f-f2b1672449c8","call_id":"call_a8d9b5ad903348a3bee08c11b57fba21","output":"Script running with cell ID 69\nWall time 2.4 seconds\nOutput:\n","internal_chat_message_metadata_passthrough":{"turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","create_time":1793502320.9921167}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+  {"timestamp":"2026-11-01T03:05:24.188Z","ordinal":637,"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a19507-68ea-7790-b2d8-0443be585414","turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","item":{"type":"CommandExecution","id":"exec-fcd25967-7262-40ed-8a74-f7d04354ef6e","process_id":"30995","command":"<redacted>","cwd":"<redacted>","parsed_cmd":"<redacted>","source":"unified_exec_startup","status":"completed","aggregated_output":"<redacted>","exit_code":0,"duration":{"secs":0,"nanos":6560}},"started_at_ms":1793502324188,"completed_at_ms":1793502324188}},
+  {"timestamp":"2026-11-01T03:05:27.611Z","ordinal":648,"type":"response_item","payload":{"type":"function_call","status":"completed","id":"fc_0619224da6bd5bb3016ae6ac7769908191a6c8ff037c01c621","name":"wait","arguments":"{\"cell_id\":\"69\",\"yield_time_ms\":30000,\"max_tokens\":6000}","call_id":"call_24db32c89b7c43b1b1b0657a8a47aa32","internal_chat_message_metadata_passthrough":{"turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","create_time":1793502327.4154603}},"metadata":{"client_authored":false,"user_input_order":31}},
+  {"timestamp":"2026-11-01T03:05:42.638Z","ordinal":650,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a19511-edee-7aa3-ba29-3a531f3ae2a4","call_id":"call_24db32c89b7c43b1b1b0657a8a47aa32","output":[{"type":"input_text","text":"Script completed\nWall time 15.0 seconds\nOutput:\n"},{"type":"input_text","text":"<redacted output part>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"01a19508-2a17-74b1-924b-88793f0d3e05","create_time":1793502342.638817}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+];
+
+/** Recorded, redacted: Codex 0.166.0, cell 1, the exec, one inner `CommandExecution` and one wait that sees it finish. */
+export const CELL_C_LINES = [
+  {"timestamp":"2026-11-01T03:44:06.667Z","ordinal":23,"type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_00878406a5b343eb016ae6b58614348191b7e086b8708c442e","status":"completed","call_id":"call_eb63dba798f24ab0bb47114320d2d5ef","name":"exec","input":"<redacted js: await tools.exec_command({\"cmd\": \"...\", ...}); text(...)>","internal_chat_message_metadata_passthrough":{"turn_id":"01a19535-0054-7161-b9ce-b8a213148c29","create_time":1793504646.0816913}}},
+  {"timestamp":"2026-11-01T03:44:06.740Z","ordinal":25,"type":"response_item","payload":{"type":"custom_tool_call_output","id":"ctco_01a19535-1654-73a1-9bf5-dd531ac2ab8d","call_id":"call_eb63dba798f24ab0bb47114320d2d5ef","output":"Script running with cell ID 1\nWall time 0.0 seconds\nOutput:\n","internal_chat_message_metadata_passthrough":{"turn_id":"01a19535-0054-7161-b9ce-b8a213148c29","create_time":1793504646.7407892}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+  {"timestamp":"2026-11-01T03:44:06.766Z","ordinal":27,"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a19534-fe52-71c3-977b-c102c472e091","turn_id":"01a19535-0054-7161-b9ce-b8a213148c29","item":{"type":"CommandExecution","id":"exec-56c9fd22-ac0c-4e21-9408-caa2e4ee4616","process_id":"66558","command":"<redacted>","cwd":"<redacted>","parsed_cmd":"<redacted>","source":"unified_exec_startup","status":"completed","aggregated_output":"<redacted>","exit_code":0,"duration":{"secs":0,"nanos":8432}},"started_at_ms":1793504646766,"completed_at_ms":1793504646766}},
+  {"timestamp":"2026-11-01T03:44:08.762Z","ordinal":32,"type":"response_item","payload":{"type":"function_call","status":"completed","id":"fc_00878406a5b343eb016ae6b58811d4819180b5d9e1a77cb991","name":"wait","arguments":"{\"cell_id\":\"1\",\"yield_time_ms\":10000,\"max_tokens\":30000}","call_id":"call_83e899c0948c46e0a06750de995bb548","internal_chat_message_metadata_passthrough":{"turn_id":"01a19535-0054-7161-b9ce-b8a213148c29","create_time":1793504648.1350896}},"metadata":{"client_authored":false,"user_input_order":3}},
+  {"timestamp":"2026-11-01T03:44:08.826Z","ordinal":34,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a19535-1e7a-7c81-918b-7876e607a24f","call_id":"call_83e899c0948c46e0a06750de995bb548","output":[{"type":"input_text","text":"Script completed\nWall time 0.0 seconds\nOutput:\n"},{"type":"input_text","text":"<redacted output part>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"01a19535-0054-7161-b9ce-b8a213148c29","create_time":1793504648.8262641}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+];
+
+/**
+ * Group C with its finishing header swapped to `Script failed` (followed by a `Script error: …` part) or
+ * `Script terminated`. Built from the recorded finishing line: no failed or terminated cell was recorded here.
+ */
+export function cellEndingAs(header) {
+  const lines = clone(CELL_C_LINES), last = lines.at(-1);
+  const [first, ...rest] = last.payload.output;
+  last.payload.output = [{ ...first, text: first.text.replace(/^Script completed/, header) },
+    ...(header === 'Script failed' ? [{ type: 'input_text', text: 'Script error: <redacted>' }] : rest)];
+  return lines;
 }
 
-/** The recorded v1 turn, with its wait exec yielding once and the wait result read by a `wait` on its cell. */
+/**
+ * The recorded v1 turn, with its wait exec yielding once and its result read by a `wait` on that cell. The yield and
+ * the wait are built after the recorded group C lines (a running result is a string, the wait names only `cell_id`,
+ * `yield_time_ms` and `max_tokens`); the finishing result is the recorded v1 wait result.
+ */
 export function v1YieldedWaitTurn(startMs) {
   const lines = v1ParentTurn(startMs);
   const index = lines.findIndex(line => line.payload.call_id === V1_WAIT_EXEC && line.payload.type === 'custom_tool_call_output');
   const recorded = lines[index], at = Date.parse(recorded.timestamp);
   const yielded = { ...clone(recorded), timestamp: new Date(at - 300).toISOString() };
-  yielded.payload.output = runningOutput(0);
-  const [call, result] = waitLines('call_cell_wait', new Date(at - 200).toISOString(), recorded.timestamp, recorded.payload.output);
+  yielded.payload.output = clone(CELL_C_LINES[1]).payload.output.replace('cell ID 1', 'cell ID 2');
+  const call = clone(CELL_C_LINES[3]);
+  call.timestamp = new Date(at - 200).toISOString();
+  call.payload = { ...call.payload, call_id: 'call_cell_wait', arguments: JSON.stringify({ cell_id: '2', yield_time_ms: 10000, max_tokens: 30000 }) };
+  const result = clone(CELL_C_LINES[4]);
+  result.timestamp = recorded.timestamp;
+  result.payload = { ...result.payload, call_id: 'call_cell_wait', output: recorded.payload.output };
   return [...lines.slice(0, index), yielded, call, result, ...lines.slice(index + 1)];
 }
 
