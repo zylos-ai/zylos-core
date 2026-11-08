@@ -1,6 +1,6 @@
-import { element, icon } from './plain-text.js?v=94';
+import { element, icon } from './plain-text.js?v=103';
 import { endReasonLabel, timeValue } from './event-labels.js?v=89';
-import { eventRow, eventTime } from './detail-overview.js?v=98';
+import { eventRow, eventTime } from './detail-overview.js?v=103';
 
 export { timeValue };
 

@@ -1,4 +1,4 @@
-import { element, fallbackName, icon, platformOf } from './plain-text.js?v=94';
+import { element, fallbackName, icon, platformOf } from './plain-text.js?v=103';
 
 // Scope metadata is validated by Core's parseSessionGroup on the server.
 /**

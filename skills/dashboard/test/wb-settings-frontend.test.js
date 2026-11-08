@@ -345,7 +345,7 @@ test('removed header entry selectors have no startup bindings and account contro
   const header = html.slice(html.indexOf('<header'), html.indexOf('</header>'));
   for (const id of ['fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
   assert.equal(html.includes('id="locale-toggle"'), false, 'the language choice is built inside the settings page');
-  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=102/); assert.match(html, /style\.css\?v=61/);
+  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=103/); assert.match(html, /style\.css\?v=62/);
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());
 });

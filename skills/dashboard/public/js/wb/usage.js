@@ -1,6 +1,6 @@
-import { element, icon } from './plain-text.js?v=94';
-import { money } from './instance-strip.js?v=99';
-import { dateField } from './date-field.js?v=1';
+import { element, icon } from './plain-text.js?v=103';
+import { money } from './instance-strip.js?v=103';
+import { dateField } from './date-field.js?v=103';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];
 export const usageRanges = ['24h', '7d', 'month', '30d', 'custom'];

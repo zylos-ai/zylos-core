@@ -1,5 +1,5 @@
 import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=102';
-import { element } from './plain-text.js?v=94';
+import { element } from './plain-text.js?v=103';
 
 export { parseC4Content };
 export { validateAnswer } from '../../chat-schema.js?v=102';

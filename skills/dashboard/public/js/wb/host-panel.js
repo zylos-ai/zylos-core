@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=94';
+import { element, icon } from './plain-text.js?v=103';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);

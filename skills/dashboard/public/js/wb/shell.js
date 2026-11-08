@@ -1,12 +1,12 @@
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=99';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=98';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=103';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip } from './instance-strip.js?v=99';
-import { renderAttention } from './attention-bar.js?v=94';
-import { createGroupDetail } from './detail.js?v=100';
-import { loadNamePrompt, renderAutoName } from './auto-name.js?v=94';
-import { createHostPanel } from './host-panel.js?v=94';
-import { element, icon } from './plain-text.js?v=94';
+import { instanceStrip } from './instance-strip.js?v=103';
+import { renderAttention } from './attention-bar.js?v=103';
+import { createGroupDetail } from './detail.js?v=103';
+import { loadNamePrompt, renderAutoName } from './auto-name.js?v=103';
+import { createHostPanel } from './host-panel.js?v=103';
+import { element, icon } from './plain-text.js?v=103';
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
   endpoint = path => path, identity = () => endpoint('/api/workbench/groups'),

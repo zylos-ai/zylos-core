@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=94';
+import { element, icon } from './plain-text.js?v=103';
 
 export const settingsSections = ['defaults', 'pricing', 'keys', 'fleet', 'observer', 'ui'];
 const sectionIcons = { defaults: 'bot', pricing: 'dollar', keys: 'key', fleet: 'fleet', observer: 'term', ui: 'sliders' };

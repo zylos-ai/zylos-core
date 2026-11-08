@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=94';
+import { element } from './plain-text.js?v=103';
 export function activityStrip(document, data, { inboundUnknown = false, t = key => key } = {}) {
   const root = element(document, 'div', undefined, 'wb-activity');
   const width = (data?.cellSeconds ?? 60) * 1000;
