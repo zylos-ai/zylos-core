@@ -294,11 +294,18 @@ export function createConversationState({
       || typeof block.id !== 'string' || ![1, 2].includes(block.schemaVersion)) return null;
     return { ...scope, conversationId: id, messageId: row.messageId, blockId: block.id, schemaVersion: block.schemaVersion };
   }
-  function clearQuestionDraft(id, row, form) {
+  function clearQuestionDraft(id, row, form, { preserveVisible = false } = {}) {
     const scope = form?.draftScope || questionDraftScope(id, row);
     if (scope) draftStore?.remove(scope);
     if (form) {
-      form.values = {}; form.freeText = ''; form.fieldErrors = []; form.formError = null;
+      if (preserveVisible) {
+        const block = row?.constraints?.block;
+        if (block?.type === 'form_intent' && block.schemaVersion === 2) {
+          const active = new Set(evaluateFormState(block.data?.fields, form.values || {}).activeKeys);
+          form.values = Object.fromEntries(Object.entries(form.values || {}).filter(([key]) => active.has(key)));
+        }
+      } else { form.values = {}; form.freeText = ''; }
+      form.fieldErrors = []; form.formError = null;
       form.draftStatus = null; form.draftCleared = true;
     }
   }
@@ -310,7 +317,7 @@ export function createConversationState({
       const formKey = `${row.c4Id}:${row.interruptId}`;
       if (!current.questionForms.has(formKey) && row.status === 'answered' && row.action?.id === row.answerId && !row.actionError) current.questionForms.set(formKey, {});
       const form = current.questionForms.get(formKey);
-      if (row.status !== 'paused') clearQuestionDraft(id, row, form);
+      if (row.status !== 'paused') clearQuestionDraft(id, row, form, { preserveVisible: true });
       if (form && !form.sending) {
         const reconciling = form.receipt?.needsReconciliation === true;
         form.receipt = row.delivery ?? null;

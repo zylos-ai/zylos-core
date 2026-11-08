@@ -53,6 +53,22 @@ test('serialized UTF8 exact byte limit is accepted and oversize retains stored d
   assert.equal(store.load(scope()).value, text);
 });
 
+test('loading stored UTF8 records accepts the byte limit and rejects a larger record', () => {
+  const storage = new Storage(), store = createDraftStore({ storage, now: () => 1 });
+  store.save(scope(), { value: '' }, { freeText: 'visible alternative' });
+  const key = storage.key(0), record = JSON.parse(storage.getItem(key));
+  const room = MAX_DRAFT_BYTES - new TextEncoder().encode(JSON.stringify(record)).byteLength;
+  record.values.value = '汉'.repeat(Math.floor(room / 3)) + 'a'.repeat(room % 3);
+  // Seed storage directly: the write boundary must not mask a missing read boundary.
+  const exact = JSON.stringify(record);
+  assert.equal(new TextEncoder().encode(exact).byteLength, MAX_DRAFT_BYTES);
+  storage.setItem(key, exact);
+  assert.deepEqual(store.loadEditable(scope()), { values: record.values, freeText: record.freeText });
+  record.values.value += 'a'; storage.setItem(key, JSON.stringify(record));
+  assert.equal(store.loadEditable(scope()), null); assert.equal(store.load(scope()), null);
+  assert.equal(storage.getItem(key), JSON.stringify(record));
+});
+
 test('storage access/write failure reports unsaved without mutating caller memory or evicting', () => {
   const storage = new Storage(), store = createDraftStore({ storage });
   store.save(scope(), { value: 'previous' });

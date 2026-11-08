@@ -80,6 +80,21 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Login sets a credential cookie and a readable, noncredential reset marker.
+function loginCookies(response, { base = '', markerBase = base, maxAge = 86400, legacy = false } = {}) {
+  const cookies = response.headers.getSetCookie();
+  assert.equal(cookies.length, legacy ? 3 : 2);
+  const session = cookies.find(cookie => cookie.startsWith('__Secure-zylos_dashboard_session='));
+  assert.ok(session, 'login must set its session cookie');
+  const [credential, ...attributes] = session.split('; ');
+  assert.match(credential, /^__Secure-zylos_dashboard_session=[^;]+$/);
+  assert.deepEqual(attributes, ['HttpOnly', 'Secure', 'SameSite=Strict', `Path=${base || '/'}`, `Max-Age=${maxAge}`]);
+  const marker = cookies.find(cookie => cookie.startsWith('zylos_dashboard_draft_reset_'));
+  assert.equal(marker, `zylos_dashboard_draft_reset_${encodeURIComponent(markerBase)}=1; Secure; SameSite=Strict; Path=${base || '/'}`);
+  assert.doesNotMatch(marker, /HttpOnly/);
+  return session;
+}
+
 test('auth protects API and renders proxy-prefixed login URLs', async () => {
   const { origin, server } = await makeServer();
   try {
@@ -125,13 +140,7 @@ test('login sets secure cookie and authenticated requests can reach API and SSE'
     assert.equal(login.status, 302);
     assert.equal(login.headers.get('location'), '/dashboard/');
 
-    const cookie = login.headers.get('set-cookie');
-    assert.match(cookie, /^__Secure-zylos_dashboard_session=/);
-    assert.match(cookie, /HttpOnly/);
-    assert.match(cookie, /Secure/);
-    assert.match(cookie, /SameSite=Strict/);
-    assert.match(cookie, /Path=\/dashboard;/);
-    assert.match(cookie, /Max-Age=86400$/);
+    const cookie = loginCookies(login, { base: '/dashboard' });
 
     const health = await fetch(`${origin}/api/health`, {
       headers: { Cookie: cookie }
@@ -194,24 +203,24 @@ test('session cookie path follows the forwarded prefix and falls back to root', 
   });
   try {
     const direct = await loginWith({});
-    assert.match(direct.headers.get('set-cookie'), /^__Secure-zylos_dashboard_session=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=86400$/);
+    loginCookies(direct);
 
     const trailing = await loginWith({ 'X-Forwarded-Prefix': '/dashboard/' });
-    assert.match(trailing.headers.get('set-cookie'), /; Path=\/dashboard; /);
+    loginCookies(trailing, { base: '/dashboard' });
 
     const remembered = await loginWith({ 'X-Forwarded-Prefix': '/dashboard' }, { password: 'secret', remember: 'on' });
-    assert.match(remembered.headers.get('set-cookie'), /; Path=\/dashboard; Max-Age=2592000$/);
+    loginCookies(remembered, { base: '/dashboard', maxAge: 2592000 });
 
     for (const prefix of ['/dash;Domain=evil.test', '/dashboard?x=1', '/../dashboard', '//evil.test']) {
       const resp = await loginWith({ 'X-Forwarded-Prefix': prefix });
       assert.equal(resp.status, 302, prefix);
-      const cookie = resp.headers.get('set-cookie');
+      const cookie = loginCookies(resp, { markerBase: prefix === '/dash;Domain=evil.test' ? prefix : '' });
       assert.match(cookie, /; Path=\/; Max-Age=86400$/, prefix);
       assert.doesNotMatch(cookie, /Domain|evil/, prefix);
     }
 
     const multi = await loginWith({ 'X-Forwarded-Prefix': '/dashboard, /other' });
-    assert.match(multi.headers.get('set-cookie'), /; Path=\/dashboard; /);
+    loginCookies(multi, { base: '/dashboard' });
   } finally {
     await closeServer(server);
   }
@@ -227,9 +236,8 @@ test('legacy __Host- session cookie is revoked and cleared on any request', asyn
       body: form({ password: 'secret' }),
       redirect: 'manual'
     });
-    const token = login.headers.get('set-cookie').split(';')[0].split('=').slice(1).join('=');
-    // Only the new cookie is set when the browser has no legacy cookie.
-    assert.equal(login.headers.getSetCookie().length, 1);
+    const session = loginCookies(login, { base: '/dashboard' });
+    const token = session.split(';')[0].split('=').slice(1).join('=');
 
     // A session presented under the legacy name is not accepted, and is revoked.
     const legacy = await fetch(`${origin}/api/state`, {
@@ -256,12 +264,11 @@ test('legacy __Host- session cookie is revoked and cleared on any request', asyn
     });
     assert.equal(relogin.status, 302);
     const cookies = relogin.headers.getSetCookie();
-    assert.equal(cookies.length, 2);
     assert.equal(cookies[0], legacyClear);
-    assert.match(cookies[1], /^__Secure-zylos_dashboard_session=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/dashboard; Max-Age=86400$/);
+    const renewedSession = loginCookies(relogin, { base: '/dashboard', legacy: true });
 
     const fresh = await fetch(`${origin}/api/state`, {
-      headers: { Cookie: `__Host-zylos_dashboard_session=stale; ${cookies[1].split(';')[0]}` }
+      headers: { Cookie: `__Host-zylos_dashboard_session=stale; ${renewedSession.split(';')[0]}` }
     });
     assert.equal(fresh.status, 200);
     assert.deepEqual(fresh.headers.getSetCookie(), [legacyClear]);

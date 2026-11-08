@@ -24,11 +24,11 @@ function store() {
   let saved = values(), freeText = ''; const loads = [], removes = [];
   return { loads, removes, load(key) { loads.push(key); return saved && { ...saved }; }, loadEditable(key) { const v = this.load(key); return v ? { values: v, freeText } : null; }, save(key, v, options = {}) { saved = { ...v }; freeText = options.freeText ?? ''; return { saved: true }; }, remove(key) { removes.push(key); saved = null; freeText = ''; } };
 }
-async function controller(t, { result, failure } = {}) {
+async function controller(t, { result, failure, answerStatus } = {}) {
   const drafts = store(); let row = question();
   const state = createConversationState({ draftStore: drafts, draftScope: () => scope, setTimeout: () => 1, clearTimeout() {},
     request: async (p, options) => {
-      if (p.endsWith('/answers')) { if (failure) throw failure; return result; }
+      if (p.endsWith('/answers')) { if (answerStatus) row = { ...row, status: answerStatus }; if (failure) throw failure; return result; }
       if (p.includes('/questions?')) return { items: [row], nextCursor: null };
       if (p.includes('/messages?')) return { items: [], nextCursor: null };
       if (p.includes('/status?')) return { items: [] };
@@ -48,10 +48,30 @@ for (const stored of [false, null, true]) test(`accepted form clears editable dr
   assert.equal(f.form.freeText, '');
   assert.equal(f.form.action.id, action().id); assert.equal(f.state.snapshot().questions[0].status, 'answered');
 });
-test('authoritative terminal question clears persistence without a rendered message', async t => {
+test('authoritative terminal question clears persistence and retains visible inputs without a rendered message', async t => {
   const f = await controller(t); f.terminal(); await f.state.refreshQuestions();
-  assert.deepEqual(f.form.values, {}); assert.equal(f.drafts.removes.length, 1);
+  assert.deepEqual(f.form.values, values()); assert.equal(f.drafts.removes.length, 1);
+  assert.equal(f.form.freeText, 'Other pending answer');
 });
+test('terminal authority removes inactive values while retaining visible fields and other-answer input', async t => {
+  const f = await controller(t);
+  f.form.values.customer_type = 'person';
+  f.terminal(); await f.state.refreshQuestions();
+  assert.deepEqual(f.form.values, { customer_type: 'person' });
+  assert.equal(f.form.freeText, 'Other pending answer');
+  assert.equal(f.drafts.removes.length, 1);
+});
+for (const [code, status] of [['chat_question_not_paused', 'stopped'], ['chat_answer_conflict', 'answered']]) {
+  test(`${code} keeps visible form input locked and deletes hidden values and persistence`, async t => {
+    const f = await controller(t, { failure: { status: 409, code }, answerStatus: status });
+    f.form.values.customer_type = 'person';
+    await f.state.answer(envelope.interruptId, action());
+    assert.deepEqual(f.form.values, { customer_type: 'person' });
+    assert.equal(f.form.freeText, 'Other pending answer');
+    assert.equal(f.form.locked, true); assert.equal(f.form.error, code);
+    assert.equal(f.drafts.removes.length, 1);
+  });
+}
 test('definite failure retains values and accepts only bounded originating submitted field errors', async t => {
   const failure = { status: 400, code: 'invalid_chat_answer', payload: { fields: [
     { key: 'company_name', reason: 'required' }, { key: 'other', reason: 'range' },
@@ -88,7 +108,20 @@ test('mounted reload waits for authority before hydrating and terminal state def
   visibleNodes(f.root).find(n => n.dataset.action === 'refreshStatus').dispatch('click'); await tick(); await tick();
   assert.equal(f.input('company_name'), control); assert.equal(f.document.activeElement, control); assert.equal(control.selectionStart, 3);
   f.end(); visibleNodes(f.root).find(n => n.dataset.action === 'refreshStatus').dispatch('click'); await tick(); await tick();
-  assert.equal(control.value, ''); assert.ok(f.drafts.removes.length > 0);
+  assert.equal(control.value, 'Private'); assert.equal(control.disabled, true); assert.ok(f.drafts.removes.length > 0);
+});
+test('mounted terminal authority clears retained hidden controls and keeps visible input locked', async t => {
+  const f = await mounted(t); await f.opening; await tick(); await tick();
+  const company = f.input('company_name'), count = f.input('employee_count'), selector = f.input('customer_type');
+  selector.value = 'person'; selector.dispatch('change');
+  const other = f.root.querySelector('.chat-question-other textarea');
+  other.value = 'Visible alternative'; other.dispatch('input');
+  assert.equal(company.closest('label').hidden, true); assert.equal(company.value, 'Private');
+  f.end(); visibleNodes(f.root).find(n => n.dataset.action === 'refreshStatus').dispatch('click'); await tick(); await tick();
+  assert.equal(company.value, ''); assert.equal(count.value, '');
+  assert.equal(selector.value, 'person'); assert.equal(selector.disabled, true);
+  assert.equal(other.value, 'Visible alternative'); assert.equal(other.disabled, true);
+  assert.ok(f.drafts.removes.length > 0);
 });
 test('missing active fields can receive authoritative required diagnostics', async t => {
   const f = await controller(t, { failure: { status: 400, code: 'invalid_chat_answer', payload: { fields: [{ key: 'employee_count', reason: 'required' }] } } });

@@ -126,14 +126,14 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
       status.textContent = formState.error ? t('chat.question.submitFailed') : (formState.fieldErrors?.length || formState.formError) ? t('chat.question.correctFields') : '';
     };
     root.updateFormState = refresh;
-    root.clearEditableValues = () => {
-      formState.values = {}; formState.freeText = ''; formState.fieldErrors = []; formState.formError = null; formState.draftStatus = null;
-      for (const control of controls) {
-        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(control.tagName)) {
-          control.value = ''; control.checked = false;
-          for (const option of control.options || []) option.selected = false;
-        }
+    root.clearRemovedValues = () => {
+      for (const [key, { input }] of fieldNodes) {
+        if (Object.hasOwn(formState.values || {}, key)) continue;
+        input.value = ''; input.checked = false;
+        for (const option of input.options || []) option.selected = false;
       }
+      const other = root.querySelector('.chat-question-other textarea');
+      if (other && !formState.freeText) other.value = '';
       refresh();
     };
     for (const field of data.fields) {

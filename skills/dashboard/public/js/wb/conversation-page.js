@@ -533,7 +533,7 @@ export function mountConversationPage({
         continue;
       }
       q.signature = signature;
-      if (form.draftCleared) q.node.clearEditableValues?.();
+      if (form.draftCleared) q.node.clearRemovedValues?.();
       q.node.updateFormState?.();
       const fresh = questionNode(q, s);
       const choiceDescription = q.node.closest('.chat-block')?.querySelector('.chat-choice-options');
