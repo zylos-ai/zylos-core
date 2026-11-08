@@ -6,7 +6,7 @@ import { clearDashboardSessions } from '../../skills/dashboard/src/lib/auth-sess
 
 export async function dashboardCommand(args) {
   if (args.length === 0 || args.some(arg => ['--help', '-h'].includes(arg))) {
-    console.log('Usage: zylos dashboard reset-password\nGenerate a new Dashboard password, show it once, and restart a running Dashboard.');
+    console.log('Usage: zylos dashboard reset-password\nGenerate a new Dashboard password, show it once, restart a running Dashboard, and invalidate all signed-in browser and API sessions.');
     return;
   }
   if (args.length !== 1 || args[0] !== 'reset-password') throw new Error('Usage: zylos dashboard reset-password');
@@ -21,7 +21,7 @@ export async function dashboardCommand(args) {
     }
     serviceConfirmed = true;
   } catch {
-    console.error('Dashboard password saved, but service status/restart could not be confirmed. Restart Dashboard before signing in.');
+    console.error('Dashboard password saved, but service status/restart could not be confirmed. Restart Dashboard first, then run "zylos dashboard reset-password" again to clear any sessions issued by the old process.');
     process.exitCode = 2;
   }
   try {

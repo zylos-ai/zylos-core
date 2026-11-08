@@ -22,11 +22,11 @@ mock.module('node:child_process', { namedExports: { ...childProcess,
 } });
 console.log('Init route worker isolation:', JSON.stringify(Object.fromEntries(
   ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR'].map(key => [key, process.env[key]]))));
-const { startCoreServices, parseInitFlags } = await import('../../../../cli/commands/init.js');
+const { startServicesWithDashboard, parseInitFlags } = await import('../../../../cli/commands/init.js');
 const { printDashboardInfo } = await import('../../../../cli/lib/dashboard-access.js');
 const flags = parseInitFlags(process.argv.slice(2).filter(arg => !['hook-failed', 'provision-failed'].includes(arg)));
-const access = { zylosDir: root, noCaddy: flags.caddy === false, quiet: flags.quiet };
-assert.equal(await startCoreServices(null, access), 1);
+const { dashboardAccess: access, servicesStarted } = await startServicesWithDashboard(flags);
+assert.equal(servicesStarted, 1);
 assert.ok(commands.some(command => command.startsWith('pm2 start ')));
 assert.ok(commands.includes('pm2 save'));
 console.log('Init service phase finished.');
@@ -38,8 +38,8 @@ assert.equal(access.password, undefined);
 if (flags.quiet) {
   const configPath = path.join(root, 'components/dashboard/config.json');
   const before = fs.readFileSync(configPath, 'utf8');
-  const repeat = { zylosDir: root, noCaddy: flags.caddy === false, quiet: true };
-  assert.equal(await startCoreServices(null, repeat), 1);
+  const { dashboardAccess: repeat, servicesStarted: repeatedStarted } = await startServicesWithDashboard(flags);
+  assert.equal(repeatedStarted, 1);
   assert.equal(repeat.password, null);
   const repeatedLines = [];
   printDashboardInfo(repeat, line => { repeatedLines.push(line); console.log(line); });

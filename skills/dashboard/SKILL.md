@@ -41,7 +41,7 @@ config:
       description: Dashboard bind address
       default: "127.0.0.1"
     - name: DASHBOARD_AUTH_PASSWORD
-      description: Dashboard login password (independent from Web Console; generated on first install and shown once by zylos init)
+      description: Dashboard login password (independent from Web Console; generated when missing, shown once by non-quiet init, never printed by quiet init)
       sensitive: true
 
 
@@ -146,8 +146,9 @@ API sessions, including remembered logins; users must sign in again. API keys
 remain configured. It restarts a
 running Dashboard so the replacement applies immediately; if Dashboard is not
 running, the change applies at its next start. If service status or restart cannot
-be confirmed, the command reports that you must restart Dashboard before signing
-in. Keep the displayed password out of files, shell history and logs.
+be confirmed, restart Dashboard first, then run `zylos dashboard reset-password`
+again to clear sessions the old process may have issued. Keep the displayed
+password out of files, shell history and logs.
 
 For optional terminal viewing, supported platforms and cleanup recovery, see
 [Observer](docs/observer.md). Observer automatically selects the target Dashboard

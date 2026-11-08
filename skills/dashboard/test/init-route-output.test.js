@@ -67,6 +67,8 @@ for (const mode of ['absent', 'failed', 'explicit-skip', 'hook-failed', 'provisi
       assert.doesNotMatch(result.stdout + result.stderr, /Password:|[a-f0-9]{32}/);
       assert.match(result.stdout, /Dashboard password generated/);
       assert.match(result.stdout, /zylos dashboard reset-password/);
+      assert.match(result.stdout, /generate and display a new random password/);
+      assert.doesNotMatch(result.stdout, /set your own password/);
       assert.match(JSON.parse(fs.readFileSync(path.join(data, 'config.json'), 'utf8')).auth.password, /^scrypt:/);
       return;
     }

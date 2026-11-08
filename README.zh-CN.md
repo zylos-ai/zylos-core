@@ -198,6 +198,11 @@ docker run -d --name zylos \
   ghcr.io/zylos-ai/zylos-core:latest
 ```
 
+Docker 启动使用 quiet 模式，不会把 Dashboard 密码打印到日志。启动后，在终端运行
+`docker exec -it zylos zylos dashboard reset-password`，随机生成并显示一次新的
+Dashboard 密码；这也会清除旧的 Dashboard 登录会话。非 quiet 的交互式 init
+会显示一次初始密码。
+
 打开 `http://localhost:3456` 访问 Web 控制台。通过 `docker logs zylos | grep -A2 "Web Console"` 查看密码。更多配置（Docker Compose、环境变量、群晖 NAS 等）请参阅 [Docker 部署指南](docs/docker.md)。
 
 </details>

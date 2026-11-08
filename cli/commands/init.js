@@ -1016,6 +1016,12 @@ function initializeDatabases() {
 
 // ── Service startup ─────────────────────────────────────────────
 
+export async function startServicesWithDashboard(opts, startServices = startCoreServices) {
+  const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false, quiet: opts.quiet };
+  const servicesStarted = await startServices(opts.webPassword, dashboardAccess);
+  return { dashboardAccess, servicesStarted };
+}
+
 /**
  * Prepare and start core services via PM2 ecosystem config.
  * @returns {Promise<number>} Number of services successfully started
@@ -2422,8 +2428,7 @@ export async function initCommand(args) {
       }
 
       if (!quiet) console.log(heading('Starting services...'));
-      const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false, quiet };
-      const servicesStarted = await startCoreServices(opts.webPassword, dashboardAccess);
+      const { dashboardAccess, servicesStarted } = await startServicesWithDashboard(opts);
       if (servicesStarted > 0) {
         setupPm2Startup();
         if (!quiet) console.log(`\n${green(`${servicesStarted} service(s) started.`)} ${dim('Run "zylos status" to check.')}`);
@@ -2511,8 +2516,7 @@ export async function initCommand(args) {
 
     // Step 11: Start services
     if (!quiet) console.log(`\n${heading('Starting services...')}`);
-    const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false, quiet };
-    const servicesStarted = await startCoreServices(opts.webPassword, dashboardAccess);
+    const { dashboardAccess, servicesStarted } = await startServicesWithDashboard(opts);
 
     if (servicesStarted > 0) {
       setupPm2Startup();
