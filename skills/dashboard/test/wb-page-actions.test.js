@@ -81,11 +81,14 @@ test('the rotation threshold applies without asking, only for 10–95, from the 
   c.threshold.value = '80';
   await c.threshold.dispatch('keydown', { key: 'Enter' });
   await c.threshold.dispatch('keydown', { key: 'a' });
-  c.threshold.value = '5';
-  await c.apply.dispatch('click');
+  for (const value of ['5', '9', '10', '95', '96']) {
+    c.threshold.value = value;
+    await c.apply.dispatch('click');
+  }
   assert.deepEqual(a.asked, [], 'the threshold does not change the running agent, so nothing is asked');
-  assert.deepEqual(a.sent, [{ action: 'set-threshold', body: { value: 70 } }, { action: 'set-threshold', body: { value: 80 } }]);
-  assert.deepEqual(applied, [70, 80]);
+  assert.deepEqual(a.sent.map(item => item.body.value), [70, 80, 10, 95], 'both ends of 10–95 apply; 9 and 96 do not');
+  assert.ok(a.sent.every(item => item.action === 'set-threshold'));
+  assert.deepEqual(applied, [70, 80, 10, 95]);
 });
 
 test('a manual restart asks first and names the session shown at that moment, so Core can refuse a changed target', async () => {
@@ -123,8 +126,10 @@ test('nothing is asked or sent while the viewed machine was reached with a read-
   assert.deepEqual(a.asked, []); assert.deepEqual(a.sent, []);
 });
 
-// The page script cannot be loaded outside a browser, so these read what it hands the modules above.
-test('the page sends dashboard actions only through its page actions', () => {
+// Text checks of the page script, which cannot be loaded outside a browser: quick guards that it hands the
+// sender only to the modules above. Clicking through the real page (asked first, cancel sends nothing, confirm
+// sends once) is the opt-in browser case in workbench-browser.test.js.
+test('page script text: dashboard actions are sent only through the page actions', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   assert.deepEqual(app.match(/\bsendAction\b/g), ['sendAction', 'sendAction'], 'the sender is defined once and handed only to the page actions');
   assert.match(app, /createPageActions\(\{\s*t, send: sendAction,/);
@@ -136,7 +141,7 @@ test('the page sends dashboard actions only through its page actions', () => {
   assert.match(app, /wireSettingsConfirmations\(\{\s*document, t, runner: pageActions\(\),/);
 });
 
-test('the observer page and read-only state use the same viewed-machine access', () => {
+test('page script text: the observer page and read-only state use the same viewed-machine access', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   assert.deepEqual(app.match(/observerPageUsable\([^)]*\)/g), ['observerPageUsable(status, viewedMachine()'], 'the observer page is given the viewed machine as it is');
   assert.match(app, /function remoteIsReadOnly\(\) \{\s*const viewed = viewedMachine\(\);\s*return viewed\.viewingRemote && viewed\.access !== 'admin';\s*\}/);

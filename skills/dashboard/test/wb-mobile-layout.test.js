@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-// Phone layout rules read from the shipped stylesheet and page; the rendered sizes are measured in a browser
-// for each change (1280 and 390 wide, light and dark), so these only keep the rules from being dropped.
+// Text checks of the shipped stylesheet and page: quick guards that the phone layout rules are still there.
+// They do not render anything. The rendered result (no control under 40px, no sideways scrolling, the two-row
+// detail header, the memory list and file screens, schedule numbers 3+3) is measured by the opt-in browser
+// case in workbench-browser.test.js.
 const read = path => fs.readFileSync(new URL('../public/' + path, import.meta.url), 'utf8');
 const css = read('css/wb.css'), html = read('index.html'), app = read('js/app.js');
 
@@ -21,7 +23,7 @@ function phoneRules(source) {
 }
 const phone = phoneRules(css);
 
-test('on phones every control a finger taps is at least 40px, icon-only buttons 40px wide', () => {
+test('stylesheet: on phones every control a finger taps is at least 40px, icon-only buttons 40px wide', () => {
   const rule = phone.match(/:is\(([^)]*)\)\s*:is\(button, select, summary, a\.wb-btn, input[^{]*\{ min-height: 40px; \}/);
   assert.ok(rule, 'one rule sets the minimum height of tappable controls');
   for (const area of ['.app-header', '#fleet-view', '#tab-overview', '#tab-memory', '#tab-observer', '#tab-trends', '#tab-schedule', '#tab-settings', '.wb-modal']) {
@@ -34,7 +36,7 @@ test('on phones every control a finger taps is at least 40px, icon-only buttons 
   assert.match(phone, /\.memory-file, \.wb-memory-group-h, \.wb-memory-section-h \{ min-height: 40px; \}/);
 });
 
-test('on phones the memory file list and the open file each take the screen, with a way back', () => {
+test('stylesheet: on phones the memory file list and the open file each take the screen, with a way back', () => {
   assert.match(html, /<button class="memory-back wb-btn" id="memory-back" type="button">[\s\S]*?data-i18n="memory\.back"/);
   for (const locale of ['en', 'zh']) assert.ok(JSON.parse(read(`i18n/${locale}.json`))['memory.back'], locale + ' names the way back');
   assert.match(css, /^\.memory-back \{ display: none; \}/m, 'wider screens show both panes and no back button');
@@ -49,15 +51,15 @@ test('on phones the memory file list and the open file each take the screen, wit
   assert.equal(app.match(/filePaneOpen: false/g)?.length, 2, 'a fresh page and a reset both start on the list');
 });
 
-test('raw memory text wraps instead of scrolling sideways', () => {
+test('stylesheet: raw memory text wraps instead of scrolling sideways', () => {
   assert.match(css, /^\.memory-raw \{ white-space: pre-wrap; overflow-wrap: anywhere; \}/m);
 });
 
-test('on phones the schedule timeline labels are at least 11px', () => {
+test('stylesheet: on phones the schedule timeline labels are at least 11px', () => {
   assert.match(phone, /\.wb-sched-lane \.wb-sched-axis, \.wb-sched-lane \.wb-sched-axis span \{ font-size: 11px; \}/);
 });
 
-test('wider screens keep detail headers on one row; phones give the title its own row and put state and actions under it', () => {
+test('stylesheet: wider screens keep detail headers on one row; phones give the title its own row and put state and actions under it', () => {
   assert.match(css, /^\.wb-d-sub \{ display: contents; \}/m, 'on wider screens the state and actions stay in the title row');
   assert.match(phone, /\.wb-d-top:has\(> \.wb-d-sub\) \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\) auto;/);
   assert.match(phone, /\.wb-d-top:has\(> \.wb-d-sub\) > :last-child \{ grid-column: 3; grid-row: 1; \}/, 'closing stays on the title row');
@@ -65,17 +67,17 @@ test('wider screens keep detail headers on one row; phones give the title its ow
   assert.doesNotMatch(phone, /\.wb-d-top[^{]*\{[^}]*margin-left: \d+px/, 'the second row is aligned by the grid, not a fixed indent');
 });
 
-test('on phones overview rows are two columns: the group on the left, its state on the right, the rest full width', () => {
+test('stylesheet: on phones overview rows are two columns: the group on the left, its state on the right, the rest full width', () => {
   assert.match(phone, /\.wb-row, html\[data-detail=technical\] \.wb-row \{ grid-template-columns: minmax\(0, 1fr\) auto;/);
   assert.match(phone, /\.wb-row > \.wb-pill \{ grid-column: 2; justify-self: end; \}/);
   assert.match(phone, /\.wb-row > \.wb-current, \.wb-row > \.wb-activity \{ grid-column: 1 \/ -1; \}/);
 });
 
-test('on phones the six schedule numbers form three columns by two rows', () => {
+test('stylesheet: on phones the six schedule numbers form three columns by two rows', () => {
   assert.match(phone, /\.wb-sched-kpi \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
 });
 
-test('on phones the open memory file keeps its header compact: back, path and scope on one row', () => {
+test('stylesheet: on phones the open memory file keeps its header compact: back, path and scope on one row', () => {
   assert.match(phone, /#tab-memory\.memory-file-open \.memory-viewer-head \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\);/);
   assert.match(phone, /#tab-memory\.memory-file-open \.memory-back \{ grid-column: 1; grid-row: 1;[^}]*width: 40px;/);
   assert.match(phone, /#tab-memory\.memory-file-open \.memory-viewer-title \{ grid-column: 2; grid-row: 1; \}/);
