@@ -350,6 +350,7 @@ const VIEW_SCHEMA = {
 
 function blockSchemaWithHostDefinitions() {
   const schema = clone(BLOCK_SCHEMA);
+  schema.properties.type.enum.push('x-zylos.image', 'x-zylos.file');
   schema.properties.schemaVersion = { enum: [1, 2] };
   const formRule = schema.allOf.find(rule => rule.if?.properties?.type?.const === 'form_intent');
   formRule.if.properties.schemaVersion = { const: 1 };
@@ -360,6 +361,16 @@ function blockSchemaWithHostDefinitions() {
   schema.$defs.formFieldV2.properties.activeWhen = { $ref: '#/$defs/activeWhen' };
   schema.$defs.formIntentDataV2 = clone(schema.$defs.formIntentData);
   schema.$defs.formIntentDataV2.properties.fields.items = { $ref: '#/$defs/formFieldV2' };
+  schema.$defs.attachmentData = {
+    type: 'object', required: ['attachmentId', 'nameSnapshot'], additionalProperties: false,
+    // Match the existing attachment service's ID grammar and display-name cap.
+    properties: { attachmentId: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,128}$' },
+      nameSnapshot: { type: 'string', minLength: 1, maxLength: 160 } },
+  };
+  for (const type of ['x-zylos.image', 'x-zylos.file']) {
+    schema.allOf.push({ if: { properties: { type: { const: type } } },
+      then: { properties: { schemaVersion: { const: 1 }, data: { $ref: '#/$defs/attachmentData' } } } });
+  }
   return schema;
 }
 
@@ -376,6 +387,15 @@ COMPONENT_CATALOG.push({ type: 'form_intent', schemaVersion: 2, dataSchema: 'for
     interruptId: 'interrupt_conditional_form_question', questionSummary: '登记主体信息',
     interrupt: { blockId: 'question', reason: 'input_required' } },
 });
+
+for (const [kind, name] of [['image', 'diagram.png'], ['file', 'report.pdf']]) {
+  COMPONENT_CATALOG.push({ type: `x-zylos.${kind}`, schemaVersion: 1, dataSchema: 'attachmentData', interactive: false,
+    description: `A registered ${kind} attachment. Register on the target instance first; data contains only attachmentId and nameSnapshot. The ID does not grant download permission. Keep the filename and ID in fallbackText.`,
+    example: { version: 1, kind: 'message', messageId: `attachment_${kind}_message`,
+      fallbackText: `${name} (attachment att_${kind})`, blocks: [{ id: kind, type: `x-zylos.${kind}`, schemaVersion: 1,
+        data: { attachmentId: `att_${kind}`, nameSnapshot: name }, fallbackText: `${name} (attachment att_${kind})` }] },
+  });
+}
 
 // Static renderer implementations shipped with this Core version. A catalog
 // entry alone is never an implementation claim. Rendering tests cover each key.

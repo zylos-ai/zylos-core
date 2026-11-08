@@ -35,6 +35,12 @@ function setup(t) {
     if (name === 'comm-bridge') fs.copyFileSync(path.join(source, 'init-db.sql'), path.join(dest, 'init-db.sql'));
     else fs.cpSync(path.join(source, 'src/lib'), path.join(dest, 'src/lib'), { recursive: true });
   }
+  // The attachment service imports only WC's existing shared utility, not its server.
+  const utility = path.join(skills, 'web-console');
+  fs.mkdirSync(path.join(utility, 'scripts'), { recursive: true });
+  fs.copyFileSync(path.join(core, 'skills/web-console/package.json'), path.join(utility, 'package.json'));
+  fs.copyFileSync(path.join(core, 'skills/web-console/scripts/attachment-utils.js'), path.join(utility, 'scripts/attachment-utils.js'));
+  fs.symlinkSync(fs.realpathSync(path.join(core, 'skills/web-console/node_modules')), path.join(utility, 'node_modules'));
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'pm2'), TMPDIR: tmp,
     TMUX_TMPDIR: tmp, PATH: bin, ZYLOS_PACKAGE_ROOT: core, ZYLOS_SESSION_GROUP: 'origin',
     CHANNEL_SEND_LOG: path.join(root, 'sends'), CHANNEL_HTTP_LOG: path.join(root, 'http'),
@@ -109,7 +115,16 @@ test('Core status notification traverses the real Dashboard receiver without HTT
   noHttpOrDashboard(f);
 });
 
-for (const [name, content] of [['marked content', CONTENT_PREFIX + '{}'], ['oversized Unicode', '😀'.repeat(MAX_CONTENT_BYTES / 4) + 'a']]) {
+const attachmentContent = data => CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message',
+  messageId: 'attachment_reference', fallbackText: 'report.txt', blocks: [{ id: 'file', type: 'x-zylos.file', schemaVersion: 1,
+    data, fallbackText: 'report.txt' }] });
+for (const [name, content] of [
+  ['marked content', CONTENT_PREFIX + '{}'], ['oversized Unicode', '😀'.repeat(MAX_CONTENT_BYTES / 4) + 'a'],
+  ['attachment path', attachmentContent({ path: '/tmp/source.txt', nameSnapshot: 'report.txt' })],
+  ['attachment URL', attachmentContent({ attachmentId: 'missing', nameSnapshot: 'report.txt', url: 'https://example.invalid/report.txt' })],
+  ['unknown attachment data', attachmentContent({ attachmentId: 'missing', nameSnapshot: 'report.txt', size: 10 })],
+  ['missing attachment ID', attachmentContent({ nameSnapshot: 'report.txt' })],
+]) {
   // Boundary: actual pre-storage hook rejection. Run on Core/hook/transport changes; skip for UI-only edits.
   test(`Real send rejects ${name} before storage or receiver invocation`, t => {
     const f = setup(t), result = f.send(content);

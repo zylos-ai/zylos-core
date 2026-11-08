@@ -60,3 +60,16 @@ test('valid degraded and overdeep Views leave memory projection byte-identical',
     assert.equal(expected.includes('截断，全文见 #7'), long);
   }
 });
+
+// Actual state formatter after attachment schema changes; no memory-store IO.
+test('working state preserves attachment filenames and IDs while omitting source and storage metadata', () => {
+  const shared = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/attachment-blocks.json', import.meta.url), 'utf8'));
+  const content = CONTENT_PREFIX + JSON.stringify(shared.mixed), rows = [row(content)];
+  const before = JSON.stringify(rows), text = render(rows);
+  assert.ok(text.includes(escapeText(projectC4Content(content, { c4Id: 7 }))));
+  for (const visible of ['diagram.png', 'att_image', 'report.pdf', 'att_file']) assert.ok(text.includes(visible));
+  for (const hidden of ['ATTACHMENT_STORAGE_METADATA', 'ATTACHMENT_SOURCE_PATH', 'sourcePath', 'nameSnapshot', '[C4-JSON]']) {
+    assert.equal(text.includes(hidden), false, hidden);
+  }
+  assert.equal(JSON.stringify(rows), before);
+});

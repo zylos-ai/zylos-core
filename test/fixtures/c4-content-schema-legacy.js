@@ -1,0 +1,316 @@
+/*
+Protocol constraints adapted from zz-howard/chatweave @ 03e69a4435ce2f4913ed28884509f3db64d6ebcf,
+schemas/v0.1/content-block.schema.json and action.schema.json.
+
+MIT License
+
+Copyright (c) 2026 Howard Zhou
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+export const CONTENT_PREFIX = '[C4-JSON]\n';
+export const MAX_CONTENT_BYTES = 65536;
+const encoder = new TextEncoder();
+const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const chars = value => [...value].length;
+const string = (value, minimum = 0, maximum = Infinity) => typeof value === 'string' && chars(value) >= minimum && chars(value) <= maximum;
+const keys = (value, required, optional = []) => object(value)
+  && required.every(key => own(value, key))
+  && Object.keys(value).every(key => required.includes(key) || optional.includes(key));
+const id = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
+const byteLength = value => encoder.encode(value).byteLength;
+const whitespace = /^[ \t\r\n]*$/;
+const blockTypes = ['markdown', 'time_series', 'breakdown', 'category_series', 'choice', 'confirmation', 'form_intent'];
+const interactive = ['choice', 'confirmation', 'form_intent'];
+
+function date(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  return month >= 1 && month <= 12 && day >= 1 && day <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+}
+function dateTime(value) {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  return !!match && date(match[1]) && +match[2] < 24 && +match[3] < 60 && +match[4] <= 60
+    && (!match[5] || (+match[6] < 24 && +match[7] < 60));
+}
+function formatValid(name, value) {
+  if (name === 'date') return date(value);
+  if (name === 'date-time') return dateTime(value);
+  if (name === 'uri') { try { return !!new URL(value).protocol; } catch { return false; } }
+  return false;
+}
+function typeValid(type, value) {
+  if (type === 'object') return object(value);
+  if (type === 'array') return Array.isArray(value);
+  if (type === 'null') return value === null;
+  if (type === 'integer') return Number.isInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  return typeof value === type;
+}
+function reference(ref, document) {
+  const [name, pointer = ''] = ref.split('#');
+  const source = name === 'action.schema.json' ? ACTION_SCHEMA : name === 'content-block.schema.json' ? BLOCK_SCHEMA : document;
+  return { document: source, schema: pointer.split('/').slice(1).reduce((value, part) => value?.[part.replaceAll('~1', '/').replaceAll('~0', '~')], source) };
+}
+// Internal interpreter for the fixed, embedded schema subset below. It is not
+// a public or general-purpose JSON Schema evaluator and never evaluates code.
+function matches(schema, value, document) {
+  if (typeof schema === 'boolean') return schema;
+  if (!object(schema)) return false;
+  if (schema.$ref) {
+    const ref = reference(schema.$ref, document);
+    if (!matches(ref.schema, value, ref.document)) return false;
+  }
+  if (own(schema, 'const') && value !== schema.const) return false;
+  if (schema.enum && !schema.enum.includes(value)) return false;
+  if (schema.type && !(Array.isArray(schema.type) ? schema.type : [schema.type]).some(type => typeValid(type, value))) return false;
+  if (typeof value === 'string') {
+    if (schema.minLength !== undefined && chars(value) < schema.minLength) return false;
+    if (schema.maxLength !== undefined && chars(value) > schema.maxLength) return false;
+    if (schema.pattern && !new RegExp(schema.pattern, 'u').test(value)) return false;
+    if (schema.format && !formatValid(schema.format, value)) return false;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || (schema.minimum !== undefined && value < schema.minimum) || (schema.maximum !== undefined && value > schema.maximum)) return false;
+  }
+  if (object(value)) {
+    if (schema.required?.some(key => !own(value, key))) return false;
+    const names = Object.keys(value);
+    if (schema.maxProperties !== undefined && names.length > schema.maxProperties) return false;
+    if (schema.minProperties !== undefined && names.length < schema.minProperties) return false;
+    for (const name of names) {
+      if (schema.propertyNames && !matches(schema.propertyNames, name, document)) return false;
+      if (schema.properties && own(schema.properties, name)) {
+        if (!matches(schema.properties[name], value[name], document)) return false;
+      } else if (schema.additionalProperties === false) return false;
+      else if (object(schema.additionalProperties) && !matches(schema.additionalProperties, value[name], document)) return false;
+    }
+  }
+  if (Array.isArray(value)) {
+    if (schema.minItems !== undefined && value.length < schema.minItems) return false;
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) return false;
+    if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) return false;
+    if (schema.items && value.some(item => !matches(schema.items, item, document))) return false;
+  }
+  if (schema.allOf?.some(item => !matches(item, value, document))) return false;
+  if (schema.anyOf && !schema.anyOf.some(item => matches(item, value, document))) return false;
+  if (schema.oneOf && schema.oneOf.filter(item => matches(item, value, document)).length !== 1) return false;
+  if (schema.not && matches(schema.not, value, document)) return false;
+  if (schema.if && !matches(matches(schema.if, value, document) ? schema.then ?? true : schema.else ?? true, value, document)) return false;
+  return true;
+}
+function dataLimits(value) {
+  const queue = [{ value, depth: 1 }];
+  let nodes = 0;
+  while (queue.length) {
+    const item = queue.pop();
+    if (++nodes > 5000 || item.depth > 6) return false;
+    if (object(item.value) || Array.isArray(item.value)) {
+      for (const child of Object.values(item.value)) queue.push({ value: child, depth: item.depth + 1 });
+    }
+  }
+  return byteLength(JSON.stringify(value)) <= 65536;
+}
+function withinMetadataDepth(value) {
+  const stack = [{ value, depth: 1 }];
+  while (stack.length) {
+    const item = stack.pop();
+    if (item.depth > 6) return false;
+    if (object(item.value) || Array.isArray(item.value)) {
+      for (const child of Object.values(item.value)) stack.push({ value: child, depth: item.depth + 1 });
+    }
+  }
+  return true;
+}
+function boundedBlockNodes(block) {
+  const queue = [block]; let nodes = 0;
+  while (queue.length) {
+    const value = queue.pop();
+    if (++nodes > 5000) return false;
+    if (object(value) || Array.isArray(value)) queue.push(...Object.values(value));
+  }
+  return true;
+}
+function validBlock(block) {
+  if (!matches(BLOCK_SCHEMA, block, BLOCK_SCHEMA) || !blockTypes.includes(block.type) || block.schemaVersion !== 1) return false;
+  if (!boundedBlockNodes(block)) return false;
+  if (block.metadata?.provenance === 'adapter' && block.type !== 'markdown') return false;
+  if (block.data && !dataLimits(block.data)) return false;
+  return block.type !== 'markdown' || !block.data || byteLength(block.data.text) <= 32768;
+}
+
+export function normalizeHookMessage(value) {
+  return typeof value === 'string' ? [...value.replace(/[\r\n\u2028\u2029]/gu, ' ')].slice(0, 500).join('') : '';
+}
+export function makeQuestionSummary(envelope) {
+  const block = Array.isArray(envelope?.blocks) ? envelope.blocks.find(item => item.id === envelope.interrupt?.blockId) : null;
+  const source = [block?.fallbackText, block?.data?.prompt, block?.data?.title, block?.data?.purpose, envelope?.fallbackText]
+    .find(value => typeof value === 'string' && value.trim());
+  return typeof source === 'string' ? [...source.replace(/\s+/gu, ' ').trim()].slice(0, 500).join('') : '';
+}
+function validAction(action) {
+  return matches(ACTION_SCHEMA.$defs.actionRequest, action, ACTION_SCHEMA) && action.protocolVersion === '0.1';
+}
+function validEnvelope(envelope) {
+  if (!object(envelope) || envelope.version !== 1 || !id(envelope.messageId) || !string(envelope.fallbackText, 1, 16000)) return false;
+  if (envelope.kind === 'message') {
+    if (!keys(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'blocks'], ['metadata', 'interruptId', 'questionSummary', 'interrupt'])
+      || !Array.isArray(envelope.blocks) || envelope.blocks.length > 64 || !envelope.blocks.every(validBlock)
+      || new Set(envelope.blocks.map(block => block.id)).size !== envelope.blocks.length
+      || (own(envelope, 'metadata') && (!object(envelope.metadata) || !withinMetadataDepth(envelope.metadata)))) return false;
+    const questionKeys = ['interruptId', 'questionSummary', 'interrupt'];
+    if (questionKeys.every(key => !own(envelope, key))) return true;
+    if (!questionKeys.every(key => own(envelope, key)) || !id(envelope.interruptId) || !string(envelope.questionSummary, 1, 500)
+      || !keys(envelope.interrupt, ['blockId', 'reason'], ['otherInput'])
+      || !['confirmation', 'input_required'].includes(envelope.interrupt.reason)
+      || (own(envelope.interrupt, 'otherInput') && typeof envelope.interrupt.otherInput !== 'boolean')) return false;
+    const block = envelope.blocks.find(item => item.id === envelope.interrupt.blockId);
+    return !!block && interactive.includes(block.type) && (block.status ?? 'complete') === 'complete' && object(block.data) && (block.data.state?.status ?? 'open') === 'open'
+      && envelope.interrupt.reason === (block.type === 'confirmation' ? 'confirmation' : 'input_required')
+      && envelope.questionSummary === makeQuestionSummary(envelope);
+  }
+  if (envelope.kind === 'answer') {
+    return keys(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'interruptId', 'questionSummary', 'action', 'metadata'])
+      && id(envelope.interruptId) && string(envelope.questionSummary, 1, 500) && validAction(envelope.action)
+      && keys(envelope.metadata, ['zylos']) && keys(envelope.metadata.zylos, ['answerId'])
+      && envelope.metadata.zylos.answerId === envelope.action.id;
+  }
+  if (envelope.kind === 'control') {
+    if (!keys(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'interruptId', 'control']) || !id(envelope.interruptId)) return false;
+    const control = envelope.control;
+    return object(control) && id(control.messageId)
+      && (control.operation === 'stop' ? keys(control, ['operation', 'messageId'])
+        : control.operation === 'replace' && keys(control, ['operation', 'messageId', 'replacementInterruptId'])
+          && id(control.replacementInterruptId));
+  }
+  return false;
+}
+
+function jsonEnd(source, start) {
+  if (source[start] !== '{') return -1;
+  const stack = []; let quoted = false, escaped = false;
+  for (let index = start; index < source.length; index++) {
+    const char = source[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') quoted = true;
+    else if (char === '{' || char === '[') stack.push(char);
+    else if (char === '}' || char === ']') {
+      if (stack.pop() !== (char === '}' ? '{' : '[')) return -1;
+      if (!stack.length) return index + 1;
+    }
+  }
+  return -1;
+}
+export function parseC4Content(content) {
+  if (typeof content !== 'string') return { kind: 'invalid', reason: 'content_type' };
+  if (!content.startsWith(CONTENT_PREFIX)) return { kind: 'text', text: content };
+  if (byteLength(content) > MAX_CONTENT_BYTES) return { kind: 'invalid', reason: 'content_too_large' };
+  try {
+    let start = CONTENT_PREFIX.length;
+    while (start < content.length && /[ \t\r\n]/.test(content[start])) start++;
+    const end = jsonEnd(content, start);
+    if (end < 0) return { kind: 'invalid', reason: 'invalid_json' };
+    let envelope;
+    try { envelope = JSON.parse(content.slice(start, end)); }
+    catch { return { kind: 'invalid', reason: 'invalid_json' }; }
+    const tail = content.slice(end);
+    const suffixMatch = /^[ \t\r\n]*(\n\n\[C4\] Status notification suppressed by cooldown while health=([^\n]*)\.)[ \t\r\n]*$/.exec(tail);
+    if (!whitespace.test(tail)) {
+      const fields = suffixMatch?.[2];
+      const separator = fields?.indexOf(' reason=', 1) ?? -1;
+      if (separator < 1 || separator + ' reason='.length >= fields.length) return { kind: 'invalid', reason: 'invalid_suffix' };
+    }
+    if (!validEnvelope(envelope)) return { kind: 'invalid', reason: 'invalid_envelope' };
+    return { kind: 'envelope', envelope, suffix: suffixMatch?.[1] ?? '' };
+  } catch { return { kind: 'invalid', reason: 'invalid_envelope' }; }
+}
+
+function validFieldValue(field, value) {
+  if (value == null) return field.required !== true;
+  if (['text', 'multiline_text'].includes(field.type)) return string(value, 0, field.maxLength ?? 2000);
+  if (['number', 'integer'].includes(field.type)) return typeof value === 'number' && Number.isFinite(value)
+    && (field.type !== 'integer' || Number.isInteger(value)) && (field.min === undefined || value >= field.min) && (field.max === undefined || value <= field.max);
+  if (field.type === 'boolean') return typeof value === 'boolean';
+  if (field.type === 'date') return date(value);
+  if (field.type === 'datetime') return dateTime(value);
+  if (field.type === 'single_select') return field.options.some(option => option.id === value);
+  if (field.type === 'multi_select') return Array.isArray(value) && new Set(value).size === value.length && value.every(id => field.options.some(option => option.id === id));
+  return false;
+}
+export function validateAnswer(action, questionEnvelope) {
+  try {
+    if (!validAction(action) || !validEnvelope(questionEnvelope) || questionEnvelope.kind !== 'message' || !questionEnvelope.interrupt) return false;
+    const block = questionEnvelope.blocks.find(item => item.id === questionEnvelope.interrupt.blockId), data = block.data;
+    if (action.context.messageId !== questionEnvelope.messageId || action.context.blockId !== block.id
+      || action.type !== data.action.type || action.target !== data.action.target || (data.state?.status ?? 'open') !== 'open') return false;
+    const payload = action.payload;
+    if (own(payload, 'freeText')) return questionEnvelope.interrupt.otherInput !== false;
+    if (block.type === 'choice') {
+      const selected = payload.selected;
+      return ((data.selection ?? 'single') !== 'single' || selected.length === 1)
+        && selected.length >= (data.minSelect ?? 1) && selected.length <= (data.maxSelect ?? data.options.length)
+        && selected.every(value => data.options.some(option => option.id === value));
+    }
+    if (block.type === 'confirmation') return ['confirm', 'cancel'].includes(payload.outcome);
+    if (block.type === 'form_intent') return Object.keys(payload.values).every(key => data.fields.some(field => field.key === key))
+      && data.fields.every(field => validFieldValue(field, own(payload.values, field.key) ? payload.values[field.key] : undefined));
+    return false;
+  } catch { return false; }
+}
+export function validateHookInput(value) {
+  if (!keys(value, ['version', 'hook_event_name', 'hook_id', 'request_id', 'invocation_id', 'request', 'context'])
+    || value.version !== 1 || value.hook_event_name !== 'BeforeSend'
+    || !['hook_id', 'request_id', 'invocation_id'].every(key => string(value[key], 1))) return false;
+  if (!keys(value.request, ['channel', 'endpoint', 'content', 'options']) || !string(value.request.channel, 1)
+    || !(value.request.endpoint === null || typeof value.request.endpoint === 'string')
+    || typeof value.request.content !== 'string' || !keys(value.request.options, [], ['groupName', 'wholeGroup'])
+    || (own(value.request.options, 'groupName') && typeof value.request.options.groupName !== 'string')
+    || (own(value.request.options, 'wholeGroup') && typeof value.request.options.wholeGroup !== 'boolean')) return false;
+  return keys(value.context, [], ['component', 'session_group', 'runtime', 'session_id', 'run_id'])
+    && Object.values(value.context).every(item => string(item, 1));
+}
+export function validateHookOutput(value) {
+  if (!object(value) || value.version !== 1) return false;
+  if (value.decision === 'continue') return keys(value, ['version', 'decision']);
+  return value.decision === 'abort' && keys(value, ['version', 'decision', 'message']) && typeof value.message === 'string';
+}
+function sqliteId(value) {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,18}$/.test(value)) return null;
+  return value.length < 19 || value <= '9223372036854775807' ? value : null;
+}
+export function validateDeliveryPacket(packet, row) {
+  return keys(packet, ['version', 'c4_id', 'channel', 'endpoint_id', 'session_group', 'content']) && packet.version === 1
+    && object(row) && sqliteId(packet.c4_id) !== null && sqliteId(packet.c4_id) === sqliteId(row.id)
+    && string(packet.channel, 1) && (packet.endpoint_id === null || typeof packet.endpoint_id === 'string')
+    && typeof packet.session_group === 'string' && typeof packet.content === 'string'
+    && ['channel', 'endpoint_id', 'session_group', 'content'].every(key => packet[key] === row[key]);
+}
+
+// Embedded, fixed ChatWeave schema subset; no runtime schema fetch or imports.
+const BLOCK_SCHEMA = {"type":"object","required":["id","type","schemaVersion"],"additionalProperties":false,"properties":{"id":{"$ref":"#/$defs/blockId"},"type":{"enum":["markdown","time_series","breakdown","category_series","choice","confirmation","form_intent"]},"schemaVersion":{"const":1},"data":{"type":"object"},"fallbackText":{"type":"string","maxLength":2000},"metadata":{"$ref":"#/$defs/blockMetadata"},"status":{"type":"string","enum":["complete","pending","error"]},"reason":{"type":"string","maxLength":500}},"allOf":[{"if":{"properties":{"type":{"not":{"const":"markdown"}}}},"then":{"required":["fallbackText"]}},{"if":{"properties":{"type":{"const":"markdown"}}},"then":{"properties":{"data":{"$ref":"#/$defs/markdownData"}}}},{"if":{"properties":{"type":{"const":"time_series"}}},"then":{"properties":{"data":{"$ref":"#/$defs/timeSeriesData"}}}},{"if":{"properties":{"type":{"const":"breakdown"}}},"then":{"properties":{"data":{"$ref":"#/$defs/breakdownData"}}}},{"if":{"properties":{"type":{"const":"category_series"}}},"then":{"properties":{"data":{"$ref":"#/$defs/categorySeriesData"}}}},{"if":{"properties":{"type":{"const":"choice"}}},"then":{"properties":{"data":{"$ref":"#/$defs/choiceData"}}}},{"if":{"properties":{"type":{"const":"confirmation"}}},"then":{"properties":{"data":{"$ref":"#/$defs/confirmationData"}}}},{"if":{"properties":{"type":{"const":"form_intent"}}},"then":{"properties":{"data":{"$ref":"#/$defs/formIntentData"}}}},{"if":{"properties":{"status":{"enum":["pending","error"]}},"required":["status"]},"then":{"required":["fallbackText"]},"else":{"required":["data"]}},{"if":{"properties":{"status":{"const":"error"}},"required":["status"]},"else":{"not":{"required":["reason"]}}},{"if":{"properties":{"metadata":{"properties":{"provenance":{"const":"adapter"}},"required":["provenance"]}},"required":["metadata"]},"then":{"properties":{"type":{"const":"markdown"}}}}],"$defs":{"blockId":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"key":{"type":"string","pattern":"^[a-z][a-z0-9_]{0,31}$"},"label":{"type":"string","minLength":1,"maxLength":120},"shortLabel":{"type":"string","minLength":1,"maxLength":24},"text":{"type":"string","maxLength":2000},"unit":{"type":"string","minLength":1,"maxLength":32},"scalar":{"type":["number","string","boolean","null"],"maxLength":500},"temporal":{"type":"string","anyOf":[{"format":"date"},{"format":"date-time"}]},"assessment":{"type":"object","required":["status"],"additionalProperties":false,"properties":{"status":{"type":"string","enum":["positive","negative","warning","critical","neutral","info"]},"label":{"$ref":"#/$defs/label"},"detail":{"$ref":"#/$defs/text"}}},"valueFormat":{"type":"object","additionalProperties":false,"properties":{"style":{"type":"string","enum":["decimal","integer","percent","currency","duration"]},"currency":{"type":"string","pattern":"^[A-Z]{3}$"},"minorUnits":{"type":"boolean"},"maximumFractionDigits":{"type":"integer","minimum":0,"maximum":6}}},"blockMetadata":{"type":"object","additionalProperties":false,"properties":{"provenance":{"type":"string","enum":["model","tool","host","adapter"]},"asOf":{"type":"string","format":"date-time"},"citations":{"type":"array","maxItems":10,"items":{"type":"object","required":["label"],"additionalProperties":false,"properties":{"label":{"$ref":"#/$defs/label"},"url":{"type":"string","format":"uri","maxLength":2000},"ref":{"type":"string","maxLength":128}}}},"host":{"type":"object","maxProperties":16}}},"blockState":{"type":"object","required":["status"],"additionalProperties":false,"properties":{"status":{"type":"string","enum":["open","resolved","expired","cancelled","superseded"]},"selected":{"type":"array","maxItems":10,"items":{"$ref":"action.schema.json#/$defs/optionId"},"minItems":1,"uniqueItems":true},"freeText":{"type":"string","maxLength":500,"minLength":1},"outcome":{"type":"string","enum":["confirm","cancel"]},"values":{"type":"object","maxProperties":12},"resolvedBy":{"type":"string","minLength":1,"maxLength":128},"resolvedAt":{"type":"string","format":"date-time"},"supersededBy":{"type":"string","maxLength":200},"reason":{"type":"object","required":["code"],"additionalProperties":false,"properties":{"code":{"type":"string","enum":["withdrawn","policy","record_changed","record_deleted","permission_changed","stopped","other"]},"text":{"type":"string","maxLength":200}}},"note":{"$ref":"#/$defs/text"}},"allOf":[{"if":{"properties":{"status":{"const":"resolved"}},"required":["status"]},"then":{"required":["resolvedAt"]}},{"if":{"properties":{"status":{"const":"cancelled"}},"required":["status"]},"then":{"required":["reason"]}},{"if":{"properties":{"status":{"enum":["cancelled","expired","superseded"]}},"required":["status"]},"then":{"not":{"required":["resolvedBy"]}}},{"if":{"properties":{"status":{"enum":["open","resolved"]}},"required":["status"]},"then":{"not":{"required":["reason"]}}},{"if":{"properties":{"status":{"const":"resolved"}},"required":["status"]},"then":{"oneOf":[{"required":["selected"],"not":{"anyOf":[{"required":["outcome"]},{"required":["values"]},{"required":["freeText"]}]}},{"required":["outcome"],"not":{"anyOf":[{"required":["selected"]},{"required":["values"]},{"required":["freeText"]}]}},{"required":["values"],"not":{"anyOf":[{"required":["selected"]},{"required":["outcome"]},{"required":["freeText"]}]}},{"required":["freeText"],"not":{"anyOf":[{"required":["selected"]},{"required":["outcome"]},{"required":["values"]}]}}]},"else":{"not":{"anyOf":[{"required":["selected"]},{"required":["outcome"]},{"required":["values"]},{"required":["freeText"]},{"required":["resolvedAt"]},{"required":["resolvedBy"]}]}}},{"if":{"properties":{"status":{"const":"superseded"}},"required":["status"]},"then":{"required":["supersededBy"]},"else":{"not":{"required":["supersededBy"]}}}]},"markdownData":{"type":"object","required":["text"],"additionalProperties":false,"properties":{"text":{"type":"string","maxLength":32768}}},"timeSeriesData":{"type":"object","required":["xType","series"],"additionalProperties":false,"properties":{"title":{"$ref":"#/$defs/label"},"xType":{"type":"string","enum":["date","datetime","number","category"]},"xLabel":{"$ref":"#/$defs/label"},"yLabel":{"$ref":"#/$defs/label"},"yUnit":{"$ref":"#/$defs/unit"},"format":{"$ref":"#/$defs/valueFormat"},"series":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"object","required":["key","label","points"],"additionalProperties":false,"properties":{"key":{"$ref":"#/$defs/key"},"label":{"$ref":"#/$defs/label"},"unit":{"$ref":"#/$defs/unit"},"points":{"type":"array","maxItems":500,"items":{"type":"object","required":["x","y"],"additionalProperties":false,"properties":{"x":{"type":["string","number"],"maxLength":64},"y":{"type":["number","null"]}}}}}}},"summary":{"$ref":"#/$defs/text"}}},"breakdownData":{"type":"object","required":["parts"],"additionalProperties":false,"properties":{"title":{"$ref":"#/$defs/label"},"unit":{"$ref":"#/$defs/unit"},"format":{"$ref":"#/$defs/valueFormat"},"parts":{"type":"array","minItems":2,"maxItems":12,"items":{"type":"object","required":["key","label","value"],"additionalProperties":false,"properties":{"key":{"$ref":"#/$defs/key"},"label":{"$ref":"#/$defs/label"},"value":{"type":"number","minimum":0},"mergedCount":{"type":"integer","minimum":2}}}},"asOf":{"$ref":"#/$defs/temporal"},"summary":{"$ref":"#/$defs/text"}}},"categorySeriesData":{"type":"object","required":["points"],"additionalProperties":false,"properties":{"title":{"$ref":"#/$defs/label"},"xLabel":{"$ref":"#/$defs/label"},"yLabel":{"$ref":"#/$defs/label"},"unit":{"$ref":"#/$defs/unit"},"format":{"$ref":"#/$defs/valueFormat"},"points":{"type":"array","minItems":1,"maxItems":24,"items":{"type":"object","required":["key","label","value"],"additionalProperties":false,"properties":{"key":{"$ref":"#/$defs/key"},"label":{"$ref":"#/$defs/label"},"value":{"type":["number","null"]},"assessment":{"$ref":"#/$defs/assessment"}}}},"reference":{"type":"object","required":["label","value"],"additionalProperties":false,"properties":{"label":{"$ref":"#/$defs/label"},"value":{"type":"number"}}},"summary":{"$ref":"#/$defs/text"}}},"option":{"type":"object","required":["id","label"],"additionalProperties":false,"properties":{"id":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"label":{"$ref":"#/$defs/label"},"description":{"$ref":"#/$defs/text"}}},"choiceData":{"type":"object","required":["prompt","options","action"],"additionalProperties":false,"properties":{"prompt":{"$ref":"#/$defs/text"},"options":{"type":"array","minItems":2,"maxItems":10,"items":{"$ref":"#/$defs/option"}},"selection":{"type":"string","enum":["single","multiple"]},"minSelect":{"type":"integer","minimum":0,"maximum":10},"maxSelect":{"type":"integer","minimum":1,"maximum":10},"allowFreeText":{"type":"boolean"},"action":{"allOf":[{"$ref":"action.schema.json#/$defs/actionSpec"},{"properties":{"type":{"const":"choice.select"}}}]},"state":{"$ref":"#/$defs/blockState"}},"allOf":[{"properties":{"state":{"not":{"anyOf":[{"required":["outcome"]},{"required":["values"]}]}}}}]},"confirmationData":{"type":"object","required":["title","severity","action"],"additionalProperties":false,"properties":{"title":{"$ref":"#/$defs/label"},"body":{"$ref":"#/$defs/text"},"severity":{"type":"string","enum":["normal","destructive"]},"details":{"type":"array","maxItems":12,"items":{"type":"object","required":["label","value"],"additionalProperties":false,"properties":{"label":{"$ref":"#/$defs/label"},"value":{"$ref":"#/$defs/scalar"},"unit":{"$ref":"#/$defs/unit"},"format":{"$ref":"#/$defs/valueFormat"}}}},"confirmLabel":{"$ref":"#/$defs/shortLabel"},"cancelLabel":{"$ref":"#/$defs/shortLabel"},"action":{"allOf":[{"$ref":"action.schema.json#/$defs/actionSpec"},{"properties":{"type":{"const":"confirmation.respond"}}}]},"state":{"$ref":"#/$defs/blockState"}},"if":{"properties":{"action":{"properties":{"requiresConfirmation":{"const":true}},"required":["requiresConfirmation"]}}},"then":{"properties":{"severity":{"const":"destructive"}}},"allOf":[{"properties":{"state":{"not":{"anyOf":[{"required":["selected"]},{"required":["values"]}]}}}}]},"formField":{"type":"object","required":["key","label","type"],"additionalProperties":false,"properties":{"key":{"$ref":"#/$defs/key"},"label":{"$ref":"#/$defs/label"},"type":{"type":"string","enum":["text","multiline_text","number","integer","date","datetime","boolean","single_select","multi_select"]},"required":{"type":"boolean"},"options":{"type":"array","maxItems":20,"items":{"$ref":"#/$defs/option"}},"min":{"type":"number"},"max":{"type":"number"},"maxLength":{"type":"integer","minimum":1,"maximum":2000},"unit":{"$ref":"#/$defs/unit"},"placeholder":{"$ref":"#/$defs/label"},"help":{"$ref":"#/$defs/text"},"defaultValue":{"anyOf":[{"$ref":"#/$defs/scalar"},{"type":"array","maxItems":20,"items":{"type":"string","maxLength":64}}]}},"allOf":[{"if":{"properties":{"type":{"enum":["single_select","multi_select"]}}},"then":{"required":["options"],"properties":{"options":{"minItems":1}}}}]},"formIntentData":{"type":"object","required":["fields","action"],"additionalProperties":false,"properties":{"title":{"$ref":"#/$defs/label"},"purpose":{"$ref":"#/$defs/text"},"fields":{"type":"array","minItems":1,"maxItems":12,"items":{"$ref":"#/$defs/formField"}},"submitLabel":{"$ref":"#/$defs/shortLabel"},"action":{"allOf":[{"$ref":"action.schema.json#/$defs/actionSpec"},{"properties":{"type":{"const":"form.submit"}}}]},"state":{"$ref":"#/$defs/blockState"}},"allOf":[{"properties":{"state":{"not":{"anyOf":[{"required":["selected"]},{"required":["outcome"]}]}}}}]}}};
+const ACTION_SCHEMA = {"$defs":{"messageId":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},"blockId":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"optionId":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"actionId":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$"},"actionType":{"type":"string","enum":["choice.select","confirmation.respond","form.submit"]},"target":{"type":"string","pattern":"^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){0,3}$","maxLength":64},"actionSpec":{"type":"object","required":["type","target"],"additionalProperties":false,"properties":{"type":{"$ref":"#/$defs/actionType"},"target":{"$ref":"#/$defs/target"},"requiresConfirmation":{"type":"boolean"},"expiresAt":{"type":"string","format":"date-time"}},"if":{"properties":{"requiresConfirmation":{"const":true}},"required":["requiresConfirmation"]},"then":{"properties":{"type":{"const":"confirmation.respond"}}}},"actionContext":{"type":"object","required":["messageId","blockId"],"additionalProperties":false,"properties":{"conversationId":{"$ref":"#/$defs/messageId"},"messageId":{"$ref":"#/$defs/messageId"},"blockId":{"$ref":"#/$defs/blockId"}}},"choiceSelectPayload":{"type":"object","additionalProperties":false,"properties":{"selected":{"type":"array","items":{"$ref":"#/$defs/optionId"},"minItems":1,"maxItems":10,"uniqueItems":true},"freeText":{"$ref":"#/$defs/freeText"}},"oneOf":[{"required":["selected"]},{"required":["freeText"]}]},"freeText":{"type":"string","minLength":1,"maxLength":500},"confirmationRespondPayload":{"type":"object","additionalProperties":false,"properties":{"outcome":{"type":"string","enum":["confirm","cancel"]},"freeText":{"$ref":"#/$defs/freeText"}},"oneOf":[{"required":["outcome"]},{"required":["freeText"]}]},"formSubmitPayload":{"type":"object","additionalProperties":false,"oneOf":[{"required":["values"]},{"required":["freeText"]}],"properties":{"freeText":{"$ref":"#/$defs/freeText"},"values":{"type":"object","maxProperties":12,"propertyNames":{"pattern":"^[a-z][a-z0-9_]{0,31}$"},"additionalProperties":{"anyOf":[{"type":["string","number","boolean","null"],"maxLength":2000},{"type":"array","maxItems":20,"items":{"type":"string","maxLength":64}}]}}}},"actionRequest":{"type":"object","required":["id","protocolVersion","type","target","context","payload"],"additionalProperties":false,"properties":{"id":{"$ref":"#/$defs/actionId"},"protocolVersion":{"type":"string","pattern":"^[0-9]+\\.[0-9]+$"},"type":{"$ref":"#/$defs/actionType"},"target":{"$ref":"#/$defs/target"},"context":{"$ref":"#/$defs/actionContext"},"payload":{"type":"object"},"clientTs":{"type":"string","format":"date-time"}},"allOf":[{"if":{"properties":{"type":{"const":"choice.select"}}},"then":{"properties":{"payload":{"$ref":"#/$defs/choiceSelectPayload"}}}},{"if":{"properties":{"type":{"const":"confirmation.respond"}}},"then":{"properties":{"payload":{"$ref":"#/$defs/confirmationRespondPayload"}}}},{"if":{"properties":{"type":{"const":"form.submit"}}},"then":{"properties":{"payload":{"$ref":"#/$defs/formSubmitPayload"}}}}]}}};

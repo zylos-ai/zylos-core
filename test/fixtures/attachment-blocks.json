@@ -1,0 +1,184 @@
+{
+  "blocks": [
+    {
+      "id": "image",
+      "type": "x-zylos.image",
+      "schemaVersion": 1,
+      "data": {
+        "attachmentId": "att_image",
+        "nameSnapshot": "diagram.png"
+      },
+      "fallbackText": "图片：diagram.png（附件 att_image）"
+    },
+    {
+      "id": "file",
+      "type": "x-zylos.file",
+      "schemaVersion": 1,
+      "data": {
+        "attachmentId": "att_file",
+        "nameSnapshot": "report.pdf"
+      },
+      "fallbackText": "文件：report.pdf（附件 att_file）"
+    }
+  ],
+  "mixed": {
+    "version": 1,
+    "kind": "message",
+    "messageId": "mixed_attachments",
+    "fallbackText": "diagram.png（att_image）和 report.pdf（att_file）；选一个方案，等待用户回答。",
+    "blocks": [
+      {
+        "id": "text",
+        "type": "markdown",
+        "schemaVersion": 1,
+        "data": {
+          "text": "嵌套 { 字符 } 与 \\\" 引号；<img onerror=\"bad()\">"
+        }
+      },
+      {
+        "id": "image",
+        "type": "x-zylos.image",
+        "schemaVersion": 1,
+        "data": {
+          "attachmentId": "att_image",
+          "nameSnapshot": "diagram.png"
+        },
+        "fallbackText": "图片：diagram.png（附件 att_image）"
+      },
+      {
+        "id": "chart",
+        "type": "time_series",
+        "schemaVersion": 1,
+        "data": {
+          "xType": "date",
+          "series": [
+            {
+              "key": "usage",
+              "label": "用量",
+              "points": [
+                {
+                  "x": "2026-11-01",
+                  "y": 1
+                },
+                {
+                  "x": "2026-11-02",
+                  "y": null
+                }
+              ]
+            }
+          ]
+        },
+        "fallbackText": "用量图：首日1，次日未知"
+      },
+      {
+        "id": "question",
+        "type": "choice",
+        "schemaVersion": 1,
+        "data": {
+          "prompt": "选一个方案",
+          "options": [
+            {
+              "id": "a",
+              "label": "方案甲"
+            },
+            {
+              "id": "b",
+              "label": "方案乙"
+            }
+          ],
+          "action": {
+            "type": "choice.select",
+            "target": "clarification.answer"
+          }
+        },
+        "fallbackText": "选一个方案"
+      },
+      {
+        "id": "file",
+        "type": "x-zylos.file",
+        "schemaVersion": 1,
+        "data": {
+          "attachmentId": "att_file",
+          "nameSnapshot": "report.pdf"
+        },
+        "fallbackText": "文件：report.pdf（附件 att_file）"
+      }
+    ],
+    "interruptId": "interrupt_single_question",
+    "questionSummary": "选一个方案",
+    "interrupt": {
+      "blockId": "question",
+      "reason": "input_required"
+    },
+    "metadata": {
+      "internal": "ATTACHMENT_STORAGE_METADATA",
+      "sourcePath": "/tmp/ATTACHMENT_SOURCE_PATH"
+    }
+  },
+  "invalidData": [
+    {
+      "name": "missing_id",
+      "data": {
+        "nameSnapshot": "report.pdf"
+      }
+    },
+    {
+      "name": "missing_name",
+      "data": {
+        "attachmentId": "att_file"
+      }
+    },
+    {
+      "name": "empty_id",
+      "data": {
+        "attachmentId": "",
+        "nameSnapshot": "report.pdf"
+      }
+    },
+    {
+      "name": "empty_name",
+      "data": {
+        "attachmentId": "att_file",
+        "nameSnapshot": ""
+      }
+    },
+    {
+      "name": "non_string_id",
+      "data": {
+        "attachmentId": 4,
+        "nameSnapshot": "report.pdf"
+      }
+    },
+    {
+      "name": "non_string_name",
+      "data": {
+        "attachmentId": "att_file",
+        "nameSnapshot": 4
+      }
+    },
+    {
+      "name": "path",
+      "data": {
+        "attachmentId": "att_file",
+        "nameSnapshot": "report.pdf",
+        "path": "/tmp/private.pdf"
+      }
+    },
+    {
+      "name": "url",
+      "data": {
+        "attachmentId": "att_file",
+        "nameSnapshot": "report.pdf",
+        "url": "https://example.invalid/private.pdf"
+      }
+    },
+    {
+      "name": "metadata",
+      "data": {
+        "attachmentId": "att_file",
+        "nameSnapshot": "report.pdf",
+        "size": 42
+      }
+    }
+  ]
+}

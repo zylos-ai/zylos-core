@@ -8,11 +8,20 @@ import { CONTENT_PREFIX, makeQuestionSummary, parseC4Content } from '../../comm-
 // Resolve the browser alias to the same shared source; never evaluate source text.
 const browserSchema = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const legacySchema = new URL('../../../test/fixtures/c4-content-schema-legacy.js', import.meta.url).href;
+const legacyRenderer = new URL('./fixtures/chat-blocks-legacy.js', import.meta.url).href;
+const legacyPlainText = new URL('./fixtures/plain-text-legacy.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(context.parentURL).pathname === new URL(legacyRenderer).pathname) {
+    const resolved = new URL(specifier, context.parentURL).pathname;
+    if (resolved === new URL('../../chat-schema.js', legacyRenderer).pathname) return next(legacySchema, context);
+    if (resolved === new URL('./plain-text.js', legacyRenderer).pathname) return next(legacyPlainText, context);
+  }
   if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserSchema) return next(sourceSchema, context);
   return next(specifier, context);
 } });
 const { renderChatContent } = await import('../public/js/wb/chat-blocks.js');
+const { renderChatContent: renderWithLegacySchema } = await import('./fixtures/chat-blocks-legacy.js');
 const t = key => key;
 const action = type => ({ type, target: 'test.answer' });
 function block(type, data, extra = {}) { return { id: 'block-one', type, schemaVersion: 1, fallbackText: 'Readable fallback', data, ...extra }; }
@@ -202,4 +211,45 @@ test('plain hosts hide message references while technical hosts retain them', ()
   assert.equal(find(plain).hidden, true);
   assert.equal(find(technical).hidden, false);
   assert.ok(technical.textContent.includes('66'));
+});
+
+// Actual browser module, resolver alias and DOM fallback. Run for attachment
+// schema/registration changes; in-memory DOM only, no HTTP or runtime resources.
+test('mixed attachment blocks use filenames without a renderer while the known question still works', () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/attachment-blocks.json', import.meta.url), 'utf8'));
+  let questions = 0;
+  const root = render(fixture.mixed, { renderQuestion({ block: question }) {
+    questions++; assert.equal(question.id, 'question');
+    return createDocument().createElement('fieldset');
+  } });
+  assert.equal(questions, 1);
+  for (const block of fixture.blocks) {
+    const part = allNodes(root).find(node => node.dataset?.blockId === block.id);
+    assert.equal(part.textContent, block.fallbackText);
+    assert.equal(allNodes(part).some(node => ['IMG', 'A', 'BUTTON', 'INPUT'].includes(node.tagName)), false);
+  }
+  assert.equal(allNodes(root).some(node => node.className?.includes('chat-block-error')), false);
+  for (const invalid of fixture.invalidData) {
+    const source = structuredClone(fixture.mixed); source.blocks[1].data = invalid.data;
+    const rejected = render(source, { renderQuestion() { assert.fail('invalid envelope must not offer an answer'); } });
+    assert.equal(rejected.textContent, 'chat.invalidContentchat.block.reference 42', invalid.name);
+  }
+});
+
+test('an old page schema rejects new and rollback-history attachment envelopes as one invalid message', () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/attachment-blocks.json', import.meta.url), 'utf8'));
+  // Exact historical renderer, its plain-text dependency and schema bytes from
+  // Core 977958c9, imported normally. No export adapter or source rewriting.
+  const document = createDocument();
+  for (const id of [42, 43]) {
+    const root = renderWithLegacySchema({ document, row: { id, content: CONTENT_PREFIX + JSON.stringify(fixture.mixed) }, t,
+      renderQuestion() { assert.fail('old schema cannot expose actions from an invalid envelope'); } });
+    assert.equal(root.textContent, `chat.invalidContentchat.block.reference ${id}`);
+    for (const filename of ['diagram.png', 'report.pdf']) assert.equal(root.textContent.includes(filename), false);
+  }
+  const known = structuredClone(fixture.mixed);
+  known.blocks = known.blocks.filter(block => !block.type.startsWith('x-zylos.'));
+  const root = renderWithLegacySchema({ document, row: { id: 44, content: CONTENT_PREFIX + JSON.stringify(known) }, t });
+  assert.equal(allNodes(root).some(node => node.className?.includes('chat-block-error')), false);
+  assert.ok(root.textContent.includes('选一个方案'));
 });

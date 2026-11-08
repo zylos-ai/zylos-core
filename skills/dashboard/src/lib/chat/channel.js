@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { registerQuestion } from './questions.js';
 import { recordQuestionControl } from './question-controls.js';
-import { validateDeliveryPacket } from '../../../../comm-bridge/scripts/c4-content-schema.js';
+import { parseC4Content, validateDeliveryPacket } from '../../../../comm-bridge/scripts/c4-content-schema.js';
+import { withChatAttachments } from './attachments.js';
 
 const mismatch = () => Object.assign(new Error('Dashboard delivery does not match an authoritative outbound row.'), { code: 'DELIVERY_MISMATCH' });
 
@@ -24,5 +25,19 @@ export function acceptDelivery(packet, { env = process.env } = {}) {
   } finally { db?.close(); }
   registerQuestion(row, { env });
   recordQuestionControl(row, { env });
+  const parsed = parseC4Content(row.content);
+  const blocks = parsed.kind === 'envelope' && parsed.envelope.kind === 'message'
+    ? parsed.envelope.blocks.filter(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type)) : [];
+  if (blocks.length) {
+    try {
+      withChatAttachments(zylosDir, {}, service => {
+        const linked = service.linkRow(row);
+        if (linked.length !== blocks.length || linked.some(item => !item.available)) throw new Error('Attachment association unavailable');
+      });
+    } catch {
+      throw Object.assign(new Error('Dashboard attachment association failed; history or collection will retry the existing C4 row.'),
+        { code: 'ATTACHMENT_ASSOCIATION_FAILED', storedAttachmentFailure: true });
+    }
+  }
   return row;
 }

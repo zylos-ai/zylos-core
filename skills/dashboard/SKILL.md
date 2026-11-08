@@ -314,7 +314,7 @@ the actual instance's `.env`; invalid or missing values use 20 MiB. Each file is
 limited independently, with at most 20 attachments per message.
 
 Registration succeeds with
-`{ok:true,attachmentId,name,kind,expiresAt}`. The expiry is the roughly 25-minute
+`{ok:true,attachmentId,name,kind,expiresAt}`. The expiry is the strict 25-minute
 deadline for sending an unlinked attachment, not its deletion time. `resolve`
 returns `{ok:true,path}` for a readable copy in the same conversation, including
 a prepared but not yet linked copy. Failures exit nonzero and return
@@ -342,4 +342,12 @@ There is no attachment send subcommand. Plain `[MEDIA:...]` text does not
 register or copy a file. Registration alone does not send a message; follow the
 original send-result contract before deciding whether to retry. A failed send
 does not consume the ID, and an already linked same-conversation ID can be
-reused after its preparation deadline.
+reused after its preparation deadline. BeforeSend accepts only agent registrations
+until their first real message association; unlinked user uploads cannot be
+referenced by an agent block. A wrong kind, expired or unreadable copy is rejected
+with a target-instance registration hint. The hook never copies files or changes
+the message. A failed association after C4 storage is repaired by history/GC;
+do not resend an already stored message to repair it. Keep the filename and ID
+in the envelope fallback as well as the block fallback. The component CLI only
+advertises shipped renderers, so Schema support alone does not add an image/file
+renderer to that list.

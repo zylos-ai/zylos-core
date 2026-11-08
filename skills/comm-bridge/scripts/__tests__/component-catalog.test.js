@@ -104,3 +104,19 @@ test('host definitions extend the catalog without claiming a conditional rendere
   assert.deepEqual(hypothetical.REGISTERED_COMPONENT_KEYS, ['form_intent@2']);
   assert.deepEqual(hypothetical.COMPONENT_DEFINITIONS[0].parameters, delivered.BLOCK_SCHEMA.$defs.formIntentDataV2);
 });
+
+test('attachment definitions extend the shared schema without claiming a renderer', () => {
+  for (const type of ['x-zylos.image', 'x-zylos.file']) {
+    const component = COMPONENT_CATALOG.find(item => item.type === type);
+    assert.ok(component);
+    assert.equal(component.schemaVersion, 1);
+    assert.equal(parseC4Content(encode(component.example)).kind, 'envelope');
+    assert.equal(REGISTERED_COMPONENT_KEYS.includes(`${type}@1`), false);
+    assert.equal(MODEL_INSTRUCTIONS.includes(`${type}@1:`), false);
+    const registered = createCatalogArtifacts({ implementedKeys: [`${type}@1`] });
+    assert.deepEqual(registered.COMPONENT_DEFINITIONS[0].parameters, BLOCK_SCHEMA.$defs.attachmentData);
+    assert.ok(registered.MODEL_INSTRUCTIONS.includes('Register on the target instance first'));
+    assert.deepEqual(Object.keys(BLOCK_SCHEMA.$defs.attachmentData.properties), ['attachmentId', 'nameSnapshot']);
+    assert.equal(BLOCK_SCHEMA.$defs.attachmentData.additionalProperties, false);
+  }
+});

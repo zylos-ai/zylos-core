@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import Database from 'better-sqlite3';
+import { C4Reader } from '../c4-reader.js';
+import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../schema.js';
 import {
   MAX_ATTACHMENTS, sanitizeDisplayName, sanitizedExtension, uploadKind,
   parseAttachmentAnnotation, resolveAllowedPathSync, sniffImage, readUploadLimit,
@@ -19,12 +22,12 @@ const rowFields = ['direction', 'channel', 'endpoint_id', 'session_group', 'cont
 
 /** Private copies and their authoritative message references belong to Dashboard. */
 export class ChatAttachments {
-  constructor({ store, db = store?.db, c4Reader, zylosDir, now = Date.now }) {
+  constructor({ store, db = store?.db, c4Reader, zylosDir, now = Date.now, readonly = false }) {
     this.db = db;
     this.c4Reader = c4Reader;
     this.zylosDir = fs.realpathSync(zylosDir);
     const media = path.join(this.zylosDir, 'components', 'dashboard', 'media');
-    fs.mkdirSync(media, { recursive: true, mode: 0o700 });
+    if (!readonly) fs.mkdirSync(media, { recursive: true, mode: 0o700 });
     this.mediaDir = fs.realpathSync(media);
     this.now = now;
     this.maxUploadBytes = readUploadLimit(this.zylosDir);
@@ -198,6 +201,30 @@ export class ChatAttachments {
     });
   }
 
+  /** Read-only producer check; an ID alone never establishes ownership. */
+  validateAgentReferences(conversation, blocks) {
+    if (!Array.isArray(blocks) || blocks.length > MAX_ATTACHMENTS
+        || new Set(blocks.map(block => block.data?.attachmentId)).size !== blocks.length) {
+      throw fail('invalid_chat_attachments');
+    }
+    const group = this._conversation(conversation);
+    // Core falls back to the namespace when an explicit outbound group does
+    // not exist. A reference must target the exact registered conversation.
+    if (!this._core().prepare('SELECT 1 FROM group_heads WHERE session_group=?').get(group.sessionGroup)) {
+      throw fail('chat_attachment_unavailable', 404);
+    }
+    const now = this.now();
+    for (const block of blocks) {
+      const record = this._record(block.data?.attachmentId, conversation);
+      const kind = block.type === 'x-zylos.image' ? 'image' : block.type === 'x-zylos.file' ? 'file' : null;
+      if (record.kind !== kind || !record.linked && (record.source !== 'agent'
+          || now < record.created_at || now - record.created_at >= ATTACHMENT_SEND_WINDOW_MS)) {
+        throw fail('chat_attachment_unavailable', 404);
+      }
+      this._file(record);
+    }
+  }
+
   _references(row) {
     if (row.direction === 'in') {
       return String(row.content).split('\n').map(parseAttachmentAnnotation).filter(Boolean).slice(0, MAX_ATTACHMENTS)
@@ -368,5 +395,19 @@ export class ChatAttachments {
     await this.gcRunning;
     await this.directory?.close();
     this.directory = null;
+  }
+}
+
+/** Open existing attachment storage without initialization or migration. */
+export function withChatAttachments(zylosDir, { readonly = false } = {}, callback) {
+  let db, reader;
+  try {
+    db = new Database(path.join(zylosDir, 'components', 'dashboard', 'dashboard.db'), { readonly, fileMustExist: true });
+    if (inspectDatabase(db).currentVersion !== TARGET_SCHEMA_VERSION) throw fail('chat_attachment_unavailable', 404);
+    reader = new C4Reader(zylosDir);
+    return callback(new ChatAttachments({ db, c4Reader: reader, zylosDir, readonly: true }));
+  } finally {
+    reader?.close();
+    db?.close();
   }
 }
