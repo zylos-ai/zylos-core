@@ -69,6 +69,20 @@ test('storage access/write failure reports unsaved without mutating caller memor
   assert.equal(unavailable.save(scope(), memory).saved, false);
 });
 
+test('a failed sixty-fifth draft write preserves all sixty-four stored edits without eviction', () => {
+  const storage = new Storage(), store = createDraftStore({ storage });
+  for (let index = 0; index < 64; index += 1) assert.equal(store.save(scope({ conversationId: String(index) }), { value: index }).saved, true);
+  let removed = 0;
+  storage.removeItem = () => { removed++; };
+  storage.setItem = () => { throw Error('quota'); };
+  const memory = { value: 'unsaved sixty-fifth', hidden: 'retain in memory' };
+  assert.deepEqual(store.save(scope({ conversationId: '65' }), memory), { saved: false, reason: 'storage' });
+  assert.equal(storage.length, 64);
+  assert.equal(removed, 0, 'write failure must happen before any eviction');
+  for (let index = 0; index < 64; index += 1) assert.equal(store.load(scope({ conversationId: String(index) })).value, index);
+  assert.equal(memory.hidden, 'retain in memory');
+});
+
 test('malformed draft data supplies no values and auth cleanup does not touch foreign keys', () => {
   const storage = new Storage(), store = createDraftStore({ storage });
   store.save(scope(), { value: 'ok' });

@@ -829,5 +829,6 @@
   "chat.question.draft.saved": "Draft saved in this tab",
   "chat.question.draft.restored": "Draft restored",
   "chat.question.draft.unsaved": "Draft not saved",
-  "chat.chart.data": "Chart data"
+  "chat.chart.data": "Chart data",
+  "chat.question.correctFields": "Please correct the highlighted fields before submitting."
 }

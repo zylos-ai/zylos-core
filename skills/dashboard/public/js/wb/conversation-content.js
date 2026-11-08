@@ -41,7 +41,10 @@ export function renderConversationContent({
     renderQuestion,
     supportsBlock,
     showTechnicalDetails,
-    layout: (root, view, blockNodes) => applyChatView(document, root, view, blockNodes),
+    layout: (root, view, blockNodes) => {
+      applyChatView(document, root, view, blockNodes);
+      root.classList.add('conversation-composed-content');
+    },
     renderChart({ block, fallback }) {
       const resource = conversationChartResource({ document, block, fallback, t });
       resources.push(resource);
@@ -67,6 +70,7 @@ export function renderConversationContent({
       text.replaceWith(formatted);
     }
   }
+  if (resources.length) content.classList.add('conversation-chart-content');
   content.mount = () => { for (const resource of resources) resource.mount(); };
   content.destroy = () => { for (const resource of resources) resource.destroy(); };
   return content;

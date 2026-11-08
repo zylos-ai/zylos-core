@@ -731,7 +731,7 @@ test('fleet summary cost totals treat explicit null as unreported, but 0 as a re
 test('in-page remote viewing rewrites agent data paths through the fleet proxy', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   // Single choke point: every JSON fetch goes through agentPath().
-  assert.match(app, /const r = await fetch\(api\(agentPath\(path\)\), \{ cache: 'no-store' \}\);/);
+  assert.match(app, /const r = await draftFetch\(api\(agentPath\(path\)\), \{ cache: 'no-store' \}\);/);
   // Only /api/* paths are re-rooted; /api/fleet (our own wall) and non-API
   // paths like /login always stay on the local dashboard root.
   assert.match(app, /if \(!path\.startsWith\('\/api\/'\) \|\| path === '\/api\/fleet'\) return path;/);

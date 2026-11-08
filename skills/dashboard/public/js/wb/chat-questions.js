@@ -119,10 +119,11 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         entry.error.textContent = error ? t('chat.question.field.' + error.reason) : '';
         entry.error.hidden = !error;
         entry.input.setAttribute('aria-invalid', error ? 'true' : 'false');
+        for (const segment of entry.segments || []) segment.setAttribute('aria-pressed', segment.value === formState.values[key] ? 'true' : 'false');
       }
       draftHint.textContent = formState.draftStatus ? t('chat.question.draft.' + formState.draftStatus) : '';
       draftHint.hidden = !draftHint.textContent;
-      status.textContent = formState.error ? t('chat.question.submitFailed') : formState.formError ? t('chat.question.invalidAnswer') : '';
+      status.textContent = formState.error ? t('chat.question.submitFailed') : (formState.fieldErrors?.length || formState.formError) ? t('chat.question.correctFields') : '';
     };
     root.updateFormState = refresh;
     root.clearEditableValues = () => {
@@ -138,7 +139,8 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     for (const field of data.fields) {
       if (!Object.hasOwn(formState.values, field.key) && field.defaultValue !== undefined) formState.values[field.key] = clone(field.defaultValue);
       if (!Object.hasOwn(formState.values, field.key) && field.type === 'boolean' && field.required === true) formState.values[field.key] = false;
-      const label = node('label', undefined, 'chat-question-field'); label.dataset.fieldKey = field.key; label.append(node('span', field.label + (field.required ? ' *' : '')));
+      const segmented = field.type === 'single_select' && field.required && field.options.length >= 2 && field.options.length <= 4;
+      const label = node(segmented ? 'div' : 'label', undefined, 'chat-question-field'); label.dataset.fieldKey = field.key; label.append(node('span', field.label + (field.required ? ' *' : '')));
       let input;
       const storedValue = formState.values[field.key];
       // Storage is untrusted; rendering guards do not replace shared submission validation.
@@ -157,7 +159,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         if (!input.multiple) input.value = value ?? '';
       } else {
         input = node(field.type === 'multiline_text' ? 'textarea' : 'input');
-        input.type = field.type === 'boolean' ? 'checkbox' : ['number', 'integer'].includes(field.type) ? 'number'
+        if (input.tagName === 'INPUT') input.type = field.type === 'boolean' ? 'checkbox' : ['number', 'integer'].includes(field.type) ? 'number'
           : field.type === 'date' ? 'date' : field.type === 'datetime' ? 'datetime-local' : 'text';
         if (field.type === 'boolean') input.checked = value === true;
         else if (field.type === 'datetime' && value) {
@@ -190,10 +192,23 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
       input.addEventListener('input', save); input.addEventListener('change', save);
       controls.push(input); label.append(input);
       if (field.help) label.append(node('span', field.help, 'chat-notice'));
-      const fieldError = node('span', '', 'chat-error'); fieldError.setAttribute('role', 'alert');
+      const segments = [];
+      if (segmented) {
+        input.hidden = true;
+        const group = node('div', undefined, 'chat-form-segments');
+        group.setAttribute('role', 'group'); group.setAttribute('aria-label', field.label);
+        for (const option of field.options) {
+          const segment = button(option.label, () => { input.value = option.id; save(); }, 'selectFormOption');
+          segment.classList.add('chat-form-segment'); segment.value = option.id;
+          segment.setAttribute('aria-label', field.label + ': ' + option.label);
+          segments.push(segment); group.append(segment);
+        }
+        label.append(group);
+      }
+      const fieldError = node('span', '', 'chat-field-error'); fieldError.setAttribute('role', 'alert');
       fieldError.id = 'field-error-' + envelope.messageId + '-' + block.id + '-' + field.key;
       input.setAttribute('aria-describedby', fieldError.id);
-      label.append(fieldError); fieldNodes.set(field.key, { label, input, error: fieldError });
+      label.append(fieldError); fieldNodes.set(field.key, { label, input, error: fieldError, segments });
       form.append(label);
     }
     root.append(form, draftHint, button(data.submitLabel || t('chat.question.submit'), () => {

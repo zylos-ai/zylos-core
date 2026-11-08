@@ -73,9 +73,11 @@ test('the static component list is the catalog intersection with shipped impleme
     assert.equal(definition.key, `${definition.type}@${definition.schemaVersion}`);
     assert.equal(typeof definition.description, 'string');
     assert.ok(definition.description.length > 0);
-    const conditional = BLOCK_SCHEMA.allOf.find(rule => (rule.if?.properties?.type?.const ?? rule.then?.properties?.type?.const) === definition.type
-      && (rule.if.properties.schemaVersion?.const ?? 1) === definition.schemaVersion);
-    const dataReference = conditional.then.properties.data.$ref.split('/').at(-1);
+    const rules = BLOCK_SCHEMA.allOf.filter(rule => (rule.if?.properties?.type?.const ?? rule.then?.properties?.type?.const) === definition.type
+      && (rule.if.properties.schemaVersion?.const ?? 1) === definition.schemaVersion
+      && typeof rule.then?.properties?.data?.$ref === 'string');
+    assert.equal(rules.length, 1, `one exact schema rule for ${definition.key}`);
+    const dataReference = rules[0].then.properties.data.$ref.split('/').at(-1);
     assert.deepEqual(definition.parameters, BLOCK_SCHEMA.$defs[dataReference]);
     assert.ok(MODEL_INSTRUCTIONS.includes(`${definition.key}: ${definition.description}`));
     assert.ok(MODEL_INSTRUCTIONS.includes(JSON.stringify(definition.parameters)));

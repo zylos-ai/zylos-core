@@ -173,9 +173,6 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
       blockNodes.set(block.id, failed);
     }
   }
-  if (parsed.view && layout) {
-    try { layout(root, parsed.view, blockNodes); }
-    catch { root.replaceChildren(...blockNodes.values()); }
-  }
+  if (parsed.view && layout) layout(root, parsed.view, blockNodes);
   return root;
 }

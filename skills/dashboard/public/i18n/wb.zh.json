@@ -829,5 +829,6 @@
   "chat.question.draft.saved": "草稿已保存在当前标签页",
   "chat.question.draft.restored": "已恢复草稿",
   "chat.question.draft.unsaved": "草稿未保存",
-  "chat.chart.data": "图表数据"
+  "chat.chart.data": "图表数据",
+  "chat.question.correctFields": "请修正标注的字段后提交"
 }

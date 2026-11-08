@@ -78,10 +78,10 @@ const seriesBlock = (xType = 'category') => ({ id: 'traffic', type: 'time_series
     series: [{ key: 'a', label: 'A', points: [{ x: xType === 'category' ? 'p50' : 0, y: 4200 }, { x: xType === 'category' ? 'p99' : 5, y: null }] },
       { key: 'b', label: 'B', points: [{ x: xType === 'category' ? 'p50' : 0, y: 6100 }] }], summary: 'Replay' } });
 
-test('categorical time series uses aligned stacked bars with titles axes legends and missing gaps', () => {
+test('categorical time series uses aligned grouped bars with titles axes legends and missing gaps', () => {
   const config = conversationChartConfig(seriesBlock());
-  assert.equal(config.type, 'bar'); assert.equal(config.options.scales.x.stacked, true);
-  assert.equal(config.options.scales.y.stacked, true); assert.equal(config.options.plugins.legend.display, true);
+  assert.equal(config.type, 'bar'); assert.equal(config.options.scales.x.stacked, false);
+  assert.equal(config.options.scales.y.stacked, false); assert.equal(config.options.plugins.legend.display, true);
   assert.equal(config.options.scales.x.title.text, 'Time'); assert.equal(config.options.scales.y.title.text, 'Requests');
   assert.equal(config.data.labels.join(','), 'p50,p99');
   assert.equal(config.data.datasets[1].data[0], 6100); assert.equal(config.data.datasets[1].data[1], null);
@@ -218,4 +218,38 @@ test('percentage lines retain the full comparison range and quarter-grid ticks',
   const ordinary = conversationChartConfig(block);
   assert.equal(ordinary.options.scales.y.suggestedMax, undefined);
   assert.equal(ordinary.options.scales.y.ticks.stepSize, undefined);
+});
+
+test('same-unit percentage comparisons remain separate bars without adding their values', () => {
+  const block = seriesBlock(); block.data.yUnit = '%';
+  block.data.series = [
+    { key: 'first', label: 'First', points: [{ x: 'hit', y: 87 }] },
+    { key: 'second', label: 'Second', points: [{ x: 'hit', y: 90 }] }
+  ];
+  const config = conversationChartConfig(block);
+  assert.equal(config.type, 'bar');
+  assert.equal(config.options.scales.x.stacked, false);
+  assert.equal(config.options.scales.y.stacked, false);
+  assert.equal(config.data.datasets.length, 2);
+  assert.equal(config.data.datasets[0].data[0], 87);
+  assert.equal(config.data.datasets[1].data[0], 90);
+  assert.equal(config.options.scales.y.suggestedMax, 100);
+  assert.equal(config.options.scales.y.ticks.stepSize, 25);
+  assert.equal(config.options.plugins.legend.display, true);
+  assert.equal(config.options.plugins.legend.onClick, null);
+});
+
+test('chart legends are noninteractive labels while breakdown alone remains stacked', () => {
+  const cases = [seriesBlock(), seriesBlock('number'),
+    { type: 'category_series', data: { points: [{ label: 'A', value: 1 }], reference: { label: 'Target', value: 1 } } },
+    { type: 'breakdown', data: { parts: [{ label: 'A', value: 30 }, { label: 'B', value: 70 }] } }];
+  for (const block of cases) {
+    const config = conversationChartConfig(block);
+    assert.equal(config.options.plugins.legend.onClick, null);
+    assert.equal(config.options.plugins.legend.onHover, undefined);
+    assert.equal(config.options.plugins.legend.onLeave, undefined);
+  }
+  const breakdown = conversationChartConfig(cases[3]);
+  assert.equal(breakdown.options.scales.x.stacked, true);
+  assert.equal(breakdown.options.scales.y.stacked, true);
 });
