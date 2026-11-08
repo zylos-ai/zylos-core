@@ -115,9 +115,10 @@ test('recent activity is not taken over by diagnostics and follows the technical
   level = 'technical';
   f.reads.length = 0;
   detail.setViewDetail();
-  await new Promise(resolve => setImmediate(resolve));
-  await detail.refresh();
-  const recentRead = f.reads.find(url => url.pathname === '/api/timeline' && url.searchParams.get('limit') === '5');
+  // The switch alone rereads: wait (bounded) for the read it starts and the redraw after it.
+  const recentReadOf = () => f.reads.find(url => url.pathname === '/api/timeline' && url.searchParams.get('limit') === '5');
+  for (let i = 0; i < 50 && !(recentReadOf() && labels(recent()).includes('release')); i++) await new Promise(resolve => setImmediate(resolve));
+  const recentRead = recentReadOf();
   assert.ok(recentRead, 'switching to technical detail rereads recent activity');
   assert.equal(recentRead.searchParams.has('types'), false);
   assert.deepEqual(labels(recent()), ['stop', 'release'], 'the four newest releases are one row');

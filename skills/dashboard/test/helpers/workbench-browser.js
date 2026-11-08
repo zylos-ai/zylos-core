@@ -489,6 +489,41 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   });
 
+  // The busy group's run holds 600 router `release` diagnostics between a few events a person can follow
+  // (fixtures/workbench-browser-api.js). Plain view lists only those events, newest first, in recent activity
+  // and on the timeline; technical detail shows the diagnostics as one row with their count.
+  await step('group timeline: plain events newest first, repeated diagnostics one row in technical detail', async () => {
+    const plain = ['完成一轮', '工具使用完成', '开始使用工具', '收到任务', '会话开始'];
+    for (const [width, height] of [[390, 844], [1280, 800]]) {
+      const { page, context, errors, shot } = await open(width, height, '/');
+      const labels = selector => page.locator(selector).evaluateAll(nodes => nodes.map(node => node.firstChild?.textContent ?? node.textContent));
+      await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
+      await page.locator('.wb-detail-recent .wb-ev').first().waitFor();
+      assert.deepEqual(await labels('.wb-detail-recent .wb-ev-t'), plain, `${width}: recent activity is the plain events, newest first`);
+      await page.locator('#wb-side [role="tab"]', { hasText: '时间线' }).click();
+      await page.locator('.wb-timeline-event').first().waitFor();
+      assert.deepEqual(await labels('.wb-timeline-event .wb-ev-t'), plain, `${width}: the timeline lists the plain events, newest first`);
+      assert.doesNotMatch(await page.locator('#wb-side').textContent(), /后台记录|release/);
+      let layout = await page.evaluate(measure);
+      assert.equal(layout.documentWidth, width, `${width}: no sideways scrolling`);
+      if (width < 761) assert.deepEqual(layout.small, [], 'no control under 40px');
+      await shot('timeline-plain');
+
+      // The phone detail covers the header, so the technical detail switch is pressed from the page.
+      await page.locator('#wb-tech-btn').evaluate(node => node.click());
+      await page.locator('.wb-timeline-event.wb-ev-merged').waitFor();
+      const rows = await labels('.wb-timeline-event .wb-ev-t');
+      assert.deepEqual(rows, ['stop', 'release', 'post_tool_use', 'pre_tool_use', 'user_prompt_submit', 'session_start'],
+        `${width}: technical detail adds the 600 releases as one row, in time order`);
+      assert.match(await page.locator('.wb-timeline-event.wb-ev-merged .wb-ev-rep').textContent(), /^600 次 · \d\d:\d\d – \d\d:\d\d$/);
+      layout = await page.evaluate(measure);
+      assert.equal(layout.documentWidth, width, `${width}: no sideways scrolling in technical detail`);
+      await shot('timeline-technical');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
   // Unanswered reads are listed so a page change that needs a new answer is visible, not silently empty.
   if (unserved.size) console.log('Workbench browser case left unanswered:', [...unserved].sort().join(', '));
 }

@@ -72,6 +72,31 @@ function memoryTree(now) {
 const longText = '# Current state\n\n## Doing now\n- Second prototype round, settings and memory pages\n- Re-review after the next round\n'
   + Array.from({ length: 10 }, (_, i) => `\n## Week ${i + 1}\n- Monday: merge duplicate memory entries and add missing source links.\n- Wednesday: check the scheduled task history; both timeouts are explained.\n- Friday: file the review notes and wait for the owner to confirm.\n`).join('');
 
+// The busy group's current run: a few events a person can follow, then 600 router `release` diagnostics (one a
+// second), then the turn ends. Reads answer like the dashboard's: by run or group, by type, in sequence order.
+function runEvents(now) {
+  let seq = 0;
+  const event = (type, msAgo, category) => ({ id: `e${++seq}`, event_seq: seq, timestamp: iso(now - msAgo), event_type: type, category,
+    run_id: 'run-tg', session_group: GROUP, runtime: 'claude', metadata: {} });
+  return [event('session_start', 20 * 60e3, 'session'), event('user_prompt_submit', 19 * 60e3, 'turn'), event('pre_tool_use', 18 * 60e3, 'tool'),
+    event('post_tool_use', 17 * 60e3, 'tool'), ...Array.from({ length: 600 }, (_, i) => event('release', 16 * 60e3 - i * 1000, 'diagnostic')),
+    event('stop', 5 * 60e3, 'turn')];
+}
+function timeline(url, now) {
+  const params = url.searchParams, types = params.get('types')?.split(',').filter(Boolean);
+  const after = Number(params.get('after_seq') ?? 0), limit = Math.min(1000, Number(params.get('limit') ?? 100));
+  if (params.get('run_id') ? params.get('run_id') !== 'run-tg' : params.get('session_group') !== GROUP) return { events: [] };
+  const events = runEvents(now).filter(event => (!types || types.includes(event.event_type)) && event.event_seq > after);
+  if (params.get('order') === 'desc') events.reverse();
+  return { events: events.slice(0, limit) };
+}
+function runs(url, now) {
+  if (decodeURIComponent(url.pathname.split('/')[4] ?? '') !== GROUP) return { runs: [], totalEvents: 0, totalRuns: 0, unattributed: 0 };
+  const all = runEvents(now), types = url.searchParams.get('types')?.split(',').filter(Boolean);
+  const n = all.filter(event => !types || types.includes(event.event_type)).length;
+  return { runs: [{ runId: 'run-tg', startAt: all[0].timestamp, endAt: all.at(-1).timestamp, n, endReason: 'running' }], totalEvents: n, totalRuns: 1, unattributed: 0 };
+}
+
 const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high', new_session_threshold: 70,
   models: [{ id: 'opus', display_name: 'Opus' }, { id: 'sonnet', display_name: 'Sonnet' }], efforts_by_model: { '*': ['low', 'medium', 'high'] } };
 
@@ -93,14 +118,14 @@ export function workbenchAnswer(url, now) {
   if (p === '/api/workbench/memory/backlog') return { groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
     count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], hasOlder: false, budgets: { limits: {}, warnings: {} } };
   if (p.endsWith('/backlog')) return { count: 12, firstAt: null, syncing: false };
-  if (p.endsWith('/runs')) return { runs: [], totalEvents: 0, totalRuns: 0, unattributed: 0 };
+  if (p.endsWith('/runs')) return runs(url, now);
   if (p.endsWith('/messages')) return { messages: [] };
   if (p.endsWith('/config')) {
     const pair = { runtime: 'claude', mode: 'default' };
     return { runtime: { ok: true, data: { desired: { mode: 'inherit' }, resolved: pair, running: { status: 'applied', launchConfig: pair } } },
       model: { ok: true, data: { runtime: 'claude', desired: pair, resolved: pair, running: { status: 'applied', launchConfig: pair } } } };
   }
-  if (p === '/api/timeline') return { events: [] };
+  if (p === '/api/timeline') return timeline(url, now);
   if (p === '/api/state') return { dashboard_version: '0.7.0', state: 'IDLE', agent: { name: 'browser-case' }, sessionGroup: 'origin', runId: 'run-origin', sessionId: 's0',
     runtime_info: { runtime: 'claude', zylos_version: '0.9.4', cc_version: '2.1.80' } };
   if (p === '/api/session-mode') return { ok: true, data: { sessionMode: 'multi', transition: null } };
