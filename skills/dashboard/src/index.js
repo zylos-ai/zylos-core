@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { AuthGate, exchangeApiKeyForToken, generateApiKey, hashApiKey, migratePasswordIfNeeded, validateApiSession } from './lib/auth.js';
 import { handleChatSettings } from './lib/chat/settings.js';
 import { ChatHistory } from './lib/chat/history.js';
+import { ChatChangeObserver } from './lib/chat/change-observer.js';
+import { handleChatStream } from './lib/chat/stream.js';
 import { handleChatHistory } from './lib/chat/history-routes.js';
 import { ChatActivity, recordGroupInterrupt } from './lib/chat/activity.js';
 import { ChatConversations, isChatLocalIdUsed } from './lib/chat/conversations.js';
@@ -1686,6 +1688,7 @@ export function createServer() {
   });
   const history = new ChatHistory({ c4Reader, conversations, attachments });
   const chatActivity = new ChatActivity({ history, store });
+  const chatObserver = new ChatChangeObserver({ c4Reader, history });
   const rootDir = publicDir();
   const fleetProxy = new FleetProxy({ config, rootDir, poller: fleetPoller, authGate: auth });
 
@@ -1747,6 +1750,7 @@ export function createServer() {
     }
 
     if (pathname === '/api/stream') {
+      if (handleChatStream(req, res, url, { auth, config, hub: sse, observer: chatObserver })) return;
       await handleApi(req, res, pathname, url);
       return;
     }
@@ -1910,6 +1914,7 @@ export function createServer() {
     return attachmentClose ??= attachments.close();
   };
   server.on('close', () => {
+    chatObserver.close();
     server.closeAttachments().catch(() => {
       console.error('[chat] Attachment cleanup did not close cleanly.');
     });

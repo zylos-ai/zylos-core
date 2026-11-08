@@ -6,77 +6,92 @@ export class SseHub {
     this.sequence = 0;
   }
 
-  addClient(res, validator) {
+  addClient(res, validator, { onClose } = {}) {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-store',
       connection: 'keep-alive',
       'x-accel-buffering': 'no'
     });
-    res.write(': connected\n\n');
-    const client = { res, validator: validator || null };
+    const client = { res, validator: validator || null, onClose };
     this.clients.add(client);
-    this._startKeepalive();
-    res.on('close', () => {
-      this.clients.delete(client);
-      if (this.clients.size === 0) this._stopKeepalive();
-    });
+    res.on('close', () => this._remove(client));
+    this._write(client, ': connected\n\n');
+    if (this.clients.size) this._startKeepalive();
+    return client;
+  }
+
+  _remove(client) {
+    if (!this.clients.delete(client)) return;
+    try { client.onClose?.(); } catch { /* transport teardown must continue */ }
+    if (this.clients.size === 0) this._stopKeepalive();
   }
 
   removeClient(res) {
     for (const client of this.clients) {
-      if (client.res === res) {
-        this.clients.delete(client);
-        break;
-      }
+      if (client.res === res) { this._remove(client); break; }
     }
-    if (this.clients.size === 0) this._stopKeepalive();
+  }
+
+  _write(client, payload) {
+    if (!this.clients.has(client)) return false;
+    try {
+      // Disconnect a slow reader instead of retaining an unbounded event queue.
+      if (client.res.writableLength > 64 * 1024 || client.res.write(payload) === false) {
+        this._remove(client);
+        if (client.res.destroy) client.res.destroy();
+        else client.res.end();
+        return false;
+      }
+      return true;
+    } catch {
+      this._remove(client);
+      try { client.res.destroy?.(); } catch { /* already closed */ }
+      return false;
+    }
+  }
+
+  sendTo(client, eventType, data) {
+    if (!this.clients.has(client) || this._evictIfInvalid(client)) return false;
+    const payload = `id: ${++this.sequence}\nevent: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+    return this._write(client, payload);
   }
 
   broadcast(eventType, data) {
-    this.sequence += 1;
-    const payload = `id: ${this.sequence}\nevent: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const client of this.clients) {
-      if (this._evictIfInvalid(client)) continue;
-      try {
-        client.res.write(payload);
-      } catch {
-        this.clients.delete(client);
-      }
+    // Chat activity is opt-in and may only be sent to its authorized subscriber.
+    if (eventType.startsWith('chat_')) return;
+    const payload = `id: ${++this.sequence}\nevent: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const client of [...this.clients]) {
+      if (!this._evictIfInvalid(client)) this._write(client, payload);
     }
   }
 
   closeAll() {
-    this._stopKeepalive();
-    for (const client of this.clients) {
+    for (const client of [...this.clients]) {
+      this._remove(client);
       try { client.res.end(); } catch { /* already closed */ }
     }
-    this.clients.clear();
+    this._stopKeepalive();
   }
 
   _evictIfInvalid(client) {
-    if (!client.validator || client.validator()) return false;
-    try {
-      client.res.write('event: auth_expired\ndata: {}\n\n');
-      client.res.end();
-    } catch { /* already closed */ }
-    this.clients.delete(client);
+    let valid = true;
+    try { valid = !client.validator || client.validator(); } catch { valid = false; }
+    if (valid) return false;
+    this._write(client, 'event: auth_expired\ndata: {}\n\n');
+    this._remove(client);
+    try { client.res.end(); } catch { /* already closed */ }
     return true;
   }
 
   _startKeepalive() {
     if (this.keepaliveTimer) return;
     this.keepaliveTimer = setInterval(() => {
-      for (const client of this.clients) {
-        if (this._evictIfInvalid(client)) continue;
-        try {
-          client.res.write(': keepalive\n\n');
-        } catch {
-          this.clients.delete(client);
-        }
+      for (const client of [...this.clients]) {
+        if (!this._evictIfInvalid(client)) this._write(client, ': keepalive\n\n');
       }
     }, this.keepaliveMs);
-    this.keepaliveTimer.unref();
+    this.keepaliveTimer.unref?.();
   }
 
   _stopKeepalive() {

@@ -933,5 +933,8 @@
   "chat.activity.label.skill": "使用技能 {arg}",
   "chat.activity.label.subagent": "子任务：{arg}",
   "chat.activity.label.subagentPlain": "子任务",
-  "chat.activity.label.tool": "使用工具"
+  "chat.activity.label.tool": "使用工具",
+  "chat.page.push.connecting": "正在连接实时更新… · 仍在轮询",
+  "chat.page.push.polling": "实时更新未连接 · 轮询中",
+  "chat.page.push.live": "实时更新已连接"
 }

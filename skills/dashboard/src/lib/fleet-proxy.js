@@ -213,6 +213,34 @@ function guardedSseStream(guard, upstreamStream, onLeak) {
   });
 }
 
+// Validate complete SSE records so a retained secret-guard tail cannot delay
+// chat_ready or a dirty hint until the producer's next keepalive.
+function guardedChatSseStream(guard, authorize) {
+  let pending = '';
+  const decoder = new TextDecoder();
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      if (!authorize()) return callback(new Error('chat_access_revoked'));
+      pending += decoder.decode(chunk, { stream: true });
+      if (Buffer.byteLength(pending) > 64 * 1024) return callback(new Error('sse_record_too_large'));
+      let boundary;
+      while ((boundary = /\r?\n\r?\n/.exec(pending))) {
+        const end = boundary.index + boundary[0].length;
+        const record = pending.slice(0, end);
+        if (guard.contains(record)) return callback(new Error('secret_leak_blocked'));
+        this.push(record);
+        pending = pending.slice(end);
+      }
+      callback();
+    },
+    flush(callback) {
+      // A truncated record is not an event and must not become one on close.
+      pending = '';
+      callback();
+    }
+  });
+}
+
 export class FleetProxy {
   constructor({ config, rootDir, poller, fetch, authGate, observerConnect = connectObserverWebSocket }) {
     this.config = config;
@@ -327,9 +355,10 @@ export class FleetProxy {
   }
 
   async proxyApi(req, res, agent, suffix, search) {
-    if (suffix.startsWith('/api/chat/')) {
+    const chatStream = suffix === '/api/stream' && new URLSearchParams(search).has('chat');
+    if (suffix.startsWith('/api/chat/') || chatStream) {
       const context = req._authContext;
-      if (context?.scope !== 'admin') {
+      if (context?.scope !== 'admin' || chatStream && this.authGate?.resolveAuthContext(req)?.scope !== 'admin') {
         sendJson(res, 403, { error: 'admin_required' });
         return;
       }
@@ -432,9 +461,11 @@ export class FleetProxy {
       }
       res.writeHead(remoteResp.status, responseHeaders);
       const upstream = Readable.fromWeb(remoteResp.body);
-      const guarded = guardedSseStream(guard, upstream, () => {
+      const chatAuthorized = () => this.authGate?.resolveAuthContext(req)?.scope === 'admin';
+      const guarded = chatStream ? guardedChatSseStream(guard, chatAuthorized) : guardedSseStream(guard, upstream, () => {
         process.stderr.write(`[fleet-proxy] blocked secret-bearing SSE response from ${agent.name}\n`);
       });
+      let chatValidationTimer;
       // pipe() does not propagate errors: an unhandled 'error' on any stream in
       // this chain would crash the whole process (#257). A failed relay must
       // only tear down its own connection; the browser's EventSource reconnects.
@@ -442,15 +473,21 @@ export class FleetProxy {
         if (err && err.name !== 'AbortError') {
           process.stderr.write(`[fleet-proxy] SSE relay from ${agent.name} aborted: ${err.message || err}\n`);
         }
+        clearInterval(chatValidationTimer);
         upstreamControl.abort();
         upstream.destroy();
         guarded.destroy();
         if (!res.destroyed && !res.writableEnded) res.end();
       };
+      if (chatStream) {
+        chatValidationTimer = setInterval(() => { if (!chatAuthorized()) abortRelay(); }, 15000);
+        chatValidationTimer.unref?.();
+      }
       upstream.on('error', abortRelay);
       guarded.on('error', abortRelay);
       res.on('error', () => { /* client write failures surface via 'close' */ });
       res.on('close', () => abortRelay());
+      guarded.on('end', () => clearInterval(chatValidationTimer));
       upstream.pipe(guarded).pipe(res);
     } else {
       let buffer;

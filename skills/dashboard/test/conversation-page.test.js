@@ -382,3 +382,42 @@ test('attachment metadata recovery retains the message anchor focused form and c
   assert.ok(message.querySelector('[data-action="downloadAttachment"]')); assert.match(message.textContent, /latest-photo.png/);
   page.destroy(); assert.equal(charts[0].destroyCalls, 1);
 });
+
+for (const locale of ['en', 'zh']) test(`push updates preserve the editor and old reading position while localizing connection state in ${locale}`, async t => {
+  const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+  const document = conversationDocument(), root = document.createElement('div');
+  let updated = false, subscription;
+  const original = { id: 1, direction: 'in', status: 'pending', content: 'first message' };
+  const page = mountConversationPage({ root, document, t: key => translations[key] ?? key,
+    onStreamSubscription: value => { subscription = value; }, fetch: async path => {
+      const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+        : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', displayName: 'Push fixture' }], nextCursor: null }
+        : path.includes('/messages?') ? { items: updated ? [original, { id: 2, direction: 'out', status: 'delivered', content: 'new reply' }] : [original], afterCursor: 'after', nextCursor: null }
+        : path.includes('/status?') ? { items: updated ? [{ ...original, status: 'delivered' }] : [] }
+        : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', state: 'active' } }
+        : { items: [], nextCursor: null };
+      return { ok: true, status: 200, json: async () => body };
+    } });
+  t.after(() => page.destroy()); await page.open();
+  allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click'); await tick(); await tick();
+  const input = root.querySelector('.conversation-input'), message = root.querySelector('[data-message-id="1"]');
+  input.value = 'keep editor'; input.dispatch('input'); input.focus(); input.selectionStart = 3;
+  const stream = root.querySelector('.conversation-stream');
+  stream.scrollHeight = 1000; stream.clientHeight = 200; stream.scrollTop = 100;
+  page.streamStatus('connecting', subscription);
+  assert.equal(root.querySelector('.conversation-push-status').textContent, translations['chat.page.push.connecting']);
+  updated = true;
+  page.streamEvent('chat_ready', { version: 1, ...subscription }, subscription); await tick(); await tick();
+  assert.equal(root.querySelector('.conversation-push-status').textContent, translations['chat.page.push.live']);
+  assert.equal(root.querySelector('[data-message-id="1"]'), message);
+  assert.equal(root.querySelector('.conversation-input'), input);
+  assert.equal(document.activeElement, input); assert.equal(input.value, 'keep editor'); assert.equal(input.selectionStart, 3);
+  assert.equal(stream.scrollTop, 100);
+  assert.equal(root.querySelector('[data-action="latest"]').hidden, false);
+  assert.ok(root.querySelector('[data-message-id="2"]'));
+  assert.equal(message.querySelector('[data-delivery-state="delivered"]').hidden, false);
+  page.streamStatus('disconnected', subscription);
+  assert.equal(root.querySelector('.conversation-push-status').textContent, translations['chat.page.push.polling']);
+  assert.ok(root.querySelector('[data-action="refreshMessages"]')); assert.ok(root.querySelector('[data-action="refreshStatus"]'));
+  page.close(); assert.equal(subscription, null);
+});

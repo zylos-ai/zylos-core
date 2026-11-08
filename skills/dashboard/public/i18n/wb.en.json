@@ -933,5 +933,8 @@
   "chat.activity.label.skill": "Use skill {arg}",
   "chat.activity.label.subagent": "Subtask: {arg}",
   "chat.activity.label.subagentPlain": "Subtask",
-  "chat.activity.label.tool": "Use a tool"
+  "chat.activity.label.tool": "Use a tool",
+  "chat.page.push.connecting": "Connecting live updates… · polling continues",
+  "chat.page.push.polling": "Live updates unavailable · polling",
+  "chat.page.push.live": "Live updates connected"
 }

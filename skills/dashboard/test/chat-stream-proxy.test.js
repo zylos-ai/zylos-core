@@ -1,0 +1,112 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import crypto from 'node:crypto';
+import { AuthGate } from '../src/lib/auth.js';
+import { FleetProxy } from '../src/lib/fleet-proxy.js';
+import { SseHub } from '../src/lib/sse.js';
+import { ChatChangeObserver } from '../src/lib/chat/change-observer.js';
+import { handleChatStream } from '../src/lib/chat/stream.js';
+
+const gated = { skip: process.env.ZYLOS_CHAT_INTEGRATION !== '1', timeout: 10000 };
+const hash = s => crypto.createHash('sha256').update(s).digest('hex');
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(check) {
+  const end = Date.now() + 1500;
+  while (Date.now() < end) { if (check()) return; await pause(5); }
+  assert.ok(check(), 'bounded SSE condition');
+}
+// Real HTTP/AuthGate/producer/proxy streams. Run for chat stream access/relay
+// changes; skip unrelated UI. Official runner isolation is read back before
+// listeners; no DB/tmux/PM2/model. All clients/listeners/timers are fixture-owned.
+async function fixture(t) {
+  console.info('chat proxy isolation', JSON.stringify(Object.fromEntries(['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'].map(key => [key,process.env[key]]))), 'DB/socket/PM2/tmux unused; loopback ephemeral ports');
+  let localRevoked = false, version = 1, forwarded = 0;
+  const cookie = 'private-chat-proxy-cookie', token = 'zylos_st_' + 'b'.repeat(64), read = 'zylos_st_' + 'a'.repeat(64);
+  const store = {
+    getSession: digest => !localRevoked && digest === hash(cookie) ? { created_at: Date.now(), last_activity_at: Date.now() } : null,
+    touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
+    getApiSession: digest => digest === hash(token) || digest === hash(read)
+      ? { api_key_id: 'private', scope: digest === hash(token) ? 'admin' : 'read', expires_at: Date.now()+60000 } : null
+  };
+  const config = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: true } };
+  const auth = new AuthGate(config, store), localAuth = new AuthGate(config, store), hub = new SseHub(20);
+  const observer = new ChatChangeObserver({ c4Reader: { readVersion: () => ({ generation: 1, version }) }, history: { chatChangeSnapshot: (_scope, { afterId = null } = {}) => ({ highwater: version, listChanged: afterId !== null && afterId < version, latestId: null, delivery: [] }) }, intervalMs: 20 });
+  const sockets = new Set(), servers = [];
+  async function listen(fn) {
+    const server = http.createServer(fn); servers.push(server);
+    await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
+    return `http://127.0.0.1:${server.address().port}`;
+  }
+  const remote = await listen(async (req,res) => {
+    const url = new URL(req.url,'http://fixture');
+    if (await auth.handle(req,res,url)) return;
+    if (!handleChatStream(req,res,url,{ auth,config,hub,observer })) hub.addClient(res);
+  });
+  const proxy = new FleetProxy({ authGate: localAuth, config: { fleet: { agents: [{ name:'Peer',base_url:remote }] } },
+    poller: { getSessionToken: async () => token }, fetch: (...args) => { forwarded++; return fetch(...args); } });
+  const local = await listen(async(req,res) => {
+    const url=new URL(req.url,'http://fixture');
+    if (await localAuth.handle(req,res,url)) return;
+    if (!await proxy.handle(req,res,url)) { res.writeHead(404);res.end(); }
+  });
+  function open(identity='cookie',search='?chat=1&chat_tab=mine') {
+    let text='',status,ended=false,error;
+    const headers=identity==='cookie'?{cookie:`__Secure-zylos_dashboard_session=${cookie}`}:{authorization:`Bearer ${identity==='read'?read:token}`};
+    const req=http.get(local+'/fleet/Peer/api/stream'+search,{headers},res=>{
+      status=res.statusCode;
+      res.on('data',chunk=>{text+=chunk.toString();if(text.length>16384){error=Error('SSE fixture log exceeded bound');req.destroy();}});
+      res.on('end',()=>{ended=true;});res.on('close',()=>{ended=true;});
+    });
+    req.on('error',err=>{error=err;ended=true;});sockets.add(req);
+    return {text:()=>text,status:()=>status,ended:()=>ended,error:()=>error,close:()=>req.destroy()};
+  }
+  t.after(async()=>{
+    for(const socket of sockets)socket.destroy();observer.close();hub.closeAll();clearInterval(auth._cleanupTimer);clearInterval(localAuth._cleanupTimer);
+    for(const server of servers){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+  });
+  return {open,config,observer,forwarded:()=>forwarded,revoke:()=>{localRevoked=true;},change:()=>{version++;},
+    async leakSplitRecord() {
+      const frame = `event: state_change\ndata: {"value":"${token}"}\n\n`;
+      const at = frame.indexOf(token)+20;
+      for (const part of [frame.slice(0,at),frame.slice(at)]) {
+        for (const client of hub.clients) client.res.write(part);
+        await pause(10);
+      }
+    } };
+}
+
+test('Fleet chat streams enforce local admin and producer remote policy without leaking IDs',gated,async t=>{
+  const f=await fixture(t);
+  const denied=f.open('read');await until(()=>denied.ended());
+  assert.equal(denied.status(),403);assert.equal(f.forwarded(),0);assert.doesNotMatch(denied.text(),/conversationId|chat_ready/);
+  f.config.chat.allowRemote=false;
+  const disabled=f.open();await until(()=>disabled.ended());
+  assert.equal(disabled.status(),403);assert.doesNotMatch(disabled.text(),/conversationId|chat_ready/);
+  f.config.chat.allowRemote=true;
+  const allowed=f.open();await until(()=>allowed.text().includes('event: chat_ready'));
+  assert.equal(allowed.status(),200);assert.equal(f.observer.subscriptions.size,1);
+  assert.doesNotMatch(allowed.text(),/zylos_st_|cookie|password|preview|content/);
+});
+
+test('Fleet forwards each complete chat record promptly and stops after local credential revocation',gated,async t=>{
+  const f=await fixture(t),stream=f.open();
+  await until(()=>stream.text().includes('event: chat_ready'));
+  const start=Date.now();f.change();
+  await until(()=>stream.text().includes('event: chat_messages_changed'));
+  assert.ok(Date.now()-start<1000,'no secret-guard tail waits for keepalive');
+  const before=stream.text();f.revoke();f.change();
+  await until(()=>stream.ended());
+  assert.equal(stream.text(),before,'revoked local browser receives no further chat metadata');
+  await until(()=>f.observer.subscriptions.size===0);
+});
+
+
+test('Fleet chat framing rejects a secret split between transport chunks before forwarding the record',gated,async t=>{
+  const f=await fixture(t),stream=f.open();
+  await until(()=>stream.text().includes('event: chat_ready'));
+  const before=stream.text();
+  await f.leakSplitRecord();
+  await until(()=>stream.ended());
+  assert.equal(stream.text(),before,'no part of the secret-bearing record reaches the browser');
+});

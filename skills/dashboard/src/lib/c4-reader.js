@@ -6,18 +6,45 @@ export class C4Reader {
   constructor(zylosDir) {
     this._dbPath = path.join(zylosDir, 'comm-bridge', 'c4.db');
     this._db = null;
+    this._fileIdentity = null;
+    this._generation = 0;
   }
 
   _open() {
     if (this._db) return this._db;
     if (!fs.existsSync(this._dbPath)) return null;
     try {
+      const before = fs.statSync(this._dbPath);
       this._db = new Database(this._dbPath, { readonly: true });
       this._db.pragma('busy_timeout = 3000');
+      const stat = fs.statSync(this._dbPath);
+      if (before.dev !== stat.dev || before.ino !== stat.ino) throw new Error('Database replaced while opening');
+      this._fileIdentity = `${stat.dev}:${stat.ino}`;
+      this._generation++;
     } catch {
+      try { this._db?.close(); } catch { /* failed open */ }
       this._db = null;
+      this._fileIdentity = null;
     }
     return this._db;
+  }
+
+  // data_version observes commits made by other connections. File identity,
+  // rather than mtime, prevents a replaced database from leaving a stale handle.
+  readVersion() {
+    try {
+      const stat = fs.statSync(this._dbPath);
+      const identity = `${stat.dev}:${stat.ino}`;
+      if (this._db && identity !== this._fileIdentity) this.close();
+      const db = this._open();
+      if (!db) return null;
+      const version = db.pragma('data_version', { simple: true });
+      if (!Number.isSafeInteger(version)) return null;
+      return { generation: this._generation, version };
+    } catch {
+      this.close();
+      return null;
+    }
   }
 
   getTodayStats() {
@@ -230,6 +257,7 @@ export class C4Reader {
   close() {
     this._db?.close();
     this._db = null;
+    this._fileIdentity = null;
     this._responseTimeCache = null;
   }
 }

@@ -1,6 +1,7 @@
 import { parseC4Content, evaluateFormState } from '../../chat-schema.js?v=102';
 import { messageState } from './chat-delivery-state.js?v=100';
 import { asDate } from './conversation-time.js?v=99';
+import { normalizeChatSubscription, chatSubscriptionKey, matchesChatEvent } from './conversation-push.js?v=1';
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
 const base = '/api/chat/conversations';
 const pathFor = id => `${base}/${encodeURIComponent(id)}`;
@@ -42,6 +43,7 @@ export function createConversationState({
     loading = false,
     creatingDraft = false;
   let groupPresenceRead = null;
+  let streamState = 'polling', streamTimer = null, streamScope = null, readDirty = false, readStatus = false, retryAt = 0;
   const cells = new Map(),
     listeners = new Set(onChange ? [onChange] : []);
   const key = id => `${tab}:${id}`;
@@ -97,6 +99,7 @@ export function createConversationState({
     error: error || cell()?.error,
     blocked,
     updateError,
+    streamState,
     creatingDraft,
     canRetry: active && !!cell()?.retryRequired && cell()?.receipt?.retryAllowed === true && !cell()?.sending,
     canWrite: active && !blocked && tab === 'mine' && mode === 'multi' && !!selectedId && cell()?.ownershipResolved === true,
@@ -115,9 +118,11 @@ export function createConversationState({
   function schedule(wait) {
     stopTimer();
     if (!active || destroyed || blocked || !visible()) return;
+    if (wait === undefined && updateError && retryAt > now()) wait = retryAt - now();
     const current = cell(),
-      hasHistory = current?.afterCursor && !selectedId?.startsWith('d:');
-    const interval = hasHistory ? fastUntil > now() || activityLive(current) ? 2000 : 5000 : 30000;
+      hasHistory = !!current && !!selectedId && !selectedId.startsWith('d:');
+    const interval = hasHistory && activityLive(current) ? 2000
+      : streamState === 'live' ? 30000 : hasHistory ? fastUntil > now() ? 2000 : 5000 : 30000;
     const listWait = Math.max(0, lastListAt + 30000 - now());
     timer = delay(() => {
       timer = null;
@@ -127,7 +132,7 @@ export function createConversationState({
   }
   const accelerate = () => {
     fastUntil = now() + 120000;
-    schedule(2000);
+    schedule(streamState === 'live' && !activityLive(cell()) ? 30000 : 2000);
   };
   const preview = content => {
     const parsed = parseC4Content(content);
@@ -147,21 +152,101 @@ export function createConversationState({
       })
     } : row).sort((a, b) => Number(b.stamp || 0) - Number(a.stamp || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
-  async function poll() {
-    if (polling) return polling;
+  function streamSubscription() {
+    if (!valid(epoch)) return null;
+    const current = cell();
+    return normalizeChatSubscription({ tab, conversationId: selectedId,
+      ids: current?.messages.filter(row => row.direction === 'in' && ['pending', 'running', 'pending_reconciliation'].includes(messageState(row))).slice(-100).map(row => row.id) || [] });
+  }
+  function clearStreamTimer() {
+    if (streamTimer !== null) cancel(streamTimer);
+    streamTimer = null;
+  }
+  function resetStream() {
+    clearStreamTimer();
+    streamScope = null;
+    streamState = 'polling';
+  }
+  function streamStatus(value, subscription = streamSubscription()) {
+    if (!valid(epoch) || chatSubscriptionKey(subscription) !== chatSubscriptionKey(streamSubscription())) return;
+    clearStreamTimer();
+    streamScope = chatSubscriptionKey(subscription);
+    streamState = value === 'connecting' ? 'connecting' : 'polling';
+    if (value === 'connecting') {
+      const e = epoch, scope = streamScope;
+      streamTimer = delay(() => {
+        streamTimer = null;
+        if (valid(e) && streamScope === scope && streamState === 'connecting') { streamState = 'polling'; emit(); }
+      }, 3000);
+      streamTimer?.unref?.();
+    }
+    emit();
+    schedule();
+  }
+  function streamEvent(name, data, subscription = streamSubscription()) {
+    if (!valid(epoch) || !matchesChatEvent(data, subscription)
+      || chatSubscriptionKey(subscription) !== chatSubscriptionKey(streamSubscription())) return;
+    if (name === 'chat_ready') {
+      clearStreamTimer();
+      streamState = 'live';
+      streamScope = chatSubscriptionKey(subscription);
+      emit();
+    } else if (!['chat_messages_changed', 'chat_delivery_changed'].includes(name)) return;
+    void poll({ dirty: true });
+  }
+  async function poll({ dirty = false, status = false, manual = false } = {}) {
+    readDirty ||= dirty;
+    readStatus ||= status;
+    if (polling) {
+      await polling;
+      if (valid(epoch) && visible() && (manual || status || !updateError) && (readDirty || readStatus)) return poll({ manual: manual || status });
+      return;
+    }
     if (!valid(epoch) || !visible()) return;
-    const e = epoch;
+    if (!manual && !status && updateError && retryAt > now()) {
+      schedule(retryAt - now());
+      return;
+    }
+    stopTimer();
+    const e = epoch, navigation = selectedVersion;
+    let passStatus = false, passDirty = false, passCurrent = null;
     // Install the lock before even an empty pass can finish.
     const task = Promise.resolve().then(async () => {
       try {
-        if (now() - lastListAt >= 30000) await list(false, true);
-        if (!valid(e) || !visible()) return;
-        const current = cell(),
-          id = selectedId,
-          currentTab = tab;
-        if (current?.afterCursor && !id.startsWith('d:')) await syncCurrent(current, id, currentTab, e);
+        const force = readDirty, checkStatus = readStatus;
+        passStatus = checkStatus;
+        passDirty = force;
+        readDirty = readStatus = false;
+        if (force || now() - lastListAt >= 30000) await list(false, true);
+        if (!valid(e) || !visible() || selectedVersion !== navigation) return;
+        const current = cell(), currentTab = tab;
+        passCurrent = current;
+        let id = selectedId;
+        if (current && currentTab === 'mine' && !current.sending && (checkStatus || force && current.retryRequired)) {
+          const data = await request(pathFor(id));
+          if (!valid(e) || !visible() || selectedVersion !== navigation) return;
+          current.receipt = data;
+          current.conversation = data.conversation;
+          current.ownershipResolved = !!data.conversation;
+          current.retryRequired = data.stored === null;
+          if (data.conversationId && data.conversationId !== id) {
+            id = data.conversationId;
+            cells.set(`${currentTab}:${id}`, current);
+            selectedId = id;
+          }
+        }
+        if (current && id && !id.startsWith('d:')) {
+          if (checkStatus && !force) {
+            await statuses(current, id, currentTab, e);
+            if (valid(e) && visible()) await questions(current, id, currentTab, false, e, null, true, true);
+          } else {
+            if (checkStatus) current.pendingQuestionRefresh = true;
+            await syncCurrent(current, id, currentTab, e);
+          }
+        }
         if (valid(e)) {
           updateError = null;
+          retryAt = 0;
           retryDelay = 5000;
           emit();
         }
@@ -169,8 +254,12 @@ export function createConversationState({
         if (!valid(e)) return;
         if ((err?.code || err?.payload?.error) === 'remote_chat_disabled') {
           failure(err, e);
+        } else if (passStatus && !passDirty) {
+          failure(err, e, passCurrent);
         } else {
           updateError = err?.code || 'chat_request_failed';
+          readDirty ||= passDirty;
+          readStatus ||= passStatus;
           emit();
         }
       } finally {
@@ -179,9 +268,11 @@ export function createConversationState({
           if (valid(epoch)) {
             if (updateError) {
               const wait = retryDelay;
+              retryAt = now() + wait;
               retryDelay = Math.min(60000, retryDelay * 2);
               schedule(wait);
-            } else schedule();
+            } else if ((readDirty || readStatus) && visible()) schedule(0);
+            else schedule();
           }
         }
       }
@@ -199,6 +290,7 @@ export function createConversationState({
     const code = err?.code || err?.payload?.error || err?.message || 'chat_request_failed';
     if (code === 'remote_chat_disabled') {
       stopTimer();
+      resetStream();
       cancelGroupPresenceRead();
       updateError = null;
       epoch++;
@@ -258,7 +350,7 @@ export function createConversationState({
         listLoadingVersion = 0;
         loading = false;
       }
-      if (quiet && !more && cell()) readGroupPresence(cell(), currentTab, e);
+      if (quiet && !more && cell() && visible()) readGroupPresence(cell(), currentTab, e);
       emit();
     } catch (err) {
       if (!valid(e) || version !== listVersion || currentTab !== tab) return;
@@ -586,7 +678,7 @@ export function createConversationState({
         if (err?.code === 'invalid_chat_cursor') return await recoverCursor(current, id, currentTab, e);
         throw err;
       }
-      if (!data || version !== current.historyVersion) return 0;
+      if (!data || version !== current.historyVersion || current !== cell() || id !== selectedId || currentTab !== tab) return 0;
       let added = applyMessages(current, id, data, direction === 'after' && currentTab === 'mine');
       if (direction !== 'after') current.messageCursor = data.nextCursor ?? null;
       if (direction !== 'before') current.afterCursor = data.afterCursor ?? null;
@@ -608,7 +700,7 @@ export function createConversationState({
       tab: currentTab,
       ids: ids.join(',')
     })}`);
-    if (!valid(e)) return;
+    if (!valid(e) || current !== cell() || id !== selectedId || currentTab !== tab) return;
     const updates = new Map((data.items || []).map(row => [row.id, row]));
     current.messages = current.messages.map(row => updates.has(row.id) ? {
       ...row,
@@ -706,10 +798,12 @@ export function createConversationState({
   async function syncCurrent(current, id, currentTab, e) {
     if (current.syncing) return current.syncing;
     current.syncing = (async () => {
-      await history(current, id, currentTab, 'after', e, true);
-      if (!valid(e)) return;
+      await history(current, id, currentTab, current.afterCursor ? 'after' : 'initial', e, true);
+      if (!valid(e) || !visible() || current !== cell() || id !== selectedId || currentTab !== tab) return;
       await statuses(current, id, currentTab, e);
-      if (valid(e)) await readActivity(current, id, currentTab, e);
+      if (!valid(e) || !visible()) return;
+      await readActivity(current, id, currentTab, e);
+      if (!valid(e) || !visible()) return;
       if (current.pendingQuestionRefresh) {
         const refreshed = await questions(current, id, currentTab, false, e, null, true, true);
         if (refreshed && valid(e)) current.pendingQuestionRefresh = false;
@@ -1002,6 +1096,9 @@ export function createConversationState({
   }
   return {
     snapshot,
+    streamSubscription,
+    streamStatus,
+    streamEvent,
     clearDrafts(scope) {
       for (const current of cells.values()) for (const form of current.questionForms.values()) {
         const own = form.draftScope;
@@ -1022,6 +1119,8 @@ export function createConversationState({
       const nextIdentity = identityValue();
       if (active && nextIdentity === openedIdentity) return;
       stopTimer();
+      resetStream();
+      readDirty = readStatus = false;
       if (nextIdentity !== openedIdentity) {
         cancelGroupPresenceRead();
         openedIdentity = nextIdentity;
@@ -1037,6 +1136,7 @@ export function createConversationState({
       active = true;
       epoch++;
       updateError = null;
+      retryAt = 0;
       retryDelay = 5000;
       fastUntil = 0;
       emit();
@@ -1049,6 +1149,9 @@ export function createConversationState({
       epoch++;
       loading = false;
       stopTimer();
+      resetStream();
+      readDirty = readStatus = false;
+      emit();
     },
     destroy() {
       cancelGroupPresenceRead();
@@ -1056,6 +1159,7 @@ export function createConversationState({
       destroyed = true;
       epoch++;
       stopTimer();
+      resetStream();
       document?.removeEventListener?.('visibilitychange', visibilityChanged);
       cells.clear();
       listeners.clear();
@@ -1104,41 +1208,7 @@ export function createConversationState({
     },
     loadMore: () => list(true),
     loadOlder,
-    async refreshMessages() {
-      if (!cell()?.afterCursor) return;
-      try {
-        await syncCurrent(cell(), selectedId, tab, epoch);
-        updateError = null;
-      } catch (err) {
-        if (err?.code === 'remote_chat_disabled') {
-          failure(err, epoch);
-        } else {
-          updateError = err?.code || 'chat_request_failed';
-          emit();
-        }
-      }
-      schedule();
-    },
-    async refreshStatus() {
-      const current = cell(),
-        id = selectedId,
-        e = epoch,
-        currentTab = tab;
-      if (!current || blocked) return;
-      if (currentTab === 'mine') await run(() => request(pathFor(id)), data => {
-        current.receipt = data;
-        current.conversation = data.conversation;
-        current.ownershipResolved = !!data.conversation;
-        current.retryRequired = data.stored === null;
-        emit();
-      }, e, current);
-      if (!valid(e)) return;
-      try {
-        await statuses(current, id, currentTab, e);
-      } catch (err) {
-        failure(err, e, current);
-      }
-      if (valid(e)) await questions(current, id, currentTab, false, e, null, false, true);
-    }
+    refreshMessages() { return poll({ dirty: true, manual: true }); },
+    refreshStatus() { return poll({ status: true }); }
   };
 }

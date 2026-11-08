@@ -4,7 +4,7 @@ import { element, icon } from './plain-text.js?v=104';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon } from './board.js?v=115';
-import { createConversationState } from './conversation-state.js?v=124';
+import { createConversationState } from './conversation-state.js?v=125';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=104';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=109';
@@ -54,6 +54,7 @@ export function mountConversationPage({
   draftScope = () => null,
   groupLinks = null,
   technicalDetails = () => false,
+  onStreamSubscription = () => {},
   storage = globalThis.localStorage
 } = {}) {
   let destroyed = false,
@@ -286,6 +287,9 @@ export function mountConversationPage({
   }, 'edit', 'wb-icon-btn');
   titleLine.append(title, renameToggle);
   heading.append(titleLine, subtitle, running);
+  const streamHint = node('span', undefined, 'conversation-push-status');
+  streamHint.setAttribute('role', 'status');
+  heading.append(streamHint);
   const headerActions = node('div', undefined, 'conversation-header-actions');
   const readNew = action('refreshMessages', () => state.refreshMessages(), 'restart');
   const statusCheck = action('refreshStatus', () => state.refreshStatus(), 'check');
@@ -1172,6 +1176,8 @@ export function mountConversationPage({
     errorNotice.hidden = !s.error || duplicateSendError || s.receipt?.stored === true && s.error === s.receipt.error;
     text(errorNotice, s.error ? t(conversationErrorKey(s.error)) : '');
     updateNotice.hidden = !s.updateError;
+    streamHint.dataset.streamState = s.streamState;
+    text(streamHint, t('chat.page.push.' + s.streamState));
     const current = s.conversation ?? s.items.find(item => item.id === s.selectedId);
     text(title, nameOf(current, s.tab === 'external'));
     const rateWait = s.groupWait?.kind === 'rate_wait';
@@ -1285,9 +1291,19 @@ export function mountConversationPage({
     reconcileMessages(s, switched, before);
     scheduleFit();
   }
-  const unsubscribe = state.subscribe(redraw);
+  let streamSubscriptionKey = 'null';
+  const notifyStreamSubscription = () => {
+    const subscription = state.streamSubscription(), next = JSON.stringify(subscription);
+    if (next === streamSubscriptionKey) return;
+    streamSubscriptionKey = next;
+    onStreamSubscription(subscription);
+  };
+  const unsubscribe = state.subscribe(() => { redraw(); notifyStreamSubscription(); });
   redraw();
   return {
+    streamSubscription: state.streamSubscription,
+    streamStatus: state.streamStatus,
+    streamEvent: state.streamEvent,
     async open(...args) {
       page.hidden = false;
       scheduleFit();
@@ -1337,6 +1353,7 @@ export function mountConversationPage({
       }
       fitObserver?.disconnect();
       unsubscribe();
+      onStreamSubscription(null);
       state.destroy();
       listRows.clear();
       for (const record of messages.values()) record.resource?.destroy?.();

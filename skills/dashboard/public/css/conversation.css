@@ -1152,3 +1152,5 @@ button.conversation-activity-head:focus-visible { outline:2px solid var(--accent
 @media (prefers-reduced-motion: reduce) {
   .conversation-activity-step[data-status=running]>.wb-ico,.conversation-activity-dots>i { animation:none; }
 }
+
+.conversation-push-status { color: var(--text-muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }

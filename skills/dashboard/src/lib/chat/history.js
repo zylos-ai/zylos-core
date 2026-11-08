@@ -280,6 +280,34 @@ export class ChatHistory {
     return rows;
   }
 
+  /** Metadata-only invalidation baseline; no previews, body or attachments. */
+  chatChangeSnapshot({ tab = 'mine', conversationId = null, ids = [] } = {}, { afterId = null } = {}) {
+    this._tab(tab);
+    if (!Array.isArray(ids) || ids.length > 100) throw fail('invalid_chat_message_ids');
+    if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 0)) throw fail('invalid_chat_cursor');
+    const watch = ids.length ? this._messageIds(ids) : [];
+    if (!conversationId && watch.length) throw fail('invalid_chat_conversation');
+    return this._db().transaction(() => {
+      const range = conversationId ? this._conversation(tab, conversationId) : null;
+      // Core inserts allocate AUTOINCREMENT IDs. A primary-key frontier avoids
+      // rescanning old conversations, including excluded-channel traffic.
+      const highwater = this._query('SELECT COALESCE(MAX(id),0) AS id FROM conversations', {})[0].id;
+      if (afterId !== null && afterId > highwater) throw fail('chat_history_unavailable', 502);
+      const listScope = this._scope(tab, '1=1', {});
+      const inserted = this._query(`SELECT c.id FROM conversations c NOT INDEXED
+        WHERE c.id>@afterId AND c.id<=@highwater AND ${visible} AND ${listScope.where}
+        ORDER BY c.id LIMIT 1`, { afterId: afterId ?? highwater, highwater });
+      let latestId = null, delivery = [];
+      if (range) {
+        latestId = this._query(`SELECT c.id FROM conversations c
+          WHERE ${visible} AND ${range.where} ORDER BY c.id DESC LIMIT 1`, range.parameters)[0]?.id ?? null;
+        if (watch.length) delivery = this._rowsByIds(range, watch,
+          'c.id,c.direction,c.status,c.delivery_action').sort((a, b) => a.id - b.id);
+      }
+      return { highwater, listChanged: inserted.length > 0, latestId, delivery };
+    })();
+  }
+
   status(id, { tab = 'mine', ids } = {}) {
     const range = this._conversation(tab, id);
     const rows = this._rowsByIds(range, this._messageIds(ids), 'c.id,c.direction,c.status,c.delivery_action');

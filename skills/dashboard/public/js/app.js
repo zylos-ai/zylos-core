@@ -1,3 +1,4 @@
+import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=102';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=114';
@@ -6,7 +7,7 @@ import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/set
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=104';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=117';
 import { renderVersion } from './wb/settings-version.js?v=104';
-import { mountConversationPage } from './wb/conversation-page.js?v=125';
+import { mountConversationPage } from './wb/conversation-page.js?v=126';
 import { mountChatSettings } from './wb/chat-settings.js?v=113';
 import { mountWorkbench } from './wb/shell.js?v=116';
 import { watchHeader } from './wb/header-fit.js?v=94';
@@ -1565,6 +1566,17 @@ async function refreshAll() {
 }
 
 // ─── SSE ───
+let chatReconnectQueued = false, sseGeneration = 0;
+const chatPush = createConversationPush({
+  onSubscriptionChange() {
+    if (chatReconnectQueued) return;
+    chatReconnectQueued = true;
+    queueMicrotask(() => { chatReconnectQueued = false; connectSse(); });
+  },
+  onStatus: (status, subscription) => chatPage?.streamStatus(status, subscription),
+  onEvent: (name, data, subscription) => chatPage?.streamEvent(name, data, subscription),
+  isCurrent: source => state.eventSource === source,
+});
 function applySse(name, data) {
   if (!data || typeof data !== 'object') return;
   // A remote agent's stream describes its own fleet; never let it clobber ours.
@@ -1589,13 +1601,15 @@ function applySse(name, data) {
 
 function connectSse() {
   if (!window.EventSource) return;
+  sseGeneration++;
+  chatPush.detach();
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;
   }
   clearTimeout(state.sseReconnectTimer);
 
-  const source = new EventSource(api(agentPath('/api/stream')));
+  const source = new EventSource(chatPush.streamUrl(api(agentPath('/api/stream'))));
   state.eventSource = source;
 
   source.onopen = () => {
@@ -1607,12 +1621,15 @@ function connectSse() {
 
   source.onerror = () => {
     if (state.eventSource !== source) return;
+    chatPage?.streamStatus('disconnected');
+    chatPush.detach();
     source.close();
     state.eventSource = null;
     renderConnection('reconnecting');
     scheduleSseReconnect();
   };
 
+  chatPush.attach(source);
   for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet', 'history_changed']) {
     state.eventSource.addEventListener(ev, (e) => {
       if (state.eventSource !== source) return;
@@ -1623,17 +1640,21 @@ function connectSse() {
 }
 
 function scheduleSseReconnect() {
+  const generation = sseGeneration;
   const delay = Math.min(1000 * Math.pow(2, state.sseRetries || 0), 30000);
   state.sseRetries = (state.sseRetries || 0) + 1;
   state.sseReconnectTimer = setTimeout(async () => {
+    if (generation !== sseGeneration) return;
     try {
       const r = await fetch(api(agentPath('/api/state')), { cache: 'no-store' });
+      if (generation !== sseGeneration) return;
       if (r.status === 401) {
         window.location.href = api('/login');
         return;
       }
       if (!r.ok) throw new Error(r.status);
     } catch {
+      if (generation !== sseGeneration) return;
       renderConnection('reconnecting');
       scheduleSseReconnect();
       return;
@@ -2896,6 +2917,8 @@ window.addEventListener('beforeunload', () => {
   clearInterval(state.pollTimer);
   clearFleetFallback();
   clearTimeout(state.sseReconnectTimer);
+  sseGeneration++;
+  chatPush.destroy();
   state.eventSource?.close();
   closeObserver({ release: true }).catch(() => {});
 });
@@ -2978,6 +3001,7 @@ const stopSchedule = mountSchedule({
 });
 window.addEventListener('pagehide', stopSchedule);
 chatPage = mountConversationPage({ root: document.querySelector('#wb-chat'), t,
+  onStreamSubscription: subscription => chatPush.setSubscription(subscription),
   fetch: draftFetch, draftStore: draftRestoreStore,
   draftScope: () => ({ authRoot: FORM_AUTH_ROOT, instance: draftInstance(FORM_AUTH_ROOT, state.remoteAgent ?? REMOTE_AGENT ?? null) }),
   endpoint: path => api(agentPath(path)),
