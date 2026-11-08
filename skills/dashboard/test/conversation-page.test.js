@@ -407,7 +407,7 @@ for (const locale of ['en', 'zh']) test(`push updates preserve the editor and ol
   page.streamStatus('connecting', subscription);
   assert.equal(root.querySelector('.conversation-push-status').textContent, translations['chat.page.push.connecting']);
   updated = true;
-  page.streamEvent('chat_ready', { version: 1, ...subscription }, subscription); await tick(); await tick();
+  page.streamEvent('chat_ready', { version: 1, ids: [], ...subscription }, subscription); await tick(); await tick();
   assert.equal(root.querySelector('.conversation-push-status').textContent, translations['chat.page.push.live']);
   assert.equal(root.querySelector('[data-message-id="1"]'), message);
   assert.equal(root.querySelector('.conversation-input'), input);
@@ -438,7 +438,7 @@ test('initial ready catchup releases the loading notice and both manual read but
   t.after(() => page.destroy());
   const opening = page.open(); await tick();
   page.streamStatus('connecting', subscription);
-  page.streamEvent('chat_ready', { version: 1, ...subscription }, subscription); await tick();
+  page.streamEvent('chat_ready', { version: 1, ids: [], ...subscription }, subscription); await tick();
   assert.equal(resolvers.length, 2);
   resolvers[1]({ items: [{ id: 'g:AA', displayName: 'Current data' }], nextCursor: null }); await tick(); await tick();
   allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click'); await tick(); await tick();

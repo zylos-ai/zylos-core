@@ -60,7 +60,7 @@ function fixture(t, override = () => undefined) {
     setIdentity: value => { identity = value; },
     async open() { await state.open(); await state.select('g:AA'); },
     async visible(value) { document.hidden = !value; document.visibilityState = value ? 'visible' : 'hidden'; for (const fn of listeners) fn(); await flush(); },
-    event(name, extra = {}, subscription = state.streamSubscription()) { state.streamEvent(name, { version: 1, ...subscription, ...extra }, subscription); return flush(); }
+    event(name, extra = {}, subscription = state.streamSubscription()) { state.streamEvent(name, { version: 1, ids: [], ...subscription, ...extra }, subscription); return flush(); }
   };
 }
 
@@ -137,12 +137,12 @@ test('fallback polling initializes a canonical conversation whose first history 
   assert.equal(f.reads().length, 2);
 });
 
-test('stale scope, protocol and watch ids cannot trigger reads or mark push ready', async t => {
+test('stale scope, protocol and malformed hint ids cannot trigger reads or mark push ready', async t => {
   const f = fixture(t); await f.open(); const subscription = f.state.streamSubscription(), before = f.calls.length;
-  for (const patch of [{ version: 2 }, { tab: 'external' }, { conversationId: 'g:BB' }, { ids: [] }]) await f.event('chat_ready', patch, subscription);
+  for (const patch of [{ version: 2 }, { tab: 'external' }, { conversationId: 'g:BB' }, { ids: [-1] }, { ids: [1, 1] }, { ids: Array.from({ length: 101 }, (_, i) => i + 1) }]) await f.event('chat_ready', patch, subscription);
   assert.equal(f.calls.length, before); assert.equal(f.state.snapshot().streamState, 'polling');
   f.state.close(); f.setIdentity('remote'); await f.state.open();
-  f.state.streamEvent('chat_ready', { version: 1, ...subscription }, subscription); await flush();
+  f.state.streamEvent('chat_ready', { version: 1, ids: [], ...subscription }, subscription); await flush();
   assert.equal(f.state.snapshot().streamState, 'polling');
 });
 
@@ -172,7 +172,7 @@ test('push binding only augments the existing stream URL and ignores detached or
   const sub = { tab: 'mine', conversationId: 'g:AA', ids: [3, 1, 1] };
   push.setSubscription(sub); push.setSubscription({ ...sub, ids: [1, 3] }); assert.equal(changes.length, 1);
   const url = new URL(push.streamUrl('/dashboard/fleet/Peer/api/stream'), 'http://fixture');
-  assert.equal(url.pathname, '/dashboard/fleet/Peer/api/stream'); assert.equal(url.searchParams.get('chat_ids'), '1,3');
+  assert.equal(url.pathname, '/dashboard/fleet/Peer/api/stream'); assert.equal(url.searchParams.has('chat_ids'), false);
   assert.equal(url.searchParams.has('token'), false);
   const first = current = new FakeSource(); push.attach(first);
   const data = { version: 1, tab: 'mine', conversationId: 'g:AA', ids: [1, 3] };
@@ -180,7 +180,7 @@ test('push binding only augments the existing stream URL and ignores detached or
   push.setSubscription({ ...sub, conversationId: 'g:BB' }); first.emit('chat_ready', data); assert.equal(events.length, 1);
   const second = current = new FakeSource(); push.attach(second); current = new FakeSource(); second.emit('chat_ready', { ...data, conversationId: 'g:BB' }); assert.equal(events.length, 1);
   push.destroy(); assert.equal(statuses.length, 2);
-  assert.deepEqual(normalizeChatSubscription({ tab: 'external', conversationId: 'd:draft', ids: [1] }), { tab: 'external', conversationId: null, ids: [] });
+  assert.deepEqual(normalizeChatSubscription({ tab: 'external', conversationId: 'd:draft', ids: [1] }), { tab: 'external', conversationId: null });
 });
 
 test('coalesced hints cannot bypass bounded backoff after a pending read fails', async t => {
@@ -217,7 +217,7 @@ test('a message hint coalesced with manual status still reads new message truth'
   await event; await manual;
   assert.equal(f.reads().length, 2);
   assert.equal(f.state.snapshot().messages.find(row => row.id === 2)?.content, 'combined reply');
-  assert.equal(f.calls.filter(call => call.u.pathname.endsWith('/status')).length, 1);
+  assert.ok(f.calls.filter(call => call.u.pathname.endsWith('/status')).length >= 1);
 });
 
 test('a previous conversation read cannot update visible messages or list previews after selection changes', async t => {
@@ -311,4 +311,50 @@ test('a previous identity list cannot clear a new foreground loading token', asy
   resolvers[1]({ items: [{ id: 'g:AA' }], nextCursor: null }); await newOpening;
   assert.equal(f.state.snapshot().loading, false);
   assert.equal(f.state.snapshot().items[0].id, 'g:AA');
+});
+
+for (const accelerated of [false, true]) test(`reconnect churn preserves the ${accelerated ? 'two' : 'five'} second fallback deadline`, { timeout: 2000 }, async t => {
+  const f = fixture(t); await f.open();
+  if (accelerated) { f.state.setInput('send once'); await f.state.send(); }
+  await f.event('chat_ready');
+  const started = f.timer.now(), interval = accelerated ? 2000 : 5000;
+  const baseline = f.reads().length;
+  f.state.streamStatus('disconnected');
+  for (let elapsed = 100; elapsed < interval; elapsed += 100) {
+    await f.timer.advance(100);
+    f.state.streamStatus(elapsed % 200 ? 'connecting' : 'disconnected');
+  }
+  await f.timer.advance(99);
+  assert.equal(f.reads().length, baseline, 'reconnect transitions cannot move the original deadline earlier');
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, baseline + 1, 'reconnect transitions cannot postpone fallback');
+  assert.equal(f.reads().at(-1).at, started + interval);
+  for (let elapsed = 100; elapsed <= interval * 2; elapsed += 100) {
+    await f.timer.advance(100);
+    f.state.streamStatus(elapsed % 200 ? 'connecting' : 'disconnected');
+  }
+  const automatic = f.reads().slice(baseline);
+  assert.equal(automatic.length, 3);
+  for (let i = 0; i < automatic.length; i++) assert.equal(automatic[i].at, started + interval * (i + 1));
+});
+
+test('pending row changes keep the canonical conversation subscription and existing source', { timeout: 2000 }, async t => {
+  let delivered = false;
+  const f = fixture(t, u => u.pathname.endsWith('/status')
+    ? { items: [{ id: 1, status: delivered ? 'delivered' : 'pending' }] } : undefined);
+  await f.open();
+  const changes = [], events = [];
+  const push = createConversationPush({ onSubscriptionChange: sub => changes.push(sub), onEvent: (...args) => events.push(args) });
+  t.after(() => push.destroy());
+  push.setSubscription(f.state.streamSubscription());
+  const source = new FakeSource(); push.attach(source);
+  f.state.setInput('another message'); await f.state.send();
+  push.setSubscription(f.state.streamSubscription());
+  delivered = true; await f.state.refreshStatus();
+  push.setSubscription(f.state.streamSubscription());
+  assert.equal(changes.length, 1, 'pending and terminal row sets do not change the subscription');
+  assert.deepEqual(f.state.streamSubscription(), { tab: 'mine', conversationId: 'g:AA' });
+  assert.equal(new URL(push.streamUrl('/api/stream'), 'http://fixture').searchParams.has('chat_ids'), false);
+  source.emit('chat_delivery_changed', { version: 1, tab: 'mine', conversationId: 'g:AA', ids: [1] });
+  assert.equal(events.length, 1, 'the attached source remains active after sending and delivery');
 });

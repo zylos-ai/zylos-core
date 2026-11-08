@@ -118,9 +118,9 @@ test('an old stream producer remains connected while current chat uses polling f
   await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${update.pendingId}"] [data-delivery-state="delivered"]') && !!document.querySelector('[data-message-id="${update.id}"]')`), 'old producer fallback reads committed truth', 6000);
   const latencyMs = Date.now() - update.committedAt;
   assert.ok(latencyMs <= 6000);
-  await until(() => page.evaluate(`document.querySelector('.conversation-push-status').dataset.streamState==='polling'`), 'terminal-ID subscription change also retains old-producer polling fallback', 3500);
+  await until(() => page.evaluate(`document.querySelector('.conversation-push-status').dataset.streamState==='polling'`), 'terminal delivery retains old-producer polling fallback', 3500);
   const streamsAfter = fixture.requests.filter(row => row.path === '/api/stream').length;
-  assert.ok(streamsAfter <= streamsBefore + 1, 'only clearing terminal delivery IDs may rebuild the stream');
+  assert.equal(streamsAfter, streamsBefore, 'pending and terminal delivery do not rebuild the stream');
   assert.equal(fixture.hub.clients.size, 1);
   await pause(1000);
   assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, streamsAfter);
@@ -138,4 +138,54 @@ test('an old stream producer remains connected while current chat uses polling f
   console.info('old stream browser result', JSON.stringify({ latencyMs, streamsBefore, streamsAfter, activeStreams: 1, polling: true }));
   await page.evaluate('window.dispose()');
   await browser.close(); await sandbox.close();
+});
+
+test('four user sends and delivery transitions retain the same conversation stream', {
+  skip: !enabled, timeout: 20000,
+}, async t => {
+  const sandbox = createChatSandbox(t);
+  const fixture = await createChatPushBrowserFixture(sandbox);
+  const browser = await startChatBrowser(t, sandbox, fixture.origin);
+  const page = await browser.page({ locale: 'en', width: 1280 });
+  await until(() => page.evaluate(`document.querySelector('.conversation-push-status')?.dataset.streamState==='live'`), 'initial ready', 5000);
+  await settledControls(page);
+  const before = fixture.requests.filter(row => row.path === '/api/stream').length;
+  for (let i = 0; i < 4; i++) {
+    const previousPendingId = fixture.currentPendingId();
+    await page.evaluate(`(()=>{const input=document.querySelector('textarea.conversation-input');input.value='User send ${i}';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-action="send"]').click();})()`);
+    await until(() => fixture.requests.filter(row => row.method === 'POST').length === i + 1 && fixture.currentPendingId() !== previousPendingId, 'one user POST per send');
+    const id = fixture.currentPendingId();
+    await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${id}"]') && !document.querySelector('textarea.conversation-input').disabled`), 'sent row read back');
+    const update = fixture.deliverAndReply('Reply to user send ' + i);
+    await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${id}"] [data-delivery-state="delivered"]') && !!document.querySelector('[data-message-id="${update.id}"]')`), 'delivery and reply from committed rows', 2000);
+    assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, before, 'same-scope send and completion never reconnect');
+  }
+  assert.equal(fixture.requests.filter(row => row.method === 'POST').length, 4);
+  assert.equal(fixture.hub.clients.size, 1);
+  assert.equal(browser.errors.length, 0); assert.equal(browser.external.length, 0);
+  console.info('chat stable stream browser result', JSON.stringify({ sends: 4, streamsBefore: before, streamsAfter: before, active: 1 }));
+  await page.evaluate('window.dispose()'); await browser.close(); await sandbox.close();
+});
+
+for (const status of [503, 401]) test(`stream ${status} reconnect attempts preserve normal polling deadlines`, {
+  skip: !enabled, timeout: 15000,
+}, async t => {
+  const sandbox = createChatSandbox(t);
+  const fixture = await createChatPushBrowserFixture(sandbox);
+  const browser = await startChatBrowser(t, sandbox, fixture.origin);
+  const page = await browser.page({ locale: 'en', width: 1280 });
+  await until(() => page.evaluate(`document.querySelector('.conversation-push-status')?.dataset.streamState==='live'`), 'initial ready', 5000);
+  await settledControls(page);
+  const disconnectedAt = Date.now(); fixture.interrupt(status);
+  await until(() => page.evaluate(`document.querySelector('.conversation-push-status')?.dataset.streamState==='polling'`), 'disconnect restores polling', 2000);
+  await pause(3000);
+  const update = fixture.deliverAndReply('Reply while stream repeatedly fails ' + status);
+  await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${update.id}"]') && !!document.querySelector('[data-message-id="${update.pendingId}"] [data-delivery-state="delivered"]')`), 'polling reads despite frequent failing reconnects', 3000);
+  const elapsedMs = Date.now() - disconnectedAt;
+  assert.ok(elapsedMs <= 6000, 'normal fallback is not deferred beyond its five-second cadence plus browser tolerance');
+  assert.ok(fixture.requests.filter(row => row.path === '/api/stream').length >= 3, 'reconnect status churn really occurred');
+  assert.equal(fixture.requests.some(row => row.method !== 'GET'), false);
+  assert.equal(browser.errors.length, 0); assert.equal(browser.external.length, 0);
+  console.info('chat outage browser result', JSON.stringify({ status, elapsedMs, commitToDomMs: Date.now() - update.committedAt }));
+  await page.evaluate('window.dispose()'); await browser.close(); await sandbox.close();
 });

@@ -21,11 +21,12 @@ async function until(check) {
 // listeners; no DB/tmux/PM2/model. All clients/listeners/timers are fixture-owned.
 async function fixture(t) {
   console.info('chat proxy isolation', JSON.stringify(Object.fromEntries(['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'].map(key => [key,process.env[key]]))), 'DB/socket/PM2/tmux unused; loopback ephemeral ports');
-  let localRevoked = false, version = 1, forwarded = 0;
+  let localRevoked = false, version = 1, forwarded = 0, touches = 0, deletes = 0;
+  const session = { created_at: Date.now(), last_activity_at: Date.now() };
   const cookie = 'private-chat-proxy-cookie', token = 'zylos_st_' + 'b'.repeat(64), read = 'zylos_st_' + 'a'.repeat(64);
   const store = {
-    getSession: digest => !localRevoked && digest === hash(cookie) ? { created_at: Date.now(), last_activity_at: Date.now() } : null,
-    touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
+    getSession: digest => !localRevoked && digest === hash(cookie) ? session : null,
+    touchSession(_hash, at) { touches++; session.last_activity_at = at; }, deleteSession() { deletes++; localRevoked = true; }, cleanupSessions() {}, cleanupExpiredApiSessions() {},
     getApiSession: digest => digest === hash(token) || digest === hash(read)
       ? { api_key_id: 'private', scope: digest === hash(token) ? 'admin' : 'read', expires_at: Date.now()+60000 } : null
   };
@@ -65,7 +66,7 @@ async function fixture(t) {
     for(const socket of sockets)socket.destroy();observer.close();hub.closeAll();clearInterval(auth._cleanupTimer);clearInterval(localAuth._cleanupTimer);
     for(const server of servers){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
   });
-  return {open,config,observer,forwarded:()=>forwarded,revoke:()=>{localRevoked=true;},change:()=>{version++;},
+  return {open,config,observer,session,touches:()=>touches,deletes:()=>deletes,forwarded:()=>forwarded,revoke:()=>{localRevoked=true;},change:()=>{version++;},
     async leakSplitRecord() {
       const frame = `event: state_change\ndata: {"value":"${token}"}\n\n`;
       const at = frame.indexOf(token)+20;
@@ -109,4 +110,21 @@ test('Fleet chat framing rejects a secret split between transport chunks before 
   await f.leakSplitRecord();
   await until(()=>stream.ended());
   assert.equal(stream.text(),before,'no part of the secret-bearing record reaches the browser');
+});
+
+test('Fleet chunk revalidation is readonly and rejects an idle-expired browser session',gated,async t=>{
+  const f=await fixture(t),stream=f.open();
+  await until(()=>stream.text().includes('event: chat_ready'));
+  const touches=f.touches(),lastActivity=f.session.last_activity_at;
+  assert.ok(touches>0,'ordinary local HTTP admission still records activity');
+  for(let i=0;i<4;i++){
+    f.change();await pause(30);
+  }
+  assert.equal(f.touches(),touches,'SSE data and keepalive records do not refresh the local cookie');
+  assert.equal(f.session.last_activity_at,lastActivity);
+  const before=stream.text();f.session.last_activity_at=Date.now()-3_600_001;f.change();
+  await until(()=>stream.ended());
+  assert.equal(stream.text(),before,'no data record crosses after local idle expiry');
+  assert.equal(f.deletes(),0,'readonly stream validation never deletes a session row');
+  await until(()=>f.observer.subscriptions.size===0);
 });

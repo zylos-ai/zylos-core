@@ -52,7 +52,7 @@ export async function createChatPushBrowserFixture(sandbox, { legacyHub = null }
     add(CONTENT_PREFIX + JSON.stringify(envelope), { id: 61 });
   })();
   let pendingId = add('Please update delivery automatically. / 请自动更新投递状态。', { direction: 'in', status: 'pending' });
-  let streamsAllowed = true;
+  let streamsAllowed = true, streamFailureStatus = 503;
   const requests = [], events = [];
   const sendTo = hub.sendTo?.bind(hub);
   if (sendTo) hub.sendTo = (client, name, data) => {
@@ -87,7 +87,7 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
       if (url.pathname.startsWith('/api/')) {
         if (requests.length >= 300) return json(res, { error: 'fixture_request_limit' }, 503);
         requests.push({ path: url.pathname, query: url.search, method: req.method, page: req.headers['x-fixture-page'] ?? null, at: Date.now() });
-        if (url.pathname === '/api/stream' && !streamsAllowed) return json(res, { error: 'private_stream_outage' }, 503);
+        if (url.pathname === '/api/stream' && !streamsAllowed) return json(res, { error: 'private_stream_outage' }, streamFailureStatus);
         if (url.pathname === '/api/stream' && legacyHub) {
           const denied = requireChatAccess(req, auth, config);
           if (denied) return json(res, { error: denied.error }, denied.status);
@@ -98,6 +98,16 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
         if (await handleChatStream(req, res, url, { auth, config, hub, observer })) return;
         const denied = requireChatAccess(req, auth, config);
         if (denied) return json(res, { error: denied.error }, denied.status);
+        if (req.method === 'POST' && url.pathname.endsWith('/send')) {
+          let body = '';
+          for await (const chunk of req) {
+            body += chunk.toString();
+            if (Buffer.byteLength(body) > 16384) return json(res, { error: 'fixture_body_limit' }, 413);
+          }
+          const content = JSON.parse(body).content;
+          pendingId = add(content, { direction: 'in', status: 'pending' });
+          return json(res, { stored: true, conversationId, deliveryState: 'pending' });
+        }
         if (await handleChatHistory(req, res, url, { auth, config, history })) return;
         if (url.pathname === '/api/session-mode') return json(res, { data: { sessionMode: 'multi' } });
         if (url.pathname.endsWith('/questions')) return json(res, { items: [question], nextCursor: null });
@@ -121,7 +131,8 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
       writer.transaction(() => { writer.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(pendingId); id = add(label); })();
       return { id, committedAt: Date.now(), pendingId };
     }, addReply(label) { const id = add(label); return { id, committedAt: Date.now() }; },
-    interrupt() { streamsAllowed = false; hub.closeAll(); }, recover() { streamsAllowed = true; },
+    interrupt(status = 503) { streamFailureStatus = status; streamsAllowed = false; hub.closeAll(); }, recover() { streamsAllowed = true; },
+    currentPendingId() { return pendingId; },
     newPending() { pendingId = add('Another pending message / 另一条待投递消息', { direction: 'in', status: 'pending' }); return pendingId; }
   };
 }

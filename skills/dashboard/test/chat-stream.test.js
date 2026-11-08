@@ -19,12 +19,13 @@ class Response extends EventEmitter {
 }
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 function fixture(t) {
-  let revoked = false, reads = 0;
+  let revoked = false, reads = 0, touches = 0, deletes = 0;
+  const session = { created_at: Date.now(), last_activity_at: Date.now() };
   const cookie = 'isolated-chat-stream-session';
   const tokens = { read: 'zylos_st_' + 'a'.repeat(64), admin: 'zylos_st_' + 'b'.repeat(64) };
   const store = {
-    getSession: hash => !revoked && hash === digest(cookie) ? { created_at: Date.now(), last_activity_at: Date.now() } : null,
-    touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
+    getSession: hash => !revoked && hash === digest(cookie) ? session : null,
+    touchSession(_hash, at) { touches++; session.last_activity_at = at; }, deleteSession() { deletes++; revoked = true; }, cleanupSessions() {}, cleanupExpiredApiSessions() {},
     getApiSession(hash) {
       const scope = Object.keys(tokens).find(key => hash === digest(tokens[key]));
       return !revoked && scope ? { api_key_id: scope, scope, expires_at: Date.now() + 60000 } : null;
@@ -44,7 +45,7 @@ function fixture(t) {
     const handled = handleChatStream(req, res, new URL('/api/stream' + search, 'http://fixture'), { auth, config, hub, observer });
     return { req, res, handled };
   };
-  return { request, config, hub, observer, reads: () => reads, revoke: () => { revoked = true; }, tick: () => task?.() };
+  return { request, config, hub, observer, session, touches: () => touches, deletes: () => deletes, reads: () => reads, revoke: () => { revoked = true; }, tick: () => task?.() };
 }
 
 test('chat stream uses actual cookie and API chat admission before any snapshot', t => {
@@ -101,7 +102,7 @@ test('keepalive rechecks live chat policy and releases observer membership', asy
 
 test('invalid chat query and methods are rejected before subscription', t => {
   const f = fixture(t);
-  for (const query of ['?chat=0', '?chat=1&chat=1', '?chat=1&chat_tab=other', '?chat=1&chat_ids=1', '?chat=1&chat_conversation=d:1']) {
+  for (const query of ['?chat=0', '?chat=1&chat=1', '?chat=1&chat_tab=other', '?chat=1&chat_ids=1', '?chat=1&chat_conversation=g:AA&chat_ids=1', '?chat=1&chat_conversation=d:1']) {
     const before = f.reads(); assert.equal(f.request('cookie', query).res.status, 400); assert.equal(f.reads(), before);
   }
   assert.equal(f.request('cookie', '?chat=1', 'POST').res.status, 405);
@@ -119,4 +120,49 @@ test('a slow or throwing client is removed once and cannot retain a pending even
   throwing.write = () => { throw Error('fixture write failed'); };
   assert.equal(f.hub.sendTo(second, 'state_change', {}), false);
   assert.equal(closed, 2); assert.equal(f.hub.clients.size, 0);
+});
+
+test('chat sampling emission and keepalive revalidate cookies without extending idle expiry', { timeout: 2000 }, async t => {
+  const f = fixture(t), { res } = f.request();
+  const touches = f.touches(), lastActivity = f.session.last_activity_at;
+  assert.equal(touches, 1, 'initial HTTP admission remains activity');
+  const client = [...f.hub.clients][0];
+  for (let i = 0; i < 10; i++) { f.tick(); f.hub.sendTo(client, 'chat_ready', { version: 1 }); }
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(f.touches(), touches, 'sampling, sending and keepalive never touch the session');
+  assert.equal(f.session.last_activity_at, lastActivity);
+  f.session.last_activity_at = Date.now() - 3_600_001;
+  f.tick();
+  assert.equal(res.writableEnded, true, 'open stream cannot keep an idle cookie valid');
+  assert.equal(f.deletes(), 0, 'readonly expiry check does not write a deletion');
+  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.hub.chatClients.size, 0);
+});
+
+test('chat connection caps reject before headers and release capacity on close', t => {
+  const f = fixture(t); f.config.chat.allowRemote = true;
+  assert.equal(f.hub.maxChatClients, 100); assert.equal(f.hub.maxChatClientsPerPrincipal, 20);
+  f.hub.maxChatClients = 2; f.hub.maxChatClientsPerPrincipal = 1;
+  const cookie = f.request().res, before = f.reads();
+  const duplicate = f.request().res;
+  assert.equal(duplicate.status, 429); assert.match(duplicate.text(), /chat_connection_limit/);
+  assert.doesNotMatch(duplicate.headers['content-type'], /event-stream/);
+  assert.equal(f.reads(), before); assert.equal(f.observer.subscriptions.size, 1);
+  const admin = f.request('admin').res;
+  assert.equal(admin.status, 200); assert.equal(f.hub.clients.size, 2);
+  const ordinary = new Response(); f.hub.addClient(ordinary);
+  assert.equal(ordinary.status, 200, 'ordinary streams do not consume chat admission');
+  cookie.end(); assert.equal(f.observer.subscriptions.size, 1);
+  const replacement = f.request().res;
+  assert.equal(replacement.status, 200); assert.equal(f.observer.subscriptions.size, 2);
+  admin.end(); replacement.end();
+  assert.equal(f.hub.chatClients.size, 0); assert.equal(f.observer.subscriptions.size, 0);
+});
+
+test('the instance chat cap bounds different principals before snapshot work', t => {
+  const f = fixture(t); f.config.chat.allowRemote = true;
+  f.hub.maxChatClients = 1; f.hub.maxChatClientsPerPrincipal = 2;
+  const first = f.request().res, reads = f.reads();
+  assert.equal(f.request('admin').res.status, 429);
+  assert.equal(f.reads(), reads); assert.equal(f.hub.clients.size, 1);
+  first.end(); assert.equal(f.request('admin').res.status, 200);
 });

@@ -3,16 +3,15 @@ const canonical = value => typeof value === 'string' && /^(?:g:(?:[0-9A-F]{2})+|
 export function normalizeChatSubscription(value) {
   if (!value || !['mine', 'external'].includes(value.tab)) return null;
   const conversationId = canonical(value.conversationId) ? value.conversationId : null;
-  const ids = conversationId && value.tab === 'mine' && Array.isArray(value.ids)
-    ? [...new Set(value.ids.filter(id => Number.isSafeInteger(id) && id > 0))].slice(-100).sort((a, b) => a - b) : [];
-  return { tab: value.tab, conversationId, ids };
+  return { tab: value.tab, conversationId };
 }
 export const chatSubscriptionKey = value => JSON.stringify(normalizeChatSubscription(value));
 export function matchesChatEvent(data, subscription) {
   const normalized = normalizeChatSubscription(subscription);
   return !!normalized && data?.version === 1 && data.tab === normalized.tab
     && data.conversationId === normalized.conversationId && Array.isArray(data.ids)
-    && data.ids.length === normalized.ids.length && data.ids.every((id, index) => id === normalized.ids[index]);
+    && data.ids.length <= 100 && data.ids.every(id => Number.isSafeInteger(id) && id > 0)
+    && new Set(data.ids).size === data.ids.length;
 }
 
 /** Chat attaches to the application's existing stream; this never creates one. */
@@ -36,7 +35,6 @@ export function createConversationPush({ onSubscriptionChange = () => {}, onStat
       if (!subscription) return path;
       const params = new URLSearchParams({ chat: '1', chat_tab: subscription.tab });
       if (subscription.conversationId) params.set('chat_conversation', subscription.conversationId);
-      if (subscription.ids.length) params.set('chat_ids', subscription.ids.join(','));
       return path + (path.includes('?') ? '&' : '?') + params;
     },
     attach(next) {

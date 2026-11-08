@@ -358,7 +358,7 @@ export class FleetProxy {
     const chatStream = suffix === '/api/stream' && new URLSearchParams(search).has('chat');
     if (suffix.startsWith('/api/chat/') || chatStream) {
       const context = req._authContext;
-      if (context?.scope !== 'admin' || chatStream && this.authGate?.resolveAuthContext(req)?.scope !== 'admin') {
+      if (context?.scope !== 'admin' || chatStream && this.authGate?.resolveAuthContext(req, { touch: false })?.scope !== 'admin') {
         sendJson(res, 403, { error: 'admin_required' });
         return;
       }
@@ -461,7 +461,7 @@ export class FleetProxy {
       }
       res.writeHead(remoteResp.status, responseHeaders);
       const upstream = Readable.fromWeb(remoteResp.body);
-      const chatAuthorized = () => this.authGate?.resolveAuthContext(req)?.scope === 'admin';
+      const chatAuthorized = () => this.authGate?.resolveAuthContext(req, { touch: false })?.scope === 'admin';
       const guarded = chatStream ? guardedChatSseStream(guard, chatAuthorized) : guardedSseStream(guard, upstream, () => {
         process.stderr.write(`[fleet-proxy] blocked secret-bearing SSE response from ${agent.name}\n`);
       });

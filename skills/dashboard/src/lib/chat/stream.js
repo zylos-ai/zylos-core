@@ -6,14 +6,19 @@ import { sendJson } from '../http.js';
 export function handleChatStream(req, res, url, { auth, config, hub, observer }) {
   if (url.pathname !== '/api/stream' || !url.searchParams.has('chat')) return false;
   if (req.method !== 'GET') { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
-  const validate = () => !requireChatAccess(req, auth, config);
+  const validate = () => !requireChatAccess(req, auth, config, { touch: false });
   const denied = requireChatAccess(req, auth, config);
   if (denied) { sendJson(res, denied.status, denied); return true; }
   let subscription;
   try { subscription = parseChatSubscription(url.searchParams); }
   catch (err) { sendJson(res, err.statusCode || 400, { error: err.code || 'invalid_chat_subscription' }); return true; }
+  const principal = `${req._authContext.kind}:${req._authContext.principalId}`;
+  if (!hub.canAddChatClient(principal)) {
+    sendJson(res, 429, { error: 'chat_connection_limit' });
+    return true;
+  }
   let unsubscribe;
-  const client = hub.addClient(res, validate, { onClose: () => unsubscribe?.() });
+  const client = hub.addClient(res, validate, { chatPrincipal: principal, onClose: () => unsubscribe?.() });
   unsubscribe = observer.subscribe(subscription, {
     validate,
     send: (event, data) => hub.sendTo(client, event, data),

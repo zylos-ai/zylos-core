@@ -94,17 +94,17 @@ function validateSessionHash(hash, { touch = true } = {}) {
   const idleMs = session.remember ? REMEMBER_IDLE_MS : SESSION_IDLE_MS;
   if (now - session.created_at > absoluteMs ||
       now - session.last_activity_at > idleMs) {
-    _store.deleteSession(hash);
+    if (touch) _store.deleteSession(hash);
     return null;
   }
   if (touch) _store.touchSession(hash, now);
   return authContext('cookie', hash, 'admin', hash);
 }
 
-function validateSession(token) {
+function validateSession(token, options) {
   if (!token || !_store) return null;
   const hash = sha256(token);
-  return validateSessionHash(hash);
+  return validateSessionHash(hash, options);
 }
 
 function destroySession(token) {
@@ -121,11 +121,11 @@ function parseCookies(header) {
   return cookies;
 }
 
-function getSessionAuth(req) {
+function getSessionAuth(req, options) {
   for (const pair of (req.headers.cookie || '').split(';')) {
     const [name, ...rest] = pair.trim().split('=');
     if (name !== COOKIE_NAME) continue;
-    const context = validateSession(rest.join('='));
+    const context = validateSession(rest.join('='), options);
     if (context) return context;
   }
   return null;
@@ -408,9 +408,9 @@ export class AuthGate {
     return Boolean(this.resolveAuthContext(req));
   }
 
-  resolveAuthContext(req) {
+  resolveAuthContext(req, options) {
     if (!this.enabled || !this.config.auth?.password) return null;
-    const cookieAuth = getSessionAuth(req);
+    const cookieAuth = getSessionAuth(req, options);
     if (cookieAuth) {
       req._authContext = cookieAuth;
       return cookieAuth;
@@ -418,10 +418,10 @@ export class AuthGate {
     return this.getApiAuth(req);
   }
 
-  revalidateAuthContext(context) {
+  revalidateAuthContext(context, options) {
     if (!this.enabled || !this.config.auth?.password || !context || context.scope !== 'admin') return null;
     if (context.kind === 'cookie') {
-      const refreshed = validateSessionHash(context.principalId);
+      const refreshed = validateSessionHash(context.principalId, options);
       return refreshed?.principalId === context.principalId ? refreshed : null;
     }
     if (context.kind === 'api' && context.credentialId) {

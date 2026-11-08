@@ -106,3 +106,25 @@ test('workbench proxied memory and registered writes require local admin', async
     assert.equal(await gate.handle(request(), response, url), false);
   }
 });
+
+test('readonly cookie resolution and revalidation do not touch or delete session rows', t => {
+  const token = 'readonly-session', now = Date.now();
+  const row = { created_at: now, last_activity_at: now }; let touched = 0, deleted = 0;
+  const gate = new AuthGate({ auth: { enabled: true, password: 'scrypt:configured' } }, {
+    getSession: hash => hash === sha256(token) ? row : null,
+    touchSession() { touched++; }, deleteSession() { deleted++; },
+    cleanupSessions() {}, cleanupExpiredApiSessions() {},
+  });
+  t.after(() => clearInterval(gate._cleanupTimer));
+  const req = { headers: { cookie: `__Secure-zylos_dashboard_session=${token}` } };
+  const context = gate.resolveAuthContext(req, { touch: false });
+  assert.equal(context.scope, 'admin');
+  assert.ok(gate.revalidateAuthContext(context, { touch: false }));
+  assert.equal(touched, 0); assert.equal(deleted, 0);
+  assert.ok(gate.resolveAuthContext(req)); assert.equal(touched, 1, 'ordinary HTTP keeps its touch behavior');
+  row.last_activity_at = Date.now() - 3_600_001;
+  assert.equal(gate.resolveAuthContext(req, { touch: false }), null);
+  assert.equal(gate.revalidateAuthContext(context, { touch: false }), null);
+  assert.equal(touched, 1); assert.equal(deleted, 0);
+  assert.equal(gate.resolveAuthContext(req), null); assert.equal(deleted, 1, 'ordinary expiry still prunes its stale row');
+});

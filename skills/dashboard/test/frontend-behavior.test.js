@@ -749,7 +749,7 @@ test('in-page remote viewing rewrites agent data paths through the fleet proxy',
 
 test('SSE stream follows the viewed agent and remote fleet events never clobber the local wall', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /new EventSource\(api\(agentPath\('\/api\/stream'\)\)\)/);
+  assert.match(app, /new EventSource\(chatPush\.streamUrl\(api\(agentPath\('\/api\/stream'\)\)\)\)/);
   // Reconnect probe targets the same agent the stream does.
   assert.match(app, /await fetch\(api\(agentPath\('\/api\/state'\)\), \{ cache: 'no-store' \}\);/);
   // A remote agent's stream describes its own fleet — drop those events.

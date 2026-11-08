@@ -281,12 +281,9 @@ export class ChatHistory {
   }
 
   /** Metadata-only invalidation baseline; no previews, body or attachments. */
-  chatChangeSnapshot({ tab = 'mine', conversationId = null, ids = [] } = {}, { afterId = null } = {}) {
+  chatChangeSnapshot({ tab = 'mine', conversationId = null } = {}, { afterId = null } = {}) {
     this._tab(tab);
-    if (!Array.isArray(ids) || ids.length > 100) throw fail('invalid_chat_message_ids');
     if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 0)) throw fail('invalid_chat_cursor');
-    const watch = ids.length ? this._messageIds(ids) : [];
-    if (!conversationId && watch.length) throw fail('invalid_chat_conversation');
     return this._db().transaction(() => {
       const range = conversationId ? this._conversation(tab, conversationId) : null;
       // Core inserts allocate AUTOINCREMENT IDs. A primary-key frontier avoids
@@ -301,8 +298,17 @@ export class ChatHistory {
       if (range) {
         latestId = this._query(`SELECT c.id FROM conversations c
           WHERE ${visible} AND ${range.where} ORDER BY c.id DESC LIMIT 1`, range.parameters)[0]?.id ?? null;
-        if (watch.length) delivery = this._rowsByIds(range, watch,
-          'c.id,c.direction,c.status,c.delivery_action').sort((a, b) => a.id - b.id);
+        if (tab === 'mine') {
+          // Each fixed-status seek returns at most 100 rows from the existing
+          // group/direction/status index, then keep the newest 100 overall.
+          // A row leaving this set also invalidates delivery truth when it
+          // reaches a terminal state, without retaining terminal history.
+          const pending = ['pending', 'running'].flatMap(status => this._query(`SELECT c.id,c.direction,c.status,c.delivery_action
+            FROM conversations c INDEXED BY idx_conv_group_status
+            WHERE ${visible} AND ${range.where} AND c.direction='in' AND c.status=@status
+            ORDER BY c.id DESC LIMIT 100`, { ...range.parameters, status }));
+          delivery = pending.sort((a, b) => b.id - a.id).slice(0, 100).reverse();
+        }
       }
       return { highwater, listChanged: inserted.length > 0, latestId, delivery };
     })();

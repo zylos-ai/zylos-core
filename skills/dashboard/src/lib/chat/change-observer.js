@@ -1,24 +1,20 @@
 const invalid = code => Object.assign(new Error(code), { code, statusCode: 400 });
 
-export function normalizeChatSubscription({ tab = 'mine', conversationId = null, ids = [] } = {}) {
+export function normalizeChatSubscription({ tab = 'mine', conversationId = null } = {}) {
   if (!['mine', 'external'].includes(tab)) throw invalid('invalid_chat_tab');
   if (conversationId !== null && (typeof conversationId !== 'string' || conversationId.length > 2048
     || !/^(?:g:(?:[0-9A-F]{2})+|l:(?:[0-9A-F]{2})+:(?:[0-9A-F]{2})*)$/.test(conversationId))) throw invalid('invalid_chat_conversation');
-  if (!Array.isArray(ids) || ids.length > 100 || ids.some(id => !/^[1-9][0-9]*$/.test(String(id)) || !Number.isSafeInteger(Number(id)))) throw invalid('invalid_chat_message_ids');
-  const values = ids.map(Number);
-  if (new Set(values).size !== values.length || !conversationId && values.length || tab === 'external' && values.length) throw invalid('invalid_chat_message_ids');
-  return { tab, conversationId, ids: values.sort((a, b) => a - b) };
+  return { tab, conversationId };
 }
 
 export function parseChatSubscription(parameters) {
   if (!parameters.has('chat')) return null;
-  for (const name of ['chat', 'chat_tab', 'chat_conversation', 'chat_ids']) {
+  for (const name of ['chat', 'chat_tab', 'chat_conversation']) {
     if (parameters.getAll(name).length > 1) throw invalid('invalid_chat_subscription');
   }
-  if (parameters.get('chat') !== '1') throw invalid('invalid_chat_subscription');
-  const rawIds = parameters.get('chat_ids');
+  if (parameters.get('chat') !== '1' || parameters.has('chat_ids')) throw invalid('invalid_chat_subscription');
   return normalizeChatSubscription({ tab: parameters.get('chat_tab') ?? 'mine',
-    conversationId: parameters.get('chat_conversation') || null, ids: rawIds ? rawIds.split(',') : [] });
+    conversationId: parameters.get('chat_conversation') || null });
 }
 
 /** One read-only sampler shared by all currently authorized chat streams. */
@@ -67,7 +63,7 @@ export class ChatChangeObserver {
     if (this.closed || !this.subscriptions.has(record)) return false;
     if (!this._authorized(record)) { this._remove(record, 'chat_access_revoked'); return false; }
     try {
-      if (record.send(event, { version: 1, ...record.options }) !== false) return true;
+      if (record.send(event, { version: 1, ...record.options, ids: record.snapshot?.delivery.map(row => row.id) ?? [] }) !== false) return true;
     } catch { /* closed or slow transport */ }
     this._remove(record, 'chat_unavailable');
     return false;

@@ -1,19 +1,29 @@
 export class SseHub {
-  constructor(keepaliveMs = 15_000) {
+  constructor(keepaliveMs = 15_000, { maxChatClients = 100, maxChatClientsPerPrincipal = 20 } = {}) {
     this.keepaliveMs = keepaliveMs;
     this.clients = new Set();
     this.keepaliveTimer = null;
     this.sequence = 0;
+    this.maxChatClients = maxChatClients;
+    this.maxChatClientsPerPrincipal = maxChatClientsPerPrincipal;
+    this.chatClients = new Map();
   }
 
-  addClient(res, validator, { onClose } = {}) {
+  canAddChatClient(principal) {
+    let total = 0;
+    for (const count of this.chatClients.values()) total += count;
+    return total < this.maxChatClients && (this.chatClients.get(principal) || 0) < this.maxChatClientsPerPrincipal;
+  }
+
+  addClient(res, validator, { onClose, chatPrincipal } = {}) {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-store',
       connection: 'keep-alive',
       'x-accel-buffering': 'no'
     });
-    const client = { res, validator: validator || null, onClose };
+    const client = { res, validator: validator || null, onClose, chatPrincipal };
+    if (chatPrincipal !== undefined) this.chatClients.set(chatPrincipal, (this.chatClients.get(chatPrincipal) || 0) + 1);
     this.clients.add(client);
     res.on('close', () => this._remove(client));
     this._write(client, ': connected\n\n');
@@ -23,6 +33,11 @@ export class SseHub {
 
   _remove(client) {
     if (!this.clients.delete(client)) return;
+    if (client.chatPrincipal !== undefined) {
+      const count = this.chatClients.get(client.chatPrincipal) - 1;
+      if (count) this.chatClients.set(client.chatPrincipal, count);
+      else this.chatClients.delete(client.chatPrincipal);
+    }
     try { client.onClose?.(); } catch { /* transport teardown must continue */ }
     if (this.clients.size === 0) this._stopKeepalive();
   }

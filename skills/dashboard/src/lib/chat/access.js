@@ -15,8 +15,8 @@ export function isChatDataRoute(method, pathname) {
 }
 
 /** Call on the data instance before querying conversation data. */
-export function requireChatAccess(req, auth, config) {
-  const context = auth.enabled ? auth.resolveAuthContext(req) : null;
+export function requireChatAccess(req, auth, config, options) {
+  const context = auth.enabled ? auth.resolveAuthContext(req, options) : null;
   if (!context) return { status: 403, error: 'chat_auth_required' };
   if (context.kind === 'cookie' && context.scope === 'admin') return null;
   if (context.kind !== 'api') return { status: 403, error: 'chat_auth_required' };

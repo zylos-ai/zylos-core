@@ -38,7 +38,7 @@ function fixture(t) {
     direction: 'in', channel: 'dashboard', endpoint: 'one', group: 'dash:one',
     content: 'private body should never enter events', status: 'pending', ...row });
   const streams = [];
-  const subscribe = (options = { tab: 'mine', conversationId: idFor('dash:one'), ids: [1] }) => {
+  const subscribe = (options = { tab: 'mine', conversationId: idFor('dash:one') }) => {
     const record = { events: [], stopped: [], allowed: true };
     record.off = observer.subscribe(options, { validate: () => record.allowed,
       send: (event, data) => { assert.ok(record.events.length < 30); record.events.push({ event, data }); },
@@ -94,7 +94,7 @@ test('two clients share one sampler and one scope snapshot per changed pass', ga
   a.off(); assert.equal(f.timers.count(), 1); b.off(); assert.equal(f.timers.count(), 0);
   const stopped = versions; f.timers.tick(); assert.equal(versions, stopped);
   let emitted = 0;
-  f.observer.subscribe({ tab: 'mine', conversationId: idFor('dash:one'), ids: [1] }, {
+  f.observer.subscribe({ tab: 'mine', conversationId: idFor('dash:one') }, {
     validate: () => true, send: () => { emitted++; f.observer.close(); } });
   assert.equal(emitted, 1); assert.equal(f.timers.count(), 0);
   f.timers.tick(); assert.equal(emitted, 1);
@@ -106,7 +106,7 @@ test('authorization is rechecked without commits and before every emitted hint',
   f.timers.tick(); assert.deepEqual(stream.stopped, ['chat_access_revoked']);
   assert.equal(f.timers.count(), 0); assert.equal(stream.events.length, 1);
   let attempts = 0, stopped = 0;
-  f.observer.subscribe({ tab: 'mine', conversationId: idFor('dash:one'), ids: [1] }, {
+  f.observer.subscribe({ tab: 'mine', conversationId: idFor('dash:one') }, {
     validate: () => ++attempts === 1, send: () => assert.fail('revoked subscription leaked an event'), onStop: () => stopped++ });
   assert.equal(stopped, 1); assert.equal(f.timers.count(), 0);
 });
@@ -120,7 +120,7 @@ test('database replacement invalidates streams and a new subscription baselines 
     VALUES (10,'in','dashboard','one','dash:one','replacement private','pending')`).run(); second.close();
   fs.renameSync(replacement, f.sandbox.paths.c4Db);
   f.timers.tick(); assert.deepEqual(stream.stopped, ['chat_unavailable']); assert.equal(f.timers.count(), 0);
-  const fresh = f.subscribe({ tab: 'mine', conversationId: idFor('dash:one'), ids: [10] });
+  const fresh = f.subscribe({ tab: 'mine', conversationId: idFor('dash:one') });
   assert.equal(fresh.events[0].event, 'chat_ready'); assert.equal(f.reader._generation, 2);
 });
 
@@ -139,33 +139,34 @@ test('unreadable or missing database stops polling and recovery requires a reada
   assert.equal(f.observer.subscriptions.size, 0);
 });
 
-test('metadata snapshots share history visibility and reject foreign watched IDs', gate, t => {
+test('metadata snapshots share history visibility and discover only scoped pending rows', gate, t => {
   const f = fixture(t); f.write({ id: 1 });
   for (const [i, channel] of ['void', 'internal', 'system', 'scheduler', 'control'].entries()) f.write({ id: 10 + i, channel });
   f.write({ id: 20, group: 'origin' }); f.write({ id: 21, group: '*' });
   f.write({ id: 22, group: 'unowned:one' }); f.write({ id: 23, direction: 'other' });
   f.write({ id: 24, channel: 'telegram', group: 'telegram:one' });
-  const own = f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one'), ids: [1] }, { afterId: 0 });
+  const own = f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one') }, { afterId: 0 });
   assert.equal(own.listChanged, true); assert.equal(own.latestId, 1); assert.equal(own.highwater, 24);
   const external = f.history.chatChangeSnapshot({ tab: 'external' }, { afterId: 23 }); assert.equal(external.listChanged, true);
   const hiddenOnly = f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: 1 }); assert.equal(hiddenOnly.listChanged, false);
   assert.throws(() => f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('telegram:one') }), /chat_conversation_not_found/);
-  assert.throws(() => f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one'), ids: [24] }), /chat_message_not_found/);
+  assert.deepEqual(own.delivery.map(row => row.id), [1], 'only selected conversation pending rows are monitored');
+  assert.equal(external.delivery.length, 0, 'external chat does not monitor delivery rows');
   f.writer.transaction(() => { for (let i = 100; i < 300; i++) f.write({ id: i, direction: 'out', status: 'delivered' }); })();
-  const bounded = f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one'), ids: [1] }, { afterId: 24 });
+  const bounded = f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one') }, { afterId: 24 });
   assert.equal(bounded.listChanged, true); assert.equal(bounded.highwater, 299); assert.equal(bounded.latestId, 299); assert.equal(bounded.delivery.length, 1);
   const baseline = f.history.chatChangeSnapshot({ tab: 'mine' }); assert.equal(baseline.listChanged, false);
   assert.throws(() => f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: 300 }), /chat_history_unavailable/);
 });
 
-test('chat subscription query is explicit and strictly bounded', () => {
+test('chat subscription query contains only explicit conversation scope', () => {
   assert.equal(parseChatSubscription(new URLSearchParams()), null);
-  assert.deepEqual(parseChatSubscription(new URLSearchParams('chat=1&chat_tab=mine&chat_conversation=g:646173683A6F6E65&chat_ids=8,2')),
-    { tab: 'mine', conversationId: 'g:646173683A6F6E65', ids: [2, 8] });
-  for (const query of ['chat=0', 'chat=1&chat=1', 'chat=1&chat_tab=other', 'chat=1&chat_ids=1',
-    'chat=1&chat_conversation=d:one', 'chat=1&chat_conversation=g:ff', 'chat=1&chat_conversation=g:FF&chat_ids=1,1',
-    'chat=1&chat_tab=external&chat_conversation=g:FF&chat_ids=1', 'chat=1&chat_conversation=g:FF&chat_ids=0',
-    'chat=1&chat_conversation=g:FF&chat_ids=' + Array.from({ length: 101 }, (_, i) => i + 1).join(',')]) {
+  assert.deepEqual(parseChatSubscription(new URLSearchParams('chat=1&chat_tab=mine&chat_conversation=g:646173683A6F6E65')),
+    { tab: 'mine', conversationId: 'g:646173683A6F6E65' });
+  for (const query of ['chat=0', 'chat=1&chat=1', 'chat=1&chat_tab=other',
+    'chat=1&chat_conversation=d:one', 'chat=1&chat_conversation=g:ff',
+    'chat=1&chat_conversation=g:FF&chat_conversation=g:EE',
+    'chat=1&chat_ids=', 'chat=1&chat_ids=1', 'chat=1&chat_conversation=g:FF&chat_ids=1']) {
     assert.throws(() => parseChatSubscription(new URLSearchParams(query)), error => error.statusCode === 400, query);
   }
 });
@@ -174,7 +175,7 @@ test('chat subscription query is explicit and strictly bounded', () => {
 // Run for frontier/scope changes under the same gated private DB lifecycle.
 test('incremental list hints survive large excluded tails without leaking hidden-only commits', gate, t => {
   const f = fixture(t); f.write({ id: 1 });
-  const stream = f.subscribe({ tab: 'mine', conversationId: null, ids: [] });
+  const stream = f.subscribe({ tab: 'mine', conversationId: null });
   f.writer.transaction(() => {
     f.write({ id: 2, endpoint: 'two', group: 'dash:two' });
     for (let id = 3; id <= 1500; id++) f.write({ id, channel: 'internal', group: 'private:internal' });
@@ -187,7 +188,7 @@ test('incremental list hints survive large excluded tails without leaking hidden
 
 test('clients joining at different frontiers receive separate readable baselines', gate, t => {
   const f = fixture(t); f.write({ id: 1 });
-  const options = { tab: 'mine', conversationId: null, ids: [] };
+  const options = { tab: 'mine', conversationId: null };
   const first = f.subscribe(options), windows = [];
   const snapshot = f.history.chatChangeSnapshot.bind(f.history);
   f.history.chatChangeSnapshot = (options, window) => { windows.push(window.afterId); return snapshot(options, window); };
@@ -215,14 +216,18 @@ test('incremental metadata queries use primary-key windows at representative C4 
     }
   });
   const subscriptions = [
-    { tab: 'mine', conversationId: idFor('dash:g1'), ids: Array.from({ length: 100 }, (_, i) => 1 + i * 200) },
-    { tab: 'external', conversationId: null, ids: [] },
+    { tab: 'mine', conversationId: idFor('dash:g1') },
+    { tab: 'external', conversationId: null },
   ];
   addRange(1, 100000);
-  const outputs = [], listPlans = {}, baselineMs = {};
+  const outputs = [], listPlans = {}, pendingPlans = {}, baselineMs = {};
   const query = f.history._query.bind(f.history);
   f.history._query = (sql, parameters) => {
     const rows = query(sql, parameters);
+    if (sql.includes('c.status=@status') && !pendingPlans[parameters.status]) {
+      pendingPlans[parameters.status] = f.reader._db.prepare('EXPLAIN QUERY PLAN ' + sql).all(parameters).map(row => row.detail);
+      assert.ok(rows.length <= 100, 'each fixed-status query is bounded');
+    }
     if (sql.includes('c.id>@afterId')) {
       const tab = sql.includes("c.channel='dashboard'") ? 'mine' : 'external';
       if (!listPlans[tab]) listPlans[tab] = f.reader._db.prepare('EXPLAIN QUERY PLAN ' + sql).all(parameters).map(row => row.detail);
@@ -259,6 +264,62 @@ test('incremental metadata queries use primary-key windows at representative C4 
   assert.ok(selectedPlan.some(value => value.includes('idx_conv_group_id')));
   for (const plan of Object.values(listPlans)) assert.ok(plan.some(value => /SEARCH c USING INTEGER PRIMARY KEY/.test(value)));
   assert.ok(maxPlan.some(value => value.includes('SEARCH conversations')));
-  console.info('chat observer query costs', JSON.stringify({ results: outputs, baselineMs, listPlans, maxPlan, selectedPlan,
-    boundary: 'Only newly committed ID ranges are searched; historical rows are not rescanned. No fixed bound on rows inserted between two samples.' }));
+  assert.equal(Object.keys(pendingPlans).length, 2);
+  for (const plan of Object.values(pendingPlans)) {
+    assert.ok(plan.some(value => value.includes('SEARCH c USING INDEX idx_conv_group_status (session_group=? AND direction=? AND status=?)')));
+    assert.equal(plan.some(value => value.includes('TEMP B-TREE')), false, 'fixed-status seek supplies row ID order');
+  }
+  console.info('chat observer query costs', JSON.stringify({ results: outputs, baselineMs, listPlans, pendingPlans, maxPlan, selectedPlan,
+    boundary: 'List uses newly committed ID ranges; pending/running discovery reads at most100 each from the group/status index and retains100 newest. No fixed bound on rows inserted between list samples.' }));
+});
+
+// Server-owned pending discovery on a stable subscription: a terminal row
+// leaves the bounded snapshot and must still dirty the authoritative status.
+test('one conversation stream discovers new pending inputs and observes terminal transitions without client IDs', gate, t => {
+  const f = fixture(t); f.write({ id: 1, direction: 'out', status: 'delivered' });
+  const stream = f.subscribe({ tab: 'mine', conversationId: idFor('dash:one') });
+  assert.equal(stream.events.length, 1); assert.equal(stream.events[0].data.ids.length, 0);
+  for (const [index, terminal] of ['delivered', 'failed', 'switch_absorbed'].entries()) {
+    const id = index + 2, before = stream.events.length;
+    f.write({ id }); f.timers.tick();
+    assert.ok(stream.events.length > before);
+    assert.equal(stream.events.at(-1).event, 'chat_delivery_changed');
+    assert.ok(stream.events.at(-1).data.ids.includes(id));
+    f.writer.prepare("UPDATE conversations SET status='running' WHERE id=?").run(id); f.timers.tick();
+    assert.equal(stream.events.at(-1).event, 'chat_delivery_changed');
+    const pendingEvents = stream.events.length;
+    f.writer.prepare('UPDATE conversations SET status=? WHERE id=?').run(terminal, id); f.timers.tick();
+    assert.equal(stream.events.length, pendingEvents + 1);
+    assert.equal(stream.events.at(-1).event, 'chat_delivery_changed');
+    assert.equal(stream.events.at(-1).data.ids.includes(id), false, 'terminal disappearance emits a scope hint');
+    assert.equal(f.observer.subscriptions.size, 1, 'no resubscription is needed for sends or delivery transitions');
+    assert.equal(f.timers.count(), 1);
+  }
+  const count = stream.events.length;
+  f.write({ id: 20, channel: 'internal', group: 'private:other' }); f.timers.tick();
+  assert.equal(stream.events.length, count, 'retiring terminal rows does not create an extra hint');
+});
+
+test('server pending discovery retains the newest hundred scoped inbound rows with bounded indexed reads', gate, t => {
+  const f = fixture(t);
+  f.writer.transaction(() => {
+    for (let id = 1; id <= 300; id++) f.write({ id, status: id % 2 ? 'pending' : 'running' });
+    for (let id = 301; id <= 350; id++) f.write({ id, group: 'dash:other', endpoint: 'other' });
+    for (let id = 351; id <= 400; id++) f.write({ id, direction: 'out', status: 'pending' });
+  })();
+  const options = { tab: 'mine', conversationId: idFor('dash:one') };
+  const snapshot = f.history.chatChangeSnapshot(options);
+  assert.equal(snapshot.delivery.length, 100);
+  for (let offset = 0; offset < 100; offset++) {
+    assert.equal(snapshot.delivery[offset].id, 201 + offset);
+    assert.equal(snapshot.delivery[offset].direction, 'in');
+  }
+  const stream = f.subscribe(options), count = stream.events.length;
+  f.writer.prepare("UPDATE conversations SET status='delivered' WHERE id=300").run(); f.timers.tick();
+  assert.equal(stream.events.length, count + 1);
+  assert.equal(stream.events.at(-1).event, 'chat_delivery_changed');
+  assert.equal(stream.events.at(-1).data.ids.length, 100);
+  assert.equal(stream.events.at(-1).data.ids.includes(300), false);
+  assert.equal(stream.events.at(-1).data.ids.includes(200), true);
+  assert.equal(f.reader._db.pragma('query_only', { simple: true }), 1);
 });
