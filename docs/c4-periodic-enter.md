@@ -35,7 +35,11 @@ exhausted), the new budget keeps that earlier elapsed-time anchor: text pasted
 on top of an unsubmitted message must not push its recovery back (#795).
 Slash controls and raw keystrokes clear the budget. Queue admission and heartbeat auto-ack behavior are
 unchanged. No idle, health, input-content or Codex-specific condition gates a
-periodic attempt. An empty verdict or delivered status does not cancel it.
+periodic attempt. An empty verdict or delivered status does not cancel it:
+#795 showed confident `empty` verdicts from both the cursor check and the text
+parser while the draft was still in the input box, and accepting
+`disputed_empty` (below) is only safe because this budget stays armed. Do not
+add a cancel-on-empty path without replacing that backstop.
 
 Initial and retry Enter commands do not move the elapsed-time anchor: in
 #795 the Enters that followed later pastes did not submit the stuck draft
@@ -81,7 +85,9 @@ while the draft is still there (#795). That override is now reported as
 checks again. A second disagreement, or one on the final check, is accepted
 as submitted instead of failing strict conversation verification, because a
 strict failure re-pastes the whole message and duplicates the input. The
-periodic Enter remains the backstop for anything still left in the input box.
+periodic Enter remains the backstop for anything still left in the input box;
+this acceptance depends on the budget staying armed after an `empty` or
+`disputed_empty` verdict (see above).
 
 ## Diagnostics
 
