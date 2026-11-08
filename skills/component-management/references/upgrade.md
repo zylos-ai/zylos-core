@@ -92,6 +92,22 @@ The CLI executes the post-upgrade hook (if declared) and restarts the service (i
 
 ## Session Mode — Self-Upgrade (zylos-core)
 
+### Standalone Dashboard prerequisite
+
+Before helping a user upgrade from 0.9.x to 1.0, check `zylos --version` and
+`zylos list`. If the standalone `dashboard` component is installed, explain that
+Zylos 1.0 includes Dashboard and it must first be uninstalled with
+`zylos uninstall dashboard --yes`. This keeps its data; do not add `--purge`.
+Follow the component uninstall confirmation workflow before executing it, then
+continue the requested Core upgrade. Retained Dashboard data alone is not an
+installed standalone component.
+
+Do not rely on an older CLI's `--check` to report this prerequisite. If the
+standalone component is still installed, `zylos upgrade --self --yes` stops before
+changing the installed package or data with `DASHBOARD_STILL_INSTALLED`:
+"Uninstall standalone Dashboard before upgrading." Its `next` is
+"Run zylos uninstall dashboard --yes while retaining its data before retrying the upgrade."
+
 ### Core database schema extensions
 
 Self-upgrade first reads only the SQLite `user_version` of the C4,
@@ -298,6 +314,10 @@ Reply with version change, change summary, and any action results.
 ## C4 Mode — Self-Upgrade (zylos-core)
 
 Same two-step pattern for upgrading zylos itself. **All information shown before confirmation.**
+
+For a 0.9.x → 1.0 upgrade, check and explain the
+[standalone Dashboard prerequisite](#standalone-dashboard-prerequisite) before
+requesting upgrade confirmation; an older CLI's `--check` may not mention it.
 
 ### Step 1 — User requests
 

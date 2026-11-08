@@ -184,7 +184,7 @@ test('stop before delivery requeues the claimed row without tmux I/O', async t =
     assert.equal(result.blocked, true);
     assert.equal(type === 'conversation' ? f.row(row.id).status : row.status, 'pending');
     assert.equal(f.calls.some(call => ['open', 'resolve', 'paste', 'keys', 'capture', 'command'].includes(call[0])), false);
-    assert.ok(f.calls.some(call => call[0] === 'diagnostic' && call[1] === 'release' && call[2].code === 'delivery_stopped'));
+    assert.ok(f.calls.some(call => call[0] === 'diagnostic' && call[1] === 'delivery_deferred' && call[2].code === 'delivery_stopped'));
   });
 });
 
@@ -311,10 +311,11 @@ test('JSONL records successful settlement, stale settlement and distinct gate re
   const lost = rows.filter(row => row.event === 'mark_delivered_stale');
   assert.equal(lost.length, 1); assert.equal(lost[0].conversation_id, stale.id);
   assert.equal(f.row(stale.id).session_id, 'other');
-  const releases = rows.filter(row => row.event === 'release');
-  assert.deepEqual(releases.map(row => row.code), ['session_unhealthy', 'runtime_unavailable', 'require_idle']);
-  for (const row of releases) {
-    assert.equal(row.decision, 'release'); assert.equal(row.reason, row.code);
+  const waits = rows.filter(row => ['delivery_deferred', 'delivery_wait_changed'].includes(row.event));
+  assert.deepEqual(waits.map(row => row.code), ['session_unhealthy', 'runtime_unavailable', 'require_idle']);
+  assert.deepEqual(waits.map(row => row.reason), ['session_recovering', 'runtime_unavailable', 'require_idle']);
+  for (const row of waits) {
+    assert.equal(row.decision, row.event); assert.ok(row.attempts >= 1); assert.ok(row.durationMs >= 0);
     assert.equal(row.conversation_id, gated.id); assert.equal(row.session_group, gated.session_group);
   }
 });

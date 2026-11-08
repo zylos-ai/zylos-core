@@ -46,17 +46,71 @@ export function createDelivery(deps, configuration = {}) {
     periodicEnabled: PERIODIC_ENTER_ENABLED, periodicIntervalMs: PERIODIC_ENTER_INTERVAL_MS,
     periodicMaxAttempts: PERIODIC_ENTER_MAX_ATTEMPTS, captureEnabled: ENTER_CAPTURE_ENABLED,
     idleHoldMs: REQUIRE_IDLE_POST_SEND_HOLD_MS, idleWaitMs: REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
-    idlePollMs: REQUIRE_IDLE_EXECUTION_POLL_MS, retryBaseMs: RETRY_BASE_MS, ...configuration };
+    idlePollMs: REQUIRE_IDLE_EXECUTION_POLL_MS, retryBaseMs: RETRY_BASE_MS,
+    gateBackoffBaseMs: 1000, gateBackoffMaxMs: 30000, ...configuration };
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const open = deps.openTmuxConnection ?? openTmuxConnection;
   const resolve = deps.resolveSessionTarget ?? resolveSessionTarget;
   const revalidate = deps.revalidateSessionTarget ?? revalidateSessionTarget;
   const active = new Set();
+  const waits = new Map();
   let stopped = false;
   const diagnostic = (event, fields) => {
     try { Promise.resolve(deps.diagnostic?.(event, fields)).catch(() => {}); } catch {}
   };
+
+  const waitKey = (row, type) => `${type}:${row.id}`;
+  function waitFields(wait) {
+    return { ...wait.fields, code: wait.code, reason: wait.reason, attempts: wait.attempts,
+      deferredChecks: wait.deferredChecks, durationMs: Math.max(0, now() - wait.startedAt),
+      phaseDurationMs: Math.max(0, now() - wait.changedAt) };
+  }
+  function finishWait(row, type, outcome = 'resumed', fields) {
+    const key = waitKey(row, type), wait = waits.get(key);
+    if (!wait) return;
+    if (fields) wait.fields = fields;
+    waits.delete(key);
+    diagnostic(outcome === 'expired' ? 'delivery_expired' : outcome === 'resumed' ? 'delivery_resumed' : 'delivery_wait_ended',
+      { ...waitFields(wait), ...(outcome === 'expired' || outcome === 'resumed' ? {} : { outcome }) });
+  }
+  function defer(row, type, code, reason, fields) {
+    const key = waitKey(row, type);
+    let wait = waits.get(key);
+    if (!wait) {
+      wait = { fields, row, type, code, reason, attempts: 1, deferredChecks: 0, startedAt: now(), changedAt: now() };
+      waits.set(key, wait);
+      diagnostic('delivery_deferred', waitFields(wait));
+    } else {
+      wait.fields = fields;
+      wait.attempts++;
+      if (wait.code !== code || wait.reason !== reason) {
+        diagnostic('delivery_wait_changed', { ...waitFields(wait), previousCode: wait.code, previousReason: wait.reason, code, reason });
+        wait.code = code; wait.reason = reason; wait.changedAt = now();
+      }
+    }
+    wait.retryAt = now() + Math.min(options.gateBackoffBaseMs * 2 ** Math.min(wait.attempts - 1, 10), options.gateBackoffMaxMs);
+  }
+  function canAttempt(row, type) {
+    const wait = waits.get(waitKey(row, type));
+    if (!wait || now() >= wait.retryAt) return true;
+    wait.deferredChecks++;
+    return false;
+  }
+  function sweepWaits() {
+    for (const wait of waits.values()) {
+      if (wait.type === 'conversation' && typeof deps.db.getConversationsByRange !== 'function') continue;
+      const row = wait.type === 'control' ? deps.db.getControlById?.(wait.row.id)
+        : deps.db.getConversationsByRange(wait.row.id, wait.row.id)[0];
+      if (row?.status === 'pending' || row?.status === 'running') continue;
+      // Expiration and cancellation can settle a row before its lane sees it
+      // again. Diagnostic memory follows the same authoritative row lifetime.
+      const expired = wait.type === 'control' ? row?.status === 'timeout' && row.last_error === 'ACK_DEADLINE_EXCEEDED'
+        : row?.delivery_action === 'pending_expired';
+      const outcome = wait.type === 'control' ? row?.last_error ?? row?.status : row?.status;
+      finishWait(wait.row, wait.type, expired ? 'expired' : outcome ?? 'removed');
+    }
+  }
 
   async function deliver(row, type) {
     const group = deps.getSessionMode() === 'single' ? null : row.session_group;
@@ -65,7 +119,7 @@ export function createDelivery(deps, configuration = {}) {
     const periodic = new PeriodicEnter({ enabled: options.periodicEnabled, intervalMs: options.periodicIntervalMs,
       maxAttempts: options.periodicMaxAttempts, now, emit });
     let connection, target, adapter, timer, draining = false, queue = Promise.resolve();
-    let result = 'blocked', gateCode, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false;
+    let result = 'blocked', gateCode, gateReason, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false;
     const bound = () => ({ target, connection });
     function io(action) {
       const work = queue.then(action);
@@ -177,8 +231,8 @@ export function createDelivery(deps, configuration = {}) {
             ['serverGeneration', 'sessionId', 'paneId'].some(key => binding.tmuxTarget[key] !== target[key]) ||
             (binding.expectedSessionId != null && binding.expectedSessionId !== target.runtimeSessionId)) throw failure('RUNID_MISMATCH');
         }
-        if (!target.ready) { gateCode = 'wait_ready'; emit('wait_ready'); }
-        else if (!['claude', 'codex'].includes(target.runtime)) { gateCode = 'runtime_unknown'; emit('runtime_unknown'); try { deps.alert?.('runtime_unknown', fields); } catch {} }
+        if (!target.ready) { gateCode = 'wait_ready'; }
+        else if (!['claude', 'codex'].includes(target.runtime)) { gateCode = 'runtime_unknown'; try { deps.alert?.('runtime_unknown', fields); } catch {} }
         else {
         state = await readState();
         const item = { ...row, type };
@@ -190,7 +244,10 @@ export function createDelivery(deps, configuration = {}) {
           gateCode = !bypass && offline(state.state) ? 'session_offline'
             : !bypass && (state.health ?? 'ok') !== 'ok' ? 'session_unhealthy'
             : !bypass && publicHealth !== 'ok' ? 'runtime_unavailable' : 'require_idle';
+          gateReason = gateCode === 'session_unhealthy' ? `session_${state.health}`
+            : gateCode === 'runtime_unavailable' ? `runtime_${publicHealth}` : gateCode;
         } else {
+          finishWait(row, type, 'resumed', { ...fields });
           adapter = deps.getSessionAdapter(target.runtime);
           const content = row.content || '';
           if (bypass && shouldAutoAckHeartbeat({ item, agentState: { state: state.state, healthy: !offline(state.state) }, procState: state.proc,
@@ -256,7 +313,7 @@ export function createDelivery(deps, configuration = {}) {
     if (result === 'blocked') {
       if (type === 'control') deps.db.requeueControl(row.id);
       else deps.db.requeueConversation(row.id);
-      emit('release', { code: gateCode, reason: gateCode });
+      defer(row, type, gateCode, gateReason ?? gateCode, { ...fields });
     } else if (result === 'delivered') {
       // The body is already verified. Missing final identity only affects attribution.
       try {
@@ -277,6 +334,6 @@ export function createDelivery(deps, configuration = {}) {
     task.finally(() => tasks.delete(task)).catch(() => {});
     return task;
   }
-  return { deliverConversation: row => run(row, 'conversation'), deliverControl: row => run(row, 'control'),
-    async stop() { stopped = true; for (const controller of active) controller.cancel(); await Promise.allSettled([...tasks]); } };
+  return { canAttempt, finishWait, sweepWaits, deliverConversation: row => run(row, 'conversation'), deliverControl: row => run(row, 'control'),
+    async stop() { stopped = true; for (const controller of active) controller.cancel(); await Promise.allSettled([...tasks]); waits.clear(); } };
 }

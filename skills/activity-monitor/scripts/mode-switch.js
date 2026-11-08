@@ -179,6 +179,20 @@ export class ModeSwitchCoordinator {
     for (const scope of ['machine', 'allSessionGroups']) {
       missingDeadlines.push([scope, await this.db.listRunningControlsWithoutDeadline({ [scope]: true })]);
     }
+    if (row.source_mode === 'single' && row.target_mode === 'multi' && missingDeadlines[0][1].length) {
+      const scenes = await this.observe({ configuration });
+      if (scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
+      if (!scenes.some(scene => scene.present) && await this.legacyPresent() === false) {
+        const fences = await this.db.listDrainFences();
+        if (fences.length === 1 && fences[0].sessionGroup === '*' && fences[0].reason === null && fences[0].runId === null) {
+          const result = await this.db.expireLegacyRunningControls(row.run_id);
+          if (result.count) {
+            this.event('transition_legacy_controls_expired', row, { reason: 'legacy_executor_absent', count: result.count, ids: result.ids });
+            missingDeadlines[0][1] = await this.db.listRunningControlsWithoutDeadline({ machine: true });
+          }
+        }
+      }
+    }
     for (const [scope, ids] of missingDeadlines) {
       if (ids.length) {
         await this.block(row, `running_control_without_deadline:${scope}:${ids.join(',')}`); return;

@@ -13,6 +13,7 @@ export function createLane(context, group) {
       const row = deps.db.getNextPending(filter);
       if (!row) return null;
       if (!deps.db.expirePending(row.id, options.pendingMaxAgeSeconds)) return row;
+      deps.finishDeliveryWait?.(row, 'conversation', 'expired');
       await deps.handleExpired(row, { sessionMode: state.mode, identity: state.live.get(group) });
       if (stopped) return null;
     }
@@ -25,12 +26,13 @@ export function createLane(context, group) {
     diagnostic(reason, { session_group: group, runId: activation.runId, conversation_id: activation.message?.id ?? null });
   }
   async function sendControl(row, live, startup = false) {
+    if (deps.canAttemptDelivery?.(row, 'control') === false) return { claimed: false, blocked: true };
     if (!deps.db.claimControl(row.id)) {
       if (startup && deps.db.getControlById(row.id)?.status === 'pending') releaseActivation('fenced_during_launch');
       return { claimed: false, blocked: true };
     }
     const result = await deps.deliverControl(row, live);
-    if (startup && result?.blocked) releaseActivation('release');
+    if (startup && result?.blocked) releaseActivation('activation_released');
     return { claimed: true, blocked: result?.blocked ?? false };
   }
   async function ready(live) {
@@ -42,7 +44,13 @@ export function createLane(context, group) {
       startupIds = [...current.startupControlIds];
       startupLoaded = true;
       diagnostic('adopt_ready', { session_group: group, runId: live.runId, session_id: live.sessionId });
-      if (!startupIds.length) diagnostic('startup_prompt_missing', { session_group: group, runId: live.runId, session_id: live.sessionId });
+      if (!startupIds.length) {
+        const skipped = current.startupPrompt?.state === 'skipped';
+        diagnostic(skipped ? 'startup_prompt_skipped' : 'startup_prompt_missing', {
+          session_group: group, runId: live.runId, session_id: live.sessionId,
+          reason: skipped ? current.startupPrompt.reason : current.startupPrompt?.state === 'failed' ? 'enqueue_failed' : 'unknown',
+        });
+      }
     }
     const control = deps.db.getNextPendingControl(Math.floor(now() / 1000), filter);
     // Recovery controls are already priority-zero and bypass-gated by their
@@ -50,6 +58,7 @@ export function createLane(context, group) {
     if (control?.bypass_state && !startupIds.includes(control.id)) {
       await sendControl(control, live); return;
     }
+    const message = await nextMessage();
     while (startupIds.length) {
       const id = startupIds[0];
       const row = deps.db.getControlById(id);
@@ -64,12 +73,13 @@ export function createLane(context, group) {
     if (activation) {
       // A settled delivery failure must not replay an already-pasted trigger.
       // If its DB write threw, the row remains running for startup recovery.
+      if (activation.message && deps.canAttemptDelivery?.(activation.message, 'conversation') === false) return;
       try { if (activation.message) await deps.deliverConversation(activation.message, live); }
       finally { state.activations.delete(group); }
       return;
     }
-    const row = await nextMessage();
-    if (row && deps.db.claimConversation(row.id)) await deps.deliverConversation(row, live);
+    const row = message;
+    if (row && deps.canAttemptDelivery?.(row, 'conversation') !== false && deps.db.claimConversation(row.id)) await deps.deliverConversation(row, live);
   }
   async function step() {
     const activation = state.activations.get(group);

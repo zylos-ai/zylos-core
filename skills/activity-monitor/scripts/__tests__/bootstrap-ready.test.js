@@ -16,7 +16,7 @@ test('local publication follows enqueue and retains the exact control IDs', asyn
   const f = fixture(t), file = path.join(f.dir, 'current-session.json');
   const result = await publishBootstrapReady({ source: 'startup', session_id: 's' }, { ...f, now: () => 42,
     enqueue: async () => { assert.equal(fs.existsSync(file), false); return { startupControlIds: [4, 7] }; } });
-  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { runId: 'run', sessionId: 's', startupControlIds: [4, 7], ts: 42 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { runId: 'run', sessionId: 's', startupControlIds: [4, 7], startupPrompt: { state: 'enqueued' }, ts: 42 });
   assert.equal(result.sessionId, 's');
 });
 
@@ -39,6 +39,7 @@ test('clear keeps old on publication failure; enqueue failure can still publish 
   const record = await publishBootstrapReady({ source: 'clear', session_id: 'new' }, { ...f, enqueue: async () => { throw Error('queue unavailable'); } });
   assert.deepEqual(record.startupControlIds, []);
   assert.equal(record.sessionId, 'new');
+  assert.deepEqual(record.startupPrompt, { state: 'failed' });
 });
 
 test('rejected managed identity leaves untouched and does not enqueue', async t => {
@@ -72,4 +73,16 @@ test('legacy foreground identity requires a runtime ancestor in the observed pan
   assert.equal((await readBootstrapIdentity({ kind: 'legacy' }, options)).runtimePid, 20);
   await assert.rejects(readBootstrapIdentity({ kind: 'legacy' }, { ...options,
     processTree: async () => [{ pid: 30, ppid: 1, name: 'node' }] }), { code: 'IDENTITY_UNAVAILABLE' });
+});
+
+// Producer/publication boundary: real startup selection and atomic READY file.
+// Run for startup suppression metadata; no DB, subprocess, tmux or service starts.
+test('onboarding suppression persists a skipped outcome instead of enqueue failure', async t => {
+  const { enqueueStartupPrompt } = await import('../session-start-prompt.js');
+  const f = fixture(t);
+  const record = await publishBootstrapReady({ source: 'startup', session_id: 's' }, { ...f,
+    enqueue: source => enqueueStartupPrompt(source, { onboardingPending: () => true, execFile: () => assert.fail('suppressed startup must not enqueue') }) });
+  assert.equal(record.startupControlIds.length, 0);
+  assert.deepEqual(record.startupPrompt, { state: 'skipped', reason: 'onboarding_pending' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dir, 'current-session.json'))).startupPrompt, record.startupPrompt);
 });

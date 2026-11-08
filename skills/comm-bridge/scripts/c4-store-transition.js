@@ -26,6 +26,17 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       return { runId };
     }),
     getModeTransition: ({ runId } = {}) => read(c => find(c, runId)),
+    expireLegacyRunningControls: runId => write(c => {
+      const row = required(c, runId);
+      if (row.phase !== 'gating' || row.source_mode !== 'single' || row.target_mode !== 'multi') throw dataError('TRANSITION_PRECONDITION', 'Legacy control cleanup requires single-to-multi gating');
+      onlyGlobal(c, true);
+      // The caller proves executor absence under the lifecycle queue. Recheck
+      // durable ownership and row eligibility inside this write transaction.
+      const predicate = "status='running' AND session_group IS NULL AND ack_deadline_at IS NULL AND created_at<? AND updated_at<?";
+      const ids = all(c, `SELECT id FROM control_queue WHERE ${predicate} ORDER BY id LIMIT 20`, row.created_at, row.created_at).map(value => value.id);
+      const { changes: count } = run(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE ${predicate}`, seconds(), row.created_at, row.created_at);
+      return { count, ids };
+    }),
     getLastCompletedModeTransition: () => read(c => decode(get(c, "SELECT * FROM mode_transitions WHERE phase='complete' ORDER BY updated_at DESC,created_at DESC,rowid DESC LIMIT 1"))),
     listGroupHeads: () => read(c => all(c, 'SELECT session_group AS sessionGroup,head_id AS headId FROM group_heads ORDER BY session_group COLLATE BINARY')),
     absorbForTransition: runId => write(c => {
