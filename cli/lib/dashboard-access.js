@@ -27,8 +27,6 @@ export function dashboardAccessAddress({ zylosDir, routed = false }) {
 
 export function printDashboardInfo(access, log = console.log) {
   if (!access) return;
-  const password = access.password;
-  delete access.password;
   log('');
   log(heading('Dashboard'));
   try {
@@ -36,11 +34,19 @@ export function printDashboardInfo(access, log = console.log) {
     log(`    URL: ${bold(address.url)}`);
     if (address.localOnly) log('    Local access only through this port; no public route is configured.');
   } catch (error) { log(`    ${warn(error.message)}`); }
+  printDashboardPassword(access, log);
+  log('');
+}
+
+export function printDashboardPassword(access, log = console.log) {
+  const password = access.password;
+  delete access.password;
   if (password) {
     log(`    Password: ${bold(password)}`);
     log('    Save this password now. It is shown only once and is not saved in plaintext.');
+  } else if (access.provisionFailed) {
+    log(warn('    Dashboard password setup could not be confirmed. Run "zylos dashboard reset-password".'));
   } else {
     log(dim('    Password already configured. Reset it with "zylos dashboard reset-password".'));
   }
-  log('');
 }

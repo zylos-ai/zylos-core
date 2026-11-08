@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { ZYLOS_DIR } from '../lib/config.js';
-import { isCaddyAvailable } from '../lib/caddy.js';
-import { printDashboardInfo } from '../lib/dashboard-access.js';
+import { printDashboardPassword } from '../lib/dashboard-access.js';
 import { provisionDashboardAuth } from '../../skills/dashboard/src/lib/auth-provision.js';
 
 export async function dashboardCommand(args) {
@@ -10,7 +9,7 @@ export async function dashboardCommand(args) {
     return;
   }
   if (args.length !== 1 || args[0] !== 'reset-password') throw new Error('Usage: zylos dashboard reset-password');
-  const access = { zylosDir: ZYLOS_DIR, routed: isCaddyAvailable(ZYLOS_DIR), ...await provisionDashboardAuth(ZYLOS_DIR, { reset: true }) };
+  const access = { zylosDir: ZYLOS_DIR, ...await provisionDashboardAuth(ZYLOS_DIR, { reset: true }) };
   let running;
   try {
     const pid = execFileSync('pm2', ['pid', 'zylos-dashboard'], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -24,5 +23,5 @@ export async function dashboardCommand(args) {
     console.error('Dashboard password saved, but service status/restart could not be confirmed. Restart Dashboard before signing in.');
     process.exitCode = 2;
   }
-  printDashboardInfo(access);
+  printDashboardPassword(access);
 }

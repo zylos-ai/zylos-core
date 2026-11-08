@@ -10,9 +10,10 @@ import test from 'node:test';
 // changes; skip unrelated UI. Each worker uses private HOME/ZYLOS_DIR/PM2_HOME,
 // short temp/tmux location and DB paths. PM2/install commands are intercepted;
 // real hook + route owner run. Bounded synchronous worker is reaped on timeout.
-for (const mode of ['absent', 'failed', 'explicit-skip']) {
+for (const mode of ['absent', 'failed', 'explicit-skip', 'hook-failed', 'handoff-failed']) {
   const invalidPort = mode === 'failed', noCaddy = mode === 'explicit-skip';
-  test(`init Dashboard route output ${invalidPort ? 'reports an actual failure reason' : noCaddy ? 'respects no-caddy with existing Caddy files' : 'does not warn when Caddy is absent'}`, t => {
+  const provisionFailed = mode === 'hook-failed' || mode === 'handoff-failed';
+  test(`init Dashboard route output ${provisionFailed ? `reports ${mode} without claiming a configured password` : invalidPort ? 'reports an actual failure reason' : noCaddy ? 'respects no-caddy with existing Caddy files' : 'does not warn when Caddy is absent'}`, t => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-route-')));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'instance'),
@@ -41,7 +42,7 @@ for (const mode of ['absent', 'failed', 'explicit-skip']) {
       ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR'].map(key => [key, env[key]])),
       tmuxSocket: path.join(env.TMUX_TMPDIR, 'default'), db: path.join(data, 'dashboard.db') }));
     const result = spawnSync(process.execPath, ['--experimental-test-module-mocks',
-      fileURLToPath(new URL('./fixtures/init-dashboard-route.js', import.meta.url)), ...(noCaddy ? ['--no-caddy'] : [])], {
+      fileURLToPath(new URL('./fixtures/init-dashboard-route.js', import.meta.url)), ...(noCaddy ? ['--no-caddy'] : []), ...(provisionFailed ? [mode] : [])], {
       env, encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024,
     });
     assert.equal(result.status, 0, result.stderr);
@@ -52,6 +53,14 @@ for (const mode of ['absent', 'failed', 'explicit-skip']) {
       assert.doesNotMatch(result.stdout, /Dashboard route requires attention/);
       assert.match(result.stdout, /http:\/\/127\.0\.0\.1:3491\//);
       assert.match(result.stdout, /Local access only through this port; no public route/);
+    }
+    if (provisionFailed) {
+      assert.match(result.stdout, /Dashboard configuration failed:/);
+      assert.match(result.stdout, /password setup could not be confirmed/);
+      assert.match(result.stdout, /zylos dashboard reset-password/);
+      assert.doesNotMatch(result.stdout, /Password already configured|Password:|private-handoff-content/);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'config.json'), 'utf8')).auth, undefined);
+      return;
     }
     const generated = result.stdout.match(/Password: ([a-f0-9]{32})/);
     assert.ok(generated, 'init should display the generated password');

@@ -10,6 +10,11 @@ const root = process.env.ZYLOS_DIR;
 assert.equal(fs.realpathSync(root), root);
 const commands = [];
 mock.module('node:child_process', { namedExports: { ...childProcess,
+  spawnSync(...args) {
+    if (process.argv.includes('hook-failed')) return { status: 1, stderr: 'private-handoff-content' };
+    if (process.argv.includes('handoff-failed')) return { status: 0, output: ['', '', '', 'private-handoff-content'] };
+    return childProcess.spawnSync(...args);
+  },
   execSync(command) {
     commands.push(command);
     if (command === 'pm2 jlist') return JSON.stringify([{ name: 'scheduler', pm2_env: { status: 'online' } }]);
@@ -20,7 +25,7 @@ console.log('Init route worker isolation:', JSON.stringify(Object.fromEntries(
   ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR'].map(key => [key, process.env[key]]))));
 const { startCoreServices, parseInitFlags } = await import('../../../../cli/commands/init.js');
 const { printDashboardInfo } = await import('../../../../cli/lib/dashboard-access.js');
-const flags = parseInitFlags(process.argv.slice(2));
+const flags = parseInitFlags(process.argv.slice(2).filter(arg => !['hook-failed', 'handoff-failed'].includes(arg)));
 const access = { zylosDir: root, noCaddy: flags.caddy === false };
 assert.equal(startCoreServices(null, access), 1);
 assert.ok(commands.some(command => command.startsWith('pm2 start ')));

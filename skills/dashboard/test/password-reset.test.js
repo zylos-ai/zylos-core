@@ -93,7 +93,7 @@ for (const repair of [false, true]) {
     assert.notEqual(next, password);
     assert.equal(reset.stdout.split(next).length - 1, 1);
     assert.match(reset.stdout, /takes effect the next time Dashboard starts/);
-    assert.match(reset.stdout, new RegExp(`http://127\\.0\\.0\\.1:${repair ? 3491 : 3470}/`));
+    assert.doesNotMatch(reset.stdout, /URL:|https?:\/\//);
     assert.equal(await passwordAccepted(f.env.ZYLOS_DIR, password), false);
     assert.equal(await passwordAccepted(f.env.ZYLOS_DIR, next), true);
     assertNoPlaintext(f.root, password); assertNoPlaintext(f.root, next);
@@ -121,11 +121,18 @@ for (const restartFails of [false, true]) {
   test(`password reset targets only a running Dashboard and ${restartFails ? 'reports restart failure' : 'confirms restart'}`, t => {
     const f = fixture(t, { running: true, restartFails });
     writeConfig(f, { port: 3491, auth: { enabled: true } });
+    fs.mkdirSync(path.join(f.env.ZYLOS_DIR, 'bin'));
+    fs.mkdirSync(path.join(f.env.ZYLOS_DIR, 'http'));
+    fs.mkdirSync(path.join(f.env.ZYLOS_DIR, '.zylos'));
+    fs.writeFileSync(path.join(f.env.ZYLOS_DIR, 'bin/caddy'), 'unused');
+    fs.writeFileSync(path.join(f.env.ZYLOS_DIR, 'http/Caddyfile'), 'no dashboard route');
+    fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos/config.json'), JSON.stringify({ domain: 'public.example.test' }));
     const reset = spawnSync(process.execPath, [cli, 'dashboard', 'reset-password'], {
       env: f.env, encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024 });
     assert.equal(reset.status, restartFails ? 2 : 0, reset.stderr);
     const password = reset.stdout.match(/Password: ([a-f0-9]{32})/)?.[1];
     assert.ok(password, 'even a failed restart must show the saved new password once');
+    assert.doesNotMatch(reset.stdout, /URL:|public\.example\.test|https?:\/\//);
     assert.equal(reset.stdout.split(password).length - 1, 1);
     assert.equal(reset.stderr.includes(password), false);
     assert.equal(fs.readFileSync(f.calls, 'utf8'), 'pid zylos-dashboard\nrestart zylos-dashboard\n');

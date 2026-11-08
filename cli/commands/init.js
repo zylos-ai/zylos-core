@@ -1102,7 +1102,10 @@ export function startCoreServices(webPassword = null, dashboardAccess = null) {
       }
       Object.assign(dashboardAccess, { password: generated.password, zylosDir: ZYLOS_DIR });
     }
-  } catch (err) { console.log(`  ${warn(`Dashboard configuration failed: ${err.message}`)}`); }
+  } catch (err) {
+    if (dashboardAccess) dashboardAccess.provisionFailed = true;
+    console.log(`  ${warn(`Dashboard configuration failed: ${err.message}`)}`);
+  }
   initializeDatabases();
   const dashboardRoute = dashboardAccess?.noCaddy ? { state: 'skipped' } : applyDashboardRoute({ zylosDir: ZYLOS_DIR });
   if (dashboardAccess) dashboardAccess.routed = dashboardRoute.state === 'done';
