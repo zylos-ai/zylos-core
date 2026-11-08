@@ -1,6 +1,7 @@
 import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=102';
-import { element } from './plain-text.js?v=103';
+import { element } from './plain-text.js?v=104';
 import { receiptState } from './chat-delivery-state.js?v=100';
+import { instantFromInput, zonedInputValue } from './instance-zone.js?v=100';
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const referenceMatches = (question, envelope, block, row) => question && !question.questionError && row?.direction === 'out'
@@ -11,7 +12,7 @@ const referenceMatches = (question, envelope, block, row) => question && !questi
 
 /** A question uses its immutable message for fields and Dashboard for its current lifecycle. */
 export function renderQuestion({ document, envelope, block, row, question, canWrite = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
-  t = key => key, onSubmit = null, formState = {}, onDraftChange = null, otherAnswerDisclosure = false } = {}) {
+  t = key => key, onSubmit = null, formState = {}, onDraftChange = null, otherAnswerDisclosure = false, timeZone = null } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-question');
   const validEnvelope = parseC4Content(CONTENT_PREFIX + JSON.stringify(envelope));
@@ -163,8 +164,8 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
           : field.type === 'date' ? 'date' : field.type === 'datetime' ? 'datetime-local' : 'text';
         if (field.type === 'boolean') input.checked = value === true;
         else if (field.type === 'datetime' && value) {
-          const d = new Date(value);
-          input.value = Number.isFinite(d.getTime()) ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
+          // Date-times are shown and entered as wall time in the instance time zone (UTC while it is unknown).
+          input.value = zonedInputValue(value, timeZone);
         } else input.value = value ?? '';
         if (field.min !== undefined) input.min = field.min;
         if (field.max !== undefined) input.max = field.max;
@@ -179,7 +180,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         else if (field.type === 'multi_select') formState.values[field.key] = [...input.selectedOptions].map(option => option.value);
         else if (input.value === '' && !['text', 'multiline_text'].includes(field.type)) delete formState.values[field.key];
         else if (['number', 'integer'].includes(field.type)) formState.values[field.key] = Number(input.value);
-        else if (field.type === 'datetime') { const d = new Date(input.value); formState.values[field.key] = Number.isFinite(d.getTime()) ? d.toISOString() : input.value; }
+        else if (field.type === 'datetime') { const at = instantFromInput(input.value, timeZone); formState.values[field.key] = Number.isFinite(at) ? new Date(at).toISOString() : input.value; }
         else formState.values[field.key] = input.value;
         formState.fieldErrors = (formState.fieldErrors || []).filter(item => item.key !== field.key);
         formState.formError = null; formState.error = null;

@@ -142,6 +142,10 @@ function refreshInstalledVersions() {
 const config = loadConfig();
 ensureDataDirs(config);
 await migratePasswordIfNeeded(config);
+// The instance time zone (.env TZ), read on every call; every date and time the Dashboard shows uses it.
+const scheduleTz = createScheduleTz({ zylosDir: config.zylosDir });
+await scheduleTz();
+const instanceTz = () => scheduleTz.current().tz;
 const activeRuntime = loadZylosConfig(config.zylosDir).runtime || process.env.ZYLOS_RUNTIME || 'claude';
 const isClaudeRuntime = activeRuntime === 'claude';
 config.runtime = activeRuntime;
@@ -400,7 +404,7 @@ if (codexRolloutCollector) {
 }
 
 // 8. Metric resolver
-const metricResolver = new MetricResolver(store, collectors, config, { stateEngine: coreState });
+const metricResolver = new MetricResolver(store, collectors, config, { stateEngine: coreState, timeZone: instanceTz });
 
 // 9b. C4 reader (read-only access to comm-bridge DB)
 const c4Reader = new C4Reader(config.zylosDir);
@@ -468,7 +472,6 @@ function workbenchFailure(res, error) {
   sendJson(res, status, { ok: false, error: { code: status === 500 ? 'internal_error' : error.code,
     message: status === 500 ? 'Request failed' : error.message } });
 }
-const scheduleTz = createScheduleTz({ zylosDir: config.zylosDir });
 const scheduleReader = createScheduleRead({ zylosDir: config.zylosDir, scheduleTz, displayNames,
   getSnapshot: () => workbench.getSnapshot() });
 const scheduleWriter = createScheduleWrite({ zylosDir: config.zylosDir, scheduleTz });
@@ -1129,7 +1132,7 @@ async function handleApi(req, res, pathname, url) {
   }
   if (pathname === '/api/state') {
     await coreState.refresh();
-    sendJson(res, 200, buildApiStatePayload());
+    sendJson(res, 200, { ...buildApiStatePayload(), tz: (await scheduleTz()).tz });
     return true;
   }
 
@@ -1174,10 +1177,11 @@ async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/workbench/usage' || pathname === '/api/workbench/host') {
     try {
       const range = url.searchParams.get('range') || undefined;
+      const tz = pathname.endsWith('/usage') ? (await scheduleTz()).tz : null;
       const data = pathname.endsWith('/usage')
         ? url.searchParams.get('summary') === 'cost'
-          ? { costSummary: costSummary(store, { tz: process.env.TZ }) }
-          : usageSeries(store, c4Reader, { range, tz: process.env.TZ,
+          ? { costSummary: costSummary(store, { tz }) }
+          : usageSeries(store, c4Reader, { range, tz,
             since: url.searchParams.get('since'), until: url.searchParams.get('until') })
         : hostSeries(store, { range, pm2Data: pm2Collector.getLatestPM2Data() });
       sendJson(res, 200, data);
@@ -1203,7 +1207,7 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/workbench/pricing') {
     try {
-      const bounds = usageBounds({ range: '7d', tz: process.env.TZ });
+      const bounds = usageBounds({ range: '7d', tz: (await scheduleTz()).tz });
       const models = costRows(store, { ...bounds, bucket: 'total', byModel: true })
         .map(({ runtime, model, value }) => ({ runtime, model, cost: value }));
       const unmatched = store.db.prepare(`SELECT runtime, json_extract(dimensions, '$.model') AS model,
@@ -1298,7 +1302,7 @@ async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/metrics/aggregate') {
     const metric = url.searchParams.get('metric');
     const period = url.searchParams.get('period') || 'session';
-    const tz = url.searchParams.get('tz') || process.env.TZ || 'UTC';
+    const tz = url.searchParams.get('tz') || (await scheduleTz()).tz || 'UTC';
     if (!metric || !['cost', 'cache', 'tokens'].includes(metric)) {
       sendJson(res, 400, { error: 'metric must be "cost", "cache", or "tokens"' });
       return true;

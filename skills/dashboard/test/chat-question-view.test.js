@@ -12,7 +12,7 @@ registerHooks({ resolve(specifier, context, next) {
 const { renderQuestion } = await import('../public/js/wb/chat-questions.js');
 const t = key => key;
 function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = true, missing = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
-  mutateQuestion, formState = {}, submit = async () => {}, otherAnswerDisclosure = false } = {}) {
+  mutateQuestion, formState = {}, submit = async () => {}, otherAnswerDisclosure = false, timeZone = null } = {}) {
   const defaults = type === 'choice' ? { prompt: 'Pick one', options: [{ id: 'a', label: 'First' }, { id: 'b', label: 'Second' }], action: { type: 'choice.select', target: 'answer.choice' } }
     : type === 'confirmation' ? { title: 'Proceed?', severity: 'normal', action: { type: 'confirmation.respond', target: 'answer.confirm' } }
       : { title: 'Your details', fields: [{ key: 'name', label: 'Name', type: 'text', required: true, maxLength: 10 }], action: { type: 'form.submit', target: 'answer.form' } };
@@ -27,7 +27,7 @@ function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = tru
     status, answerId: null, action: null, actionError: null, delivery: null };
   mutateQuestion?.(question);
   const document = createDocument(), requests = [];
-  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, otherAnswerDisclosure, t, formState,
+  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, otherAnswerDisclosure, t, formState, timeZone,
     onSubmit: async (action, options) => { requests.push({ action, options }); return submit(action, options); } });
   const root = render();
   return { root, render, requests, question, envelope, formState, nodes: () => allNodes(root),
@@ -93,6 +93,24 @@ test('forms retain valid typed values after failure and redraw', async () => {
   assert.match(redrawn.textContent, /submitFailed/);
   allNodes(redrawn).find(node => node.dataset.action === 'answer').dispatch('click'); await tick();
   assert.equal(f.requests[0].action.id, f.requests[1].action.id);
+});
+
+test('date-time fields show and read wall time in the instance time zone, not the browser zone', async t => {
+  const saved = process.env.TZ;
+  t.after(() => { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; });
+  process.env.TZ = 'America/Los_Angeles';
+  const fields = [{ key: 'time', label: 'Time', type: 'datetime', defaultValue: '2026-11-07T17:30:00Z' }];
+  for (const [timeZone, shown, typed, sent] of [
+    ['Asia/Shanghai', '2026-11-08T01:30', '2026-11-08T09:00', '2026-11-08T01:00:00.000Z'],
+    [null, '2026-11-07T17:30', '2026-11-08T09:00', '2026-11-08T09:00:00.000Z'],
+  ]) {
+    const f = fixture({ type: 'form_intent', data: { fields }, timeZone });
+    const input = f.nodes().find(node => node.attributes['aria-label'] === 'Time');
+    assert.equal(input.value, shown, `the saved instant is shown in ${timeZone ?? 'UTC'}`);
+    change(input, typed);
+    f.button('answer').dispatch('click'); await tick();
+    assert.equal(f.requests[0].action.payload.values.time, sent);
+  }
 });
 
 test('form fields submit typed values for all supported scalar and select types', async () => {

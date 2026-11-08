@@ -1,6 +1,6 @@
-import { createGroupDetail } from './detail.js?v=114';
-import { boardController } from './board.js?v=114';
-import { element, icon } from './plain-text.js?v=103';
+import { createGroupDetail } from './detail.js?v=115';
+import { boardController } from './board.js?v=115';
+import { element, icon } from './plain-text.js?v=104';
 
 /**
  * The overview's group detail, opened as a side panel on another page. It is the same component; the panel reads

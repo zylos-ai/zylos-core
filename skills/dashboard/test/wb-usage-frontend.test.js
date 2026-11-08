@@ -5,6 +5,7 @@ import { createDocument, allNodes, deferred, tick, Node } from './fixtures/workb
 import { cachePath, renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
 import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
 
 // Direct modules with injected DOM, charts and reads; no browser, network, storage or processes.
 const fixture = () => {
@@ -68,6 +69,23 @@ test('custom invalid dates do not request and range URL carries explicit bounds'
   await page.open();
   allNodes(f.root).find(n=>n.id==='wb-usage-apply').dispatch('click');await tick();assert.equal(reads,1);
   assert.ok(f.root.textContent.includes('wb.usage.invalidRange'));assert.match(usagePath({range:'custom',since:'a',until:'b'}),/since=a&until=b/);page.destroy();
+});
+test('custom usage dates are read as wall time in the instance time zone, not the browser zone', async t => {
+  const saved = process.env.TZ;
+  t.after(() => { setInstanceZone(null); if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; });
+  process.env.TZ = 'America/Los_Angeles';
+  setInstanceZone('Asia/Shanghai');
+  const f = fixture(); const paths = [];
+  const page = createUsagePage({ ...f, read: async path => { paths.push(path); return value; } });
+  await page.open();
+  const nodes = allNodes(f.root);
+  nodes.find(node => node.id === 'wb-usage-since').value = '2026-11-01T00:00';
+  nodes.find(node => node.id === 'wb-usage-until').value = '2026-11-02T00:00';
+  nodes.find(node => node.id === 'wb-usage-apply').dispatch('click'); await tick();
+  const query = new URLSearchParams(paths.at(-1).split('?')[1]);
+  assert.equal(query.get('since'), '2026-10-31T16:00:00.000Z', 'midnight on 1 November in Shanghai');
+  assert.equal(query.get('until'), '2026-11-01T16:00:00.000Z');
+  page.destroy();
 });
 test('custom usage rejects a range longer than the allowed year before reading', async () => {
   const f = fixture(); let reads = 0;

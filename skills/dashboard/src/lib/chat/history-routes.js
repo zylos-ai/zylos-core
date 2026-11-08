@@ -2,8 +2,9 @@ import { requireChatAccess } from './access.js';
 import { sendJson } from '../http.js';
 
 /**
- * `instanceTz` is the schedule page's time zone reader (the instance .env TZ). Message pages carry it as `tz` so the
- * page reads daily chart points in the agent's time zone; null when it is unknown.
+ * `instanceTz` is the schedule page's time zone reader (the instance .env TZ). The conversation list and message pages
+ * carry it as `tz`, so the page shows message times and reads daily chart points in the agent's time zone; null when
+ * it is unknown.
  */
 export async function handleChatHistory(req, res, url, { auth, config, history, instanceTz = null }) {
   const match = /^\/api\/chat\/conversations(?:\/([^/]+)\/(messages|status))?$/.exec(url.pathname);
@@ -22,7 +23,7 @@ export async function handleChatHistory(req, res, url, { auth, config, history, 
     try { id = match[1] && decodeURIComponent(match[1]); }
     catch { sendJson(res, 400, { error: 'invalid_chat_conversation' }); return true; }
     const result = match[2] ? history[match[2]](id, options) : history.list(options);
-    if (match[2] === 'messages') result.tz = await readInstanceTz(instanceTz);
+    if (!match[2] || match[2] === 'messages') result.tz = await readInstanceTz(instanceTz);
     sendJson(res, 200, result);
   } catch (error) {
     sendJson(res, error.statusCode || 502, { error: error.code || 'chat_history_unavailable' });

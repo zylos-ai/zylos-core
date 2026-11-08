@@ -1,7 +1,7 @@
-import { element, icon } from './plain-text.js?v=103';
-import { endReasonLabel, timeValue } from './event-labels.js?v=89';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=114';
-import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=106';
+import { element, icon } from './plain-text.js?v=104';
+import { endReasonLabel, timeValue } from './event-labels.js?v=90';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=115';
+import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=107';
 
 export { timeValue };
 

@@ -1,4 +1,5 @@
-import { element } from './plain-text.js?v=103';
+import { element } from './plain-text.js?v=104';
+import { formatZoned, instanceZone, zonedInputValue } from './instance-zone.js?v=100';
 
 const colors = ['#4f8cf7', '#aa79e8', '#35a998', '#e1a33d', '#e06b83', '#73859f'];
 const halfDay = 12 * 60 * 60 * 1000;
@@ -75,6 +76,8 @@ function formatted(value, unit, format, locale) {
 /** Chart kinds are a host presentation choice; protocol data remains unchanged. */
 export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dce3', locale, timeZone } = {}) {
   const data = block.data;
+  // An unknown instance zone reads UTC, as daily points do.
+  const zone = instanceZone(timeZone ?? null);
   const tick = unit => value => formatted(value, unit, data.format, locale);
   const axis = (title, unit) => ({ ...(data.format?.style === 'percent' || unit === '%'
     ? { suggestedMax: data.format?.style === 'percent' ? 1 : 100 } : {}), title: { display: !!title, text: title, color: text },
@@ -103,6 +106,11 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
       scales.x.time = { unit: 'day' };
       scales.x.ticks = { color: text, source: 'data', callback: value => dayLabel.format(value) };
       scales.x.afterDataLimits = scale => { scale.min -= halfDay; scale.max += halfDay; };
+    } else if (data.xType === 'datetime') {
+      // Date-times are labelled in the instance time zone (UTC while it is unknown), never the browser's: a tick at
+      // the zone's midnight names the day, other ticks the clock time.
+      scales.x.ticks = { color: text, callback: value => formatZoned(value, locale,
+        zonedInputValue(value, zone).endsWith('T00:00') ? { month: 'short', day: 'numeric' } : { hour: '2-digit', minute: '2-digit' }, zone) };
     }
     const categoryKeys = [], categoryLabels = new Map();
     const points = data.series.map(series => {
@@ -151,6 +159,8 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
       labels: { color: text, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
     tooltip: { callbacks: { ...(data.xType === 'date' ? { title(items) {
       return items.length ? new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric' }).format(items[0].parsed.x) : '';
+    } } : data.xType === 'datetime' ? { title(items) {
+      return items.length ? formatZoned(items[0].parsed.x, locale, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }, zone) : '';
     } } : {}), label(context) {
       const amount = context.parsed[indexAxis === 'y' ? 'x' : 'y'];
       return `${context.dataset.label}: ${formatted(amount, context.dataset.unit, data.format, locale)}`;

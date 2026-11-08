@@ -1,27 +1,28 @@
 import { consumeDraftReset, createDraftRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=102';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=113';
-import { createPricingPanel } from './wb/settings-pricing.js?v=114';
-import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=103';
-import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=103';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=116';
-import { renderVersion } from './wb/settings-version.js?v=103';
-import { mountConversationPage } from './wb/conversation-page.js?v=119';
-import { mountChatSettings } from './wb/chat-settings.js?v=112';
-import { mountWorkbench } from './wb/shell.js?v=115';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=114';
+import { createPricingPanel } from './wb/settings-pricing.js?v=115';
+import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=104';
+import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=104';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=117';
+import { renderVersion } from './wb/settings-version.js?v=104';
+import { mountConversationPage } from './wb/conversation-page.js?v=120';
+import { mountChatSettings } from './wb/chat-settings.js?v=113';
+import { mountWorkbench } from './wb/shell.js?v=116';
 import { watchHeader } from './wb/header-fit.js?v=94';
-import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=103';
-import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=114';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from './wb/observer-page.js?v=114';
+import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=104';
+import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=115';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from './wb/observer-page.js?v=115';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
-import { mountSchedule } from './wb/schedule.js?v=103';
-import { createUsagePage } from './wb/usage.js?v=114';
-import { ObserverHistory } from './observer-history.js?v=2';
+import { mountSchedule } from './wb/schedule.js?v=104';
+import { createUsagePage } from './wb/usage.js?v=115';
+import { ObserverHistory } from './observer-history.js?v=3';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=114';
-import { createFleetSounds } from './fleet-sounds.js?v=114';
+import { fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=115';
+import { createFleetSounds } from './fleet-sounds.js?v=115';
 import { refreshDashboardState } from './state-refresh.js?v=98';
+import { setInstanceZone } from './wb/instance-zone.js?v=100';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
@@ -993,6 +994,8 @@ async function resolveMemoryConflict(action) {
 async function refreshState() {
   const data = await refreshDashboardState(state, fetchJson);
   if (!data) return;
+  // Every date and time on the page is written in the instance time zone (.env TZ) the server reports; UTC while unknown.
+  setInstanceZone(data.tz);
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
   if (Object.hasOwn(data, 'new_session_threshold')) {
     state.newSessionThreshold = data.new_session_threshold;

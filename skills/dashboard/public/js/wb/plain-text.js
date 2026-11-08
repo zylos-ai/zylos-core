@@ -1,3 +1,4 @@
+import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 export function element(document, tag, text, className) {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = String(text ?? '');
@@ -35,8 +36,8 @@ export function unnamedConversation(row, t = key => key, { now = Date.now(), loc
   const at = row.createdAt == null ? null : row.createdAt * 1000;
   const date = at == null ? null : new Date(at);
   if (!date || !Number.isFinite(date.getTime())) return t('chat.unnamed');
-  const sameDay = date.toDateString() === new Date(now).toDateString();
-  const when = date.toLocaleString(locale, sameDay ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const sameDay = zonedDay(date) === zonedDay(now);
+  const when = formatZoned(date, locale, sameDay ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   return `${t('chat.unnamed')} · ${when}`;
 }
 /** Engine names read as product names: Claude, Codex. */

@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=103';
+import { element } from './plain-text.js?v=104';
 
 /** Segmented choice: one pressed button per option; forwards the chosen value. */
 function segmented(root, { document, id, label, options, value, onChange }) {

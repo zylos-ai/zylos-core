@@ -1,4 +1,6 @@
 import { recoveryTime } from './cooldown.js?v=89';
+import { formatZoned } from './instance-zone.js?v=100';
+const CLOCK_SECONDS = { hour: 'numeric', minute: '2-digit', second: '2-digit' };
 const KEY = 'zylos-dashboard-detail-level';
 
 export function createViewMode({ storage = globalThis.localStorage, document = globalThis.document } = {}) {
@@ -90,7 +92,7 @@ export function waitText(wait, level = 'plain', t, now = Date.now()) {
   if (!wait) return '';
   const reason = wait.kind ?? wait.reason ?? 'unknown';
   const at = recoveryTime(wait.cooldownUntil, now);
-  const until = at === null ? '' : new Date(at).toLocaleTimeString();
+  const until = at === null ? '' : formatZoned(at, undefined, CLOCK_SECONDS);
   if (level === 'technical') return [reason, wait.reasonCode ?? wait.reason, until].filter(Boolean).join(' · ');
   if (t) {
     const key = ['rate_wait', 'auth_wait', 'queued', 'starting', 'fenced', 'start_failed'].includes(reason) ? reason : 'unknown';

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import '../public/js/markdown-it.min.js';
 import { ObserverHistory, createHistoryMarkdown, escapeHistory } from '../public/js/observer-history.js';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
 
 function controller() {
   const history = Object.create(ObserverHistory.prototype);
@@ -99,15 +100,22 @@ test('session search follows the internal-record visibility setting', async () =
   assert.ok(requests.every(request => request.route === 'search' && request.params.session === 'current'));
 });
 
-test('session labels distinguish duplicate titles using browser local start time', () => {
+test('session labels distinguish duplicate titles using the instance time zone, not the browser zone', t => {
+  const saved = process.env.TZ;
+  t.after(() => { setInstanceZone(null); if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; });
+  process.env.TZ = 'America/Los_Angeles';
+  setInstanceZone('Asia/Shanghai');
   const { history } = controller();
-  const year = new Date().getFullYear();
-  const first = new Date(year, 0, 2, 3, 4).toISOString();
-  const second = new Date(year, 0, 2, 4, 5).toISOString();
+  const year = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(new Date()));
+  // 03:04 and 04:05 on 2 January in Shanghai.
+  const first = new Date(Date.UTC(year, 0, 1, 19, 4)).toISOString();
+  const second = new Date(Date.UTC(year, 0, 1, 20, 5)).toISOString();
   assert.equal(history.sessionLabel({ id: 'a', title: 'Same title', startedAt: first }), '01-02 03:04 · Same title');
   assert.equal(history.sessionLabel({ id: 'b', title: 'Same title', startedAt: second }), '01-02 04:05 · Same title');
   assert.equal(history.sessionLabel({ id: 'current', kind: 'subagent', title: 'Same title', startedAt: first }), '↳ observer.history.current · 01-02 03:04 · Same title');
-  assert.equal(history.sessionLabel({ id: 'a', title: 'Old', startedAt: new Date(year - 1, 11, 31, 23, 59).toISOString() }), `${year - 1}-12-31 23:59 · Old`);
+  assert.equal(history.sessionLabel({ id: 'a', title: 'Old', startedAt: new Date(Date.UTC(year - 1, 11, 31, 15, 59)).toISOString() }), `${year - 1}-12-31 23:59 · Old`);
+  setInstanceZone(null);
+  assert.equal(history.sessionLabel({ id: 'a', title: 'Same title', startedAt: first }), '01-01 19:04 · Same title', 'an unknown zone reads UTC');
 });
 
 test('session labels omit absent or invalid time without empty separators or duplicated fallback', () => {

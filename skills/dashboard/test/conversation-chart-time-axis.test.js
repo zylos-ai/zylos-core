@@ -203,18 +203,24 @@ test('dates that do not exist are left out without moving the axis', () => {
   } finally { chart.destroy(); }
 });
 
-test('hourly data keeps the automatic time axis and default tooltip', () => {
-  const config = conversationChartConfig(block('datetime', hours(12)), { locale: 'en' });
+test('hourly data keeps the automatic time axis and labels its ticks and tooltip in the instance time zone', () => {
+  const config = conversationChartConfig(block('datetime', hours(12)), { locale: 'en', timeZone: 'Asia/Shanghai' });
   assert.equal(config.options.scales.x.type, 'time');
-  assert.equal(config.options.scales.x.time, undefined);
+  assert.equal(config.options.scales.x.time, undefined, 'Chart.js still picks the unit');
   assert.equal(config.options.scales.x.ticks.source, undefined);
-  assert.equal(config.options.scales.x.ticks.callback, undefined);
   assert.equal(config.options.scales.x.afterDataLimits, undefined);
-  assert.equal(config.options.plugins.tooltip.callbacks.title, undefined);
   const axis = render(config, 900);
   assert.ok(['hour', 'minute'].includes(axis.unit), `unit ${axis.unit}`);
   assert.ok(axis.labels.length > 1);
-  for (const label of axis.labels) assert.match(label, /^\d{1,2}(:\d\d)?\s?[ap]\.?m\.?$/i);
+  for (const label of axis.labels) assert.match(label, /^(\d{2}:\d{2}(\s?[AP]M)?|[A-Z][a-z]{2} \d{1,2})$/, label);
+  const callback = config.options.scales.x.ticks.callback;
+  const instant = Date.UTC(2026, 10, 2, 1, 30);
+  assert.equal(callback(instant), new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' }).format(instant));
+  assert.equal(callback(Date.UTC(2026, 10, 1, 16)), 'Nov 2', 'midnight in the instance zone names the day');
+  const title = config.options.plugins.tooltip.callbacks.title([{ parsed: { x: instant } }]);
+  assert.equal(title, new Intl.DateTimeFormat('en', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' }).format(instant));
+  const unknown = conversationChartConfig(block('datetime', hours(12)), { locale: 'en' });
+  assert.equal(unknown.options.scales.x.ticks.callback(Date.UTC(2026, 10, 2, 0)), 'Nov 2', 'an unknown zone reads UTC');
 });
 
 test('an instant outside the date range leaves out only its own point', () => {

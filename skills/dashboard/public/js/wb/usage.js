@@ -1,6 +1,7 @@
-import { element, icon } from './plain-text.js?v=103';
-import { money } from './instance-strip.js?v=114';
-import { dateField } from './date-field.js?v=103';
+import { element, icon } from './plain-text.js?v=104';
+import { money } from './instance-strip.js?v=115';
+import { dateField } from './date-field.js?v=104';
+import { instantFromInput } from './instance-zone.js?v=100';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];
 export const usageRanges = ['24h', '7d', 'month', '30d', 'custom'];
@@ -294,7 +295,8 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     const current = ++generation, target = identity(); owner = target;
     clear(); status.textContent = t('wb.usage.loading');
     const custom = range === 'custom';
-    const start = custom ? new Date(since.value).getTime() : null, end = custom ? new Date(until.value).getTime() : null;
+    // The custom range is entered as wall time in the instance time zone, like every time on this page.
+    const start = custom ? instantFromInput(since.value) : null, end = custom ? instantFromInput(until.value) : null;
     if (custom && (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || end - start > 366 * 86400000)) {
       status.textContent = t('wb.usage.invalidRange'); return;
     }

@@ -1,4 +1,4 @@
-import { element, runtimeName } from './plain-text.js?v=103';
+import { element, runtimeName } from './plain-text.js?v=104';
 
 export function responseError(value, fallback = 'request_failed') {
   const error = value?.error;

@@ -1,3 +1,4 @@
+import { formatZoned } from './instance-zone.js?v=100';
 export function timeValue(value) {
   if (typeof value === 'number') return value < 100000000000 ? value * 1000 : value;
   if (typeof value !== 'string') return NaN;
@@ -35,5 +36,5 @@ export function displayTime(value, level = 'plain', locale) {
   if (value == null) return null;
   if (level === 'technical') return String(value);
   const time = timeValue(value);
-  return Number.isFinite(time) ? new Date(time).toLocaleString(locale) : String(value);
+  return Number.isFinite(time) ? formatZoned(time, locale) : String(value);
 }

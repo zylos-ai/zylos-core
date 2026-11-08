@@ -252,3 +252,19 @@ test('statusline ingest emits weekly dimensions and drops five-hour dimensions',
   assert.equal(requestData.value.metrics.length, 1);
   assert.deepEqual(requestData.value.metrics[0].dimensions, { rate_limit_7d: 21, rate_limit_7d_resets_at: 456 });
 });
+
+test('today and seven-day costs are counted in the instance time zone read on every call', () => {
+  const calls = [];
+  const store = { aggregateCost(bounds) { calls.push(bounds); return 0; } };
+  let zone = 'Asia/Shanghai';
+  const resolver = new MetricResolver(store, {}, {}, { timeZone: () => zone });
+  const midnight = (iso, timeZone) => new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .format(new Date(iso));
+  for (const next of ['Asia/Shanghai', 'America/Los_Angeles', null]) {
+    zone = next; calls.length = 0;
+    resolver.resolveAggregated('cost');
+    const [today, week] = calls;
+    assert.equal(midnight(today.since, next ?? 'UTC'), '00:00', `today starts at midnight in ${next ?? 'UTC'}`);
+    assert.equal(midnight(week.since, next ?? 'UTC'), '00:00');
+  }
+});

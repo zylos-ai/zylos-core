@@ -104,16 +104,18 @@ export function rateLimitWindowExpired(dimensions, metricName, now = Date.now())
 }
 
 export class MetricResolver {
-  constructor(store, collectors, config, { stateEngine } = {}) {
+  constructor(store, collectors, config, { stateEngine, timeZone = () => process.env.TZ } = {}) {
     this.store = store;
     this.collectors = collectors;
     this.config = config;
     this._stateEngine = stateEngine || null;
+    // The instance time zone (.env TZ) that "today" and "7 days" are counted in; unknown reads UTC.
+    this._timeZone = timeZone;
     this._stalenessThreshold = (config.metricStalenessSeconds || DEFAULT_STALENESS_S) * 1000;
   }
 
   resolveAggregated(metricName) {
-    const tz = process.env.TZ || 'UTC';
+    const tz = this._timeZone() || 'UTC';
     const sessionId = this._stateEngine?.getCurrentSessionId?.() || null;
     const now = new Date();
     const today = dayBoundsUTC(tz, 0, now);

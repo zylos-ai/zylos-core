@@ -1,11 +1,12 @@
-import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=103';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=104';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=114';
-import { groupEventCount, renderOverview } from './detail-overview.js?v=114';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=114';
-import { eventTypesFor, recentWindow } from './timeline-rows.js?v=106';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=112';
-import { renderNameEditor } from './name-edit.js?v=112';
+import { channelIcon, platformLabel, statePill } from './board.js?v=115';
+import { groupEventCount, renderOverview } from './detail-overview.js?v=115';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=115';
+import { eventTypesFor, recentWindow } from './timeline-rows.js?v=107';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=113';
+import { renderNameEditor } from './name-edit.js?v=113';
+import { formatZoned } from './instance-zone.js?v=100';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -75,7 +76,7 @@ export function confirmDialog(document, { title, body, ok, cancel, danger = true
 export function formatStartedAt(value, locale) {
   if (value == null) return null;
   const date = new Date(value * 1000);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString(locale || undefined) : null;
+  return Number.isFinite(date.getTime()) ? formatZoned(date, locale) : null;
 }
 
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,

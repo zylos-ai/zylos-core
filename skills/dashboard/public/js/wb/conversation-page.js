@@ -1,13 +1,14 @@
 import { createUploadTray } from './chat-upload-tray.js?v=2';
-import { createChatAttachment } from './chat-attachments.js?v=3';
-import { element, icon } from './plain-text.js?v=103';
+import { createChatAttachment } from './chat-attachments.js?v=4';
+import { element, icon } from './plain-text.js?v=104';
 import { asDate } from './conversation-time.js?v=99';
-import { channelIcon } from './board.js?v=114';
-import { createConversationState } from './conversation-state.js?v=118';
+import { formatZoned } from './instance-zone.js?v=100';
+import { channelIcon } from './board.js?v=115';
+import { createConversationState } from './conversation-state.js?v=119';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
-import { renderQuestion } from './chat-questions.js?v=103';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=108';
-import { createGroupSide } from './group-side.js?v=2';
+import { renderQuestion } from './chat-questions.js?v=104';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=109';
+import { createGroupSide } from './group-side.js?v=3';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -173,7 +174,7 @@ export function mountConversationPage({
   const relativeTime = date => {
     const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
     if (seconds >= 3600 && seconds < 86400) {
-      return date.toLocaleTimeString(document.documentElement?.lang || undefined, { hour: '2-digit', minute: '2-digit' });
+      return formatZoned(date, document.documentElement?.lang, { hour: '2-digit', minute: '2-digit' }, instanceTimeZone);
     }
     const key = seconds < 60 ? 'justNow' : seconds < 3600 ? 'minutesAgo' : 'daysAgo';
     const count = seconds < 3600 ? Math.floor(seconds / 60) : Math.floor(seconds / 86400);
@@ -506,13 +507,15 @@ export function mountConversationPage({
       }
     }
   }
+  // Message times and days are written in the instance time zone the history reports (UTC when it does not).
+  const clockText = date => formatZoned(date, document.documentElement?.lang, { hour: '2-digit', minute: '2-digit' }, instanceTimeZone);
   function dateLabel(row) {
     const date = asDate(row.timestamp ?? row.created_at ?? row.createdAt);
-    return date ? date.toLocaleDateString(document.documentElement?.lang || undefined, {
+    return date ? formatZoned(date, document.documentElement?.lang, {
       year: 'numeric',
       month: 'short',
       day: 'numeric'
-    }) : null;
+    }, instanceTimeZone) : null;
   }
   function makeMessage(row, s) {
     const article = node('article', undefined, 'chat-message conversation-message ' + (row.direction === 'in' ? 'chat-in' : 'chat-out'));
@@ -524,13 +527,11 @@ export function mountConversationPage({
       author = node('span', t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai'), 'chat-message-author');
     meta.append(author);
     const date = asDate(row.timestamp ?? row.created_at ?? row.createdAt);
+    let timeNode = null;
     if (date) {
-      const time = node('time', date.toLocaleTimeString(document.documentElement?.lang || undefined, {
-        hour: '2-digit',
-        minute: '2-digit'
-      }));
-      time.dateTime = date.toISOString();
-      meta.append(time);
+      timeNode = node('time', clockText(date));
+      timeNode.dateTime = date.toISOString();
+      meta.append(timeNode);
     }
     const questions = [];
     const content = renderConversationContent({
@@ -583,7 +584,9 @@ export function mountConversationPage({
       questions,
       resource: content,
       attachmentKey: JSON.stringify(row.attachments || []),
-      content: row.content
+      content: row.content,
+      time: timeNode,
+      date
     };
     patchMessage(record, row, s);
     return record;
@@ -613,6 +616,7 @@ export function mountConversationPage({
     }
     const rendered = renderQuestion({
       document,
+      timeZone: instanceTimeZone,
       envelope: record.envelope,
       block: record.block,
       row: record.row,
@@ -638,6 +642,7 @@ export function mountConversationPage({
     return rendered;
   }
   function patchMessage(record, row, s) {
+    if (record.time) text(record.time, clockText(record.date));
     const delivery = s.tab === 'mine' && row.direction === 'in' ? messageState(row) : null;
     const status = delivery ? t(delivery === 'pending' && s.groupHealth === 'rate_limited'
       ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.' + delivery) : '';
@@ -881,6 +886,7 @@ export function mountConversationPage({
     const before = captureHistory();
     const s = state.snapshot();
     currentSnapshot = s;
+    instanceTimeZone = s.tz ?? null;
     for (const {
       button,
       title,

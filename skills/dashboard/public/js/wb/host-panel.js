@@ -1,4 +1,5 @@
-import { element, icon } from './plain-text.js?v=103';
+import { element, icon } from './plain-text.js?v=104';
+import { formatZoned } from './instance-zone.js?v=100';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
@@ -100,14 +101,14 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   card.append(element(document, 'p', `${t('wb.host.pm2')} ${pm2 == null ? t('wb.unknown') : pm2.online + ' / ' + pm2.total} ${t('wb.host.online')}`, 'wb-host-svc'));
   const series = value?.series ?? [], lang = document.documentElement?.lang || undefined;
   const short = range === '7d' ? { month: 'numeric', day: 'numeric' } : { hour: '2-digit', minute: '2-digit' };
-  const labels = series.map(row => new Date(row.at).toLocaleString(lang, short));
+  const labels = series.map(row => formatZoned(row.at, lang, short));
   const peak = value?.cpuPeak;
   card.append(hostLegend(document, t));
   const fields = [['cpu', 'cpu', 'cpu_pct'], ['mem', 'memory', 'mem_used_pct'], ['disk', 'disk', 'disk_used_pct']];
   for (const [index, [field, label, current]] of fields.entries()) {
     charts.push(hostChart(card, { title: t('wb.host.' + label), current: value?.current?.[current],
       peak: field === 'cpu' ? peak?.value ?? seriesPeak(series, field) : seriesPeak(series, field),
-      peakTitle: field === 'cpu' && peak?.at ? new Date(peak.at).toLocaleString(lang) : '',
+      peakTitle: field === 'cpu' && peak?.at ? formatZoned(peak.at, lang) : '',
       labels, avg: series.map(row => row[field]?.avg ?? null), max: series.map(row => row[field]?.max ?? null),
       axis: index === fields.length - 1, document, t, chartFactory }));
   }
@@ -119,7 +120,7 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   for (const [, label] of fields) for (const statistic of ['avg', 'max']) head.append(element(document, 'th', `${t('wb.host.' + label)} ${t('wb.host.' + statistic)}`));
   const thead = element(document, 'thead'), tbody = element(document, 'tbody'); thead.append(head); table.append(thead, tbody);
   for (const row of series) {
-    const line = element(document, 'tr'); line.append(element(document, 'th', new Date(row.at).toLocaleString(lang)));
+    const line = element(document, 'tr'); line.append(element(document, 'th', formatZoned(row.at, lang)));
     for (const [field] of fields) for (const statistic of ['avg', 'max']) line.append(element(document, 'td', percent(row[field]?.[statistic])));
     tbody.append(line);
   }

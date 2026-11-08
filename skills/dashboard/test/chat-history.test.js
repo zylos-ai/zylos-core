@@ -452,15 +452,16 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   assert.equal((await request(routes[0])).status, 403); assert.equal(reads, before);
 });
 
-// The message route reports the instance time zone through the schedule page's reader (the real scheduler tz.js on a
-// temporary installation's .env); daily charts read their points in it. Only messages pages carry it.
+// The conversation list and message routes report the instance time zone through the schedule page's reader (the real
+// scheduler tz.js on a temporary installation's .env); message times and daily charts are shown in it. The status
+// route does not carry it.
 // Integration. Isolation: HOME, PM2_HOME and TMPDIR are isolated by the test runner; this test uses a private c4.db
 // from fixture(), a temporary installation from scheduleEnv whose .env is the only one read, and points the process's
 // ZYLOS_DIR there for this test only (restored in teardown); both roots are removed in teardown. Run when the chat
-// history route, the schedule time zone reader or scheduler tz.js changes; changes limited to chart drawing may skip it.
+// history routes, the schedule time zone reader or scheduler tz.js changes; changes limited to page drawing may skip it.
 const TZ_URL = new URL('../../scheduler/scripts/tz.js', import.meta.url).href;
 let tzImport = 0;
-test('message pages carry the instance time zone from .env, and null when it cannot be read', async t => {
+test('conversation lists and message pages carry the instance time zone from .env, and null when it cannot be read', async t => {
   const f = fixture(t);
   f.add({ id: 1 });
   const id = f.history.list({ tab: 'external' }).items[0].id;
@@ -486,6 +487,10 @@ test('message pages carry the instance time zone from .env, and null when it can
   assert.equal((await call(messages, reader())).body.tz, null, 'an invalid zone is unknown, so the page falls back to UTC');
   assert.equal((await call(messages, async () => { throw new Error('unreadable'); })).body.tz, null);
   assert.equal((await call(messages, null)).body.tz, null);
+  fs.writeFileSync(path.join(install.zylosDir, '.env'), 'TZ=Asia/Shanghai\n');
   const list = await call('/api/chat/conversations?tab=external', reader());
-  assert.equal(list.status, 200); assert.equal('tz' in list.body, false, 'only message pages carry the zone');
+  assert.equal(list.status, 200); assert.equal(list.body.tz, 'Asia/Shanghai', 'the conversation list carries the zone for its times too');
+  assert.equal((await call('/api/chat/conversations?tab=external', null)).body.tz, null);
+  const status = await call(`/api/chat/conversations/${encodeURIComponent(id)}/status?tab=external&ids=1`, reader());
+  assert.equal(status.status, 200); assert.equal('tz' in status.body, false, 'delivery status reads carry no zone');
 });

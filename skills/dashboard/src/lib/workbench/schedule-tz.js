@@ -13,21 +13,40 @@ function sameDirectory(left, right) {
 }
 
 /**
- * The scheduler's tz.js fixes its .env path from ZYLOS_DIR when first imported.
- * When this process would read another installation's .env, report unknown.
+ * The instance time zone: the scheduler's tz.js reads `.env` TZ on every call. The scheduler's tz.js fixes its .env
+ * path from ZYLOS_DIR when first imported. When this process would read another installation's .env, report unknown.
+ * `current()` is the same reader for synchronous callers; it reports unknown until the module has loaded once.
  */
 export function createScheduleTz({ zylosDir, env = process.env, home = os.homedir(),
   tzModule = TZ_MODULE } = {}) {
-  return async function scheduleTz() {
-    const envDir = env.ZYLOS_DIR ?? path.join(home, 'zylos');
-    if (!sameDirectory(envDir, zylosDir)) return { tz: null, reason: 'tz_unavailable' };
+  let loaded = null;
+  const unavailable = () => ({ tz: null, reason: 'tz_unavailable' });
+  const sameInstallation = () => sameDirectory(env.ZYLOS_DIR ?? path.join(home, 'zylos'), zylosDir);
+  const read = module => {
     try {
-      const { loadTimezone } = await import(tzModule);
-      return { tz: loadTimezone() };
+      return { tz: module.loadTimezone() };
     } catch {
-      return { tz: null, reason: 'tz_unavailable' };
+      return unavailable();
     }
   };
+  async function scheduleTz() {
+    if (!sameInstallation()) return unavailable();
+    try {
+      loaded = await import(tzModule);
+    } catch {
+      return unavailable();
+    }
+    return read(loaded);
+  }
+  scheduleTz.current = () => {
+    if (!sameInstallation()) return unavailable();
+    if (!loaded) {
+      scheduleTz().catch(() => {});
+      return unavailable();
+    }
+    return read(loaded);
+  };
+  return scheduleTz;
 }
 
 function offsetMinutes(epochMs, tz) {

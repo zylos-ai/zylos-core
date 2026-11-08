@@ -1,5 +1,5 @@
-import { element } from './plain-text.js?v=103';
-import { responseError } from './group-config.js?v=112';
+import { element } from './plain-text.js?v=104';
+import { responseError } from './group-config.js?v=113';
 
 export async function saveGroupName(key, name, { request }) {
   const path = `/api/workbench/groups/${encodeURIComponent(key)}/name`;

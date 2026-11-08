@@ -1,8 +1,9 @@
-import { element, icon, runtimeName } from './plain-text.js?v=103';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=114';
-import { toolLabel, waitText } from './view-mode.js?v=114';
-import { displayTime, eventLabel, timeValue } from './event-labels.js?v=89';
-import { recentRows } from './timeline-rows.js?v=106';
+import { element, icon, runtimeName } from './plain-text.js?v=104';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=115';
+import { toolLabel, waitText } from './view-mode.js?v=115';
+import { displayTime, eventLabel, timeValue } from './event-labels.js?v=90';
+import { recentRows } from './timeline-rows.js?v=107';
+import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 
 export function activeSubagents(events, runId) {
   const agents = new Map();
@@ -60,9 +61,9 @@ export function sampleAge(at, now = Date.now(), t = key => key) {
 export function eventTime(value, level = 'plain', locale, now = null) {
   const time = timeValue(value);
   if (!Number.isFinite(time)) return { text: value == null ? '' : String(value), title: value == null ? '' : String(value) };
-  const date = new Date(time), otherDay = now != null && date.toDateString() !== new Date(now).toDateString();
-  const text = otherDay ? date.toLocaleString(locale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+  const date = new Date(time), otherDay = now != null && zonedDay(date) !== zonedDay(now);
+  const text = otherDay ? formatZoned(date, locale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : formatZoned(date, locale, { hour: '2-digit', minute: '2-digit' });
   return { text, title: displayTime(value, level, locale) };
 }
 const toolEvents = new Set(['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'permission_request']);

@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=103';
+import { element } from './plain-text.js?v=104';
 
 // This page's Dashboard version, zylos with its update hint, the AI engine CLI and its upgrade
 // button (the original generated action node), in both views.

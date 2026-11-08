@@ -1,3 +1,4 @@
+import { zonedDay, zonedInputValue } from './wb/instance-zone.js?v=100';
 // Read-only history UI. The controller never owns the terminal or its lease.
 export function escapeHistory(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -101,9 +102,8 @@ export class ObserverHistory {
     const date = session.startedAt ? new Date(session.startedAt) : null;
     let time = '';
     if (date && Number.isFinite(date.getTime())) {
-      const pad = value => String(value).padStart(2, '0');
-      const year = date.getFullYear() === new Date().getFullYear() ? '' : `${date.getFullYear()}-`;
-      time = `${year}${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      const [day, clock] = zonedInputValue(date).split('T');
+      time = `${day.slice(0, 4) === zonedDay(Date.now()).slice(0, 4) ? day.slice(5) : day} ${clock}`;
     }
     const title = session.title || session.startedAt || session.id;
     const body = session.title && time ? `${time} · ${title}` : title;

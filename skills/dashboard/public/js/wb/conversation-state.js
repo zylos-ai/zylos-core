@@ -53,7 +53,6 @@ export function createConversationState({
     conversation: null,
     ownershipResolved: false,
     messages: [],
-    tz: null,
     messageCursor: null,
     afterCursor: null,
     input: '',
@@ -76,6 +75,10 @@ export function createConversationState({
     questionVersion: 0,
     questionForms: new Map()
   });
+  // The instance time zone (its .env TZ) comes with the list and each message page; an older instance without it
+  // reads as unknown.
+  let instanceTz = null;
+  const readZone = data => { instanceTz = typeof data?.tz === 'string' && data.tz ? data.tz : null; };
   const snapshot = () => ({
     tab,
     mode,
@@ -83,6 +86,7 @@ export function createConversationState({
     nextCursor,
     selectedId,
     ...(cell() || blank()),
+    tz: instanceTz,
     loading,
     error: error || cell()?.error,
     blocked,
@@ -233,6 +237,7 @@ export function createConversationState({
       if (!Array.isArray(data?.items)) throw {
         code: 'chat_invalid_response'
       };
+      readZone(data);
       items = more || quiet ? merge(items, data.items) : data.items;
       items.sort((a, b) => Number(b.stamp || 0) - Number(a.stamp || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       if (more) listDepth++;
@@ -513,8 +518,7 @@ export function createConversationState({
     return data;
   }
   function applyMessages(current, id, data, trackQuestions = false) {
-    // The instance time zone (its .env TZ) comes with each page; an older instance without it reads as unknown.
-    current.tz = typeof data.tz === 'string' && data.tz ? data.tz : null;
+    readZone(data);
     const previousNewest = current.messages.at(-1)?.id ?? 0;
     const known = new Set(current.messages.map(row => row.id));
     const added = data.items.filter(row => !known.has(row.id));
