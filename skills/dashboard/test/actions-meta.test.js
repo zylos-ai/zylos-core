@@ -229,11 +229,29 @@ test('threshold writes require a model and engine, preserve another model and re
     assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: 41 }, config)).error, 'invalid_value');
     assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: '35junk' }, config)).error, 'invalid_value');
     assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: true }, config)).error, 'invalid_value');
+    for (const runtime of ['claude', 'codex']) {
+      const rejected = await handleAction('set-threshold', { runtime, model: 'opus[1m]', value: 9 }, config);
+      assert.equal(rejected.error, 'invalid_value');
+      assert.match(rejected.message, /between 10 and 40/);
+      assert.equal((await handleAction('set-threshold', { runtime, model: 'opus[1m]', value: 10 }, config)).ok, true);
+    }
     assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: 35 }, config)).ok, true);
     const stored = JSON.parse(fs.readFileSync(path.join(zylosDir, '.zylos/config.json'), 'utf8'));
     assert.equal(stored.model_rotation_thresholds.claude.opus, 68);
     assert.equal(stored.model_rotation_thresholds.claude['opus[1m]'], 35);
     assert.equal(stored.new_session_threshold, 68, 'legacy key remains unchanged');
+  } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
+});
+
+test('metadata keeps a fixed Claude version separate from the default model alias', () => {
+  const zylosDir = makeZylosDir();
+  try {
+    fs.mkdirSync(path.join(zylosDir, '.claude'));
+    fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
+    const meta = getActionsMeta({ runtime: 'claude', zylosDir, thresholdModel: 'claude-opus-4-6[1m]',
+      model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }, {});
+    assert.equal(meta.model_thresholds['opus[1m]'], 30);
+    assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 40);
   } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
 });
 

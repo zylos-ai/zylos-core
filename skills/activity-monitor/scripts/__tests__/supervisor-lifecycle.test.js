@@ -1208,3 +1208,15 @@ test('early sync follows the same actual model threshold after instance defaults
   }
   assert.deepEqual(f.controls.map(row=>row.sessionGroup),['large']);
 });
+
+test('rotation uses an alias threshold only for sessions launched through that alias', async () => {
+  const f = fixture();
+  f.context.configuration.rotationPolicy = { model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } };
+  f.context.configuration.defaultModels = { claude: 'opus[1m]' };
+  const alias = scene('alias', { model: 'claude-opus-5-5', contextWindow: 1000000, usagePercent: 35 });
+  const fixed = scene('fixed', { model: 'claude-opus-4-6', contextWindow: 1000000, usagePercent: 35,
+    launchConfig: { runtime: 'claude', mode: 'override', model: 'claude-opus-4-6[1m]' } });
+  f.scenes = [alias, fixed];
+  for (const item of f.scenes) await f.lifecycle.checkRotation(item, f.context);
+  assert.deepEqual(f.controls.map(row => row.sessionGroup), ['alias']);
+});

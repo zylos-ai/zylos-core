@@ -4,8 +4,8 @@ import { channelIcon, platformLabel, statePill } from './board.js?v=103';
 import { groupEventCount, renderOverview } from './detail-overview.js?v=105';
 import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=105';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=106';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=111';
-import { renderNameEditor } from './name-edit.js?v=111';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=112';
+import { renderNameEditor } from './name-edit.js?v=112';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;

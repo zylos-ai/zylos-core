@@ -545,10 +545,12 @@ test('model thresholds switch with the selected model and save an explicit engin
   const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: meta }, document, t,
     confirm: async () => true, execute: async (action, body) => { calls.push({ action, body }); return true; } });
   const model = root.querySelector('#settings-model-claude'), threshold = root.querySelector('#settings-threshold-claude'), save = root.querySelector('#settings-save-models');
-  assert.equal(threshold.value, '70'); assert.equal(threshold.max, '95');
+  assert.equal(threshold.value, '70'); assert.equal(threshold.max, '95'); assert.equal(threshold.min, '10');
   model.value = 'opus[1m]'; await model.dispatch('change');
   assert.equal(threshold.value, '40'); assert.equal(threshold.max, '40');
   threshold.value = '41'; await threshold.dispatch('input'); assert.equal(save.disabled, true);
+  threshold.value = '9'; await threshold.dispatch('input'); assert.equal(save.disabled, true);
+  threshold.value = '10'; await threshold.dispatch('input'); assert.equal(save.disabled, false);
   threshold.value = '35'; await threshold.dispatch('input'); assert.equal(save.disabled, false);
   await save.dispatch('click');
   assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'claude', model: 'opus[1m]' } },
@@ -578,17 +580,19 @@ test('custom model threshold waits for metadata and ignores a late response for 
 });
 
 
-test('an unchanged migrated threshold above the new write limit does not block effort changes', async () => {
+test('an unchanged migrated threshold outside new write limits does not block effort changes', async () => {
+  for (const previous of [5, 100]) {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high', models: [{ id: 'opus' }],
-    efforts_by_model: { opus: ['high', 'low'] }, model_thresholds: { opus: 100 }, model_threshold_max: { opus: 95 } };
+    efforts_by_model: { opus: ['high', 'low'] }, model_thresholds: { opus: previous }, model_threshold_max: { opus: 95 } };
   const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: meta }, document, t,
     confirm: async () => true, execute: async (action, body) => { calls.push({ action, body }); return true; } });
   const effort = root.querySelector('#settings-effort-claude'), threshold = root.querySelector('#settings-threshold-claude'), save = root.querySelector('#settings-save-models');
-  assert.equal(threshold.value, '100'); effort.value = 'low'; await effort.dispatch('change'); assert.equal(save.disabled, false);
+  assert.equal(threshold.value, String(previous)); effort.value = 'low'; await effort.dispatch('change'); assert.equal(save.disabled, false);
   await save.dispatch('click'); assert.deepEqual(calls, [{ action: 'switch-effort', body: { runtime: 'claude', effort: 'low' } }]);
   threshold.value = '99'; await threshold.dispatch('input'); assert.equal(save.disabled, true, 'a new value must meet the write limit');
   panel.destroy();
+  }
 });
 
 

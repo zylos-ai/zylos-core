@@ -50,7 +50,10 @@ function candidates(options) {
   if (!key) return [];
   const family = options.runtime === 'claude' ? claudeAlias(key) : null;
   const alias = family && `${family}${isLargeWindow(options) ? '[1m]' : ''}`;
-  return alias && alias !== key ? [key, alias] : [key];
+  const launch = options.launchConfig;
+  const startedModel = launch?.runtime === options.runtime ? cleanModel(launch.mode === 'override'
+    ? launch.model : launch.mode === 'default' ? options.defaultModel : null) : '';
+  return alias && alias !== key && isAlias(startedModel) && startedModel === alias ? [key, alias] : [key];
 }
 function defaultMatches(options) {
   const { defaultModel } = options;
@@ -135,8 +138,8 @@ export function setModelThreshold({
   }
   const options = { runtime, model, contextWindow, codexModels };
   const parsed = percent(value);
-  if (parsed === null || parsed > thresholdLimit(options)) {
-    throw Object.assign(new RangeError(`threshold must be an integer from 1 to ${thresholdLimit(options)}`), { code: 'INVALID_MODEL_THRESHOLD' });
+  if (parsed === null || parsed < 10 || parsed > thresholdLimit(options)) {
+    throw Object.assign(new RangeError(`threshold must be an integer from 10 to ${thresholdLimit(options)}`), { code: 'INVALID_MODEL_THRESHOLD' });
   }
   // Pin both legacy engine defaults before the first per-model write.
   migrateModelThresholds({ zylosDir, codexModels, updateConfig });

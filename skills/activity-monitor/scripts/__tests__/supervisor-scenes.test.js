@@ -97,7 +97,7 @@ test('identity checks preserve the full occupancy snapshot during tmux unavailab
 test('scene threshold uses the identity-validated model and observed window', {timeout:15000}, async t => {
   const f=readyTmuxTarget(t,{prefix:'model-scene-',mode:'multi'});
   const scenes=service(f,{readUsage:undefined});
-  const configuration={rotationPolicy:{model_rotation_thresholds:{claude:{sonnet:63,'opus[1m]':36}}},defaultModels:{claude:'haiku'}};
+  const configuration={rotationPolicy:{model_rotation_thresholds:{claude:{'claude-sonnet-4-6':63,'claude-opus-4-6[1m]':36}}},defaultModels:{claude:'haiku'}};
   for(const [model,window,expected] of [['claude-sonnet-4-6',200000,63],['claude-opus-4-6',1000000,36]]){
     fs.writeFileSync(path.join(path.dirname(f.readyPath),'statusline.json'),JSON.stringify({session_id:'session-1',zylos:{v:1,runId:'run-1',capturedAt:Date.now()},model:{id:model},context_window:{context_window_size:window,used_percentage:50}}));
     const observed=await scenes.observeGroup('origin');

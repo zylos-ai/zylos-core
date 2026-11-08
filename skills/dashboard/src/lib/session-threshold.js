@@ -16,5 +16,6 @@ export function sessionThreshold(policy, { runtime, usage, launchConfig, desired
   const facts = desiredModel !== undefined ? { model: desiredModel } : usageModelFacts(usage, runtime, launchConfig);
   if (!facts.model) return null;
   return modelThreshold(policy.config, { runtime, ...facts,
+    launchConfig,
     defaultModel: policy.defaultModels[runtime], codexModels: policy.codexModels });
 }

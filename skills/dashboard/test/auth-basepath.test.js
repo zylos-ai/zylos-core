@@ -1692,15 +1692,15 @@ test('state and fleet thresholds follow the actual session model across engine a
   writeConfig(root, 'secret', { auth: { enabled: false } });
   for (const dir of ['.zylos', '.claude', '.codex']) fs.mkdirSync(path.join(root, dir), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', model_rotation_thresholds: {
-    claude: { haiku: 81, sonnet: 63, 'opus[1m]': 36 }, codex: { 'actual-codex': 58, 'native-codex': 79 },
+    claude: { haiku: 81, 'claude-sonnet-4-6': 63, 'claude-opus-4-6[1m]': 36 }, codex: { 'actual-codex': 58, 'native-codex': 79 },
   } }));
   fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'haiku' }));
   fs.writeFileSync(path.join(root, '.codex/config.toml'), 'model = "native-codex"\n');
-  let runtime = 'claude', usage = { valid: false };
+  let runtime = 'claude', usage = { valid: false }, launchConfig = null;
   t.mock.method(CoreState.prototype, 'refresh', async function () { return this.getState(); });
   t.mock.method(CoreState.prototype, 'getState', () => ({ runtime, state: 'IDLE', ready: true }));
   t.mock.method(CoreState.prototype, 'getUsageObservation', () => structuredClone(usage));
-  t.mock.method(CoreState.prototype, 'getLaunchConfig', () => ({ runtime, mode: 'default' }));
+  t.mock.method(CoreState.prototype, 'getLaunchConfig', () => launchConfig ?? { runtime, mode: 'default' });
   const running = await makeServerWithDir(root); server = running.server;
   for (const [engine, sample, expected] of [
     ['claude', { model: { id: 'claude-sonnet-4-6' }, context_window: { context_window_size: 200000, used_percentage: 50 } }, 63],
@@ -1716,5 +1716,24 @@ test('state and fleet thresholds follow the actual session model across engine a
     assert.equal(fleetResponse.status, 200);
     const self = (await fleetResponse.json()).agents.find(agent => agent.self);
     assert.ok(self); assert.equal(self.new_session_threshold, expected);
+  }
+  fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }));
+  const metaResponse = await fetch(running.origin + '/api/actions/meta?runtime=claude&model=claude-opus-4-6%5B1m%5D', { signal: AbortSignal.timeout(3000) });
+  assert.equal(metaResponse.status, 200);
+  const meta = await metaResponse.json();
+  assert.equal(meta.model_thresholds['opus[1m]'], 30);
+  assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 40);
+  runtime = 'claude';
+  for (const [model, launch, expected] of [
+    ['claude-opus-5-5', { runtime, mode: 'default' }, 30],
+    ['claude-opus-4-6', { runtime, mode: 'override', model: 'claude-opus-4-6[1m]' }, 40],
+  ]) {
+    launchConfig = launch;
+    usage = { valid: true, value: { model: { id: model }, context_window: { context_window_size: 1000000 } } };
+    const stateResponse = await fetch(running.origin + '/api/state', { signal: AbortSignal.timeout(3000) });
+    assert.equal((await stateResponse.json()).new_session_threshold, expected);
+    const fleetResponse = await fetch(running.origin + '/api/fleet', { signal: AbortSignal.timeout(3000) });
+    assert.equal((await fleetResponse.json()).agents.find(agent => agent.self).new_session_threshold, expected);
   }
 });

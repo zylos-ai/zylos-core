@@ -834,7 +834,7 @@ test('group row thresholds follow actual running models and the desired model wh
   fs.mkdirSync(path.join(f.root,'.zylos'),{recursive:true});
   fs.mkdirSync(path.join(f.root,'.claude'),{recursive:true});
   fs.writeFileSync(path.join(f.root,'.claude/settings.json'),JSON.stringify({model:'haiku'}));
-  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({model_rotation_thresholds:{claude:{sonnet:63,'opus[1m]':36}}}));
+  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({model_rotation_thresholds:{claude:{'claude-sonnet-4-6':63,'claude-opus-4-6[1m]':36,'opus[1m]':36}}}));
   f.live.get('telegram:small').usage={valid:true,value:{model:{id:'claude-sonnet-4-6'},context_window:{context_window_size:200000,used_percentage:60}}};
   f.live.get('telegram:large').usage={valid:true,value:{model:{id:'claude-opus-4-6'},context_window:{context_window_size:1000000,used_percentage:38}}};
   f.live.delete('telegram:sleeping');
@@ -870,4 +870,18 @@ test('group threshold discards the previous model override when session identity
   f.advance(2001);
   const changed = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:changing');
   assert.equal(changed.rotationThreshold, null);
+});
+
+test('group thresholds distinguish the default alias from a fixed version override', async t => {
+  const f = fixture(t, { groupKeys: ['telegram:alias', 'telegram:fixed'] });
+  for (const dir of ['.zylos', '.claude']) fs.mkdirSync(path.join(f.root, dir), { recursive: true });
+  fs.writeFileSync(path.join(f.root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
+  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }));
+  f.live.get('telegram:alias').usage = { valid: true, value: { model: { id: 'claude-opus-5-5' }, context_window: { context_window_size: 1000000 } } };
+  const fixed = f.live.get('telegram:fixed');
+  fixed.identity.launchConfig = { runtime: 'claude', mode: 'override', model: 'claude-opus-4-6[1m]' };
+  fixed.usage = { valid: true, value: { model: { id: 'claude-opus-4-6' }, context_window: { context_window_size: 1000000 } } };
+  const rows = (await f.service.getSnapshot()).rows;
+  assert.equal(rows.find(row => row.sessionGroup === 'telegram:alias').rotationThreshold, 30);
+  assert.equal(rows.find(row => row.sessionGroup === 'telegram:fixed').rotationThreshold, 40);
 });

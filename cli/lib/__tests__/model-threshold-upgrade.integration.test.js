@@ -45,10 +45,11 @@ test('old configuration upgrade exposes the same model threshold in settings, mo
   ]){
     const meta=getActionsMeta({...config,zylosDir:root,runtime},null);
     const actual=runtime==='claude'?usage.model.id:usage.model;
-    const threshold=sceneRotationThreshold({runtime,model:actual,contextWindow:runtime==='claude'?200000:258400},{rotationPolicy:config,defaultModels:policy.defaultModels,codexModels:policy.codexModels});
+    const launchConfig={runtime,mode:'default'};
+    const threshold=sceneRotationThreshold({runtime,model:actual,contextWindow:runtime==='claude'?200000:258400,launchConfig},{rotationPolicy:config,defaultModels:policy.defaultModels,codexModels:policy.codexModels});
     assert.equal(meta.model_thresholds[model],threshold);
-    assert.equal(sessionThreshold(policy,{runtime,usage}),threshold);
-    console.log('Upgraded model agreement:',JSON.stringify({runtime,model,settings:meta.model_thresholds[model],monitor:threshold,fleet:sessionThreshold(policy,{runtime,usage})}));
+    assert.equal(sessionThreshold(policy,{runtime,usage,launchConfig}),threshold);
+    console.log('Upgraded model agreement:',JSON.stringify({runtime,model,settings:meta.model_thresholds[model],monitor:threshold,fleet:sessionThreshold(policy,{runtime,usage,launchConfig})}));
   }
   const controls=[];
   const scene={sessionGroup:null,present:true,ready:true,runId:'private-run',sessionId:'private-session',runtime:'claude',model:'claude-opus-4-6',contextWindow:200000,usagePercent:60,launchConfig:{runtime:'claude',mode:'default'}};

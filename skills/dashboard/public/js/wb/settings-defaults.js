@@ -1,6 +1,6 @@
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=103';
-import { settingsCard } from './settings.js?v=111';
+import { settingsCard } from './settings.js?v=112';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {
@@ -229,7 +229,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
     const custom = element(document, 'input'); custom.id = 'settings-model-custom-' + runtime; custom.placeholder = t('actions.model_placeholder'); custom.className = 'wb-input';
     const effort = element(document, 'select', undefined, 'wb-input wb-select'); effort.id = 'settings-effort-' + runtime; effort.setAttribute('aria-label', t('actions.effort'));
     const threshold = element(document, 'input', undefined, 'wb-input wb-input-num'); threshold.id = 'settings-threshold-' + runtime;
-    threshold.type = 'number'; threshold.min = '1'; threshold.step = '1'; threshold.setAttribute('aria-label', t('actions.threshold'));
+    threshold.type = 'number'; threshold.min = '10'; threshold.step = '1'; threshold.setAttribute('aria-label', t('actions.threshold'));
     const thresholdEdits = new Map();
     let thresholdSequence = 0;
     const dirty = element(document, 'span', t('wb.settings.unsavedOne'), 'wb-dirty');
@@ -289,7 +289,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
       thresholdInvalid: () => modelValue() && (modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) == null
         ? Boolean((rows[runtime]?.meta ?? meta).model_thresholds)
         : drafts[runtime].threshold !== modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) &&
-          (!Number.isInteger(drafts[runtime].threshold) || drafts[runtime].threshold < 1 || drafts[runtime].threshold > Number(threshold.max))) };
+          (!Number.isInteger(drafts[runtime].threshold) || drafts[runtime].threshold < 10 || drafts[runtime].threshold > Number(threshold.max))) };
     lock(model, () => !writable()); lock(custom, () => !writable());
     lock(effort, () => !writable() || effortOptionState(meta, modelValue(), drafts[runtime].effort || meta.current_effort).disabled);
     lock(threshold, () => !writable() || !modelValue() || modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) == null);

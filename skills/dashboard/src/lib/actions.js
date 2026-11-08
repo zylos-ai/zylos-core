@@ -326,8 +326,8 @@ async function setThreshold(reqId, body, config, zylosDir) {
   if (typeof body?.model !== 'string' || !body.model.trim()) return { ok: false, error: 'invalid_model', messageKey: 'result.invalid_model' };
   const value = typeof body.value === 'number' || (typeof body.value === 'string' && /^\d+$/.test(body.value.trim())) ? Number(body.value) : NaN;
   const limit = thresholdLimit({ runtime: body.runtime, model: body.model, codexModels: readCodexModelWindows({}) });
-  if (body.value === '' || !Number.isInteger(value) || value < 1 || value > limit) {
-    return { ok: false, error: 'invalid_value', message: `Threshold must be between 1 and ${limit}`, messageKey: 'result.invalid_threshold', messageParams: { max: limit } };
+  if (body.value === '' || !Number.isInteger(value) || value < 10 || value > limit) {
+    return { ok: false, error: 'invalid_value', message: `Threshold must be between 10 and ${limit}`, messageKey: 'result.invalid_threshold', messageParams: { max: limit } };
   }
   try {
     await setModelThreshold({ runtime: body.runtime, model: body.model, value, zylosDir });

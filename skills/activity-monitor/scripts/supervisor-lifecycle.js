@@ -18,6 +18,7 @@ export function sceneRotationThreshold(scene, configuration) {
   if (!['claude', 'codex'].includes(scene.runtime)) return null;
   return modelThreshold(configuration.rotationPolicy ?? {}, {
     runtime: scene.runtime, model: scene.model, contextWindow: scene.contextWindow,
+    launchConfig: scene.launchConfig,
     defaultModel: configuration.defaultModels?.[scene.runtime], codexModels: configuration.codexModels,
   });
 }
