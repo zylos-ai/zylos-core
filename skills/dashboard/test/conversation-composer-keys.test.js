@@ -265,10 +265,11 @@ test('when a send must be retried, no key retries it, the hint points to the ret
   assert.equal(JSON.parse(f.sends()[0].body).retry, true, 'the send is marked as a retry');
 });
 
-test('both languages tell the user to click the retry button to retry', () => {
+test('both languages tell the user to check the delivery status, then click the retry button to retry', () => {
   for (const [locale, retry] of [['zh', '明确重试发送'], ['en', 'Retry sending']]) {
     const pack = JSON.parse(readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
     assert.ok(pack['chat.page.retryHint'].includes(retry), `${locale} names the button`);
+    assert.ok(pack['chat.page.retryHint'].toLowerCase().includes(pack['chat.refreshStatus'].toLowerCase()), `${locale} says to check the delivery status first`);
     assert.equal(pack['chat.retry'], retry);
     assert.doesNotMatch(pack['chat.page.retryHint'], /Enter/, `${locale} does not say Enter sends`);
   }
