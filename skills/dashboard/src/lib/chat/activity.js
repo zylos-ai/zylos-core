@@ -249,7 +249,7 @@ export class ChatActivity {
     if (tab !== 'mine' || typeof id !== 'string' || !id.startsWith('g:')) throw fail('chat_activity_unsupported');
     const range = this.history._conversation(tab, id);
     const group = range.parameters.group;
-    const requested = this.history._rowsByIds(range, this.history._messageIds(ids), 'c.id,c.direction,c.timestamp');
+    const requested = this.history._rowsByIds(range, this.history._messageIds(ids), 'c.id,c.direction,c.timestamp,c.status');
     const now = this.now();
     const inbound = requested.filter(row => row.direction === 'in').sort((a, b) => a.id - b.id);
     const items = requested.filter(row => row.direction !== 'in').map(row => ({ id: row.id, state: 'none' }));
@@ -276,8 +276,7 @@ export class ChatActivity {
     for (const row of inbound) {
       const round = byMessage.get(row.id);
       if (!round) {
-        const age = now - (c4Time(row.timestamp) ?? now);
-        items.push({ id: row.id, state: age > 2 * 60_000 ? 'none' : 'pending' });
+        items.push({ id: row.id, state: this._undelivered(group, row, now) });
         continue;
       }
       if (round.start === null) {
@@ -290,6 +289,20 @@ export class ChatActivity {
     const result = [];
     for (const round of shown.keys()) result.push(this._round(range, group, round, now));
     return { now, items, rounds: result };
+  }
+
+  /**
+   * A visible message with no delivery record yet. While C4 still queues it (for example waiting for a free
+   * session) or the router has already logged anything about it, its round can still start; it has no activity
+   * only once it left the queue, the router never mentioned it and two minutes passed.
+   */
+  _undelivered(group, row, now) {
+    if (['pending', 'running'].includes(row.status)) return 'pending';
+    const sent = c4Time(row.timestamp) ?? now;
+    if (now - sent <= 2 * 60_000) return 'pending';
+    const routed = this._events(`SELECT 1 FROM runtime_events WHERE session_group=@group AND timestamp >= @from
+      AND json_extract(metadata, '$.conversation_id') = @id LIMIT 1`, { group, from: iso(sent - DELIVERY_LEAD_MS), id: row.id });
+    return routed.length ? 'pending' : 'none';
   }
 
   _key(round) { return `${round.messages[0]}`; }

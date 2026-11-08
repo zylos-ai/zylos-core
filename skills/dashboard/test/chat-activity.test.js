@@ -194,6 +194,25 @@ test('messages without a turn yet are pending, old undelivered ones and replies 
   assert.equal(read(f, [1]).items[0].state, 'none', 'a delivery that never started a turn stops being polled');
 });
 
+test('a message queued past two minutes keeps waiting for its round instead of being given up', t => {
+  const f = fixture(t, { now: at(200) });
+  f.message(1, 0, 'in', { status: 'running' });
+  f.message(2, 10);
+  f.event('activate_new', 150, { meta: { conversation_id: 2 }, session: null });
+  f.message(3, 20);
+  const first = read(f, [1, 2, 3]);
+  const state = (result, id) => result.items.find(item => item.id === id).state;
+  assert.equal(state(first, 1), 'pending', 'still queued in C4');
+  assert.equal(state(first, 2), 'pending', 'delivered, the router logged it, its delivery record is not imported yet');
+  assert.equal(state(first, 3), 'none', 'left the queue long ago and the router never logged it');
+  f.db.prepare("UPDATE conversations SET status='delivered' WHERE id=1").run();
+  f.event('user_prompt_submit', 205); f.deliver(1, 205.2); f.tool('a', 206, 207); f.event('stop', 210);
+  f.clock.now = at(212);
+  const later = read(f, [1]);
+  assert.equal(state(later, 1), 'round');
+  assert.equal(roundOf(later, 1).segments.at(-1).steps.length, 1);
+});
+
 test('Codex steps come from the rollout with its failure flag; hook duplicates and subagent controls are left out', t => {
   const f = fixture(t);
   const codex = { runtime: 'codex', session: 'thread-1' };
