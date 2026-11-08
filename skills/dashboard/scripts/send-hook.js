@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-import { CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, readC4Envelope, validateAttachmentData, validateHookInput } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, readC4Envelope, describeC4ContentRejection, validateAttachmentData, validateHookInput } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { isMainModule } from '../../comm-bridge/scripts/is-main-module.js';
 import { resolveUploadRoot } from './attachment-utils.js';
 import { withChatAttachments } from '../src/lib/chat/attachments.js';
@@ -32,7 +32,7 @@ export function evaluateBeforeSend(input, { env = process.env } = {}) {
     if (parsed.kind !== 'envelope') {
       return raw.kind === 'envelope' && Array.isArray(raw.envelope?.blocks)
         && raw.envelope.blocks.some(block => attachment(block) && !validateAttachmentData(block.data))
-        ? registerAgain() : abort('Invalid Dashboard structured content.');
+        ? registerAgain() : abort('Invalid Dashboard structured content: ' + describeC4ContentRejection(content));
     }
     if (parsed.viewError) return abort('Invalid Dashboard view: ' + parsed.viewError);
     const blocks = parsed.envelope.kind === 'message' ? parsed.envelope.blocks.filter(attachment) : [];

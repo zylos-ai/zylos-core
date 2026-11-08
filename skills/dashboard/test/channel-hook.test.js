@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { evaluateBeforeSend } from '../scripts/send-hook.js';
-import { CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, validateHookOutput } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, validateHookOutput, makeQuestionSummary, COMPONENT_DEFINITIONS } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const wire = content => {
@@ -93,4 +93,45 @@ test('Dashboard hook accepts a conditional form without View and rejects invalid
   const envelope = structuredClone(viewForms.formQuestion);
   envelope.blocks.find(block => block.type === 'form_intent').data.fields = viewForms.invalidDefinitions[0].fields;
   rejects(CONTENT_PREFIX + JSON.stringify(envelope));
+});
+
+
+for (const component of COMPONENT_DEFINITIONS.filter(item => item.interactive)) {
+  test(`Dashboard hook explains and enforces the derived summary for ${component.key}`, () => {
+    const envelope = structuredClone(component.example);
+    const block = envelope.blocks.find(item => item.id === envelope.interrupt.blockId);
+    block.fallbackText = '  Correct   question\n' + '😀'.repeat(510);
+    envelope.questionSummary = 'PRIVATE_SUMMARY_DO_NOT_ECHO';
+    const content = CONTENT_PREFIX + JSON.stringify(envelope);
+    assert.equal(parseC4Content(content).kind, 'invalid');
+    const result = evaluateBeforeSend(wire(content));
+    assert.equal(result.decision, 'abort');
+    assert.match(result.message, /questionSummary must equal the interrupted block's derived summary/);
+    assert.match(result.message, /fallbackText/);
+    assert.equal(result.message.includes(envelope.questionSummary), false);
+    assert.equal(result.message.includes(block.fallbackText), false);
+    envelope.questionSummary = makeQuestionSummary(envelope);
+    assert.equal(envelope.questionSummary, 'Correct question ' + '😀'.repeat(483));
+    assert.equal([...envelope.questionSummary].length, 500);
+    accepts(CONTENT_PREFIX + JSON.stringify(envelope));
+  });
+}
+
+test('Dashboard hook reports the first safe structural or framing reason without reflecting submitted data', () => {
+  const marker = 'PRIVATE_CONTENT_DO_NOT_ECHO';
+  const envelope = structuredClone(fixtures.valid.find(item => item.name === 'confirmation').envelope);
+  const cases = [
+    [CONTENT_PREFIX + '{"' + marker, /Expected one JSON object after the C4 marker/],
+    [CONTENT_PREFIX + JSON.stringify({ ...envelope, version: 2, fallbackText: marker }), /Envelope version must be 1/],
+    [CONTENT_PREFIX + JSON.stringify({ ...envelope, blocks: [{ ...envelope.blocks[0], [marker]: marker }] }), /blocks\[0\] does not match a supported block schema/],
+    [CONTENT_PREFIX + JSON.stringify({ ...envelope, [marker]: marker }), /Envelope fields do not match the required/],
+    [CONTENT_PREFIX + JSON.stringify(envelope) + marker, /Unexpected text follows the structured JSON object/],
+  ];
+  for (const [content, reason] of cases) {
+    const result = evaluateBeforeSend(wire(content));
+    assert.equal(result.decision, 'abort');
+    assert.equal(validateHookOutput(result), true);
+    assert.match(result.message, reason);
+    assert.equal(result.message.includes(marker), false);
+  }
 });

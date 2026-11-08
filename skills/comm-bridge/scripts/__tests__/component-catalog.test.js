@@ -143,3 +143,10 @@ test('catalog selection guidance covers the reply decisions and keeps chart take
   assert.match(guidance('confirmation'), /wait for the user to answer before acting/);
   for (const form of COMPONENT_CATALOG.filter(component => component.type === 'form_intent')) assert.match(form.useWhen, /multiple related fields/);
 });
+
+
+test('generated model instructions explain the exact interrupted question summary derivation', () => {
+  assert.match(MODEL_INSTRUCTIONS, /questionSummary must equal makeQuestionSummary\(envelope\)/);
+  assert.match(MODEL_INSTRUCTIONS, /interrupted block's first nonempty string from fallbackText, data\.prompt, data\.title, data\.purpose, then the envelope fallbackText/);
+  assert.match(MODEL_INSTRUCTIONS, /collapse whitespace to single spaces, trim, and keep the first 500 Unicode characters/);
+});

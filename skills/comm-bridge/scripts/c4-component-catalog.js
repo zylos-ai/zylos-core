@@ -427,7 +427,7 @@ export function createCatalogArtifacts({ implementedKeys = CORE_COMPONENT_KEYS }
     'C4 version 1; ChatWeave protocol 0.1. Use only the components listed below.',
     'Send the complete example envelope with the exact [C4-JSON] marker followed by a newline.',
     'Replace example values while preserving field constraints. Every non-markdown block needs fallbackText.',
-    'Interactive messages need the matching interrupt and summary. Actions are checked against the stored question.',
+    'Interactive messages need the matching interrupt and summary. questionSummary must equal makeQuestionSummary(envelope): use the interrupted block\'s first nonempty string from fallbackText, data.prompt, data.title, data.purpose, then the envelope fallbackText; collapse whitespace to single spaces, trim, and keep the first 500 Unicode characters. Actions are checked against the stored question.',
     'Parameter references resolve against BLOCK_SCHEMA.$defs or ACTION_SCHEMA.$defs in the same schema module.',
     ...registered.map(component => `${component.key}: ${component.description}\nWhen to use: ${component.useWhen}\nParameters: ${JSON.stringify(component.parameters)}`),
   ].join('\n\n');
