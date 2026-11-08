@@ -224,7 +224,7 @@ export class ChatActivity {
     const meta = parse(row.metadata);
     return { type: row.event_type, at: ms(row.timestamp), session: row.session_id ?? null, runtime: row.runtime,
       summary: row.summary, meta, seq: row.event_seq,
-      message: row.event_type === 'deliver' && Number.isSafeInteger(Number(meta.conversation_id)) && meta.conversation_id !== null
+      message: row.event_type === 'deliver' && Number.isSafeInteger(Number(meta.conversation_id)) && Number(meta.conversation_id) > 0
         ? Number(meta.conversation_id) : null };
   }
 
