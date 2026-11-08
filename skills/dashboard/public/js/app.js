@@ -4,7 +4,7 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=103';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=103';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=103';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=113';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=115';
 import { renderVersion } from './wb/settings-version.js?v=103';
 import { mountConversationPage } from './wb/conversation-page.js?v=109';
 import { mountChatSettings } from './wb/chat-settings.js?v=112';

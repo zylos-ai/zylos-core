@@ -99,7 +99,7 @@ test('idle reclaim shows exact environment seconds and never writes under enviro
     const input = root.querySelector('#settings-hot-ttl-minutes'), save = root.querySelector('#settings-save-hot-ttl');
     assert.equal(input.disabled, true); assert.equal(input.readOnly, true); assert.equal(save.disabled, true);
     if (overrides.seconds === 1801) {
-      assert.equal(input.value, String(1801 / 60)); assert.match(root.textContent, /hotTtl\.environment(?!Invalid)/);
+      assert.equal(input.value, '30.0'); assert.match(root.textContent, /hotTtl\.environment(?!Invalid)/);
       assert.match(root.textContent, /exactSeconds.*1801/);
     }
     if (overrides.environment_valid === false) assert.match(root.textContent, /hotTtl\.environmentInvalid/);
@@ -122,6 +122,61 @@ test('idle reclaim retains drafts after cancellation or refusal and follows the 
   writable = false; locks.forEach(fn => fn()); assert.equal(input.disabled, true); assert.equal(save.disabled, true);
   await save.dispatch('click'); assert.equal(sent.length, 1);
   writable = true; locks.forEach(fn => fn()); accepted = true; await save.dispatch('click'); assert.equal(save.disabled, true);
+});
+
+test('idle reclaim rechecks write and metadata locks after confirmation resolves', async () => {
+  for (const change of ['write access', 'read only', 'environment', 'mode']) {
+    const document = documentFixture(), root = node(document, 'div'), decision = deferred(), sent = [];
+    const meta = hotTtlMeta(); let writable = true, confirmations = 0;
+    renderHotTtl(root, { metadata: { claude: meta }, document, t, writable: () => writable,
+      confirm: () => { confirmations++; return decision.promise; }, execute: async (...args) => sent.push(args) });
+    const input = root.querySelector('#settings-hot-ttl-minutes'), save = root.querySelector('#settings-save-hot-ttl');
+    input.value = '5'; await input.dispatch('input');
+    const click = save.dispatch('click');
+    assert.equal(confirmations, 1);
+    if (change === 'write access') writable = false;
+    if (change === 'read only') meta.session_hot_ttl.read_only = true;
+    if (change === 'environment') meta.session_hot_ttl.environment_set = true;
+    if (change === 'mode') meta.session_hot_ttl.mode = 'single';
+    decision.resolve(true); await click;
+    assert.equal(sent.length, 0, change + ' changed while the confirmation was open');
+  }
+});
+
+test('idle reclaim readonly copy omits save instructions and shows a readable exact duration', () => {
+  for (const locale of ['en', 'zh']) {
+    const pack = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
+    const translate = (key, params = {}) => Object.entries(params).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), pack[key] ?? key);
+    const document = documentFixture(), root = node(document, 'div');
+    renderHotTtl(root, { metadata: { claude: hotTtlMeta({ seconds: 1801, read_only: true, environment_set: true, environment_valid: true }) }, document, t: translate });
+    assert.equal(root.querySelector('#settings-hot-ttl-minutes').value, '30.0');
+    assert.equal(root.querySelector('#settings-hot-ttl-minutes').disabled, true);
+    const range = root.querySelector('#settings-hot-ttl-range').textContent;
+    assert.equal(range, pack['wb.settings.hotTtl.readOnly']);
+    assert.doesNotMatch(range, /Saving|保存|next reclaim/);
+    const source = root.querySelector('#settings-hot-ttl-source').textContent;
+    assert.match(source, locale === 'en' ? /30 min 1 sec \(1801 seconds\)/ : /30分1秒（1801秒）/);
+    if (locale === 'zh') assert.doesNotMatch(source, /。 /);
+    renderHotTtl(root, { metadata: { claude: hotTtlMeta() }, document, t: translate });
+    assert.equal(root.querySelector('#settings-hot-ttl-range').textContent, translate('wb.settings.hotTtl.range', { min: 5, max: 1440 }));
+  }
+});
+
+test('idle reclaim formats legacy fractional minutes without treating the display as a write', async () => {
+  const document = documentFixture(), root = node(document, 'div'), sent = [], asked = [];
+  renderHotTtl(root, { metadata: { claude: hotTtlMeta({ seconds: 1801, minutes: 1801 / 60 }) }, document, t,
+    confirm: async text => { asked.push(text); return true; },
+    execute: async (action, body) => { sent.push({ action, body }); return true; } });
+  const input = root.querySelector('#settings-hot-ttl-minutes'), save = root.querySelector('#settings-save-hot-ttl');
+  assert.equal(input.value, '30.0'); assert.equal(input.disabled, false); assert.equal(save.disabled, true);
+  assert.match(root.querySelector('#settings-hot-ttl-source').textContent, /exactSeconds.*"minutes":30.*"remainder":1.*"seconds":1801/);
+  await input.dispatch('input'); await save.dispatch('click');
+  assert.equal(sent.length, 0); assert.equal(asked.length, 0, 'formatting alone must not ask to save a rounded duration');
+  input.value = '31'; await input.dispatch('input'); assert.equal(save.disabled, false);
+  await save.dispatch('click');
+  assert.equal(sent.length, 1); assert.equal(sent[0].action, 'set-session-hot-ttl'); assert.equal(sent[0].body.minutes, 31);
+  assert.equal(save.disabled, true, 'successful save becomes the new unchanged baseline');
+  assert.equal(root.querySelector('#settings-hot-ttl-source').textContent, '', 'old fractional duration must not remain after the new integer value is saved');
 });
 
 test('idle reclaim missing metadata stays unknown and does not reuse the prior instance value', () => {

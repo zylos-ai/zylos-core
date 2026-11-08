@@ -81,8 +81,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     // configuration still blocks lifecycle mutations, including pressure reclaim.
     const raw=await readConfig(), {mode}=await readMode();
     if(mode!=='multi' || poolReader.resolveSessionPoolBaseline({env,config:raw}).fixed)return null;
-    const context={configuration:{...configuration,...raw,...lifecycleConfiguration,mode,rotationPolicy:raw,
-      hotTtlSeconds:resolveSessionHotTtl(raw,env).seconds},
+    const context={configuration:{...configuration,...raw,...lifecycleConfiguration,mode,rotationPolicy:raw},
       transition:await db.getModeTransition(),fences:await db.listDrainFences(),restartRequests:supervisor.admission.readRequests()};
     context.scenes=await scenes.observe(context);
     if(stopping)return null;

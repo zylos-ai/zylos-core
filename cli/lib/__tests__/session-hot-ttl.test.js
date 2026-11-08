@@ -5,7 +5,7 @@ import { resolveSessionHotTtl } from '../session-hot-ttl.js';
 test('hot TTL preserves positive integer environment and config precedence', () => {
   assert.equal(resolveSessionHotTtl({}, {}).seconds, 1800);
   assert.equal(resolveSessionHotTtl({ session_hot_ttl_seconds: ' 61 ' }, {}).minutes, 61 / 60);
-  for (const value of ['0', '-1', '1.5', '', '12x', '9007199254740992']) {
+  for (const value of ['0', '-1', '1.5', '', '12x', '1e3', '0x10', '9007199254740992']) {
     const resolved = resolveSessionHotTtl({ session_mode: 'multi', session_hot_ttl_seconds: '90' },
       { ZYLOS_SESSION_HOT_TTL_SECONDS: value });
     assert.equal(resolved.seconds, 90);

@@ -52,6 +52,8 @@
 .wb-bot::before { content: ""; width: 13px; height: 13px; background: currentColor; -webkit-mask: var(--wb-ico) center/contain no-repeat; mask: var(--wb-ico) center/contain no-repeat; }
 .wb-input, .wb-cfg-edit input, .wb-cfg-edit select { height: 28px; min-width: 0; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 12.5px; }
 .wb-input:focus, .wb-cfg-edit input:focus, .wb-cfg-edit select:focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
+#settings-hot-ttl-source { white-space: pre-line; }
+#settings-hot-ttl-minutes:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
 .wb-seg-sm { display: inline-flex; border: 1px solid var(--wb-line-strong); border-radius: 6px; overflow: hidden; vertical-align: middle; }
 .wb-seg-sm button { border: 0; background: transparent; color: var(--text-muted); font-size: 11px; line-height: 18px; padding: 0 8px; cursor: pointer; white-space: nowrap; }
 .wb-seg-sm button + button { border-left: 1px solid var(--wb-line-strong); }

@@ -366,13 +366,15 @@ export function renderHotTtl(root, { metadata = {}, document = root.ownerDocumen
   label.setAttribute('for', 'settings-hot-ttl-minutes');
   const input = element(document, 'input', undefined, 'wb-input wb-input-num');
   input.id = 'settings-hot-ttl-minutes'; input.type = 'number'; input.min = String(min); input.max = String(max); input.step = '1';
-  input.value = baseline == null ? '' : String(baseline); input.readOnly = !editable();
+  input.value = baseline == null ? '' : Number.isInteger(baseline) ? String(baseline) : baseline.toFixed(1);
+  let displayedBaseline = input.value;
+  input.readOnly = !editable();
   input.setAttribute('aria-describedby', 'settings-hot-ttl-help');
   const save = element(document, 'button', t('btn.save'), 'wb-btn wb-btn-primary');
   save.id = 'settings-save-hot-ttl'; save.type = 'button';
   const row = element(document, 'div', undefined, 'wb-set-inline'); row.append(input, element(document, 'span', t('wb.settings.hotTtl.minutes')), save);
   const help = element(document, 'p', t('wb.settings.hotTtl.help'), 'wb-note'); help.id = 'settings-hot-ttl-help';
-  const range = element(document, 'p', t('wb.settings.hotTtl.range', { min, max }), 'wb-note');
+  const range = element(document, 'p', '', 'wb-note'); range.id = 'settings-hot-ttl-range';
   const source = element(document, 'p', '', 'wb-note'); source.id = 'settings-hot-ttl-source';
   const result = element(document, 'p', '', 'wb-note'); result.id = 'settings-hot-ttl-result'; result.setAttribute('role', 'status');
   if (!meta || baseline == null) source.textContent = t('wb.unknown');
@@ -381,14 +383,17 @@ export function renderHotTtl(root, { metadata = {}, document = root.ownerDocumen
     if (meta.environment_set) notes.push(t(meta.environment_valid ? 'wb.settings.hotTtl.environment' : 'wb.settings.hotTtl.environmentInvalid'));
     if (meta.mode === 'single') notes.push(t('wb.settings.hotTtl.single'));
     else if (meta.mode !== 'multi') notes.push(t('wb.unknown'));
-    if (seconds % 60 !== 0) notes.push(t('wb.settings.hotTtl.exactSeconds', { seconds }));
-    source.textContent = notes.join(' ');
+    if (seconds % 60 !== 0) notes.push(t('wb.settings.hotTtl.exactSeconds', { minutes: Math.floor(seconds / 60), remainder: seconds % 60, seconds }));
+    source.textContent = notes.join('\n');
   }
   const minutes = () => input.value.trim() === '' ? NaN : Number(input.value);
   const invalid = () => !Number.isInteger(minutes()) || minutes() < min || minutes() > max;
   const lockInput = () => busy || !writable() || !editable() || baseline == null;
-  const lockSave = () => lockInput() || invalid() || minutes() === baseline;
-  const redraw = () => { input.disabled = lockInput(); save.disabled = lockSave(); };
+  const lockSave = () => lockInput() || invalid() || input.value === displayedBaseline || minutes() === baseline;
+  const redraw = () => {
+    input.disabled = lockInput(); save.disabled = lockSave();
+    range.textContent = t(editable() && writable() && baseline != null ? 'wb.settings.hotTtl.range' : 'wb.settings.hotTtl.readOnly', { min, max });
+  };
   lock?.(input, lockInput); lock?.(save, lockSave);
   input.addEventListener('input', redraw);
   save.addEventListener('click', async () => {
@@ -400,7 +405,7 @@ export function renderHotTtl(root, { metadata = {}, document = root.ownerDocumen
     try {
       const accepted = await execute('set-session-hot-ttl', { minutes: value }, { confirmed: true });
       if (accepted === false) result.textContent = t('wb.settings.saveFailed');
-      else { baseline = value; result.textContent = t('wb.settings.hotTtl.saved'); }
+      else { baseline = value; displayedBaseline = String(value); source.textContent = ''; result.textContent = t('wb.settings.hotTtl.saved'); }
     } catch (error) { result.textContent = error.message; }
     finally { busy = false; redraw(); refreshLocks(); }
   });

@@ -292,7 +292,7 @@ test('hot TTL actions save integer minutes as seconds and preserve unrelated con
       session_evict_min_idle_seconds: 300, model_rotation_thresholds: { claude: { opus: 65 } } };
     fs.writeFileSync(file, JSON.stringify(initial));
     const config = { zylosDir };
-    for (const minutes of [4, 1441, 1.5, '5x', false, '', null, undefined]) {
+    for (const minutes of [4, 1441, 1.5, 5.5, '5x', false, '', null, undefined]) {
       const before = fs.readFileSync(file, 'utf8');
       const result = await handleAction('set-session-hot-ttl', { minutes }, config);
       assert.equal(result.ok, false);
