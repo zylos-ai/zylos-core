@@ -205,7 +205,10 @@ const releasedHistoryDamage=[
  ['snapshot digest invalid',j=>{j.snapshotManifestHash=j.compensationCutoff.snapshotManifestHash='invalid';}],
  ['identity digest invalid',j=>{j.initialIdentity.cliHash='invalid';}],
  ['core manifest digest invalid',j=>{j.coreManifest[0].originalHash='invalid';}],
- ['database backup path mismatch',j=>{j.dbBackupDir=path.join(j.zylosDir,'.backup/db/other');}]
+ ['database backup path mismatch',j=>{j.dbBackupDir=path.join(j.zylosDir,'.backup/db/other');}],
+ ...[['empty',''],['missing',null]].map(([name,value])=>[
+  `versions ${name}`,j=>{j.from=j.compensationCutoff.from=value;j.to=j.compensationCutoff.to=value;}
+ ])
 ];
 // Same isolated file-only boundary as the positive case; each reject must stop
 // before inspection, leave both journals intact, and never execute old runners.
