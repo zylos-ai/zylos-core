@@ -190,6 +190,8 @@ export async function runAttachmentVisual(t, sandbox) {
     await context.route(uploadPattern, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'chat_attachment_write_failed' }) }));
     await chooseFiles([imageFile('补充截图.png')]);
     await itemNamed('补充截图.png').locator('[data-action="retryUpload"]').waitFor();
+    const failedTrayPreview = await itemNamed('补充截图.png').locator('.chat-attachment-image-frame[data-state="failed"]').evaluate(frame => ({ height: frame.getBoundingClientRect().height, icon: !!frame.querySelector('.chat-attachment-placeholder .wb-ico-image') }));
+    assert.ok(failedTrayPreview.height <= 36 && failedTrayPreview.icon, 'failed tray image uses the approved short placeholder');
     await context.unroute(uploadPattern); expectedHttpError = null;
     let heldUpload, resolveHeld;
     const heldStarted = new Promise(resolve => { resolveHeld = resolve; });
