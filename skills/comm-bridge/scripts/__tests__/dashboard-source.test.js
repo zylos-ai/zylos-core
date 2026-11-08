@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { readOwnerName, dashboardSource } from '../dashboard-source.js';
 import { formatConversation } from '../router/format.js';
+import { formatConversationsForAgent } from '../c4-db.js';
 import { replyVia } from '../c4-query-format.js';
 import { ATTACHMENTS_DIR } from '../c4-config.js';
 import { CONTENT_PREFIX } from '../c4-content-schema.js';
@@ -15,7 +16,7 @@ test('Dashboard source uses only the established owner name in Active IDs and fa
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'references.md');
   assert.equal(readOwnerName(file), 'the owner');
-  for (const [record, expected] of [['Howard (Telegram: private-id)', 'Howard'], ['王小明（平台：私密）','王小明'], ['(not yet established)','the owner'], ['', 'the owner'], ['unknown','unknown'], ['none','none'], ['未设置','未设置'], ['not yet established','not yet established'], ['（未建立）','the owner']]) {
+  for (const [record, expected] of [['Howard (Telegram: private-id)', 'Howard'], ['王小明（平台：私密）','王小明'], ['(not yet established)','the owner'], ['', 'the owner'], ['unknown','unknown'], ['none','none'], ['未设置','未设置'], ['not yet established','not yet established'], ['（未建立）','the owner'], ['(note) Howard','the owner'], ['（备注）Howard','the owner']]) {
     fs.writeFileSync(file, `# References\n## Active IDs\n- Owner: ${record}\n## Other\n- Owner: Incorrect\n`);
     assert.equal(readOwnerName(file), expected);
   }
@@ -69,4 +70,6 @@ test('Dashboard delivery reads the owner from the default isolated memory record
   assert.equal(readOwnerName(), 'Default Owner');
   assert.equal(formatConversation(row, { scriptPath: '/send.js' }),
     '[Dashboard] Default Owner said: Hello ' + replyVia(row, '/send.js'));
+  assert.ok(formatConversationsForAgent([row], { spill: false })
+    .includes('[Dashboard] Default Owner said: Hello'));
 });

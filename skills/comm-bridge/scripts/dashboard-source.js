@@ -10,7 +10,6 @@ export function readOwnerName(file = path.join(DATA_DIR, '..', 'memory', 'refere
     const active = text.split(/^## Active IDs\s*$/m)[1]?.split(/^## /m)[0] ?? '';
     const record = active.match(/^- Owner: ([^\r\n]*)/m)?.[1] ?? '';
     const value = record.trim();
-    if (!value || /^(?:\(.*\)|（.*）)$/.test(value)) return 'the owner';
     return value.replace(/\s*[（(].*$/, '').trim() || 'the owner';
   } catch { return 'the owner'; }
 }
