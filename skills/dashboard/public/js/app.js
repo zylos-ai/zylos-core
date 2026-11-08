@@ -1592,6 +1592,8 @@ function refreshUsage() {
 function initTabs() {
   const activateTab = (name, push = false) => {
     if (name === 'usage') name = 'trends';
+    // Leaving settings closes its phone drawer; the drawer's history entry becomes the new page's entry.
+    const reuseEntry = name !== 'settings' && Boolean(settingsPage?.drawer.leave());
     if (name !== 'settings') settingsLoader?.invalidate();
     if (push) state.navigationGeneration += 1;
     if (name === 'memory' && remoteIsReadOnly()) name = 'overview';
@@ -1617,7 +1619,7 @@ function initTabs() {
     if (push) {
       const prefix = remotePrefix();
       const path = name === 'overview' ? `${prefix}/` : `${prefix}/${name === 'trends' ? 'usage' : name}`;
-      window.history.pushState({ tab: name }, '', api(path));
+      window.history[reuseEntry ? 'replaceState' : 'pushState']({ tab: name }, '', api(path));
     }
   };
   document.querySelectorAll('.tab').forEach((btn) => {
@@ -1626,6 +1628,8 @@ function initTabs() {
     });
   });
   window.addEventListener('popstate', async () => {
+    // Back that only closed the settings drawer (or the drawer removing its own entry) leaves the page as it is.
+    if (settingsPage?.drawer.popstate()) return;
     const generation = ++state.navigationGeneration;
     const path = window.location.pathname;
     // In-page remote viewing only exists on the parent document; the

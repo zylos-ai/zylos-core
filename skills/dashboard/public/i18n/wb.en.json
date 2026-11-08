@@ -813,6 +813,8 @@
   "wb.settings.undo": "Undo",
   "wb.settings.unmatchedTitle": "({runtime}) has no matching price",
   "wb.settings.unsaved": "Unsaved changes",
+  "wb.settings.sections": "Settings sections",
+  "wb.settings.sectionsClose": "Close section list",
   "wb.settings.unsavedList": "Unsaved: {list}",
   "wb.settings.unsavedOne": "Unsaved",
   "wb.settings.unsavedRuntime": "{runtime} {count}",

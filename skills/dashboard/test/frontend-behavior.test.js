@@ -79,6 +79,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
       observer: { generation: 0, statusGeneration: 0, statusRequest: null }
     },
     settingsLoader: { invalidate() {} },
+    settingsPage: null,
     settingsModal: { querySelector: (selector) => settings[selector], querySelectorAll: () => buttons },
     $: (selector) => elements[selector],
     document: {

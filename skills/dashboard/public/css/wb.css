@@ -914,6 +914,8 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-nav-btn[hidden] { display: none; }
 .wb-set-nav-n { margin-left: auto; color: var(--wb-wait); font-size: 11px; font-weight: 600; }
 .wb-set-nav-n[hidden] { display: none; }
+/* The section drawer's title, its opening button and its backdrop exist only on phones. */
+.wb-set-drawer-h, .wb-set-drawer-btn, .wb-set-scrim { display: none; }
 .wb-set-body { flex: 1; min-width: 0; padding: 22px 28px 40px; }
 .wb-set-wrap { max-width: 920px; }
 .wb-set-status:empty { display: none; }
@@ -1172,8 +1174,19 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 
 @media (max-width: 760px) {
   .wb-set { flex-direction: column; background: none; }
-  .wb-set-nav { position: static; align-self: stretch; min-width: 0; flex-direction: row; width: auto; max-height: none; padding: 6px 8px; border-bottom: 1px solid var(--wb-line); background: var(--wb-side); overflow-x: auto; }
-  .wb-set-nav-btn { width: auto; flex: none; }
+  /* Phones: the sections live in a drawer that slides in from the left; a button at the top of the page names the current section. */
+  .wb-set-nav { position: fixed; top: 0; bottom: 0; left: 0; z-index: 61; align-self: stretch; width: min(300px, 84vw); max-height: none; padding: 8px 10px 16px; border-right: 1px solid var(--wb-line); background: var(--wb-panel); box-shadow: var(--wb-shadow); transform: translateX(-104%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
+  .wb-set-drawer-open .wb-set-nav { transform: none; visibility: visible; transition: transform .2s ease; }
+  .wb-set-drawer-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; padding: 2px 2px 8px 8px; border-bottom: 1px solid var(--wb-line); font-size: 14px; white-space: nowrap; }
+  .wb-set-nav-btn { height: auto; min-height: 44px; font-size: 14.5px; }
+  .wb-set-scrim { display: block; position: fixed; inset: 0; z-index: 60; background: var(--wb-scrim); opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility 0s linear .2s; }
+  .wb-set-drawer-open .wb-set-scrim { opacity: 1; visibility: visible; transition: opacity .2s ease; }
+  .wb-set-drawer-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; margin: 0 0 14px; padding: 0 12px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 14.5px; font-weight: 600; text-align: left; cursor: pointer; }
+  .wb-set-drawer-cur { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
+  .wb-set-drawer-cur > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wb-set-drawer-btn .wb-ico { color: var(--text-dim); }
+  .wb-set-drawer-btn > .wb-ico:last-child { transform: rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) { .wb-set-nav, .wb-set-scrim, .wb-set-drawer-open :is(.wb-set-nav, .wb-set-scrim) { transition: none; } }
   .wb-set-body { padding: 16px 16px 32px; }
   .wb-savebar { margin: 18px -16px 0; padding: 12px 16px; }
   .wb-set-split { grid-template-columns: 1fr; gap: 12px; }
@@ -1198,11 +1211,12 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-page-h.agent-fleet-head { align-items: flex-start; }
 }
 
-/* ─── Phones: everything a finger taps is at least 40px; icon-only buttons are 40px square ─── */
+/* ─── Phones: everything a finger taps is at least 40px; icon-only buttons are 40px square ───
+   (The settings drawer's section rows and its opening button set their own 44px minimum.) */
 .memory-back { display: none; }
 @media (max-width: 760px) {
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal)
-    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot) { min-height: 40px; }
+    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: 40px; }
   :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh) { min-width: 40px; }
   .wb-switch-l { min-height: 40px; }
   .wb-seg { height: auto; }
