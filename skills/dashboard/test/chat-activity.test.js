@@ -17,7 +17,8 @@ import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { codeModeV1Turn, multiAgentV2Turn } from './fixtures/codex-multi-agent-rollout.js';
+import { V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, v1ChildRollout, v1ParentTurn, v2CompletedTurn, v2ListedTurn, v2TimedOutTurn }
+  from './fixtures/codex-multi-agent-rollout.js';
 
 const GROUP = 'dash-owned:a';
 const ID = `g:${Buffer.from(GROUP).toString('hex').toUpperCase()}`;
@@ -555,23 +556,82 @@ async function collectRollout(f, name, lines) {
   await new CodexRolloutCollector(f.store, { modelPrices: {} }, { transcripts }).collect();
 }
 
-test('a Codex subtask is one step from spawn to finish in both multi-agent generations, never a command or its message', async t => {
-  for (const [name, lines, end] of [['v2', multiAgentV2Turn(), at(9)], ['v1-code-mode', codeModeV1Turn(), at(8)]]) {
-    const f = fixture(t);
-    const codex = { runtime: 'codex', session: 'thread-1' };
-    f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0, codex);
-    await collectRollout(f, name, lines);
-    f.message(2, 15, 'out'); f.event('turn_complete', 16, codex);
-    const round = roundOf(read(f, [1]), 1);
-    const steps = round.segments[0].steps;
-    assert.deepEqual(steps.map(step => `${step.kind}:${step.label.key}:${step.label.arg ?? ''}:${step.status}`), ['subagent:subagent::done'], name);
-    assert.equal(steps[0].start, at(2), `${name}: starts when the spawn answered`);
-    assert.equal(steps[0].end, end, `${name}: ends when its finish was reported`);
-    const shown = JSON.stringify(round);
-    for (const secret of ['Look through', 'inspect_logs', 'Check the backup lock', 'Kepler', 'Found the restart', 'stale']) {
-      assert.ok(!shown.includes(secret), `${name}: ${secret} is not shown`);
-    }
-  }
+const codex = { runtime: 'codex', session: 'thread-1' };
+const steps = round => round.segments.flatMap(segment => segment.steps);
+const describe = round => steps(round).map(step => `${step.kind}:${step.label.key}:${step.status}`);
+const timeOf = (lines, match) => Date.parse(lines.find(match).timestamp);
+const PRIVATE = ['<redacted', 'zylo131', 'plan_audit', 'single_session', 'Kierkegaard', V1_CHILD, '"hi"'];
+function assertNothingPrivate(round, name) {
+  const shown = JSON.stringify(round);
+  for (const secret of PRIVATE) assert.ok(!shown.includes(secret), `${name}: ${secret} is not shown`);
+}
+// A round opened by message 1 at 0 s, with recorded Codex lines collected from its rollout; the reply arrives after.
+async function codexRound(t, lines, { replyAt = 30, child = null, ended = true } = {}) {
+  const f = fixture(t);
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0, codex);
+  await collectRollout(f, 'parent', lines);
+  if (child) await collectRollout(f, 'child', child);
+  if (ended) { f.message(2, replyAt, 'out'); if (!lines.some(line => line.payload?.type === 'task_complete')) f.event('turn_complete', replyAt + 1, codex); }
+  return { f, round: roundOf(read(f, [1]), 1) };
+}
+
+test('a Codex v2 subtask is one step from its recorded start to its recorded completion, never a command or its message', async t => {
+  const lines = v2CompletedTurn(at(1));
+  const { round } = await codexRound(t, lines);
+  assert.deepEqual(describe(round), ['subagent:subagent:done'], 'the spawn answer and its start event make one step');
+  const [step] = steps(round);
+  assert.equal(step.start, timeOf(lines, line => line.payload.item?.kind === 'started'), 'starts at the recorded start');
+  assert.equal(step.end, timeOf(lines, line => line.payload.item?.kind === 'completed'), 'a timed-out wait does not end it');
+  assertNothingPrivate(round, 'v2');
+});
+
+test('a Codex v2 subtask seen finished only in a list of agents ends there', async t => {
+  const lines = v2ListedTurn(at(1));
+  const { round } = await codexRound(t, lines);
+  assert.deepEqual(describe(round), ['subagent:subagent:done'], 'other finished agents in the list are not steps of this round');
+  assert.equal(steps(round)[0].end, Date.parse(lines.at(-1).timestamp));
+  assertNothingPrivate(round, 'v2 list');
+});
+
+test('a Codex v2 wait that timed out leaves the subtask running until its round ends', async t => {
+  const lines = v2TimedOutTurn(at(1));
+  const live = await codexRound(t, lines, { ended: false });
+  live.f.clock.now = at(20);
+  const running = roundOf(read(live.f, [1]), 1);
+  assert.deepEqual(describe(running), ['subagent:subagent:running'], 'still running after the timed-out wait');
+  const { round } = await codexRound(t, lines, { replyAt: 30 });
+  assert.equal(steps(round)[0].end, at(31), 'it ends with its round, not at the timed-out wait');
+});
+
+test('a Codex v1 subtask run from code mode is one step, not two commands, ending once at its wait result', async t => {
+  const lines = v1ParentTurn(at(1));
+  const { round } = await codexRound(t, lines);
+  assert.deepEqual(describe(round), ['subagent:subagent:done']);
+  const [step] = steps(round);
+  assert.equal(step.start, timeOf(lines, line => line.payload.call_id === V1_SPAWN_EXEC && line.payload.type === 'custom_tool_call_output'));
+  assert.equal(step.end, timeOf(lines, line => line.payload.call_id === V1_WAIT_EXEC && line.payload.type === 'custom_tool_call_output'),
+    'the completion notice right after does not end it a second time');
+  assert.equal(round.end, timeOf(lines, line => line.payload.type === 'task_complete'));
+  assertNothingPrivate(round, 'v1');
+});
+
+test('a Codex v1 subtask whose script printed nothing is named by the thread Codex reported spawning', async t => {
+  const lines = v1ParentTurn(at(1)).map(line => {
+    if (line.payload.type !== 'custom_tool_call_output') return line;
+    return { ...line, payload: { ...line.payload, output: [line.payload.output[0]] } };
+  });
+  const { round } = await codexRound(t, lines);
+  assert.deepEqual(describe(round), ['subagent:subagent:done']);
+  assert.equal(steps(round)[0].end, timeOf(lines, line => line.payload.type === 'message'), 'the completion notice ends it');
+});
+
+test('a Codex subagent thread rollout that names its parent as the session neither ends the parent round nor adds steps', async t => {
+  const parent = v1ParentTurn(at(1));
+  const { f, round } = await codexRound(t, parent, { child: v1ChildRollout(at(1)) });
+  assert.deepEqual(describe(round), ['subagent:subagent:done']);
+  assert.equal(round.end, timeOf(parent, line => line.payload.type === 'task_complete'), 'the child turn end is not the parent turn end');
+  const childUsage = f.store.db.prepare("SELECT COUNT(*) FROM metric_points WHERE metric_name = 'turn_duration'").pluck().get();
+  assert.equal(childUsage, 2, 'both threads keep their turn timing');
 });
 
 test('a Codex subtask whose finish was never recorded ends with its round instead of reading as unfinished', t => {
