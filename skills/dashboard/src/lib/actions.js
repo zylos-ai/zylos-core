@@ -332,7 +332,7 @@ async function setThreshold(reqId, body, config, zylosDir) {
   try {
     await setModelThreshold({ runtime: body.runtime, model: body.model, value, zylosDir });
     log(reqId, `threshold set: ${body.runtime}/${body.model} ${value}%`);
-    return { ok: true, runtime: body.runtime, model: body.model, value, message: `New session threshold set to ${value}%`, messageKey: 'result.threshold_set', messageParams: { value } };
+    return { ok: true, runtime: body.runtime, model: body.model, value, message: `Rotation threshold set to ${value}%`, messageKey: 'result.threshold_set', messageParams: { value } };
   } catch (err) {
     return { ok: false, error: 'set_failed', message: err.message, messageKey: 'result.set_failed', messageParams: { error: err.message } };
   }
