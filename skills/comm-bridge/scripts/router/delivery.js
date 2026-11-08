@@ -47,7 +47,7 @@ export function createDelivery(deps, configuration = {}) {
     periodicMaxAttempts: PERIODIC_ENTER_MAX_ATTEMPTS, captureEnabled: ENTER_CAPTURE_ENABLED,
     idleHoldMs: REQUIRE_IDLE_POST_SEND_HOLD_MS, idleWaitMs: REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
     idlePollMs: REQUIRE_IDLE_EXECUTION_POLL_MS, retryBaseMs: RETRY_BASE_MS,
-    gateBackoffBaseMs: 5000, gateBackoffMaxMs: 30000, ...configuration };
+    gateBackoffBaseMs: 1000, gateBackoffMaxMs: 30000, ...configuration };
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const open = deps.openTmuxConnection ?? openTmuxConnection;
@@ -105,8 +105,10 @@ export function createDelivery(deps, configuration = {}) {
       if (row?.status === 'pending' || row?.status === 'running') continue;
       // Expiration and cancellation can settle a row before its lane sees it
       // again. Diagnostic memory follows the same authoritative row lifetime.
-      const expired = wait.type === 'control' ? row?.status === 'timeout' : row?.delivery_action === 'pending_expired';
-      finishWait(wait.row, wait.type, expired ? 'expired' : row?.status ?? 'removed');
+      const expired = wait.type === 'control' ? row?.status === 'timeout' && row.last_error === 'ACK_DEADLINE_EXCEEDED'
+        : row?.delivery_action === 'pending_expired';
+      const outcome = wait.type === 'control' ? row?.last_error ?? row?.status : row?.status;
+      finishWait(wait.row, wait.type, expired ? 'expired' : outcome ?? 'removed');
     }
   }
 

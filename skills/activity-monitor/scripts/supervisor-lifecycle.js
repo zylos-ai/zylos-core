@@ -499,7 +499,6 @@ export class SupervisorLifecycle {
         await this.beforeWrite(modeOf(context) === 'single' ? null : 'origin', context)) {
       await this.d.db.insertControl(this.prompt('SYNC_BACKLOG_ALERT', kind === 'group' ? scene.sessionGroup : kind, range.count, Math.floor(alertLag / 1000)), {
         sessionGroup: modeOf(context) === 'single' ? null : 'origin', appendAckSuffix: false,
-        ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000),
       });
       this.backlogSent.set(key, now);
     }
@@ -519,7 +518,7 @@ export class SupervisorLifecycle {
     if (!await this.beforeWrite(modeOf(context) === 'single' ? null : scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
       sessionGroup: modeOf(context) === 'single' ? null : scene.sessionGroup, priority: 2, appendAckSuffix: false,
-      ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000),
+      ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000) }),
     });
     this.syncSent.set(key, now);
     this.syncRuns.set(key, scene.runId);
