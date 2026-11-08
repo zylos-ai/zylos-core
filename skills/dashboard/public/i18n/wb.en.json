@@ -679,6 +679,7 @@
   "chat.page.unavailable": "Service unavailable",
   "chat.page.down": "Service offline",
   "chat.page.healthUnknown": "Service status unknown",
+  "chat.page.waiting": "Waiting",
   "chat.page.paused": "Delivery paused",
   "chat.page.starting": "Session starting",
   "chat.page.startFailed": "Session start failed",

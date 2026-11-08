@@ -679,6 +679,7 @@
   "chat.page.unavailable": "服务不可用",
   "chat.page.down": "服务离线",
   "chat.page.healthUnknown": "服务状态未知",
+  "chat.page.waiting": "等待处理",
   "chat.page.paused": "投递已暂停",
   "chat.page.starting": "会话启动中",
   "chat.page.startFailed": "会话启动失败",

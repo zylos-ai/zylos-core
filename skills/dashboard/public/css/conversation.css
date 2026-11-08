@@ -830,6 +830,9 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-running.conversation-restricted {
   color:var(--wb-wait)
 }
+.conversation-running.conversation-waiting {
+  color:var(--text-muted)
+}
 .conversation-page .conversation-message-status {
   display:flex;
   align-items:center;

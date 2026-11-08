@@ -96,7 +96,7 @@ for (const locale of ['en', 'zh']) {
     });
   }
   for (const [kind, label] of [['auth_wait', 'authFailed'], ['fenced', 'paused'], ['starting', 'starting'],
-    ['start_failed', 'startFailed'], ['unknown', 'healthUnknown']]) {
+    ['start_failed', 'startFailed']]) {
     test(`server ${kind} wait cannot display a green running header in ${locale}`, async t => {
       const f = healthPage(t, { locale, health: 'ok', wait: { kind } });
       await f.page.openGroup(f.sessionGroup); await tick();
@@ -105,6 +105,32 @@ for (const locale of ['en', 'zh']) {
       assert.equal(header.classList.contains('conversation-restricted'), true);
       assert.equal(header.textContent, f.translations['chat.page.' + label]);
       assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
+    });
+  }
+  for (const [presence, reason] of [['not_running', 'pool_capacity_missing'], ['running', 'no_rule'],
+    ['running', 'queue_summary_failed'], ['not_running', 'queue_summary_failed']]) {
+    test(`healthy ${presence} group waiting for ${reason} has a neutral header in ${locale}`, { timeout: 2000 }, async t => {
+      const f = healthPage(t, { locale, health: 'ok', presence, wait: { kind: 'unknown', reason } });
+      await f.page.openGroup(f.sessionGroup); await tick();
+      const header = f.root.querySelector('.conversation-running');
+      assert.equal(header.hidden, false);
+      assert.equal(header.classList.contains('conversation-restricted'), false);
+      assert.equal(header.classList.contains('conversation-waiting'), true);
+      assert.equal(header.textContent, f.translations['chat.page.waiting']);
+      assert.ok(f.translations['chat.page.waiting']);
+      assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
+    });
+  }
+  for (const [health, label] of [['rate_limited', 'rateLimited'], ['recovering', 'recovering'],
+    ['auth_failed', 'authFailed'], ['unavailable', 'unavailable'], ['down', 'down'], [null, 'healthUnknown'], ['future_health', 'healthUnknown']]) {
+    test(`unknown wait retains ${health ?? 'unreadable'} health status in ${locale}`, { timeout: 2000 }, async t => {
+      const f = healthPage(t, { locale, health, wait: { kind: 'unknown', reason: 'no_rule' } });
+      await f.page.openGroup(f.sessionGroup); await tick();
+      const header = f.root.querySelector('.conversation-running');
+      assert.equal(header.hidden, false);
+      assert.equal(header.classList.contains('conversation-restricted'), true);
+      assert.equal(header.classList.contains('conversation-waiting'), false);
+      assert.equal(header.textContent, f.translations['chat.page.' + label]);
     });
   }
   test(`a queued wait cannot manufacture running presence in ${locale}`, async t => {

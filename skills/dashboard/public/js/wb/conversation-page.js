@@ -1179,10 +1179,12 @@ export function mountConversationPage({
       unavailable: 'unavailable', down: 'down' }[s.groupHealth];
     const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused',
       starting: 'starting', start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
-    const headerLabel = healthLabel ?? waitLabel ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
-    const restricted = headerLabel !== 'running';
-    running.hidden = s.groupPresence !== true && (!restricted || !healthLabel && !s.groupWait);
+    const waiting = s.groupHealth === 'ok' && s.groupWait?.kind === 'unknown';
+    const headerLabel = healthLabel ?? (waiting ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
+    const restricted = headerLabel !== 'running' && !waiting;
+    running.hidden = s.groupPresence !== true && (!(restricted || waiting) || !healthLabel && !s.groupWait);
     running.classList.toggle('conversation-restricted', restricted);
+    running.classList.toggle('conversation-waiting', waiting);
     text(running.lastElementChild, t('chat.page.' + headerLabel
       + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : '')));
     const channel = channelOf(current);
