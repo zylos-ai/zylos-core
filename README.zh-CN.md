@@ -101,10 +101,12 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 按服务商要求明确选择 Claude 的凭据类型：`--api-key` 写入
 `ANTHROPIC_API_KEY`，使用 `x-api-key`；`--auth-token` 写入
 `ANTHROPIC_AUTH_TOKEN`，使用 `Authorization: Bearer`。这两个参数与
-`--setup-token` 互斥。只有显式凭据参数会替换 Claude 已有登录；已经登录且没有
-传凭据参数时，会忽略凭据环境变量，即使 API-key 和 Bearer 两个变量同时存在。
-确实需要认证时，保留既有 OAuth token 环境变量的优先级，否则同时设置
-`ANTHROPIC_API_KEY` 和 `ANTHROPIC_AUTH_TOKEN` 会报错。
+`--setup-token` 互斥。只有显式 `--api-key` 或 `--auth-token` 会替换 Claude
+已有登录。已经登录时，`--setup-token` 保留原登录，不重新校验或保存传入的 token。
+没有显式 API-key 或 Bearer 参数时，也会忽略凭据环境变量，即使这两个变量同时存在。
+未登录时，`--setup-token` 仍按既有流程保存并校验。环境变量保留既有 OAuth token
+的优先级；没有 OAuth token 时，同时设置 `ANTHROPIC_API_KEY` 和
+`ANTHROPIC_AUTH_TOKEN` 会报错。
 交互式 init 会询问自定义 Claude 地址使用哪一种请求头，不会自动试探两种方式。
 只有本次确实要校验 API 凭据时，才按 CLI 参数 > 环境变量 > 既有
 `~/zylos/.env` > Claude 原生 settings 或 Codex config 的顺序读取地址。

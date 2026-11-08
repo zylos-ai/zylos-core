@@ -105,12 +105,15 @@ Flags can also be set via environment variables during `zylos init`. Resolution 
 Choose the Claude credential type required by your provider: `--api-key` writes
 `ANTHROPIC_API_KEY` and uses `x-api-key`; `--auth-token` writes
 `ANTHROPIC_AUTH_TOKEN` and uses `Authorization: Bearer`. These options and
-`--setup-token` are mutually exclusive. Only an explicit credential flag can
-replace an existing Claude login. If Claude is already authenticated and no
-credential flag is given, credential environment variables are ignored, even
-when both API-key and Bearer variables are set. When authentication is needed,
-the existing OAuth-token environment priority is retained; otherwise, setting
-both `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` is an error. Interactive init
+`--setup-token` are mutually exclusive. Only an explicit `--api-key` or
+`--auth-token` flag replaces an existing Claude login. If Claude is already
+authenticated, `--setup-token` retains the existing login without re-verifying
+or saving the supplied token. Without an explicit API-key or Bearer flag,
+credential environment variables are also ignored, even when both API-key and
+Bearer variables are set. When authentication is needed, `--setup-token`
+continues through the existing save-and-verify flow. Environment input keeps
+its existing OAuth-token priority; without an OAuth token, setting both
+`ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` is an error. Interactive init
 asks which header to use for a custom Claude endpoint; it does not try both.
 Only when an API credential will actually be verified does init look up its
 base URL: CLI flag > environment > saved `~/zylos/.env` > native Claude settings

@@ -1649,18 +1649,14 @@ export function parseInitFlags(args) {
   return opts;
 }
 
-/**
- * Fill in options from environment variables where CLI flags were not provided.
- * Resolution: CLI flag > env var > existing config > interactive prompt.
- *
- * @param {object} opts - Parsed CLI options (mutated in place)
- */
+class InitEndpointConfigurationError extends Error {}
+
 function savedInitBaseUrl(runtime, { zylosDir, home }) {
   const key = runtime === 'codex' ? 'OPENAI_BASE_URL' : 'ANTHROPIC_BASE_URL';
   const message = 'Could not read saved API endpoint configuration. Provide the base URL explicitly or repair the saved configuration.';
   const read = file => {
     try { return fs.readFileSync(file, 'utf8'); }
-    catch (error) { if (error.code === 'ENOENT') return null; throw new Error(message); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw new InitEndpointConfigurationError(message); }
   };
   const envText = read(path.join(zylosDir, '.env'));
   if (envText !== null) {
@@ -1675,7 +1671,7 @@ function savedInitBaseUrl(runtime, { zylosDir, home }) {
     const value = runtime === 'codex' ? parseToml(native).openai_base_url : JSON.parse(native)?.env?.ANTHROPIC_BASE_URL;
     if (value !== undefined && typeof value !== 'string') throw new Error(message);
     return value || null;
-  } catch { throw new Error(message); }
+  } catch { throw new InitEndpointConfigurationError(message); }
 }
 
 /** Resolve only the chosen runtime's saved endpoint, without promoting saved credentials. */
@@ -1684,6 +1680,12 @@ export function resolveInitBaseUrl(opts, runtime, { zylosDir = ZYLOS_DIR, home =
   if (runtime === 'codex' && opts.codexBaseUrl === null) opts.codexBaseUrl = savedInitBaseUrl('codex', { zylosDir, home });
 }
 
+/**
+ * Fill in options from environment variables where CLI flags were not provided.
+ * Resolution: CLI flag > env var > existing config > interactive prompt.
+ *
+ * @param {object} opts - Parsed CLI options (mutated in place)
+ */
 export function resolveFromEnv(opts, { authenticated = () => commandExists('claude') && isClaudeAuthenticated() } = {}) {
   // An explicit Claude credential selects its kind and overrides ambient auth variables.
   // Preserve an existing login when credential variables are merely ambient.
@@ -1780,6 +1782,11 @@ export function validateInitOptions(opts, { deferApiFormat = false } = {}) {
   return null;
 }
 
+/** Validate known inputs before preparation; saved API endpoints are resolved later. */
+export function validateInitInput(opts) {
+  return validateInitOptions(opts, { deferApiFormat: opts.baseUrl === null });
+}
+
 /** Ask for the relay's documented header rather than probing different credential kinds. */
 export async function promptClaudeApiCredential({ baseUrl } = {}, {
   choose = promptChoice, secret = promptSecret, log = console.log,
@@ -1862,6 +1869,15 @@ export async function continueInitAfterPersistence(values, continuation, {
   return true;
 }
 
+/** Consume authentication failure and preserve earlier preparation failures. */
+export function consumeInitAuthenticationResult(authentication, exitCode = 0) {
+  if (authentication.failed) {
+    process.exitCode = 1;
+    return { shouldStop: true, exitCode: 1 };
+  }
+  return { shouldStop: false, exitCode: Math.max(exitCode, authentication.exitCode) };
+}
+
 /** The selected runtime's real authentication step, before post-template persistence. */
 export async function runInitAuthentication(opts, {
   runtime: selectedRuntime, skipConfirm = false, quiet = false,
@@ -1883,234 +1899,230 @@ export async function runInitAuthentication(opts, {
   let pendingClaudeBaseUrl = null;
   let pendingCodexBaseUrl = null;
 
-  const previousClaudeBaseUrl = process.env.ANTHROPIC_BASE_URL;
-  const previousCodexBaseUrl = process.env.OPENAI_BASE_URL;
   const snapshot = () => ({ claudeAuthenticated, codexAuthenticated, pendingAuthToken, pendingApiKey,
     pendingSetupToken, pendingClaudeBaseUrl, pendingCodexBaseUrl, exitCode });
   const activateBase = runtime => {
     const base = runtime === 'codex' ? opts.codexBaseUrl : opts.baseUrl;
     if (!base) return;
-    if ((runtime === 'codex' ? saveCodexBase(base) : saveClaudeBase(base)) !== true) throw new Error('base storage failed');
+    if (runtime === 'codex') saveCodexBase(base);
+    else saveClaudeBase(base);
     if (runtime === 'codex') pendingCodexBaseUrl = base;
     else pendingClaudeBaseUrl = base;
   };
   const prepareApi = runtime => {
     if (runtime === 'codex') codexApiAttempted = true;
     else claudeApiAttempted = true;
-    resolveBase(opts, runtime);
-    const validation = validate(opts);
-    if (validation) throw new Error('API configuration invalid');
+    try { resolveBase(opts, runtime); }
+    catch (error) {
+      if (error instanceof InitEndpointConfigurationError) return error.message;
+      throw error;
+    }
+    return validate(opts);
+  };
+  const configurationFailure = message => {
+    reportError(`  ${error(message)}`);
+    return { ...snapshot(), failed: true, exitCode: 1 };
   };
   const login = (...args) => { activateBase(selectedRuntime); return nativeLogin(...args); };
   const verifySetup = () => { activateBase('claude'); return setupVerify(); };
-  try {
-    if (selectedRuntime === 'codex') {
-      // ── Step 6 (Codex): auth + startup config ────────────────────────────
-      if (exists('codex')) {
-        if (opts.codexApiKey) {
-          prepareApi('codex');
-          codexAuthenticated = await authCodex(opts.codexApiKey, { baseUrl: opts.codexBaseUrl, quiet, log, reportError });
-          if (codexAuthenticated && opts.codexBaseUrl) activateBase('codex');
-          if (!codexAuthenticated && skipConfirm) exitCode = 1;
+  if (selectedRuntime === 'codex') {
+    // ── Step 6 (Codex): auth + startup config ────────────────────────────
+    if (exists('codex')) {
+      if (opts.codexApiKey) {
+        const validation = prepareApi('codex');
+        if (validation) return configurationFailure(validation);
+        codexAuthenticated = await authCodex(opts.codexApiKey, { baseUrl: opts.codexBaseUrl, quiet, log, reportError });
+        if (codexAuthenticated && opts.codexBaseUrl) activateBase('codex');
+        if (!codexAuthenticated && skipConfirm) exitCode = 1;
+      } else {
+        codexAuthenticated = codexStatus();
+        if (codexAuthenticated) {
+          if (!quiet) log(`  ${success('Codex authenticated')}`);
         } else {
-          codexAuthenticated = codexStatus();
-          if (codexAuthenticated) {
-            if (!quiet) log(`  ${success('Codex authenticated')}`);
-          } else {
-            if (!quiet) log(`  ${warn('Codex not authenticated')}`);
-            if (!skipConfirm) {
-              const codexAuthChoice = await choose(
-                '\n  How would you like to authenticate Codex?',
-                ['OpenAI API key', 'Device auth (headless/server — no browser needed)', 'Browser login'],
-              );
-              if (codexAuthChoice === 1) {
-                prepareApi('codex');
-                log(`\n  ${dim('Paste the API credential expected by this Codex endpoint:')}`);
-                const apiKey = await secret('  API key: ');
-                if (!apiKey) log(`  ${warn('No key entered. Skipped.')}`);
-                else {
-                  const validation = validate({ ...opts, codexApiKey: apiKey });
-                  if (validation) { reportError(`  ${error(validation)}`); return { ...snapshot(), failed: true }; }
-                  codexAuthenticated = await authCodex(apiKey, { baseUrl: opts.codexBaseUrl, log, reportError });
-                  if (codexAuthenticated && opts.codexBaseUrl) activateBase('codex');
-                  if (!codexAuthenticated) {
-                    pendingCodexBaseUrl = null;
-                    if (previousCodexBaseUrl === undefined) delete process.env.OPENAI_BASE_URL;
-                    else process.env.OPENAI_BASE_URL = previousCodexBaseUrl;
-                  }
-                }
-              } else if (codexAuthChoice === 2) {
-                // Option 2: device-auth (headless)
-                log(`\n  ${cyan('Starting Codex device auth...')}`);
-                log(`  ${dim('Follow the instructions to authenticate. Press Ctrl+C when done.')}\n`);
-                try {
-                  login('codex', ['login', '--device-auth']);
-                } catch { /* user may Ctrl+C */ }
-                codexAuthenticated = codexStatus();
-                if (codexAuthenticated) {
-                  log(`\n  ${success('Codex authenticated')}`);
-                } else {
-                  log(`\n  ${warn('Authentication not completed.')}`);
-                  log(`    ${dim('Run "codex login --device-auth" to try again.')}`);
-                }
+          if (!quiet) log(`  ${warn('Codex not authenticated')}`);
+          if (!skipConfirm) {
+            const codexAuthChoice = await choose(
+              '\n  How would you like to authenticate Codex?',
+              ['OpenAI API key', 'Device auth (headless/server — no browser needed)', 'Browser login'],
+            );
+            if (codexAuthChoice === 1) {
+              const configurationError = prepareApi('codex');
+              if (configurationError) return configurationFailure(configurationError);
+              log(`\n  ${dim('Paste the API credential expected by this Codex endpoint:')}`);
+              const apiKey = await secret('  API key: ');
+              if (!apiKey) log(`  ${warn('No key entered. Skipped.')}`);
+              else {
+                const validation = validate({ ...opts, codexApiKey: apiKey });
+                if (validation) return configurationFailure(validation);
+                codexAuthenticated = await authCodex(apiKey, { baseUrl: opts.codexBaseUrl, log, reportError });
+                if (codexAuthenticated && opts.codexBaseUrl) activateBase('codex');
+              }
+            } else if (codexAuthChoice === 2) {
+              // Option 2: device-auth (headless)
+              log(`\n  ${cyan('Starting Codex device auth...')}`);
+              log(`  ${dim('Follow the instructions to authenticate. Press Ctrl+C when done.')}\n`);
+              try {
+                login('codex', ['login', '--device-auth']);
+              } catch { /* user may Ctrl+C */ }
+              codexAuthenticated = codexStatus();
+              if (codexAuthenticated) {
+                log(`\n  ${success('Codex authenticated')}`);
               } else {
-                // Option 3: browser login
-                log(`\n  ${cyan('Starting Codex browser login...')}`);
-                log(`  ${dim('After login completes, press Ctrl+C to return.')}\n`);
-                try {
-                  login('codex', ['login']);
-                } catch { /* user may Ctrl+C */ }
-                codexAuthenticated = codexStatus();
-                if (codexAuthenticated) {
-                  log(`\n  ${success('Codex authenticated')}`);
-                } else {
-                  log(`\n  ${warn('Authentication not completed.')}`);
-                  log(`    ${dim('Run "codex login" to try again.')}`);
-                }
+                log(`\n  ${warn('Authentication not completed.')}`);
+                log(`    ${dim('Run "codex login --device-auth" to try again.')}`);
               }
             } else {
-              if (!quiet) log(`    ${dim('Run "codex login --device-auth" or re-run with "--codex-api-key <key>" to authenticate.')}`);
+              // Option 3: browser login
+              log(`\n  ${cyan('Starting Codex browser login...')}`);
+              log(`  ${dim('After login completes, press Ctrl+C to return.')}\n`);
+              try {
+                login('codex', ['login']);
+              } catch { /* user may Ctrl+C */ }
+              codexAuthenticated = codexStatus();
+              if (codexAuthenticated) {
+                log(`\n  ${success('Codex authenticated')}`);
+              } else {
+                log(`\n  ${warn('Authentication not completed.')}`);
+                log(`    ${dim('Run "codex login" to try again.')}`);
+              }
             }
+          } else {
+            if (!quiet) log(`    ${dim('Run "codex login --device-auth" or re-run with "--codex-api-key <key>" to authenticate.')}`);
           }
-        }
-
-        // Write ~/.codex/config.toml to suppress interactive prompts on first launch
-        if ((!opts.codexApiKey || codexAuthenticated) && writeCodex(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl || undefined })) {
-          if (!quiet) log(`  ${success('Codex startup config written')}`);
         }
       }
 
-    } else {
-      // ── Step 6 (Claude): auth check + guided login ────────────────────────
-      if (exists('claude')) {
-        const explicit = !opts.authFromEnv && !!(opts.apiKey || opts.authToken || opts.setupToken);
-        claudeAuthenticated = !explicit && claudeStatus();
-        if (claudeAuthenticated) {
-          if (!quiet) log(`  ${success('Claude Code authenticated')}`);
-        } else if (opts.setupToken) {
-          // Setup token provided via flag/env — save, verify via actual API call, rollback on failure
-          if (setupSave(opts.setupToken)) {
-            if (!quiet) log(`  ${dim('Verifying setup token...')}`);
-            const tokenResult = verifySetup();
-            if (tokenResult.valid) {
-              pendingSetupToken = opts.setupToken;
-              claudeAuthenticated = true;
-              if (!quiet) log(`  ${success('Setup token verified and saved')}`);
-            } else {
-              setupRollback();
-              if (tokenResult.authError) {
-                reportError(`  ${error('Setup token is invalid or expired.')}`);
-                reportError(`    ${dim('Generate a new one: claude setup-token')}`);
-              } else {
-                reportError(`  ${error('Could not verify setup token. Check network and try again.')}`);
-                if (tokenResult.message) reportError(`    ${dim(tokenResult.message.split('\n')[0])}`);
-              }
-              if (skipConfirm) exitCode = 1;
-            }
-          }
-        } else if (opts.apiKey || opts.authToken) {
-          prepareApi('claude');
-          claudeAuthenticated = await authClaude(opts, { quiet, log, reportError });
-          if (claudeAuthenticated) {
-            if (opts.baseUrl) activateBase('claude');
-            if (opts.authToken) pendingAuthToken = opts.authToken;
-            else pendingApiKey = opts.apiKey;
-          } else if (skipConfirm) exitCode = 1;
-        } else {
-          if (!quiet) log(`  ${warn('Claude Code not authenticated')}`);
-          if (!skipConfirm) {
-            const authChoice = await choose(
-              '\n  How would you like to authenticate?',
-              ['Claude subscription (opens browser login)', opts.baseUrl && isOfficialClaudeBaseUrl(opts.baseUrl) ? 'Anthropic API key' : 'API credential (API key or Bearer token)', 'Setup token (from claude setup-token)'],
-            );
+      // Write ~/.codex/config.toml to suppress interactive prompts on first launch
+      if ((!opts.codexApiKey || codexAuthenticated) && writeCodex(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl || undefined })) {
+        if (!quiet) log(`  ${success('Codex startup config written')}`);
+      }
+    }
 
-            if (authChoice === 1) {
-              // Option 1: Subscription login (existing flow)
-              log(`\n  ${cyan('Starting Claude Code for authentication...')}`);
-              log(`  ${dim('After login, type /exit to return to zylos init.')}\n`);
-              const sigintListeners = process.rawListeners('SIGINT');
-              process.removeAllListeners('SIGINT');
-              process.on('SIGINT', () => {});
-              try {
-                // On macOS, spawning Claude from a curl|bash pipeline leaves stdin
-                // in a state where ink's TUI can't receive keyboard input — even with
-                // /dev/tty redirects. Use `script` to allocate a fresh pseudo-terminal
-                // that gives Claude full terminal control.
-                if (process.platform === 'darwin') {
-                  login('script', ['-q', '/dev/null', 'claude']);
-                } else {
-                  login('claude', []);
-                }
-              } catch { /* user may Ctrl+C */ }
-              process.removeAllListeners('SIGINT');
-              for (const l of sigintListeners) process.on('SIGINT', l);
-              claudeAuthenticated = claudeStatus();
-              if (claudeAuthenticated) {
-                log(`\n  ${success('Claude Code authenticated')}`);
-              } else {
-                log(`\n  ${warn('Authentication not completed.')}`);
-                log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
-              }
-            } else if (authChoice === 2) {
-              prepareApi('claude');
-              const credential = await promptClaude({ baseUrl: opts.baseUrl }, { choose, secret, log });
-              if (credential) {
-                claudeAuthenticated = await authClaude({ ...credential, baseUrl: opts.baseUrl }, { log, reportError });
-                if (claudeAuthenticated) {
-                  if (opts.baseUrl) activateBase('claude');
-                  if (credential.authToken) pendingAuthToken = credential.authToken;
-                  else pendingApiKey = credential.apiKey;
-                } else {
-                  pendingClaudeBaseUrl = null;
-                  if (previousClaudeBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
-                  else process.env.ANTHROPIC_BASE_URL = previousClaudeBaseUrl;
-                }
-              }
-            } else if (authChoice === 3) {
-              // Option 3: Setup token (OAuth token from claude setup-token)
-              log(`\n  ${dim('Paste your setup token (starts with sk-ant-oat):')}`);
-              log(`  ${dim('Generate one by running "claude setup-token" on a machine with a browser.')}`);
-              const token = await secret('  Setup token: ');
-              const tokenValidation = token ? validate({ setupToken: token }) : null;
-              if (!token) {
-                log(`  ${warn('No token entered. Skipped.')}`);
-              } else if (tokenValidation) {
-                log(`  ${error(tokenValidation)}`);
-                log(`    ${dim('Run "claude setup-token" to generate a valid token.')}`);
-              } else if (setupSave(token)) {
-                log(`  ${dim('Verifying setup token...')}`);
-                const tokenResult = verifySetup();
-                if (tokenResult.valid) {
-                  pendingSetupToken = token;
-                  claudeAuthenticated = true;
-                  log(`  ${success('Setup token verified and saved')}`);
-                } else {
-                  setupRollback();
-                  if (tokenResult.authError) {
-                    log(`  ${error('Setup token is invalid or expired.')}`);
-                    log(`    ${dim('Generate a new one: claude setup-token')}`);
-                  } else {
-                    log(`  ${error('Could not verify setup token. Check network and try again.')}`);
-                    if (tokenResult.message) log(`    ${dim(tokenResult.message.split('\n')[0])}`);
-                  }
-                }
-              }
-            }
+  } else {
+    // ── Step 6 (Claude): auth check + guided login ────────────────────────
+    if (exists('claude')) {
+      const explicit = !opts.authFromEnv && !!(opts.apiKey || opts.authToken);
+      claudeAuthenticated = !explicit && claudeStatus();
+      if (claudeAuthenticated) {
+        if (!quiet) log(`  ${success('Claude Code authenticated')}`);
+      } else if (opts.setupToken) {
+        // Setup token provided via flag/env — save, verify via actual API call, rollback on failure
+        if (setupSave(opts.setupToken)) {
+          if (!quiet) log(`  ${dim('Verifying setup token...')}`);
+          const tokenResult = verifySetup();
+          if (tokenResult.valid) {
+            pendingSetupToken = opts.setupToken;
+            claudeAuthenticated = true;
+            if (!quiet) log(`  ${success('Setup token verified and saved')}`);
           } else {
-            if (!quiet) log(`    ${dim('Run "zylos init" again to authenticate.')}`);
+            setupRollback();
+            if (tokenResult.authError) {
+              reportError(`  ${error('Setup token is invalid or expired.')}`);
+              reportError(`    ${dim('Generate a new one: claude setup-token')}`);
+            } else {
+              reportError(`  ${error('Could not verify setup token. Check network and try again.')}`);
+              if (tokenResult.message) reportError(`    ${dim(tokenResult.message.split('\n')[0])}`);
+            }
+            if (skipConfirm) exitCode = 1;
           }
         }
-      } // end if (exists('claude')) — Step 6
-    } // end else (Claude runtime branch)
+      } else if (opts.apiKey || opts.authToken) {
+        const validation = prepareApi('claude');
+        if (validation) return configurationFailure(validation);
+        claudeAuthenticated = await authClaude(opts, { quiet, log, reportError });
+        if (claudeAuthenticated) {
+          if (opts.baseUrl) activateBase('claude');
+          if (opts.authToken) pendingAuthToken = opts.authToken;
+          else pendingApiKey = opts.apiKey;
+        } else if (skipConfirm) exitCode = 1;
+      } else {
+        if (!quiet) log(`  ${warn('Claude Code not authenticated')}`);
+        if (!skipConfirm) {
+          const authChoice = await choose(
+            '\n  How would you like to authenticate?',
+            ['Claude subscription (opens browser login)', isOfficialClaudeBaseUrl(opts.baseUrl) ? 'Anthropic API key' : 'API credential (API key or Bearer token)', 'Setup token (from claude setup-token)'],
+          );
 
-    // Explicit base-only changes retain their existing behavior, including the other runtime.
-    if (opts.baseUrl && !claudeApiAttempted) activateBase('claude');
-    if (opts.codexBaseUrl && !codexApiAttempted) activateBase('codex');
-    return snapshot();
-  } catch {
-    reportError(`  ${error('Could not read or apply API endpoint configuration. Provide the base URL explicitly or repair the saved configuration.')}`);
-    return { ...snapshot(), failed: true, exitCode: 1 };
-  }
+          if (authChoice === 1) {
+            // Option 1: Subscription login (existing flow)
+            log(`\n  ${cyan('Starting Claude Code for authentication...')}`);
+            log(`  ${dim('After login, type /exit to return to zylos init.')}\n`);
+            const sigintListeners = process.rawListeners('SIGINT');
+            process.removeAllListeners('SIGINT');
+            process.on('SIGINT', () => {});
+            try {
+              // On macOS, spawning Claude from a curl|bash pipeline leaves stdin
+              // in a state where ink's TUI can't receive keyboard input — even with
+              // /dev/tty redirects. Use `script` to allocate a fresh pseudo-terminal
+              // that gives Claude full terminal control.
+              if (process.platform === 'darwin') {
+                login('script', ['-q', '/dev/null', 'claude']);
+              } else {
+                login('claude', []);
+              }
+            } catch { /* user may Ctrl+C */ }
+            process.removeAllListeners('SIGINT');
+            for (const l of sigintListeners) process.on('SIGINT', l);
+            claudeAuthenticated = claudeStatus();
+            if (claudeAuthenticated) {
+              log(`\n  ${success('Claude Code authenticated')}`);
+            } else {
+              log(`\n  ${warn('Authentication not completed.')}`);
+              log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
+            }
+          } else if (authChoice === 2) {
+            const validation = prepareApi('claude');
+            if (validation) return configurationFailure(validation);
+            const credential = await promptClaude({ baseUrl: opts.baseUrl }, { choose, secret, log });
+            if (credential) {
+              claudeAuthenticated = await authClaude({ ...credential, baseUrl: opts.baseUrl }, { log, reportError });
+              if (claudeAuthenticated) {
+                if (opts.baseUrl) activateBase('claude');
+                if (credential.authToken) pendingAuthToken = credential.authToken;
+                else pendingApiKey = credential.apiKey;
+              }
+            }
+          } else if (authChoice === 3) {
+            // Option 3: Setup token (OAuth token from claude setup-token)
+            log(`\n  ${dim('Paste your setup token (starts with sk-ant-oat):')}`);
+            log(`  ${dim('Generate one by running "claude setup-token" on a machine with a browser.')}`);
+            const token = await secret('  Setup token: ');
+            const tokenValidation = token ? validate({ setupToken: token }) : null;
+            if (!token) {
+              log(`  ${warn('No token entered. Skipped.')}`);
+            } else if (tokenValidation) {
+              log(`  ${error(tokenValidation)}`);
+              log(`    ${dim('Run "claude setup-token" to generate a valid token.')}`);
+            } else if (setupSave(token)) {
+              log(`  ${dim('Verifying setup token...')}`);
+              const tokenResult = verifySetup();
+              if (tokenResult.valid) {
+                pendingSetupToken = token;
+                claudeAuthenticated = true;
+                log(`  ${success('Setup token verified and saved')}`);
+              } else {
+                setupRollback();
+                if (tokenResult.authError) {
+                  log(`  ${error('Setup token is invalid or expired.')}`);
+                  log(`    ${dim('Generate a new one: claude setup-token')}`);
+                } else {
+                  log(`  ${error('Could not verify setup token. Check network and try again.')}`);
+                  if (tokenResult.message) log(`    ${dim(tokenResult.message.split('\n')[0])}`);
+                }
+              }
+            }
+          }
+        } else {
+          if (!quiet) log(`    ${dim('Run "zylos init" again to authenticate.')}`);
+        }
+      }
+    } // end if (exists('claude')) — Step 6
+  } // end else (Claude runtime branch)
+
+  // Explicit base-only changes retain their existing behavior, including the other runtime.
+  if (opts.baseUrl && !claudeApiAttempted && !opts.apiKey && !opts.authToken) activateBase('claude');
+  if (opts.codexBaseUrl && !codexApiAttempted && (selectedRuntime !== 'codex' || !opts.codexApiKey)) activateBase('codex');
+  return snapshot();
 }
 
 /**
@@ -2178,7 +2190,7 @@ export async function initCommand(args) {
   resolveFromEnv(opts);
 
   // Validate options
-  const validationErr = validateInitOptions(opts, { deferApiFormat: true });
+  const validationErr = validateInitInput(opts);
   if (validationErr) {
     console.error(`${error(`Error: ${validationErr}`)}`);
     process.exit(1);
@@ -2333,8 +2345,9 @@ export async function initCommand(args) {
   await ensureInitMemoryMigration({ freshInstall: installState === 'fresh' });
   let claudeJustInstalled = preparation.installed.includes('claude');
   const authentication = await runInitAuthentication(opts, { runtime: selectedRuntime, skipConfirm, quiet });
-  if (authentication.failed) { process.exitCode = 1; return; }
-  exitCode = Math.max(exitCode, authentication.exitCode);
+  const authenticationState = consumeInitAuthenticationResult(authentication, exitCode);
+  if (authenticationState.shouldStop) return;
+  exitCode = authenticationState.exitCode;
   const { claudeAuthenticated, codexAuthenticated, pendingAuthToken, pendingApiKey,
     pendingSetupToken, pendingClaudeBaseUrl, pendingCodexBaseUrl } = authentication;
 
