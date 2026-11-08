@@ -25,28 +25,33 @@ verification or claim to establish the natural false-empty root cause.
 | --- | --- | --- |
 | `C4_BRACKETED_PASTE_ENABLED` | off | Only `1` enables bracketed paste |
 | `C4_PERIODIC_ENTER_ENABLED` | on | Unset or `1` enables; any other value disables |
-| `C4_PERIODIC_ENTER_INTERVAL_MS` | 60000 | Positive integer, minimum 1000; monotonic elapsed time |
+| `C4_PERIODIC_ENTER_INTERVAL_MS` | 10000 | Positive integer, minimum 1000; monotonic elapsed time (was 60000 before #795) |
 | `C4_PERIODIC_ENTER_MAX_ATTEMPTS` | 3 | Positive integer, capped at 10 |
 | `C4_ENTER_CAPTURE_ENABLED` | off | Only `1` enables sensitive local captures |
 
-A new actual paste clears the old budget. A successfully pasted conversation
-or ordinary non-slash text control arms a new budget. Slash controls and raw
-keystrokes clear it. Queue admission and heartbeat auto-ack behavior are
+A successfully pasted conversation or ordinary non-slash text control arms a
+new three-attempt budget. If an earlier item's budget is still pending (not
+exhausted), the new budget keeps that earlier elapsed-time anchor: text pasted
+on top of an unsubmitted message must not push its recovery back (#795).
+Slash controls and raw keystrokes clear the budget. Queue admission and heartbeat auto-ack behavior are
 unchanged. No idle, health, input-content or Codex-specific condition gates a
 periodic attempt. An empty verdict or delivered status does not cancel it.
 
-Initial and retry Enter commands reset the elapsed-time anchor on successful
-command return, not on confirmed application submission. After at least 60
-seconds, the awaited dispatcher loop attempts another Enter against
-`TMUX_SESSION`, up to three cumulative attempts per eligible paste. With the
-normal 1-3 second polling interval and an otherwise free loop, the first attempt
-is about 60-63 seconds after the last normal Enter. Work already occupying the
+Initial and retry Enter commands do not move the elapsed-time anchor: in
+#795 the Enters that followed later pastes did not submit the stuck draft
+either, so treating them as progress only delayed recovery. The anchor is the
+paste that armed the oldest pending budget, or the last periodic attempt.
+After at least the interval (10 seconds by default), the awaited dispatcher
+loop attempts another Enter against `TMUX_SESSION`, up to three cumulative
+attempts per budget. With the normal 1-3 second polling interval and an
+otherwise free loop, the first attempt is about 10-13 seconds after that
+paste. Work already occupying the
 loop may delay it further. The timer cannot interleave with normal delivery.
 
 Failed sends consume budget and reset the attempt anchor, preventing tight
 retries. Successful sends reset elapsed time without restoring attempts.
-Exhaustion stops until another eligible paste; frequent new messages can defer
-recovery indefinitely. A runtime/session restart does not cancel an existing
+Exhaustion stops until another eligible paste. Frequent new messages no
+longer defer recovery, because they keep the pending anchor. A runtime/session restart does not cancel an existing
 budget: the next attempt targets the session then available. Restarting the
 dispatcher itself loses its in-memory budget. Dispatcher shutdown prevents sends.
 
@@ -65,6 +70,18 @@ isolated tests also showed Enter selecting menu items. These effects remain
 possible if the operating assumptions are violated. The timer does not identify
 draft ownership or dialog state, and can send to a replacement runtime or a newly
 selected pane. It never changes a message's recorded delivery status.
+
+## Disputed empty verdict
+
+For Claude, the cursor detector runs first and the text parser can override a
+cursor `has_content`. The parser only reads the first 10 characters of the
+input box's first line, so a multi-line draft can make it report `empty`
+while the draft is still there (#795). That override is now reported as
+`disputed_empty`: verification sends one extra Enter (`dispute_retry`) and
+checks again. A second disagreement, or one on the final check, is accepted
+as submitted instead of failing strict conversation verification, because a
+strict failure re-pastes the whole message and duplicates the input. The
+periodic Enter remains the backstop for anything still left in the input box.
 
 ## Diagnostics
 

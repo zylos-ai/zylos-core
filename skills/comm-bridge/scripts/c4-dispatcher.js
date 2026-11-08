@@ -118,7 +118,6 @@ function sendEnter(kind, details = {}) {
   trace('enter_attempt', metadata);
   try {
     sendTmuxKeys(TMUX_SESSION, ['Enter'], { stdio: 'pipe', timeout: 5000 });
-    periodicEnter.entered();
     trace('enter_sent', metadata);
   } catch (error) {
     trace('enter_failed', { ...metadata, ...tmuxFailureDetails(error) });
@@ -408,8 +407,13 @@ export function checkInputBox() {
   }
 
   const fallbackState = checkClaudeFallbackInputBox(capture);
-  trace('input_check', { cursorState, fallbackState, verdict: fallbackState === 'indeterminate' ? cursorState : fallbackState, detector: 'claude_fallback' });
-  return fallbackState === 'indeterminate' ? cursorState : fallbackState;
+  // The text parser only reads the first line of the input box, so its 'empty'
+  // can be wrong for a multi-line draft (#795). When it overrides the cursor's
+  // 'has_content', report the disagreement instead of a confident 'empty'.
+  const verdict = fallbackState === 'indeterminate' ? cursorState
+    : fallbackState === 'empty' ? 'disputed_empty' : fallbackState;
+  trace('input_check', { cursorState, fallbackState, verdict, detector: 'claude_fallback' });
+  return verdict;
 }
 
 export function isUsageOverlayCapture(capture) {
@@ -448,14 +452,29 @@ export function getCursorY() {
 
 async function submitAndVerify() {
   sendEnter('initial');
+  let disputeRetried = false;
+  let lastState = null;
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
     captureEnter('after', { kind: 'normal_verify', attempt: attempt + 1 });
     const state = checkInputBox();
+    lastState = state;
 
     if (state === 'empty') {
       return { verified: true, state: 'empty' };
+    }
+
+    // Detectors disagree: press Enter once more and re-check. A repeated
+    // disagreement is accepted as empty rather than failed, because a strict
+    // verify failure re-pastes the whole message (duplicate input); the
+    // periodic Enter remains the backstop if text is still left behind.
+    if (state === 'disputed_empty') {
+      if (disputeRetried) return { verified: true, state: 'empty' };
+      disputeRetried = true;
+      log(`Enter verify attempt ${attempt + 1}: detectors disagree on empty input, retrying Enter`);
+      sendEnter('dispute_retry');
+      continue;
     }
 
     if (state === 'indeterminate') {
@@ -481,6 +500,8 @@ async function submitAndVerify() {
     sendEnter('verify_retry');
   }
 
+  // A disagreement on the final check was never a confident 'has_content'.
+  if (lastState === 'disputed_empty') return { verified: true, state: 'empty' };
   return { verified: false, state: 'has_content' };
 }
 
@@ -490,16 +511,17 @@ async function sendToTmux(message, options = {}) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
-  periodicEnter.reset('normal_paste');
+  const armsPeriodic = options.itemType === 'conversation' || options.periodicTextControl;
+  // Pastes that arm their own budget carry an earlier pending deadline over
+  // (see PeriodicEnter.arm); other pastes such as slash controls clear it.
+  if (!armsPeriodic) periodicEnter.reset('normal_paste');
   trace('paste_attempt', { itemId: options.itemId, itemType: options.itemType, bytes: Buffer.byteLength(sanitized, 'utf8'), delayMs });
 
   try {
     execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], { stdio: 'pipe', timeout: 5000 });
     execFileSync('tmux', ['paste-buffer', ...(BRACKETED_PASTE_ENABLED ? ['-p'] : []), '-b', bufferName, '-t', TMUX_SESSION], { stdio: 'pipe', timeout: 5000 });
     trace('paste_sent', { itemId: options.itemId, itemType: options.itemType });
-    if (options.itemType === 'conversation' || options.periodicTextControl) {
-      periodicEnter.arm(options.itemId, options.itemType);
-    }
+    if (armsPeriodic) periodicEnter.arm(options.itemId, options.itemType);
   } catch (err) {
     trace('paste_failed', { itemId: options.itemId, itemType: options.itemType });
     logDeliveryFailure('tmux_paste', 0, 'PASTE_ERROR');
