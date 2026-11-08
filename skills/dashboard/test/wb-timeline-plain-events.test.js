@@ -8,6 +8,8 @@ import { createRuns } from '../src/lib/workbench/runs.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { createTimelineLoader, renderTimeline } from '../public/js/wb/detail-timeline.js';
 import { createGroupDetail } from '../public/js/wb/detail.js';
+import { recentRows, recentWindow } from '../public/js/wb/timeline-rows.js';
+import { repeatRow } from '../public/js/wb/detail-overview.js';
 
 // Boundary: a real Store (private SQLite in a temporary directory) and the real run listing answer the
 // timeline and run reads; the real loader, group detail and renderers draw into an injected DOM. The
@@ -20,17 +22,19 @@ const tr = (key, params) => key + (params ? ' ' + JSON.stringify(params) : '');
 const at = seconds => new Date(Date.parse('2026-11-08T10:00:00.000Z') + seconds * 1000).toISOString();
 
 // One run: a few events a person can follow, then 600 router `release` diagnostics, then the turn ends.
-function fixture(t) {
+// `unattributed` adds a release and a stop that belong to no run, before the run starts.
+function fixture(t, { unattributed = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-timeline-'));
   const store = new Store(path.join(root, 'dashboard.db'));
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   let seq = 0;
-  const put = (type, seconds, category = 'lifecycle') => {
+  const put = (type, seconds, category = 'lifecycle', runId = RUN) => {
     const id = `event-${++seq}`;
-    store.insertEvent({ id, ingest_id: id, timestamp: at(seconds), runtime: 'claude', run_id: RUN, session_group: GROUP,
+    store.insertEvent({ id, ingest_id: id, timestamp: at(seconds), runtime: 'claude', run_id: runId, session_group: GROUP,
       event_type: type, category, metadata: {}, source: 'core-log' });
   };
   store.db.transaction(() => {
+    if (unattributed) { put('release', -20, 'diagnostic', null); put('stop', -19, 'turn', null); }
     put('session_start', 0); put('user_prompt_submit', 1); put('pre_tool_use', 2, 'tool'); put('post_tool_use', 3, 'tool');
     for (let i = 0; i < 600; i++) put('release', 4 + i * 0.1, 'diagnostic');
     put('stop', 70, 'turn');
@@ -53,7 +57,7 @@ function fixture(t) {
     if (url.pathname.endsWith('/backlog')) return { count: 0, firstAt: null, syncing: false };
     throw new Error('unexpected read ' + url.pathname);
   }
-  return { store, read, reads };
+  return { store, read, reads, put };
 }
 const labels = root => allNodes(root).filter(node => node.classList.contains('wb-ev-t')).map(node => node.text ?? '');
 const repeats = root => allNodes(root).filter(node => node.classList.contains('wb-ev-rep')).map(node => node.textContent);
@@ -116,12 +120,118 @@ test('recent activity is not taken over by diagnostics and follows the technical
   f.reads.length = 0;
   detail.setViewDetail();
   // The switch alone rereads: wait (bounded) for the read it starts and the redraw after it.
-  const recentReadOf = () => f.reads.find(url => url.pathname === '/api/timeline' && url.searchParams.get('limit') === '5');
+  const recentReadOf = () => f.reads.find(url => url.pathname === '/api/timeline' && url.searchParams.get('limit') === String(recentWindow));
   for (let i = 0; i < 50 && !(recentReadOf() && labels(recent()).includes('release')); i++) await new Promise(resolve => setImmediate(resolve));
   const recentRead = recentReadOf();
   assert.ok(recentRead, 'switching to technical detail rereads recent activity');
   assert.equal(recentRead.searchParams.has('types'), false);
-  assert.deepEqual(labels(recent()), ['stop', 'release'], 'the four newest releases are one row');
-  assert.deepEqual(repeats(recent()).length, 1);
+  // The window holds the stop and the 99 newest releases; the releases run on past it, so the count is a lower bound.
+  assert.deepEqual(labels(recent()), ['stop', 'release'], 'the releases in the window are one row');
+  assert.deepEqual(repeats(recent()), [tr('wb.timeline.repeatedUntil', { count: recentWindow - 1, to: short(at(4 + 599 * 0.1)) })]);
   assert.match(root.textContent, /wb\.detail\.fullTimeline \{"events":605,"runs":1\}/);
+});
+
+const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const waitFor = async condition => { for (let i = 0; i < 50 && !condition(); i++) await new Promise(resolve => setImmediate(resolve)); };
+function openDetail(t, f, level) {
+  const document = createDocument(), root = document.createElement('aside');
+  const fetch = async pathname => ({ ok: true, status: 200, json: async () => f.read(pathname) });
+  const detail = createGroupDetail({ root, document, fetch, t: tr, detail: () => level.value, now: () => Date.parse(at(80)) });
+  t.after(() => detail.destroy());
+  const row = { sessionGroup: GROUP, presence: 'running', state: { kind: 'idle' }, live: { runId: RUN, sessionId: 's' }, tools: [],
+    queue: { pending: { count: 0 }, running: { count: 0 } }, contextPct: 10, createdAt: 1000, launchConfig: { runtime: 'claude', mode: 'default' } };
+  return { detail, root, open: () => detail.open(row, { rows: [row], listKnown: true }) };
+}
+
+test('recent activity and the timeline give the same count for repeats inside the read window', async t => {
+  const f = fixture(t);
+  // Eight idle events after the turn: more than the five rows recent activity shows.
+  for (let i = 0; i < 8; i++) f.put('idle', 71 + i * 20);
+  const level = { value: 'plain' };
+  const { detail, root, open } = openDetail(t, f, level);
+  await open();
+  const recent = () => allNodes(root).find(node => node.classList.contains('wb-detail-recent'));
+  const idleRow = tr('wb.timeline.repeated', { count: 8, from: short(at(71)), to: short(at(71 + 7 * 20)) });
+  assert.deepEqual(labels(recent()).slice(0, 2), ['wb.event.idle', 'wb.event.stop']);
+  assert.deepEqual(repeats(recent()), [idleRow], 'every idle event in the window is counted, not only the newest five');
+  await detail.selectTab('timeline');
+  await waitFor(() => repeats(root).length);
+  assert.deepEqual(repeats(root), [idleRow], 'the timeline shows the same row');
+});
+
+test('repeats in the same minute show one time', () => {
+  const document = createDocument();
+  const event = seconds => ({ event_type: 'stop', timestamp: at(seconds), event_seq: seconds });
+  const [group] = recentRows([event(1), event(2)]);
+  const node = repeatRow(document, group, { t: tr });
+  assert.deepEqual(repeats(node), [tr('wb.timeline.repeatedAt', { count: 2, at: short(at(1)) })]);
+});
+
+test('unattributed events are counted per view: plain events in plain view, all of them in technical view', async t => {
+  const f = fixture(t, { unattributed: true });
+  let level = 'plain';
+  const loader = createTimelineLoader({ request: f.read, detail: () => level, now: () => Date.parse(at(80)) });
+  await loader.open(GROUP, RUN);
+  assert.equal(loader.state.unattributed, 1, 'only the stop outside the run is a plain event');
+  level = 'technical';
+  await loader.setLevel();
+  assert.equal(loader.state.unattributed, 2);
+  loader.close();
+});
+
+test('plain view: new diagnostics are not appended on refresh', async t => {
+  const f = fixture(t);
+  const loader = createTimelineLoader({ request: f.read, detail: () => 'plain', now: () => Date.parse(at(80)) });
+  await loader.open(GROUP, RUN);
+  f.put('release', 71, 'diagnostic'); f.put('user_prompt_submit', 72);
+  f.reads.length = 0;
+  await loader.refresh();
+  const append = f.reads.find(url => url.pathname === '/api/timeline');
+  assert.ok(append?.searchParams.has('after_seq'), 'the refresh reads only what follows the loaded events');
+  assert.equal(append.searchParams.get('types')?.split(',').includes('release'), false, 'the read asks for plain events only');
+  const types = loader.state.events.get(RUN).map(event => event.event_type);
+  assert.equal(types.includes('release'), false);
+  assert.equal(types.at(-1), 'user_prompt_submit');
+  loader.close();
+});
+
+test('switching technical detail with the timeline tab open shows the diagnostics there', async t => {
+  const f = fixture(t);
+  const level = { value: 'plain' };
+  const { detail, root, open } = openDetail(t, f, level);
+  await open();
+  await detail.selectTab('timeline');
+  await waitFor(() => labels(root).length);
+  assert.equal(labels(root).includes('release'), false);
+  level.value = 'technical';
+  detail.setViewDetail();
+  await waitFor(() => labels(root).includes('release'));
+  assert.equal(labels(root).includes('release'), true, 'the open timeline rereads at the new level');
+});
+
+test('a run count read for a level switched away from is dropped when it arrives late', async t => {
+  const f = fixture(t);
+  let level = 'plain', hold = null;
+  const request = async (pathname, options) => {
+    const url = new URL(pathname, 'http://fixture');
+    if (url.pathname.endsWith('/runs') && !url.searchParams.has('types') && !hold) {
+      let release; const gate = new Promise(resolve => { release = resolve; });
+      hold = { release };
+      await gate;
+    }
+    return f.read(pathname, options);
+  };
+  const loader = createTimelineLoader({ request, detail: () => level, now: () => Date.parse(at(80)) });
+  await loader.open(GROUP, RUN);
+  level = 'technical';
+  const toTechnical = loader.setLevel();
+  await waitFor(() => hold);
+  assert.ok(hold, 'the technical run read is waiting');
+  level = 'plain';
+  await loader.setLevel();
+  hold.release();
+  await toTechnical;
+  assert.equal(loader.state.totalEvents, 5, 'the plain count stays');
+  assert.equal(loader.state.runs[0].n, 5);
+  loader.close();
 });

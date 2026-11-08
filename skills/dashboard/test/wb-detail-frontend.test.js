@@ -9,6 +9,7 @@ import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGro
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
+import { recentWindow } from '../public/js/wb/timeline-rows.js';
 
 // Direct product imports with injected DOM, fetch, clock, timers, clipboard and
 // confirmation. Run for detail rendering, request ownership or form changes;
@@ -51,7 +52,7 @@ test('historical detail resolves board rows, named search and key-only jumps wit
   assert.equal(allNodes(f.root).some(node => node.tagName === 'SCRIPT'), false);
   assert.equal(calls.some(path => path.includes('/search') || (path.startsWith('/api/timeline') && path.includes('run_id='))), false);
   const recent = calls.find(path => path.startsWith('/api/timeline'));
-  assert.equal(new URL(recent, 'http://fixture').searchParams.get('limit'), '5');
+  assert.equal(new URL(recent, 'http://fixture').searchParams.get('limit'), String(recentWindow), 'recent activity reads a window, not only the rows it shows');
   assert.equal(new URL(recent, 'http://fixture').searchParams.has('run_id'), false);
   assert.equal(f.controller.state.totalEvents, 17);
   assert.equal(f.controller.state.totalRuns, 5);

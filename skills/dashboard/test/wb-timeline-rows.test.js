@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
-import { eventChip, eventTypesFor, showsEvent, newestFirst, mergeRepeats, recentRows,
+import { eventChip, eventTypesFor, showsEvent, newestFirst, mergeRepeats, recentRows, recentLimit,
   plainEventTypes, lifecycleEventTypes, toolEventTypes } from '../public/js/wb/timeline-rows.js';
 import { repeatRow } from '../public/js/wb/detail-overview.js';
 import { chipNames } from '../public/js/wb/detail-timeline.js';
@@ -72,7 +72,7 @@ test('consecutive identical events merge with their count and both ends; tools, 
 
 test('a merged row shows the newest event once with how many times and from when to when', () => {
   const document = createDocument();
-  const [group] = recentRows(Array.from({ length: 600 }, (_, i) => ev('release', i, i + 1, { category: 'diagnostic' })));
+  const [group] = mergeRepeats(newestFirst(Array.from({ length: 600 }, (_, i) => row(ev('release', i, i + 1, { category: 'diagnostic' })))));
   assert.equal(group.count, 600);
   const node = repeatRow(document, group, { level: 'technical', t });
   const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -83,4 +83,23 @@ test('a merged row shows the newest event once with how many times and from when
   assert.equal(allNodes(node).filter(child => child.tagName === 'TIME').length, 1, 'one row, one time column');
   const single = repeatRow(document, recentRows([ev('stop', 1, 1)])[0], { level: 'plain', t });
   assert.equal(allNodes(single).some(child => child.classList.contains('wb-ev-rep')), false);
+});
+
+test('recent activity: repeats merge across the whole read, five rows show, and a group reaching the end of a full read is open', () => {
+  const document = createDocument();
+  // 3 stops, then 30 releases, then 70 idles: 103 events, read as a window of 100 (the 3 oldest stops fall outside).
+  const events = [...Array.from({ length: 3 }, (_, i) => ev('stop', i, i + 1)),
+    ...Array.from({ length: 30 }, (_, i) => ev('release', 10 + i, 10 + i)),
+    ...Array.from({ length: 70 }, (_, i) => ev('idle', 100 + i, 100 + i))].slice(-100);
+  const groups = recentRows(events, { window: 100 });
+  assert.deepEqual(groups.map(group => [group.newest.event.event_type, group.count, Boolean(group.open)]),
+    [['idle', 70, false], ['release', 30, true]], 'the releases reach the end of a full read, so more may precede it');
+  const open = allNodes(repeatRow(document, groups[1], { t })).find(child => child.classList.contains('wb-ev-rep'));
+  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  assert.equal(open.textContent, t('wb.timeline.repeatedUntil', { count: 30, to: short(at(39)) }), 'a lower bound and no first time');
+  // A read shorter than its window is everything there is: no group is open.
+  assert.equal(recentRows(events.slice(-50), { window: 100 }).some(group => group.open), false);
+  // More groups than rows: only the first five show.
+  const many = Array.from({ length: 12 }, (_, i) => ev(i % 2 ? 'stop' : 'idle', i, i + 1));
+  assert.equal(recentRows(many, { window: 100 }).length, recentLimit);
 });
