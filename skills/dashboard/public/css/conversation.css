@@ -1106,3 +1106,40 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
     display:none
   }
 }
+
+/* Agent activity: one folded line above each reply, open while the agent works. Folded heads and the live head
+   share one box so their left edges line up; the time column is a grid column at the area's right edge, so it never
+   moves with the length of a step's text. */
+.conversation-page .conversation-activity-slot { display:flex; flex-direction:column; gap:2px; }
+.conversation-page .conversation-activity-slot[hidden] { display:none; }
+.conversation-page .conversation-message-body:not(.conversation-message-body-wide)>.conversation-activity-slot:not([hidden])~.chat-message-content { align-self:flex-start; }
+.conversation-activity { display:flex; flex-direction:column; gap:2px; max-width:100%; font-size:12.5px; line-height:1.5; color:var(--text-dim); }
+.conversation-activity[data-open] { width:520px; }
+.conversation-activity-head { display:inline-flex; align-self:flex-start; align-items:center; gap:5px; max-width:100%; min-height:24px; margin:0; padding:2px 8px 2px 6px; border:1px solid transparent; border-radius:7px; background:none; font:inherit; font-size:12px; color:var(--text-muted); text-align:left; }
+.conversation-activity-head>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+button.conversation-activity-head { cursor:pointer; }
+button.conversation-activity-head:hover { background:var(--wb-hover, var(--wb-line)); color:var(--text-dim); }
+button.conversation-activity-head:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.conversation-activity-head .wb-ico { width:13px; height:13px; flex:none; transition:transform .15s; }
+.conversation-activity[data-open] .conversation-activity-head .wb-ico-chev { transform:rotate(90deg); }
+.conversation-activity-steps { display:grid; grid-template-columns:13px minmax(0,1fr) auto; column-gap:8px; row-gap:1px; align-items:center; margin:2px 0 0 13px; padding-left:12px; border-left:1px solid var(--wb-line); }
+.conversation-activity-steps[hidden] { display:none; }
+.conversation-activity-step { display:contents; }
+.conversation-activity-step>.wb-ico { width:13px; height:13px; color:var(--text-muted); }
+.conversation-activity-label { min-width:0; min-height:24px; line-height:24px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); }
+.conversation-activity-time { justify-self:end; font-size:11px; color:var(--text-muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.conversation-activity-step[data-status=running]>.wb-ico { color:var(--accent); animation:conversation-activity-spin 1s linear infinite; }
+.conversation-activity-step[data-status=running]>.conversation-activity-label { color:var(--text); }
+.conversation-activity-step[data-status=failed]>.wb-ico,.conversation-activity-step[data-status=failed]>.conversation-activity-time,
+.conversation-activity-step[data-status=incomplete]>.wb-ico,.conversation-activity-step[data-status=incomplete]>.conversation-activity-time { color:var(--wb-wait); }
+.conversation-activity-say { grid-column:1/-1; margin:0; padding:3px 0 4px; font-size:12px; line-height:1.6; color:var(--text-muted); overflow-wrap:anywhere; }
+.conversation-activity-thinking { grid-column:1/-1; display:flex; align-items:center; gap:6px; min-height:24px; font-size:11.5px; color:var(--text-muted); }
+.conversation-activity-dots { display:inline-flex; gap:3px; }
+.conversation-activity-dots>i { width:4px; height:4px; border-radius:50%; background:currentColor; opacity:.5; animation:conversation-activity-dot 1.2s infinite; }
+.conversation-activity-dots>i:nth-child(2) { animation-delay:.2s; }
+.conversation-activity-dots>i:nth-child(3) { animation-delay:.4s; }
+@keyframes conversation-activity-spin { to { transform:rotate(360deg); } }
+@keyframes conversation-activity-dot { 0%,60%,100% { transform:none; opacity:.35; } 30% { transform:translateY(-3px); opacity:.9; } }
+@media (prefers-reduced-motion: reduce) {
+  .conversation-activity-step[data-status=running]>.wb-ico,.conversation-activity-dots>i { animation:none; }
+}

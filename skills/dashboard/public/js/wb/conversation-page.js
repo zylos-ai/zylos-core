@@ -9,6 +9,8 @@ import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=104';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=109';
 import { createGroupSide } from './group-side.js?v=3';
+import { activityPlacement, createActivityArea } from './conversation-activity.js?v=100';
+import { createScrollGesture } from './scroll-gesture.js?v=100';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -65,6 +67,14 @@ export function mountConversationPage({
   let fitFrame = null,
     fitObserver = null,
     fittedHeight = null;
+  // Activity areas: manual open state per part (kept across redraws), the parts after a round's last message, and
+  // the clock tick that keeps running times current.
+  const activityOpen = new Map(),
+    trailingActivity = new Map(),
+    activityEntries = new Map();
+  let activityTimer = null,
+    followAfterGesture = false,
+    growthDuringGesture = 0;
   const view = document.defaultView;
   const listRows = new Map(),
     messages = new Map(),
@@ -500,6 +510,28 @@ export function mountConversationPage({
   }, {
     passive: true
   });
+  // While the user drags, swipes or wheels the history, the page never writes its scroll position. Once the list
+  // is still, it follows new content only if the user stayed at the bottom; a user who left it is not pulled back.
+  const gesture = createScrollGesture(stream, {
+    setTimeout: (fn, ms) => view?.setTimeout ? view.setTimeout(fn, ms) : globalThis.setTimeout(fn, ms),
+    clearTimeout: id => view?.clearTimeout ? view.clearTimeout(id) : globalThis.clearTimeout(id),
+    onSettle: () => {
+      if (destroyed) return;
+      if (followAfterGesture && stream.scrollHeight - stream.scrollTop - stream.clientHeight <= growthDuringGesture + 2) {
+        stream.scrollTop = stream.scrollHeight;
+        unread = 0;
+        updateUnread();
+      }
+      followAfterGesture = false;
+      growthDuringGesture = 0;
+    }
+  });
+  function holdScroll(follow, grownBy = 0) {
+    if (!gesture.active) return false;
+    if (follow) followAfterGesture = true;
+    growthDuringGesture += Math.max(0, grownBy);
+    return true;
+  }
   function positionChildren(parent, ordered) {
     for (let i = 0; i < ordered.length; i++) {
       if (parent.children[i] !== ordered[i]) {
@@ -571,10 +603,13 @@ export function mountConversationPage({
       if (!destroyed && !statusButton.disabled) void state.refreshStatus();
     });
     status.append(statusIcon, statusText, statusButton);
-    body.append(meta, content, status);
+    const activitySlot = node('div', undefined, 'conversation-activity-slot');
+    body.append(meta, activitySlot, content, status);
     article.append(avatar, body);
     const record = {
       node: article,
+      activitySlot,
+      activityAreas: new Map(),
       status,
       statusIcon,
       statusText,
@@ -751,6 +786,7 @@ export function mountConversationPage({
     if (destroyed) return;
     const before = captureHistory();
     change();
+    if (holdScroll(before.pinned, stream.scrollHeight - before.previousHeight)) { scheduleFit(); return; }
     if (before.pinned) stream.scrollTop = stream.scrollHeight;
     else if (before.anchor?.node.isConnected) stream.scrollTop = before.oldTop + before.anchor.node.getBoundingClientRect().top - before.anchorTop;
     scheduleFit();
@@ -807,6 +843,7 @@ export function mountConversationPage({
       ordered.push(record.node);
     }
     disposeMissingMessages(messages, ids);
+    placeActivity(s, ordered);
     const liveDays = new Set(ordered.filter(el => el.classList.contains('conversation-day')));
     for (const [day, divider] of days) {
       if (!liveDays.has(divider)) {
@@ -816,8 +853,11 @@ export function mountConversationPage({
     }
     positionChildren(messageList, ordered);
     for (const record of messages.values()) record.resource?.mount?.();
-    if (switched || !maxSeenId && s.messages.length || added && near && !s.gap
-      || pinned && (stream.scrollHeight !== previousHeight || stream.clientHeight !== previousClientHeight)) {
+    const follow = switched || !maxSeenId && s.messages.length || added && near && !s.gap
+      || pinned && (stream.scrollHeight !== previousHeight || stream.clientHeight !== previousClientHeight);
+    if (holdScroll(follow, stream.scrollHeight - previousHeight)) {
+      if (follow) unread = 0;
+    } else if (follow) {
       stream.scrollTop = stream.scrollHeight;
       unread = 0;
     } else if (anchor?.node.isConnected && anchorTop !== undefined) {
@@ -832,6 +872,79 @@ export function mountConversationPage({
       maxSeenId = String(s.messages[s.messages.length - 1].id);
     }
     updateUnread();
+  }
+  const serverNow = s => Date.now() + (s?.activity?.offset ?? 0);
+  function renderArea(entry, area, s) {
+    activityEntries.set(entry.key, { entry, area });
+    area.update(entry, { open: activityOpen.get(entry.key) === true, now: serverNow(s) });
+  }
+  function activityArea() {
+    return createActivityArea({ document, t, onToggle: toggleActivity });
+  }
+  /** Folded parts go above their replies; the live or trailing part follows the round's last loaded message. */
+  function placeActivity(s, ordered) {
+    const placement = activityPlacement(s.messages, s.tab === 'mine' ? s.activity : null);
+    activityEntries.clear();
+    for (const [id, record] of messages) {
+      if (!record.activitySlot) continue;
+      const entries = placement.folded.get(Number(id)) ?? [];
+      const keys = new Set(entries.map(entry => entry.key));
+      for (const [key, area] of record.activityAreas) if (!keys.has(key)) { area.node.remove(); record.activityAreas.delete(key); }
+      entries.forEach((entry, index) => {
+        let area = record.activityAreas.get(entry.key);
+        if (!area) { area = activityArea(); record.activityAreas.set(entry.key, area); }
+        renderArea(entry, area, s);
+        if (record.activitySlot.children[index] !== area.node) record.activitySlot.insertBefore(area.node, record.activitySlot.children[index] ?? null);
+      });
+      record.activitySlot.hidden = !entries.length;
+    }
+    const keys = new Set(placement.trailing.map(entry => entry.key));
+    for (const [key, item] of trailingActivity) if (!keys.has(key)) { item.node.remove(); trailingActivity.delete(key); }
+    for (const entry of placement.trailing) {
+      let item = trailingActivity.get(entry.key);
+      if (!item) {
+        const article = node('article', undefined, 'chat-message conversation-message chat-out conversation-activity-message');
+        const avatar = node('span', undefined, 'conversation-avatar');
+        avatar.append(icon(document, 'bot'));
+        const body = node('div', undefined, 'conversation-message-body');
+        const meta = node('div', undefined, 'conversation-message-meta');
+        const author = node('span', t('chat.page.ai'), 'chat-message-author');
+        meta.append(author);
+        const area = activityArea();
+        body.append(meta, area.node);
+        article.append(avatar, body);
+        item = { node: article, area, author };
+        trailingActivity.set(entry.key, item);
+      }
+      text(item.author, t('chat.page.ai'));
+      renderArea(entry, item.area, s);
+      const anchor = messages.get(String(entry.anchor))?.node;
+      const at = anchor ? ordered.indexOf(anchor) : -1;
+      if (at < 0) { item.node.remove(); continue; }
+      let position = at + 1;
+      while (ordered[position]?.classList?.contains('conversation-activity-message')) position++;
+      ordered.splice(position, 0, item.node);
+    }
+    const live = placement.trailing.some(entry => entry.live);
+    if (live && activityTimer === null && view?.setInterval) activityTimer = view.setInterval(tickActivity, 1000);
+    if (!live && activityTimer !== null) { view?.clearInterval(activityTimer); activityTimer = null; }
+  }
+  function tickActivity() {
+    if (destroyed) return;
+    for (const { entry, area } of activityEntries.values()) {
+      if (entry.live) area.update(entry, { open: true, now: serverNow(currentSnapshot) });
+    }
+  }
+  /** Opening or closing a part keeps it where it is on screen; nothing else moves under the user. */
+  function toggleActivity(key) {
+    const found = activityEntries.get(key);
+    if (!found || destroyed) return;
+    const head = found.area.node.firstElementChild;
+    const before = head?.getBoundingClientRect().top;
+    activityOpen.set(key, activityOpen.get(key) !== true);
+    found.area.update(found.entry, { open: activityOpen.get(key), now: serverNow(currentSnapshot) });
+    if (before !== undefined && head.isConnected && !gesture.active) stream.scrollTop += head.getBoundingClientRect().top - before;
+    scheduleFit();
   }
   function fitPage() {
     fitFrame = null;
@@ -850,6 +963,7 @@ export function mountConversationPage({
       fittedHeight = available;
       page.style.height = `${available}px`;
     }
+    if (holdScroll(bottom)) return;
     if (bottom) {
       stream.scrollTop = stream.scrollHeight;
     } else if (anchor?.isConnected) {
@@ -1188,6 +1302,9 @@ export function mountConversationPage({
       for (const resource of trayResources.values()) resource.destroy();
       trayResources.clear();
       view?.removeEventListener('resize', scheduleFit);
+      gesture.destroy();
+      if (activityTimer !== null) view?.clearInterval(activityTimer);
+      activityTimer = null;
       if (fitFrame !== null) {
         view?.cancelAnimationFrame(fitFrame);
       }

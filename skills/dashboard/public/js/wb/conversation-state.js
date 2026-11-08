@@ -73,7 +73,9 @@ export function createConversationState({
     questionsLoading: false,
     questionError: null,
     questionVersion: 0,
-    questionForms: new Map()
+    questionForms: new Map(),
+    // Agent activity per inbound message id and per round key; `offset` turns browser time into server time.
+    activity: { items: new Map(), rounds: new Map(), offset: 0, reading: false }
   });
   // The instance time zone (its .env TZ) comes with the list and each message page; an older instance without it
   // reads as unknown.
@@ -111,7 +113,7 @@ export function createConversationState({
     if (!active || destroyed || blocked || !visible()) return;
     const current = cell(),
       hasHistory = current?.afterCursor && !selectedId?.startsWith('d:');
-    const interval = hasHistory ? fastUntil > now() ? 2000 : 5000 : 30000;
+    const interval = hasHistory ? fastUntil > now() || activityLive(current) ? 2000 : 5000 : 30000;
     const listWait = Math.max(0, lastListAt + 30000 - now());
     timer = delay(() => {
       timer = null;
@@ -566,6 +568,8 @@ export function createConversationState({
       if (direction !== 'after') current.messageCursor = data.nextCursor ?? null;
       if (direction !== 'before') current.afterCursor = data.afterCursor ?? null;
       emit();
+      // Newer pages are followed by the poll's own activity read.
+      if (direction !== 'after') void readActivity(current, id, currentTab, e);
       return added;
     } catch (err) {
       if (quiet) throw err;
@@ -634,12 +638,48 @@ export function createConversationState({
       }
     })();
   }
+  /** Inbound messages whose activity can still change: not read yet, waiting for a turn, or in a running round. */
+  function activityIds(current) {
+    const ids = [];
+    for (const row of current.messages) {
+      if (row.direction !== 'in') continue;
+      const item = current.activity.items.get(row.id);
+      if (!item || item.state === 'pending' || item.state === 'round' && current.activity.rounds.get(item.round)?.state === 'running') ids.push(row.id);
+    }
+    return ids.slice(-100);
+  }
+  function activityLive(current) {
+    if (!current?.activity) return false;
+    for (const round of current.activity.rounds.values()) if (round.state === 'running') return true;
+    for (const item of current.activity.items.values()) if (item.state === 'pending') return true;
+    return false;
+  }
+  /** Activity is optional: a failed read keeps what is shown and never raises an update error. */
+  async function readActivity(current, id, currentTab, e) {
+    if (currentTab !== 'mine' || typeof id !== 'string' || !id.startsWith('g:') || current.activity.reading) return;
+    const ids = activityIds(current);
+    if (!ids.length) return;
+    current.activity.reading = true;
+    try {
+      const data = await request(`${pathFor(id)}/activity?${query({ tab: currentTab, ids: ids.join(',') })}`);
+      if (!valid(e) || !Array.isArray(data?.items) || !Array.isArray(data?.rounds)) return;
+      if (Number.isFinite(data.now)) current.activity.offset = data.now - now();
+      for (const round of data.rounds) current.activity.rounds.set(round.key, round);
+      for (const item of data.items) current.activity.items.set(item.id, item);
+      emit();
+    } catch {
+      // Keep the last activity; the next poll asks again.
+    } finally {
+      current.activity.reading = false;
+    }
+  }
   async function syncCurrent(current, id, currentTab, e) {
     if (current.syncing) return current.syncing;
     current.syncing = (async () => {
       await history(current, id, currentTab, 'after', e, true);
       if (!valid(e)) return;
       await statuses(current, id, currentTab, e);
+      if (valid(e)) await readActivity(current, id, currentTab, e);
       if (current.pendingQuestionRefresh) {
         const refreshed = await questions(current, id, currentTab, false, e, null, true, true);
         if (refreshed && valid(e)) current.pendingQuestionRefresh = false;
@@ -712,6 +752,7 @@ export function createConversationState({
         };
         priorMin = min;
         applyMessages(current, id, data);
+        void readActivity(current, id, currentTab, e);
         current.gap = data.items.some(row => row.id <= gap.afterId) || !data.nextCursor ? null : {
           ...gap,
           cursor: data.nextCursor
@@ -753,6 +794,7 @@ export function createConversationState({
         };
         priorMin = min;
         applyMessages(current, id, data);
+        void readActivity(current, id, currentTab, e);
         current.messageCursor = data.nextCursor ?? null;
         if (current.gap && (data.items.some(row => row.id <= current.gap.afterId) || !data.nextCursor)) current.gap = null;
         emit();
