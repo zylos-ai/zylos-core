@@ -23,6 +23,7 @@ import { ChatAnswers } from '../../src/lib/chat/answers.js';
 import { ChatAnswerDelivery } from '../../src/lib/chat/delivery.js';
 import { handleChatConversations } from '../../src/lib/chat/write-routes.js';
 import { handleChatHistory } from '../../src/lib/chat/history-routes.js';
+import { ChatActivity } from '../../src/lib/chat/activity.js';
 import { handleChatAnswers } from '../../src/lib/chat/answer-routes.js';
 import { handleChatSettings } from '../../src/lib/chat/settings.js';
 import { acceptDelivery } from '../../src/lib/chat/channel.js';
@@ -111,6 +112,8 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   const sender = new ChatSender({ conversations, c4Reader: reader, attachments, loadCore: async () => core, zylosDir: zylos });
   let answers = new ChatAnswers({ store }), delivery = new ChatAnswerDelivery({ answers, sender, c4Reader: reader });
   const history = new ChatHistory({ c4Reader: reader, conversations, attachments });
+  // The real activity reader on the same C4 history and Dashboard event store, as the server wires it.
+  const activity = new ChatActivity({ history, store });
   const query = createQueryHandlers(c4);
   const runC4Db = async args => {
     const argument = key => args.includes(key) ? args[args.indexOf(key) + 1] : undefined;
@@ -142,7 +145,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (await auth.handle(req, res, url)) return;
       if (url.pathname.startsWith('/fleet/') && proxy && await proxy.handle(req, res, url)) return;
-      const common = { auth, config, conversations, sender, history, answers, delivery, attachments, readMode, instanceTz };
+      const common = { auth, config, conversations, sender, history, activity, answers, delivery, attachments, readMode, instanceTz };
       if (await handleChatSettings(req, res, url, common)) return;
       if (attachments && await handleChatAttachments(req, res, url, common)) return;
       if (await handleChatConversations(req, res, url, common)) return;
