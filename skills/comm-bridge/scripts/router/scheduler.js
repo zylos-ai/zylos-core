@@ -171,6 +171,7 @@ export function createRouter(dependencies, configuration = {}) {
     state.round++;
     const seconds = Math.floor(now() / 1000);
     deps.db.expireTimedOutControls(seconds);
+    deps.sweepDeliveryWaits?.();
     if (now() - lastCleanup >= options.cleanupIntervalMs) {
       deps.db.cleanupControlQueue(seconds - options.retentionDays * 86400); lastCleanup = now();
     }

@@ -10,11 +10,19 @@ export async function publishBootstrapReady(payload, { env = process.env, enqueu
   if (!env.ZYLOS_RUN_ID || typeof payload.session_id !== 'string' || !payload.session_id) return { skipped: true, reason: 'identity_missing' };
   const scope = await scopeReader(env);
   await identityReader(scope, { env });
-  let startupControlIds = [];
-  try { startupControlIds = (await enqueue(payload.source)).startupControlIds ?? []; }
-  catch (error) { console.error(`[bootstrap-ready] enqueue failed: ${error.message}`); }
+  let startupControlIds = [], startupPrompt;
+  try {
+    const result = await enqueue(payload.source);
+    startupControlIds = result.startupControlIds ?? [];
+    startupPrompt = result.skipped === true
+      ? { state: 'skipped', reason: result.reason }
+      : { state: startupControlIds.length ? 'enqueued' : 'failed' };
+  } catch (error) {
+    startupPrompt = { state: 'failed' };
+    console.error(`[bootstrap-ready] enqueue failed: ${error.message}`);
+  }
   if (!Array.isArray(startupControlIds) || !startupControlIds.every(id => Number.isSafeInteger(id) && id > 0)) throw new Error('Invalid startup control ids');
-  const record = { runId: env.ZYLOS_RUN_ID, sessionId: payload.session_id, startupControlIds, ts: now() };
+  const record = { runId: env.ZYLOS_RUN_ID, sessionId: payload.session_id, startupControlIds, startupPrompt, ts: now() };
   fs.mkdirSync(scope.dir, { recursive: true });
   const file = path.join(scope.dir, 'current-session.json');
   const temporary = `${file}.${randomUUID()}.tmp`;
