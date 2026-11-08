@@ -34,9 +34,10 @@ function setup({ phone = true } = {}) {
   };
   // Back as the browser does it: the entry moves first, then the page hears popstate.
   const goBack = () => { index--; return drawer.popstate(); };
+  const goForward = () => { index++; return drawer.popstate(); };
   const drawer = createSettingsDrawer({ layout, nav, toggle, closeButton, scrim, window });
   return { document, docListeners, header, panel, other, layout, nav, scrim, body, toggle, closeButton, sections, drawer, entries,
-    window, media, goBack, backs: () => backs, index: () => index, setMedia(on) { media.matches = on; mediaListener?.(); } };
+    window, media, goBack, goForward, backs: () => backs, index: () => index, setMedia(on) { media.matches = on; mediaListener?.(); } };
 }
 const isOpen = page => page.layout.classList.contains('wb-set-drawer-open');
 
@@ -128,11 +129,37 @@ test('forward onto an old drawer entry keeps settings as it is only while settin
   assert.equal(page.drawer.popstate(), false, 'from another page: the page navigates to settings');
 });
 
-test('destroy closes the drawer and stops listening', async () => {
+test('Forward onto the entry an in-page close left behind, then Back off it, stays on the same settings page', async () => {
   const page = setup();
   await page.toggle.dispatch('click');
-  page.drawer.destroy();
-  assert.equal(isOpen(page), false); assert.equal(page.docListeners.has('keydown'), false); assert.equal(page.body.inert, false);
+  await page.closeButton.dispatch('click');
+  assert.equal(page.backs(), 1);
+  assert.equal(page.goBack(), true, 'the step back the close asked for is the drawer\'s');
+  assert.equal(page.goForward(), true, 'Forward onto the old entry: same page');
+  assert.equal(isOpen(page), false, 'the drawer stays closed');
+  assert.equal(page.goBack(), true, 'Back off it again: same page, settings is not read again');
+  assert.equal(page.goBack(), false, 'one more Back is ordinary navigation');
+  assert.equal(page.index(), 0);
+
+  const far = setup();
+  await far.toggle.dispatch('click');
+  await far.closeButton.dispatch('click');
+  far.goBack(); far.goForward();
+  far.entries[1].url = 'https://host/memory';
+  assert.equal(far.goBack(), false, 'Back off it to another address is the page\'s navigation');
+});
+
+test('opening the drawer while standing on its old entry reuses that entry', async () => {
+  const page = setup();
+  await page.toggle.dispatch('click');
+  await page.closeButton.dispatch('click');
+  page.goBack(); page.goForward();
+  await page.toggle.dispatch('click');
+  assert.equal(isOpen(page), true);
+  assert.equal(page.entries.length, 3, 'no second drawer entry');
+  assert.equal(page.goBack(), true, 'Back closes the drawer on the same page');
+  assert.equal(isOpen(page), false);
+  assert.equal(page.goBack(), false, 'one more Back is ordinary navigation');
 });
 
 test('in the settings page, choosing a section from the open drawer switches to it and closes the drawer', async () => {

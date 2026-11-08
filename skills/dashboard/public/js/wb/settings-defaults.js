@@ -1,6 +1,6 @@
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=103';
-import { settingsCard } from './settings.js?v=103';
+import { settingsCard } from './settings.js?v=104';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {

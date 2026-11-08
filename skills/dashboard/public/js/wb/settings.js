@@ -1,5 +1,5 @@
 import { element, icon } from './plain-text.js?v=103';
-import { createSettingsDrawer } from './settings-drawer.js?v=103';
+import { createSettingsDrawer } from './settings-drawer.js?v=104';
 
 export const settingsSections = ['defaults', 'pricing', 'keys', 'fleet', 'observer', 'ui'];
 const sectionIcons = { defaults: 'bot', pricing: 'dollar', keys: 'key', fleet: 'fleet', observer: 'term', ui: 'sliders' };
