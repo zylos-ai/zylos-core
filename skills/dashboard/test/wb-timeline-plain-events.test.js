@@ -10,6 +10,11 @@ import { createTimelineLoader, renderTimeline } from '../public/js/wb/detail-tim
 import { createGroupDetail } from '../public/js/wb/detail.js';
 import { recentRows, recentWindow } from '../public/js/wb/timeline-rows.js';
 import { repeatRow } from '../public/js/wb/detail-overview.js';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+// Times are written in the instance zone, never the browser's. Chatham (UTC+12:45/+13:45) differs from every zone
+// these tests run under, so an expectation in the instance zone fails if the page falls back to the browser zone.
+const ZONE = 'Pacific/Chatham';
+setInstanceZone(ZONE);
 
 // Boundary: a real Store (private SQLite in a temporary directory) and the real run listing answer the
 // timeline and run reads; the real loader, group detail and renderers draw into an injected DOM. The
@@ -91,7 +96,7 @@ test('600 release diagnostics: plain view shows only the plain events newest fir
   renderTimeline(root, loader, { document, t: tr, level });
   assert.deepEqual(labels(root), ['stop', 'release', 'post_tool_use', 'pre_tool_use', 'user_prompt_submit', 'session_start'],
     'the 600 releases are one row, between the events around them');
-  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE });
   assert.deepEqual(repeats(root), [tr('wb.timeline.repeated', { count: 600, from: short(at(4)), to: short(at(4 + 599 * 0.1)) })]);
 
   level = 'plain';
@@ -131,7 +136,7 @@ test('recent activity is not taken over by diagnostics and follows the technical
   assert.match(root.textContent, /wb\.detail\.fullTimeline \{"events":605,"runs":1\}/);
 });
 
-const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE });
 const waitFor = async condition => { for (let i = 0; i < 50 && !condition(); i++) await new Promise(resolve => setImmediate(resolve)); };
 function openDetail(t, f, level) {
   const document = createDocument(), root = document.createElement('aside');

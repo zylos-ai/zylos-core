@@ -10,6 +10,11 @@ import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
 import { recentWindow } from '../public/js/wb/timeline-rows.js';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+// Times are written in the instance zone, never the browser's. Chatham (UTC+12:45/+13:45) differs from every zone
+// these tests run under, so an expectation in the instance zone fails if the page falls back to the browser zone.
+const ZONE = 'Pacific/Chatham';
+setInstanceZone(ZONE);
 
 // Direct product imports with injected DOM, fetch, clock, timers, clipboard and
 // confirmation. Run for detail rendering, request ownership or form changes;
@@ -130,8 +135,8 @@ test('event, end reason and time labels are plain words in plain view and raw va
   assert.equal(endReasonLabel('ttl', 'technical', t), 'ttl');
   const iso = '2026-11-06T10:20:30.000Z';
   assert.equal(displayTime(iso, 'technical'), iso);
-  assert.equal(displayTime(iso, 'plain', 'en-US'), new Date(iso).toLocaleString('en-US'));
-  assert.equal(displayTime('2026-11-06 10:20:30', 'plain', 'en-US'), new Date(iso).toLocaleString('en-US'));
+  assert.equal(displayTime(iso, 'plain', 'en-US'), new Date(iso).toLocaleString('en-US', { timeZone: ZONE }));
+  assert.equal(displayTime('2026-11-06 10:20:30', 'plain', 'en-US'), new Date(iso).toLocaleString('en-US', { timeZone: ZONE }));
 });
 
 test('overview recent activity and evidence are plain in plain view and raw only in technical detail', () => {
@@ -144,8 +149,8 @@ test('overview recent activity and evidence are plain in plain view and raw only
   assert.match(recent, /wb\.event\.wait_health/); assert.match(recent, /wb\.event\.reclaim_done/);
   assert.doesNotMatch(recent, /wait_health ·|reclaim_done$|T10:20:30/);
   const times = allNodes(root.children[1]).filter(node => node.tagName === 'TIME');
-  assert.equal(times[0].textContent, new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
-  assert.equal(times[0].title, new Date(iso).toLocaleString());
+  assert.equal(times[0].textContent, new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE }));
+  assert.equal(times[0].title, new Date(iso).toLocaleString(undefined, { timeZone: ZONE }));
   assert.equal(allNodes(root).some(node => node.tagName === 'DETAILS'), false);
   assert.doesNotMatch(root.textContent, /no_rule|wb\.detail\.evidence/);
   renderOverview(root, current, data, { document, t, level: 'technical' });
@@ -164,9 +169,9 @@ test('recent activity lists newest first, dates events from another day, and cou
     totalEvents: 2, totalRuns: 1, unattributed: 1 };
   renderOverview(root, row('a', { state: { kind: 'idle' } }), data, { document, t, level: 'plain', currentTime: now });
   const times = allNodes(root.children[1]).filter(node => node.tagName === 'TIME');
-  assert.deepEqual(times.map(node => node.title), [at(1), at(2), at(30)].map(value => new Date(value).toLocaleString()), 'newest first');
-  assert.equal(times[0].textContent, new Date(at(1)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }), 'today shows the time');
-  assert.equal(times[2].textContent, new Date(at(30)).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }), 'another day shows the date too');
+  assert.deepEqual(times.map(node => node.title), [at(1), at(2), at(30)].map(value => new Date(value).toLocaleString(undefined, { timeZone: ZONE })), 'newest first');
+  assert.equal(times[0].textContent, new Date(at(1)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE }), 'today shows the time');
+  assert.equal(times[2].textContent, new Date(at(30)).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: ZONE }), 'another day shows the date too');
   assert.match(root.children[1].textContent, /wb\.detail\.fullTimeline \{"events":3,"runs":1\}/, 'the count includes events outside a run');
   assert.equal(groupEventCount({ totalEvents: 17, unattributed: 4 }), 21);
   assert.equal(groupEventCount({}), 0);
@@ -190,13 +195,13 @@ test('timeline run rows, events and messages hide run ids and raw codes in plain
     filter: 'all', totalRuns: 1 }, setFilter() {}, collapse() {} };
   const document = createDocument(), root = document.createElement('div');
   renderTimeline(root, loader, { document, t, level: 'plain' });
-  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE });
   const toggle = allNodes(root).find(node => node.attributes?.['aria-expanded'] != null);
   assert.equal(toggle.textContent, `${short(start)} – ${short(end)}wb.endReason.manual_restartwb.timeline.count {"count":2}`);
-  assert.ok(allNodes(toggle).some(node => node.title === `${new Date(start).toLocaleString()} – ${new Date(end).toLocaleString()}`), 'the full times stay in the tooltip');
+  assert.ok(allNodes(toggle).some(node => node.title === `${new Date(start).toLocaleString(undefined, { timeZone: ZONE })} – ${new Date(end).toLocaleString(undefined, { timeZone: ZONE })}`), 'the full times stay in the tooltip');
   const event = allNodes(root).find(node => node.classList.contains('wb-timeline-event'));
   assert.equal(event.textContent, short(at) + 'wb.event.reclaim_done');
-  assert.equal(allNodes(event).find(node => node.tagName === 'TIME').title, new Date(at).toLocaleString());
+  assert.equal(allNodes(event).find(node => node.tagName === 'TIME').title, new Date(at).toLocaleString(undefined, { timeZone: ZONE }));
   assert.doesNotMatch(root.textContent, /run-0123456789abcdef|reclaim_done$|T10:30:00|manual_restart(?!wb)/);
   assert.equal(allNodes(root).find(node => node.classList.contains('wb-timeline-message')).textContent, short(at) + 'wb.timeline.received');
   renderTimeline(root, loader, { document, t, level: 'technical' });
@@ -550,7 +555,7 @@ test('group action successes are translated, known non-submission keeps its reas
     'wb.actions.notSubmitted · zylos_dir_mismatch');
   assert.equal(groupActionText({ submission: 'not_submitted', error: { code: 'INSTANCE_ROOT_MISMATCH', message: 'different instance' } }, t),
     'wb.actions.notSubmitted · INSTANCE_ROOT_MISMATCH · different instance');
-  assert.equal(formatStartedAt(1000, 'en'), new Date(1000000).toLocaleString('en'));
+  assert.equal(formatStartedAt(1000, 'en'), new Date(1000000).toLocaleString('en', { timeZone: ZONE }));
   assert.notEqual(formatStartedAt(1000, 'en'), '1000');
   assert.equal(formatStartedAt(null, 'en'), null);
 });

@@ -5,6 +5,11 @@ import { eventChip, eventTypesFor, showsEvent, newestFirst, mergeRepeats, recent
   plainEventTypes, lifecycleEventTypes, toolEventTypes } from '../public/js/wb/timeline-rows.js';
 import { repeatRow } from '../public/js/wb/detail-overview.js';
 import { chipNames } from '../public/js/wb/detail-timeline.js';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+// Times are written in the instance zone, never the browser's. Chatham (UTC+12:45/+13:45) differs from every zone
+// these tests run under, so an expectation in the instance zone fails if the page falls back to the browser zone.
+const ZONE = 'Pacific/Chatham';
+setInstanceZone(ZONE);
 
 // Direct product imports with an injected DOM; no I/O, timers or child processes.
 // Run for timeline classification, ordering or repeat-merging changes.
@@ -75,7 +80,7 @@ test('a merged row shows the newest event once with how many times and from when
   const [group] = mergeRepeats(newestFirst(Array.from({ length: 600 }, (_, i) => row(ev('release', i, i + 1, { category: 'diagnostic' })))));
   assert.equal(group.count, 600);
   const node = repeatRow(document, group, { level: 'technical', t });
-  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE });
   assert.equal(node.classList.contains('wb-ev-merged'), true);
   const repeat = allNodes(node).find(child => child.classList.contains('wb-ev-rep'));
   assert.equal(repeat.textContent, t('wb.timeline.repeated', { count: 600, from: short(at(0)), to: short(at(599)) }));
@@ -95,7 +100,7 @@ test('recent activity: repeats merge across the whole read, five rows show, and 
   assert.deepEqual(groups.map(group => [group.newest.event.event_type, group.count, Boolean(group.open)]),
     [['idle', 70, false], ['release', 30, true]], 'the releases reach the end of a full read, so more may precede it');
   const open = allNodes(repeatRow(document, groups[1], { t })).find(child => child.classList.contains('wb-ev-rep'));
-  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE });
   assert.equal(open.textContent, t('wb.timeline.repeatedUntil', { count: 30, to: short(at(39)) }), 'a lower bound and no first time');
   // A read shorter than its window is everything there is: no group is open.
   assert.equal(recentRows(events.slice(-50), { window: 100 }).some(group => group.open), false);

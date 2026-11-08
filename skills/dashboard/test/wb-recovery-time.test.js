@@ -5,6 +5,11 @@ import { instanceStrip } from '../public/js/wb/instance-strip.js';
 import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { waitText } from '../public/js/wb/view-mode.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+// Times are written in the instance zone, never the browser's. Chatham (UTC+12:45/+13:45) differs from every zone
+// these tests run under, so an expectation in the instance zone fails if the page falls back to the browser zone.
+const ZONE = 'Pacific/Chatham';
+setInstanceZone(ZONE);
 
 // Direct product imports with injected DOM and clock. Run for recovery-time,
 // instance strip, attention bar or waiting text changes; skip collectors and
@@ -13,7 +18,7 @@ const t = (key, values = {}) => key + Object.values(values).join(':');
 const now = 1_800_000_000_000;
 const future = now / 1000 + 600;
 // The strip and attention bar show recovery as a short clock time.
-const clock = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const clock = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: ZONE });
 const cases = [['zero', 0], ['null', null], ['past', now / 1000 - 600], ['future', future]];
 
 test('recovery time is known only for a future epoch second', () => {
@@ -54,7 +59,7 @@ test('waiting text shows an unknown recovery time unless cooldown is in the futu
     const wait = { kind: 'rate_wait', cooldownUntil, pendingCount: 2 };
     const translated = waitText(wait, 'plain', t, now), fallback = waitText(wait, 'plain', undefined, now);
     if (name === 'future') {
-      const time = new Date(future * 1000).toLocaleTimeString();
+      const time = new Date(future * 1000).toLocaleTimeString(undefined, { timeZone: ZONE });
       assert.equal(translated, 'wb.wait.rate_wait' + time + ':2');
       assert.match(fallback, new RegExp(time.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' 恢复'));
     } else {
