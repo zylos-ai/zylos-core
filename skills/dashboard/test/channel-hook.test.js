@@ -135,3 +135,22 @@ test('Dashboard hook reports the first safe structural or framing reason without
     assert.equal(result.message.includes(marker), false);
   }
 });
+
+
+test('Dashboard hook explains when an interrupt does not identify an interactive block', () => {
+  for (const blockId of ['missing_target', 'plain_context']) {
+    const envelope = structuredClone(fixtures.valid.find(item => item.name === 'confirmation').envelope);
+    envelope.blocks.push({ id: 'plain_context', type: 'markdown', schemaVersion: 1,
+      data: { text: 'Context only' }, fallbackText: 'Context only' });
+    envelope.interrupt.blockId = blockId;
+    const content = CONTENT_PREFIX + JSON.stringify(envelope);
+    const input = wire(content), before = JSON.stringify(input);
+    assert.equal(parseC4Content(content).kind, 'invalid');
+    const result = evaluateBeforeSend(input);
+    assert.equal(result.decision, 'abort');
+    assert.equal(validateHookOutput(result), true);
+    assert.match(result.message, /interrupt\.blockId must identify an interactive block/);
+    assert.doesNotMatch(result.message, /register|missing_target|plain_context/);
+    assert.equal(JSON.stringify(input), before);
+  }
+});

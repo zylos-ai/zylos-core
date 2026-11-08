@@ -169,7 +169,8 @@ test('attachment hook reserves registration advice for invalid attachment data a
     content(block(registered, { status: 'pending' }))]) {
     const result = f.hook(value);
     assert.equal(result.decision, 'abort');
-    assert.equal(result.message, 'Invalid Dashboard structured content.');
+    assert.match(result.message, /^Invalid Dashboard structured content/);
+    assert.doesNotMatch(result.message, /register/);
   }
   for (const data of [{ nameSnapshot: registered.name }, { attachmentId: registered.id, nameSnapshot: registered.name, url: 'https://example.invalid/file' },
     { attachmentId: 'unknown_id', nameSnapshot: registered.name }]) {
