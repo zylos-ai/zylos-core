@@ -1,10 +1,12 @@
+import { createUploadTray } from './chat-upload-tray.js?v=1';
+import { createChatAttachment } from './chat-attachments.js?v=1';
 import { element, icon } from './plain-text.js?v=94';
 import { asDate } from './conversation-time.js?v=99';
 import { channelIcon } from './board.js?v=98';
-import { createConversationState } from './conversation-state.js?v=102';
+import { createConversationState } from './conversation-state.js?v=103';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=102';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=102';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=103';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -117,6 +119,20 @@ export function mountConversationPage({
     document,
     t
   });
+  let uploadRedrawQueued = false;
+  const uploadTray = createUploadTray({ fetch: fetcher,
+    createXHR: () => new view.XMLHttpRequest(),
+    createFormData: () => new view.FormData(),
+    url: view?.URL ?? globalThis.URL,
+    onUnauthorized: source => { const scope = draftScope(); if (scope) state.clearDrafts({ ...scope, instance: source.instance }); },
+    onChange: () => {
+      if (uploadRedrawQueued || destroyed) return;
+      uploadRedrawQueued = true;
+      queueMicrotask(() => { uploadRedrawQueued = false; if (!destroyed) redraw(); });
+    }
+  });
+  const uploadScope = s => s.canWrite ? { instance: draftScope()?.instance ?? String(typeof identity === 'function' ? identity() : identity ?? 'local'),
+    conversationId: s.selectedId, uploadsUrl: endpoint(`/api/chat/conversations/${encodeURIComponent(s.selectedId)}/uploads`) } : null;
   const nameOf = (row, external = false) => row?.displayName ?? row?.display_name
     ?? (external ? row?.sessionGroup ?? row?.session_group : null) ?? t('chat.unnamed');
   const channelOf = row => row?.channel ?? (row?.sessionGroup ?? row?.session_group ?? '').split(':')[0] ?? '';
@@ -310,8 +326,29 @@ export function mountConversationPage({
   const send = action('send', () => {}, 'send', 'wb-btn wb-btn-primary');
   send.type = 'submit';
   const hint = node('p', t('chat.page.sendHint'), 'conversation-compose-hint');
-  composeBox.append(input, send);
-  composer.append(receipt, composeBox, hint);
+  const attach = action('attach', () => fileInput.click(), 'plus');
+  const fileInput = node('input'); fileInput.type = 'file'; fileInput.multiple = true;
+  fileInput.hidden = true; fileInput.dataset.action = 'chooseFiles'; fileInput.setAttribute('aria-label', t('chat.attach'));
+  const tray = node('div', undefined, 'conversation-upload-tray');
+  const uploadNotice = node('p', '', 'chat-notice conversation-upload-notice'); uploadNotice.setAttribute('role', 'status');
+  let trayResources = [];
+  const addFiles = files => {
+    if (!currentSnapshot?.canWrite || currentSnapshot.sending || currentSnapshot.retryRequired && !currentSnapshot.canRetry) return;
+    void uploadTray.acceptFiles(Array.from(files));
+  };
+  fileInput.addEventListener('change', () => { addFiles(fileInput.files || []); fileInput.value = ''; });
+  input.addEventListener('paste', event => {
+    const files = Array.from(event.clipboardData?.files || []);
+    if (files.length && currentSnapshot?.canWrite && !currentSnapshot.sending) { event.preventDefault(); addFiles(files); }
+  });
+  composer.addEventListener('dragover', event => {
+    if (currentSnapshot?.canWrite && Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault();
+  });
+  composer.addEventListener('drop', event => {
+    if (currentSnapshot?.canWrite && event.dataTransfer?.files?.length) { event.preventDefault(); addFiles(event.dataTransfer.files); }
+  });
+  composeBox.append(attach, input, send, fileInput);
+  composer.append(receipt, tray, uploadNotice, composeBox, hint);
   input.addEventListener('input', () => state.setInput(input.value));
   input.addEventListener('keydown', event => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.isComposing) {
@@ -349,9 +386,11 @@ export function mountConversationPage({
   }
   async function requestSend() {
     const selected = selectedKey;
-    await state.send({
-      retry: currentSnapshot.retryRequired
-    });
+    const captured = uploadTray.capture();
+    const sent = await state.send({ retry: currentSnapshot.retryRequired, attachments: captured.ids });
+    if (sent?.stored === true && sent.preserveInput !== true) uploadTray.completeStored(captured);
+    const nextScope = uploadScope(state.snapshot());
+    if (captured.scope && nextScope && captured.scope.instance === nextScope.instance && captured.scope.conversationId !== nextScope.conversationId) uploadTray.moveScope(captured.scope, nextScope);
     if (!destroyed && selectedKey === selected && state.snapshot().receipt?.stored === true) {
       stream.scrollTop = stream.scrollHeight;
       unread = 0;
@@ -414,6 +453,7 @@ export function mountConversationPage({
       row,
       t,
       showTechnicalDetails: technicalDetails() === true,
+      attachmentContext: { conversationId: s.selectedId, endpoint, fetch: fetcher, external: s.tab === 'external', onLayout: preserveAttachmentLayout },
       renderQuestion: ({
         envelope,
         block
@@ -456,6 +496,7 @@ export function mountConversationPage({
       author,
       questions,
       resource: content,
+      attachmentKey: JSON.stringify(row.attachments || []),
       content: row.content
     };
     patchMessage(record, row, s);
@@ -614,6 +655,14 @@ export function mountConversationPage({
       anchorTop
     };
   }
+  function preserveAttachmentLayout(change) {
+    if (destroyed) return;
+    const before = captureHistory();
+    change();
+    if (before.pinned) stream.scrollTop = stream.scrollHeight;
+    else if (before.anchor?.node.isConnected) stream.scrollTop = before.oldTop + before.anchor.node.getBoundingClientRect().top - before.anchorTop;
+    scheduleFit();
+  }
   function reconcileMessages(s, switched, before) {
     const {
       oldTop,
@@ -642,7 +691,7 @@ export function mountConversationPage({
         previousDay = day;
       }
       let record = messages.get(id);
-      if (record && record.content !== row.content) {
+      if (record && (record.content !== row.content || record.attachmentKey !== JSON.stringify(row.attachments || []))) {
         record.resource?.destroy?.();
         record.node.remove();
         messages.delete(id);
@@ -756,6 +805,7 @@ export function mountConversationPage({
     input.setAttribute('aria-label', t('chat.input'));
     renameInput.setAttribute('aria-label', t('chat.name'));
     if (s.blocked) {
+      uploadTray.clear();
       input.value = '';
       renameInput.value = '';
       list.replaceChildren();
@@ -946,7 +996,29 @@ export function mountConversationPage({
     fitInput();
     send.dataset.action = s.retryRequired ? 'retry' : 'send';
     text(send.label, t(s.retryRequired ? 'chat.retry' : 'chat.send'));
-    send.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry || !s.input.trim();
+    void uploadTray.setScope(uploadScope(s));
+    const upload = uploadTray.snapshot();
+    const limits = upload.config ? t('chat.upload.limits').replace('{size}', String(upload.config.maxUploadBytes / (1024 * 1024))).replace('{count}', String(upload.config.maxAttachments)) : '';
+    attach.title = limits;
+    text(hint, [t('chat.page.sendHint'), limits].filter(Boolean).join(' · '));
+    attach.hidden = !s.canWrite;
+    attach.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry;
+    fileInput.disabled = attach.disabled;
+    for (const resource of trayResources) resource.destroy();
+    trayResources = [];
+    tray.replaceChildren();
+    for (const item of upload.items) {
+      const resource = createChatAttachment({ document, attachment: item, t, mode: 'tray', localUrl: item.previewUrl,
+        onRemove: () => uploadTray.remove(item.localId), onRetry: () => { void uploadTray.retry(item.localId); } });
+      resource.node.dataset.uploadId = item.localId;
+      for (const control of resource.node.querySelectorAll('button')) if (s.sending || s.retryRequired && !s.canRetry) control.disabled = true;
+      tray.append(resource.node); resource.mount(); trayResources.push(resource);
+    }
+    tray.hidden = !upload.items.length;
+    const uploadError = upload.error || (s.error === 'chat_attachment_unavailable' ? s.error : null);
+    uploadNotice.hidden = !uploadError;
+    text(uploadNotice, uploadError ? t('chat.upload.' + uploadError) : '');
+    send.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry || !uploadTray.isSendable(s.input);
     receipt.hidden = !showReceipt;
     receipt.dataset.deliveryState = outcome || '';
     const receiptKey = outcome === 'not_stored' && s.mode === 'single'
@@ -993,9 +1065,11 @@ export function mountConversationPage({
       state.close();
     },
     redraw,
-    clearDrafts(scope) { state.clearDrafts(scope); },
+    clearDrafts(scope) { uploadTray.clearForAuthentication(scope?.instance ? { instance: scope.instance } : undefined); state.clearDrafts(scope); },
     destroy() {
       destroyed = true;
+      uploadTray.destroy();
+      for (const resource of trayResources) resource.destroy();
       view?.removeEventListener('resize', scheduleFit);
       if (fitFrame !== null) {
         view?.cancelAnimationFrame(fitFrame);

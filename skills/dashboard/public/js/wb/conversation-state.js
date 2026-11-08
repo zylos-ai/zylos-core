@@ -495,7 +495,8 @@ export function createConversationState({
       tab: currentTab,
       limit: 50,
       direction,
-      cursor
+      cursor,
+      ...(currentTab === 'mine' && direction === 'after' ? { recheckIds: current.messages.filter(row => row.attachments?.some(item => !item.available)).slice(-100).map(row => row.id).join(',') || undefined } : {})
     })}`);
     if (!valid(e)) return null;
     if (!Array.isArray(data?.items)) throw {
@@ -508,6 +509,8 @@ export function createConversationState({
     const known = new Set(current.messages.map(row => row.id));
     const added = data.items.filter(row => !known.has(row.id));
     current.messages = merge(current.messages, data.items).sort((a, b) => a.id - b.id);
+    const attachmentUpdates = new Map((data.attachmentUpdates || []).map(row => [row.id, row.attachments]));
+    current.messages = current.messages.map(row => attachmentUpdates.has(row.id) ? { ...row, attachments: attachmentUpdates.get(row.id) } : row);
     const newer = added.filter(row => row.id > previousNewest);
     if (newer.some(row => row.direction === 'out')) fastUntil = 0;
     if (trackQuestions && newer.length) current.pendingQuestionRefresh = true;
@@ -809,14 +812,16 @@ export function createConversationState({
     }, epoch, current);
   }
   async function send({
-    retry = false
+    retry = false, attachments = []
   } = {}) {
     const current = cell();
-    if (!snapshot().canWrite || !current || current.sending || !current.input.trim() || current.retryRequired && (!retry || current.receipt?.retryAllowed !== true)) return;
+    if (!snapshot().canWrite || !current || current.sending || (!current.input.trim() && !attachments.length) || current.retryRequired && (!retry || current.receipt?.retryAllowed !== true)) return;
     const e = epoch,
       id = selectedId,
       currentTab = tab,
-      text = current.input;
+      text = current.input,
+      attachmentIds = [...attachments];
+    let outcome = null;
     accelerate();
     current.sending = true;
     current.error = null;
@@ -828,6 +833,7 @@ export function createConversationState({
         method: 'POST',
         body: {
           content: text,
+          ...(attachmentIds.length ? { attachments: attachmentIds } : {}),
           ...(retry ? {
             retry: true
           } : {})
@@ -837,6 +843,7 @@ export function createConversationState({
         code: 'chat_invalid_response'
       };
       if (destroyed || sendIdentity !== openedIdentity || blocked) return;
+      outcome = result;
       current.receipt = result;
       current.retryRequired = result.stored === null;
       if (!result.preserveInput && result.stored === true && current.input === text) current.input = '';
@@ -892,6 +899,7 @@ export function createConversationState({
       current.sending = false;
       if (active && sendIdentity === openedIdentity && !blocked) emit();
     }
+    return outcome;
   }
   return {
     snapshot,

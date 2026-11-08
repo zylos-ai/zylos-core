@@ -1,5 +1,6 @@
 import { element } from './plain-text.js?v=94';
-import { renderChatContent } from './chat-blocks.js?v=102';
+import { renderChatContent } from './chat-blocks.js?v=103';
+import { createChatAttachment } from './chat-attachments.js?v=1';
 import { applyChatView } from './chat-view.js?v=102';
 import { conversationChartResource } from './conversation-charts.js?v=102';
 export function conversationErrorKey(code) {
@@ -31,22 +32,31 @@ export function renderConversationContent({
   t,
   renderQuestion,
   supportsBlock,
+  attachmentContext = {},
   showTechnicalDetails = false
 }) {
   const resources = [];
+  let hasCharts = false;
   const content = renderChatContent({
     document,
     row,
     t,
     renderQuestion,
     supportsBlock,
+    external: attachmentContext.external === true,
     showTechnicalDetails,
     layout: (root, view, blockNodes) => {
       applyChatView(document, root, view, blockNodes);
       root.classList.add('conversation-composed-content');
     },
     renderChart({ block, fallback }) {
+      hasCharts = true;
       const resource = conversationChartResource({ document, block, fallback, t });
+      resources.push(resource);
+      return resource.node;
+    },
+    renderAttachment({ attachment }) {
+      const resource = createChatAttachment({ document, attachment, context: attachmentContext, t });
       resources.push(resource);
       return resource.node;
     }
@@ -70,7 +80,7 @@ export function renderConversationContent({
       text.replaceWith(formatted);
     }
   }
-  if (resources.length) content.classList.add('conversation-chart-content');
+  if (hasCharts) content.classList.add('conversation-chart-content');
   content.mount = () => { for (const resource of resources) resource.mount(); };
   content.destroy = () => { for (const resource of resources) resource.destroy(); };
   return content;
