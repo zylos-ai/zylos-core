@@ -220,11 +220,16 @@ export function buildSteps(events, round, { settling = false } = {}) {
   }
   if (steps.length > STEPS_PER_ROUND) { steps = steps.slice(-STEPS_PER_ROUND); truncated = true; }
   const stopped = round.turns.at(-1)?.stopped === true;
+  // Code-mode commands that yielded and that no `wait` on their cell saw finish (the model may poll in a new `exec`).
+  const unread = new Set(cells.values());
   for (const step of steps) {
     if (step.kind === 'say' || step.end !== null) continue;
-    // A Codex subagent's end is recorded only when the parent waits for it or is told it finished; when neither
-    // was seen, the subtask is taken to have ended with the round.
-    if (end !== null && !settling) { step.status = stopped ? 'stopped' : step.codexSubagent ? 'done' : 'incomplete'; step.end = end; }
+    // A Codex subagent's end is recorded only when the parent waits for it or is told it finished, and a yielded
+    // command's only when a `wait` on its cell reads it; when that was not seen, it is taken to have ended with the round.
+    if (end !== null && !settling) {
+      step.status = stopped ? 'stopped' : step.codexSubagent || unread.has(step) ? 'done' : 'incomplete';
+      step.end = end;
+    }
     else step.status = 'running';
   }
   return { steps, truncated };

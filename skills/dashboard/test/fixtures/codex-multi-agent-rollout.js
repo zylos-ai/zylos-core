@@ -179,23 +179,18 @@ export function cellEndingAs(header) {
 }
 
 /**
- * The recorded v1 turn, with its wait exec yielding once and its result read by a `wait` on that cell. The yield and
- * the wait are built after the recorded group C lines (a running result is a string, the wait names only `cell_id`,
- * `yield_time_ms` and `max_tokens`); the finishing result is the recorded v1 wait result.
+ * Group C's recorded exec and its yield, after which the model polls in a new `exec` (its script calling
+ * `tools.write_stdin`) instead of waiting on the old cell, so no `wait` ever sees cell 1 finish. The new exec and its
+ * result are built from the recorded exec call and finishing result (new call id, script text redacted the same way).
  */
-export function v1YieldedWaitTurn(startMs) {
-  const lines = v1ParentTurn(startMs);
-  const index = lines.findIndex(line => line.payload.call_id === V1_WAIT_EXEC && line.payload.type === 'custom_tool_call_output');
-  const recorded = lines[index], at = Date.parse(recorded.timestamp);
-  const yielded = { ...clone(recorded), timestamp: new Date(at - 300).toISOString() };
-  yielded.payload.output = clone(CELL_C_LINES[1]).payload.output.replace('cell ID 1', 'cell ID 2');
-  const call = clone(CELL_C_LINES[3]);
-  call.timestamp = new Date(at - 200).toISOString();
-  call.payload = { ...call.payload, call_id: 'call_cell_wait', arguments: JSON.stringify({ cell_id: '2', yield_time_ms: 10000, max_tokens: 30000 }) };
-  const result = clone(CELL_C_LINES[4]);
-  result.timestamp = recorded.timestamp;
-  result.payload = { ...result.payload, call_id: 'call_cell_wait', output: recorded.payload.output };
-  return [...lines.slice(0, index), yielded, call, result, ...lines.slice(index + 1)];
+export function cellPolledInNewExec() {
+  const [exec, yielded] = clone(CELL_C_LINES);
+  const call = clone(CELL_C_LINES[0]), result = clone(CELL_C_LINES[4]);
+  call.timestamp = '2026-11-01T03:44:09.100Z';
+  call.payload = { ...call.payload, call_id: 'call_poll_exec', input: '<redacted js: await tools.write_stdin({"session_id": ..., "chars": ""}); text(...)>' };
+  result.timestamp = '2026-11-01T03:44:10.200Z';
+  result.payload = { ...result.payload, type: 'custom_tool_call_output', call_id: 'call_poll_exec' };
+  return [exec, yielded, call, result];
 }
 
 /**

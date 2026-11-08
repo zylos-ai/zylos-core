@@ -17,8 +17,8 @@ import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, cellEndingAs, rebase, v1ChildRollout,
-  v1LongChildRollout, v1ParentTurn, v1YieldedWaitTurn, v2CompletedTurn, v2InterruptedTurn, v2TimedOutTurn }
+import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, cellEndingAs, cellPolledInNewExec, rebase,
+  v1ChildRollout, v1LongChildRollout, v1ParentTurn, v2CompletedTurn, v2InterruptedTurn, v2TimedOutTurn }
   from './fixtures/codex-multi-agent-rollout.js';
 
 const GROUP = 'dash-owned:a';
@@ -679,12 +679,19 @@ test('a code-mode command whose script failed or was terminated is a failed step
   }
 });
 
-test('a Codex v1 subtask whose wait yielded ends when a wait on that cell reads its result', async t => {
-  const lines = v1YieldedWaitTurn(at(1)).filter(line => line.payload.type !== 'message');
-  const { round } = await codexRound(t, lines);
-  assert.deepEqual(describe(round), ['subagent:subagent:done']);
-  assert.equal(steps(round)[0].end, timeOf(lines, line => line.payload.call_id === 'call_cell_wait' && line.payload.type === 'function_call_output'));
-  assertNothingPrivate(round, 'v1 yielded wait');
+test('a code-mode command no wait saw finish ends with its round when the model polled it from a new exec', async t => {
+  const lines = rebase(cellPolledInNewExec(), at(1));
+  const live = await codexRound(t, lines, { ended: false });
+  live.f.clock.now = at(20);
+  assert.deepEqual(describe(roundOf(read(live.f, [1]), 1)), ['tool:runCommand:running', 'tool:runCommand:done'],
+    'the yielded command runs on while the round is open; the polling exec is its own step');
+  const { round } = await codexRound(t, lines, { replyAt: 30 });
+  assert.deepEqual(describe(round), ['tool:runCommand:done', 'tool:runCommand:done'], 'not unfinished: it ended with its round');
+  const [yielded, polling] = steps(round);
+  assert.equal(yielded.start, Date.parse(lines[0].timestamp));
+  assert.equal(yielded.end, at(31), 'the yielded command ends at the round end');
+  assert.equal(polling.end, Date.parse(lines[3].timestamp), 'the polling exec ends at its own result');
+  assertNothingPrivate(round, 'polled in a new exec');
 });
 
 test('a Codex subtask whose finish was never recorded ends with its round instead of reading as unfinished', t => {
