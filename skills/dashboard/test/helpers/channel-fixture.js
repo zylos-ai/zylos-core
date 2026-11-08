@@ -15,6 +15,7 @@ const core = path.resolve(dashboard, '../..');
 const observer = new URL('./channel-delivery-observer.js', import.meta.url).href;
 
 // Installed product scripts + two private databases; no service/runtime/socket.
+// Run for channel/hook dependency changes; unrelated UI changes may skip.
 // All launches are synchronous with deadlines and cleanup belongs to this case.
 export function setupChannelFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-channel-'));
@@ -47,6 +48,13 @@ export function setupChannelFixture(t) {
     if (name === 'comm-bridge') fs.copyFileSync(path.join(source, 'init-db.sql'), path.join(dest, 'init-db.sql'));
     else fs.cpSync(path.join(source, 'src/lib'), path.join(dest, 'src/lib'), { recursive: true });
   }
+  // Match the installed sibling skill used by the attachment hook import.
+  const webConsole = path.join(skills, 'web-console');
+  fs.mkdirSync(path.join(webConsole, 'scripts'), { recursive: true });
+  const webConsoleSource = path.join(core, 'skills', 'web-console');
+  fs.copyFileSync(path.join(webConsoleSource, 'package.json'), path.join(webConsole, 'package.json'));
+  fs.copyFileSync(path.join(webConsoleSource, 'scripts/attachment-utils.js'), path.join(webConsole, 'scripts/attachment-utils.js'));
+  fs.symlinkSync(fs.realpathSync(path.join(webConsoleSource, 'node_modules')), path.join(webConsole, 'node_modules'));
   c4Db = new Database(c4Path); guardDatabase(c4Db, c4Schema);
   dashboardStore = new Store(dashboardPath);
   const c4Store = createStore(c4Db, { validateComponent: () => true, readConfig: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }) });
