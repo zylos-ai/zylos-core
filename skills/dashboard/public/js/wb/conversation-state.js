@@ -491,16 +491,22 @@ export function createConversationState({
   }
   async function readPage(current, id, currentTab, direction, cursor, e) {
     if (!valid(e)) return null;
+    const unavailable = currentTab === 'mine' && direction === 'after' ? current.messages.filter(row => row.attachments?.some(item => !item.available)) : [];
+    let start = unavailable.findIndex(row => row.id > (current.attachmentRecheckAfter ?? 0));
+    if (start < 0) start = 0;
+    const rechecking = unavailable.slice(start, start + 100);
     const data = await request(`${pathFor(id)}/messages?${query({
       tab: currentTab,
       limit: 50,
       direction,
-      cursor
+      cursor,
+      ...(rechecking.length ? { recheckIds: rechecking.map(row => row.id).join(',') } : {})
     })}`);
     if (!valid(e)) return null;
     if (!Array.isArray(data?.items)) throw {
       code: 'chat_invalid_response'
     };
+    if (rechecking.length) current.attachmentRecheckAfter = rechecking.at(-1).id;
     return data;
   }
   function applyMessages(current, id, data, trackQuestions = false) {
@@ -508,6 +514,8 @@ export function createConversationState({
     const known = new Set(current.messages.map(row => row.id));
     const added = data.items.filter(row => !known.has(row.id));
     current.messages = merge(current.messages, data.items).sort((a, b) => a.id - b.id);
+    const attachmentUpdates = new Map((data.attachmentUpdates || []).map(row => [row.id, row.attachments]));
+    current.messages = current.messages.map(row => attachmentUpdates.has(row.id) ? { ...row, attachments: attachmentUpdates.get(row.id) } : row);
     const newer = added.filter(row => row.id > previousNewest);
     if (newer.some(row => row.direction === 'out')) fastUntil = 0;
     if (trackQuestions && newer.length) current.pendingQuestionRefresh = true;
@@ -809,14 +817,16 @@ export function createConversationState({
     }, epoch, current);
   }
   async function send({
-    retry = false
+    retry = false, attachments = []
   } = {}) {
     const current = cell();
-    if (!snapshot().canWrite || !current || current.sending || !current.input.trim() || current.retryRequired && (!retry || current.receipt?.retryAllowed !== true)) return;
+    if (!snapshot().canWrite || !current || current.sending || (!current.input.trim() && !attachments.length) || current.retryRequired && (!retry || current.receipt?.retryAllowed !== true)) return;
     const e = epoch,
       id = selectedId,
       currentTab = tab,
-      text = current.input;
+      text = current.input,
+      attachmentIds = [...attachments];
+    let outcome = null;
     accelerate();
     current.sending = true;
     current.error = null;
@@ -828,6 +838,7 @@ export function createConversationState({
         method: 'POST',
         body: {
           content: text,
+          ...(attachmentIds.length ? { attachments: attachmentIds } : {}),
           ...(retry ? {
             retry: true
           } : {})
@@ -836,7 +847,8 @@ export function createConversationState({
       if (!result || ![true, false, null].includes(result.stored)) throw {
         code: 'chat_invalid_response'
       };
-      if (destroyed || sendIdentity !== openedIdentity || blocked) return;
+      if (destroyed || sendIdentity !== openedIdentity || blocked) return outcome;
+      outcome = result;
       current.receipt = result;
       current.retryRequired = result.stored === null;
       if (!result.preserveInput && result.stored === true && current.input === text) current.input = '';
@@ -849,13 +861,15 @@ export function createConversationState({
           current.conversation = data.conversation;
           emit();
         }, e, current);
-        if (!valid(e) || tab !== currentTab) return;
+        if (!valid(e) || tab !== currentTab) return outcome;
         await list();
-        if (!valid(e) || tab !== currentTab) return;
+        if (!valid(e) || tab !== currentTab) return outcome;
         if (!canonical.startsWith('d:')) await syncAfterSend(current, canonical, currentTab, e);
       }
     } catch (err) {
-      if (valid(e) && err?.payload?.conversationId && err.payload.preserveInput) {
+      if (!destroyed && !blocked && sendIdentity === openedIdentity && identityValue() === openedIdentity
+        && err?.payload?.conversationId && err.payload.preserveInput) {
+        outcome = err.payload;
         const canonical = err.payload.conversationId;
         current.receipt = null;
         current.retryRequired = false;
@@ -892,6 +906,7 @@ export function createConversationState({
       current.sending = false;
       if (active && sendIdentity === openedIdentity && !blocked) emit();
     }
+    return outcome;
   }
   return {
     snapshot,

@@ -955,3 +955,43 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   .conversation-page .chat-question-field select,.conversation-page .chat-question .chat-form-segment { min-height: 40px; }
   .conversation-chart-data > summary { min-height: 40px; display: flex; align-items: center; }
 }
+
+/* Shared user/agent media and the current conversation's local upload tray. */
+.conversation-compose-box { --conversation-control-height:40px; }
+.conversation-upload-label { font-size:11px; color:var(--text-dim); line-height:1.3; margin:0; }
+.conversation-upload-tray { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-auto-rows:max-content; align-items:start; align-content:start; gap:6px; min-width:0; max-height:188px; overflow:auto; overscroll-behavior:contain; }
+.chat-attachment { margin:8px 0; width:min(100%,560px); min-width:0; border:1px solid var(--wb-line-strong); border-radius:8px; background:var(--wb-panel); overflow:hidden; }
+.conversation-page .chat-block:has(>.chat-attachment) { padding:0; border:0; background:transparent; }
+.conversation-page .chat-block>.chat-attachment { margin:0; }
+.chat-attachment-info { display:flex; gap:9px; align-items:center; padding:7px 10px; min-width:0; }
+.chat-attachment-type { color:var(--text-dim); }
+.chat-attachment-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:2px; }
+.chat-attachment-name { min-width:0; overflow-wrap:anywhere; font-weight:550; font-size:12.5px; line-height:1.4; }
+.chat-attachment-meta { font-size:11px; line-height:1.4; color:var(--text-muted); }
+.chat-attachment-status { margin:0; padding:0; }
+.chat-attachment-actions { display:flex; flex:none; gap:4px; align-items:center; margin-inline-start:auto; }
+.chat-attachment-actions:empty { display:none; }
+.chat-attachment-actions .wb-btn { flex:none; margin:0; min-width:40px; height:40px; padding:0 9px; font-size:11.5px; }
+.chat-attachment-actions .chat-attachment-icon-button { width:40px; padding:0; justify-content:center; border-color:transparent; background:transparent; }
+.chat-attachment-icon-button .chat-attachment-action-label { display:none; }
+.chat-attachment-image-frame { width:100%; max-height:300px; background:var(--wb-hover); overflow:hidden; }
+.chat-attachment-image-content { display:block; width:100%; height:100%; object-fit:contain; }
+.chat-attachment-image-frame[data-state=failed] { height:72px; }
+.chat-attachment-placeholder { height:72px; display:flex; align-items:center; justify-content:center; background:var(--wb-hover); color:var(--text-muted); }
+.chat-attachment-placeholder .wb-ico { width:22px; height:22px; }
+.chat-attachment-progress { display:block; width:100%; height:4px; border:0; margin:0; appearance:none; -webkit-appearance:none; background:var(--wb-hover); accent-color:var(--accent); }
+.chat-attachment-progress::-webkit-progress-bar { background:var(--wb-hover); }
+.chat-attachment-progress::-webkit-progress-value { background:var(--accent); }
+.chat-attachment-progress::-moz-progress-bar { background:var(--accent); }
+.chat-attachment[data-upload-state=failed],.chat-attachment[data-upload-state=expired] { border-color:color-mix(in srgb,var(--wb-err) 45%,var(--wb-line)); }
+.conversation-upload-tray .chat-attachment { width:100%; margin:0; align-self:start; }
+.conversation-upload-tray .chat-attachment-image-frame { max-height:72px; }
+.conversation-upload-tray .chat-attachment-image-frame[data-state=failed],.conversation-upload-tray .chat-attachment-placeholder { height:32px; }
+.conversation-upload-tray .chat-attachment-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conversation-upload-notice { font-size:12px; margin:0; color:var(--wb-err); }
+.chat-attachment .wb-ico-image { --wb-ico:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='18' height='18' rx='2'/><circle cx='8.5' cy='8.5' r='1.5'/><path d='m21 15-5-5L5 21'/></svg>"); }
+.chat-attachment .wb-ico-file { --wb-ico:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z'/><path d='M14 2v6h6'/></svg>"); }
+@media (max-width:760px) {
+  .conversation-upload-tray { grid-template-columns:minmax(0,1fr); }
+  .conversation-compose-box>.wb-btn { min-width:40px; padding:0 10px; }
+}

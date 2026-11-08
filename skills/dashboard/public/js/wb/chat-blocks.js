@@ -1,5 +1,6 @@
 import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=102';
 import { element } from './plain-text.js?v=103';
+import { attachmentDisplayText } from './chat-attachments.js?v=3';
 
 export { parseC4Content };
 export { validateAnswer } from '../../chat-schema.js?v=102';
@@ -7,7 +8,7 @@ export { validateAnswer } from '../../chat-schema.js?v=102';
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 
 /** Render the validated shared protocol as inert DOM; the host owns answers. */
-export function renderChatContent({ document, row, t = key => key, renderQuestion, supportsBlock, renderChart, layout, showTechnicalDetails = true } = {}) {
+export function renderChatContent({ document, row, t = key => key, renderQuestion, supportsBlock, renderChart, renderAttachment, external = false, layout, showTechnicalDetails = true } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-message-content');
   const reference = () => {
@@ -22,7 +23,16 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     return result;
   };
   const parsed = parseC4Content(row.content);
-  if (parsed.kind === 'text') { root.append(node('p', parsed.text, 'chat-message-text')); return root; }
+  if (parsed.kind === 'text') {
+    const body = attachmentDisplayText(parsed.text, { external, t });
+    if (body) root.append(node('p', body, 'chat-message-text'));
+    for (const [attachmentIndex, attachment] of (Array.isArray(row.attachments) ? row.attachments.slice(0, 20) : []).entries()) {
+      const rendered = renderAttachment?.({ attachment, attachmentIndex, row });
+      if (rendered) root.append(rendered);
+      else root.append(node('p', `${t(attachment.kind === 'image' ? 'chat.attachment.image' : 'chat.attachment.file')} ${attachment.name || ''}`, 'chat-block-text'));
+    }
+    return root;
+  }
   if (parsed.kind !== 'envelope') { root.append(error()); return root; }
   const envelope = parsed.envelope;
   if (envelope.kind !== 'message' || !envelope.blocks.length) {
@@ -144,9 +154,17 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
           part.append(reference());
         }
         else text(part, t('chat.block.pending'), 'chat-message-status');
-      } else if (!REGISTERED_COMPONENT_KEYS.includes(`${block.type}@${block.schemaVersion}`) || supportsBlock?.(block) === false) {
+      } else if ((!REGISTERED_COMPONENT_KEYS.includes(`${block.type}@${block.schemaVersion}`)
+        && !(renderAttachment && block.schemaVersion === 1 && ['x-zylos.image', 'x-zylos.file'].includes(block.type))) || supportsBlock?.(block) === false) {
         text(part, block.fallbackText || envelope.fallbackText);
       } else if (block.type === 'markdown') text(part, block.data.text || block.fallbackText || envelope.fallbackText, 'chat-message-text');
+      else if (['x-zylos.image', 'x-zylos.file'].includes(block.type)) {
+        const attachment = (Array.isArray(row.attachments) ? row.attachments : []).find(item => item.id === block.data.attachmentId);
+        const fallback = { name: block.data.nameSnapshot, kind: block.type === 'x-zylos.image' ? 'image' : 'file', available: false };
+        const rendered = renderAttachment?.({ attachment: attachment || fallback, block, row });
+        if (rendered) part.append(rendered);
+        else text(part, block.fallbackText || envelope.fallbackText);
+      }
       else if (['time_series', 'breakdown', 'category_series'].includes(block.type)) {
         const fallback = chart(block);
         part.append(renderChart?.({ block, fallback }) ?? fallback);

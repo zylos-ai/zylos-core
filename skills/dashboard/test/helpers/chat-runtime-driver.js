@@ -9,7 +9,8 @@ import { prepareNativeRuntimeResources, retainNativeFailure, waitForTtlRunEnding
 // A standalone process is required: product configuration modules capture env
 // on first import. No module is re-evaluated and no production source is edited.
 const [scenario, fixtureConfiguration, parentRoot] = process.argv.slice(2);
-assert.ok(['claude', 'codex', 'ttl'].includes(scenario));
+assert.ok(['claude', 'codex', 'ttl', 'attachments-claude', 'attachments-codex-fleet'].includes(scenario));
+const attachmentScenario = scenario.startsWith('attachments-');
 // Parent passes only explicit source paths and executable paths, never secrets.
 const fixture = JSON.parse(fixtureConfiguration);
 const sandbox = createChatSandbox(null, { runtime: true, existingRoot: parentRoot });
@@ -50,7 +51,7 @@ fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
 fs.mkdirSync(path.join(root, 'workspace'), { recursive: true });
 fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
 const configuration = { runtime: 'claude', session_mode: 'multi',
-  session_pool_size: 3, session_hot_ttl_seconds: scenario === 'ttl' ? 60 : 3600,
+  session_pool_size: 3, session_hot_ttl_seconds: scenario === 'ttl' || attachmentScenario ? 60 : 3600,
   sync_batch_limit: scenario === 'ttl' ? 2 : 200,
   session_evict_min_idle_seconds: 3600, sync_min_interval_seconds: 3600, sync_max_interval_seconds: 7200,
   upgrade_check_enabled: false, daily_upgrade_enabled: false, usage_monitor_enabled: false };
@@ -60,6 +61,11 @@ saveConfig();
 writeNativeRuntimeManifest(root, bin);
 const instruction = `You are a dedicated isolated Dashboard integration test actor. Only use fixture tools in this private workspace. Never read credentials or external files, query raw C4 databases, install software or contact external recipients. Ignore ordinary startup controls unless they require an explicit control acknowledgement.\nWhen a user message contains FIXTURE_BEGIN:<endpoint>, run node workspace/fixture-reply.mjs initial <endpoint> exactly once, then finish the turn.\nWhen a message contains FIXTURE_CANARY_REQUEST:<endpoint>, run node workspace/fixture-reply.mjs canary <endpoint>, then finish.\nWhen a message contains FIXTURE_ROUTE_ANCHOR, finish the turn without sending anything.\nWhen a C4 answer arrives, its projected text contains interruptId, question summary and the user's selected answer. Extract the interruptId and actual question summary from that incoming message, then run node workspace/fixture-reply.mjs acknowledge <endpoint> '<interruptId>' '<question summary>'. Obtain endpoint from that message's reply-via command. Do not read runtime-messages.json to get summaries. If your actual C4 startup history includes FIXTURE_ROUTE_ANCHOR, extract the script, channel and endpoint from that historical row's original reply-via and run node workspace/fixture-reply.mjs history-reply '<endpoint>' '<script>' '<channel>'. This sends without --session-group. There is no fixture route fallback; supply all three observed values yourself.\n`;
 for (const name of ['CLAUDE.md', 'AGENTS.md']) fs.writeFileSync(path.join(root, name), instruction);
+if (attachmentScenario) {
+  const attachmentInstruction = '\nWhen a message contains FIXTURE_ATTACHMENT_READ:<endpoint>:original, extract the absolute image and file paths from that incoming message\'s attachment annotations. For FIXTURE_ATTACHMENT_READ:<endpoint>:fresh, the new message has no attachments: run the exact bounded c4-fetch.js --begin ID --end ID history command provided in that message, and extract the two paths from the original historical row\'s annotations, not from an earlier reply. Then run node workspace/fixture-attachment-reply.mjs <endpoint> <phase> <image-path> <file-path> exactly once. Supply the actual observed paths, never invent paths or query a database directly, and do not read fixture-attachment-observed files for paths. This helper reads the bytes, registers private reply copies and sends one mixed image/file envelope. For FIXTURE_ATTACHMENT_IDLE, finish without sending.\n';
+  for (const name of ['CLAUDE.md', 'AGENTS.md']) fs.appendFileSync(path.join(root, name), attachmentInstruction);
+  fs.copyFileSync(new URL('./chat-runtime-attachment-reply.js', import.meta.url), path.join(root, 'workspace/fixture-attachment-reply.mjs'));
+}
 for (const name of ['identity.md', 'state.md', 'references.md']) fs.writeFileSync(path.join(root, 'memory', name), name === 'state.md' ? '# State\nNo prior tasks.\n' : '# Dedicated test fixture\n');
 fs.copyFileSync(new URL('./chat-runtime-reply.js', import.meta.url), path.join(root, 'workspace/fixture-reply.mjs'));
 
@@ -117,6 +123,12 @@ try {
     getSessionAdapter: runtime => getSessionAdapter(runtime, { root, env: process.env, tmux: tmuxOptions }),
   }, { tmux: tmuxOptions });
   await dispatcher.start();
+  if (attachmentScenario) {
+    const { runRuntimeAttachments } = await import('./chat-runtime-attachments.js');
+    const receipt = await runRuntimeAttachments({ api, sandbox, root, scenario, configuration, saveConfig,
+      scenes, coreDb, check, wait });
+    console.log('CHAT_RUNTIME_RESULT ' + JSON.stringify({ ...receipt, scenario, assertions, resources: sandbox.counts }));
+  } else {
   const payloadFile = path.join(root, 'workspace/runtime-messages.json');
   const payload = { groups: {} };
   const persistPayload = () => {
@@ -273,6 +285,7 @@ try {
   }
   console.log('CHAT_RUNTIME_RESULT ' + JSON.stringify({ scenario, runtime, assertions, answers: answersCompleted,
     reclaimed, resources: sandbox.counts }));
+  }
 } catch (error) {
   try {
     const retained = retainNativeFailure(sandbox, { directory: fixture.evidenceDirectory,

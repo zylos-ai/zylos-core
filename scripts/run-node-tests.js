@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createTestEnvironment } from './test-environment.js';
 
@@ -54,8 +55,22 @@ const discoveredFiles = TEST_ROOTS
   .map((file) => path.relative(ROOT, file));
 
 // Explicit paths are selected only from the normal discovery roots.
-const requested = process.argv.slice(2);
+const arguments_ = process.argv.slice(2);
+if (arguments_.includes('--test-name-pattern')) {
+  console.error('Use --test-name-pattern=<pattern> as one argument.');
+  process.exit(1);
+}
+const patterns = arguments_.filter(value => value.startsWith('--test-name-pattern='));
+const requested = arguments_.filter(value => !value.startsWith('--test-name-pattern='));
+if (patterns.length > 1 || patterns.some(value => value === '--test-name-pattern=')) {
+  console.error('Supply at most one nonempty --test-name-pattern=<pattern>.');
+  process.exit(1);
+}
 if (requested.length === 1 && requested[0] === '--list') {
+  if (patterns.length) {
+    console.error('--list cannot be combined with --test-name-pattern.');
+    process.exit(1);
+  }
   console.log(discoveredFiles.join('\n'));
   process.exit(0);
 }
@@ -80,7 +95,9 @@ try {
   const env = { ...process.env, TMPDIR: tmpdir };
   // Runtime identity belongs to each fixture, never the agent running tests.
   for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP']) delete env[key];
-  const nodeArgs = ['--experimental-test-module-mocks', '--test', ...testFiles];
+  const reporter = patterns.length
+    ? [`--test-reporter=${fileURLToPath(new URL('./test-match-reporter.js', import.meta.url))}`] : [];
+  const nodeArgs = ['--experimental-test-module-mocks', '--test', ...reporter, ...patterns, ...testFiles];
   // Probe in subshells: unsupported special builtins must not terminate the runner.
   // Apply limits in the exec shell so Node and every test child inherit them.
   const limitScript = `

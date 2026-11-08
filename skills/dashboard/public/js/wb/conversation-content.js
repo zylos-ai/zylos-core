@@ -1,5 +1,6 @@
 import { element } from './plain-text.js?v=103';
-import { renderChatContent } from './chat-blocks.js?v=105';
+import { renderChatContent, parseC4Content } from './chat-blocks.js?v=106';
+import { createChatAttachment } from './chat-attachments.js?v=3';
 import { applyChatView } from './chat-view.js?v=103';
 import { conversationChartResource } from './conversation-charts.js?v=103';
 export function conversationErrorKey(code) {
@@ -31,22 +32,38 @@ export function renderConversationContent({
   t,
   renderQuestion,
   supportsBlock,
+  attachmentContext = {},
   showTechnicalDetails = false
 }) {
   const resources = [];
+  const attachmentResources = [];
+  const plainAttachments = parseC4Content(row.content).kind === 'text';
+  let mounted = false, destroyed = false;
+  let hasCharts = false;
+  const makeAttachment = attachment => createChatAttachment({ document, attachment, context: attachmentContext, t });
+  const blockAttachment = (block, metadata) => metadata.find(item => item.id === block.data.attachmentId)
+    || { name: block.data.nameSnapshot, kind: block.type === 'x-zylos.image' ? 'image' : 'file', available: false };
   const content = renderChatContent({
     document,
     row,
     t,
     renderQuestion,
     supportsBlock,
+    external: attachmentContext.external === true,
     showTechnicalDetails,
     layout: (root, view, blockNodes) => {
       applyChatView(document, root, view, blockNodes);
       root.classList.add('conversation-composed-content');
     },
     renderChart({ block, fallback }) {
+      hasCharts = true;
       const resource = conversationChartResource({ document, block, fallback, t });
+      resources.push(resource);
+      return resource.node;
+    },
+    renderAttachment({ attachment, block, attachmentIndex }) {
+      const resource = makeAttachment(attachment);
+      attachmentResources.push({ resource, attachment, block, attachmentIndex });
       resources.push(resource);
       return resource.node;
     }
@@ -70,8 +87,36 @@ export function renderConversationContent({
       text.replaceWith(formatted);
     }
   }
-  if (resources.length) content.classList.add('conversation-chart-content');
-  content.mount = () => { for (const resource of resources) resource.mount(); };
-  content.destroy = () => { for (const resource of resources) resource.destroy(); };
+  if (hasCharts) content.classList.add('conversation-chart-content');
+  content.updateAttachments = metadata => {
+    if (destroyed) return;
+    const items = Array.isArray(metadata) ? metadata.slice(0, 20) : [];
+    const update = () => {
+      for (const entry of [...attachmentResources]) {
+        const next = entry.block ? blockAttachment(entry.block, items) : items[entry.attachmentIndex];
+        if (next && JSON.stringify(entry.attachment) === JSON.stringify(next)) continue;
+        const previous = entry.resource, index = resources.indexOf(previous);
+        previous.destroy();
+        if (next) {
+          entry.attachment = next; entry.resource = makeAttachment(next);
+          previous.node.replaceWith(entry.resource.node); resources[index] = entry.resource;
+          if (mounted) entry.resource.mount();
+        } else {
+          previous.node.remove(); resources.splice(index, 1);
+          attachmentResources.splice(attachmentResources.indexOf(entry), 1);
+        }
+      }
+      if (plainAttachments) for (const [attachmentIndex, attachment] of items.entries()) {
+        if (attachmentResources.some(entry => entry.attachmentIndex === attachmentIndex)) continue;
+        const resource = makeAttachment(attachment);
+        attachmentResources.push({ resource, attachment, attachmentIndex }); resources.push(resource);
+        content.append(resource.node); if (mounted) resource.mount();
+      }
+    };
+    if (attachmentContext.onLayout) attachmentContext.onLayout(update);
+    else update();
+  };
+  content.mount = () => { if (destroyed) return; mounted = true; for (const resource of resources) resource.mount(); };
+  content.destroy = () => { if (destroyed) return; destroyed = true; for (const resource of resources) resource.destroy(); };
   return content;
 }
