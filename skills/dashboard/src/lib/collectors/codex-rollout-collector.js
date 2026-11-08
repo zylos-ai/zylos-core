@@ -30,8 +30,7 @@ export class CodexRolloutCollector {
     // spawned.
     this._pendingSpawnExecs = [];
     this._spawnedThreadsByCallId = new Map();
-    // Code-mode cells still running after their `exec` yielded (cell id → exec call), and the cell each `wait` resumes.
-    this._execByCell = new Map();
+    // The code-mode cell each `wait` resumes.
     this._waitCellByCallId = new Map();
     this._onEvent = null;
     this._onMetric = null;
@@ -578,15 +577,9 @@ export class CodexRolloutCollector {
       this._waitCellByCallId.set(callId, toolArgs.cell_id);
     }
     const cellId = normalizedName === 'wait' && callId ? this._waitCellByCallId.get(callId) ?? null : null;
-    const resumed = cellId ? this._execByCell.get(cellId) ?? null : null;
-    const execCallId = normalizedName === 'exec' ? callId : resumed?.callId ?? null;
-    const wraps = execCallId ? this._codeModeWrapsByCallId.get(execCallId) ?? null : null;
+    const wraps = normalizedName === 'exec' && callId ? this._codeModeWrapsByCallId.get(callId) ?? null : null;
     const running = isOutput && (normalizedName === 'exec' || cellId) ? runningCell(item.output ?? payload.output) : null;
-    if (running && normalizedName === 'exec' && callId) this._execByCell.set(running, { callId });
-    if (isOutput && cellId) {
-      this._waitCellByCallId.delete(callId);
-      if (!running) this._execByCell.delete(cellId);
-    }
+    if (isOutput && cellId) this._waitCellByCallId.delete(callId);
 
     if (!isOutput && normalizedName === 'spawn_agent' && callId) {
       this._subagentSpawnByCallId.set(callId, {
@@ -641,7 +634,7 @@ export class CodexRolloutCollector {
     written += toolResult?.inserted ? 1 : 0;
 
     if (isOutput && wraps) {
-      written += this._ingestCodeModeAgentOutput(wraps, execCallId, item.output ?? payload.output, timestamp, mapping, position);
+      written += this._ingestCodeModeAgentOutput(wraps, callId, item.output ?? payload.output, timestamp, mapping, position);
     } else if (isOutput) {
       written += this._ingestSubagentLifecycleOutput(normalizedName, callId, item.output ?? payload.output, timestamp, mapping, position);
     } else {
