@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { projectC4Content } from '../c4-content-projection.js';
 import { formatConversation } from '../router/format.js';
-import { replyVia } from '../c4-query-format.js';
+import { replyVia, shellQuote } from '../c4-query-format.js';
 import { createQueryHandlers } from '../c4-v2-cli.js';
 import { ATTACHMENTS_DIR, SKILLS_DIR } from '../c4-config.js';
 import { buildAnnotatedContent, buildAttachmentAnnotation } from '../attachment-annotations.js';
@@ -86,7 +86,11 @@ test('ordinary Dashboard text includes component guidance within its paste budge
   assert.ok(suffix.includes('Charts/choices/forms when useful:'));
   assert.equal(suffix.includes('Attachments:'), false);
   const maximum = 800 - suffix.length;
-  assert.ok(maximum >= 500, `Full installed paths must retain at least 500 body characters, got ${maximum}`);
+  const catalogPath = shellQuote(path.join(SKILLS_DIR, 'dashboard/scripts/components.js'));
+  const hint = suffix.slice(0, -(' ' + replyVia(empty, scriptPath)).length);
+  assert.ok(hint.includes(catalogPath));
+  const nonPathHintCharacters = hint.length - catalogPath.length;
+  assert.ok(nonPathHintCharacters <= 53, `Non-path component hint overhead must not exceed 53 characters, got ${nonPathHintCharacters}`);
   console.log(JSON.stringify({ pasteBudget: 800, skillsDir: SKILLS_DIR, routeCharacters: (' ' + replyVia(empty, scriptPath)).length, hintCharacters: suffix.length - (' ' + replyVia(empty, scriptPath)).length, baselineBodyCharacters: 800 - (' ' + replyVia(empty, scriptPath)).length, guidedBodyCharacters: maximum }));
   const command = suffix.split('\n').find(line => line.startsWith('Charts/choices/forms when useful:'));
   assert.ok(command.endsWith(' list --json'));
@@ -95,7 +99,7 @@ test('ordinary Dashboard text includes component guidance within its paste budge
   const representativeSuffix = formatConversation(representative, { scriptPath });
   const representativeBaseline = 800 - (' ' + replyVia(representative, scriptPath)).length;
   const representativeMaximum = 800 - representativeSuffix.length;
-  assert.ok(representativeMaximum >= 450, `UUID routing must retain at least 450 body characters, got ${representativeMaximum}`);
+  assert.equal(representativeSuffix.slice(0, -(' ' + replyVia(representative, scriptPath)).length), hint);
   console.log(JSON.stringify({ routeShape: 'UUID endpoint and group', baselineBodyCharacters: representativeBaseline, guidedBodyCharacters: representativeMaximum }));
   for (const [index, length] of [1, maximum].entries()) {
     const plain = { ...row, id: 910010 + index, content: 'x'.repeat(length) };

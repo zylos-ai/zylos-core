@@ -236,7 +236,7 @@ naming and message submission; question answers and UI actions have separate con
 
 Choose a supported component when it makes the reply clearer or lets the user
 answer directly. Keep ordinary replies concise. Selection guidance lives in the
-component catalog and is returned by `describe`; consult it before composing.
+component catalog and is returned by `list` and `describe`; consult it before composing.
 
 Read the component list from the same installed Core before composing a C4 message:
 
