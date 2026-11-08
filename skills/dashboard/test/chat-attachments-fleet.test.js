@@ -52,15 +52,19 @@ async function waitFor(check, timeout = 4000) {
 }
 
 async function listen(handler) {
+  const pending = new Set();
   const server = http.createServer((req, res) => {
-    Promise.resolve(handler(req, res)).catch(() => {
+    const work = Promise.resolve(handler(req, res)).catch(() => {
       if (!res.headersSent) sendJson(res, 500, { error: 'fixture_failure' });
       else res.destroy();
     });
+    pending.add(work);
+    work.then(() => pending.delete(work));
   });
   server.keepAliveTimeout = 100;
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  return { server, origin: `http://127.0.0.1:${server.address().port}` };
+  return { server, origin: `http://127.0.0.1:${server.address().port}`,
+    settle: () => waitFor(() => pending.size === 0) };
 }
 
 // Actual FleetProxy + target Store/ChatAttachments/ChatSender over two private
@@ -164,6 +168,7 @@ async function fixture(t, { limit = 20 } = {}) {
     for (const id of activeTimers) clearTimeout(id);
     hub.server.closeAllConnections(); target.server.closeAllConnections();
     await Promise.all([new Promise(resolve => hub.server.close(resolve)), new Promise(resolve => target.server.close(resolve))]);
+    await hub.settle(); await target.settle();
     await attachments.close(); store.close(); db.close(); fs.rmSync(root, { recursive: true, force: true });
   });
   const route = `/api/chat/conversations/${encodeURIComponent(draft.id)}`;
@@ -184,6 +189,7 @@ async function fixture(t, { limit = 20 } = {}) {
     return { status: response.status, body: await response.json() };
   };
   return { root, targetRoot, hubRoot, target, hub, route, draft, other, attachments, store, db, proxy,
+    settle: async () => { await hub.settle(); await target.settle(); },
     request, upload, send, timer, setToken: value => { token = value; }, setMode: value => { mode = value; },
     setLocalEnabled: value => { localEnabled = value; }, targetConfig,
     setUploadStatus: value => { uploadStatus = value; }, setDropReply: value => { dropReply = value; },
@@ -346,15 +352,41 @@ test('chunked uploads grow target partial files before completion and disconnect
   await waitFor(() => f.media().length === 0);
 });
 
-test('target file limit and total multipart overhead reject known and chunked excess without files', async t => {
-  const f = await fixture(t, { limit: 1 });
-  assert.equal((await f.upload(Buffer.alloc(MiB + 1))).status, 413);
-  const stream = openUpload(t, f);
-  stream.request.end(Buffer.alloc(MiB + 65537));
-  const result = await stream.response;
-  assert.equal(result.status, 413); assert.equal(Object.hasOwn(result.body, 'id'), false);
-  await waitFor(() => f.media().length === 0);
-  assert.equal(f.hubMedia().length, 0);
+test('oversized files and multipart envelopes are rejected without published attachments', async t => {
+  await t.test('a complete near-limit file succeeds', async t => {
+    const f = await fixture(t, { limit: 1 });
+    const result = await f.upload(Buffer.alloc(MiB - 1));
+    assert.equal(result.status, 201); assert.equal(result.body.size, MiB - 1);
+    await f.settle();
+    assert.equal(f.media().length, 1); assert.equal(f.hubMedia().length, 0);
+  });
+  for (const chunked of [false, true]) await t.test(`${chunked ? 'chunked' : 'known-length'} complete oversized file is rejected`, async t => {
+    const f = await fixture(t, { limit: 1 });
+    let result;
+    if (chunked) {
+      const stream = openUpload(t, f);
+      stream.request.end(Buffer.concat([Buffer.alloc(MiB + 1), ending]));
+      result = await stream.response;
+    } else result = await f.upload(Buffer.alloc(MiB + 1));
+    assert.equal(result.status, 413); assert.equal(Object.hasOwn(result.body, 'id'), false);
+    await f.settle();
+    assert.equal(f.uploads(), 1);
+    assert.equal(f.media().length, 0); assert.equal(f.hubMedia().length, 0);
+    assert.equal(f.store.db.prepare('SELECT count(*) n FROM chat_attachments').get().n, 0);
+  });
+  await t.test('oversized chunked envelope with an in-limit file is rejected and cleaned', async t => {
+    const f = await fixture(t, { limit: 1 }), stream = openUpload(t, f);
+    stream.request.write(Buffer.alloc(65536));
+    // Prove the writer started before completing the oversized envelope. Relay
+    // and target both enforce total bytes; this asserts their combined outcome.
+    await waitFor(() => f.media().some(name => name.endsWith('.part') && fs.statSync(path.join(f.attachments.mediaDir, name)).size > 0));
+    stream.request.end(Buffer.concat([Buffer.alloc(MiB - 1 - 65536), ending, Buffer.alloc(65537)]));
+    const result = await stream.response;
+    assert.equal(result.status, 413); assert.equal(Object.hasOwn(result.body, 'id'), false);
+    await f.settle();
+    assert.equal(f.media().length, 0); assert.equal(f.hubMedia().length, 0);
+    assert.equal(f.store.db.prepare('SELECT count(*) n FROM chat_attachments').get().n, 0);
+  });
 });
 
 test('known total length above target allowance is rejected before a body or upload reaches the target', async t => {
