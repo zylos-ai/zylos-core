@@ -34,6 +34,7 @@ export function stepText(step, t = key => key) {
  * Where each activity part goes. A part that ends with a reply folds above that reply when it has steps; the part
  * after the last reply is the live area while the round runs (shown before the first reply even with no steps, and
  * after a reply once something happens), and folds after the round's last message when the round ended with steps.
+ * The live area sits under the latest user message, including one sent moments ago that is still waiting to be routed.
  */
 export function activityPlacement(messages, activity) {
   const loaded = new Set(messages.map(row => row.id));
@@ -49,7 +50,14 @@ export function activityPlacement(messages, activity) {
     if (!round) continue;
     const anchors = [...round.messageIds, ...round.segments.map(part => part.replyId).filter(id => id !== null)].filter(id => loaded.has(id));
     if (!anchors.length) continue;
-    const anchor = Math.max(...anchors);
+    let anchor = Math.max(...anchors);
+    // While the agent works, a message just sent is not yet known to belong to this round (that takes one refresh after
+    // it reaches the session); the live area already moves under it so it always sits below the latest user message.
+    if (round.state === 'running') for (const later of messages) {
+      if (later.direction !== 'in' || later.id <= anchor) continue;
+      const state = activity.items.get(later.id)?.state;
+      if (state === undefined || state === 'pending') anchor = later.id;
+    }
     let replies = 0;
     for (const segment of round.segments) {
       const key = `${round.key}:${segment.replyId ?? 'tail'}`;

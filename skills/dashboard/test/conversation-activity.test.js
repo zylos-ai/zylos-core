@@ -66,6 +66,21 @@ test('a reply without steps gets no activity area', () => {
   assert.equal(activityPlacement([msg(5, 'in')], activity([{ id: 5, state: 'pending' }], [])).trailing.length, 0);
 });
 
+test('the live area moves under a message just sent before the server ties it to the running round', () => {
+  const live = round('1', { state: 'running', end: null, segments: [{ replyId: null, start: 0, end: null, steps: [tool(1, null, 'running')] }] });
+  for (const later of [undefined, { id: 3, state: 'pending' }]) {
+    const items = [{ id: 1, state: 'round', round: '1' }, ...(later ? [later] : [])];
+    const placed = activityPlacement([msg(1, 'in'), msg(3, 'in')], activity(items, [live]));
+    assert.equal(placed.trailing.length, 1);
+    assert.equal(placed.trailing[0].anchor, 3, 'it sits under the latest user message right away');
+  }
+  const ended = round('1', { state: 'done', end: 9, segments: [{ replyId: null, start: 0, end: 9, steps: [tool(1, 9, 'done')] }] });
+  const placed = activityPlacement([msg(1, 'in'), msg(3, 'in')], activity([{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'pending' }], [ended]));
+  assert.equal(placed.trailing[0].anchor, 1, 'a finished round stays with its own messages');
+  const other = activityPlacement([msg(1, 'in'), msg(3, 'in')], activity([{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'none' }], [live]));
+  assert.equal(other.trailing[0].anchor, 1, 'a message known to start no round does not take the live area');
+});
+
 test('a message sent while the agent works moves the one activity under it with the steps so far', () => {
   const steps = [tool(1, 2), tool(3, null, 'running')];
   const shared = round('1', { messageIds: [1, 3], state: 'running', end: null, segments: [{ replyId: null, start: s(0), end: null, steps }] });
