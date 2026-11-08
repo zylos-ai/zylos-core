@@ -298,7 +298,6 @@
   "fleet_manage.add_key_hint": "Paste an API key created on the remote dashboard.",
   "fleet_manage.keys_empty": "No API keys created",
   "fleet_manage.create_key": "Create key",
-  "fleet_manage.scope": "Scope",
   "fleet_manage.scope_read": "Read",
   "fleet_manage.scope_admin": "Admin",
   "fleet_manage.admin_key_warning": "Admin keys can remotely run Actions, change Settings, restart, or upgrade this agent.",

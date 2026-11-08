@@ -298,7 +298,6 @@
   "fleet_manage.add_key_hint": "粘贴远端 dashboard 创建的 API 密钥。",
   "fleet_manage.keys_empty": "尚未创建 API 密钥",
   "fleet_manage.create_key": "创建密钥",
-  "fleet_manage.scope": "Scope",
   "fleet_manage.scope_read": "只读",
   "fleet_manage.scope_admin": "管理员",
   "fleet_manage.admin_key_warning": "管理员密钥可远程执行操作、修改设置、重启或升级本机 Agent。",
