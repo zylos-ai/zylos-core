@@ -2410,6 +2410,24 @@ test('workbench shell gates automatic naming and discards an old agent prompt', 
   assert.equal(requests.some(item => item.options?.method === 'POST'), false);
 });
 
+// Observer entry wiring: the real shell decides per group whether the drawer offers the live terminal.
+test('the workbench drawer offers the live terminal for Origin only, never for another running group', async context => {
+  const live = (sessionGroup, extra = {}) => ({ sessionGroup, name: { displayName: sessionGroup }, state: { kind: 'busy' }, presence: 'running', live: { runId: 'run-' + sessionGroup, sessionId: 's' }, ...extra });
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path.endsWith('/api/workbench/groups')) return { mode: 'multi', view: 'multi', rows: [live('origin', { origin: true }), live('telegram:a')], instance: { pool: { used: 2 } } };
+    if (path.includes('/runs')) return { runs: [], totalRuns: 0, totalEvents: 0, unattributed: 0 };
+    if (path.includes('/backlog')) return { count: 0, firstAt: null, syncing: false };
+    if (path.startsWith('/api/timeline')) return { events: [] };
+    return fallback(path);
+  }, { storage: { 'zylos-dashboard-detail-level': 'technical' }, observerStatus: () => ({ installed: true, enabled: true }) });
+  await wbTick(); await wbTick();
+  await h.openGroup('origin'); await wbTick();
+  assert.match(h.nodes.get('#wb-side').textContent, /wb\.detail\.observeLive/, 'Origin offers the live terminal');
+  await h.openGroup('telegram:a'); await wbTick();
+  assert.match(h.nodes.get('#wb-side').textContent, /telegram/);
+  assert.doesNotMatch(h.nodes.get('#wb-side').textContent, /wb\.detail\.observe/, 'another group offers no terminal entry');
+});
+
 // Programmatic group selection uses the real mounted shell/detail/olderRow;
 // run for cross-page selection wiring, skip backend-only changes. The harness
 // owns DOM, fetch, timers and observers; no live processes/DB/network are used.

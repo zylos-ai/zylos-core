@@ -481,6 +481,22 @@ test('a successful price save clears the unsaved count, the save bar, the naviga
   assert.equal(counts.at(-1), 1, 'later edits count against the saved values'); panel.destroy();
 });
 
+test('saving an edited Codex priority price clears the unsaved count and keeps the value', async () => {
+  const fixture = priceFixture(), counts = [], writes = [];
+  const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async body => writes.push(body), onDirty: count => counts.push(count) });
+  await fixture.root.querySelector('#settings-price-tab-codex').dispatch('click');
+  const priority = () => fixture.priority.children[0].querySelectorAll('input')[1];
+  priority().value = '7'; await priority().dispatch('input');
+  assert.equal(counts.at(-1), 1);
+  await panel.save();
+  assert.equal(writes[0].runtimes.codex.priorityModelPrices.gpt.input, 7);
+  assert.equal(counts.at(-1), 0, 'the priority table is part of the new baseline');
+  assert.equal(priority().value, '7'); assert.equal(priority().classList.contains('wb-dirty-in'), false);
+  await fixture.root.querySelector('#settings-price-tab-claude').dispatch('click'); await fixture.root.querySelector('#settings-price-tab-codex').dispatch('click');
+  assert.equal(counts.at(-1), 0);
+  panel.destroy();
+});
+
 test('a failed price save keeps the unsaved count', async () => {
   const fixture = priceFixture(), counts = [];
   const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async () => { throw new Error('write_failed'); }, onDirty: count => counts.push(count) });
