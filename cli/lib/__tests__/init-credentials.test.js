@@ -247,6 +247,42 @@ for (const runtime of ['claude', 'codex']) test(`malformed saved ${runtime} endp
   assert.doesNotThrow(() => resolveBase(explicit, runtime));
 });
 
+// Interactive stage + saved native parser only. Run for API preparation/error handling changes;
+// skip docs-only changes. Private HOME, recorded auth stubs, no HTTP or installer.
+for (const runtime of ['claude', 'codex']) test(`interactive ${runtime} API choice stops on malformed saved configuration before credential verification`, async t => {
+  const home = isolatedCredentials(t), zylosDir = path.join(home, 'zylos'); fs.mkdirSync(zylosDir);
+  const credential = crypto.randomUUID(), calls = [], output = [];
+  const native = path.join(home, runtime === 'claude' ? '.claude/settings.json' : '.codex/config.toml');
+  fs.mkdirSync(path.dirname(native));
+  fs.writeFileSync(native, runtime === 'claude' ? '{"secret":"' + credential : 'broken = [');
+  const result = await runInitAuthentication(parseInitFlags([]), {
+    runtime, quiet: true, exists: () => true, claudeStatus: () => false, codexStatus: () => false,
+    choose: async () => { calls.push('choose'); return runtime === 'claude' ? 2 : 1; },
+    resolveBase: (opts, chosen) => resolveInitBaseUrl(opts, chosen, { home, zylosDir }),
+    promptClaude: async () => { calls.push('prompt-credential'); return { authToken: credential }; },
+    secret: async () => { calls.push('prompt-credential'); return credential; },
+    authClaude: async () => { calls.push('verify-claude'); return false; },
+    authCodex: async () => { calls.push('verify-codex'); return false; },
+    writeCodex: () => { calls.push('write-config'); return true; },
+    log: message => output.push(message), reportError: message => output.push(message),
+  });
+  assert.equal(result.failed, true); assert.equal(result.exitCode, 1);
+  assert.deepEqual(calls, ['choose']);
+  assert.equal(result.pendingClaudeBaseUrl, null); assert.equal(result.pendingCodexBaseUrl, null);
+  assert.match(output.join(''), /Could not read saved API endpoint/);
+  assert.equal(output.join('').includes(credential), false); assert.doesNotMatch(output.join(''), /\n\s+at /);
+});
+
+test('unexpected endpoint resolution errors propagate without invoking authentication', async t => {
+  isolatedCredentials(t); const expected = new Error('controlled endpoint lookup failure'), calls = [];
+  await assert.rejects(runInitAuthentication(parseInitFlags(['--auth-token', crypto.randomUUID()]), {
+    runtime: 'claude', quiet: true, exists: () => true,
+    resolveBase: () => { throw expected; },
+    authClaude: async () => { calls.push('verify'); return false; },
+  }), error => error === expected);
+  assert.deepEqual(calls, []);
+});
+
 for (const key of ['apiKey', 'authToken', 'setupToken']) test(`post-template ${key} persistence failure stops before any base writer`, () => {
   const calls = [], output = [], credential = crypto.randomUUID();
   const fail = () => { calls.push('credential'); return false; };
