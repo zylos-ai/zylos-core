@@ -958,7 +958,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 
 /* Shared user/agent media and the current conversation's local upload tray. */
 .conversation-compose-box { --conversation-control-height:40px; }
-.conversation-upload-tray { display:flex; flex-wrap:wrap; gap:8px; min-width:0; }
+.conversation-upload-tray { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-auto-rows:max-content; align-items:start; align-content:start; gap:8px; min-width:0; max-height:188px; overflow:auto; overscroll-behavior:contain; }
 .chat-attachment { margin:8px 0; width:min(100%,560px); min-width:0; border:1px solid var(--wb-line); border-radius:10px; background:var(--wb-panel); overflow:hidden; }
 .chat-attachment-info { display:flex; flex-wrap:wrap; gap:4px 12px; align-items:center; padding:10px 12px; min-width:0; }
 .chat-attachment-name { min-width:0; flex:1 1 160px; overflow-wrap:anywhere; font-weight:600; font-size:13px; }
@@ -967,14 +967,14 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .chat-attachment-actions { display:flex; flex-wrap:wrap; gap:6px; padding:0 12px 10px; }
 .chat-attachment-actions:empty { display:none; }
 .chat-attachment-actions button { min-height:40px; min-width:40px; padding:7px 12px; }
-.chat-attachment-image-frame { width:100%; background:var(--bg-elevated); overflow:hidden; }
+.chat-attachment-image-frame { width:100%; max-height:300px; background:var(--bg-elevated); overflow:hidden; }
 .chat-attachment-image-content { display:block; width:100%; height:100%; object-fit:contain; }
 .chat-attachment-progress { flex-basis:100%; width:100%; height:8px; accent-color:var(--accent); }
-.conversation-upload-tray .chat-attachment { flex:0 1 240px; width:240px; margin:0; }
-.conversation-upload-tray .chat-attachment-image-frame { max-height:150px; }
+.conversation-upload-tray .chat-attachment { width:100%; margin:0; align-self:start; }
+.conversation-upload-tray .chat-attachment-image-frame { max-height:72px; }
 .conversation-upload-notice { font-size:12px; margin:0; color:var(--error,var(--text-muted)); }
 @media (max-width:760px) {
-  .conversation-upload-tray .chat-attachment { flex-basis:100%; width:100%; }
+  .conversation-upload-tray { grid-template-columns:minmax(0,1fr); }
   .chat-attachment-actions { gap:8px; }
   .conversation-compose-box>.wb-btn { min-width:40px; padding:0 10px; }
 }
