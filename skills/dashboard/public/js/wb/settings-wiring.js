@@ -1,4 +1,4 @@
-import { confirmDialog } from './detail.js?v=99';
+import { confirmDialog } from './detail.js?v=100';
 
 /**
  * Connects the settings page and the key table to the dashboard's own confirmation dialog.
