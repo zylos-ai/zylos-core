@@ -181,3 +181,27 @@ test('actual loop awaits complete delivery before periodic supplementation', asy
   assert.deepEqual(order, ['delivery-start', 'delivery-end', 'timer']);
   assert.ok(state.commands.some(command => command.args[0] === 'paste-buffer'));
 });
+
+test('disputed empty gets one extra Enter, then is accepted without a strict failure (#795)', async () => {
+  for (const sequence of [['disputed_empty', 'empty'], ['disputed_empty', 'disputed_empty'], ['has_content', 'has_content', 'disputed_empty']]) {
+    const { state, context, deliver } = harness();
+    const verdicts = [...sequence];
+    context.checkInputBox = () => (verdicts.length > 1 ? verdicts.shift() : verdicts[0]);
+    assert.equal(await deliver(), 'submitted', sequence.join(','));
+    const enters = state.events.filter(event => event.event === 'enter_sent').map(event => event.kind);
+    assert.equal(enters.filter(kind => kind === 'dispute_retry').length, 1, sequence.join(','));
+    assert.equal(enters[0], 'initial');
+  }
+});
+
+test('a paste on top of a pending item keeps its periodic deadline (#795)', async () => {
+  const { state, context, timer, deliver } = harness();
+  await deliver({ itemId: 1 });
+  state.time = 40000;
+  await deliver({ itemId: 2 });
+  state.time = 60000;
+  await context.maybePeriodicEnter();
+  assert.equal(timer.pending.itemId, 2);
+  assert.equal(timer.pending.attempts, 1);
+  assert.equal(state.events.find(event => event.event === 'periodic_attempt').itemId, 2);
+});

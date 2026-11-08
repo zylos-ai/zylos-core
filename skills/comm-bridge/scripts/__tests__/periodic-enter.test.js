@@ -30,21 +30,38 @@ test('disabled and startup never send; exact interval is inclusive', async () =>
   assert.equal(f.count(), 1);
 });
 
-test('normal Enter resets interval, supplements retain cumulative three-attempt cap', async () => {
+test('a new paste keeps an earlier pending deadline but gets a fresh three-attempt budget (#795)', async () => {
   const f = fixture();
   f.timer.arm(1, 'conversation');
-  f.advance(59000);
-  f.timer.entered();
-  f.advance(1000);
+  f.advance(40000);
+  f.timer.arm(2, 'conversation');
+  assert.equal(f.events.at(-1).carriedFrom, 1);
+  f.advance(20000);
   await f.tick();
-  assert.equal(f.count(), 0);
+  assert.equal(f.count(), 1, 'deadline counts from the first paste, not the second');
+  assert.equal(f.timer.pending.itemId, 2);
   for (let i = 0; i < 5; i++) { f.advance(60000); await f.tick(); }
   assert.equal(f.count(), 3);
   assert.equal(f.events.filter(e => e.event === 'periodic_exhausted').length, 1);
-  f.timer.arm(2, 'control');
-  f.advance(60000);
+  f.timer.arm(3, 'control');
+  assert.equal(f.events.at(-1).carriedFrom, undefined, 'an exhausted budget is not carried');
+  f.advance(59999);
+  await f.tick();
+  assert.equal(f.count(), 3);
+  f.advance(1);
   await f.tick();
   assert.equal(f.count(), 4);
+});
+
+test('frequent pastes cannot defer recovery indefinitely', async () => {
+  const f = fixture();
+  f.timer.arm(1, 'conversation');
+  for (let id = 2; id <= 5; id++) {
+    f.advance(30000);
+    f.timer.arm(id, 'conversation');
+    await f.tick();
+  }
+  assert.equal(f.count(), 2, 'attempts keep firing on the interval while pastes arrive every 30s');
 });
 
 test('failed attempts rate limit and exhaust; shutdown defers', async () => {
