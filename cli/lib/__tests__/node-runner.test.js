@@ -75,3 +75,49 @@ for (const fail of [false, true]) test(`Node runner ${fail ? 'retains failed tem
     assert.equal(result.stderr.includes('Test temporary files retained'), false);
   }
 });
+
+// Runner CLI boundary: use real runner children and test modules, isolated
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, no sockets, databases, tmux or PM2.
+// Run for argument/filter/reporter changes; unrelated product changes may skip.
+// The outer runner and t.after own all files; every child has a fixed deadline.
+for (const entry of [
+  { name: 'rejects an unmatched name', args: ['--test-name-pattern=^absent case$'], status: 1, error: /No tests matched/ },
+  { name: 'runs a matched name', args: ['--test-name-pattern=^selected success$'], status: 0, receipt: 'success' },
+  { name: 'retains a selected explicit gate skip', args: ['--test-name-pattern=^selected skip$'], status: 0 },
+  { name: 'runs children of a matched suite', args: ['--test-name-pattern=^selected suite$'], status: 0, receipt: 'child' },
+  { name: 'propagates a selected test failure', args: ['--test-name-pattern=^selected failure$'], status: 1 },
+  { name: 'rejects an empty name pattern', args: ['--test-name-pattern='], status: 1, error: /nonempty/ },
+  { name: 'explains the separated pattern syntax', args: ['--test-name-pattern', '^selected success$'], status: 1, error: /Use --test-name-pattern=<pattern> as one argument/ },
+  { name: 'rejects listing with a name pattern', args: ['--list', '--test-name-pattern=selected'], status: 1, error: /--list cannot be combined/ },
+  { name: 'lists without loading tests', args: ['--list'], status: 0 },
+]) test(`Node runner ${entry.name}`, t => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'node-filter-'));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  fs.cpSync(path.join(root, 'scripts'), path.join(fixture, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(fixture, 'package.json'), '{"type":"module"}');
+  const tests = path.join(fixture, 'cli/lib/__tests__');
+  fs.mkdirSync(tests, { recursive: true });
+  const receipt = path.join(fixture, 'executed.txt');
+  fs.writeFileSync(path.join(tests, 'fixture.test.js'), `
+    import { test, describe } from 'node:test';
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    test('selected success', () => fs.writeFileSync(${JSON.stringify(receipt)}, 'success'));
+    test('selected skip', { skip: 'fixture gate disabled' }, () => assert.fail('gate must skip'));
+    test('selected failure', () => assert.fail('selected fixture failure'));
+    describe('selected suite', () => {
+      test('child', () => fs.writeFileSync(${JSON.stringify(receipt)}, 'child'));
+    });
+  `);
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const files = entry.args.includes('--list') ? [] : ['cli/lib/__tests__/fixture.test.js'];
+  const result = spawnSync(process.execPath, [path.join(fixture, 'scripts/run-node-tests.js'), ...entry.args, ...files], {
+    cwd: fixture, encoding: 'utf8', timeout: 30000, env,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, entry.status, result.stdout + result.stderr);
+  if (entry.error) assert.match(result.stdout + result.stderr, entry.error);
+  if (entry.receipt) assert.equal(fs.readFileSync(receipt, 'utf8'), entry.receipt);
+  else assert.equal(fs.existsSync(receipt), false, 'unselected or skipped bodies must not run');
+});

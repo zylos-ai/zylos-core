@@ -8,7 +8,7 @@ const cleanup = [];
 const t = { after: callback => cleanup.push(callback) };
 const sandbox = createChatSandbox(t, { existingRoot: path.dirname(process.env.HOME) });
 if (!sandbox) throw Error('Explicit integration gate is required');
-const fixture = await createChatApiFixture(t, sandbox, { name: 'remote-process', pageApis: process.argv.includes('--page-apis') });
+const fixture = await createChatApiFixture(t, sandbox, { name: 'remote-process' });
 if (process.argv.includes('--lookup-unavailable')) fixture.setLookupUnavailable(true);
 await fixture.restartDelivery();
 const send = value => process.stdout.write(`CHAT_RPC ${JSON.stringify(value)}\n`);

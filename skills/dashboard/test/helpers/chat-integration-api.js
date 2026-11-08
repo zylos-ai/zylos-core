@@ -61,7 +61,7 @@ export function assertChatProcessIsolation(sandbox, { env = process.env, skillsD
 
 // Real HTTP/AuthGate/chat modules and two SQLite owners. Only the Core route and
 // notification adapter are controlled: no model, PM2 or tmux is launched here.
-export async function createChatApiFixture(t, sandbox, { name = 'instance', extraHandler, attachmentService = true, pageApis = false } = {}) {
+export async function createChatApiFixture(t, sandbox, { name = 'instance', extraHandler, attachmentService = true } = {}) {
   console.log('Chat HTTP isolation:', JSON.stringify(sandbox.assertIsolation()));
   console.log('Chat Core process isolation:', JSON.stringify(assertChatProcessIsolation(sandbox)));
   const zylos = sandbox.paths.zylos;
@@ -152,14 +152,6 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
         sendJson(res, 200, await workbenchResponse(workbench, url.pathname, url.searchParams)); return;
       }
       if (await extraHandler?.(req, res, url, fixture)) return;
-      if (pageApis && url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/chat/')) {
-        const values = { '/api/session-mode': { data: { sessionMode: readMode() } },
-          '/api/state': { state: 'idle', runtime: 'claude', session_mode: readMode(), agent: { id: 'test', name }, runtime_info: {} },
-          '/api/fleet': { agents: [] }, '/api/settings': { active: 'claude', runtimes: { claude: { modelPrices: {}, builtInModels: [], fastMode: {} }, codex: { modelPrices: {}, builtInModels: [], priorityModelPrices: {}, builtInPriorityModels: [] } } },
-          '/api/workbench/pricing': { models: [] }, '/api/workbench/runtime-overrides': { runtime: [], runtimeTotal: 0, nextAfter: null } };
-        if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
-        sendJson(res, 200, values[url.pathname] || {}); return;
-      }
       if (['/', '/index.html', '/chat'].includes(url.pathname)) {
         sendHtml(res, 200, fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8')
           .replaceAll('__BASE_PATH__', '').replaceAll('__ASSET_ROOT__', '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin')); return;
@@ -245,11 +237,11 @@ export function questionContent(question) { return CONTENT_PREFIX + JSON.stringi
 // A real second Dashboard runs in a separate process because AuthGate owns a
 // process-global session store. Sharing its module between instances would be
 // an invalid test topology. The child's own harness proves every private target.
-export async function createRemoteChatApiFixture(t, sandbox, { timeoutMs = 45000, pageApis = false } = {}) {
+export async function createRemoteChatApiFixture(t, sandbox, { timeoutMs = 45000 } = {}) {
   let child, info, serial = 0;
   const pending = new Map();
   async function launch({ lookupUnavailable = false } = {}) {
-    child = sandbox.startChild(process.execPath, [fileURLToPath(new URL('./chat-integration-api-child.js', import.meta.url)), ...(lookupUnavailable ? ['--lookup-unavailable'] : []), ...(pageApis ? ['--page-apis'] : [])], {
+    child = sandbox.startChild(process.execPath, [fileURLToPath(new URL('./chat-integration-api-child.js', import.meta.url)), ...(lookupUnavailable ? ['--lookup-unavailable'] : [])], {
       // This RPC process serves the whole case, including every matrix reply.
       // The outer case's shorter deadline still owns its final teardown.
       timeoutMs, maxOutputBytes: 1024 * 1024,

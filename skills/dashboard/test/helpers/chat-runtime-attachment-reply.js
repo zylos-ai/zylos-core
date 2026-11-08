@@ -32,7 +32,7 @@ const read = (filename, kind) => {
   ]));
   assert.equal(record.ok, true);
   assert.ok(record.attachmentId);
-  return { record, hash };
+  return { record, hash, path: actual };
 };
 const image = read(imagePath, 'image'), file = read(filePath, 'file');
 const receipt = `FIXTURE_ATTACHMENT_ACK:${phase}:${image.hash}:${file.hash}`;
@@ -47,3 +47,6 @@ const content = '[C4-JSON]\n' + JSON.stringify({ version: 1, kind: 'message',
     block('file', 'file', file.record),
   ] });
 run('comm-bridge/scripts/c4-send.js', ['dashboard', endpoint, '--session-group', endpoint], content);
+fs.writeFileSync(path.join(root, 'workspace', `fixture-attachment-observed-${phase}.json`), JSON.stringify({
+  endpoint, phase, paths: [image.path, file.path], hashes: [image.hash, file.hash]
+}), { flag: 'wx', mode: 0o600 });

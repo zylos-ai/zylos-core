@@ -101,6 +101,14 @@ for (const [name, scenario, accounts] of [
     assert.equal(receipt.scenario, scenario);
     if (scenario.startsWith('attachments-')) {
       assert.equal(receipt.attachmentReplies, 2, 'Original and fresh native sessions completed attachment replies');
+      assert.equal(new Set(receipt.attachmentReplyIds).size, receipt.attachmentReplies, 'Receipt counts distinct observed C4 reply rows');
+      assert.deepEqual(receipt.triggers.map(({ phase, attachmentAnnotations }) => ({ phase, attachmentAnnotations })), [
+        { phase: 'original', attachmentAnnotations: 2 }, { phase: 'fresh', attachmentAnnotations: 0 },
+      ], 'Fresh native trigger carries no new upload annotation');
+      assert.notEqual(receipt.triggers[0].id, receipt.triggers[1].id);
+      assert.equal(receipt.ttlEndingRunId, receipt.originalRunId);
+      assert.equal(receipt.ttlEndingReason, 'ttl');
+      assert.notEqual(receipt.freshRunId, receipt.originalRunId);
       assert.equal(receipt.reclaimed, true, 'Actual TTL ending preceded the second attachment read');
       assert.equal(receipt.fleet, scenario.endsWith('-fleet'));
     } else assert.ok(receipt.answers >= 4, 'All supported question action types traversed the real model chain');

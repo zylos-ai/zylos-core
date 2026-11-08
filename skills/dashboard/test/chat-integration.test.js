@@ -12,6 +12,7 @@ import strictAssert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
@@ -21,7 +22,7 @@ import { createChatApiFixture, createRemoteChatApiFixture, questionContent, asse
 import { acceptDelivery } from '../src/lib/chat/channel.js';
 import { makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { ATTACHMENT_SEND_WINDOW_MS, ATTACHMENT_TTL_MS, ATTACHMENT_GC_INTERVAL_MS } from '../src/lib/chat/attachments.js';
-import { buildAnnotatedContent } from '../../web-console/scripts/attachment-utils.js';
+import { buildAnnotatedContent, parseAttachmentAnnotation } from '../../web-console/scripts/attachment-utils.js';
 import { fixturePng } from './helpers/chat-attachments-api.js';
 
 const conditionalFixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
@@ -545,7 +546,8 @@ registerIntegrationCase('startup loads delivered history without querying or inj
 // FleetProxy. Run for attachment storage/routes/protocol; unrelated UI may skip.
 // Each case owns private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DBs via the harness.
 for (const fleet of [false, true]) attachmentCase(`${fleet ? 'fleet' : 'local'} image and file messages preserve target bytes and mixed agent references`, async (t, sandbox) => {
-  const target = fleet ? await createRemoteChatApiFixture(t, createChatSandbox(t)) : await createChatApiFixture(t, sandbox);
+  const targetSandbox = fleet ? createChatSandbox(t) : sandbox;
+  const target = fleet ? await createRemoteChatApiFixture(t, targetSandbox) : await createChatApiFixture(t, sandbox);
   const hub = fleet ? await createChatApiFixture(t, sandbox) : target;
   if (fleet) {
     assert.equal((await target.request('/api/chat/settings', { method: 'PUT', body: { allowRemote: true } })).status, 200);
@@ -581,12 +583,26 @@ for (const fleet of [false, true]) attachmentCase(`${fleet ? 'fleet' : 'local'} 
   assert.equal(history.status, 200);
   const user = history.body.items.find(row => row.id === sent.body.messageId);
   assert.equal(user.attachments.length, 2); assert.ok(user.attachments.every(item => item.available));
+  const annotations = user.content.split('\n').map(parseAttachmentAnnotation).filter(Boolean);
+  assert.equal(annotations.length, 2);
+  for (const [index, annotation] of annotations.entries()) {
+    assert.equal(path.dirname(annotation.path), path.join(targetSandbox.paths.zylos, 'components/dashboard/media'));
+    assert.equal(attachmentDigest(fs.readFileSync(annotation.path)), attachmentDigest(index === 0 ? png : text));
+  }
   assert.equal(history.body.items.find(row => row.id === mixed.body.messageId).attachments[0].id, file.body.id);
   const register = async (name, kind, bytes) => {
     if (fleet) return target.registerAttachment(current.draft.localId, name, kind, bytes.toString('base64'));
     const directory = path.join(sandbox.paths.zylos, 'workspace'); fs.mkdirSync(directory, { recursive: true });
     const filename = path.join(directory, name); fs.writeFileSync(filename, bytes);
-    return target.attachments.register(current.draft.localId, { kind, path: filename });
+    sandbox.assertIsolation();
+    const child = sandbox.startChild(process.execPath, [fileURLToPath(new URL('../scripts/attachments.js', import.meta.url)),
+      'register', '--conversation', current.draft.localId, '--kind', kind, '--path', filename], { timeoutMs: 8000, maxOutputBytes: 65536 });
+    child.stdin.end();
+    const result = await child.completion;
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    const record = JSON.parse(result.stdout);
+    assert.equal(record.ok, true);
+    return record;
   };
   const registeredImage = await register('answer.png', 'image', png);
   const registeredFile = await register('answer.txt', 'file', text);
@@ -633,7 +649,9 @@ attachmentCase('cookie and API key principals cannot cross groups or unlinked ow
 });
 
 // Boundary: unreferenced physical copies expire at 30 minutes, not 25. Run
-// for collection/window changes; unrelated rendering may skip. Private harness.
+// for collection/window changes; unrelated rendering may skip.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
+// runner and sandbox read back actual paths before allocation and own cleanup.
 attachmentCase('unsent upload expires for sending at twenty-five minutes and deletes its file at thirty', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
   const record = await uploadAttachment(a, active.route); assert.equal(record.status, 201);
@@ -651,7 +669,8 @@ attachmentCase('unsent upload expires for sending at twenty-five minutes and del
 
 // Boundary: existing authoritative references outlive login/TTL/window and
 // same ID links to multiple messages. Run for history/GC; UI-only may skip.
-// Private fixture; timestamp backfill uses existing schema, no product clock.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
+// timestamp backfill uses existing schema, no product clock; sandbox owns cleanup.
 attachmentCase('multiple message references survive login renewal and thirty-minute collection', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
   const bytes = Buffer.from('permanent linked copy');
@@ -672,7 +691,8 @@ attachmentCase('multiple message references survive login renewal and thirty-min
 
 // Boundary: linked row committed but callback lost; history repairs without
 // an extra receive. Run for sender/history association; rendering may skip.
-// Private sandbox and DBs; controlled receive adapter loses only its receipt.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
+// sandbox owns cleanup; controlled receive adapter loses only its receipt.
 attachmentCase('lost post-insert receipt is repaired by history without automatic resend', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
   const record = await uploadAttachment(a, active.route); assert.equal(record.status, 201);
@@ -690,7 +710,8 @@ attachmentCase('lost post-insert receipt is repaired by history without automati
 
 // Boundary: >200 relevant rows after fixed registration watermark require
 // multiple GC passes. Run for GC/history queries; unrelated UI may skip.
-// Private harness. Bounded 205-row fixture asserts counts, never a large diff.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
+// sandbox owns cleanup. Bounded 205-row fixture asserts counts, never a large diff.
 attachmentCase('collection continues multiple pages after its fixed watermark before retaining a late reference', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
   const record = await uploadAttachment(a, active.route); assert.equal(record.status, 201);
@@ -710,7 +731,9 @@ attachmentCase('collection continues multiple pages after its fixed watermark be
 });
 
 // Boundary: Core lookup failure must defer deletion, then a later scan may
-// finish. Run for GC/recovery; unrelated UI may skip. Private DB and media.
+// finish. Run for GC/recovery; unrelated UI may skip.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
+// sandbox owns every database, media file and child through case teardown.
 attachmentCase('collection lookup failure preserves the physical copy for the next check', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
   const uploaded = await uploadAttachment(a, active.route); assert.equal(uploaded.status, 201);
@@ -724,21 +747,30 @@ attachmentCase('collection lookup failure preserves the physical copy for the ne
 });
 
 // Boundary: directory orphan cleanup follows mtime and preserves live record
-// copies. Run for GC/filesystem changes; UI-only may skip. Private media only.
+// copies. Run for GC/filesystem changes; UI-only may skip.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
+// sandbox owns every database, media file and child through case teardown.
 attachmentCase('directory sweep deletes old orphan final and partial files but preserves fresh files', async (t, sandbox) => {
-  const a = await createChatApiFixture(t, sandbox);
+  const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
+  const recorded = await uploadAttachment(a, active.route, Buffer.from('recorded old file'));
+  assert.equal(recorded.status, 201);
+  const recordedPath = a.attachments.resolve(active.draft.localId, recorded.body.id);
   const old = ['orphan-final.bin', 'orphan-part.bin.part'];
   for (const name of [...old, 'fresh.part']) fs.writeFileSync(path.join(a.attachments.mediaDir, name), 'orphan fixture');
   const aged = new Date(Date.now() - ATTACHMENT_TTL_MS - 1000);
   for (const name of old) fs.utimesSync(path.join(a.attachments.mediaDir, name), aged, aged);
+  fs.utimesSync(recordedPath, aged, aged);
   await a.attachments.gc();
   for (const name of old) assert.equal(fs.existsSync(path.join(a.attachments.mediaDir, name)), false);
   assert.equal(fs.existsSync(path.join(a.attachments.mediaDir, 'fresh.part')), true);
+  assert.equal(fs.existsSync(recordedPath), true);
+  assert.ok(savedAttachment(a, recorded.body.id));
 });
 
 // Boundary: accepted >5-minute validate-to-insert gap can race expiry GC.
 // Run for attachment windows/receive sequencing; unrelated UI may skip.
-// Private DB timestamp backfill and receive barrier, no product time changes.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
+// sandbox owns cleanup; DB timestamp backfill/receive barrier, no product time changes.
 attachmentCase('validation followed by more than five minutes before insert can leave an unavailable attachment', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
   const uploaded = await uploadAttachment(a, active.route); assert.equal(uploaded.status, 201);
@@ -760,7 +792,8 @@ attachmentCase('validation followed by more than five minutes before insert can 
 });
 
 // Boundary: target remote permission revoked while multipart writer is active.
-// Run for attachment authorization/stream cleanup; UI-only may skip. Private
+// Run for attachment authorization/stream cleanup; UI-only may skip.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
 // loopback request/socket/media/DB; case cleanup owns unfinished requests.
 for (const fleet of [false, true]) attachmentCase(`${fleet ? 'fleet' : 'local'} permission closure rejects an ongoing upload and removes its partial file`, async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
@@ -796,7 +829,8 @@ for (const fleet of [false, true]) attachmentCase(`${fleet ? 'fleet' : 'local'} 
 
 // Boundary: already-started binary response must abort, never complete with a
 // short successful body, after target permission closes. Run for streaming or
-// access changes; UI-only may skip. Private bounded 20 MiB file and HTTP socket.
+// access changes; UI-only may skip. Isolation: private HOME/ZYLOS_DIR/PM2_HOME/
+// short TMPDIR/socket/test DBs; case owns bounded 20 MiB file and HTTP socket.
 for (const fleet of [false, true]) attachmentCase(`${fleet ? 'fleet' : 'local'} permission closure aborts an ongoing download instead of returning a successful short body`, async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
   a.config.chat.allowRemote = true;
@@ -821,13 +855,23 @@ for (const fleet of [false, true]) attachmentCase(`${fleet ? 'fleet' : 'local'} 
     response.once('error', () => { failed = true; });
     response.once('close', resolve);
   });
-  await delay(1100); a.config.chat.allowRemote = false; response.resume(); await completion;
+  await delay(1100); a.config.chat.allowRemote = false;
+  const resumedAt = performance.now();
+  let closeDeadline;
+  try {
+    response.resume();
+    await Promise.race([completion, new Promise((_, reject) => {
+      closeDeadline = setTimeout(() => { request.destroy(); reject(Error('Revoked download did not close within 3000ms')); }, 3000);
+    })]);
+    assert.ok(performance.now() - resumedAt < 3000, 'Revoked download closes promptly rather than waiting for keep-alive expiry');
+  } finally { clearTimeout(closeDeadline); }
   assert.equal(failed, true); assert.equal(response.complete, false); assert.ok(received < bytes.length);
   a.config.chat.allowRemote = true; await assertAttachmentBytes(a, active.route, uploaded.body.id, bytes, { identity: 'admin' });
 });
 
 // Boundary: rejected upload/send and uncertain committed receive are not retry
-// triggers. Run for failure/recovery semantics; unrelated UI may skip. Private
+// triggers. Run for failure/recovery semantics; unrelated UI may skip.
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs;
 // HTTP and DB with controlled Core receipt only, no native runtime or network.
 attachmentCase('upload and send failures never schedule a second receive or replay uploaded bytes', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox), active = await a.createConversation();
