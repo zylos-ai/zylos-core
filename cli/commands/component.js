@@ -27,6 +27,7 @@ import { evaluateUpgrade } from '../lib/claude-eval.js';
 import { resumeFinalize } from '../lib/upgrade-resume.js';
 import { recoverBeforeUpgrade } from '../lib/upgrade-discovery.js';
 import { upgradeFailureCode, upgradeFailureMessage } from '../lib/upgrade-admission.js';
+import { inspectDashboardRegistrationCleanup, cleanupDashboardRegistration } from '../lib/dashboard-registration-cleanup.js';
 
 /**
  * Print a single upgrade step result in real time.
@@ -1249,7 +1250,7 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
   }
 }
 
-export async function uninstallComponent(args) {
+export async function uninstallComponent(args, deps = {}) {
   // zylos uninstall --self → full system uninstall
   if (args.includes('--self')) {
     const hasTarget = args.some(a => !a.startsWith('-'));
@@ -1284,11 +1285,23 @@ export async function uninstallComponent(args) {
   }
 
   if (target === 'dashboard') {
-    const result = { action: checkOnly ? 'uninstall_check' : 'uninstall', success: false, component: target,
-      error: 'core_managed', message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
-    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
-    process.exitCode = 1;
-    return;
+    const options = { zylosDir: deps.zylosDir || ZYLOS_DIR, packageRoot: deps.packageRoot };
+    let result = inspectDashboardRegistrationCleanup(options, deps);
+    if (result.success && explicitPurge) {
+      result = { success: false, error: 'purge_not_supported', message: 'Dashboard registration cleanup retains all files and data; --purge is not supported.' };
+    } else if (result.success && !checkOnly) {
+      const confirmed = skipConfirm || explicitConfirm || await (deps.promptYesNo || promptYesNo)('Remove standalone Dashboard registration and verified standalone services? Core Dashboard, files and data will be retained.', false);
+      result = confirmed ? cleanupDashboardRegistration(options, deps) : { success: false, error: 'cancelled', message: 'Dashboard cleanup cancelled.' };
+    }
+    result = { action: checkOnly ? 'uninstall_check' : 'uninstall', component: target, ...result };
+    if (jsonOutput) console.log(JSON.stringify(result));
+    else {
+      console[result.success ? 'log' : 'error'](result.message || 'Dashboard registration cleanup preview: files and data retained.');
+      for (const warning of result.warnings || []) console.warn(warning);
+      if (checkOnly && result.success) console.log(`Standalone PM2 IDs to remove: ${result.removeServices.join(', ') || 'none'}`);
+    }
+    if (!result.success) process.exitCode = 1;
+    return result;
   }
 
   if (checkOnly) {
