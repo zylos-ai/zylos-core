@@ -753,8 +753,8 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
   .wb-memory-chart-row { grid-template-columns: minmax(70px, 96px) minmax(40px, 1fr) auto; }
   .wb-memory-flags { grid-column: 1 / -1; }
   .memory-layout { grid-template-columns: 1fr; min-height: 0; }
-  .memory-tree-card { border-right: 0; border-bottom: 1px solid var(--wb-line); }
-  .memory-tree { max-height: 46dvh; }
+  .memory-tree-card { border-right: 0; }
+  .memory-tree { max-height: none; }
   .memory-viewer-head { flex-wrap: wrap; justify-content: flex-start; align-items: flex-start; padding: 12px; }
   .wb-memory-summary:not([hidden]) { display: block; }
   .wb-memory-summary > .wb-ico { vertical-align: -2px; }
@@ -908,7 +908,7 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-nav { position: sticky; top: var(--wb-header-h); align-self: flex-start; width: 209px; flex: none; max-height: calc(100dvh - var(--wb-header-h)); display: flex; flex-direction: column; gap: 2px; padding: 14px 9px 14px 8px; overflow: auto; }
 .wb-set-nav-btn { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); font-size: 13px; text-align: left; white-space: nowrap; cursor: pointer; }
 .wb-set-nav-btn:hover { background: var(--wb-hover); color: var(--text); }
-.wb-set-nav-btn[aria-current="true"] { background: var(--wb-hover); color: var(--text); font-weight: 600; }
+.wb-set-nav-btn[aria-current="true"] { background: var(--wb-accent-soft); color: var(--accent); font-weight: 600; }
 .wb-set-nav-btn[hidden] { display: none; }
 .wb-set-nav-n { margin-left: auto; color: var(--wb-wait); font-size: 11px; font-weight: 600; }
 .wb-set-nav-n[hidden] { display: none; }
@@ -941,8 +941,8 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-fld-l { color: var(--text-dim); font-size: 13px; }
 .wb-input-num { width: 84px; }
 .wb-input-name { width: 220px; }
-.wb-set-card .wb-select-wrap select { height: 28px; padding: 0 26px 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 12.5px; appearance: none; -webkit-appearance: none; cursor: pointer; }
-.wb-set-card .wb-select-wrap select:focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
+/* Settings controls share one height: text fields, selects and buttons line up on a row. */
+.wb-set-body :is(.wb-input, .wb-select, .wb-btn) { height: var(--wb-h); }
 .wb-seg2 { display: inline-flex; height: var(--wb-h); border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); overflow: hidden; background: var(--wb-panel); }
 .wb-seg2 button { padding: 0 12px; border: 0; background: transparent; color: var(--text-dim); font-size: 12.5px; white-space: nowrap; cursor: pointer; }
 .wb-seg2 button + button { border-left: 1px solid var(--wb-line-strong); }
@@ -1195,3 +1195,37 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-k-acts { flex-wrap: wrap; row-gap: 4px; }
   .wb-page-h.agent-fleet-head { align-items: flex-start; }
 }
+
+/* ─── Phones: everything a finger taps is at least 40px; icon-only buttons are 40px square ─── */
+.memory-back { display: none; }
+@media (max-width: 760px) {
+  :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-drawer)
+    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot) { min-height: 40px; }
+  :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh) { min-width: 40px; }
+  .wb-switch-l { min-height: 40px; }
+  .wb-seg { height: auto; }
+  /* Switch-style buttons keep their 36×20 look inside a transparent 40px frame. */
+  .fleet-sound-toggle.wb-switch-btn { box-sizing: content-box; border: 10px solid transparent; background-clip: padding-box; }
+  .fleet-sound-toggle.wb-switch-btn:hover { border: 10px solid transparent; }
+  /* Timeline dots: a 40px transparent target around the same 9px dot; the lane clips targets at its ends. */
+  .wb-sched-timeline { overflow-x: clip; }
+  /* Chart text stays readable: the timeline's hour labels are at least 11px. */
+  .wb-sched-lane .wb-sched-axis, .wb-sched-lane .wb-sched-axis span { font-size: 11px; }
+  .wb-sched-timeline .wb-sched-dot { --wb-dot: var(--text-dim); --wb-dot-ring: none; width: 40px; height: 40px; margin: -20px 0 0 -20px; border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; }
+  .wb-sched-timeline .wb-sched-dot::before { content: ""; position: absolute; top: 50%; left: 50%; width: 9px; height: 9px; margin: -6.5px 0 0 -6.5px; box-sizing: content-box; border: 2px solid var(--wb-panel); border-radius: 50%; background: var(--wb-dot); box-shadow: var(--wb-dot-ring); }
+  .wb-sched-timeline .wb-sched-dot.wb-p1 { --wb-dot: var(--wb-wait); }
+  .wb-sched-timeline .wb-sched-dot:hover::before { transform: scale(1.25); }
+  .wb-sched-timeline .wb-sched-dot:hover { --wb-dot: var(--text); }
+  .wb-sched-timeline .wb-sched-dot.active { --wb-dot: var(--accent); --wb-dot-ring: 0 0 0 3px var(--wb-accent-soft); }
+  .memory-file, .wb-memory-group-h, .wb-memory-section-h { min-height: 40px; }
+  /* Task detail: deleting sits apart from pausing and editing; a tappable value lines up with its label. */
+  .wb-sched-detail .wb-d-acts .wb-icon-danger { margin-left: auto; }
+  .wb-kv:has(> .wb-kv-v > button.wb-sched-target) { align-items: center; }
+
+  /* Memory: the file list and the open file each take the screen; the open file has a way back. */
+  .memory-back { display: inline-flex; align-self: flex-start; }
+  #tab-memory:not(.memory-file-open) .memory-viewer { display: none; }
+  #tab-memory.memory-file-open :is(.memory-tree-card, .wb-memory-summary, .wb-memory-charts) { display: none; }
+  #tab-memory.memory-file-open .memory-content { padding: 12px 12px 24px; }
+}
+.memory-raw { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -99,7 +99,8 @@ const state = {
     conflictRetryText: '',
     liveNotice: null,
     draftTimer: null,
-    liveCheckTimer: null
+    liveCheckTimer: null,
+    filePaneOpen: false
   }
 };
 
@@ -389,7 +390,7 @@ const memoryScopeView = createMemoryScope({
   summaryRoot: $('#memory-summary'), t,
   request: fetchAgentJson, getTree: () => state.memory.tree, getFile: () => state.memory.file,
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
-  onChange: () => renderMemory(), onFile: path => openMemoryFile(path).catch(() => {}),
+  onChange: () => renderMemory(), onFile: path => { state.memory.filePaneOpen = true; window.scrollTo(0, 0); return openMemoryFile(path).catch(() => {}); },
   onGroup: path => state.memory.collapsed.delete(path),
   selectedPath: () => state.memory.selectedPath,
   isCollapsed: key => state.memory.collapsed.has(key),
@@ -431,7 +432,8 @@ function resetMemoryState() {
     conflictRetryText: '',
     liveNotice: null,
     draftTimer: null,
-    liveCheckTimer: null
+    liveCheckTimer: null,
+    filePaneOpen: false
   };
 }
 
@@ -755,6 +757,7 @@ function renderMemory() {
   }
   renderedBtn?.classList.toggle('active', state.memory.mode === 'rendered');
   rawBtn?.classList.toggle('active', state.memory.mode === 'raw');
+  $('#tab-memory')?.classList.toggle('memory-file-open', state.memory.filePaneOpen);
   renderMemoryActions();
 
   if (readOnly) {
@@ -1687,6 +1690,8 @@ function initObserverControls() {
 function initMemoryControls() {
   $('#memory-refresh')?.addEventListener('click', () => loadMemoryTree({ force: true }).catch(() => {}));
   $('#memory-edit-btn')?.addEventListener('click', startMemoryEdit);
+  // Phones show the file list and the open file one at a time; this returns to the list.
+  $('#memory-back')?.addEventListener('click', () => { state.memory.filePaneOpen = false; renderMemory(); window.scrollTo(0, 0); });
   $('#memory-save-btn')?.addEventListener('click', () => saveMemoryDraftToServer().catch(() => {}));
   $('#memory-reset-btn')?.addEventListener('click', resetMemoryEdit);
   $('#memory-fold')?.addEventListener('click', () => {

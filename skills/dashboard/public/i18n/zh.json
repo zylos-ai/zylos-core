@@ -33,6 +33,7 @@
   "observer.state_unsupported": "当前环境没有可用的 Observer 包",
   "observer.state_failed": "安装状态需要处理",
   "memory.title": "记忆",
+  "memory.back": "返回文件列表",
   "memory.refresh": "刷新记忆目录",
   "memory.collapse_all": "全部折叠",
   "memory.expand_all": "全部展开",

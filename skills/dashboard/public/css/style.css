@@ -553,7 +553,6 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
 
 @media (max-width: 760px) {
   .memory-layout { grid-template-columns: 1fr; }
-  .memory-tree { max-height: 260px; }
   .memory-viewer-head { flex-direction: column; }
 }
 
