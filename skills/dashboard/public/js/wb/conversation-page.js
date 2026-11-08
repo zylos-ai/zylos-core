@@ -74,7 +74,8 @@ export function mountConversationPage({
     activityEntries = new Map();
   let activityTimer = null,
     followAfterGesture = false,
-    growthDuringGesture = 0;
+    growthDuringGesture = 0,
+    shiftDuringGesture = 0;
   const view = document.defaultView;
   const listRows = new Map(),
     messages = new Map(),
@@ -511,7 +512,9 @@ export function mountConversationPage({
     passive: true
   });
   // While the user drags, swipes or wheels the history, the page never writes its scroll position. Once the list
-  // is still, it follows new content only if the user stayed at the bottom; a user who left it is not pulled back.
+  // is still, it follows new content only if the user stayed at the bottom; a user who left it is not pulled back,
+  // but the content that moved under them meanwhile (an older page, an opened attachment) is moved back by the same
+  // amount, so what they were reading stays in view.
   const gesture = createScrollGesture(stream, {
     setTimeout: (fn, ms) => view?.setTimeout ? view.setTimeout(fn, ms) : globalThis.setTimeout(fn, ms),
     clearTimeout: id => view?.clearTimeout ? view.clearTimeout(id) : globalThis.clearTimeout(id),
@@ -521,17 +524,27 @@ export function mountConversationPage({
         stream.scrollTop = stream.scrollHeight;
         unread = 0;
         updateUnread();
+      } else if (shiftDuringGesture) {
+        stream.scrollTop += shiftDuringGesture;
       }
       followAfterGesture = false;
       growthDuringGesture = 0;
+      shiftDuringGesture = 0;
     }
   });
-  function holdScroll(follow, grownBy = 0) {
+  /**
+   * During a gesture a change is not compensated at once: `shift` is how far the content the user was reading
+   * moved because of it, applied when the gesture settles.
+   */
+  function holdScroll(follow, grownBy = 0, shift = 0) {
     if (!gesture.active) return false;
     if (follow) followAfterGesture = true;
     growthDuringGesture += Math.max(0, grownBy);
+    if (Number.isFinite(shift)) shiftDuringGesture += shift;
     return true;
   }
+  const anchorShift = (anchorNode, anchorTop) => anchorNode?.isConnected && anchorTop !== undefined
+    ? anchorNode.getBoundingClientRect().top - anchorTop : 0;
   function positionChildren(parent, ordered) {
     for (let i = 0; i < ordered.length; i++) {
       if (parent.children[i] !== ordered[i]) {
@@ -786,7 +799,10 @@ export function mountConversationPage({
     if (destroyed) return;
     const before = captureHistory();
     change();
-    if (holdScroll(before.pinned, stream.scrollHeight - before.previousHeight)) { scheduleFit(); return; }
+    if (holdScroll(before.pinned, stream.scrollHeight - before.previousHeight, anchorShift(before.anchor?.node, before.anchorTop))) {
+      scheduleFit();
+      return;
+    }
     if (before.pinned) stream.scrollTop = stream.scrollHeight;
     else if (before.anchor?.node.isConnected) stream.scrollTop = before.oldTop + before.anchor.node.getBoundingClientRect().top - before.anchorTop;
     scheduleFit();
@@ -855,7 +871,7 @@ export function mountConversationPage({
     for (const record of messages.values()) record.resource?.mount?.();
     const follow = switched || !maxSeenId && s.messages.length || added && near && !s.gap
       || pinned && (stream.scrollHeight !== previousHeight || stream.clientHeight !== previousClientHeight);
-    if (holdScroll(follow, stream.scrollHeight - previousHeight)) {
+    if (holdScroll(follow, stream.scrollHeight - previousHeight, anchorShift(anchor?.node, anchorTop))) {
       if (follow) unread = 0;
     } else if (follow) {
       stream.scrollTop = stream.scrollHeight;
@@ -943,7 +959,8 @@ export function mountConversationPage({
     const before = head?.getBoundingClientRect().top;
     activityOpen.set(key, activityOpen.get(key) !== true);
     found.area.update(found.entry, { open: activityOpen.get(key), now: serverNow(currentSnapshot) });
-    if (before !== undefined && head.isConnected && !gesture.active) stream.scrollTop += head.getBoundingClientRect().top - before;
+    const shift = anchorShift(head, before);
+    if (shift && !holdScroll(false, 0, shift)) stream.scrollTop += shift;
     scheduleFit();
   }
   function fitPage() {
@@ -963,7 +980,7 @@ export function mountConversationPage({
       fittedHeight = available;
       page.style.height = `${available}px`;
     }
-    if (holdScroll(bottom)) return;
+    if (holdScroll(bottom, 0, anchorShift(anchor, anchorTop))) return;
     if (bottom) {
       stream.scrollTop = stream.scrollHeight;
     } else if (anchor?.isConnected) {

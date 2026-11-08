@@ -243,8 +243,9 @@ test('scroll gesture covers touch, pointer, wheel and momentum and cleans up its
     clearTimeout: id => timers.delete(id), onSettle: () => settled++ });
   const runLast = () => { const [id, fn] = [...timers].at(-1); timers.delete(id); fn(); };
   listeners.get('pointerdown')({ pointerType: 'mouse', button: 0 });
-  assert.equal(gesture.active, true);
+  assert.equal(gesture.active, false, 'a mouse press alone is a click, not yet a gesture');
   listeners.get('scroll')();
+  assert.equal(gesture.active, true, 'the list moving under the held button makes it a gesture');
   assert.equal(timers.size, 0, 'no settling while the pointer is held');
   docListeners.get('pointerup')();
   assert.equal(timers.size, 1, 'release starts the quiet period');
@@ -261,6 +262,142 @@ test('scroll gesture covers touch, pointer, wheel and momentum and cleans up its
   assert.equal(gesture.active, true);
   gesture.destroy();
   assert.equal(timers.size, 0); assert.equal(listeners.size, 0); assert.equal(docListeners.size, 0);
+});
+
+test('a press on a control is a click: only a list that moves under it, a touch elsewhere or the wheel is a gesture', () => {
+  const listeners = new Map(), docListeners = new Map(), timers = new Map();
+  let next = 0, settled = 0;
+  const target = { ownerDocument: { addEventListener: (type, fn) => docListeners.set(type, fn), removeEventListener: type => docListeners.delete(type) },
+    addEventListener: (type, fn) => listeners.set(type, fn), removeEventListener: type => listeners.delete(type) };
+  const gesture = createScrollGesture(target, { setTimeout: fn => { timers.set(++next, fn); return next; },
+    clearTimeout: id => timers.delete(id), onSettle: () => settled++ });
+  const control = selector => ({ closest: wanted => wanted.split(',').map(part => part.trim()).includes(selector) ? {} : null });
+  for (const selector of ['button', 'a', 'input', 'textarea', 'select', 'label', 'summary', '[role="button"]', '[contenteditable]']) {
+    listeners.get('pointerdown')({ pointerType: 'mouse', button: 0, target: control(selector) });
+    docListeners.get('pointerup')();
+    listeners.get('touchstart')({ target: control(selector) });
+    listeners.get('touchend')();
+    assert.equal(gesture.active, false, `a click or tap on ${selector} is not a gesture`);
+  }
+  assert.equal(timers.size, 0, 'a click leaves nothing to settle');
+  assert.equal(settled, 0);
+  listeners.get('touchstart')({ target: control('button') });
+  listeners.get('scroll')();
+  assert.equal(gesture.active, true, 'a swipe that starts on a button and moves the list is a gesture');
+  listeners.get('touchend')();
+  [...timers.values()].at(-1)();
+  assert.equal(gesture.active, false); assert.equal(settled, 1);
+  listeners.get('touchstart')({ target: control('div') });
+  assert.equal(gesture.active, true, 'a touch on the list itself is a gesture at once');
+  gesture.destroy();
+});
+
+/** A page whose message rows are 100 px tall, in list order, inside a 500 px tall stream; `older` is one more page. */
+function layoutFixture(context, { rows, older }) {
+  const document = createDocument(), root = document.createElement('div');
+  const create = document.createElement, docListeners = new Map(), timers = [];
+  let stream = null;
+  document.createElement = tag => {
+    const node = create(tag);
+    node.getClientRects = () => [];
+    Object.defineProperty(node, 'isConnected', { get: () => { for (let at = node; at; at = at.parentNode) if (at === root) return true; return false; } });
+    node.getBoundingClientRect = () => {
+      if (node === stream) return { top: 0, bottom: 500 };
+      const list = node.parentNode;
+      if (!list?.classList.contains('conversation-message-list')) return { top: 0, bottom: 0 };
+      const top = list.children.indexOf(node) * 100 - (stream?.scrollTop ?? 0);
+      return { top, bottom: top + 100 };
+    };
+    return node;
+  };
+  document.addEventListener = (type, fn) => docListeners.set(type, fn);
+  document.removeEventListener = type => docListeners.delete(type);
+  document.defaultView = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: id => { if (timers[id - 1]) timers[id - 1].fn = null; },
+    setInterval: () => 9, clearInterval() {}, innerWidth: 1280 };
+  const page = mountConversationPage({ root, document, t, fetch: async path => {
+    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:a', displayName: 'A' }], nextCursor: null }
+      : path.includes('/messages?') && path.includes('cursor=older') ? { items: older, nextCursor: null }
+      : path.includes('/messages?') ? { items: rows, nextCursor: 'older', afterCursor: 'after' }
+      : path.includes('/activity?') ? { now: s(0), items: [], rounds: [] }
+      : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', sessionGroup: 'dashboard:a', state: 'active' } }
+      : { items: [], nextCursor: null };
+    return { ok: true, status: 200, json: async () => body };
+  } });
+  context.after(() => page.destroy());
+  return { root, page, timers, docListeners, async open() {
+    await page.open();
+    allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click');
+    for (let i = 0; i < 6; i++) await tick();
+    stream = root.querySelector('.conversation-stream');
+    const list = root.querySelector('.conversation-message-list');
+    Object.defineProperty(stream, 'scrollHeight', { get: () => list.children.length * 100, set() {}, configurable: true });
+    stream.clientHeight = 500;
+    return { stream, list };
+  } };
+}
+const reply = id => ({ id, direction: 'out', content: `reply ${id}`, status: 'delivered' });
+
+test('clicking load older keeps the message being read where it was, even with the mouse still on the button', async t => {
+  const f = layoutFixture(t, { rows: Array.from({ length: 10 }, (_, i) => reply(11 + i)), older: Array.from({ length: 10 }, (_, i) => reply(1 + i)) });
+  const { stream, list } = await f.open();
+  stream.scrollTop = 300;
+  const reading = list.querySelector('[data-message-id="14"]');
+  assert.equal(reading.getBoundingClientRect().top, 0, 'the row being read is at the top of the view');
+  const older = f.root.querySelector('[data-action="loadOlder"]');
+  assert.equal(older.hidden, false);
+  stream.dispatch('pointerdown', { pointerType: 'mouse', button: 0, target: older });
+  older.dispatch('click');
+  for (let i = 0; i < 8; i++) await tick();
+  assert.ok(list.querySelector('[data-message-id="1"]'), 'the older page is shown');
+  assert.equal(reading.getBoundingClientRect().top, 0, 'the row being read did not move while the button was held');
+  f.docListeners.get('pointerup')();
+  for (const timer of f.timers.filter(timer => timer.fn && timer.ms === 180)) timer.fn();
+  assert.equal(reading.getBoundingClientRect().top, 0, 'nor after the button was released');
+});
+
+test('content that moves during a drag is moved back once the drag settles, unless the user follows the bottom', async t => {
+  const f = layoutFixture(t, { rows: Array.from({ length: 10 }, (_, i) => reply(11 + i)), older: Array.from({ length: 10 }, (_, i) => reply(1 + i)) });
+  const { stream, list } = await f.open();
+  stream.scrollTop = 300;
+  const reading = list.querySelector('[data-message-id="14"]');
+  stream.dispatch('touchstart', {});
+  f.root.querySelector('[data-action="loadOlder"]').dispatch('click');
+  for (let i = 0; i < 8; i++) await tick();
+  assert.equal(reading.getBoundingClientRect().top, 1000, 'the position is not written while the finger is down');
+  stream.dispatch('touchend', {});
+  f.timers.filter(timer => timer.fn && timer.ms === 180).at(-1).fn();
+  assert.equal(reading.getBoundingClientRect().top, 0, 'once the list is still, the older page no longer pushes the row away');
+});
+
+test('opening a folded part with the mouse or the keyboard keeps its head where it was on screen', async t => {
+  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => doneBody() });
+  const docListeners = new Map();
+  f.document.addEventListener = (type, fn) => docListeners.set(type, fn);
+  await f.open();
+  const stream = f.root.querySelector('.conversation-stream');
+  let top = 400;
+  Object.defineProperty(stream, 'scrollTop', { get: () => top, set: value => { top = value; }, configurable: true });
+  const area = f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity');
+  const head = area.firstElementChild;
+  assert.equal(head.tagName, 'BUTTON');
+  head.isConnected = true;
+  // Opening the part grows the content above the head by 60 px in this layout.
+  head.getBoundingClientRect = () => ({ top: area.querySelector('.conversation-activity-steps').hidden ? 200 : 260, bottom: 0 });
+  stream.dispatch('pointerdown', { pointerType: 'mouse', button: 0, target: head });
+  head.dispatch('click');
+  assert.equal(top, 460, 'a mouse click keeps the head in place');
+  head.focus();
+  head.dispatch('click');
+  assert.equal(top, 400, 'so does Enter or Space on the focused head (a click without a pointer press)');
+  stream.dispatch('touchstart', {});
+  head.dispatch('click');
+  assert.equal(top, 400, 'during a touch gesture the position is not written');
+  stream.dispatch('touchend', {});
+  f.timers.filter(timer => timer.fn && timer.ms === 180).at(-1).fn();
+  assert.equal(top, 460, 'it is caught up once the list is still');
 });
 
 const refresh = async f => {
