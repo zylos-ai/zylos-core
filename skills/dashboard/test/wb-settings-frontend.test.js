@@ -608,3 +608,30 @@ test('threshold-only save reports next-decision effect in both interface languag
     panel.destroy();
   }
 });
+
+
+test('a custom model requests its own threshold instead of showing the current model fallback', async () => {
+  const document = documentFixture(), root = document.createElement('div'), requests = [], response = deferred();
+  const meta = { runtime: 'codex', current_model: 'small', current_effort: 'high', models: [{ id: 'small' }],
+    efforts_by_model: { '*': ['high'] }, new_session_threshold: 62,
+    model_thresholds: { small: 62 }, model_threshold_max: { small: 95 } };
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { codex: meta }, document, t,
+    read: path => { requests.push(path); return response.promise; } });
+  const model = root.querySelector('#settings-model-codex'), custom = root.querySelector('#settings-model-custom-codex');
+  const threshold = root.querySelector('#settings-threshold-codex');
+  assert.equal(threshold.value, '62');
+  model.value = '__custom__'; await model.dispatch('change');
+  custom.value = 'large-custom'; await custom.dispatch('input');
+  assert.equal(requests.length, 1);
+  const requested = new URL(requests[0], 'http://fixture.invalid');
+  assert.equal(requested.pathname, '/api/actions/meta');
+  assert.equal(requested.searchParams.get('runtime'), 'codex');
+  assert.equal(requested.searchParams.get('model'), 'large-custom');
+  assert.equal(threshold.value, '', 'a different model must not inherit the current model threshold');
+  assert.equal(threshold.disabled, true);
+  response.resolve({ ...meta, model_thresholds: { ...meta.model_thresholds, 'large-custom': 40 },
+    model_threshold_max: { ...meta.model_threshold_max, 'large-custom': 40 } });
+  await tick();
+  assert.equal(threshold.value, '40'); assert.equal(threshold.max, '40'); assert.equal(threshold.disabled, false);
+  panel.destroy();
+});

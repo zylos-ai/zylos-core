@@ -400,6 +400,12 @@ for(const failure of [null,'thresholds','ensure','state'])test(`closed writer ac
  const available=()=>assert.doesNotThrow(()=>require(stable).assertCoreDatabaseAvailable(f.root));
  available();
  if(failure==='state')fs.mkdirSync(path.join(f.root,'memory/state.md'),{recursive:true});
+ // Keep the threshold boundary active: a legal legacy value and native model
+ // exist, with no model map written before the controlled finalization call.
+ fs.mkdirSync(path.join(f.root,'.claude'),{recursive:true});
+ fs.mkdirSync(path.join(f.root,'.zylos'),{recursive:true});
+ fs.writeFileSync(path.join(f.root,'.claude/settings.json'),JSON.stringify({model:'opus'}));
+ fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({new_session_threshold:70}));
  const {completeUpgradeFinalization}=await import('../self-upgrade.js');
  const ctx={zylosDir:f.root,transactionDir:f.dir,transactionId:'tx',journal:f.j,maintenance:f.m,upgradeProtected:true,
    from:'old',to:'new',steps:[],servicesWereRunning:[],mergeConflicts:[],mergedFiles:[],

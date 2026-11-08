@@ -156,7 +156,7 @@ describe('base URL support', () => {
 });
 
 describe('fresh install new-session threshold default', () => {
-  test('seeds the configured 1M model threshold on fresh install', async () => {
+  test('keeps the configured model threshold implicit on fresh install', async () => {
     const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');
     const updates = [];
 
@@ -169,8 +169,8 @@ describe('fresh install new-session threshold default', () => {
       },
     });
 
-    assert.equal(changed, true);
-    assert.deepEqual(updates, [{ mergeIfAbsent: { model_rotation_thresholds: { claude: { 'opus[1m]': 40 } } } }]);
+    assert.equal(changed, false);
+    assert.deepEqual(updates, []);
   });
 
   test('preserves an existing Claude threshold value', async () => {

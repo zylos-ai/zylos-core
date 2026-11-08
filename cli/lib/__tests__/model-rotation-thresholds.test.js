@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { modelThreshold, modelThresholdKey, thresholdLimit, readDefaultModels, readCodexModelWindows, migrateModelThresholds, setModelThreshold } from '../model-rotation-thresholds.js';
 
@@ -63,6 +63,63 @@ test('native defaults ignore nested TOML models and public cache reader honors p
   f.write('codex/models_cache.json', { models: [{ slug: 'private-model', context_window: 500000 }] });
   assert.deepEqual(readDefaultModels({ zylosDir: f.root }), { claude: 'opus[1m]', codex: 'private-model' });
   assert.equal(readCodexModelWindows({ codexHome: path.join(f.root, 'codex') })[0].context_window, 500000);
+  f.write('.codex/config.toml', '[provider]\nmodel = "nested-only-model"\n');
+  assert.equal(readDefaultModels({ zylosDir: f.root }).codex, null, 'a table-only model is not a root default');
+});
+
+test('legacy scalar parsing preserves accepted historical numeric prefixes while model writes stay strict', t => {
+  const f = fixture(t);
+  f.write('.claude/settings.json', { model: 'opus' });
+  for (const [stored, expected] of [['45%', 45], ['50abc', 50], [30.5, 30], ['100tail', 100]]) {
+    const config = { new_session_threshold: stored };
+    assert.equal(modelThreshold(config, { runtime: 'claude', model: 'opus', defaultModel: 'opus' }), expected);
+    f.write('.zylos/config.json', config);
+    assert.equal(migrateModelThresholds({ zylosDir: f.root }).changed, true);
+    assert.equal(f.read().model_rotation_thresholds.claude.opus, expected);
+    assert.equal(f.read().new_session_threshold, stored, 'the historical scalar bytes remain represented by their original value');
+  }
+  assert.equal(modelThreshold({ model_rotation_thresholds: { claude: { opus: '45%' } } }, { runtime: 'claude', model: 'opus' }), 70);
+  for (const value of ['45%', '50abc', 30.5]) {
+    assert.throws(() => setModelThreshold({ zylosDir: f.root, runtime: 'claude', model: 'opus', value }), error => error.code === 'INVALID_MODEL_THRESHOLD');
+  }
+});
+
+test('migration leaves absent or invalid legacy thresholds implicit instead of storing policy defaults', t => {
+  const f = fixture(t);
+  f.write('.claude/settings.json', { model: 'opus[1m]' });
+  f.write('.codex/config.toml', 'model = "small"\n');
+  for (const value of [undefined, null, 'not-a-number', 0, 101]) {
+    f.write('.zylos/config.json', { keep: true, new_session_threshold: value });
+    const before = fs.readFileSync(f.file, 'utf8');
+    const result = migrateModelThresholds({ zylosDir: f.root, updateConfig: () => assert.fail('no legacy value needs a config write') });
+    assert.equal(result.changed, false);
+    assert.equal(fs.readFileSync(f.file, 'utf8'), before);
+    assert.equal(Object.hasOwn(f.read(), 'model_rotation_thresholds'), false);
+    assert.equal(modelThreshold(f.read(), { runtime: 'claude', model: 'opus[1m]' }), 40);
+  }
+  f.write('.zylos/config.json', { new_session_threshold: 64 });
+  assert.equal(migrateModelThresholds({ zylosDir: f.root }).changed, true);
+  assert.deepEqual(f.read().model_rotation_thresholds, { claude: { 'opus[1m]': 64 } });
+});
+
+for (const [key, runtime, model, value] of [
+  ['new_session_threshold', 'claude', 'opus', 60],
+  ['codex_new_session_threshold', 'codex', 'private-codex', 55],
+]) test(`legacy CLI key ${key} updates only its own engine native model`, t => {
+  const f = fixture(t);
+  f.write('.zylos/config.json', { runtime: 'claude', model_rotation_thresholds: { claude: { opus: 66 }, codex: { 'private-codex': 73 } } });
+  f.write('.claude/settings.json', { model: 'opus' });
+  f.write('.codex/config.toml', 'model = "private-codex"\n');
+  const cli = fileURLToPath(new URL('../../zylos.js', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, 'config', 'set', key, String(value)], {
+    env: { ...process.env, HOME: f.root, ZYLOS_DIR: f.root, CODEX_HOME: path.join(f.root, '.codex') },
+    encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const expected = { claude: { opus: 66 }, codex: { 'private-codex': 73 } };
+  expected[runtime][model] = value;
+  assert.deepEqual(f.read().model_rotation_thresholds, expected);
+  assert.equal(Object.hasOwn(f.read(), key), false, 'the CLI does not resume scalar writes');
 });
 
 test('migrates legacy values once without losing raw values and caps only effective 1M usage', t => {

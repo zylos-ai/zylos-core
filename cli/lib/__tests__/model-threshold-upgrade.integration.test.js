@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { completeUpgradeFinalization } from '../cli/lib/self-upgrade.js';
-import { startSupervisor } from '../skills/activity-monitor/scripts/supervisor-main.js';
-import { handleAction } from '../skills/dashboard/src/lib/actions.js';
-import { getActionsMeta } from '../skills/dashboard/src/lib/actions.js';
-import { sceneRotationThreshold } from '../skills/activity-monitor/scripts/supervisor-lifecycle.js';
-import { readThresholdPolicy, sessionThreshold } from '../skills/dashboard/src/lib/session-threshold.js';
+import { completeUpgradeFinalization } from '../self-upgrade.js';
+import { startSupervisor } from '../../../skills/activity-monitor/scripts/supervisor-main.js';
+import { handleAction } from '../../../skills/dashboard/src/lib/actions.js';
+import { getActionsMeta } from '../../../skills/dashboard/src/lib/actions.js';
+import { sceneRotationThreshold } from '../../../skills/activity-monitor/scripts/supervisor-lifecycle.js';
+import { readThresholdPolicy, sessionThreshold } from '../../../skills/dashboard/src/lib/session-threshold.js';
 
 // Covers real upgrade-finalization config writes, metadata and monitor resolution.
 // Run when model threshold migration or consumers change; unrelated UI styling

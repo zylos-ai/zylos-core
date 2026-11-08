@@ -264,7 +264,7 @@ describe('syncTemplateModelSetting', () => {
 });
 
 describe('syncModelCoupledNewSessionThreshold', () => {
-  it('seeds a model threshold when a native model was backfilled', () => {
+  it('keeps the threshold implicit after model backfill without a legacy value', () => {
     const updates = [];
     const logs = [];
 
@@ -279,9 +279,9 @@ describe('syncModelCoupledNewSessionThreshold', () => {
       log: (line) => logs.push(line),
     });
 
-    assert.equal(result.changed, true);
-    assert.deepEqual(updates, [{ mergeIfAbsent: { model_rotation_thresholds: { claude: { 'opus[1m]': 40 } } } }]);
-    assert.deepEqual(logs, ['  + model_rotation_thresholds: model defaults migrated']);
+    assert.equal(result.changed, false);
+    assert.deepEqual(updates, []);
+    assert.deepEqual(logs, []);
   });
 
   it('preserves an explicit threshold when model was backfilled', () => {
@@ -323,7 +323,7 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     const result = syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
       defaultModels: { claude: 'opus[1m]' },
-      cfg: {},
+      cfg: { new_session_threshold: 70 },
       dryRun: true,
       updateConfig: () => {
         throw new Error('dry run should not write config');

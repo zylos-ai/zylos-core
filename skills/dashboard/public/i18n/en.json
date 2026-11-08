@@ -145,7 +145,7 @@
   "settings.col_cache_write": "Cache Write",
   "actions.model": "Model",
   "actions.effort": "Effort",
-  "actions.threshold": "New Session Threshold",
+  "actions.threshold": "Rotation threshold",
   "actions.upgrade_cc": "Upgrade CC",
   "actions.upgrade_codex": "Upgrade Codex",
   "info.update_available": "v{version} available — click Actions to upgrade",

@@ -786,7 +786,7 @@
   "wb.settings.logout": "Log out",
   "wb.settings.longContextHint": "When one request exceeds the long-context threshold, the whole request uses long-context prices",
   "wb.settings.modelsSub": "Each model keeps its own threshold",
-  "wb.settings.modelsTitle": "Default model, effort and rotation threshold per engine",
+  "wb.settings.modelsTitle": "Rotation threshold, model and effort per engine",
   "wb.settings.nextStartNote": "Model and effort apply at the next start. Threshold changes apply to sessions using that model.",
   "wb.settings.noFollowers": "No running group uses these right now",
   "wb.settings.pref.account": "Account",

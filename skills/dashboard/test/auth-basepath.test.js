@@ -11,6 +11,7 @@ import { Store } from '../src/lib/store.js';
 import { migrateSchema13 } from './fixtures/schema13.js';
 import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
+import { CoreState } from '../src/lib/core-state.js';
 
 // HTTP/auth fixtures exercise actual product routing, not remote version hosts.
 mock.method(VersionChecker.prototype, 'start', () => {});
@@ -405,7 +406,7 @@ test('/api/state exposes stable agent identity without fleet secrets', async () 
     // Identity also carries the deterministic identity color/hue.
     assert.equal(typeof body.agent.color, 'string');
     assert.equal(typeof body.agent.hue, 'number');
-    assert.equal(typeof body.new_session_threshold, 'number');
+    assert.equal(body.new_session_threshold, null, 'without a running session the threshold is unknown');
     assert.ok(body.runtime_info && typeof body.runtime_info === 'object');
     assert.ok(body.system_metrics && typeof body.system_metrics === 'object');
     assert.ok(Object.hasOwn(body.system_metrics, 'cpu_pct'));
@@ -1662,4 +1663,58 @@ test('nested Dashboard login accepts any valid same-name cookie and logout clear
   assert.deepEqual(logout.headers.getSetCookie(), ['__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/ib/dashboard; Max-Age=0']);
   const ended = await fetch(origin, { headers: { ...headers, cookie: valid }, redirect: 'manual' });
   assert.equal(ended.status, 302); await ended.text();
+});
+
+// HTTP integration: state header and self fleet record share actual sampled model
+// facts. Run for threshold/usage-to-state changes; skip rendering-only changes.
+// The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and tmux.
+// Core observations are injected; the real HTTP server/DB are private and closed.
+test('state and fleet thresholds follow the actual session model across engine and window changes', { timeout: 15000 }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-threshold-state-'));
+  let server;
+  const stores = new Set(), timers = new Set();
+  const migrate = Store.prototype.migrate, schedule = globalThis.setInterval;
+  t.mock.method(Store.prototype, 'migrate', function (...args) {
+    stores.add(this); return migrate.apply(this, args);
+  });
+  t.mock.method(globalThis, 'setInterval', (...args) => {
+    const timer = schedule(...args); timers.add(timer); return timer;
+  });
+  t.after(async () => {
+    for (const timer of timers) clearInterval(timer);
+    if (server) {
+      server.closeAllConnections(); await closeServer(server);
+      await server.closeAttachments();
+    }
+    for (const store of stores) if (store.db.open) store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  writeConfig(root, 'secret', { auth: { enabled: false } });
+  for (const dir of ['.zylos', '.claude', '.codex']) fs.mkdirSync(path.join(root, dir), { recursive: true });
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', model_rotation_thresholds: {
+    claude: { haiku: 81, sonnet: 63, 'opus[1m]': 36 }, codex: { 'actual-codex': 58, 'native-codex': 79 },
+  } }));
+  fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'haiku' }));
+  fs.writeFileSync(path.join(root, '.codex/config.toml'), 'model = "native-codex"\n');
+  let runtime = 'claude', usage = { valid: false };
+  t.mock.method(CoreState.prototype, 'refresh', async function () { return this.getState(); });
+  t.mock.method(CoreState.prototype, 'getState', () => ({ runtime, state: 'IDLE', ready: true }));
+  t.mock.method(CoreState.prototype, 'getUsageObservation', () => structuredClone(usage));
+  t.mock.method(CoreState.prototype, 'getLaunchConfig', () => ({ runtime, mode: 'default' }));
+  const running = await makeServerWithDir(root); server = running.server;
+  for (const [engine, sample, expected] of [
+    ['claude', { model: { id: 'claude-sonnet-4-6' }, context_window: { context_window_size: 200000, used_percentage: 50 } }, 63],
+    ['claude', { model: { id: 'claude-opus-4-6' }, context_window: { context_window_size: 1000000, used_percentage: 50 } }, 36],
+    ['codex', { model: 'actual-codex', contextUsage: { used: 50000, ceiling: 258400 } }, 58],
+    ['claude', null, null],
+  ]) {
+    runtime = engine; usage = sample ? { valid: true, value: sample } : { valid: false };
+    const stateResponse = await fetch(running.origin + '/api/state', { signal: AbortSignal.timeout(3000) });
+    assert.equal(stateResponse.status, 200);
+    assert.equal((await stateResponse.json()).new_session_threshold, expected);
+    const fleetResponse = await fetch(running.origin + '/api/fleet', { signal: AbortSignal.timeout(3000) });
+    assert.equal(fleetResponse.status, 200);
+    const self = (await fleetResponse.json()).agents.find(agent => agent.self);
+    assert.ok(self); assert.equal(self.new_session_threshold, expected);
+  }
 });

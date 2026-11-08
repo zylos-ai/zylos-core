@@ -151,6 +151,19 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     run: overrides => runSelfUpgradeFinalize(state, { ...deps, ...overrides }) };
 }
 
+// Resume fault tests need a real pending migration even if the preparatory run
+// already completed configuration finalization. All files belong to the fixture.
+function pendingThresholdMigration(f) {
+  const config = JSON.parse(f.read('.zylos/config.json'));
+  config.new_session_threshold = 70;
+  delete config.model_rotation_thresholds;
+  const settings = JSON.parse(f.read('.claude/settings.json'));
+  settings.model = 'opus[1m]';
+  f.write('.claude/settings.json', JSON.stringify(settings, null, 2) + '\n');
+  f.write('.zylos/config.json', JSON.stringify(config, null, 2) + '\n');
+  return JSON.stringify({ ...config, model_rotation_thresholds: { claude: { 'opus[1m]': 70 } } }, null, 2) + '\n';
+}
+
 function assertDataPreserved(f) {
   const db = new Database(path.join(f.root, 'comm-bridge/c4.db'), { readonly: true });
   try { assert.equal(db.prepare('SELECT summary FROM checkpoints WHERE id=17').get().summary, 'keep current data'); }
@@ -181,7 +194,7 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assert.match(f.read('CLAUDE.md'), /private user instructions/);
   assert.match(f.read('AGENTS.md'), /private user instructions/);
   assert.ok(JSON.parse(f.read('.claude/settings.json')).hooks.SessionStart);
-  assert.equal(JSON.parse(f.read('.zylos/config.json')).model_rotation_thresholds.claude['opus[1m]'], 40);
+  assert.equal(Object.hasOwn(JSON.parse(f.read('.zylos/config.json')), 'model_rotation_thresholds'), false, 'defaults remain implicit without a legacy user value');
   assert.equal(result.settingsChanged, true);
   assert.equal(Object.hasOwn(result, 'instructionFilesRebuilt'), false);
   assert.equal(result.completion.modeTransition, 'pending_auto');
@@ -413,6 +426,7 @@ test('protected finalization without takeover verifies Dashboard without registr
 test('resume entry preserves step 4 lock timeout without adding persistent fields',async t=>{
   const f=fixture(t);
   await f.run({ensureMemoryMigration(){throw Error('initial failure');}});
+  pendingThresholdMigration(f);
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},
     finalize:ctx=>resumeUpgradeFinalization(ctx,{...f.deps,
       updateConfig(){throw Object.assign(Error('configuration lock timed out'),{code:'LOCK_TIMEOUT'});}})});
@@ -466,11 +480,11 @@ for (const [fault, step, code] of [
   ['threshold-lock',4,'LOCK_TIMEOUT'],
   ['threshold-write',4,'EACCES'], ['ensure',5,'ENSURE_FAILED'],
   ['rename',5,'EACCES'], ['state-read',6,'EACCES'],
-]) test(`D4 protected ${fault} blocks services and permits forward repair`,async t=>{
+]) test(`protected finalization ${fault} blocks services and permits forward repair`,async t=>{
   const f=fixture(t);
   await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});
+  const config=pendingThresholdMigration(f);
   const state=f.read('memory/state.md'), settings=f.read('.claude/settings.json');
-  const config=f.read('.zylos/config.json');
   const current=path.join(f.root,'memory/sessions/current.md');
   const archived=path.join(f.root,'memory/sessions/repaired.md');
   f.write('memory/sessions/current.md','legacy session bytes');

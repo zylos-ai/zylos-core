@@ -10,6 +10,10 @@ const percent = value => {
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) value = Number(value);
   return Number.isInteger(value) && value > 0 && value <= 100 ? value : null;
 };
+const legacyPercent = value => {
+  const parsed = Number.parseInt(value, 10);
+  return parsed > 0 && parsed <= 100 ? parsed : null;
+};
 const cleanModel = model => typeof model === 'string' ? model.trim() : '';
 
 export function readCodexModelWindows({ home = os.homedir(), codexHome = process.env.CODEX_HOME || path.join(home, '.codex') } = {}) {
@@ -67,7 +71,7 @@ export function modelThreshold(config = {}, options = {}) {
       if (value !== null) return thresholdLimit(options) === 40 ? Math.min(value, 40) : value;
     }
   } else if (defaultMatches(options)) {
-    const value = percent(config[LEGACY_KEYS[options.runtime]]);
+    const value = legacyPercent(config[LEGACY_KEYS[options.runtime]]);
     if (value !== null) return thresholdLimit(options) === 40 ? Math.min(value, 40) : value;
   }
   return thresholdLimit(options) === 40 ? 40 : 70;
@@ -111,8 +115,10 @@ export function migrateModelThresholds({
   for (const runtime of ['claude', 'codex']) {
     const model = cleanModel(defaultModels[runtime]);
     if (!model || object(config.model_rotation_thresholds?.[runtime])) continue;
+    const value = legacyPercent(config[LEGACY_KEYS[runtime]]);
+    if (value === null) continue;
     const options = { runtime, model, codexModels };
-    thresholds[runtime] = { [modelThresholdKey(options)]: percent(config[LEGACY_KEYS[runtime]]) ?? modelThreshold({}, options) };
+    thresholds[runtime] = { [modelThresholdKey(options)]: value };
   }
   if (!Object.keys(thresholds).length) return { changed: false, written: [], skipped: [], config };
   return writer(zylosDir, updateConfig)({ mergeIfAbsent: { model_rotation_thresholds: thresholds } });

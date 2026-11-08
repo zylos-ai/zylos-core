@@ -14,6 +14,7 @@ export function readThresholdPolicy(zylosDir) {
 export function sessionThreshold(policy, { runtime, usage, launchConfig, desiredModel } = {}) {
   if (!['claude', 'codex'].includes(runtime)) return null;
   const facts = desiredModel !== undefined ? { model: desiredModel } : usageModelFacts(usage, runtime, launchConfig);
+  if (!facts.model) return null;
   return modelThreshold(policy.config, { runtime, ...facts,
     defaultModel: policy.defaultModels[runtime], codexModels: policy.codexModels });
 }

@@ -48,11 +48,12 @@ describe('production config writers', () => {
     const other = path.join(root, 'other');
     const targetFile = path.join(root, '.zylos', 'config.json');
     fs.mkdirSync(path.dirname(targetFile), { recursive: true });
-    fs.writeFileSync(targetFile, JSON.stringify({ new_session_threshold: 0, unknown: false }));
+    fs.writeFileSync(targetFile, JSON.stringify({ new_session_threshold: 0, codex_new_session_threshold: 75, unknown: false }));
     assert.equal(migrateNewSessionThresholdDefaults({ zylosDir: root }), true);
     assert.deepEqual(JSON.parse(fs.readFileSync(targetFile)), {
       new_session_threshold: 0,
-      model_rotation_thresholds: { claude: { 'opus[1m]': 40 }, codex: { small: 70 } },
+      codex_new_session_threshold: 75,
+      model_rotation_thresholds: { codex: { small: 75 } },
       unknown: false,
     });
     assert.equal(fs.existsSync(path.join(other, '.zylos', 'config.json')), false);
@@ -115,7 +116,6 @@ describe('production config writers', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.zylos', 'config.json'), 'utf8')), {
       runtime: 'codex',
       unknown: false,
-      model_rotation_thresholds: { claude: { 'opus[1m]': 40 }, codex: { small: 70 } },
       session_mode: 'multi',
     });
   });

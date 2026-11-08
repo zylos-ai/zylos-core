@@ -41,6 +41,8 @@ function fixture(t) {
   fs.mkdirSync(path.join(root,'memory'),{recursive:true});
   fs.mkdirSync(path.join(root,'.claude'),{recursive:true});
   fs.writeFileSync(path.join(root,'.claude/settings.json'),JSON.stringify({model:'opus'}));
+  fs.mkdirSync(path.join(root,'.zylos'),{recursive:true});
+  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({new_session_threshold:70}));
   const ctx={zylosDir:root,from:'0.9.3',to:'new',tempDir:null,servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
   ctx.journal={phase:'compensation_closed'};
   ctx.transactionDir=path.join(root,'transaction');

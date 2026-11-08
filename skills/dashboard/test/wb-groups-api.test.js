@@ -845,3 +845,17 @@ test('group row thresholds follow actual running models and the desired model wh
     ['origin',70],['telegram:large',36],['telegram:sleeping',36],['telegram:small',63]
   ]);
 });
+
+test('running default-model group threshold stays unknown until the first usage sample', async t => {
+  const f = fixture(t, { groupKeys: ['telegram:waiting'] });
+  fs.mkdirSync(path.join(f.root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
+  const pending = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:waiting');
+  assert.equal(pending.presence, 'running');
+  assert.equal(pending.rotationThreshold, null);
+  f.live.get('telegram:waiting').usage = { valid: true, value: { model: { id: 'claude-opus-4-6' },
+    context_window: { context_window_size: 1000000, used_percentage: 20 } } };
+  f.advance(2001);
+  const sampled = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:waiting');
+  assert.equal(sampled.rotationThreshold, 40);
+});

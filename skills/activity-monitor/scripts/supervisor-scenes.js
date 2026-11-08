@@ -93,8 +93,7 @@ export class SupervisorScenes {
         Object.assign(scene, usageModelFacts(null, scene.runtime, scene.launchConfig));
         if (this.readUsage) {
           const usage = await this.readUsage(scene);
-          scene.usagePercent = Number.isFinite(usage) ? usage : Number.isFinite(usage?.percent) ? usage.percent : null;
-          if (usage && typeof usage === 'object') Object.assign(scene, usageModelFacts(usage.value, scene.runtime, scene.launchConfig));
+          scene.usagePercent = Number.isFinite(usage) ? usage : null;
         } else {
           const sampled = await this.reader.readSessionState(scope, { freshnessMs: 5000 });
           if (sampled.identity.runId === scene.runId && sampled.identity.sessionId === scene.sessionId && sampled.usage.valid) {
