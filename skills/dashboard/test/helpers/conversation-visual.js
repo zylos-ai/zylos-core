@@ -78,7 +78,7 @@ export async function runConversationVisual(t, sandbox) {
     if (path.endsWith('/messages')) { reads++; messageRequests.push(request.url()); }
     if (path === '/api/chat/drafts' && request.method() === 'POST') draftWrites++;
   });
-  const errors = [], shots = [];
+  const errors = [], shots = [], composerMeasurements = [];
   let expectedDenied = false;
   page.on('pageerror', error => { if (!errors.length) errors.push(error.message); });
   page.on('response', response => { const url = new URL(response.url()); if (response.url().startsWith(fixture.base + '/') && response.status() >= 400 && url.pathname !== '/favicon.ico' && !(expectedDenied && response.status() === 403 && url.pathname.includes('/api/chat/')) && !errors.length) errors.push(`${response.status()} ${url.pathname}`); });
@@ -116,6 +116,10 @@ export async function runConversationVisual(t, sandbox) {
         const box = await page.locator('#wb-chat ' + selector).boundingBox();
         assert.ok(box && box.height >= 40, selector + ' has a 40px phone height');
       }
+      await page.locator('#wb-chat [data-action="create"]').click();
+      const nameBox = await page.locator('#wb-chat .conversation-create-form input').boundingBox();
+      assert.ok(nameBox && nameBox.height >= 40, 'new conversation name has a 40px phone height');
+      await page.locator('#wb-chat .conversation-create-form [data-action="page.cancel"]').click();
       await select();
     }
     await screenshot(`conversation-${width}-${theme}`);
@@ -132,6 +136,90 @@ export async function runConversationVisual(t, sandbox) {
     assert.match(await page.locator(`[data-message-id="${markdownRow.id}"] time`).innerText(), /11:02/, 'SQL UTC time displays in the browser timezone');
     assert.equal((await page.locator('#wb-chat').innerText()).includes('[C4 messageId='), false);
   }
+  // Measure the last line's actual layout in a mirror with identical textarea styles.
+  // A textarea has no DOM text ranges; each mirror line supplies a measurable line box.
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    if (width === 390) await page.locator('#wb-chat .conversation-back').click();
+    await select();
+    const editor = page.locator('#wb-chat .chat-composer textarea');
+    for (const [name, value] of [['empty', ''], ['one-line', 'A short line'], ['multi-line', 'First line\nSecond line\nThird line\nFourth line\nLast line']]) {
+      await editor.fill(value);
+      const measurement = await editor.evaluate(el => {
+        const bounds = el.getBoundingClientRect(), style = getComputedStyle(el);
+        const mirror = document.createElement('div');
+        for (const property of ['boxSizing', 'font', 'lineHeight', 'letterSpacing', 'padding', 'border', 'whiteSpace', 'wordBreak', 'overflowWrap']) mirror.style[property] = style[property];
+        Object.assign(mirror.style, { position: 'fixed', top: bounds.top + 'px', left: bounds.left + 'px', width: bounds.width + 'px', height: bounds.height + 'px', overflow: 'hidden', visibility: 'hidden' });
+        for (const line of (el.value || '\u200b').split('\n')) {
+          const row = document.createElement('div');
+          row.textContent = line || '\u200b';
+          mirror.append(row);
+        }
+        document.body.append(mirror);
+        mirror.scrollTop = el.scrollTop;
+        const first = mirror.firstElementChild.getBoundingClientRect();
+        const last = mirror.lastElementChild.getBoundingClientRect();
+        const button = el.parentElement.querySelector('[data-action="send"]').getBoundingClientRect();
+        const result = { height: bounds.height, lineHeight: parseFloat(style.lineHeight), lineCenter: (last.top + last.bottom) / 2,
+          buttonCenter: (button.top + button.bottom) / 2, firstTop: first.top, lastBottom: last.bottom,
+          inputTop: bounds.top, inputBottom: bounds.bottom, inputRight: bounds.right, buttonLeft: button.left,
+          buttonTop: button.top, buttonBottom: button.bottom, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+        mirror.remove();
+        return result;
+      });
+      assert.ok(Math.abs(measurement.lineCenter - measurement.buttonCenter) <= 2, `${width} ${name}: send aligns with last line: ${JSON.stringify(measurement)}`);
+      assert.ok(measurement.firstTop >= measurement.inputTop && measurement.lastBottom <= measurement.inputBottom + 1, `${width} ${name}: all lines remain visible`);
+      assert.ok(measurement.inputRight <= measurement.buttonLeft && measurement.buttonTop >= measurement.inputTop - 1 && measurement.buttonBottom <= measurement.inputBottom + 1, `${width} ${name}: send stays beside the editor`);
+      if (name === 'multi-line') assert.ok(measurement.height > 4 * measurement.lineHeight, 'editor grows beyond its initial line');
+      else assert.ok(measurement.height <= (width === 390 ? 41 : 31), 'empty and one-line editors keep a one-line height');
+      composerMeasurements.push({ width, name, ...measurement });
+      await screenshot(`composer-${width}-${name}`);
+    }
+    await editor.fill(Array.from({ length: 20 }, (_, index) => `Line ${index + 1}`).join('\n'));
+    assert.equal(await editor.evaluate(el => el.getBoundingClientRect().height <= 180 && el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === 'auto'), true, 'long editor is capped and scrolls internally');
+    await editor.fill('');
+  }
+  // Width-only resizing can grow a wrapped draft without changing the page height.
+  // Preserve both bottom pinning and a reader's visible row across that editor resize.
+  const resizeMeasurements = [];
+  const settleLayout = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  for (const reading of [false, true]) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await settleLayout();
+    const editor = page.locator('#wb-chat .chat-composer textarea');
+    const draft = await editor.evaluate(el => {
+      const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
+      context.font = getComputedStyle(el).font;
+      let value = 'Draft';
+      while (context.measureText(value + ' keeps context').width < el.clientWidth - 70) value += ' keeps context';
+      return value;
+    });
+    await editor.fill(draft);
+    await settleLayout();
+    const before = await page.locator('#wb-chat .chat-messages').evaluate((el, reading) => {
+      el.scrollTop = reading ? 90 : el.scrollHeight;
+      const bounds = el.getBoundingClientRect();
+      const anchor = [...el.querySelectorAll('[data-message-id]')].find(row => row.getBoundingClientRect().bottom > bounds.top);
+      return { anchor: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top,
+        height: document.querySelector('#wb-chat .chat-composer textarea').getBoundingClientRect().height,
+        pageHeight: document.querySelector('#wb-chat .conversation-page').getBoundingClientRect().height };
+    }, reading);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await settleLayout();
+    const after = await page.locator('#wb-chat .chat-messages').evaluate((el, anchor) => ({
+      gap: el.scrollHeight - el.scrollTop - el.clientHeight,
+      top: el.querySelector(`[data-message-id="${anchor}"]`).getBoundingClientRect().top,
+      height: document.querySelector('#wb-chat .chat-composer textarea').getBoundingClientRect().height,
+      pageHeight: document.querySelector('#wb-chat .conversation-page').getBoundingClientRect().height
+    }), before.anchor);
+    assert.equal(after.pageHeight, before.pageHeight, 'resize exercises an unchanged available page height');
+    assert.ok(after.height > before.height, 'narrowing the viewport grows the wrapped draft');
+    if (reading) assert.ok(Math.abs(after.top - before.top) < 2, 'wrapped editor resize retains the reading anchor');
+    else assert.ok(after.gap <= 2, 'wrapped editor resize retains bottom pinning');
+    resizeMeasurements.push({ reading, before, after });
+    await editor.fill('');
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => localStorage.setItem('zylos-dashboard-locale', 'en'));
   await page.reload();
   await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
@@ -313,6 +401,6 @@ export async function runConversationVisual(t, sandbox) {
   assert.doesNotMatch(await staleReceipt.innerText(), /can retry|retry sending/i);
   assert.equal(await page.locator('#wb-chat .chat-composer textarea').isDisabled(), true);
   assert.deepEqual(errors, []);
-  if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, base: fixture.base }, null, 2));
+  if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, composerMeasurements, resizeMeasurements, base: fixture.base }, null, 2));
   t.diagnostic(`conversation browser: ${shots.length} screenshots, ${reads} actual message reads, no page errors`);
 }

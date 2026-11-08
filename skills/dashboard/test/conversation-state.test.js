@@ -1142,8 +1142,10 @@ test('unparseable incremental previews use the injected locale fallback', async 
   assert.equal(f.state.snapshot().items.find(item => item.id === 'g:A').preview, 'Localized unavailable message');
   f.state.destroy();
 });
-function groupFixture(readGroup) {
+function groupFixture(readGroup, extra = () => undefined) {
   return fixture((u, options) => {
+    const value = extra(u, options);
+    if (value !== undefined) return value;
     if (u.pathname === '/api/chat/conversations/g%3AA') return {
       conversation: {
         id: 'g:A',
@@ -1308,6 +1310,153 @@ test('thirty-second list refresh deduplicates a pending optional group status re
   } finally {
     pending.resolve(groupSnapshot('unknown'));
     f.state.destroy();
+  }
+});
+
+test('a running marker remains visible throughout a pending group status refresh', async () => {
+  const pending = deferred();
+  let reads = 0;
+  const f = groupFixture(() => ++reads === 1 ? groupSnapshot('running') : pending.promise);
+  const observed = [];
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    assert.equal(f.state.snapshot().groupPresence, true);
+    const unsubscribe = f.state.subscribe(snapshot => observed.push(snapshot.groupPresence));
+    await f.timer.advance(30000);
+    assert.equal(reads, 2);
+    await f.timer.advance(4000);
+    assert.equal(f.state.snapshot().groupPresence, true);
+    assert.equal(f.state.snapshot().groupPresenceReadAt, 1000);
+    assert.ok(observed.length > 0);
+    assert.ok(observed.every(value => value === true));
+    unsubscribe();
+    pending.resolve(groupSnapshot('not_running', { sources: { status: { ok: true, readAt: 35000 } } }));
+    await flush();
+    assert.equal(f.state.snapshot().groupPresence, false);
+    assert.equal(f.state.snapshot().groupPresenceReadAt, 35000);
+  } finally {
+    pending.resolve(groupSnapshot('unknown'));
+    f.state.destroy();
+    await flush();
+  }
+});
+
+test('switching conversations aborts a pending group read and reads the new group immediately', async () => {
+  const pending = deferred();
+  let reads = 0, oldSignal;
+  const f = fixture((u, options) => {
+    if (['/api/chat/conversations/g%3AA', '/api/chat/conversations/g%3AB'].includes(u.pathname)) {
+      const id = decodeURIComponent(u.pathname.split('/').at(-1));
+      return { conversation: { id, sessionGroup: id === 'g:A' ? 'dashboard:a' : 'dashboard:b', state: 'active' }, stored: false };
+    }
+    if (u.pathname === '/api/workbench/groups') {
+      reads++;
+      if (reads === 1) {
+        oldSignal = options.signal;
+        // The old transport deliberately ignores abort: it must not hold the
+        // new selection hostage or overwrite the replacement read later.
+        return pending.promise;
+      }
+      return groupSnapshot('running', { rows: [{ sessionGroup: 'dashboard:b', presence: 'running' }] });
+    }
+  });
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    assert.equal(reads, 1);
+    assert.equal(oldSignal.aborted, false);
+    await f.state.select('g:B');
+    assert.equal(oldSignal.aborted, true);
+    assert.equal(reads, 2);
+    assert.equal(f.timer.now(), 1000);
+    assert.equal(f.state.snapshot().selectedId, 'g:B');
+    assert.equal(f.state.snapshot().groupPresence, true);
+    pending.resolve(groupSnapshot('not_running'));
+    await flush();
+    assert.equal(f.state.snapshot().groupPresence, true);
+    await f.timer.advance(30000);
+    assert.equal(reads, 3);
+  } finally {
+    pending.resolve(groupSnapshot('unknown'));
+    f.state.destroy();
+    await flush();
+  }
+});
+
+test('closing the page aborts its pending optional group request', async () => {
+  const pending = deferred();
+  let signal;
+  const f = groupFixture(options => {
+    signal = options.signal;
+    return pending.promise;
+  });
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    assert.equal(signal.aborted, false);
+    f.state.close();
+    assert.equal(signal.aborted, true);
+    assert.equal(f.timer.count(), 0);
+    pending.resolve(groupSnapshot('running'));
+    await flush();
+    assert.equal(f.state.snapshot().groupPresence, null);
+  } finally {
+    pending.resolve(groupSnapshot('unknown'));
+    f.state.destroy();
+    await flush();
+  }
+});
+
+test('opening another identity aborts the old identity group request', async () => {
+  const pending = deferred();
+  let signal;
+  const f = groupFixture(options => {
+    signal = options.signal;
+    return pending.promise;
+  });
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    assert.equal(signal.aborted, false);
+    f.setIdentity('another');
+    await f.state.open();
+    assert.equal(signal.aborted, true);
+    pending.resolve(groupSnapshot('running'));
+    await flush();
+    assert.equal(f.state.snapshot().selectedId, null);
+    assert.equal(f.state.snapshot().groupPresence, null);
+  } finally {
+    pending.resolve(groupSnapshot('unknown'));
+    f.state.destroy();
+    await flush();
+  }
+});
+
+test('remote chat closure aborts the pending optional group request', async () => {
+  const pending = deferred();
+  let signal;
+  const f = groupFixture(options => {
+    signal = options.signal;
+    return pending.promise;
+  }, u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after'
+    ? Promise.reject({ code: 'remote_chat_disabled' }) : undefined);
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    assert.equal(signal.aborted, false);
+    await f.timer.advance(5000);
+    assert.equal(signal.aborted, true);
+    assert.equal(f.state.snapshot().blocked, true);
+    assert.equal(f.timer.count(), 0);
+    pending.resolve(groupSnapshot('running'));
+    await flush();
+    assert.equal(f.state.snapshot().selectedId, null);
+    assert.equal(f.state.snapshot().groupPresence, null);
+  } finally {
+    pending.resolve(groupSnapshot('unknown'));
+    f.state.destroy();
+    await flush();
   }
 });
 

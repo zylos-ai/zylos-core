@@ -554,6 +554,7 @@
   align-items:stretch
 }
 .conversation-compose-box {
+  --conversation-control-height:30px;
   display:flex;
   gap:8px;
   align-items:flex-end;
@@ -571,10 +572,10 @@
   flex:1;
   min-width:0;
   width:auto;
-  min-height:44px;
-  height:44px;
+  min-height:var(--conversation-control-height);
+  height:var(--conversation-control-height);
   max-height:180px;
-  padding:2px 4px;
+  padding:calc((var(--conversation-control-height) - 1lh)/2) 4px;
   margin:0;
   border:0;
   border-radius:0;
@@ -584,13 +585,17 @@
   line-height:1.5;
   outline:none;
   resize:vertical;
+  overflow-y:hidden;
   box-shadow:none
 }
 .conversation-page .conversation-input:focus-visible {
   outline:none
 }
+.conversation-page .conversation-input::placeholder {
+  white-space:nowrap
+}
 .conversation-compose-box>.wb-btn {
-  height:30px;
+  height:var(--conversation-control-height);
   padding:0 11px;
   flex:none
 }
@@ -694,9 +699,10 @@
     padding:8px 12px 10px
   }
   .conversation-page .conversation-input {
-    font-size:12px;
-    min-height:40px;
-    height:40px
+    font-size:12px
+  }
+  .conversation-compose-box {
+    --conversation-control-height:40px
   }
   .conversation-compose-hint {
     font-size:9.5px
@@ -870,6 +876,9 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
     min-height:40px
   }
   .conversation-page .conversation-create-form button,.conversation-page .conversation-reload {
+    min-height:40px
+  }
+  .conversation-page .conversation-create-form input {
     min-height:40px
   }
   .conversation-page .conversation-reload {

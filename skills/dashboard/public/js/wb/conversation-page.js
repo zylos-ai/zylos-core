@@ -290,7 +290,7 @@ export function mountConversationPage({
   readOnlyFooter.append(icon(document, 'lock'), node('span', t('chat.page.externalReadOnly')));
   const composeBox = node('div', undefined, 'conversation-compose-box');
   const input = node('textarea', undefined, 'conversation-input chat-input');
-  input.rows = 2;
+  input.rows = 1;
   input.setAttribute('aria-label', t('chat.input'));
   input.placeholder = t('chat.page.placeholder');
   const send = action('send', () => {}, 'send', 'wb-btn wb-btn-primary');
@@ -316,6 +316,18 @@ export function mountConversationPage({
   detail.append(header, renameForm, notices, history, composer, readOnlyFooter);
   page.append(sidebar, detail);
   root.replaceChildren(page);
+  function fitInput() {
+    if (!view || !input.isConnected || !input.getClientRects().length) {
+      return;
+    }
+    const oldTop = input.scrollTop;
+    const atBottom = input.scrollHeight - oldTop - input.clientHeight <= 2;
+    input.style.height = '0px';
+    const height = input.value ? input.scrollHeight : parseFloat(view.getComputedStyle(input).minHeight);
+    input.style.height = `${Math.min(180, height)}px`;
+    input.style.overflowY = input.value && input.scrollHeight > input.clientHeight ? 'auto' : 'hidden';
+    input.scrollTop = atBottom ? input.scrollHeight : oldTop;
+  }
   async function requestSend() {
     const selected = selectedKey;
     await state.send({
@@ -631,17 +643,17 @@ export function mountConversationPage({
     if (destroyed || !view || page.hidden || !page.isConnected || !page.getClientRects().length) {
       return;
     }
-    const available = Math.max(0, Math.floor(view.innerHeight - page.getBoundingClientRect().top));
-    if (available === fittedHeight) {
-      return;
-    }
     const bounds = stream.getBoundingClientRect(),
       oldTop = stream.scrollTop;
     const bottom = stream.scrollHeight - oldTop - stream.clientHeight <= 2;
     const anchor = [...messageList.children].find(el => el.dataset.messageId && el.getBoundingClientRect().bottom > bounds.top && el.getBoundingClientRect().top < bounds.bottom);
     const anchorTop = anchor?.getBoundingClientRect().top;
-    fittedHeight = available;
-    page.style.height = `${available}px`;
+    fitInput();
+    const available = Math.max(0, Math.floor(view.innerHeight - page.getBoundingClientRect().top));
+    if (available !== fittedHeight) {
+      fittedHeight = available;
+      page.style.height = `${available}px`;
+    }
     if (bottom) {
       stream.scrollTop = stream.scrollHeight;
     } else if (anchor?.isConnected) {
@@ -881,6 +893,7 @@ export function mountConversationPage({
     if (input.value !== s.input) {
       input.value = s.input;
     }
+    fitInput();
     send.dataset.action = s.retryRequired ? 'retry' : 'send';
     text(send.label, t(s.retryRequired ? 'chat.retry' : 'chat.send'));
     send.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry || !s.input.trim();

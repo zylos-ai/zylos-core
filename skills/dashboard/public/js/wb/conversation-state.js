@@ -249,6 +249,7 @@ export function createConversationState({
   }
   async function select(id, fallbackMetadata) {
     if (!active || blocked) return;
+    cancelGroupPresenceRead();
     selectedId = id;
     selectedVersion++;
     if (!cells.has(key(id))) cells.set(key(id), blank());
@@ -536,8 +537,10 @@ export function createConversationState({
   }
   function cancelGroupPresenceRead() {
     if (!groupPresenceRead) return;
-    groupPresenceRead.current.groupPresenceVersion++;
-    groupPresenceRead.controller.abort();
+    const record = groupPresenceRead;
+    groupPresenceRead = null;
+    record.current.groupPresenceVersion++;
+    record.controller.abort();
   }
   function readGroupPresence(current, currentTab, e) {
     const sessionGroup = current.conversation?.sessionGroup ?? current.conversation?.session_group;
@@ -546,14 +549,14 @@ export function createConversationState({
       current.groupPresenceReadAt = null;
       return;
     }
-    // One optional status request may be pending. It never joins the message
-    // reading promise or creates a timer, including when its transport hangs.
-    if (groupPresenceRead) return;
+    // Deduplicate only the selected conversation's optional status request.
+    // Navigation must not wait for the old transport to acknowledge its abort.
+    // This read never joins message reading or creates a timer.
+    if (groupPresenceRead?.current === current) return;
+    cancelGroupPresenceRead();
     const version = ++current.groupPresenceVersion, navigation = selectedVersion;
     const record = { current, controller: new AbortController(), promise: null };
     groupPresenceRead = record;
-    current.groupPresence = null;
-    current.groupPresenceReadAt = null;
     const stillCurrent = () => valid(e) && navigation === selectedVersion && version === current.groupPresenceVersion;
     record.promise = (async () => {
       try {
@@ -904,6 +907,7 @@ export function createConversationState({
     },
     async setTab(value) {
       if (!['mine', 'external'].includes(value) || blocked) return;
+      cancelGroupPresenceRead();
       tab = value;
       selectedId = null;
       selectedVersion++;
