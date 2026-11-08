@@ -401,7 +401,7 @@ for (const [kind, name] of [['image', 'diagram.png'], ['file', 'report.pdf']]) {
 // Static renderer implementations shipped with this Core version. A catalog
 // entry alone is never an implementation claim. Rendering tests cover each key.
 export const CORE_COMPONENT_KEYS = ['markdown@1', 'time_series@1', 'breakdown@1',
-  'category_series@1', 'choice@1', 'confirmation@1', 'form_intent@1'];
+  'category_series@1', 'choice@1', 'confirmation@1', 'form_intent@1', 'form_intent@2'];
 const clone = value => JSON.parse(JSON.stringify(value));
 
 export function createCatalogArtifacts({ implementedKeys = CORE_COMPONENT_KEYS } = {}) {

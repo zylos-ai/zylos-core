@@ -921,3 +921,26 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
     min-height:40px
   }
 }
+
+/* Validated View wrappers compose complete Content blocks only. */
+.conversation-page .chat-message-content { container-type: inline-size; }
+.conversation-view-stack { display: grid; gap: 12px; }
+.conversation-view-stack[data-gap="compact"] { gap: 6px; }
+.conversation-view-columns { display: grid; grid-template-columns: repeat(var(--conversation-columns, 2), minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+.conversation-view-columns[data-layout="sidebar"] { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.conversation-view-section { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--bg-secondary); }
+.conversation-view-header,.conversation-view-body,.conversation-view-actions { min-width: 0; }
+.conversation-view-body { flex: 1; }
+.conversation-view-actions { margin-top: auto; }
+.conversation-view-section .chat-block { background: transparent; border: 0; border-radius: 0; margin: 0; padding: 6px 0; }
+.conversation-view-columns > .chat-block { margin: 0; }
+.conversation-chart-plot { position: relative; height: 220px; width: 100%; min-width: 0; }
+.conversation-chart-data { margin-top: 12px; font-size: 12px; }
+.conversation-chart-data > summary { cursor: pointer; color: var(--text-dim); }
+.conversation-page .chat-question-field[hidden] { display: none; }
+.conversation-page .chat-question-field [aria-invalid="true"] { border-color: var(--danger, #c54b4b); }
+@container (max-width: 740px) {
+  .conversation-view-columns,.conversation-view-columns[data-layout="sidebar"] { grid-template-columns: minmax(0, 1fr); }
+}
+/* A query container needs a definite width inside the message flex row. */
+.conversation-page .chat-out .conversation-message-body { width: min(900px, calc(100% - 38px)); }

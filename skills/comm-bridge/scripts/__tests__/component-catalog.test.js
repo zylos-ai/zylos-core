@@ -73,7 +73,7 @@ test('the static component list is the catalog intersection with shipped impleme
     assert.equal(definition.key, `${definition.type}@${definition.schemaVersion}`);
     assert.equal(typeof definition.description, 'string');
     assert.ok(definition.description.length > 0);
-    const conditional = BLOCK_SCHEMA.allOf.find(rule => rule.if?.properties?.type?.const === definition.type
+    const conditional = BLOCK_SCHEMA.allOf.find(rule => (rule.if?.properties?.type?.const ?? rule.then?.properties?.type?.const) === definition.type
       && (rule.if.properties.schemaVersion?.const ?? 1) === definition.schemaVersion);
     const dataReference = conditional.then.properties.data.$ref.split('/').at(-1);
     assert.deepEqual(definition.parameters, BLOCK_SCHEMA.$defs[dataReference]);
@@ -90,13 +90,13 @@ for (const fixture of fixtures.invalid) test(`catalog data rejects an unknown pa
   assert.equal(parseC4Content(encode(fixture.envelope)).kind, 'invalid');
 });
 
-test('host definitions extend the catalog without claiming a conditional renderer', () => {
+test('host definitions register the shipped conditional renderer', () => {
   const conditional = COMPONENT_CATALOG.find(component => component.type === 'form_intent' && component.schemaVersion === 2);
   assert.ok(conditional);
   assert.equal(parseC4Content(encode(conditional.example)).kind, 'envelope');
-  assert.equal(REGISTERED_COMPONENT_KEYS.includes('form_intent@2'), false);
-  assert.equal(COMPONENT_DEFINITIONS.some(component => component.schemaVersion === 2), false);
-  assert.equal(MODEL_INSTRUCTIONS.includes('form_intent@2:'), false);
+  assert.equal(REGISTERED_COMPONENT_KEYS.includes('form_intent@2'), true);
+  assert.equal(COMPONENT_DEFINITIONS.some(component => component.schemaVersion === 2), true);
+  assert.equal(MODEL_INSTRUCTIONS.includes('form_intent@2:'), true);
   assert.equal(delivered.VIEW_SCHEMA.properties.schemaVersion.const, 1);
   assert.equal(delivered.VIEW_SCHEMA.properties.nodes.maxItems, 128);
   assert.equal(digest(delivered.BLOCK_SCHEMA.$defs.activeWhen), digest(delivered.FORM_CONDITION_SCHEMA));

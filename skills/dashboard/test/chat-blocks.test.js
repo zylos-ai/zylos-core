@@ -190,13 +190,13 @@ test('answers controls and empty message envelopes display their validated fallb
   assert.equal(allNodes(control).some(node => node.tagName === 'BUTTON'), false);
 });
 
-// Known schema versions without a shipped renderer stay inert; no v2 UI here.
-test('a conditional form without a shipped renderer uses fallback and never requests controls', () => {
+// Hosts can deliberately retain static fallback for an unavailable renderer.
+test('a conditional form with an unavailable host renderer uses fallback without controls', () => {
   const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
   const source = structuredClone(fixtures.formQuestion);
   assert.equal(parseC4Content(CONTENT_PREFIX + JSON.stringify(source)).kind, 'envelope');
   let calls = 0;
-  const root = render(source, { renderQuestion() { calls++; return createDocument().createElement('button'); } });
+  const root = render(source, { supportsBlock: block => block.type !== 'form_intent' || block.schemaVersion === 1, renderQuestion() { calls++; return createDocument().createElement('button'); } });
   assert.equal(calls, 0);
   assert.ok(root.textContent.includes(source.blocks[0].fallbackText));
   assert.equal(allNodes(root).some(node => ['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'DL'].includes(node.tagName)), false);
@@ -267,4 +267,16 @@ test('an old page schema rejects new and rollback-history attachment envelopes a
   const root = renderWithLegacySchema({ document, row: { id: 44, content: CONTENT_PREFIX + JSON.stringify(known) }, t });
   assert.equal(allNodes(root).some(node => node.className?.includes('chat-block-error')), false);
   assert.ok(root.textContent.includes('选一个方案'));
+});
+
+test('live form controls replace duplicate static field lists while preserving the question description', () => {
+  const document = createDocument();
+  const controls = document.createElement('div'); controls.dataset.formControls = 'true';
+  const label = document.createElement('label'); label.textContent = 'Name'; controls.append(label);
+  const root = render(envelope([form()], true), { document, renderQuestion: () => controls });
+  assert.equal(root.textContent.match(/Name/g)?.length, 1);
+  assert.ok(root.textContent.includes('ProfileTell us more'));
+  assert.equal(allNodes(root).filter(node => node.className === 'chat-form-fields').length, 0);
+  const readonly = render(envelope([form()], true));
+  assert.ok(readonly.textContent.includes('NamePublic nameCategoryFirst'));
 });

@@ -21,7 +21,7 @@ test('component CLI lists the implemented keys and generated descriptions', () =
   const data = JSON.parse(result.output).data;
   assert.deepEqual(data.keys, REGISTERED_COMPONENT_KEYS);
   assert.deepEqual(data.components.map(item => item.key), REGISTERED_COMPONENT_KEYS);
-  assert.equal(data.components.length, 7);
+  assert.equal(data.components.length, 8);
 });
 
 for (const item of COMPONENT_DEFINITIONS) test(`component CLI describes and emits a legal ${item.key} message`, () => {
@@ -82,7 +82,7 @@ test('component CLI describes the transitive form field and action definitions',
 
 test('component CLI refuses unimplemented components and malformed arguments', () => {
   for (const args of [['list', 'extra'], ['describe'], ['example', 'x-zylos.image@1'],
-    ['describe', 'form_intent@2'], ['list', '--json', '--json'], ['unknown']]) {
+    ['describe', 'form_intent@3'], ['list', '--json', '--json'], ['unknown']]) {
     const result = call(args);
     assert.equal(result.exit, 1);
     assert.equal(result.output, '');

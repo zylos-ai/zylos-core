@@ -13,14 +13,14 @@ const { renderConversationContent } = await import('../public/js/wb/conversation
 const { renderChatContent } = await import('../public/js/wb/chat-blocks.js');
 const fixture = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
 
-test('new page keeps known content on both sides of an unsupported conditional form', () => {
+test('a host without conditional capability keeps neighboring known content', () => {
   const envelope = structuredClone(fixture.formQuestion);
   envelope.blocks.unshift({ id: 'intro', type: 'markdown', schemaVersion: 1, fallbackText: 'intro fallback', data: { text: 'Known introduction' } });
   envelope.blocks.push({ id: 'outro', type: 'markdown', schemaVersion: 1, fallbackText: 'outro fallback', data: { text: 'Known conclusion' } });
   const content = CONTENT_PREFIX + JSON.stringify(envelope);
   assert.equal(parseC4Content(content).kind, 'envelope');
   let controls = 0;
-  const root = renderConversationContent({ document: createDocument(), row: { id: 42, direction: 'out', content }, t: key => key, renderQuestion() { controls++; } });
+  const root = renderConversationContent({ document: createDocument(), row: { id: 42, direction: 'out', content }, t: key => key, supportsBlock: block => block.type !== 'form_intent' || block.schemaVersion === 1, renderQuestion() { controls++; } });
   const shown = root.textContent;
   assert.ok(shown.includes('Known introduction'));
   assert.ok(shown.includes(envelope.blocks[1].fallbackText));
