@@ -1053,6 +1053,8 @@ a.wb-btn { text-decoration: none; }
 .wb-ktable tr.revoked td { color: var(--text-muted); }
 .wb-ktable b { font-weight: 550; }
 .wb-k-acts { display: flex; justify-content: flex-end; gap: 2px; }
+/* Chinese sentences follow a full stop directly; other languages keep a space. */
+html[lang^="zh"] .wb-sent-gap { display: none; }
 .wb-ktable td:nth-child(1), .wb-ktable td:nth-child(3), .wb-ktable td:last-child { white-space: nowrap; }
 .wb-ktable td:nth-child(1) b { display: inline-block; max-width: 14em; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .wb-scope-b { padding: 1px 6px; border: 1px solid var(--wb-line-strong); border-radius: 4px; color: var(--text-dim); font-size: 11px; font-weight: 550; white-space: nowrap; }

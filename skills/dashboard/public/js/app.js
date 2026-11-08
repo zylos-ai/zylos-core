@@ -1907,7 +1907,7 @@ function createFleetManageModal() {
           <input class="wb-input" id="fleet-self-name" type="text" autocomplete="off" maxlength="32" />
           <button class="wb-btn wb-btn-primary" id="fleet-rename-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
           <button class="wb-btn" id="fleet-rename-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button></div>
-        <p class="wb-note"><span data-i18n="wb.settings.fleetNameNote">${esc(t('wb.settings.fleetNameNote'))}</span> · <span data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</span></p>
+        <p class="wb-note"><span data-i18n="wb.settings.fleetNameNote">${esc(t('wb.settings.fleetNameNote'))}</span><span class="wb-sent-gap"> </span><span data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</span></p>
       </div>
       <div class="wb-set-card">
         ${head('fleet', 'wb.settings.fleet.remotes', `<span class="wb-set-card-sub" id="fleet-agent-count"></span><span class="wb-set-card-acts"><button class="wb-btn" id="fleet-add-open" type="button"><i class="wb-ico wb-ico-plus wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.add">${esc(t('wb.settings.fleet.add'))}</span></button></span>`)}

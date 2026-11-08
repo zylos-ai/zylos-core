@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { buildAgentFleetView, fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { afterSentence, buildAgentFleetView, fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { tabForPath } from '../public/js/wb/view-mode.js';
@@ -488,11 +488,19 @@ test('an unreachable machine says how long ago it was last reachable in the page
   const lastSeen = new Date(Date.now() - 2 * 3600e3 - 60e3).toISOString();
   const fleet = { agents: [{ name: 'lab', state: 'OFFLINE', health_reason: 'unreachable', last_seen: lastSeen }] };
   const english = renderAgentFleetHtml(fleet);
-  assert.match(english, /last reachable 2h ago/);
-  const chinese = renderAgentFleetHtml(fleet, { labels: { lastSeen: '{time}最后在线' }, ageText: () => '2 小时前' });
-  assert.match(chinese, /2 小时前最后在线/);
+  assert.match(english, /changed\. Last reachable 2h ago/, 'a new sentence after the full stop, no separator');
+  const chinese = renderAgentFleetHtml(fleet, { labels: { lastSeen: '{time}最后在线', fixDown: '对方可能已关机，或地址变了。' }, ageText: () => '2 小时前' });
+  assert.match(chinese, /地址变了。2 小时前最后在线/);
+  assert.doesNotMatch(chinese, /。 ·/);
   assert.doesNotMatch(chinese, /2h/);
   assert.equal(renderAgentFleetHtml({ agents: [{ name: 'lab', state: 'OFFLINE', health_reason: 'unreachable', last_seen: 'not a time' }] }).includes('last reachable'), false);
+});
+
+test('a sentence that ends with a full stop is not followed by a separator', () => {
+  assert.equal(afterSentence('请对方重新发密钥。', '2 小时前最后在线'), '请对方重新发密钥。2 小时前最后在线');
+  assert.equal(afterSentence('Ask them for a new key.', 'last reachable 2h ago'), 'Ask them for a new key. Last reachable 2h ago');
+  assert.equal(afterSentence('Unreachable', 'last reachable 2h ago'), 'Unreachable · last reachable 2h ago');
+  assert.equal(afterSentence('Unreachable', ''), 'Unreachable');
 });
 
 test('problem cards say why in plain words, keep the precise reason for technical view and offer settings and refresh', () => {

@@ -195,6 +195,13 @@ export function defaultAgentFleetLabels() {
 }
 
 const fill = (text, values = {}) => String(text ?? '').replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
+// A sentence that already ends with a full stop is followed directly by the next one, not by a separator.
+export function afterSentence(text, next) {
+  if (!next) return text;
+  if (/[。！？]$/.test(text)) return text + next;
+  if (/[.!?]$/.test(text)) return text + ' ' + next.charAt(0).toUpperCase() + next.slice(1);
+  return text + ' · ' + next;
+}
 // How long ago a machine was last reachable; the page passes its own localized wording.
 function ageLabel(iso, now = Date.now()) {
   const ms = Date.parse(iso);
@@ -367,7 +374,7 @@ function renderTile(tile, labels) {
     <div class="wb-f-top"><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i><b>${escapeHtml(tile.name)}</b><span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     <div class="wb-f-reason"><span class="wb-plain">${escapeHtml(tile.problem.short)}</span><span class="wb-tech agent-fleet-reason">${escapeHtml(tile.stateLabel)}</span><span class="wb-tech wb-mono"> · ${escapeHtml(tile.reason)}</span></div>
-    <p class="wb-note">${escapeHtml(tile.problem.fix)}${seen ? ` · ${escapeHtml(fill(labels.lastSeen, { time: seen }))}` : ''}</p>
+    <p class="wb-note">${escapeHtml(afterSentence(tile.problem.fix, seen ? fill(labels.lastSeen, { time: seen }) : ''))}</p>
     <div class="wb-f-foot"><span class="wb-grow"></span><button class="wb-btn" type="button" data-fleet-action="settings">${escapeHtml(labels.toSettings)}</button><button class="wb-btn" type="button" data-fleet-action="refresh">${escapeHtml(labels.refresh)}</button></div>
   </div>`;
   }
