@@ -56,3 +56,30 @@ test('raw memory text wraps instead of scrolling sideways', () => {
 test('on phones the schedule timeline labels are at least 11px', () => {
   assert.match(phone, /\.wb-sched-lane \.wb-sched-axis, \.wb-sched-lane \.wb-sched-axis span \{ font-size: 11px; \}/);
 });
+
+test('wider screens keep detail headers on one row; phones give the title its own row and put state and actions under it', () => {
+  assert.match(css, /^\.wb-d-sub \{ display: contents; \}/m, 'on wider screens the state and actions stay in the title row');
+  assert.match(phone, /\.wb-d-top:has\(> \.wb-d-sub\) \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\) auto;/);
+  assert.match(phone, /\.wb-d-top:has\(> \.wb-d-sub\) > :last-child \{ grid-column: 3; grid-row: 1; \}/, 'closing stays on the title row');
+  assert.match(phone, /\.wb-d-top > \.wb-d-sub \{ grid-column: 2 \/ -1; grid-row: 2;/, 'the second row starts in the title column');
+  assert.doesNotMatch(phone, /\.wb-d-top[^{]*\{[^}]*margin-left: \d+px/, 'the second row is aligned by the grid, not a fixed indent');
+});
+
+test('on phones overview rows are two columns: the group on the left, its state on the right, the rest full width', () => {
+  assert.match(phone, /\.wb-row, html\[data-detail=technical\] \.wb-row \{ grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.match(phone, /\.wb-row > \.wb-pill \{ grid-column: 2; justify-self: end; \}/);
+  assert.match(phone, /\.wb-row > \.wb-current, \.wb-row > \.wb-activity \{ grid-column: 1 \/ -1; \}/);
+});
+
+test('on phones the six schedule numbers form three columns by two rows', () => {
+  assert.match(phone, /\.wb-sched-kpi \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
+});
+
+test('on phones the open memory file keeps its header compact: back, path and scope on one row', () => {
+  assert.match(phone, /#tab-memory\.memory-file-open \.memory-viewer-head \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\);/);
+  assert.match(phone, /#tab-memory\.memory-file-open \.memory-back \{ grid-column: 1; grid-row: 1;[^}]*width: 40px;/);
+  assert.match(phone, /#tab-memory\.memory-file-open \.memory-viewer-title \{ grid-column: 2; grid-row: 1; \}/);
+  assert.match(phone, /#tab-memory\.memory-file-open \.memory-viewer-actions \{ grid-column: 1 \/ -1; grid-row: 2;/);
+  // The label stays for screen readers while the button shows only its arrow.
+  assert.match(phone, /\.memory-back > span \{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect\(0 0 0 0\);/);
+});

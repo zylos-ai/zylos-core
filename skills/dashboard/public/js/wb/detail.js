@@ -125,7 +125,10 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       rename.addEventListener('click', () => { state.nameOpen = true; state.nameDraft = row.name?.displayName ?? ''; draw(); });
       heading.append(rename);
     }
-    top.append(box, heading, statePill(document, row, { t, level: getLevel() }));
+    // State and actions share one wrapper: on phones it becomes the second row under the title.
+    const sub = element(document, 'div', undefined, 'wb-d-sub');
+    sub.append(statePill(document, row, { t, level: getLevel() }));
+    top.append(box, heading, sub);
     const actions = element(document, 'div', undefined, 'wb-d-acts');
     for (const item of groupActionButtons(row, getWritable())) {
       const button = element(document, 'button', undefined, 'wb-icon-btn wb-act'); button.type = 'button';
@@ -140,7 +143,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const closeButton = element(document, 'button', undefined, 'wb-icon-btn'); closeButton.type = 'button';
     closeButton.setAttribute('aria-label', t('wb.close')); closeButton.title = t('wb.closeEsc');
     closeButton.append(icon(document, 'x')); closeButton.addEventListener('click', close);
-    top.append(actions, closeButton);
+    sub.append(actions); top.append(closeButton);
     header.append(top);
     const previousScroll = root.querySelector?.('.wb-detail-timeline')?.scrollTop ?? 0;
     const uptime = row.createdAt == null ? t('wb.unknown') : Math.max(0, Math.floor((now() - row.createdAt * 1000) / 60000));

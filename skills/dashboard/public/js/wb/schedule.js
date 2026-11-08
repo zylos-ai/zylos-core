@@ -706,7 +706,10 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const top = element(document, 'div', undefined, 'wb-d-top');
     const badge = element(document, 'span', undefined, 'wb-ch');
     badge.append(icon(document, 'clock'));
-    top.append(badge, element(document, 'h3', task.name, 'wb-d-title'), statePill(task));
+    // State and actions share one wrapper: on phones it becomes the second row under the title.
+    const sub = element(document, 'div', undefined, 'wb-d-sub');
+    sub.append(statePill(task));
+    top.append(badge, element(document, 'h3', task.name, 'wb-d-title'), sub);
     const acts = element(document, 'div', undefined, 'wb-d-acts');
     if (writable()) {
       if (task.status === 'pending') acts.append(iconButton(document, 'pause', t('wb.schedule.pause'), () => act(task, 'pause')));
@@ -718,7 +721,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         redraw();
       }, 'wb-icon-danger'));
     }
-    top.append(acts, iconButton(document, 'x', t('wb.close'), close, 'wb-sched-close'));
+    sub.append(acts); top.append(iconButton(document, 'x', t('wb.close'), close, 'wb-sched-close'));
     const meta = element(document, 'p', undefined, 'wb-detail-meta');
     if (level() === 'technical') meta.append(element(document, 'span', `${task.id} · P${task.priority} · `, 'wb-mono wb-sched-tech'));
     meta.append(element(document, 'span', t('wb.schedule.updated', { time: time(task.updatedAt) })));

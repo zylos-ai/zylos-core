@@ -258,6 +258,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-d-top > .wb-d-title { flex: 1; }
 .wb-d-title { margin: 0; min-width: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-d-acts { display: flex; gap: 2px; }
+.wb-d-sub { display: contents; }
 .wb-d-acts .wb-icon-btn { width: 28px; height: 28px; }
 .wb-detail-meta { margin: 8px 0 0; color: var(--text-dim); font-size: 12px; }
 .wb-name-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
@@ -434,10 +435,11 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-detail-numbers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wb-detail-numbers > div:nth-child(2) { border-right: 0; }
   .wb-detail-numbers > div:nth-child(-n+2) { border-bottom: 1px solid var(--wb-line); }
-  .wb-d-top { flex-wrap: wrap; row-gap: 6px; }
-  .wb-d-top > .wb-pill { order: 10; margin-left: 38px; }
-  .wb-d-top > .wb-d-acts { order: 11; margin-left: auto; }
-  .wb-d-top > .wb-d-title-wrap { flex-basis: calc(100% - 92px); }
+  /* Detail headers: the title has the first row to itself; state and actions form the second row, in the title's column. */
+  .wb-d-top:has(> .wb-d-sub) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 8px; row-gap: 8px; }
+  .wb-d-top:has(> .wb-d-sub) > :last-child { grid-column: 3; grid-row: 1; }
+  .wb-d-top > .wb-d-sub { grid-column: 2 / -1; grid-row: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+  .wb-d-sub > .wb-d-acts { flex-wrap: wrap; gap: 6px; }
 }
 
 /* ─── Schedule: list on the left, the same right-edge drawer as the overview ─── */
@@ -620,7 +622,9 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 }
 @media (max-width: 760px) {
   .wb-sched-top { padding: 12px 12px 4px; }
-  .wb-sched-kpi { gap: 8px 20px; }
+  /* Six numbers as three columns by two rows. */
+  .wb-sched-kpi { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 10px 12px; }
+  .wb-sched-kpi > .wb-sched-note { grid-column: 1 / -1; }
   .wb-sched-kpi-item b { font-size: 17px; }
   .wb-sched-filters { position: static; padding: 10px 12px; }
   /* The five filters share the full width; a thin scrollbar remains only if counts grow past it. */
@@ -640,11 +644,9 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-section > h3 { padding: 12px 12px 6px; }
   .wb-sched-pair { grid-template-columns: 1fr; }
   /* Touch screens have no tooltips: drawer actions get a row of their own with their names shown. */
-  .wb-sched-detail .wb-d-top { flex-wrap: wrap; row-gap: 8px; }
-  .wb-sched-detail .wb-d-top > .wb-d-title { flex: 1 1 0; }
-  .wb-sched-detail .wb-d-acts { order: 10; flex-basis: 100%; flex-wrap: wrap; gap: 6px; }
   .wb-sched-detail .wb-d-acts .wb-icon-btn { width: auto; height: 30px; gap: 5px; padding: 0 10px; border-color: var(--wb-line-strong); background: var(--wb-panel); color: var(--text); font-size: 12.5px; }
   .wb-sched-detail .wb-d-acts .wb-icon-danger { color: var(--wb-err); }
+  .wb-sched-detail .wb-d-sub > .wb-d-acts { flex: 1 1 auto; }
   .wb-sched-detail .wb-d-acts .wb-vh { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
 }
 
@@ -1227,5 +1229,11 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   #tab-memory:not(.memory-file-open) .memory-viewer { display: none; }
   #tab-memory.memory-file-open :is(.memory-tree-card, .wb-memory-summary, .wb-memory-charts) { display: none; }
   #tab-memory.memory-file-open .memory-content { padding: 12px 12px 24px; }
+  /* The open file's header stays compact: back, path and scope on one row; view mode and editing on the next. */
+  #tab-memory.memory-file-open .memory-viewer-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; padding: 8px 12px 10px; }
+  #tab-memory.memory-file-open .memory-back { grid-column: 1; grid-row: 1; align-self: center; width: 40px; padding: 0; justify-content: center; }
+  .memory-back > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  #tab-memory.memory-file-open .memory-viewer-title { grid-column: 2; grid-row: 1; }
+  #tab-memory.memory-file-open .memory-viewer-actions { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: flex-end; }
 }
 .memory-raw { white-space: pre-wrap; overflow-wrap: anywhere; }

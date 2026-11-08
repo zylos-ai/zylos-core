@@ -882,6 +882,19 @@ test('switching runs aborts a hanging subagent read so the shared refresh can fi
   }
 });
 
+test('detail header gives the title its own row and keeps state and actions together for the second row', async () => {
+  const f = detailFixture(async path => response(defaultRead(path)));
+  await f.controller.open(row('a'), { rows: [], listKnown: true });
+  const top = allNodes(f.root).find(node => node.classList.contains('wb-d-top'));
+  assert.deepEqual(top.children.map(child => child.className.split(' ')[0]), ['wb-ch', 'wb-d-title-wrap', 'wb-d-sub', 'wb-icon-btn']);
+  assert.equal(top.children.at(-1).attributes['aria-label'], 'wb.close', 'closing stays on the title row');
+  const sub = top.children[2];
+  assert.ok(sub.children[0].classList.contains('wb-pill'), 'the state comes first in the second row');
+  assert.ok(sub.children[1].classList.contains('wb-d-acts'), 'the actions follow the state');
+  assert.deepEqual(allNodes(sub.children[1]).filter(node => node.dataset?.wbAction).map(node => node.dataset.wbAction), ['interrupt', 'chop-chop', 'restart']);
+  f.controller.destroy();
+});
+
 test('detail header uses icon actions whose tooltip carries any unavailable reason, and Esc leaves the name editor first', async () => {
   const f = detailFixture(async path => response(defaultRead(path)));
   await f.controller.open({ ...row('a'), live: null, presence: 'not_running' }, { rows: [], listKnown: true });
