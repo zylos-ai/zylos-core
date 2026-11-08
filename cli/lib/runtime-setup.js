@@ -12,6 +12,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
+import { parse as parseDotEnv } from 'dotenv';
 import { ZYLOS_DIR } from './config.js';
 import { writeEnvFile } from './env.js';
 import { commandExists } from './shell-utils.js';
@@ -28,9 +29,11 @@ function upsertEnvValue(content, key, value, comment = null) {
 }
 
 export function isValidBaseUrl(value) {
+  if (typeof value !== 'string' || /[\x00-\x1f\x7f?#]/.test(value)) return false;
   try {
     const url = new URL(value);
-    return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.host;
+    return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.host
+      && !url.username && !url.password && !url.search && !url.hash;
   } catch {
     return false;
   }
@@ -174,12 +177,27 @@ export function approveApiKey(keyOrToken) {
   } catch {}
 }
 
-/**
- * Save an Anthropic API key to ~/.claude/settings.json and pre-approve it.
- * @param {string} apiKey - The API key (sk-ant-api...)
- * @returns {boolean}
- */
-export function saveApiKey(apiKey) {
+const CLAUDE_CREDENTIAL_KEYS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
+const CLAUDE_CREDENTIAL_COMMENTS = {
+  ANTHROPIC_API_KEY: 'Anthropic API key (set by zylos init)',
+  ANTHROPIC_AUTH_TOKEN: 'Anthropic auth token (set by zylos init)',
+  CLAUDE_CODE_OAUTH_TOKEN: 'Claude Code setup token (set by zylos init)',
+};
+
+function credentialEnvValue(value) {
+  if (typeof value !== 'string' || !value || /[\x00-\x1f\x7f]/.test(value)) return null;
+  // Both dotenv and the runtime's literal .env readers must recover the exact
+  // credential. Escaping quotes would add bytes in those readers, so use only a
+  // lossless representation and reject unrepresentable input before writing.
+  for (const candidate of [value, `'${value}'`, `"${value}"`]) {
+    const literal = candidate.trim().replace(/^(['"])(.*)\1$/, '$2');
+    if (literal === value && parseDotEnv(`CREDENTIAL=${candidate}\n`).CREDENTIAL === value) return candidate;
+  }
+  return null;
+}
+
+function saveClaudeCredential(key, value) {
+  if (credentialEnvValue(value) === null) return false;
   const settingsDir = path.join(os.homedir(), '.claude');
   const settingsPath = path.join(settingsDir, 'settings.json');
   try {
@@ -187,14 +205,48 @@ export function saveApiKey(apiKey) {
     let settings = {};
     try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
     if (!settings.env) settings.env = {};
-    settings.env.ANTHROPIC_API_KEY = apiKey;
+    for (const other of CLAUDE_CREDENTIAL_KEYS) delete settings.env[other];
+    settings.env[key] = value;
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   } catch {
     return false;
   }
-  approveApiKey(apiKey);
-  process.env.ANTHROPIC_API_KEY = apiKey;
+  approveApiKey(value);
+  for (const other of CLAUDE_CREDENTIAL_KEYS) delete process.env[other];
+  process.env[key] = value;
   return true;
+}
+
+/** Save an x-api-key credential to Claude settings and pre-approve it. */
+export function saveApiKey(apiKey) {
+  return saveClaudeCredential('ANTHROPIC_API_KEY', apiKey);
+}
+
+/** Save an Anthropic-compatible Bearer credential without treating it as an API key. */
+export function saveAuthToken(token) {
+  return saveClaudeCredential('ANTHROPIC_AUTH_TOKEN', token);
+}
+
+function saveClaudeCredentialToEnv(key, value) {
+  const encoded = credentialEnvValue(value);
+  if (encoded === null) return false;
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
+    // Remove all assignments, including exported, spaced and duplicate entries.
+    // Keeping an older duplicate would let a later loader select the wrong auth method.
+    const names = CLAUDE_CREDENTIAL_KEYS.join('|');
+    content = content.replace(new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?(?:${names})[^\\S\\r\\n]*=.*(?:\\r?\\n|$)`, 'gm'), '');
+    for (const comment of Object.values(CLAUDE_CREDENTIAL_COMMENTS)) {
+      content = content.split('\n').filter(line => line.trim() !== '# ' + comment).join('\n');
+    }
+    content = upsertEnvValue(content, key, encoded, CLAUDE_CREDENTIAL_COMMENTS[key]);
+    writeEnvFile(envPath, content);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -202,55 +254,31 @@ export function saveApiKey(apiKey) {
  * @param {string} apiKey
  */
 export function saveApiKeyToEnv(apiKey) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    content = upsertEnvValue(content, 'ANTHROPIC_API_KEY', apiKey, 'Anthropic API key (set by zylos init)');
-    writeEnvFile(envPath, content);
-  } catch {}
+  return saveClaudeCredentialToEnv('ANTHROPIC_API_KEY', apiKey);
+}
+
+/** Write the selected Bearer credential to the deployed Zylos environment file. */
+export function saveAuthTokenToEnv(token) {
+  return saveClaudeCredentialToEnv('ANTHROPIC_AUTH_TOKEN', token);
 }
 
 /**
  * Save a Claude Code setup token to ~/.claude/settings.json and pre-approve it.
- * Removes any existing API key to avoid having both.
+ * Removes competing API key and Bearer credentials.
  * @param {string} token - The setup token (sk-ant-oat...)
  * @returns {boolean}
  */
 export function saveSetupToken(token) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
-  try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-    delete settings.env.ANTHROPIC_API_KEY;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch {
-    return false;
-  }
-  approveApiKey(token);
-  process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-  return true;
+  return saveClaudeCredential('CLAUDE_CODE_OAUTH_TOKEN', token);
 }
 
 /**
  * Write CLAUDE_CODE_OAUTH_TOKEN to ~/zylos/.env.
- * Removes any existing ANTHROPIC_API_KEY line to avoid having both.
+ * Removes all competing API key and Bearer assignments.
  * @param {string} token
  */
 export function saveSetupTokenToEnv(token) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    content = upsertEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN', token, 'Claude Code setup token (set by zylos init)');
-    content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
-    content = content.replace(/^\s*ANTHROPIC_API_KEY\s*=.*\n?/m, '');
-    writeEnvFile(envPath, content);
-  } catch {}
+  return saveClaudeCredentialToEnv('CLAUDE_CODE_OAUTH_TOKEN', token);
 }
 
 /**

@@ -19,6 +19,15 @@ fs.mkdirSync(process.env.ZYLOS_DIR, { recursive: true });
 fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.env'), '', 'utf8');
 
 describe('runtime base URL support', () => {
+  test('invalid base URL errors never reflect credential-like URL contents', async () => {
+    const { parseRuntimeFlags, validateRuntimeFlags } = await import('../../commands/runtime.js');
+    const privatePart = 'private-url-value';
+    for (const address of [`https://user:${privatePart}@example.com`, `https://example.com/?key=${privatePart}`, `https://example.com/#${privatePart}`, 'https://example.com?', 'https://example.com#']) {
+      const result = validateRuntimeFlags('claude', parseRuntimeFlags(['--save-base-url', address]));
+      assert.ok(result?.error, 'credential-bearing URLs must be rejected');
+      assert.ok(!JSON.stringify(result).includes(privatePart), 'validation must not reflect input');
+    }
+  });
   test('Codex readiness returns objects for missing instructions and valid or invalid real trust', async t => {
     const { runtimeHooksReady } = await import('../../commands/runtime.js');
     const { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, hookKeyFor,

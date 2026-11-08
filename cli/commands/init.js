@@ -3,6 +3,8 @@ import { savePm2ProcessList } from '../lib/pm2-save.js';
 import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
 import { githubUrl } from '../lib/upstreams.js';
 import { githubRequestSync } from '../lib/github-http.js';
+import { isOfficialClaudeBaseUrl, verifyApiKey, verifyCodexApiKey } from '../lib/init-api-auth.js';
+export { verifyApiKey, verifyCodexApiKey } from '../lib/init-api-auth.js';
 /**
  * zylos init - Initialize Zylos environment
  *
@@ -12,9 +14,10 @@ import { githubRequestSync } from '../lib/github-http.js';
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
+import { parse as parseDotEnv } from 'dotenv';
+import { parse as parseToml } from 'smol-toml';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
@@ -43,13 +46,14 @@ import {
   approveApiKey,
   saveApiKey,
   saveApiKeyToEnv,
+  saveAuthToken,
+  saveAuthTokenToEnv,
   saveClaudeBaseUrl,
   saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
   saveCodexBaseUrl,
   saveCodexApiKey,
-  saveCodexApiKeyToEnv,
   saveCodexBaseUrlToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
@@ -459,76 +463,6 @@ function ensureBinInPath() {
 
   fs.appendFileSync(rcFile, snippet);
   return true;
-}
-
-// ── Codex helpers ─────────────────────────────────────────────────────────
-
-/**
-// ── End Codex helpers ──────────────────────────────────────────────────────
-
-/**
- * Save an Anthropic API key to ~/.claude/settings.json and process.env.
- * Does NOT write to ~/zylos/.env here — that happens after template
- * deployment via saveApiKeyToEnv() to avoid creating a partial .env
- * that blocks template deployment on fresh installs.
- *
- * @param {string} apiKey - The API key (sk-ant-xxx)
- * @returns {boolean} true if saved successfully
- */
-/**
- * Verify an Anthropic API key by making a lightweight API call.
- * Sends an intentionally empty request — a valid key returns 400 (bad request),
- * an invalid key returns 401 (unauthorized).
- *
- * @param {string} apiKey - The API key to verify
- * @returns {Promise<boolean>} true if key is valid
- */
-function verifyApiKey(apiKey) {
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.anthropic.com',
-      path: '/v1/messages',
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      timeout: 10000,
-    }, (res) => {
-      res.resume(); // drain response
-      // 401 = invalid key, anything else (400, 200, etc.) = key is valid
-      resolve(res.statusCode !== 401);
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
-    req.write('{}');
-    req.end();
-  });
-}
-
-/**
- * Verify an OpenAI API key by making a lightweight GET request to /v1/models.
- * @param {string} apiKey - The OpenAI API key (sk-...)
- * @returns {Promise<true|false|null>} true=valid (200), false=invalid (401), null=network error
- */
-function verifyCodexApiKey(apiKey) {
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.openai.com',
-      path: '/v1/models',
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-      timeout: 10000,
-    }, (res) => {
-      res.resume(); // drain response
-      if (res.statusCode === 401) resolve(false);
-      else resolve(true);
-    });
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
-    req.end();
-  });
 }
 
 /**
@@ -1646,6 +1580,7 @@ export function parseInitFlags(args) {
     runtime: null,  // 'claude' | 'codex' — set via --runtime flag
     setupToken: null,
     apiKey: null,
+    authToken: null,
     codexApiKey: null,
     baseUrl: null,
     codexBaseUrl: null,
@@ -1677,6 +1612,7 @@ export function parseInitFlags(args) {
       case '--runtime':
       case '--setup-token':
       case '--api-key':
+      case '--auth-token':
       case '--codex-api-key':
       case '--base-url':
       case '--codex-base-url':
@@ -1691,6 +1627,7 @@ export function parseInitFlags(args) {
         else if (arg === '--runtime') opts.runtime = val;
         else if (arg === '--setup-token') opts.setupToken = val;
         else if (arg === '--api-key') opts.apiKey = val;
+        else if (arg === '--auth-token') opts.authToken = val;
         else if (arg === '--codex-api-key') opts.codexApiKey = val;
         else if (arg === '--base-url') opts.baseUrl = val;
         else if (arg === '--codex-base-url') opts.codexBaseUrl = val;
@@ -1717,19 +1654,46 @@ export function parseInitFlags(args) {
  *
  * @param {object} opts - Parsed CLI options (mutated in place)
  */
-export function resolveFromEnv(opts) {
-  // Only promote auth tokens from env when:
-  // 1. Not already authenticated (avoids redundant re-verification)
-  // 2. No auth token was provided via CLI flag (avoids false mutual-exclusion
-  //    errors when e.g. --setup-token is on CLI but ANTHROPIC_API_KEY is in env)
-  const alreadyAuthed = commandExists('claude') && isClaudeAuthenticated();
-  const hasCliAuth = opts.setupToken !== null || opts.apiKey !== null;
-  if (!alreadyAuthed && !hasCliAuth) {
-    // Setup token takes priority over API key when both are in environment
+function savedInitBaseUrl(runtime, { zylosDir, home }) {
+  const key = runtime === 'codex' ? 'OPENAI_BASE_URL' : 'ANTHROPIC_BASE_URL';
+  const message = 'Could not read saved API endpoint configuration. Provide the base URL explicitly or repair the saved configuration.';
+  const read = file => {
+    try { return fs.readFileSync(file, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw new Error(message); }
+  };
+  const envText = read(path.join(zylosDir, '.env'));
+  if (envText !== null) {
+    // Select only the endpoint assignment; credentials in the same file are not promoted.
+    const assignments = envText.split(/\r?\n/).filter(line => new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?${key}[^\\S\\r\\n]*=`).test(line));
+    const value = parseDotEnv(assignments.join('\n'))[key];
+    if (value) return value;
+  }
+  const native = read(path.join(home, runtime === 'codex' ? '.codex/config.toml' : '.claude/settings.json'));
+  if (native === null) return null;
+  try {
+    const value = runtime === 'codex' ? parseToml(native).openai_base_url : JSON.parse(native)?.env?.ANTHROPIC_BASE_URL;
+    if (value !== undefined && typeof value !== 'string') throw new Error(message);
+    return value || null;
+  } catch { throw new Error(message); }
+}
+
+/** Resolve only the chosen runtime's saved endpoint, without promoting saved credentials. */
+export function resolveInitBaseUrl(opts, runtime, { zylosDir = ZYLOS_DIR, home = os.homedir() } = {}) {
+  if (runtime === 'claude' && opts.baseUrl === null) opts.baseUrl = savedInitBaseUrl('claude', { zylosDir, home });
+  if (runtime === 'codex' && opts.codexBaseUrl === null) opts.codexBaseUrl = savedInitBaseUrl('codex', { zylosDir, home });
+}
+
+export function resolveFromEnv(opts, { runtime: existingRuntime, zylosDir = ZYLOS_DIR, home = os.homedir() } = {}) {
+  // An explicit Claude credential selects its kind and overrides ambient auth variables.
+  // Otherwise environment input takes precedence over an existing authenticated CLI.
+  const hasCliAuth = opts.setupToken != null || opts.apiKey != null || opts.authToken != null;
+  if (!hasCliAuth) {
+    // Keep the existing OAuth environment priority; never infer a relay header kind.
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
       opts.setupToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    } else if (process.env.ANTHROPIC_API_KEY) {
-      opts.apiKey = process.env.ANTHROPIC_API_KEY;
+    } else {
+      if (process.env.ANTHROPIC_API_KEY) opts.apiKey = process.env.ANTHROPIC_API_KEY;
+      if (process.env.ANTHROPIC_AUTH_TOKEN) opts.authToken = process.env.ANTHROPIC_AUTH_TOKEN;
     }
   }
   if (opts.runtime === null && process.env.ZYLOS_RUNTIME) {
@@ -1753,6 +1717,8 @@ export function resolveFromEnv(opts) {
   if (opts.codexBaseUrl === null && process.env.OPENAI_BASE_URL) {
     opts.codexBaseUrl = process.env.OPENAI_BASE_URL;
   }
+  const selectedRuntime = opts.runtime || existingRuntime || (opts.apiKey || opts.authToken ? 'claude' : null);
+  if (selectedRuntime) resolveInitBaseUrl(opts, selectedRuntime, { zylosDir, home });
   // TZ: do NOT pick up ambient TZ from the environment.
   // Docker containers often have TZ=UTC set by default, which would silently
   // overwrite user-configured timezones on re-init. Only --timezone flag applies.
@@ -1760,9 +1726,11 @@ export function resolveFromEnv(opts) {
 }
 
 export function validateInitOptions(opts) {
-  // Mutual exclusion: setup-token and api-key
-  if (opts.setupToken && opts.apiKey) {
-    return '--setup-token and --api-key are mutually exclusive.\n  Run zylos init and choose one during setup.';
+  if ([opts.setupToken, opts.apiKey, opts.authToken].filter(Boolean).length > 1) {
+    return '--setup-token, --api-key and --auth-token are mutually exclusive.\n  Choose one Claude credential.';
+  }
+  if ([opts.setupToken, opts.apiKey, opts.authToken, opts.codexApiKey].some(value => value && /[\r\n]/.test(value))) {
+    return 'Invalid credential format: line breaks are not allowed.';
   }
 
   // Setup token format
@@ -1771,10 +1739,10 @@ export function validateInitOptions(opts) {
   }
 
   // API key format (reject setup tokens — they start with sk-ant-oat)
-  if (opts.apiKey && !opts.apiKey.startsWith('sk-ant-')) {
+  if (opts.apiKey && isOfficialClaudeBaseUrl(opts.baseUrl) && !opts.apiKey.startsWith('sk-ant-')) {
     return 'Invalid API key. It should start with "sk-ant-".\n  Get your key at: https://console.anthropic.com/settings/keys\n  Then run: zylos init --api-key <key>';
   }
-  if (opts.apiKey && opts.apiKey.startsWith('sk-ant-oat')) {
+  if (opts.apiKey && isOfficialClaudeBaseUrl(opts.baseUrl) && opts.apiKey.startsWith('sk-ant-oat')) {
     return 'That looks like a setup token, not an API key.\n  Use --setup-token instead: zylos init --setup-token <token>';
   }
 
@@ -1789,10 +1757,10 @@ export function validateInitOptions(opts) {
   }
 
   if (opts.baseUrl && !isValidBaseUrl(opts.baseUrl)) {
-    return `Invalid base URL: "${opts.baseUrl}".\n  Run: zylos init --base-url https://example.com/v1`;
+    return 'Invalid base URL. Use an HTTP(S) URL without credentials, query or fragment.\n  Run: zylos init --base-url https://example.com';
   }
   if (opts.codexBaseUrl && !isValidBaseUrl(opts.codexBaseUrl)) {
-    return `Invalid Codex base URL: "${opts.codexBaseUrl}".\n  Run: zylos init --codex-base-url https://example.com/v1`;
+    return 'Invalid Codex base URL. Use an HTTP(S) URL without credentials, query or fragment.\n  Run: zylos init --codex-base-url https://example.com/v1';
   }
 
   // Domain validation (basic hostname check)
@@ -1812,6 +1780,80 @@ export function validateInitOptions(opts) {
   return null;
 }
 
+/** Ask for the relay's documented header rather than probing different credential kinds. */
+export async function promptClaudeApiCredential({ baseUrl } = {}, {
+  choose = promptChoice, secret = promptSecret, log = console.log,
+} = {}) {
+  const custom = !isOfficialClaudeBaseUrl(baseUrl);
+  const kind = custom ? await choose('  Which credential does this endpoint require?',
+    ['API key (x-api-key header)', 'Auth token (Authorization: Bearer header)']) : 1;
+  log(`  ${dim(kind === 2 ? 'Paste the Bearer auth token for this endpoint:'
+    : custom ? 'Paste the API key for this endpoint:' : 'Paste your Anthropic API key (starts with sk-ant-):')}`);
+  const value = await secret(kind === 2 ? '  Auth token: ' : '  API key: ');
+  if (!value) { log(`  ${warn('No credential entered. Skipped.')}`); return null; }
+  const credential = kind === 2 ? { authToken: value } : { apiKey: value };
+  const validation = validateInitOptions({ ...credential, baseUrl });
+  if (validation) { log(`  ${error(validation)}`); return null; }
+  return credential;
+}
+
+/** Verify only the selected Claude header, then persist to the matching credential store. */
+export async function authenticateClaudeApiCredential({ apiKey, authToken, baseUrl }, {
+  quiet = false, log = console.log, reportError = console.error,
+  verify = verifyApiKey, saveKey = saveApiKey, saveToken = saveAuthToken,
+} = {}) {
+  if (!quiet) log(`  ${dim('Verifying Claude API credential...')}`);
+  const result = await verify(authToken || apiKey, { baseUrl: baseUrl || undefined, authToken: !!authToken });
+  if (result === false) {
+    reportError(`  ${error('Claude API credential was rejected (HTTP 401/403).')}`);
+    return false;
+  }
+  if (!(authToken ? saveToken(authToken) : saveKey(apiKey))) {
+    reportError(`  ${error('Failed to save Claude API credential to settings.json.')}`);
+    return false;
+  }
+  if (!quiet) log(result === true ? `  ${success('Claude API credential verified; settings saved. Environment persistence is pending.')}`
+    : `  ${warn('Claude API verification was inconclusive (network or server response). Settings saved; environment persistence and runtime verification are still required.')}`);
+  return true;
+}
+
+export async function authenticateCodexApiCredential(apiKey, {
+  baseUrl, quiet = false, log = console.log, reportError = console.error,
+  verify = verifyCodexApiKey, saveKey = saveCodexApiKey,
+} = {}) {
+  if (!quiet) log(`  ${dim('Verifying Codex API credential...')}`);
+  const result = await verify(apiKey, { baseUrl: baseUrl || undefined });
+  if (result === false) {
+    reportError(`  ${error('Codex API credential was rejected (HTTP 401/403).')}`);
+    return false;
+  }
+  if (!saveKey(apiKey)) {
+    reportError(`  ${error('Failed to save Codex API credential to auth.json.')}`);
+    return false;
+  }
+  if (!quiet) log(result === true ? `  ${success('Codex API credential verified and saved')}`
+    : `  ${warn('Codex API verification was inconclusive (network or server response). Credential saved; runtime verification is still required.')}`);
+  return true;
+}
+
+/** Persist post-template auth values; a partial write must stop init before services start. */
+export function persistInitCredentials({ apiKey, authToken, setupToken, claudeBaseUrl, codexBaseUrl }, {
+  saveKeyEnv = saveApiKeyToEnv, saveTokenEnv = saveAuthTokenToEnv, saveSetupEnv = saveSetupTokenToEnv,
+  saveClaudeBase = saveClaudeBaseUrlToSettingsAndEnv, saveCodexBase = saveCodexBaseUrlToEnv,
+  saveCodexConfig = writeCodexConfig, reportError = console.error,
+} = {}) {
+  try {
+    for (const [value, save] of [[authToken, saveTokenEnv], [apiKey, saveKeyEnv], [setupToken, saveSetupEnv], [claudeBaseUrl, saveClaudeBase], [codexBaseUrl, saveCodexBase]]) {
+      if (value && save(value) !== true) throw new Error('credential persistence failed');
+    }
+    if (codexBaseUrl && saveCodexConfig(ZYLOS_DIR, { openaiBaseUrl: codexBaseUrl }) !== true) throw new Error('credential persistence failed');
+    return true;
+  } catch {
+    reportError(`  ${error('Failed to persist runtime credentials or API endpoint. Initialization stopped before starting services; repair credential storage and retry.')}`);
+    return false;
+  }
+}
+
 /**
  * Print help text for `zylos init`.
  */
@@ -1828,10 +1870,11 @@ Options:
   --runtime <name>           Agent runtime: claude (default) or codex
   --timezone <tz>            Set timezone (IANA format, e.g., Asia/Shanghai)
   --setup-token <token>      Authenticate with Claude setup token
-  --api-key <key>            Authenticate with Anthropic API key
-  --codex-api-key <key>      Authenticate Codex with OpenAI API key (sk-...)
-  --base-url <url>           Custom API base URL for Claude Code
-  --codex-base-url <url>     Custom API base URL for Codex
+  --api-key <key>            Claude credential sent as x-api-key
+  --auth-token <token>       Claude credential sent as Authorization: Bearer
+  --codex-api-key <key>      Codex credential sent as Authorization: Bearer
+  --base-url <url>           Claude API root/prefix (appends /v1/messages for verification)
+  --codex-base-url <url>     Codex API base, usually ending /v1 (verifies /models)
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
@@ -1844,12 +1887,15 @@ Non-interactive mode:
 
 Environment variables:
   ZYLOS_UPSTREAM_CONFIG (local file, HTTPS profile URL, or direct)
-  CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_RUNTIME,
+  CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
+  ANTHROPIC_BASE_URL, OPENAI_BASE_URL, ZYLOS_RUNTIME,
   OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
 
   Resolution: CLI flag > env var > .env/config.json > interactive prompt
 
-Note: --setup-token and --api-key values are visible in process listings.
+Note: --setup-token, --api-key and --auth-token are mutually exclusive.
+  Official Anthropic API keys require sk-ant-; custom endpoints accept other formats.
+  These flag values (and --codex-api-key) are visible in process listings.
   On shared systems, prefer environment variables instead:
     CLAUDE_CODE_OAUTH_TOKEN=... zylos init
 `);
@@ -1870,7 +1916,7 @@ export async function initCommand(args) {
   const existingConfig = readZylosConfigOrThrow();
 
   // Resolve from environment variables
-  resolveFromEnv(opts);
+  resolveFromEnv(opts, { runtime: existingConfig?.runtime });
 
   // Validate options
   const validationErr = validateInitOptions(opts);
@@ -2006,6 +2052,11 @@ export async function initCommand(args) {
     console.log(`  ${success(`Runtime: ${runtimeLabel}`)}`);
   }
 
+  // An interactive runtime choice can differ from the pre-prompt default.
+  resolveInitBaseUrl(opts, selectedRuntime);
+  const selectedEndpointError = validateInitOptions(opts);
+  if (selectedEndpointError) throw new Error(selectedEndpointError);
+
   // Prepare both CLIs, but authenticate only the selected runtime.
   const preparation = await prepareInitRuntimeClis();
   if (preparation.failed.length) exitCode = 1;
@@ -2029,17 +2080,19 @@ export async function initCommand(args) {
   let claudeJustInstalled = preparation.installed.includes('claude');
   let claudeAuthenticated = false;
   let codexAuthenticated = false;
+  let pendingAuthToken = null;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
-  let pendingCodexApiKey = null; // set if codex api key provided, written to .env after templates
   let pendingClaudeBaseUrl = null;
   let pendingCodexBaseUrl = null;
 
-  if (opts.baseUrl) {
+  const previousClaudeBaseUrl = process.env.ANTHROPIC_BASE_URL;
+  const previousCodexBaseUrl = process.env.OPENAI_BASE_URL;
+  if (opts.baseUrl && !opts.apiKey && !opts.authToken) {
     saveClaudeBaseUrl(opts.baseUrl);
     pendingClaudeBaseUrl = opts.baseUrl;
   }
-  if (opts.codexBaseUrl) {
+  if (opts.codexBaseUrl && !opts.codexApiKey) {
     saveCodexBaseUrl(opts.codexBaseUrl);
     pendingCodexBaseUrl = opts.codexBaseUrl;
   }
@@ -2048,33 +2101,9 @@ export async function initCommand(args) {
     // ── Step 6 (Codex): auth + startup config ────────────────────────────
     if (commandExists('codex')) {
       if (opts.codexApiKey) {
-        // Verify first, then save — mirrors Claude's verifyApiKey → saveApiKey pattern.
-        // Do NOT save before verifying: a bad key in process.env causes isCodexAuthenticated()
-        // to report "authenticated" even when the key is invalid (path 1 check is existence-only).
-        if (!quiet) console.log(`  ${dim('Verifying Codex API key...')}`);
-        const verifyResult = await verifyCodexApiKey(opts.codexApiKey);
-        if (verifyResult === true) {
-          if (saveCodexApiKey(opts.codexApiKey)) {
-            codexAuthenticated = true;
-            if (!quiet) console.log(`  ${success('Codex API key verified and saved')}`);
-          } else {
-            console.error(`  ${error('Failed to save Codex API key to auth.json.')}`);
-            if (skipConfirm) exitCode = 1;
-          }
-        } else if (verifyResult === false) {
-          console.error(`  ${error('Codex API key is invalid or could not be verified.')}`);
-          console.error(`    ${dim('Check your key at platform.openai.com')}`);
-          if (skipConfirm) exitCode = 1;
-        } else {
-          // null = network unreachable — save and proceed, let Codex fail at runtime if key is bad
-          if (saveCodexApiKey(opts.codexApiKey)) {
-            if (!quiet) console.log(`  ${warn('Could not verify Codex API key (network unreachable). Proceeding...')}`);
-            codexAuthenticated = true;
-          } else {
-            console.error(`  ${error('Failed to save Codex API key to auth.json.')}`);
-            if (skipConfirm) exitCode = 1;
-          }
-        }
+        codexAuthenticated = await authenticateCodexApiCredential(opts.codexApiKey, { baseUrl: opts.codexBaseUrl, quiet });
+        if (codexAuthenticated && opts.codexBaseUrl) { saveCodexBaseUrl(opts.codexBaseUrl); pendingCodexBaseUrl = opts.codexBaseUrl; }
+        if (!codexAuthenticated && skipConfirm) exitCode = 1;
       } else {
         codexAuthenticated = isCodexAuthenticated();
         if (codexAuthenticated) {
@@ -2087,17 +2116,15 @@ export async function initCommand(args) {
               ['OpenAI API key', 'Device auth (headless/server — no browser needed)', 'Browser login'],
             );
             if (codexAuthChoice === 1) {
-              // Option 1: API key
-              console.log(`\n  ${dim('Paste your OpenAI API key (starts with sk-):')}`);
+              console.log(`\n  ${dim('Paste the API credential expected by this Codex endpoint:')}`);
               const apiKey = await promptSecret('  API key: ');
-              if (!apiKey) {
-                console.log(`  ${warn('No key entered. Skipped.')}`);
-              } else if (saveCodexApiKey(apiKey)) {
-                codexAuthenticated = isCodexAuthenticated();
-                if (codexAuthenticated) {
-                  console.log(`  ${success('Codex API key saved and verified')}`);
-                } else {
-                  console.log(`  ${warn('Key saved but auth check failed. Continuing...')}`);
+              if (!apiKey) console.log(`  ${warn('No key entered. Skipped.')}`);
+              else {
+                codexAuthenticated = await authenticateCodexApiCredential(apiKey, { baseUrl: opts.codexBaseUrl });
+                if (!codexAuthenticated) {
+                  pendingCodexBaseUrl = null;
+                  if (previousCodexBaseUrl === undefined) delete process.env.OPENAI_BASE_URL;
+                  else process.env.OPENAI_BASE_URL = previousCodexBaseUrl;
                 }
               }
             } else if (codexAuthChoice === 2) {
@@ -2136,7 +2163,7 @@ export async function initCommand(args) {
       }
 
       // Write ~/.codex/config.toml to suppress interactive prompts on first launch
-      if (writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl || undefined })) {
+      if ((!opts.codexApiKey || codexAuthenticated) && writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl || undefined })) {
         if (!quiet) console.log(`  ${success('Codex startup config written')}`);
       }
     }
@@ -2144,7 +2171,7 @@ export async function initCommand(args) {
   } else {
     // ── Step 6 (Claude): auth check + guided login ────────────────────────
     if (commandExists('claude')) {
-      claudeAuthenticated = isClaudeAuthenticated();
+      claudeAuthenticated = !opts.apiKey && !opts.authToken && isClaudeAuthenticated();
       if (claudeAuthenticated) {
         if (!quiet) console.log(`  ${success('Claude Code authenticated')}`);
       } else if (opts.setupToken) {
@@ -2168,25 +2195,19 @@ export async function initCommand(args) {
           if (skipConfirm) exitCode = 1;
         }
       }
-    } else if (opts.apiKey) {
-      // API key provided via flag/env — verify and use directly (already validated format)
-      if (!quiet) console.log(`  ${dim('Verifying API key...')}`);
-      const keyValid = await verifyApiKey(opts.apiKey);
-      if (!keyValid) {
-        console.error(`  ${error('API key is invalid or could not be verified.')}`);
-        console.error(`    ${dim('Check your key at console.anthropic.com')}`);
-        if (skipConfirm) exitCode = 1;
-      } else if (saveApiKey(opts.apiKey)) {
-        pendingApiKey = opts.apiKey;
-        claudeAuthenticated = true;
-        if (!quiet) console.log(`  ${success('API key verified and saved')}`);
-      }
+    } else if (opts.apiKey || opts.authToken) {
+      claudeAuthenticated = await authenticateClaudeApiCredential(opts, { quiet });
+      if (claudeAuthenticated) {
+        if (opts.baseUrl) { saveClaudeBaseUrl(opts.baseUrl); pendingClaudeBaseUrl = opts.baseUrl; }
+        if (opts.authToken) pendingAuthToken = opts.authToken;
+        else pendingApiKey = opts.apiKey;
+      } else if (skipConfirm) exitCode = 1;
     } else {
       if (!quiet) console.log(`  ${warn('Claude Code not authenticated')}`);
       if (!skipConfirm) {
         const authChoice = await promptChoice(
           '\n  How would you like to authenticate?',
-          ['Claude subscription (opens browser login)', 'Anthropic API key', 'Setup token (from claude setup-token)'],
+          ['Claude subscription (opens browser login)', isOfficialClaudeBaseUrl(opts.baseUrl) ? 'Anthropic API key' : 'Custom endpoint credential (API key or Bearer token)', 'Setup token (from claude setup-token)'],
         );
 
         if (authChoice === 1) {
@@ -2217,24 +2238,16 @@ export async function initCommand(args) {
             console.log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
           }
         } else if (authChoice === 2) {
-          // Option 2: API key
-          console.log(`\n  ${dim('Paste your Anthropic API key (starts with sk-ant-):')}`);
-          const apiKey = await promptSecret('  API key: ');
-          if (!apiKey) {
-            console.log(`  ${warn('No key entered. Skipped.')}`);
-          } else if (!apiKey.startsWith('sk-ant-')) {
-            console.log(`  ${error('Invalid format. API key should start with sk-ant-')}`);
-            console.log(`    ${dim('You can set it later: export ANTHROPIC_API_KEY=sk-ant-xxx')}`);
-          } else {
-            console.log(`  ${dim('Verifying API key...')}`);
-            const keyValid = await verifyApiKey(apiKey);
-            if (!keyValid) {
-              console.log(`  ${error('API key is invalid or could not be verified.')}`);
-              console.log(`    ${dim('Check your key at console.anthropic.com')}`);
-            } else if (saveApiKey(apiKey)) {
-              pendingApiKey = apiKey;
-              claudeAuthenticated = true;
-              console.log(`  ${success('API key verified and saved')}`);
+          const credential = await promptClaudeApiCredential({ baseUrl: opts.baseUrl });
+          if (credential) {
+            claudeAuthenticated = await authenticateClaudeApiCredential({ ...credential, baseUrl: opts.baseUrl });
+            if (claudeAuthenticated) {
+              if (credential.authToken) pendingAuthToken = credential.authToken;
+              else pendingApiKey = credential.apiKey;
+            } else {
+              pendingClaudeBaseUrl = null;
+              if (previousClaudeBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
+              else process.env.ANTHROPIC_BASE_URL = previousClaudeBaseUrl;
             }
           }
         } else if (authChoice === 3) {
@@ -2321,21 +2334,10 @@ export async function initCommand(args) {
     migrateWebConsolePassword();
 
     // Write auth credentials to .env if entered during this run
-    if (pendingApiKey) {
-      saveApiKeyToEnv(pendingApiKey);
-    }
-    if (pendingSetupToken) {
-      saveSetupTokenToEnv(pendingSetupToken);
-    }
-    if (pendingCodexApiKey) {
-      saveCodexApiKeyToEnv(pendingCodexApiKey);
-    }
-    if (pendingClaudeBaseUrl) {
-      saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
-    }
-    if (pendingCodexBaseUrl) {
-      saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
-      writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
+    if (!persistInitCredentials({ apiKey: pendingApiKey, authToken: pendingAuthToken, setupToken: pendingSetupToken,
+      claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl })) {
+      process.exitCode = 1;
+      return;
     }
 
     // Timezone: use resolved value or show current
@@ -2405,22 +2407,11 @@ export async function initCommand(args) {
   // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
   migrateWebConsolePassword();
 
-  // Write auth credentials to .env now that templates have been deployed
-  if (pendingApiKey) {
-    saveApiKeyToEnv(pendingApiKey);
-  }
-  if (pendingSetupToken) {
-    saveSetupTokenToEnv(pendingSetupToken);
-  }
-  if (pendingCodexApiKey) {
-    saveCodexApiKeyToEnv(pendingCodexApiKey);
-  }
-  if (pendingClaudeBaseUrl) {
-    saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
-  }
-  if (pendingCodexBaseUrl) {
-    saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
-    writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
+  // Write auth credentials to .env now that templates have been deployed.
+  if (!persistInitCredentials({ apiKey: pendingApiKey, authToken: pendingAuthToken, setupToken: pendingSetupToken,
+    claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl })) {
+    process.exitCode = 1;
+    return;
   }
   // Step 8: Configure timezone
   if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);
@@ -2496,8 +2487,8 @@ export async function initCommand(args) {
         console.log(yellow('  │  To fix:                                               │'));
         console.log(yellow('  │    codex login                                         │'));
       } else {
-        const fixCmd = (opts.setupToken || opts.apiKey)
-          ? (opts.setupToken ? 'zylos init --setup-token <valid-token>' : 'zylos init --api-key <valid-key>')
+        const fixCmd = (opts.setupToken || opts.apiKey || opts.authToken)
+          ? (opts.setupToken ? 'zylos init --setup-token <valid-token>' : opts.authToken ? 'zylos init --auth-token <valid-token>' : 'zylos init --api-key <valid-key>')
           : 'zylos init';
         console.log(yellow('  │  ⚠  Claude is not authenticated                       │'));
         console.log(yellow('  │                                                        │'));

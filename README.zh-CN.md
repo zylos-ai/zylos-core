@@ -68,8 +68,9 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 | `-q`, `--quiet` | 精简输出 | 关闭 |
 | `--runtime <name>` | AI 运行时：`claude` 或 `codex` | `claude` |
 | `--setup-token <token>` | Claude [setup token](https://code.claude.com/docs/en/authentication)（以 `sk-ant-oat` 开头） | — |
-| `--api-key <key>` | Anthropic API key（以 `sk-ant-` 开头） | — |
-| `--codex-api-key <key>` | Codex 运行时的 OpenAI API key（以 `sk-` 开头） | — |
+| `--api-key <key>` | Claude 的 `x-api-key` 凭据；官方 Anthropic key 以 `sk-ant-` 开头 | — |
+| `--auth-token <token>` | Claude 的 `Authorization: Bearer` 凭据 | — |
+| `--codex-api-key <key>` | Codex API key，也支持兼容自定义地址接受的 key | — |
 | `--base-url <url>` | 给 Claude Code 设置自定义 API 地址 | — |
 | `--codex-base-url <url>` | 给 Codex 设置自定义 API 地址 | — |
 | `--timezone <tz>` | [IANA 时区](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)，如 `Asia/Shanghai`、`America/New_York`、`Europe/London` | 系统默认 |
@@ -87,12 +88,59 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 | `ZYLOS_RUNTIME` | `--runtime` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
 | `ANTHROPIC_API_KEY` | `--api-key` |
+| `ANTHROPIC_AUTH_TOKEN` | `--auth-token` |
 | `ANTHROPIC_BASE_URL` | `--base-url` |
 | `OPENAI_API_KEY` | `--codex-api-key` |
 | `OPENAI_BASE_URL` | `--codex-base-url` |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL`（`https` 或 `http`） | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |
+
+**自定义 API 地址：**
+
+按服务商要求明确选择 Claude 的凭据类型：`--api-key` 写入
+`ANTHROPIC_API_KEY`，使用 `x-api-key`；`--auth-token` 写入
+`ANTHROPIC_AUTH_TOKEN`，使用 `Authorization: Bearer`。这两个参数与
+`--setup-token` 互斥。显式凭据参数优先于凭据环境变量；没有凭据参数时，
+保留既有 OAuth token 环境变量的优先级，否则同时设置
+`ANTHROPIC_API_KEY` 和 `ANTHROPIC_AUTH_TOKEN` 会报错。
+交互式 init 会询问自定义 Claude 地址使用哪一种请求头，不会自动试探两种方式。
+所选运行时的 base URL 按 CLI 参数 > 环境变量 > 既有 `~/zylos/.env` >
+Claude 原生 settings 或 Codex config 的顺序读取；选中的已保存地址无法读取或
+格式无效时，会在发起校验前报错，不回退到官方地址。
+
+```bash
+# 使用 Bearer 的 Anthropic 兼容地址；此处均为占位值。
+ANTHROPIC_BASE_URL=https://relay.example.com \
+ANTHROPIC_AUTH_TOKEN=... zylos init -y --runtime claude
+
+# x-api-key 是另一种方式，不要同时设置两个凭据变量。
+ANTHROPIC_BASE_URL=https://relay.example.com \
+ANTHROPIC_API_KEY=... zylos init -y --runtime claude
+```
+
+`api.anthropic.com` 主机名仍检查 `sk-ant-` 前缀，其他主机不作此前缀限制。
+凭据写入 Claude 的 `~/.claude/settings.json` 环境变量和 `~/zylos/.env`；
+切换类型时，会从这两处及当前进程中移除其他 Claude 凭据变量。
+setup-token 与 OAuth 订阅登录仍走既有路径。共享机器上宜用环境变量，
+因为凭据参数会出现在进程列表中。
+凭据或地址持久化失败时，init 会报错并在启动服务前停止；原生 settings
+可能已经更新。无法在 `.env` 中无损表示的凭据会在更改任何凭据存储前返回
+通用错误。
+
+校验只向选定地址发送一次请求，使用选定请求头，不跟随重定向，也不探测其他地址。
+Claude 按运行时 SDK 的方式在 base URL 后追加 `/v1/messages`：应提供根地址或
+`https://relay.example.com/anthropic` 这样的路径前缀，除非服务商明确要求，
+不要再在末尾加 `/v1`。Codex 在 base URL 后追加 `/models`，其默认值是
+`https://api.openai.com/v1`，兼容自定义地址通常也以 `/v1` 结尾。
+Codex 仍将 API key 存在 `~/.codex/auth.json` 的 `OPENAI_API_KEY` 字段中，
+使用 Bearer 认证。
+
+2xx 视为校验通过，401/403 视为拒绝；只有官方 HTTPS origin
+`https://api.anthropic.com` 对空校验请求返回的 400 也视为通过。
+其他 HTTP 状态、网络错误和超时属于无法确定：init 会提示，
+仍保存所选凭据，让运行时报告实际地址的行为。自定义地址的 400 不会被当成
+认证成功的证据。
 
 **退出码：** `0` = 成功，`1` = 致命错误（如无效 token），`2` = 部分成功（如 Caddy 下载失败但其他步骤正常）。
 
@@ -181,7 +229,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 `zylos init` 可重复运行，支持交互式和非交互式两种模式。它会：
 1. 安装缺失的工具（tmux、git、PM2、Claude Code 或 Codex）
-2. 配置认证（Claude：浏览器登录、API key 或 [setup token](https://code.claude.com/docs/en/authentication)；Codex：API key 或 device auth）
+2. 配置认证（Claude：浏览器登录、API key、Bearer token 或 [setup token](https://code.claude.com/docs/en/authentication)；Codex：API key 或 device auth）
 3. 创建 `~/zylos/` 目录，包含记忆、技能和服务
 4. 启动所有后台服务，并在 tmux 会话中启动 AI 智能体
 
