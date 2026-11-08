@@ -7,7 +7,8 @@ import { hashPassword } from '../src/lib/auth.js';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 
 // Covers the real local index.js /chat route and base-prefixed assets after
-// login. Run for page-route/auth changes; skip before DB/HTTP/process creation
+// login, following the actual application import to the dedicated conversation page.
+// Run for page-route/auth/entry changes; skip before DB/HTTP/process creation
 // unless explicitly arranging isolated integration.
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DB paths
 // are read back before startup; sandbox teardown reclaims child/browser/HTTP resources.
@@ -50,10 +51,21 @@ test('local chat route serves the application with base-prefixed module URLs', {
       assert.equal(html.includes('__BASE_PATH__'), false);
       assert.ok(html.includes(`${base}/_assets/`));
     }
-    const module = await fetch(`${origin}/_assets/js/wb/chat.js`, { headers: { cookie } });
+    const entry = await fetch(`${origin}/chat`, { headers: { cookie } });
+    const appPath = /src="([^"]+\/js\/app\.js\?v=\d+)"/.exec(await entry.text())?.[1];
+    assert.ok(appPath, 'the actual local entry selects the application module');
+    const app = await fetch(new URL(appPath, origin), { headers: { cookie } });
+    assert.equal(app.status, 200);
+    const pageImport = /from ['"]([^'"]*\/conversation-page\.js\?v=100)['"]/.exec(await app.text())?.[1];
+    assert.ok(pageImport, 'the actual application loads the dedicated conversation page');
+    const module = await fetch(new URL(pageImport, new URL(appPath, origin)), { headers: { cookie } });
     assert.equal(module.status, 200);
     assert.match(module.headers.get('content-type'), /javascript/);
-    assert.match(await module.text(), /export function mountChat/);
+    assert.match(await module.text(), /export function mountConversationPage/);
+    for (const name of ['chat', 'chat-state']) {
+      assert.equal((await fetch(`${origin}/_assets/js/wb/${name}.js`, { headers: { cookie } })).status, 404,
+        `${name} is no longer a served module`);
+    }
   }, { timeoutMs: 25_000 });
   assert.equal(fs.existsSync(sandbox.root), false);
   assert.equal(sandbox.children.size, 0);

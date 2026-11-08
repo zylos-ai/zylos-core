@@ -1,17 +1,51 @@
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createChatState, messageState, receiptState } from '../public/js/wb/chat-state.js';
+import { registerHooks } from 'node:module';
+import path from 'node:path';
+const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
+const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === schemaPath) return next(sourceSchema, context);
+    return next(specifier, context);
+  }
+});
+const { createConversationState, messageState, receiptState } = await import('../public/js/wb/conversation-state.js');
+
+// Pure controller tests: official runner owns these paths. No HTTP, database,
+// PM2 or tmux is used, and scheduled polling belongs only to this fake clock.
+for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) assert.ok(path.isAbsolute(process.env[key]), key);
+const runnerRoot = path.dirname(process.env.HOME);
+assert.match(path.basename(runnerRoot), /^zylos-tests-/);
+assert.equal(process.env.ZYLOS_DIR, path.join(process.env.HOME, 'zylos'));
+assert.equal(process.env.PM2_HOME, path.join(process.env.HOME, '.pm2'));
+assert.equal(process.env.TMPDIR, path.join(runnerRoot, 'tmp'));
+console.info('conversation state isolation', JSON.stringify(Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]))), 'no HTTP/DB/PM2/tmux');
+const controllers = new Set(), scheduled = new Map();
+let timerId = 0;
+const timers = {
+  document: { hidden: false, visibilityState: 'visible' },
+  now: () => 1000,
+  setTimeout(fn, ms) { const id = ++timerId; scheduled.set(id, { fn, ms }); return id; },
+  clearTimeout(id) { scheduled.delete(id); }
+};
+afterEach(() => {
+  for (const state of controllers) state.destroy();
+  controllers.clear();
+  assert.equal(scheduled.size, 0, 'controller timers are reclaimed on every test outcome');
+});
 
 const pending = () => { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };
 function fixture(extra = () => undefined) {
   const calls = [];
-  const state = createChatState({ request: async (path, options) => {
+  const state = createConversationState({ ...timers, request: async (path, options) => {
     calls.push({path,options}); const result = extra(path,options); if (result !== undefined) return result;
     if (path === '/api/session-mode') return { data: { sessionMode: 'multi' } };
     if (path.includes('/messages?')) return {items:[],nextCursor:null,afterCursor:'after'};
     if (path.includes('?')) return {items:[],nextCursor:null};
     const id = decodeURIComponent(path.split('/').at(-1)); return {conversation:{id,state:'active'},conversationId:id,stored:false};
   }});
+  controllers.add(state);
   return {state,calls};
 }
 for (const [status, action, expected] of [ ['pending',null,'pending'],['running',null,'running'],['delivered',null,'delivered'],['failed','delivered','failed'],['failed','auth_rejected','auth_rejected'],['failed','suppressed','suppressed'],['switch_absorbed',null,'switch_absorbed'],['unknown',null,'pending_reconciliation'] ]) {
@@ -62,12 +96,13 @@ test('closing suppresses in flight data and errors', async () => {
 test('changing instance clears saved inputs synchronously and rejects old responses', async () => {
   let identity = 'local', delayed = false;
   const wait = pending();
-  const state = createChatState({identity:()=>identity,request:async path=>{
+  const state = createConversationState({ ...timers, identity:()=>identity,request:async path=>{
     if(path==='/api/session-mode')return {data:{sessionMode:'multi'}};
     if(path.includes('conversations?'))return delayed?wait.promise:{items:[{id:'g:A'}],nextCursor:null};
     if(path.includes('/messages?'))return {items:[],afterCursor:'after'};
     return {conversation:{id:'g:A'},conversationId:'g:A',stored:false};
   }});
+  controllers.add(state);
   await state.open(); await state.select('g:A'); state.setInput('private local input');
   delayed=true; const old=state.refresh(); state.close(); identity='remote'; const next=state.open();
   assert.equal(state.snapshot().items.length,0); assert.equal(state.snapshot().input,''); assert.equal(state.snapshot().selectedId,null);
@@ -128,7 +163,7 @@ test('pending draft creation does not hijack a later navigation', async () => {
 });
 test('send postprocessing cannot request old conversation on another instance', async () => {
   const wait=pending(); let identity='local', sent=false; const calls=[];
-  const state=createChatState({identity:()=>identity,request:async(path,options)=>{
+  const state=createConversationState({ ...timers, identity:()=>identity,request:async(path,options)=>{
     calls.push({path,identity});
     if(path==='/api/session-mode')return {data:{sessionMode:'multi'}};
     if(path.includes('conversations?'))return {items:[],nextCursor:null};
@@ -137,6 +172,7 @@ test('send postprocessing cannot request old conversation on another instance', 
     if(sent&&identity==='local')return wait.promise;
     return {stored:false,conversationId:'g:A',conversation:{id:'g:A'}};
   }});
+  controllers.add(state);
   await state.open(); await state.select('g:A'); state.setInput('text'); const send=state.send();
   await Promise.resolve(); state.close(); identity='remote'; await state.open(); const count=calls.length;
   wait.resolve({stored:true,conversation:{id:'g:A'}}); await send;
@@ -247,7 +283,7 @@ for (const requestKind of ['detail', 'messages', 'rename', 'receiptStatus', 'row
       (requestKind === 'messages' && path.includes('/messages?')) ||
       (requestKind === 'rename' && options?.method === 'PATCH') ||
       (requestKind === 'rowStatus' && path.includes('/status?')))) throw { status: 503, code };
-    if (path.includes('/messages?')) return { items: [{ id: 1, content: 'history', direction: 'in', status: 'delivered' }], afterCursor: 'after' };
+    if (path.includes('/messages?')) return { items: [{ id: 1, content: 'history', direction: 'in', status: requestKind === 'rowStatus' ? 'pending' : 'delivered' }], afterCursor: 'after' };
     if (options?.method === 'POST') return { stored: true, conversationId: 'g:A', deliveryState: 'pending' };
   });
   await state.open(); await state.select('g:A'); failing = true;

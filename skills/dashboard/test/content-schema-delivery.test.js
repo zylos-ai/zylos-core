@@ -55,7 +55,8 @@ async function rawRequest(origin, requestPath) {
 }
 
 // Static-delivery boundary only. Run after schema URL/source or serveStatic/fleet
-// changes; skip unrelated UI/business changes. No live DB/PM2/tmux/remote calls.
+// changes or retiring active browser modules; skip unrelated UI/business changes.
+// No live DB/PM2/tmux/remote calls.
 test('shared schema is delivered at local base and fleet module URLs', { timeout: 15000 }, async t => {
   const origin = await fixture(t), expected = fs.readFileSync(schemaPath);
   assert.ok(expected.includes(Buffer.from('export const COMPONENT_DEFINITIONS = ' + JSON.stringify(COMPONENT_DEFINITIONS))));
@@ -71,7 +72,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
     const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(pageText)?.[1];
-    assert.ok(appPath, 'the entry page loads the current application module');
+    assert.equal(appPath, 'js/app.js?v=100', 'the entry page invalidates the application module cache');
     const cache = new Map();
     async function moduleAt(url) {
       if (cache.has(url)) return cache.get(url);
@@ -84,10 +85,10 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const appUrl = origin + prefix + '/_assets/' + appPath;
     let parentUrl = appUrl;
     const activeModules = new Map();
-    for (const name of ['conversation-page', 'conversation-content', 'chat-blocks']) {
+    for (const [name, version] of [['conversation-page', 100], ['conversation-content', 99], ['chat-blocks', 99]]) {
       const parent = await moduleAt(parentUrl);
       const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
-      const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=99`));
+      const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=${version}`));
       assert.ok(specifier, `${parentUrl} loads ${name}`);
       parentUrl = new URL(specifier, parentUrl).href;
       activeModules.set(name, parentUrl);
@@ -96,31 +97,45 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const page = await moduleAt(pageUrl);
     for (const name of ['conversation-state', 'chat-questions']) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
-        .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=99`));
+        .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=100`));
       assert.ok(specifier, `${name} belongs to the active page graph`);
       activeModules.set(name, new URL(specifier, pageUrl).href);
     }
-    const schemaVersions = new Set(), stateVersions = new Set();
-    let schemaImports = 0;
+    const schemaVersions = new Set(), deliveryUrls = new Set();
+    let schemaImports = 0, deliveryImports = 0;
+    assert.doesNotMatch(await moduleAt(appUrl), /(?:from\s*|import\s*)['"][^'"]*\/(?:chat|chat-state)\.js(?:[?'"])/);
+    for (const name of ['chat', 'chat-state']) {
+      assert.equal(fs.existsSync(path.join(publicRoot, 'js/wb', name + '.js')), false, `${name} is retired`);
+      assert.equal((await fetch(origin + prefix + '/_assets/js/wb/' + name + '.js')).status, 404);
+    }
     for (const moduleUrl of activeModules.values()) {
       const body = await moduleAt(moduleUrl);
       for (const match of body.matchAll(/from ['"]([^'"]*chat-schema\.js[^'"]*)['"]/g)) {
         schemaImports++;
         const schemaUrl = new URL(match[1], moduleUrl);
         assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
+        assert.equal(schemaUrl.search, '?v=99', 'the shared schema cache key is unchanged');
         schemaVersions.add(schemaUrl.search);
         const response = await fetch(schemaUrl);
         assert.equal(response.status, 200);
         assert.match(response.headers.get('content-type'), /^text\/javascript; charset=utf-8$/);
         assert.equal(Buffer.from(await response.arrayBuffer()).equals(expected), true);
       }
-      for (const match of body.matchAll(/from ['"]([^'"]*chat-state\.js[^'"]*)['"]/g)) {
-        stateVersions.add(new URL(match[1], moduleUrl).search);
+      assert.doesNotMatch(body, /(?:from\s*|import\s*)['"][^'"]*\/(?:chat|chat-state)\.js(?:[?'"])/,
+        'active page modules must not reference retired implementations');
+      for (const match of body.matchAll(/from ['"]([^'"]*chat-delivery-state\.js[^'"]*)['"]/g)) {
+        deliveryImports++;
+        const deliveryUrl = new URL(match[1], moduleUrl);
+        assert.equal(deliveryUrl.pathname, prefix + '/_assets/js/wb/chat-delivery-state.js');
+        assert.equal(deliveryUrl.search, '?v=100');
+        deliveryUrls.add(deliveryUrl.href);
+        assert.equal(await moduleAt(deliveryUrl.href), fs.readFileSync(path.join(publicRoot, 'js/wb/chat-delivery-state.js'), 'utf8'));
       }
     }
     assert.ok(schemaImports >= 4, 'all schema imports and re-exports are checked');
     assert.equal(schemaVersions.size, 1, 'one shared schema module instance');
-    assert.equal(stateVersions.size, 1, 'one shared receipt/state module instance');
+    assert.equal(deliveryImports, 4, 'page, controller import/re-export and questions share delivery state');
+    assert.equal(deliveryUrls.size, 1, 'one exact shared delivery-state module URL');
 
   }
 });

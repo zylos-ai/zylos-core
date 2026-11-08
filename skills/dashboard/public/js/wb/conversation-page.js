@@ -1,9 +1,9 @@
 import { element, icon } from './plain-text.js?v=94';
 import { asDate } from './conversation-time.js?v=99';
 import { channelIcon } from './board.js?v=94';
-import { createConversationState } from './conversation-state.js?v=99';
-import { messageState, receiptState } from './chat-state.js?v=99';
-import { renderQuestion } from './chat-questions.js?v=99';
+import { createConversationState } from './conversation-state.js?v=100';
+import { messageState, receiptState } from './chat-delivery-state.js?v=100';
+import { renderQuestion } from './chat-questions.js?v=100';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=99';
 const laterThan = (left, right) => {
   const a = String(left),
