@@ -135,3 +135,38 @@ test('a Dashboard interrupt is stored as a group runtime event', t => {
   assert.equal(row.timestamp, '2026-11-08T10:00:05.000Z'); assert.equal(row.metadata.control_id, 7);
   assert.equal(recordGroupInterrupt(store, { sessionGroup: '' }), null);
 });
+
+test('Codex failure reading joins the text of content-array outputs, the shape exec writes', () => {
+  const exec = text => [{ type: 'input_text', text }];
+  assert.equal(codexToolOutputFailed(exec('Exit code: 1\nWall time: 0.2 seconds\nOutput:\nboom')), true);
+  assert.equal(codexToolOutputFailed(exec('Exit code: 0\nWall time: 0.2 seconds\nOutput:\nok')), false);
+  assert.equal(codexToolOutputFailed(exec('Exit code: 0\nWall time: 0.1 seconds\nOutput:\nExit code: 1 printed by the command')), false,
+    'an exit line inside the command output is not the result');
+  assert.equal(codexToolOutputFailed(exec('Chunk ID: a1\nWall time: 1.0 seconds\nProcess exited with code 2\nOutput:\nx')), true);
+  assert.equal(codexToolOutputFailed([{ type: 'input_text', text: 'Script started' }, { type: 'input_text', text: 'Process exited with code 1' }]), true);
+  assert.equal(codexToolOutputFailed([{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }]), false);
+  assert.equal(codexToolOutputFailed({ content: [{ type: 'text', text: 'denied' }], isError: true }), true);
+  assert.equal(codexToolOutputFailed({ content: [{ type: 'text', text: 'Process exited with code 4' }] }), true);
+  assert.equal(codexToolOutputFailed({ content: [{ type: 'text', text: 'fine' }] }), false);
+  assert.equal(codexToolOutputFailed({ exit_code: 3 }), true);
+  assert.equal(codexToolOutputFailed({ exit_code: 0 }), false);
+  assert.equal(codexToolOutputFailed([{}, null, 5, []]), false);
+});
+
+test('Codex exec results written as content arrays get a failure flag and keep no output', async t => {
+  const { dir, store } = tmpStore(t);
+  const output = (code, secret) => [{ type: 'input_text', text: `Exit code: ${code}\nWall time: 0.3 seconds\nOutput:\n${secret}` }];
+  const mapping = { transcript_path: rollout(dir, 'exec', [
+    { type: 'response_item', payload: { type: 'function_call', name: 'exec', call_id: 'ok', arguments: '{"cmd":"ls"}' } },
+    { type: 'response_item', payload: { type: 'function_call_output', call_id: 'ok', output: output(0, 'secret-ok') } },
+    { type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', call_id: 'bad', input: 'false' } },
+    { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'bad', output: output(1, 'secret-bad') } },
+  ]), session_id: 'exec-session', session_group: 'dashboard:a', run_id: 'exec-run' };
+  const transcripts = { snapshot: { listKnown: true }, currentOriginMapping: () => null, isOriginCurrent: () => false,
+    async collect(runtime, callback) { return (await callback(mapping, false)).written; } };
+  store.insertUsageTranscript({ ...mapping, runtime: 'codex' }, new Date().toISOString());
+  await new CodexRolloutCollector(store, { modelPrices: {} }, { transcripts }).collect();
+  const results = store.queryEvents({ types: ['tool_result'], limit: 10 });
+  assert.deepEqual(results.map(row => [row.metadata.call_id, row.metadata.outcome]).sort(), [['bad', 'failed'], ['ok', 'succeeded']]);
+  assert.ok(!JSON.stringify(results).includes('secret-'), 'tool output is never stored');
+});

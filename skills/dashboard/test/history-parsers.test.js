@@ -259,3 +259,22 @@ test('metadata cursor preserves incomplete tail and resets title on truncate or 
   await fs.writeFile(file, jsonl([{ type: 'ai-title', title: 'Replacement' }]));
   assert.equal((await parser.listSessions()).sessions[0].title, 'Replacement');
 });
+
+test('Codex history marks a call whose content-array output reports a non-zero exit as failed', async t => {
+  const options = await fixture(t);
+  const dir = path.join(options.homeDir, '.codex', 'sessions', '2026', '11', '08');
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, 'rollout-exec.jsonl');
+  const result = (code, text) => [{ type: 'input_text', text: `Exit code: ${code}\nWall time: 0.1 seconds\nOutput:\n${text}` }];
+  await fs.writeFile(file, jsonl([
+    { type: 'session_meta', payload: { id: 'codex-exec' } },
+    { type: 'response_item', payload: { type: 'function_call', call_id: 'ok', name: 'exec', arguments: '{"cmd":"true"}' } },
+    { type: 'response_item', payload: { type: 'function_call_output', call_id: 'ok', output: result(0, 'fine') } },
+    { type: 'response_item', payload: { type: 'function_call', call_id: 'bad', name: 'exec', arguments: '{"cmd":"false"}' } },
+    { type: 'response_item', payload: { type: 'function_call_output', call_id: 'bad', output: result(1, 'broken') } }
+  ]));
+  const row = { session_id: 'codex-exec', transcript_path: file };
+  const parser = new CodexHistory({ ...options, store: { listCodexRolloutPaths: () => [row], latestCodexRolloutPath: () => row } });
+  const { entries } = await parser.loadSession('codex-exec');
+  assert.deepEqual(entries.filter(entry => entry.kind === 'tool').map(entry => entry.status), ['success', 'error']);
+});
