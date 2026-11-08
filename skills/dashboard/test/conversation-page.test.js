@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick } from './fixtures/workbench-dom.js';
+import { createDocument as conversationDocument } from './helpers/conversation-dom.js';
 
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
@@ -76,3 +77,51 @@ for (const stop of ['close', 'destroy']) {
     assert.equal(aborts, 1, 'the fetch transport observes cancellation exactly once');
   });
 }
+
+
+test('page reconciliation disposes charts owned by a message that leaves its snapshot', async t => {
+  const document = conversationDocument(), root = document.createElement('div');
+  const charts = [];
+  document.defaultView = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, Chart: class {
+    constructor(canvas) { this.canvas = canvas; this.destroyCalls = 0; charts.push(this); }
+    resize() {}
+    destroy() { this.destroyCalls++; }
+  } };
+  const content = '[C4-JSON]\n' + JSON.stringify({ version: 1, kind: 'message', messageId: 'chart-message', fallbackText: 'A single chart', blocks: [
+    { id: 'series', type: 'time_series', schemaVersion: 1, fallbackText: 'first: 1', data: { xType: 'category', series: [
+      { key: 'first', label: 'First', points: [{ x: 'first', y: 1 }] }
+    ] } }
+  ] });
+  const removedRow = { id: 10, direction: 'out', content }, retainedRow = { id: 20, direction: 'out', content };
+  const page = mountConversationPage({ root, document, fetch: async path => {
+    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', displayName: 'Charts' }], nextCursor: null }
+      : path.includes('/messages?') ? { items: [removedRow, retainedRow], nextCursor: null, afterCursor: 'after' }
+      : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', state: 'active' } }
+      : { items: [], nextCursor: null };
+    return { ok: true, status: 200, json: async () => body };
+  } });
+  t.after(() => page.destroy());
+  await page.open();
+  allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click');
+  await tick(); await tick();
+  assert.equal(charts.length, 2, 'the actual mounted page owns both chart resources');
+  const removedNode = root.querySelector('[data-message-id="10"]');
+  const retainedNode = root.querySelector('[data-message-id="20"]');
+  assert.ok(removedNode); assert.ok(retainedNode);
+  // The state deliberately merges history and exposes the same row objects to
+  // its page snapshot. Change a fixture-owned row identity to exercise a missing
+  // id on that real snapshot, without replacing the state or page reconciler.
+  removedRow.id = 11;
+  page.redraw();
+  assert.equal(charts[0].destroyCalls, 1, 'missing message chart is destroyed by page reconciliation');
+  assert.equal(charts[1].destroyCalls, 0, 'retained message chart stays alive');
+  assert.equal(root.querySelector('[data-message-id="10"]'), null);
+  assert.equal(removedNode.parentNode, null);
+  assert.equal(root.querySelector('[data-message-id="20"]'), retainedNode);
+  page.redraw();
+  assert.equal(charts[0].destroyCalls, 1, 'a later reconciliation does not dispose twice');
+  page.destroy();
+  assert.equal(charts[0].destroyCalls, 1);
+  assert.equal(charts[1].destroyCalls, 1);
+});
