@@ -2,7 +2,7 @@ import { element } from './plain-text.js?v=103';
 import { renderChatContent, parseC4Content } from './chat-blocks.js?v=106';
 import { createChatAttachment } from './chat-attachments.js?v=3';
 import { applyChatView } from './chat-view.js?v=103';
-import { conversationChartResource } from './conversation-charts.js?v=104';
+import { conversationChartResource } from './conversation-charts.js?v=105';
 export function conversationErrorKey(code) {
   if (['chat_auth_required', 'chat_conversation_forbidden', 'insufficient_scope'].includes(code)) {
     return 'chat.error.forbidden';
@@ -33,7 +33,8 @@ export function renderConversationContent({
   renderQuestion,
   supportsBlock,
   attachmentContext = {},
-  showTechnicalDetails = false
+  showTechnicalDetails = false,
+  chartTimeZone = () => null
 }) {
   const resources = [];
   const attachmentResources = [];
@@ -57,7 +58,7 @@ export function renderConversationContent({
     },
     renderChart({ block, fallback }) {
       hasCharts = true;
-      const resource = conversationChartResource({ document, block, fallback, t });
+      const resource = conversationChartResource({ document, block, fallback, t, timeZone: chartTimeZone });
       resources.push(resource);
       return resource.node;
     },

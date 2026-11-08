@@ -53,6 +53,7 @@ export function createConversationState({
     conversation: null,
     ownershipResolved: false,
     messages: [],
+    tz: null,
     messageCursor: null,
     afterCursor: null,
     input: '',
@@ -512,6 +513,8 @@ export function createConversationState({
     return data;
   }
   function applyMessages(current, id, data, trackQuestions = false) {
+    // The instance time zone (its .env TZ) comes with each page; an older instance without it reads as unknown.
+    current.tz = typeof data.tz === 'string' && data.tz ? data.tz : null;
     const previousNewest = current.messages.at(-1)?.id ?? 0;
     const known = new Set(current.messages.map(row => row.id));
     const added = data.items.filter(row => !known.has(row.id));

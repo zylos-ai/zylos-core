@@ -3,20 +3,49 @@ import { element } from './plain-text.js?v=103';
 const colors = ['#4f8cf7', '#aa79e8', '#35a998', '#e1a33d', '#e06b83', '#73859f'];
 const halfDay = 12 * 60 * 60 * 1000;
 
+const dayFormats = new Map();
+
+/** Year, month (0-based) and day of an instant in a time zone; an unknown or missing zone reads UTC. */
+function zoneDay(epoch, timeZone) {
+  const zone = timeZone || 'UTC';
+  let format = dayFormats.get(zone);
+  if (!format) {
+    try {
+      format = new Intl.DateTimeFormat('en-US', { timeZone: zone, year: 'numeric', month: 'numeric', day: 'numeric' });
+    } catch {
+      return zone === 'UTC' ? undefined : zoneDay(epoch, 'UTC');
+    }
+    dayFormats.set(zone, format);
+  }
+  const parts = {};
+  for (const { type, value } of format.formatToParts(new Date(epoch))) parts[type] = Number(value);
+  return [parts.year, parts.month - 1, parts.day];
+}
+
 /**
- * The calendar day a daily point names, as local midnight. An ISO string is read by its leading YYYY-MM-DD and
- * epoch milliseconds by their UTC date, so a point written as 2026-11-02T00:00:00Z or as its epoch value stays on
- * 2 November in every time zone instead of moving to the previous day west of UTC. A date that does not exist
+ * The calendar day a daily point names, as local midnight for the day axis. A plain YYYY-MM-DD, or a date-time
+ * without an offset, is read by the date it writes. Epoch milliseconds and date-times with Z or an offset name an
+ * instant, so they are read as the calendar day in the instance time zone (`timeZone`, the TZ the agent runs in),
+ * not in the browser's zone or UTC; without a known instance zone they fall back to UTC. A date that does not exist
  * (2026-02-30, 2026-13-01) gives NaN, so Chart.js leaves the point out instead of drawing it on another day.
  */
-export function chartDay(value) {
+export function chartDay(value, timeZone) {
   let parts;
   if (typeof value === 'string') {
     const match = /^(\d{4})-(\d{2})-(\d{2})(?=$|T)/.exec(value);
-    if (match) parts = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+    if (match) {
+      parts = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+      const written = new Date(Date.UTC(2000, parts[1], parts[2]));
+      written.setUTCFullYear(parts[0]);
+      if (written.getUTCFullYear() !== parts[0] || written.getUTCMonth() !== parts[1] || written.getUTCDate() !== parts[2]) return NaN;
+      if (/T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
+        const instant = Date.parse(value);
+        parts = Number.isFinite(instant) ? zoneDay(instant, timeZone) : undefined;
+        if (!parts) return NaN;
+      }
+    }
   } else if (typeof value === 'number' && Number.isFinite(value)) {
-    const utc = new Date(value);
-    parts = [utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate()];
+    parts = zoneDay(value, timeZone);
   }
   if (!parts) return value;
   const day = new Date(0);
@@ -39,7 +68,7 @@ function formatted(value, unit, format, locale) {
 }
 
 /** Chart kinds are a host presentation choice; protocol data remains unchanged. */
-export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dce3', locale } = {}) {
+export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dce3', locale, timeZone } = {}) {
   const data = block.data;
   const tick = unit => value => formatted(value, unit, data.format, locale);
   const axis = (title, unit) => ({ ...(data.format?.style === 'percent' || unit === '%'
@@ -63,7 +92,7 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
       // a single point inside the plot instead of a zero-width millisecond range.
       // Data spanning more than one calendar year names the year too, so the same day of different years
       // never shows as the same label.
-      const stamps = data.series.flatMap(series => series.points.map(point => chartDay(point.x))).filter(Number.isFinite);
+      const stamps = data.series.flatMap(series => series.points.map(point => chartDay(point.x, timeZone))).filter(Number.isFinite);
       const years = new Set(stamps.map(stamp => new Date(stamp).getFullYear()));
       const dayLabel = new Intl.DateTimeFormat(locale, { ...(years.size > 1 ? { year: 'numeric' } : {}), month: 'short', day: 'numeric' });
       scales.x.time = { unit: 'day' };
@@ -90,7 +119,7 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
       }
       const values = new Map(points[index].map(point => [point.categoryKey, point.y]));
       datasets.push({ label: series.label, data: category ? categoryKeys.map(key => values.has(key) ? values.get(key) : null)
-        : series.points.map(point => ({ x: data.xType === 'date' ? chartDay(point.x) : point.x, y: point.y })),
+        : series.points.map(point => ({ x: data.xType === 'date' ? chartDay(point.x, timeZone) : point.x, y: point.y })),
         borderColor: colors[index], backgroundColor: colors[index], borderWidth: category ? 0 : 2,
         borderRadius: category ? 3 : 0, pointRadius: category ? 0 : 2, tension: 0.2, spanGaps: false,
         yAxisID, unit });
@@ -124,8 +153,11 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
   } };
 }
 
-/** The page mounts after attachment and destroys before dropping its message DOM. */
-export function conversationChartResource({ document, block, fallback, t = key => key }) {
+/**
+ * The page mounts after attachment and destroys before dropping its message DOM. `timeZone` returns the instance
+ * time zone daily points are read in; each mount re-reads it, so a changed zone redraws the chart.
+ */
+export function conversationChartResource({ document, block, fallback, t = key => key, timeZone = () => null }) {
   const plot = element(document, 'div', undefined, 'conversation-chart-plot');
   const canvas = element(document, 'canvas');
   canvas.setAttribute('role', 'img');
@@ -141,11 +173,15 @@ export function conversationChartResource({ document, block, fallback, t = key =
       try {
         const style = document.defaultView?.getComputedStyle?.(document.documentElement);
         const palette = { text: style?.getPropertyValue('--text-dim').trim() || undefined,
-          grid: style?.getPropertyValue('--border').trim() || undefined, locale: document.documentElement?.lang || undefined };
+          grid: style?.getPropertyValue('--border').trim() || undefined, locale: document.documentElement?.lang || undefined,
+          timeZone: timeZone() || undefined };
         const signature = JSON.stringify(palette);
         if (chart) {
           if (signature !== appearance) {
-            chart.options = conversationChartConfig(block, palette).options;
+            // A new instance time zone can move daily points to other days, so the data is rebuilt with the options.
+            const next = conversationChartConfig(block, palette);
+            chart.options = next.options;
+            chart.data = next.data;
             chart.update('none');
             appearance = signature;
           }

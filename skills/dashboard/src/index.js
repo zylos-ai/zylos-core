@@ -1722,7 +1722,7 @@ export function createServer() {
     }
     if (await handleChatConversations(req, res, url, { auth, config, conversations, sender,
       readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
-    if (await handleChatHistory(req, res, url, { auth, config, history })) return;
+    if (await handleChatHistory(req, res, url, { auth, config, history, instanceTz: scheduleTz })) return;
 
     if (await observerService.handle(req, res, url)) {
       return;

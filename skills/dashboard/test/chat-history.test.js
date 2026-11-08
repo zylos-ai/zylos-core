@@ -15,6 +15,8 @@ import { sendJson } from '../src/lib/http.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { chatStatusCases } from './fixtures/chat-status.js';
+import { scheduleEnv } from './fixtures/schedule-env.js';
+import { createScheduleTz } from '../src/lib/workbench/schedule-tz.js';
 import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const groupId = value => `g:${Buffer.from(value).toString('hex').toUpperCase()}`;
@@ -448,4 +450,38 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   config.auth.enabled = false;
   const before = reads;
   assert.equal((await request(routes[0])).status, 403); assert.equal(reads, before);
+});
+
+// The message route reports the instance time zone through the schedule page's reader (the real scheduler tz.js on a
+// temporary installation's .env); daily charts read their points in it. Only messages pages carry it.
+const TZ_URL = new URL('../../scheduler/scripts/tz.js', import.meta.url).href;
+let tzImport = 0;
+test('message pages carry the instance time zone from .env, and null when it cannot be read', async t => {
+  const f = fixture(t);
+  f.add({ id: 1 });
+  const id = f.history.list({ tab: 'external' }).items[0].id;
+  const install = scheduleEnv(t, { tz: 'Asia/Shanghai', link: false });
+  const previous = process.env.ZYLOS_DIR;
+  process.env.ZYLOS_DIR = install.zylosDir;
+  t.after(() => { process.env.ZYLOS_DIR = previous; });
+  const auth = { enabled: true, resolveAuthContext: () => ({ kind: 'cookie', scope: 'admin' }) };
+  const call = async (route, instanceTz) => {
+    let status, body;
+    const res = { writeHead(code) { status = code; }, end(text) { body = JSON.parse(text); } };
+    assert.equal(await handleChatHistory({ method: 'GET', headers: {} }, res, new URL(route, 'http://localhost'),
+      { auth, config: {}, history: f.history, instanceTz }), true);
+    return { status, body };
+  };
+  const reader = () => createScheduleTz({ zylosDir: install.zylosDir, tzModule: `${TZ_URL}?case=${++tzImport}` });
+  const messages = `/api/chat/conversations/${encodeURIComponent(id)}/messages?tab=external`;
+  let page = await call(messages, reader());
+  assert.equal(page.status, 200); assert.equal(page.body.tz, 'Asia/Shanghai'); assert.deepEqual(page.body.items.map(row => row.id), [1]);
+  fs.writeFileSync(path.join(install.zylosDir, '.env'), 'TZ=America/Los_Angeles\n');
+  assert.equal((await call(messages, reader())).body.tz, 'America/Los_Angeles', 'a changed .env is read on the next page');
+  fs.writeFileSync(path.join(install.zylosDir, '.env'), 'TZ=Not/AZone\n');
+  assert.equal((await call(messages, reader())).body.tz, null, 'an invalid zone is unknown, so the page falls back to UTC');
+  assert.equal((await call(messages, async () => { throw new Error('unreadable'); })).body.tz, null);
+  assert.equal((await call(messages, null)).body.tz, null);
+  const list = await call('/api/chat/conversations?tab=external', reader());
+  assert.equal(list.status, 200); assert.equal('tz' in list.body, false, 'only message pages carry the zone');
 });

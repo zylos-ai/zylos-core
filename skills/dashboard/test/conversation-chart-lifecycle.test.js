@@ -17,18 +17,18 @@ const content = title => CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'me
     { key: 'a', label: 'A', points: [{ x: 'one', y: 1 }] }
   ] } }
 ] });
-async function fixture(t) {
+async function fixture(t, { initialContent = content('First'), initialTz } = {}) {
   const document = createDocument(), root = document.createElement('div'), instances = [];
-  let value = content('First'), blocked = false;
+  let value = initialContent, blocked = false, tz = initialTz;
   class Chart {
-    constructor(canvas) { assert.ok(allNodes(root).includes(canvas), 'canvas attached before Chart creation'); this.disposals = 0; instances.push(this); }
+    constructor(canvas, config) { assert.ok(allNodes(root).includes(canvas), 'canvas attached before Chart creation'); this.disposals = 0; this.data = config.data; this.options = config.options; instances.push(this); }
     resize() {} update() {} destroy() { this.disposals++; }
   }
   document.defaultView = { Chart, innerWidth: 390, addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {} };
   const page = mountConversationPage({ root, document, fetch: async p => {
     let data;
     if (blocked) return { ok: false, status: 403, json: async () => ({ error: 'remote_chat_disabled' }) };
-    if (p.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: value }], nextCursor: null, afterCursor: 'after' };
+    if (p.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: value }], nextCursor: null, afterCursor: 'after', ...(tz === undefined ? {} : { tz }) };
     else if (p.includes('/questions?') || p.includes('/status?')) data = { items: [], nextCursor: null };
     else if (p.includes('/api/session-mode')) data = { data: { sessionMode: 'multi' } };
     else if (/\/g%3A(?:AA|BB)$/.test(p)) data = { conversation: { id: p.endsWith('AA') ? 'g:AA' : 'g:BB', state: 'active' } };
@@ -38,7 +38,7 @@ async function fixture(t) {
   t.after(() => page.destroy()); await page.open();
   const select = async id => { visibleNodes(root).find(n => n.dataset.conversationId === id).dispatch('click'); await tick(); await tick(); };
   await select('g:AA');
-  return { page, root, instances, select, setContent(v) { value = v; }, block() { blocked = true; },
+  return { page, root, instances, select, setContent(v) { value = v; }, setTz(v) { tz = v; }, block() { blocked = true; },
     async refresh() { visibleNodes(root).find(n => n.dataset.action === 'refreshMessages').dispatch('click'); await tick(); await tick(); } };
 }
 test('page mounts attached chart once, keeps it on polling and disposes changed content including replacement with plain text', async t => {
@@ -98,4 +98,32 @@ test('message ids disappearing from a snapshot release their chart and DOM while
   assert.equal(messages.size, 0);
   assert.equal(instances[0].disposals, 1);
   assert.equal(instances[1].disposals, 1);
+});
+
+const daily = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: 'daily-message', fallbackText: 'Daily', blocks: [
+  { id: 'daily', type: 'time_series', schemaVersion: 1, fallbackText: 'Daily table', data: { title: 'Daily', xType: 'date', series: [
+    { key: 'a', label: 'A', points: [{ x: Date.UTC(2026, 10, 1, 16), y: 1 }, { x: '2026-11-05', y: 2 }] }
+  ] } }
+] });
+const localDay = stamp => { const d = new Date(stamp); return [d.getMonth() + 1, d.getDate(), d.getHours()]; };
+// Real page -> state -> content -> chart resource with the time zone the message history reports. The process zone
+// stands in for the browser's and is set apart from the instance zone, so only the reported zone can give the result.
+test('daily chart points use the instance time zone from the message history, not the browser zone, and follow a change', async t => {
+  const saved = process.env.TZ;
+  t.after(() => { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; });
+  process.env.TZ = 'America/Los_Angeles';
+  const f = await fixture(t, { initialContent: daily, initialTz: 'Asia/Shanghai' });
+  assert.equal(f.instances.length, 1);
+  assert.deepEqual(f.instances[0].data.datasets[0].data.map(point => localDay(point.x)), [[11, 2, 0], [11, 5, 0]]);
+  f.setTz('UTC'); await f.refresh();
+  assert.equal(f.instances.length, 1, 'the same chart is redrawn');
+  assert.deepEqual(f.instances[0].data.datasets[0].data.map(point => localDay(point.x)), [[11, 1, 0], [11, 5, 0]]);
+});
+
+test('a message history without a time zone (an older instance) reads daily points in UTC', async t => {
+  const saved = process.env.TZ;
+  t.after(() => { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; });
+  process.env.TZ = 'Asia/Shanghai';
+  const f = await fixture(t, { initialContent: daily });
+  assert.deepEqual(f.instances[0].data.datasets[0].data.map(point => localDay(point.x)), [[11, 1, 0], [11, 5, 0]]);
 });

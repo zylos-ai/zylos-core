@@ -3,10 +3,10 @@ import { createChatAttachment } from './chat-attachments.js?v=3';
 import { element, icon } from './plain-text.js?v=103';
 import { asDate } from './conversation-time.js?v=99';
 import { channelIcon } from './board.js?v=103';
-import { createConversationState } from './conversation-state.js?v=117';
+import { createConversationState } from './conversation-state.js?v=118';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=103';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=107';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=108';
 import { createGroupSide } from './group-side.js?v=1';
 const laterThan = (left, right) => {
   const a = String(left),
@@ -69,6 +69,8 @@ export function mountConversationPage({
     messages = new Map(),
     days = new Map(),
     actions = [];
+  // Daily chart points are read in the instance time zone the message history reports (UTC when it does not).
+  let instanceTimeZone = null;
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const label = key => t(key.startsWith('chat.') ? key : 'chat.' + key);
   const text = (el, value) => {
@@ -536,6 +538,7 @@ export function mountConversationPage({
       row,
       t,
       showTechnicalDetails: technicalDetails() === true,
+      chartTimeZone: () => instanceTimeZone,
       attachmentContext: { conversationId: s.selectedId, endpoint, fetch: fetcher, external: s.tab === 'external', onLayout: preserveAttachmentLayout },
       renderQuestion: ({
         envelope,
@@ -748,6 +751,7 @@ export function mountConversationPage({
     scheduleFit();
   }
   function reconcileMessages(s, switched, before) {
+    instanceTimeZone = s.tz ?? null;
     const {
       oldTop,
       previousHeight,

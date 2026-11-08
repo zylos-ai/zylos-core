@@ -62,7 +62,7 @@ export const COMPONENT_CATALOG = [
     "schemaVersion": 1,
     "dataSchema": "timeSeriesData",
     "interactive": false,
-    "description": "A bounded series chart with xType and one to six labeled series; each series has at most 500 x/y points.",
+    "description": "A bounded series chart with xType and one to six labeled series; each series has at most 500 x/y points. For xType date, write each x as YYYY-MM-DD (recommended); epoch milliseconds and date-times with Z or an offset are shown on their calendar day in the agent instance time zone (TZ in .env).",
     "example": {
       "version": 1,
       "kind": "message",

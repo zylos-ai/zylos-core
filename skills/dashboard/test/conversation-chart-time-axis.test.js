@@ -111,13 +111,13 @@ test('date tick labels use the page text colour', () => {
   assert.equal(config.options.scales.x.grid.color, '#abcdef');
 });
 
-test('a daily point keeps its calendar day west and east of UTC', t => {
+test('without an instance time zone a daily point keeps its calendar day west and east of UTC', t => {
   const saved = process.env.TZ;
   t.after(() => { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; });
   const day = (y, m, d) => [y, m, d];
   for (const zone of ['America/Los_Angeles', 'Pacific/Kiritimati', 'UTC']) {
     process.env.TZ = zone;
-    for (const value of ['2026-11-02', '2026-11-02T00:00:00Z', '2026-11-02T23:30:00-08:00', Date.UTC(2026, 10, 2), Date.UTC(2026, 10, 2, 23, 59)]) {
+    for (const value of ['2026-11-02', '2026-11-02T00:00:00Z', '2026-11-02T23:30:00', Date.UTC(2026, 10, 2), Date.UTC(2026, 10, 2, 23, 59)]) {
       const local = new Date(chartDay(value));
       assert.deepEqual(day(local.getFullYear(), local.getMonth() + 1, local.getDate()), [2026, 11, 2], `${zone} ${value}`);
       assert.deepEqual([local.getHours(), local.getMinutes()], [0, 0], `${zone} ${value} is local midnight`);
@@ -129,6 +129,59 @@ test('a daily point keeps its calendar day west and east of UTC', t => {
     const first = config.data.datasets[0].data[0].x;
     assert.equal(config.options.plugins.tooltip.callbacks.title([{ parsed: { x: first } }]), '2026年11月2日', zone);
   }
+});
+
+// One set of points, each naming an instant or a written date, and the day it falls on in each instance time zone.
+// 2026-11-01T16:00Z is midnight of 2 November in Shanghai and 1 November in Los Angeles (PST after 1 November).
+const ZONED = [
+  [Date.UTC(2026, 10, 1, 16), { 'Asia/Shanghai': 2, 'America/Los_Angeles': 1, UTC: 1 }],
+  [Date.UTC(2026, 10, 2, 7, 30), { 'Asia/Shanghai': 2, 'America/Los_Angeles': 1, UTC: 2 }],
+  [Date.UTC(2026, 10, 2, 23, 30), { 'Asia/Shanghai': 3, 'America/Los_Angeles': 2, UTC: 2 }],
+  ['2026-11-02T00:00:00+08:00', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 1, UTC: 1 }],
+  ['2026-11-01T20:00:00-08:00', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 1, UTC: 2 }],
+  ['2026-11-02T23:30:00Z', { 'Asia/Shanghai': 3, 'America/Los_Angeles': 2, UTC: 2 }],
+  ['2026-11-02T23:30:00.250Z', { 'Asia/Shanghai': 3, 'America/Los_Angeles': 2, UTC: 2 }],
+  ['2026-11-02', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 2, UTC: 2 }],
+  ['2026-11-02T23:30:00', { 'Asia/Shanghai': 2, 'America/Los_Angeles': 2, UTC: 2 }],
+];
+
+test('daily points fall on their calendar day in the instance time zone, whatever the browser zone', t => {
+  const saved = process.env.TZ;
+  t.after(() => { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; });
+  for (const browser of ['UTC', 'America/Los_Angeles', 'Pacific/Kiritimati', 'Asia/Shanghai']) {
+    process.env.TZ = browser;
+    for (const instance of ['Asia/Shanghai', 'America/Los_Angeles', 'UTC']) {
+      for (const [value, expected] of ZONED) {
+        const local = new Date(chartDay(value, instance));
+        assert.deepEqual([local.getFullYear(), local.getMonth() + 1, local.getDate(), local.getHours(), local.getMinutes()],
+          [2026, 11, expected[instance], 0, 0], `browser ${browser}, instance ${instance}, ${value}`);
+      }
+    }
+  }
+});
+
+test('without a usable instance time zone instants are read in UTC', () => {
+  for (const zone of [undefined, null, '', 'Not/AZone']) {
+    for (const [value, expected] of ZONED) {
+      const local = new Date(chartDay(value, zone));
+      assert.equal(local.getDate(), expected.UTC, `${zone} ${value}`);
+    }
+  }
+});
+
+test('the daily axis labels, points and tooltip follow the instance time zone', t => {
+  const saved = process.env.TZ;
+  t.after(() => { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; });
+  process.env.TZ = 'America/Los_Angeles';
+  const xs = [Date.UTC(2026, 10, 1, 16), Date.UTC(2026, 10, 2, 16), Date.UTC(2026, 10, 3, 16)];
+  const shanghai = conversationChartConfig(block('date', xs), { locale: 'zh-CN', timeZone: 'Asia/Shanghai' });
+  assert.deepEqual(render(shanghai, 900).labels, ['11月2日', '11月3日', '11月4日']);
+  const first = shanghai.data.datasets[0].data[0].x;
+  assert.equal(shanghai.options.plugins.tooltip.callbacks.title([{ parsed: { x: first } }]), '2026年11月2日');
+  const losAngeles = conversationChartConfig(block('date', xs), { locale: 'zh-CN', timeZone: 'America/Los_Angeles' });
+  assert.deepEqual(render(losAngeles, 900).labels, ['11月1日', '11月2日', '11月3日']);
+  const hourly = conversationChartConfig(block('datetime', xs), { locale: 'zh-CN', timeZone: 'Asia/Shanghai' });
+  assert.deepEqual(hourly.data.datasets[0].data.map(point => point.x), xs, 'date-time axes keep their native values');
 });
 
 test('dates that do not exist are left out without moving the axis', () => {
