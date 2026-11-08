@@ -330,6 +330,11 @@ export async function runConversationGenuiVisual(t, sandbox) {
   await page.locator('#wb-chat [data-action="refreshMessages"]').click(); await unauthorizedResponse;
   await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="controls_interrupt"] [data-field-key] input,[data-interrupt-id="controls_interrupt"] [data-field-key] select,[data-interrupt-id="controls_interrupt"] [data-field-key] textarea')].every(control => control.disabled && control.value === ''));
   assert.equal((await remoteDrafts()).length, 0, 'remote 401 clears that instance persistent drafts through the actual application fetch adapter');
+  assert.equal(await root.count(), 1, 'authentication loss retains the mounted form');
+  assert.equal(await field(root, 'full_name').inputValue(), '', 'authentication loss clears the visible input');
+  assert.equal(await field(root, 'full_name').isDisabled(), true, 'authentication loss locks the visible input');
+  assert.equal(await field(root, 'company_name').inputValue(), '', 'authentication loss clears retained inactive input too');
+  assert.equal(await root.locator('.chat-form-segment').count(), 2);
   assert.ok(await root.locator('.chat-form-segment').evaluateAll(nodes => nodes.every(control => control.disabled)), 'remote 401 locks segmented controls too');
   await page.locator('#wb-chat .conversation-update-error:visible').waitFor();
   assert.ok((await page.locator('#wb-chat .conversation-update-error').innerText()).trim(), 'remote unauthorized read displays an update prompt');
