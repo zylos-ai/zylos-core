@@ -1296,7 +1296,7 @@ export async function uninstallComponent(args, deps = {}) {
     result = { action: checkOnly ? 'uninstall_check' : 'uninstall', component: target, ...result };
     if (jsonOutput) console.log(JSON.stringify(result));
     else {
-      console[result.success ? 'log' : 'error'](result.message || 'Dashboard registration cleanup preview: files and data retained.');
+      console[result.success ? 'log' : 'error'](result.message || 'Preview: remove standalone Dashboard registration from components.json; data and built-in Dashboard retained.');
       if (result.manualCleanup) console.log(result.manualCleanup);
     }
     if (!result.success) process.exitCode = 1;

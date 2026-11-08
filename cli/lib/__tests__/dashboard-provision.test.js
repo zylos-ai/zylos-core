@@ -115,6 +115,8 @@ test('component upgrade refuses the Core-managed Dashboard at the CLI entry', t 
 for (const registered of [true, false]) test(`component uninstall ${registered ? 'removes residual registration while retaining shared files and data' : 'refuses Core-managed Dashboard without changing registration'}`, t => {
   for (const args of registered ? [
     ['uninstall', 'dashboard', '--check', '--json'],
+    ['uninstall', 'dashboard', '--check'],
+    ['uninstall', 'dashboard', '--json'],
     ['uninstall', 'dashboard', '--yes', '--json'],
   ] : [
     ['uninstall', 'dashboard', '--yes'],
@@ -137,13 +139,18 @@ for (const registered of [true, false]) test(`component uninstall ${registered ?
       encoding: 'utf8', timeout: 10_000,
       env: { ...process.env, HOME: root, ZYLOS_DIR: root, PM2_HOME: pm2Home },
     });
-    assert.equal(result.status, registered ? 0 : 1, result.stderr);
+    const cancelled = registered && !args.includes('--check') && !args.includes('--yes');
+    assert.equal(result.status, registered && !cancelled ? 0 : 1, result.stderr);
     if (args.includes('--json')) {
       const output = JSON.parse(result.stdout);
-      if (registered) assert.equal(output.success, true);
+      if (cancelled) { assert.equal(output.success, false); assert.equal(output.error, 'cancelled'); }
+      else if (registered) assert.equal(output.success, true);
       else assert.equal(output.error, 'core_managed');
+    } else if (registered) {
+      assert.match(result.stdout, /remove standalone Dashboard registration from components\.json/);
+      assert.match(result.stdout, /data and built-in Dashboard retained/);
     } else assert.match(result.stderr, /bundled with Core/);
-    if (registered && !args.includes('--check')) {
+    if (registered && !args.includes('--check') && !cancelled) {
       const after = JSON.parse(fs.readFileSync(metadata, 'utf8'));
       assert.equal(Object.hasOwn(after, 'dashboard'), false); assert.equal(after.telegram.version, '1.2.3');
     } else assert.equal(fs.readFileSync(metadata, 'utf8'), before);
