@@ -8,7 +8,7 @@ import { formatConversation } from '../router/format.js';
 import { replyVia } from '../c4-query-format.js';
 import { createQueryHandlers } from '../c4-v2-cli.js';
 import { ATTACHMENTS_DIR, SKILLS_DIR } from '../c4-config.js';
-import { buildAnnotatedContent, buildAttachmentAnnotation } from '../../../web-console/scripts/attachment-utils.js';
+import { buildAnnotatedContent, buildAttachmentAnnotation } from '../attachment-annotations.js';
 
 const home = fs.realpathSync(process.env.HOME);
 const root = fs.realpathSync(process.env.ZYLOS_DIR);

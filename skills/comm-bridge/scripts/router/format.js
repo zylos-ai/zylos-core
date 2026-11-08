@@ -3,7 +3,7 @@ import { SKILLS_DIR } from '../c4-config.js';
 import { replyVia } from '../c4-query-format.js';
 import { truncateForDelivery } from '../c4-utils.js';
 import { projectC4Content } from '../c4-content-projection.js';
-import { splitContentAndAttachments } from '../../../web-console/scripts/attachment-utils.js';
+import { splitContentAndAttachments } from '../attachment-annotations.js';
 
 const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
 

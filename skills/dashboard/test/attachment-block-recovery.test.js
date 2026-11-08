@@ -21,7 +21,7 @@ import * as coreSchema from '../../comm-bridge/scripts/c4-schema.js';
 // No runtime, model, tmux or PM2 starts. Imports do not read instance paths;
 // every product constructor runs after this fixture sets its own environment.
 function fixture(t) {
-  const root = fs.realpathSync(fs.mkdtempSync('/tmp/abr-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'abr-')));
   const env = { HOME: path.join(root, 'home'), ZYLOS_DIR: root,
     PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'), TMUX_TMPDIR: path.join(root, 'tmp') };
   const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
