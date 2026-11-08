@@ -952,6 +952,6 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .chat-form-segment:disabled { cursor: default; }
 @media (max-width: 760px) {
   .conversation-page .chat-question-field input:not([type="checkbox"]):not([type="radio"]),
-  .conversation-page .chat-question-field select,.conversation-page .chat-form-segment { min-height: 40px; }
+  .conversation-page .chat-question-field select,.conversation-page .chat-question .chat-form-segment { min-height: 40px; }
   .conversation-chart-data > summary { min-height: 40px; display: flex; align-items: center; }
 }
