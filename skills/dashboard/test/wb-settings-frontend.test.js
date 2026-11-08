@@ -262,6 +262,22 @@ test('settings composition moves actual control nodes into cards and preserves t
   await page.sections.keys.querySelector('.manage-panel').dispatch('click'); assert.equal(movedCalls, 3);
 });
 
+test('a finished key or machine notice clears when another settings section opens; one still running stays', () => {
+  const document = documentFixture(), root = document.createElement('div');
+  const settings = document.createElement('div'), fleet = document.createElement('div'), actions = document.createElement('div');
+  const notice = node(document, 'div', 'fleet-manage-status'); fleet.append(notice);
+  const page = composeSettings(root, { settings, fleet, actions, document, t });
+  page.select('keys');
+  Object.assign(notice, { textContent: 'fleet_manage.key_revoked_status', className: 'wb-note wb-status-success', hidden: false });
+  page.select('keys');
+  assert.equal(notice.textContent, 'fleet_manage.key_revoked_status', 'staying on the same section keeps it');
+  page.select('defaults');
+  assert.equal(notice.textContent, ''); assert.equal(notice.hidden, true);
+  Object.assign(notice, { textContent: 'fleet_manage.revoking_key', className: 'wb-note wb-status-running', hidden: false });
+  page.select('keys');
+  assert.equal(notice.textContent, 'fleet_manage.revoking_key'); assert.equal(notice.hidden, false);
+});
+
 test('settings relabel updates navigation without replacing controls or changing the selected section', async () => {
   const document = documentFixture(), root = document.createElement('div');
   const settings = document.createElement('div'), fleet = document.createElement('div'), actions = document.createElement('div');

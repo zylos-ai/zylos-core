@@ -84,8 +84,13 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   });
 
   layout.append(nav, body); root.append(layout);
+  let current = null;
   function select(name) {
     if (!sections[name] || buttons[name].hidden) name = 'defaults';
+    // A finished key or machine notice belongs to the section it came from; one still running stays visible.
+    const notice = status.querySelector('#fleet-manage-status');
+    if (current && name !== current && notice && !/\bwb-status-running\b/.test(notice.className)) { notice.textContent = ''; notice.hidden = true; }
+    current = name;
     for (const key of settingsSections) { sections[key].hidden = key !== name; buttons[key].setAttribute('aria-current', String(key === name)); }
   }
   function detail(level) { const hidden = level !== 'technical'; buttons.observer.hidden = hidden; if (hidden && !sections.observer.hidden) select('defaults'); }
