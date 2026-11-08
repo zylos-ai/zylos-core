@@ -1475,28 +1475,33 @@ test('a hanging group status request cannot block selection or five-second messa
   }
 });
 
-test('sending refreshes group status once while accelerated polls retain the list cadence', { timeout: 2000 }, async () => {
+for (const health of ['ok', 'rate_limited']) test(`sending with ${health} health preserves the group refresh cadence`, { timeout: 2000 }, async () => {
   const f = fixture(u => {
     if (u.pathname === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
-    if (u.pathname === '/api/workbench/groups') return groupSnapshot('running');
+    if (u.pathname === '/api/workbench/groups') return groupSnapshot('running', {
+      rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait: null }],
+      instance: { runtimeHealth: { claude: { health } } }
+    });
     if (u.pathname.endsWith('/send')) return { stored: true, conversationId: 'g:A' };
   });
   try {
     await f.state.open();
     await f.state.select('g:A');
+    assert.equal(f.state.snapshot().groupHealth, health);
     const groupReads = () => f.calls.filter(c => c.path === '/api/workbench/groups').length;
     assert.equal(groupReads(), 1);
     f.state.setInput('hello');
     await f.state.send();
-    assert.equal(groupReads(), 2);
+    const afterSendReads = health === 'ok' ? 1 : 2;
+    assert.equal(groupReads(), afterSendReads);
     const initialReads = f.reads().length;
     await f.timer.advance(12000);
     assert.equal(f.reads().length, initialReads + 6);
-    assert.equal(groupReads(), 2);
+    assert.equal(groupReads(), afterSendReads);
     await f.timer.advance(18000);
-    assert.equal(groupReads(), 3);
+    assert.equal(groupReads(), afterSendReads + 1);
     await f.timer.advance(30000);
-    assert.equal(groupReads(), 4);
+    assert.equal(groupReads(), afterSendReads + 2);
   } finally {
     f.state.destroy();
   }

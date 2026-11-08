@@ -16,7 +16,7 @@ registerHooks({
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
 
 function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', presence = 'running', pending = true,
-  wait = null, source, healthRecord, workbench } = {}) {
+  wait = null, source, healthRecord, workbench, onSend } = {}) {
   const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
   const document = conversationDocument(), root = document.createElement('div');
   const sessionGroup = 'dashboard:health', id = 'g:AA';
@@ -28,7 +28,8 @@ function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', prese
           [runtime]: healthRecord ?? { health, ...(source ? { source } : {}) } } },
         sources: { status: { ok: true, readAt: 1000 } } }
       : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
-      : path.includes('/messages?') ? { items: [...(pending ? [{ id: 1, direction: 'in', status: 'pending', content: 'hello' }] : []),
+      : path.endsWith('/send') ? onSend?.() ?? { stored: true, conversationId: id }
+      : path.includes('/messages?') ? { items: [...((typeof pending === 'function' ? pending() : pending) ? [{ id: 1, direction: 'in', status: 'pending', content: 'hello' }] : []),
         { id: 2, direction: 'in', status: 'delivered', content: 'already delivered' }], afterCursor: 'after', nextCursor: null }
       : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id, sessionGroup, state: 'active' } }
       : { items: [], nextCursor: null };
@@ -39,6 +40,33 @@ function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', prese
 }
 
 for (const locale of ['en', 'zh']) {
+  test(`sending to a healthy idle conversation keeps its running header in ${locale}`, { timeout: 2000 }, async t => {
+    let stored = false, groupReads = 0, sends = 0;
+    const f = healthPage(t, { locale, health: 'ok', pending: () => stored,
+      onSend: () => { stored = true; sends++; return { stored: true, conversationId: 'g:AA' }; },
+      workbench: () => {
+        groupReads++;
+        return { listKnown: true,
+          rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
+            live: { status: { valid: true, state: 'idle' } }, wait: stored ? { kind: 'unknown', reason: 'no_rule' } : null }],
+          instance: { runtimeHealth: { claude: { health: 'ok' } } }, sources: { status: { ok: true, readAt: 1000 } } };
+      } });
+    await f.page.openGroup(f.sessionGroup); await tick();
+    const header = f.root.querySelector('.conversation-running');
+    assert.equal(header.textContent, f.translations['chat.page.running']);
+    assert.equal(groupReads, 1);
+    const input = f.root.querySelector('.conversation-input');
+    input.value = 'new message'; input.dispatch('input');
+    f.root.querySelector('.conversation-composer').dispatch('submit', { preventDefault() {} });
+    await tick(); await tick();
+    assert.equal(sends, 1);
+    assert.equal(groupReads, 1, 'healthy sends do not sample a transient idle queue');
+    assert.equal(header.hidden, false);
+    assert.equal(header.textContent, f.translations['chat.page.running']);
+    assert.equal(header.classList.contains('conversation-restricted'), false);
+    assert.equal(header.classList.contains('conversation-waiting'), false);
+    assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
+  });
   for (const [health, label] of [
     ['ok', 'running'], ['rate_limited', 'rateLimited'], ['recovering', 'recovering'],
     ['auth_failed', 'authFailed'], ['unavailable', 'unavailable'], ['down', 'down'],

@@ -927,7 +927,7 @@ export function createConversationState({
           emit();
         }, e, current);
         if (!valid(e) || tab !== currentTab) return outcome;
-        if (result.stored === true && navigation === selectedVersion && cell() === current) {
+        if (result.stored === true && current.groupHealth !== 'ok' && navigation === selectedVersion) {
           // A read started before storage cannot describe the newly queued message.
           cancelGroupPresenceRead();
           readGroupPresence(current, currentTab, e);
