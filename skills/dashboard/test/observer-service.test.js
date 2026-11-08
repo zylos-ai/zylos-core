@@ -1180,6 +1180,11 @@ test('same-origin cookie and bearer WebSocket handshakes do not need a ticket', 
   }
 });
 
+// Real loopback HTTP validates selected-group propagation and the lease body allowlist;
+// manager/containment are injected, so no native process or database is opened.
+// Run for observer request fields, target propagation or resize changes; skip unrelated UI.
+// Use the official runner with private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and socket/DB
+// paths read back before startup. The case closes its private HTTP server in finally.
 test('observer routes carry the selected group through status, lease creation, and agent resize', async () => {
   const f = fixture();
   const selected = [];

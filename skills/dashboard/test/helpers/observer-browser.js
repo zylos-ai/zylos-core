@@ -237,6 +237,19 @@ export async function runObserverBrowser(t, sandbox, signal) {
       if (width < 761) await page.locator('.wb-set-drawer-btn').click();
       await page.locator('[data-settings-section="observer"]').first().click();
       await page.waitForFunction(() => document.querySelector('#observer-settings-state')?.textContent.includes('2'));
+      if (width < 761) {
+        // Closing the drawer removes its open class before the CSS slide and
+        // scrim fade finish. Capture the settled content, not that transition.
+        await page.waitForFunction(() => {
+          const nav = document.querySelector('.wb-set-nav'), scrim = document.querySelector('.wb-set-scrim');
+          return !document.querySelector('.wb-set').classList.contains('wb-set-drawer-open') && !history.state?.settingsDrawer
+            && getComputedStyle(nav).visibility === 'hidden' && getComputedStyle(scrim).visibility === 'hidden';
+        });
+        assert.equal(await page.locator('.wb-set-nav').isVisible(), false, 'closed mobile navigation cannot cover the settings screenshot');
+        assert.equal(await page.locator('.wb-set-scrim').isVisible(), false, 'closed mobile scrim cannot cover the settings screenshot');
+      }
+      await status.scrollIntoViewIfNeeded();
+      assert.equal(await status.isVisible(), true, 'observer settings status is visible before capture');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
       if (evidence) await page.screenshot({ path: path.join(evidence, `observer-settings-${locale}-${width}.png`) });
       groupCount = 0; await page.reload();
