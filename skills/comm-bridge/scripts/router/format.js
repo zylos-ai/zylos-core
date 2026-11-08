@@ -4,6 +4,7 @@ import { replyVia, shellQuote } from '../c4-query-format.js';
 import { truncateForDelivery } from '../c4-utils.js';
 import { projectC4Content } from '../c4-content-projection.js';
 import { splitContentAndAttachments } from '../attachment-annotations.js';
+import { dashboardSource, readOwnerName } from '../dashboard-source.js';
 
 const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
 
@@ -22,10 +23,11 @@ function withoutLegacyRoute(content, row) {
   return content.slice(0, offset).trimEnd();
 }
 
-export function formatConversation(row, { scriptPath = sendPath } = {}) {
-  const content = withoutLegacyRoute(projectC4Content(row.content || '', { c4Id: row.id }), row);
+export function formatConversation(row, { scriptPath = sendPath, ownerName = readOwnerName } = {}) {
+  const projected = withoutLegacyRoute(projectC4Content(row.content || '', { c4Id: row.id }), row);
+  const content = row.channel === 'dashboard' && row.direction === 'in' ? dashboardSource(projected, ownerName()) : projected;
   const attachmentHint = row.channel === 'dashboard' && row.direction === 'in'
-    && splitContentAndAttachments(content).attachments.length
+    && splitContentAndAttachments(projected).attachments.length
     ? `\nAttachments: ${path.join(SKILLS_DIR, 'dashboard', 'SKILL.md')}\n`
     : '';
   const componentHint = row.channel === 'dashboard' && row.direction === 'in'

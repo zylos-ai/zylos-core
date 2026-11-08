@@ -39,7 +39,7 @@ function internalRows(f){return f.db.prepare("SELECT * FROM conversations WHERE 
 function assertPair(f,content,sender='chat:a',target='chat:b',sessionId='session-a') {
   const rows=internalRows(f);assert.equal(rows.length,2);const [out,input]=rows;
   assert.deepEqual([out.direction,out.endpoint_id,out.session_group,out.content,out.status,out.priority,out.session_id],['out',target,sender,content,'delivered',3,sessionId]);
-  assert.deepEqual([input.direction,input.endpoint_id,input.session_group,input.content,input.status,input.priority,input.session_id],['in',sender,target,`[internal] ${sender} said: ${content}`,'pending',3,null]);
+  assert.deepEqual([input.direction,input.endpoint_id,input.session_group,input.content,input.status,input.priority,input.session_id],['in',sender,target,`[internal] Yourself, from your "${sender}" session group, said: ${content}`,'pending',3,null]);
   assert.equal(input.id,out.id+1);
   for(const row of rows)assert.equal(f.db.prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(row.session_group).head_id,row.id);
   return input.id;

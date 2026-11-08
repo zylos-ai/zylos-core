@@ -133,7 +133,7 @@ export function createStore(database, dependencies = {}) {
       if (senderGroup === targetGroup) throw dataError('SELF_TARGET', 'Cannot send to the sender session group');
       if (typeof content !== 'string' || !content.trim()) throw dataError('EMPTY_CONTENT', 'Message content is empty');
       const outRow = insert(c, 'out', 'internal', targetGroup, content, senderGroup, { sessionId });
-      const inRow = insert(c, 'in', 'internal', senderGroup, `[internal] ${senderGroup} said: ${content}`, targetGroup);
+      const inRow = insert(c, 'in', 'internal', senderGroup, `[internal] Yourself, from your "${senderGroup}" session group, said: ${content}`, targetGroup);
       return { outRow, inRow };
     }),
   };

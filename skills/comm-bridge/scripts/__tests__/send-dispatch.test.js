@@ -79,7 +79,7 @@ test('valid internal dispatch uses the real module and preserves empty-body erro
   assert.equal(rows.length, 2);
   assert.deepEqual(rows.map(row => [row.direction, row.endpoint_id, row.session_group, row.content, row.status]), [
     ['out', 'demo:room', 'origin', 'message', 'delivered'],
-    ['in', 'origin', 'demo:room', '[internal] origin said: message', 'pending'],
+    ['in', 'origin', 'demo:room', '[internal] Yourself, from your "origin" session group, said: message', 'pending'],
   ]);
   assert.equal(result.stdout, `[C4] internal message queued for demo:room (id ${rows[1].id})\n`);
   const empty = invoke('  \n');
@@ -140,7 +140,7 @@ db.close();
   assert.equal(rows.length, 2);
   assert.deepEqual(rows.map(row => [row.direction, row.endpoint_id, row.session_group, row.content]), [
     ['out', 'demo:target', 'origin', 'reply'],
-    ['in', 'origin', 'demo:target', '[internal] origin said: reply'],
+    ['in', 'origin', 'demo:target', '[internal] Yourself, from your "origin" session group, said: reply'],
   ]);
   assert.equal(internal.stdout, `[C4] internal message queued for demo:target (id ${rows[1].id})\n`);
 });

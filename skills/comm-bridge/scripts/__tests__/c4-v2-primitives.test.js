@@ -45,7 +45,7 @@ test('internal messages commit both directions and heads, or roll back everythin
   assert.equal(pair.outRow.endpoint_id, 'foo');
   assert.equal(pair.outRow.status, 'delivered');
   assert.equal(pair.outRow.session_id, 'sid');
-  assert.equal(pair.inRow.content, '[internal] origin said: hello\nworld');
+  assert.equal(pair.inRow.content, '[internal] Yourself, from your "origin" session group, said: hello\nworld');
   assert.equal(pair.inRow.endpoint_id, 'origin');
   assert.equal(pair.inRow.status, 'pending');
   assert.equal(pair.inRow.session_id, null);

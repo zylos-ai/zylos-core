@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { projectC4Content } from '../c4-content-projection.js';
 import { formatConversation } from '../router/format.js';
+import { dashboardSource } from '../dashboard-source.js';
 import { replyVia, shellQuote } from '../c4-query-format.js';
 import { createQueryHandlers } from '../c4-v2-cli.js';
 import { ATTACHMENTS_DIR, SKILLS_DIR } from '../c4-config.js';
@@ -79,13 +80,30 @@ test('Dashboard inbound attachment hint retains the exact original reply route a
   assert.equal(databaseOpens, 0);
 });
 
+test('attachment-only Dashboard delivery preserves complete annotation lines and its attachment hint', t => {
+  const value = { ...row, id: 910020, content: buildAnnotatedContent('', [file]) };
+  const output = formatConversation(value);
+  const directory = path.join(ATTACHMENTS_DIR, `conv-${value.id}`);
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const spill = path.join(directory, 'message.txt');
+  const complete = fs.existsSync(spill) ? fs.readFileSync(spill, 'utf8') : output;
+  assert.ok(complete.startsWith('[Dashboard] the owner said:\n' + value.content));
+  assert.ok(complete.includes('\n' + buildAttachmentAnnotation(file) + '\n'));
+  assert.equal(complete.split('Attachments:').length - 1, 1);
+  assert.ok(complete.endsWith(replyVia(value, sendPath)));
+  assert.equal(value.content, buildAttachmentAnnotation(file));
+});
+
 test('ordinary Dashboard text includes component guidance within its paste budget without an attachment hint', t => {
   const scriptPath = sendPath;
   const empty = { ...row, id: 910010, content: '' };
-  const suffix = formatConversation(empty, { scriptPath });
+  const prefix = dashboardSource('', 'the owner');
+  const emptyOutput = formatConversation(empty, { scriptPath });
+  assert.ok(emptyOutput.startsWith(prefix));
+  const suffix = emptyOutput.slice(prefix.length);
   assert.ok(suffix.includes('Charts/choices/forms when useful:'));
   assert.equal(suffix.includes('Attachments:'), false);
-  const maximum = 800 - suffix.length;
+  const maximum = 800 - suffix.length - prefix.length;
   const catalogPath = shellQuote(path.join(SKILLS_DIR, 'dashboard/scripts/components.js'));
   const hint = suffix.slice(0, -(' ' + replyVia(empty, scriptPath)).length);
   assert.ok(hint.includes(catalogPath));
@@ -96,9 +114,9 @@ test('ordinary Dashboard text includes component guidance within its paste budge
   assert.ok(command.endsWith(' list --json'));
   assert.equal(command.endsWith('--json.'), false);
   const representative = { ...empty, endpoint_id: runId, session_group: `dashboard-owned:${runId}` };
-  const representativeSuffix = formatConversation(representative, { scriptPath });
+  const representativeSuffix = formatConversation(representative, { scriptPath }).slice(prefix.length);
   const representativeBaseline = 800 - (' ' + replyVia(representative, scriptPath)).length;
-  const representativeMaximum = 800 - representativeSuffix.length;
+  const representativeMaximum = 800 - representativeSuffix.length - prefix.length;
   assert.equal(representativeSuffix.slice(0, -(' ' + replyVia(representative, scriptPath)).length), hint);
   console.log(JSON.stringify({ routeShape: 'UUID endpoint and group', baselineBodyCharacters: representativeBaseline, guidedBodyCharacters: representativeMaximum }));
   for (const [index, length] of [1, maximum].entries()) {
@@ -106,7 +124,7 @@ test('ordinary Dashboard text includes component guidance within its paste budge
     const directory = path.join(ATTACHMENTS_DIR, `conv-${plain.id}`);
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const output = formatConversation(plain, { scriptPath });
-    assert.equal(output, plain.content + suffix);
+    assert.equal(output, dashboardSource(plain.content, 'the owner') + suffix);
     assert.equal(output.includes('TRUNCATED'), false);
     assert.equal(fs.existsSync(path.join(directory, 'message.txt')), false);
   }
@@ -130,7 +148,7 @@ test('live and startup spill files retain complete annotations beyond the previe
     assert.ok(output.includes('TRUNCATED'));
     assert.equal(output.includes(buildAttachmentAnnotation(file)), false);
     const complete = fs.readFileSync(spill, 'utf8');
-    assert.ok(complete.startsWith(long));
+    assert.ok(complete.startsWith(id === 910002 ? dashboardSource(long, 'the owner') : long));
     assert.ok(complete.includes(buildAttachmentAnnotation(file)));
     assert.ok(complete.includes(buildAttachmentAnnotation(image)));
     if (id === 910002) assert.ok(complete.endsWith(replyVia(row, sendPath)));
