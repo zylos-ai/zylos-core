@@ -170,3 +170,30 @@ test('Codex exec results written as content arrays get a failure flag and keep n
   assert.deepEqual(results.map(row => [row.metadata.call_id, row.metadata.outcome]).sort(), [['bad', 'failed'], ['ok', 'succeeded']]);
   assert.ok(!JSON.stringify(results).includes('secret-'), 'tool output is never stored');
 });
+
+test('other groups never move the Origin turn timing: their prompts are not turn starts and their replies not turn ends', async t => {
+  const { dir, store } = tmpStore(t);
+  const user = (id, sessionId, at) => JSON.stringify({ type: 'user', uuid: id, sessionId, timestamp: at, message: { content: 'question' } });
+  const say = (id, sessionId, at, tool = false) => JSON.stringify({ type: 'assistant', uuid: id, requestId: id, sessionId, timestamp: at,
+    message: { id: `m-${id}`, model: 'claude-example', usage: { input_tokens: 1, output_tokens: 1 },
+      content: [{ type: 'text', text: `words ${id}` }, ...(tool ? [{ type: 'tool_use', id: `t-${id}`, name: 'Read', input: {} }] : [])] } });
+  const origin = path.join(dir, 'origin.jsonl'), group = path.join(dir, 'group.jsonl');
+  fs.writeFileSync(origin, [user('o-ask', 'origin-s', '2026-11-08T10:00:00.000Z'), say('o-work', 'origin-s', '2026-11-08T10:00:01.000Z', true)].join('\n') + '\n');
+  fs.writeFileSync(group, [user('g-ask', 'group-s', '2026-11-08T10:00:04.000Z'), say('g-reply', 'group-s', '2026-11-08T10:00:05.000Z')].join('\n') + '\n');
+  const mappings = [
+    [{ transcript_path: origin, session_id: 'origin-s', session_group: 'origin', run_id: 'r0' }, true],
+    [{ transcript_path: group, session_id: 'group-s', session_group: 'dashboard:a', run_id: 'r1' }, false],
+  ];
+  const transcripts = { async collect(runtime, callback) {
+    let written = 0;
+    for (const [mapping, current] of mappings) written += callback({ ...mapping, byte_offset: 0 }, current).written;
+    return written;
+  } };
+  const collector = new ConversationCollector(store, { zylosDir: dir, runtimeModelPrices: { claude: {} } }, { transcripts });
+  await collector.collect();
+  fs.appendFileSync(origin, say('o-done', 'origin-s', '2026-11-08T10:00:10.000Z') + '\n');
+  await collector.collect();
+  const words = new Map(store.queryEvents({ types: ['assistant_message'], limit: 10 }).map(row => [row.summary, row.duration_ms]));
+  assert.equal(words.get('words g-reply'), null, 'a group reply has no Origin turn time');
+  assert.equal(words.get('words o-done'), 10_000, 'the Origin turn still runs from its own prompt');
+});

@@ -56,7 +56,8 @@ export function createGroupActions({ zylosDir, config = { zylosDir },
     if (action !== 'restart') {
       const first = { ...await control('[KEYSTROKE]Escape', target), control: 'escape' };
       if (action === 'interrupt' && first.ok) {
-        // The runtime leaves no trace of an interrupt; the record lets the conversation page show the round as stopped.
+        // The runtime leaves no trace of an interrupt; the record (with its control id) lets the conversation page show
+        // the round as stopped once C4 has delivered the Escape. An Escape that never arrives leaves the round running.
         try { onInterrupt({ ...target, controlId: first.controlId, at: now() }); } catch { /* Recording never changes the result. */ }
       }
       if (action === 'interrupt' || !first.ok) return { ...first, steps: [first] };
