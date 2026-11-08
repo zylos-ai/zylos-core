@@ -73,13 +73,13 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
   function close({ focus = true } = {}) {
     if (aside.hidden) return;
     restoreFocus = focus;
-    if (groupDetail.state.row) groupDetail.close();
-    else closed();
+    // Closing the detail closes the panel through its onClose.
+    groupDetail.close();
   }
   const keydown = event => {
     if (event.key !== 'Escape' || event.defaultPrevented || !visible()) return;
     event.preventDefault?.();
-    // The detail's own Esc leaves its name editor first; before the detail has opened, Esc closes the panel.
+    // The detail's own Esc leaves its name editor first, then closes the detail and with it the panel.
     if (!groupDetail.escape()) close();
   };
   document.addEventListener('keydown', keydown);

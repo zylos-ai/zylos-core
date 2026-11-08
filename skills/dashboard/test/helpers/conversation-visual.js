@@ -284,6 +284,19 @@ export async function runConversationVisual(t, sandbox) {
     assert.equal(await listToggle.getAttribute('aria-expanded'), String(!collapsed));
     await settleLayout();
   };
+  // Scrolls the history to its middle (reading) or bottom and returns the first visible message, its offset, the
+  // distance from the bottom and the conversation width; measure() reads the same for that message later.
+  const readingAnchor = reading => page.locator('#wb-chat .chat-messages').evaluate((el, reading) => {
+    el.scrollTop = reading ? Math.round((el.scrollHeight - el.clientHeight) / 2) : el.scrollHeight;
+    const bounds = el.getBoundingClientRect();
+    const anchor = [...el.querySelectorAll('[data-message-id]')].find(row => row.getBoundingClientRect().bottom > bounds.top + 1);
+    return { anchor: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top,
+      gap: el.scrollHeight - el.scrollTop - el.clientHeight, width: document.querySelector('#wb-chat .conversation-detail').getBoundingClientRect().width };
+  }, reading);
+  const measure = anchor => page.locator('#wb-chat .chat-messages').evaluate((el, anchor) => ({
+    gap: el.scrollHeight - el.scrollTop - el.clientHeight,
+    top: el.querySelector(`[data-message-id="${anchor}"]`).getBoundingClientRect().top,
+    width: document.querySelector('#wb-chat .conversation-detail').getBoundingClientRect().width }), anchor);
   await page.setViewportSize({ width: 1280, height: 900 });
   await settleLayout();
   const listShownWidth = await detailWidth();
@@ -300,19 +313,9 @@ export async function runConversationVisual(t, sandbox) {
     await page.setViewportSize({ width, height: 900 });
     await setList(collapsed);
     for (const reading of [false, true]) {
-      const before = await page.locator('#wb-chat .chat-messages').evaluate((el, reading) => {
-        el.scrollTop = reading ? Math.round((el.scrollHeight - el.clientHeight) / 2) : el.scrollHeight;
-        const bounds = el.getBoundingClientRect();
-        const anchor = [...el.querySelectorAll('[data-message-id]')].find(row => row.getBoundingClientRect().bottom > bounds.top + 1);
-        return { anchor: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top,
-          gap: el.scrollHeight - el.scrollTop - el.clientHeight, width: document.querySelector('#wb-chat .conversation-detail').getBoundingClientRect().width };
-      }, reading);
+      const before = await readingAnchor(reading);
       const label = `${width} ${collapsed ? 'list collapsed' : 'list shown'} ${reading ? 'reading' : 'bottom'}`;
       if (!reading) assert.ok(before.gap <= 2, `${label}: starts pinned to the bottom`);
-      const measure = () => page.locator('#wb-chat .chat-messages').evaluate((el, anchor) => ({
-        gap: el.scrollHeight - el.scrollTop - el.clientHeight,
-        top: el.querySelector(`[data-message-id="${anchor}"]`).getBoundingClientRect().top,
-        width: document.querySelector('#wb-chat .conversation-detail').getBoundingClientRect().width }), before.anchor);
       // Each opening and closing is compared with the position just before it: the scroll offset snaps to whole
       // pixels, so a message on a fractional line may move under a pixel per change.
       const rounds = [];
@@ -321,7 +324,7 @@ export async function runConversationVisual(t, sandbox) {
         await groupInfo.click();
         await groupSide.waitFor({ state: 'visible' });
         await settleLayout();
-        const opened = await measure();
+        const opened = await measure(before.anchor);
         if (beside) {
           assert.ok(opened.width < before.width - 400, `${label}: the conversation narrows beside the group detail`);
           assert.ok(opened.width >= 590, `${label}: about 600px of conversation remain beside it`);
@@ -329,7 +332,7 @@ export async function runConversationVisual(t, sandbox) {
         await page.keyboard.press('Escape');
         await groupSide.waitFor({ state: 'hidden' });
         await settleLayout();
-        const closed = await measure();
+        const closed = await measure(before.anchor);
         const step = `${label} round ${round}`;
         if (reading) {
           assert.ok(Math.abs(opened.top - previous.top) < 2, `${step}: opening the group detail keeps the message being read in place`);
@@ -344,8 +347,32 @@ export async function runConversationVisual(t, sandbox) {
       sideMeasurements.push({ width, collapsed, beside, reading, before, rounds });
     }
   }
-  // The list state is remembered across reloads; later steps use the list.
+  // Collapsing the conversation list and showing it again widens and narrows the conversation (at 1000px the
+  // messages reflow); the message being read stays in place and a history pinned to the bottom stays pinned.
+  const listMeasurements = [];
   await setList(false);
+  for (const reading of [false, true]) {
+    const before = await readingAnchor(reading);
+    const label = `1000 collapsing the list ${reading ? 'reading' : 'bottom'}`;
+    if (!reading) assert.ok(before.gap <= 2, `${label}: starts pinned to the bottom`);
+    await setList(true);
+    const collapsed = await measure(before.anchor);
+    assert.ok(collapsed.width > before.width + 200, `${label}: the conversation widens`);
+    await setList(false);
+    const shown = await measure(before.anchor);
+    assert.equal(shown.width, before.width, `${label}: showing the list restores the width`);
+    if (reading) {
+      assert.ok(Math.abs(collapsed.top - before.top) < 2, `${label}: collapsing the list keeps the message being read in place`);
+      assert.ok(Math.abs(shown.top - collapsed.top) < 2, `${label}: showing it again keeps the message in place`);
+    } else {
+      assert.ok(collapsed.gap <= 2, `${label}: collapsing the list keeps the history pinned to the bottom`);
+      assert.ok(shown.gap <= 2, `${label}: showing it again keeps the history pinned to the bottom`);
+    }
+    listMeasurements.push({ reading, before, collapsed, shown });
+  }
+  // A collapsed list is remembered across reloads, but phones keep switching between the list and the
+  // conversation: they have no list button, so the list must come back.
+  await setList(true);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => localStorage.setItem('zylos-dashboard-locale', 'en'));
   await page.reload();
@@ -354,7 +381,33 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en');
   await checkPlaceholder('Message your agent');
   await screenshot('conversation-390-english');
+  assert.equal(await page.locator('#wb-chat .conversation-sidebar').isVisible(), false, 'the conversation fills the phone screen');
+  await page.locator('#wb-chat .conversation-back').click();
+  assert.equal(await page.locator('#wb-chat .conversation-sidebar').isVisible(), true, 'with the list remembered as collapsed, a phone still goes back to the list');
+  assert.equal(await page.locator(`#wb-chat [data-conversation-id="${first.receipt.conversationId}"]`).isVisible(), true);
+  await select();
+  // On phones the group detail covers the screen, and its actions show their names at the 40px phone height.
+  await groupInfo.click();
+  await groupSide.waitFor({ state: 'visible' });
+  const sideActions = await groupSide.locator('.wb-act').evaluateAll(buttons => buttons.map(button => {
+    const label = button.querySelector('.wb-act-label');
+    return { text: label?.textContent, labelWidth: label?.getBoundingClientRect().width ?? 0, height: button.getBoundingClientRect().height };
+  }));
+  assert.deepEqual(sideActions.map(action => action.text), ['Interrupt', 'Nudge', 'Restart']);
+  for (const action of sideActions) {
+    assert.ok(action.labelWidth > 0, `${action.text}: the group detail action shows its name on a phone`);
+    assert.ok(action.height >= 40, `${action.text}: the group detail action has a 40px phone height`);
+  }
+  for (const control of ['.wb-group-side-back', '[aria-label="Close"]']) {
+    const box = await groupSide.locator(control).first().boundingBox();
+    assert.ok(box && box.height >= 40, `${control} has a usable phone target in the group detail`);
+  }
+  await screenshot('group-detail-390-english');
+  await groupSide.locator('.wb-group-side-back').click();
+  await groupSide.waitFor({ state: 'hidden' });
   await page.setViewportSize({ width: 1440, height: 900 });
+  // Later steps use the list.
+  await setList(false);
   // Hold a workbench read without returning it. Message polling must remain independent.
   let releaseGroup, observeGroup;
   const groupObserved = new Promise(resolve => { observeGroup = resolve; });
@@ -529,6 +582,6 @@ export async function runConversationVisual(t, sandbox) {
   assert.doesNotMatch(await staleReceipt.innerText(), /can retry|retry sending/i);
   assert.equal(await page.locator('#wb-chat .chat-composer textarea').isDisabled(), true);
   assert.deepEqual(errors, []);
-  if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, composerMeasurements, resizeMeasurements, typingMeasurements, sideMeasurements, placeholderMeasurements, base: fixture.base }, null, 2));
+  if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, composerMeasurements, resizeMeasurements, typingMeasurements, sideMeasurements, listMeasurements, placeholderMeasurements, base: fixture.base }, null, 2));
   t.diagnostic(`conversation browser: ${shots.length} screenshots, ${reads} actual message reads, no page errors`);
 }

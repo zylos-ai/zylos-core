@@ -155,6 +155,22 @@ test('a group that is not on the known list shows as not running once the list a
   assert.equal(standby(), true, 'the known list without this group means it is not running');
 });
 
+test('a group that is not on the known list is not opened again by the later list reads', async testContext => {
+  const f = await fixture(testContext);
+  assert.equal(await f.page.openGroup(otherGroup), true);
+  await tick();
+  await f.openSide();
+  const tabs = () => allNodes(f.side()).filter(node => node.attributes.role === 'tab');
+  const selected = () => tabs().find(node => node.attributes['aria-selected'] === 'true')?.textContent ?? '';
+  assert.equal(allNodes(f.side()).some(node => node.textContent === 'wb.detail.standby'), true, 'shown as not running');
+  tabs()[1].dispatch('click');
+  await tick(); await tick();
+  assert.match(selected(), /^wb\.detail\.timeline/, 'the timeline tab is open');
+  await f.poll();
+  await f.poll();
+  assert.match(selected(), /^wb\.detail\.timeline/, 'the 5s re-reads leave the timeline tab open');
+});
+
 test('closing the side panel during the first group read starts no re-reading', async testContext => {
   const f = await fixture(testContext);
   const release = f.holdGroupReads();
