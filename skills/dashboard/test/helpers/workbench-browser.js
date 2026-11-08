@@ -12,7 +12,7 @@ const PAGES = ['/', '/index.html', '/memory', '/schedule', '/usage', '/settings'
 // The real page, stylesheets and modules, served the way the dashboard serves them, with fixed API answers
 // (fixtures/workbench-browser-api.js). Dashboard actions are recorded and answered as done; nothing runs.
 async function startPage(sandbox) {
-  const actions = [], unserved = new Set();
+  const actions = [], unserved = new Set(), reads = new Map();
   const now = Date.now();
   const server = http.createServer((req, res) => {
     try {
@@ -28,6 +28,7 @@ async function startPage(sandbox) {
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
+        if (req.method === 'GET') reads.set(url.pathname, (reads.get(url.pathname) ?? 0) + 1);
         const value = req.method === 'GET' ? workbenchAnswer(url, now) : undefined;
         if (value === undefined) unserved.add(`${req.method} ${url.pathname}`);
         sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' }); return;
@@ -41,7 +42,7 @@ async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   const base = await sandbox.startHttp(server);
-  return { base, actions, unserved };
+  return { base, actions, unserved, reads };
 }
 
 // Tappable controls narrower or shorter than 40px, the document width, and where the
@@ -83,16 +84,16 @@ export async function runWorkbenchBrowser(t, sandbox) {
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   console.log('Workbench browser isolation:', JSON.stringify(sandbox.assertIsolation()));
-  const { base, actions, unserved } = await startPage(sandbox);
+  const { base, actions, unserved, reads } = await startPage(sandbox);
   const { chromium } = await import(pathToFileURL(modulePath));
   const browser = await chromium.launch({ executablePath, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
   sandbox.addCleanup(() => browser.close());
 
-  async function open(width, height, route) {
+  async function open(width, height, route, options = {}) {
     const phone = width < 761;
     const context = await browser.newContext({ viewport: { width, height }, locale: 'zh-CN', timezoneId: 'UTC',
-      ...(phone ? { isMobile: true, hasTouch: true } : {}) });
+      ...(phone ? { isMobile: true, hasTouch: true } : {}), ...options });
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', request => request.request().url().startsWith(base + '/') ? request.continue() : request.abort());
     await context.addInitScript(() => {
@@ -127,16 +128,49 @@ export async function runWorkbenchBrowser(t, sandbox) {
     if (body) assert.deepEqual(sent().at(-1).body, body);
   }
 
+  // The phone settings drawer, as the page reports it: open or not, where it sits, what has focus, which
+  // history entry is current and what is inert.
+  const drawerState = page => page.evaluate(() => {
+    const nav = document.querySelector('.wb-set-nav'), toggle = document.querySelector('.wb-set-drawer-btn');
+    const focus = document.activeElement;
+    return {
+      open: document.querySelector('.wb-set').classList.contains('wb-set-drawer-open'),
+      expanded: toggle.getAttribute('aria-expanded'),
+      left: Math.round(nav.getBoundingClientRect().left), height: Math.round(nav.getBoundingClientRect().height),
+      visible: getComputedStyle(nav).visibility === 'visible' && getComputedStyle(nav).display !== 'none',
+      focus: focus === toggle ? 'toggle' : focus?.dataset?.settingsSection ? 'section:' + focus.dataset.settingsSection
+        : focus && nav.contains(focus) ? 'drawer' : focus === document.body || !focus ? 'body' : 'outside:' + (focus.id || focus.className),
+      current: nav.querySelector('[aria-current="true"]')?.dataset.settingsSection,
+      label: toggle.textContent.trim(),
+      entry: Boolean(history.state?.settingsDrawer), path: location.pathname,
+      inert: document.querySelectorAll('[inert]').length,
+      bodyInert: Boolean(document.querySelector('.wb-set-body').closest('[inert]')), headerInert: Boolean(document.querySelector('.app-header').closest('[inert]')),
+      settingsShown: !document.querySelector('#tab-settings').hidden,
+    };
+  });
+  async function openDrawer(page) {
+    await page.locator('.wb-set-drawer-btn').click();
+    await page.waitForFunction(() => history.state?.settingsDrawer && document.querySelector('.wb-set-nav').getBoundingClientRect().left === 0);
+  }
+  // Closed and settled: no drawer entry left in history once the drawer has removed it.
+  async function closed(page) {
+    await page.waitForFunction(() => !document.querySelector('.wb-set').classList.contains('wb-set-drawer-open') && !history.state?.settingsDrawer);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.wb-set-nav')).visibility === 'hidden' || innerWidth > 760);
+    return drawerState(page);
+  }
+
   async function settings(width, height) {
     const { page, context, errors, shot } = await open(width, height, '/settings');
     const upgrade = () => page.locator('#tab-settings [data-action="upgrade-cc"]');
     await upgrade().waitFor({ state: 'attached' });
     // The upgrade button sits with the versions, in whichever section holds them.
     const section = await upgrade().evaluate(node => node.closest('section.wb-set-sec')?.id.replace('settings-section-', ''));
-    await page.locator(`[data-settings-section="${section}"]`).click();
+    // Phones reach the sections through the drawer.
+    const pick = async name => { if (width < 761) await openDrawer(page); await page.locator(`[data-settings-section="${name}"]`).click(); if (width < 761) await closed(page); };
+    await pick(section);
     await upgrade().waitFor({ state: 'visible' });
     await confirmFlow(page, upgrade, 'upgrade-cc', {});
-    await page.locator('[data-settings-section="defaults"]').click();
+    await pick('defaults');
     const single = () => page.locator('#action-mode-seg button[data-mode="single"]');
     await single().waitFor({ state: 'visible' });
     await confirmFlow(page, single, 'switch-mode', { mode: 'single' });
@@ -144,6 +178,14 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const layout = await page.evaluate(measure);
       assert.deepEqual(layout.small, [], `settings at ${width}: no control under 40px`);
       assert.equal(layout.documentWidth, width, `settings at ${width}: no sideways scrolling`);
+    } else {
+      // Wider screens keep the section list as a sidebar; the drawer's button, title and backdrop do not show.
+      const desk = await page.evaluate(() => ({
+        hidden: ['.wb-set-drawer-btn', '.wb-set-drawer-h', '.wb-set-scrim'].filter(selector => getComputedStyle(document.querySelector(selector)).display === 'none'),
+        nav: (box => ({ left: Math.round(box.left), width: Math.round(box.width) }))(document.querySelector('.wb-set-nav').getBoundingClientRect()),
+        visible: getComputedStyle(document.querySelector('.wb-set-nav')).visibility,
+      }));
+      assert.deepEqual(desk, { hidden: ['.wb-set-drawer-btn', '.wb-set-drawer-h', '.wb-set-scrim'], nav: { left: 0, width: 209 }, visible: 'visible' });
     }
     await shot('settings');
     assert.deepEqual(errors, []);
@@ -203,6 +245,138 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await page.locator('.wb-sched-kpi .wb-sched-kpi-item').first().waitFor();
     const sched = await check('schedule');
     assert.deepEqual(sched.kpiRows, [3, 3]);
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  // Every way of closing the phone drawer: a section, the same section, the backdrop, Escape, the close button
+  // and Back. Each one returns focus to the button, lifts the inert background and leaves no drawer entry in
+  // history; Back closes the drawer without reloading settings and one more Back leaves settings.
+  await t.test('phone settings drawer: opening, every way of closing, focus and history', async () => {
+    const { page, context, errors, shot } = await open(390, 844, '/');
+    await page.locator('#wb-board .wb-row').first().waitFor();
+    // Arrive from the overview so one Back too many would show up as leaving settings.
+    await page.locator('#wb-settings-btn').click();
+    await page.locator('.wb-set-drawer-btn').waitFor({ state: 'visible' });
+    const label = name => page.locator(`[data-settings-section="${name}"] > span`).first().textContent();
+    let state = await drawerState(page);
+    assert.deepEqual([state.open, state.expanded, state.visible, state.inert], [false, 'false', false, 0]);
+    assert.ok(state.left < -100, `closed: the drawer is off screen (${state.left})`);
+    assert.equal(state.label, await label('defaults'), 'the button names the current section');
+    assert.match(await page.locator('.wb-set-nav').evaluate(node => getComputedStyle(node).transitionDuration), /0\.2s/, 'the drawer slides');
+    await shot('settings-drawer-closed');
+    const settingsReads = () => reads.get('/api/settings') ?? 0;
+    const readsBefore = settingsReads();
+
+    await openDrawer(page);
+    state = await drawerState(page);
+    assert.deepEqual([state.open, state.expanded, state.left, state.visible, state.focus, state.current], [true, 'true', 0, true, 'section:defaults', 'defaults']);
+    assert.equal(state.height, 844, 'the drawer runs the full height of the screen');
+    // The prototype's sizes: 300px drawer, 44px section rows and opening button, 40×40 close button.
+    const sizes = await page.evaluate(() => Object.fromEntries([['drawer', '.wb-set-nav'], ['section', '[data-settings-section="defaults"]'], ['button', '.wb-set-drawer-btn'], ['close', '.wb-set-drawer-x']]
+      .map(([name, selector]) => { const box = document.querySelector(selector).getBoundingClientRect(); return [name, [Math.round(box.width), Math.round(box.height)]]; })));
+    assert.deepEqual([sizes.drawer[0], sizes.section[1], sizes.button[1], sizes.close], [300, 44, 44, [40, 40]], JSON.stringify(sizes));
+    assert.ok(state.entry && state.bodyInert && state.headerInert, 'one history entry; the page behind the drawer is inert');
+    const layout = await page.evaluate(measure);
+    assert.deepEqual(layout.small, [], 'drawer: no control under 40px');
+    assert.equal(layout.documentWidth, 390, 'drawer: no sideways scrolling');
+    await shot('settings-drawer-open');
+    // Keyboard focus cannot reach the page behind the backdrop, either way round.
+    for (const key of ['Tab', 'Shift+Tab']) {
+      for (let i = 1; i <= 10; i++) {
+        await page.keyboard.press(key);
+        const focus = (await drawerState(page)).focus;
+        assert.ok(!focus.startsWith('outside:'), `${key} ${i}: focus stays in the drawer (${focus})`);
+      }
+    }
+
+    const ways = [
+      ['a section', async () => page.locator('[data-settings-section="keys"]').click(), 'keys'],
+      ['the same section', async () => page.locator('[data-settings-section="keys"]').click(), 'keys'],
+      ['the backdrop', async () => page.locator('.wb-set-scrim').click({ position: { x: 360, y: 420 } }), 'keys'],
+      ['Escape', async () => page.keyboard.press('Escape'), 'keys'],
+      ['the close button', async () => page.locator('.wb-set-drawer-x').click(), 'keys'],
+      ['Back', async () => page.goBack(), 'keys'],
+    ];
+    // The drawer is still open from the keyboard checks above; each later way opens it again first.
+    for (const [index, [way, close, section]] of ways.entries()) {
+      if (index) {
+        await openDrawer(page);
+        assert.equal((await drawerState(page)).focus, 'section:' + section, `${way}: focus starts on the current section`);
+      }
+      await close();
+      state = await closed(page);
+      assert.deepEqual([state.expanded, state.inert, state.focus, state.current, state.path, state.settingsShown], ['false', 0, 'toggle', section, '/settings', true], `closing with ${way}`);
+      assert.equal(state.label, await label(section), `${way}: the button names the section`);
+    }
+    assert.equal(settingsReads(), readsBefore, 'opening and closing the drawer never reloaded settings');
+
+    // No drawer entry left behind: one Back leaves settings for the overview.
+    await page.goBack();
+    await page.waitForFunction(() => location.pathname === '/' && !document.querySelector('#tab-overview').hidden);
+    // Forward again, then forward onto the drawer's old entry: settings stays as it is with the drawer closed.
+    await page.goForward();
+    await page.waitForFunction(() => location.pathname === '/settings' && !document.querySelector('#tab-settings').hidden);
+    await page.waitForTimeout(200);
+    const readsForward = settingsReads();
+    await page.goForward();
+    await page.waitForFunction(() => history.state?.settingsDrawer);
+    await page.waitForTimeout(200);
+    state = await drawerState(page);
+    assert.deepEqual([state.open, state.settingsShown, state.path], [false, true, '/settings'], 'forward onto the old drawer entry keeps settings with the drawer closed');
+    assert.equal(settingsReads(), readsForward, 'and does not reload settings');
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  await t.test('phone settings drawer: switching page or leaving the phone layout closes it and removes its history entry', async () => {
+    const start = async () => {
+      const opened = await open(390, 844, '/');
+      await opened.page.locator('#wb-board .wb-row').first().waitFor();
+      await opened.page.locator('#wb-settings-btn').click();
+      await opened.page.locator('.wb-set-drawer-btn').waitFor({ state: 'visible' });
+      return opened;
+    };
+    // Another page while the drawer is open (the page itself is inert, so this is the page's own navigation).
+    let { page, context, errors } = await start();
+    const length = await page.evaluate(() => history.length);
+    await openDrawer(page);
+    await page.evaluate(() => document.querySelector('.tab[data-tab="memory"]').click());
+    await page.waitForFunction(() => location.pathname === '/memory' && !document.querySelector('#tab-memory').hidden);
+    let state = await drawerState(page);
+    assert.deepEqual([state.open, state.inert, state.entry], [false, 0, false], 'switching page closes the drawer and lifts the inert background');
+    assert.equal(await page.evaluate(() => history.length), length + 1, 'the drawer entry became the new page entry');
+    await page.goBack();
+    await page.waitForFunction(() => location.pathname === '/settings' && !document.querySelector('#tab-settings').hidden);
+    state = await drawerState(page);
+    assert.deepEqual([state.open, state.entry], [false, false], 'Back returns to settings, not to an open drawer');
+    await page.goBack();
+    await page.waitForFunction(() => location.pathname === '/');
+    assert.deepEqual(errors, []);
+    await context.close();
+
+    // Turning or widening the screen past the phone layout while the drawer is open.
+    ({ page, context, errors } = await start());
+    await openDrawer(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    state = await closed(page);
+    assert.deepEqual([state.open, state.expanded, state.inert, state.entry, state.left, state.visible], [false, 'false', 0, false, 0, true], 'wider screen: drawer closed, sidebar shown, entry removed');
+    assert.ok(await page.locator('.wb-set-drawer-btn').isHidden(), 'wider screen: no drawer button');
+    await page.goBack();
+    await page.waitForFunction(() => location.pathname === '/', null, { timeout: 5000 });
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  await t.test('phone settings drawer: no sliding when the system asks for reduced motion', async () => {
+    const { page, context, errors } = await open(390, 844, '/settings', { reducedMotion: 'reduce' });
+    await page.locator('.wb-set-drawer-btn').waitFor({ state: 'visible' });
+    const durations = () => page.evaluate(() => ['.wb-set-nav', '.wb-set-scrim'].map(selector => getComputedStyle(document.querySelector(selector)).transitionDuration));
+    assert.deepEqual(await durations(), ['0s', '0s']);
+    // Without the slide the drawer is in place as soon as it has opened (with it, it would still be on its way in).
+    const opened = await page.evaluate(() => { document.querySelector('.wb-set-drawer-btn').click(); return Math.round(document.querySelector('.wb-set-nav').getBoundingClientRect().left); });
+    assert.equal(opened, 0);
+    assert.deepEqual(await durations(), ['0s', '0s'], 'open as well as closed');
     assert.deepEqual(errors, []);
     await context.close();
   });
