@@ -157,6 +157,29 @@ export async function runObserverBrowser(t, sandbox, signal) {
     assert.ok(reads.filter(row => row.path === '/api/workbench/groups').length > groupReads);
     assert.equal(await page.locator('#observer-group-picker').isVisible(), false);
   });
+  await step('top observer entry clears a previously observed group after its detail closes', async page => {
+    await page.locator(`[data-group="${GROUP}"]`).click();
+    await page.locator(`button[data-observer-group="${GROUP}"]`).click();
+    await page.waitForFunction(() => window.__observerSockets.length > 0);
+    assert.equal(leaseWrites(0).at(-1).body.sessionGroup, GROUP);
+
+    await page.locator('.tab[data-tab="overview"]').click();
+    await page.locator('#wb-side').waitFor({ state: 'visible' });
+    assert.equal(await page.locator(`#wb-board [data-group="${GROUP}"]`).getAttribute('aria-current'), 'true');
+    await page.keyboard.press('Escape');
+    await page.locator('#wb-side').waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('#wb-board [aria-current="true"]').count(), 0, 'closing detail leaves no current group');
+
+    const before = writes.length, sockets = await page.evaluate(() => window.__observerSockets.length);
+    await page.locator('#observer-tab').click();
+    await page.locator('#tab-observer').waitFor({ state: 'visible' });
+    await page.locator('#observer-group-picker').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#observer-group-select').inputValue(), '', 'top entry must clear the stale observed group');
+    await page.waitForFunction(() => /Choose a running group/.test(document.querySelector('#observer-notice')?.textContent || ''));
+    assert.equal(leaseWrites(before).length, 0, 'no selected detail means no automatic lease acquisition');
+    assert.equal(await page.evaluate(() => window.__observerSockets.length), sockets, 'stale observation must not reconnect');
+    assert.equal(await page.locator('.observer-frame-shell').isVisible(), false);
+  });
   scenario = 'pending-lease';
   await step('late lease acquisition cannot block selecting another group and is released', async page => {
     await page.locator('#observer-tab').click(); await select(page, GROUP); await until(() => heldLease, 'pending lease');

@@ -567,6 +567,36 @@ test('expired authentication cannot displace a group being observed', async t =>
   assert.equal(f.manager.leases.has(lease.id), true);
 });
 
+test('a completed generation for another group makes an older acquisition retryable', { timeout: 2000 }, async t => {
+  const f = groupedFixture();
+  let releaseOlder, enteredOlder;
+  const entered = new Promise(resolve => { enteredOlder = resolve; });
+  const released = new Promise(resolve => { releaseOlder = resolve; });
+  const revalidate = f.manager.revalidate.bind(f.manager);
+  let first = true;
+  // Hold the older caller after target preflight but before generation reuse.
+  f.manager.revalidate = async () => {
+    if (first) { first = false; enteredOlder(); await released; }
+    return revalidate();
+  };
+  t.after(async () => { releaseOlder(); await f.manager.shutdown(); });
+  const older = f.manager.createLease(context('admin'), { sessionGroup: 'telegram:42' });
+  const rejected = assert.rejects(older, { code: 'operation_obsolete' });
+  await entered;
+  const current = await f.manager.createLease(context('admin'), { sessionGroup: 'lark:room' });
+  assert.equal(current.sessionGroup, 'lark:room');
+  assert.equal(f.manager._starting, null, 'the other group has completely finished starting');
+  const active = f.containment.active;
+  assert.equal(active.observerTarget.sessionGroup, 'lark:room');
+  releaseOlder();
+  await rejected;
+  assert.equal(f.containment.active, active, 'the superseded caller does not replace the completed group');
+  assert.equal(f.manager.validateLease(current.id, context('admin')).sessionGroup, 'lark:room');
+  assert.equal(f.manager.leases.size, 1);
+  assert.equal(f.manager.tickets.size, 1);
+  assert.equal(f.manager._pendingLeases, 0);
+});
+
 for (const lastGroup of ['telegram:42', 'openmax:room']) {
   test(`overlapping group attachments leave ${lastGroup} available to the last caller`, async t => {
     const f = groupedFixture();
