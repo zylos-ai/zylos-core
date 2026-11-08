@@ -10,7 +10,7 @@ export function validTimezone(value) {
 export function mountTimezoneSettings(root, { document = root.ownerDocument, t = key => key,
   read, write, restart, confirm = async () => false, writable = () => true, available = () => true, identity = () => '', target = () => null,
   onSaved = () => {} } = {}) {
-  const card = settingsCard(document, { title: t('wb.settings.timezone.title'), id: 'settings-timezone' });
+  const card = settingsCard(document, { icon: 'clock', title: t('wb.settings.timezone.title'), id: 'settings-timezone' });
   const label = element(document, 'label', t('wb.settings.timezone.label'), 'wb-fld-l');
   label.setAttribute('for', 'settings-timezone-value');
   const input = element(document, 'input', undefined, 'wb-input'); input.id = 'settings-timezone-value';
@@ -58,7 +58,7 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
   }
   function errorText(error, fallback) {
     const keys = { invalid_timezone: 'invalid', timezone_managed: 'managed', timezone_changed: 'changed',
-      config_unreadable: 'readOnly', forbidden: 'readOnlyRemote', duplicate_request: 'duplicate',
+      config_unreadable: 'readOnly', forbidden: 'readOnlyRemote', timezone_unavailable_on_host: 'hostUnsupported',
       service_discovery_unavailable: 'discoveryUnknown', confirmation_required: 'confirmationRequired' };
     return t('wb.settings.timezone.' + (keys[error?.code || error?.message] ?? fallback));
   }

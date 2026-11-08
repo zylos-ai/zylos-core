@@ -958,11 +958,11 @@
   "wb.settings.timezone.webConsole": "Web console",
   "wb.settings.timezone.openmax": "OpenMax channel",
   "wb.settings.timezone.invalid": "Enter a valid IANA time zone.",
+  "wb.settings.timezone.hostUnsupported": "This time zone is unavailable in the host system’s time zone data. Choose a time zone installed on this instance.",
   "wb.settings.timezone.changed": "The instance time zone changed elsewhere. Reload the setting before restarting services.",
   "wb.settings.timezone.readFailed": "Could not read the instance time zone. Reopen settings to retry.",
   "wb.settings.timezone.saveFailed": "Could not save the time zone. The running services were not restarted.",
   "wb.settings.timezone.restartFailed": "Some services could not restart: {services}. You can retry.",
-  "wb.settings.timezone.duplicate": "This restart request was already received. Wait a moment, then retry the failed services.",
   "wb.settings.timezone.confirmationRequired": "The restart confirmation is incomplete. Reload the service list and confirm again.",
   "wb.settings.timezone.restartError": "Could not restart the services. The saved time zone is kept; retry after checking the service list.",
   "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied."

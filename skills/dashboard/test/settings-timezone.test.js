@@ -23,6 +23,19 @@ test('time zone validation rejects unknown or empty values and permits valid IAN
   for (const value of ['', null, 'Not/AZone', 4]) assert.equal(validTimezone(value), false);
   for (const value of ['UTC', ' Asia/Singapore ', 'America/New_York']) assert.equal(validTimezone(value), true);
 });
+test('time zone card uses the shared decorative clock icon', async () => {
+  const f = fixture(); await f.view.refresh();
+  const heading = f.root.querySelector('h4');
+  assert.equal(heading.children[0].classList.contains('wb-ico-clock'), true);
+  assert.equal(heading.children[0].getAttribute('aria-hidden'), 'true');
+  assert.equal(heading.children[1].textContent, 'wb.settings.timezone.title');
+});
+test('host timezone rejection displays its specific reason and keeps the saved value untouched', async () => {
+  const f = fixture({ write: async () => { const error = new Error('timezone_unavailable_on_host'); error.code = error.message; throw error; } });
+  await f.view.refresh(); await save(f, 'Asia/Calcutta');
+  assert.equal(f.notice.textContent, 'wb.settings.timezone.hostUnsupported');
+  assert.equal(f.pending.hidden, true); assert.equal(f.restarts.length, 0);
+});
 test('saving writes the zone and requires a separate confirmation to restart', async () => {
   const f = fixture(); await f.view.refresh(); await save(f);
   assert.deepEqual(f.writes, [{ tz: 'Asia/Singapore' }]); assert.equal(f.restarts.length, 0);
@@ -118,7 +131,7 @@ test('a partial restart retries only failed services from its new confirmation l
   assert.equal(f.pending.hidden, true);
 });
 test('a rejected restart explains its cause instead of naming an empty failed-service list', async () => {
-  for (const [error, key] of [['duplicate_request', 'duplicate'], ['confirmation_required', 'confirmationRequired'], ['service_discovery_unavailable', 'discoveryUnknown']]) {
+  for (const [error, key] of [['confirmation_required', 'confirmationRequired'], ['service_discovery_unavailable', 'discoveryUnknown']]) {
     const f = fixture({ restart: async () => ({ ok: false, error, failed: [], restart_services: [{ name: 'scheduler' }] }) });
     await f.view.refresh(); await save(f); await f.restart.dispatch('click');
     assert.equal(f.notice.textContent, 'wb.settings.timezone.' + key); assert.equal(f.pending.hidden, false);

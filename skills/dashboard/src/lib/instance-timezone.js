@@ -30,11 +30,35 @@ function readableTimezone(tz) {
   try { new Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; } catch { return false; }
 }
 
-// Only writes require canonical IANA spelling. Existing read semantics, including
-// the scheduler's validation and fallback, remain owned by the shared reader.
+// ICU may return an older IANA name (for example Calcutta for Kolkata).
+// Check recognition and spelling separately from the host's installed tzdata.
 function writableTimezone(tz) {
-  if (!readableTimezone(tz) || tz !== 'UTC' && !tz.includes('/')) return false;
-  return new Intl.DateTimeFormat(undefined, { timeZone: tz }).resolvedOptions().timeZone === tz;
+  return readableTimezone(tz) && (tz === 'UTC' || /^(?:[A-Z][A-Za-z0-9_+.-]*\/)+[A-Z][A-Za-z0-9_+.-]*$/.test(tz));
+}
+
+function systemZoneinfoDirectory() {
+  for (const directory of ['/usr/share/zoneinfo', '/usr/lib/zoneinfo', '/usr/share/lib/zoneinfo', '/etc/zoneinfo']) {
+    try { if (fs.statSync(directory).isDirectory()) return directory; }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') return directory; }
+  }
+  return null;
+}
+
+function requireHostTimezone(tz, zoneinfoDir) {
+  if (!zoneinfoDir) return;
+  let file = zoneinfoDir, handle;
+  try {
+    // readdir also enforces exact spelling on case-insensitive filesystems.
+    for (const part of tz.split('/')) {
+      if (!fs.readdirSync(file).includes(part)) fail('timezone_unavailable_on_host', 400);
+      file = path.join(file, part);
+    }
+    handle = fs.openSync(file, 'r');
+    if (!fs.fstatSync(handle).isFile()) fail('timezone_unavailable_on_host', 400);
+    const header = Buffer.alloc(4);
+    if (fs.readSync(handle, header, 0, 4, 0) !== 4 || header.toString() !== 'TZif') fail('timezone_unavailable_on_host', 400);
+  } catch { fail('timezone_unavailable_on_host', 400); }
+  finally { if (handle !== undefined) fs.closeSync(handle); }
 }
 
 function samePath(left, right) {
@@ -43,8 +67,9 @@ function samePath(left, right) {
 }
 
 /** Keep every byte outside the effective (last) TZ value, including quotes and comments. */
-export function replaceTimezoneValue(text, tz) {
+export function replaceTimezoneValue(text, tz, zoneinfoDir = systemZoneinfoDirectory()) {
   if (!writableTimezone(tz)) fail('invalid_timezone', 400);
+  requireHostTimezone(tz, zoneinfoDir);
   // Follow dotenv's assignment grammar, retaining original offsets rather than
   // normalizing newlines. A quoted value can span lines and contain TZ text.
   const assignment = /^(\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?))(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?$/dmg;
@@ -93,7 +118,7 @@ async function writeEnvironment(file, text) {
 
 /** Service candidates are advisory; no applied-version ledger or restart on save. */
 export function createInstanceTimezone({ zylosDir, readTimezone,
-  readPm2 = () => null, restartService, execute = execAsync,
+  readPm2 = () => null, restartService, execute = execAsync, zoneinfoDir = systemZoneinfoDirectory(),
   log = message => process.stderr.write(`[timezone] ${message}\n`) } = {}) {
   const envFile = path.join(zylosDir, '.env');
   const configFile = path.join(zylosDir, '.zylos/config.json');
@@ -145,6 +170,7 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
   }
   async function save(body) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'tz') || !writableTimezone(body.tz)) fail('invalid_timezone', 400);
+    requireHostTimezone(body.tz, zoneinfoDir);
     let previous = null, changed = false;
     try {
       requireWritable();
@@ -153,7 +179,7 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
         const current = parse(text).TZ;
         previous = readableTimezone(current) ? current : null;
         changed = current !== body.tz;
-        if (changed) await writeEnvironment(envFile, replaceTimezoneValue(text, body.tz));
+        if (changed) await writeEnvironment(envFile, replaceTimezoneValue(text, body.tz, zoneinfoDir));
         else await fs.promises.chmod(envFile, 0o600);
       });
     } catch (error) {
@@ -185,6 +211,7 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
           !Array.isArray(body.services) || body.services.length === 0 || body.services.length > SERVICES.length ||
           body.services.some(name => !SERVICES.some(([allowed]) => name === allowed)) ||
           new Set(body.services).size !== body.services.length) fail('confirmation_required', 400);
+      requireHostTimezone(body.tz, zoneinfoDir);
       // Until discovery succeeds, every confirmed service is still unattempted.
       remaining = body.services.map(name => ({ name, status: 'online' }));
       const current = parse(requireWritable()).TZ;

@@ -55,6 +55,46 @@ test('invalid timezone and unknown fields cannot change the environment', async 
   assert.equal(fs.readFileSync(f.envFile, 'utf8'), original); assert.equal(f.restarted.length, 0);
 });
 
+test('current IANA names save even when ICU resolves them to older names', async t => {
+  const f = fixture(t);
+  for (const tz of ['Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh']) {
+    assert.equal((await f.timezone.save({ tz })).tz, tz);
+    assert.equal(parse(fs.readFileSync(f.envFile)).TZ, tz);
+  }
+});
+
+test('installed host data controls supported names and exact spelling', async t => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'timezone-data-'));
+  t.after(() => fs.rmSync(data, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(data, 'Asia'));
+  // Use a real installed TZif, with a deliberately limited host name set.
+  const installed = ['/usr/share/zoneinfo', '/usr/lib/zoneinfo', '/usr/share/lib/zoneinfo', '/etc/zoneinfo']
+    .map(directory => path.join(directory, 'Asia/Kolkata')).find(file => fs.existsSync(file));
+  if (!installed) { t.skip('No installed TZif fixture on this platform'); return; }
+  fs.copyFileSync(installed, path.join(data, 'Asia/Kolkata'));
+  fs.writeFileSync(path.join(data, 'Asia/Calcutta'), 'not a timezone file');
+  const f = fixture(t, { dependencies: { zoneinfoDir: data } });
+  await f.timezone.save({ tz: 'Asia/Kolkata' });
+  const before = fs.readFileSync(f.envFile);
+  for (const tz of ['Asia/Calcutta', 'Europe/Kyiv', 'Asia/KoLkata', 'ASIA/Kolkata']) {
+    await assert.rejects(f.timezone.save({ tz }), { code: 'timezone_unavailable_on_host', status: 400 });
+    assert.equal(fs.readFileSync(f.envFile).equals(before), true);
+  }
+  fs.unlinkSync(path.join(data, 'Asia/Calcutta'));
+  await assert.rejects(f.timezone.save({ tz: 'Asia/Calcutta' }), { code: 'timezone_unavailable_on_host', status: 400 });
+  assert.equal(f.restarted.length, 0);
+});
+
+test('platforms without system zoneinfo retain recognized IANA names without ICU canonical equality', async t => {
+  const f = fixture(t, { dependencies: { zoneinfoDir: null } });
+  for (const tz of ['Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh', 'Asia/Calcutta']) {
+    assert.equal((await f.timezone.save({ tz })).tz, tz);
+  }
+  for (const tz of ['asia/kolkata', 'Asia/kolkata', '+08:00', '-05:30']) {
+    await assert.rejects(f.timezone.save({ tz }), { code: 'invalid_timezone', status: 400 });
+  }
+});
+
 test('saving preserves unrelated bytes and private permissions without restarting', async t => {
   const f = fixture(t, { text: '# keep\r\nTZ="UTC" # local\r\nSECRET=do-not-log\r\n' });
   const result = await f.timezone.save({ tz: 'Europe/London' });

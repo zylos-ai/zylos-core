@@ -10,7 +10,7 @@ const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.met
 const serviceList = [{ name: 'scheduler', status: 'online' }, { name: 'web-console', status: 'online' }];
 async function startPage(sandbox) {
   const writes = [], restarts = [], reads = [], zones = new Map(), now = Date.now();
-  const state = { partialRestart: false, unavailableAfterProgress: false };
+  const state = { partialRestart: false, unavailableAfterProgress: false, rejectTimezone: false };
   const server = http.createServer(async (req, res) => {
     try {
       const original = new URL(req.url, 'http://127.0.0.1');
@@ -22,7 +22,9 @@ async function startPage(sandbox) {
       if (route === '/api/settings/timezone') {
         if (req.method === 'GET') { reads.push(original.pathname); sendJson(res, 200, settings()); return; }
         if (req.method === 'PUT') {
-          const body = await readJsonBody(req, 4096); writes.push({ path: original.pathname, body }); zones.set(prefix, body.tz);
+          const body = await readJsonBody(req, 4096);
+          if (state.rejectTimezone) { state.rejectTimezone = false; sendJson(res, 400, { error: 'timezone_unavailable_on_host' }); return; }
+          writes.push({ path: original.pathname, body }); zones.set(prefix, body.tz);
           sendJson(res, 200, { ok: true, changed: true, previous: 'UTC', ...settings() }); return;
         }
       }
@@ -100,6 +102,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     await page.locator('#settings-timezone-value').waitFor({ state: 'visible' });
     await page.waitForFunction(() => document.querySelector('#settings-timezone-value').value !== '');
     await page.locator('#settings-timezone').scrollIntoViewIfNeeded();
+    assert.equal(await page.locator('#settings-timezone h4 .wb-ico-clock[aria-hidden="true"]').count(), 1);
     const layout = await page.evaluate(measure);
     assert.equal(layout.width, width, 'No horizontal overflow');
     assert.equal(layout.aligned, true, 'Input and save share a row and height');
@@ -119,6 +122,15 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     try {
       assert.equal(await page.locator('#settings-timezone-value').isDisabled(), false);
       await shot('editable');
+      api.state.rejectTimezone = true;
+      const savedBeforeRejection = api.writes.length;
+      await page.locator('#settings-timezone-value').fill('Asia/Calcutta');
+      await page.locator('#settings-timezone-save').click(); await answer(page, true);
+      const reason = locale === 'zh' ? '主机系统的时区数据不支持此名称' : 'unavailable in the host system';
+      await page.waitForFunction(reason => document.querySelector('#settings-timezone-result').textContent.includes(reason), reason);
+      assert.equal(api.writes.length, savedBeforeRejection);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+      await shot('host-unsupported');
       const before = api.writes.length, restarts = api.restarts.length;
       await page.locator('#settings-timezone-value').fill('Asia/Singapore');
       await page.locator('#settings-timezone-save').click(); await answer(page, false);
@@ -203,5 +215,5 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.deepEqual(stale.errors, []);
   } finally { await stale.context.close(); }
   if (evidence) fs.writeFileSync(path.join(evidence, 'metrics.json'), JSON.stringify({ metrics, writes: api.writes, restarts: api.restarts, reads: api.reads }, null, 2));
-  console.log('Timezone browser verified:', JSON.stringify({ screenshots: evidence ? 12 : 0, viewportLocalePairs: 4, writes: api.writes.length, confirmedRestarts: api.restarts.length }));
+  console.log('Timezone browser verified:', JSON.stringify({ screenshots: evidence ? 16 : 0, viewportLocalePairs: 4, writes: api.writes.length, confirmedRestarts: api.restarts.length }));
 }
