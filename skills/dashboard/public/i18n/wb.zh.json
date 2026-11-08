@@ -669,6 +669,8 @@
   "chat.page.singlePlaceholder": "single 模式下不能发送",
   "chat.page.viewConversation": "查看对话",
   "chat.page.running": "会话运行中",
+  "chat.page.rateLimited": "服务受限，恢复后自动投递",
+  "chat.page.delivery.rateLimited": "已入库 · 服务受限，恢复后自动投递",
   "chat.page.delivery.pending": "已入库 · 待投递",
   "chat.page.delivery.running": "已入库 · 投递中",
   "chat.page.delivery.delivered": "已投递到运行会话",

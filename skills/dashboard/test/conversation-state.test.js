@@ -1171,6 +1171,21 @@ const groupSnapshot = (presence, extra = {}) => ({
   },
   ...extra
 });
+test('conversation health follows its target runtime and clears when its source becomes unreadable', async t => {
+  let readable = true;
+  const f = groupFixture(() => groupSnapshot('running', {
+    rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' } }],
+    instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'ok' } } },
+    sources: { status: { ok: readable, readAt: 1000 } }
+  }));
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  await f.state.select('g:A');
+  assert.equal(f.state.snapshot().groupHealth, 'rate_limited');
+  readable = false;
+  await f.timer.advance(30000);
+  assert.equal(f.state.snapshot().groupHealth, null);
+});
 test('running marker uses the exact group and clears after an unreadable workbench response', async () => {
   let fail = false;
   const f = groupFixture(() => {

@@ -47,6 +47,7 @@ export function createConversationState({
   const cell = () => cells.get(key(selectedId));
   const blank = () => ({
     groupPresence: null,
+    groupHealth: null,
     groupPresenceReadAt: null,
     groupPresenceVersion: 0,
     conversation: null,
@@ -264,6 +265,7 @@ export function createConversationState({
         id, session_group: fallbackMetadata.session_group, channel: fallbackMetadata.channel,
       } : null);
     current.groupPresence = null;
+    current.groupHealth = null;
     current.groupPresenceReadAt = null;
     emit();
     if (currentTab === 'mine') {
@@ -591,6 +593,7 @@ export function createConversationState({
     const sessionGroup = current.conversation?.sessionGroup ?? current.conversation?.session_group;
     if (currentTab !== 'mine' || typeof sessionGroup !== 'string' || !sessionGroup) {
       current.groupPresence = null;
+      current.groupHealth = null;
       current.groupPresenceReadAt = null;
       return;
     }
@@ -610,11 +613,13 @@ export function createConversationState({
         const group = Array.isArray(data?.rows) ? data.rows.find(row => row.sessionGroup === sessionGroup) : null;
         const trusted = data?.listKnown === true && data?.sources?.status?.ok === true;
         current.groupPresence = trusted && group?.presence === 'running' ? true : trusted && group?.presence === 'not_running' ? false : null;
+        current.groupHealth = trusted ? data.instance?.runtimeHealth?.[group?.target?.runtime]?.health ?? null : null;
         current.groupPresenceReadAt = trusted && Number.isFinite(data.sources.status.readAt) ? data.sources.status.readAt : null;
       } catch {
         if (!stillCurrent()) return;
         // An unreadable optional source must not leave a stale running marker.
         current.groupPresence = null;
+        current.groupHealth = null;
         current.groupPresenceReadAt = null;
       } finally {
         if (groupPresenceRead === record) groupPresenceRead = null;

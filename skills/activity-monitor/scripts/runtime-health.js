@@ -10,7 +10,7 @@ export const recoveryBackoff = n => n <= 0 ? 0 : Math.min(3600, 60 * 5 ** (n - 1
 export const normalizeHealth = health => ['ok', 'rate_limited', 'auth_failed'].includes(health) ? health : 'unavailable';
 
 /** One recovery gate for registration, background demand and inbound routing. */
-export function recoveryEligibility(state, { runtime, cache = null, nowMs = Date.now() } = {}) {
+export function recoveryEligibility(state, { runtime, cache = null, nowMs = Date.now(), continuingAttempt = false } = {}) {
   if (state.health === 'ok') return { eligible: false, code: 'not_restricted' };
   if (state.health === 'auth_failed') return { eligible: false, code: 'auth_blocked' };
   if (!RESTRICTED.has(state.health)) return { eligible: false, code: 'invalid_request' };
@@ -27,7 +27,7 @@ export function recoveryEligibility(state, { runtime, cache = null, nowMs = Date
   const last = (down ? budget.lastDownCheckAt : budget.lastRecoveryAt) || 0;
   const accelerated = (budget.lastUserMessageRecoveryAt || 0) > last;
   const due = last + (down ? 3600 : recoveryBackoff(budget.restartFailureCount || 0));
-  if (!accelerated && now < due) {
+  if (!continuingAttempt && !accelerated && now < due) {
     return { eligible: false, code: down ? 'down_retry_interval' : 'attempt_backoff', notBefore: due * 1000 };
   }
   return { eligible: true, accelerated };

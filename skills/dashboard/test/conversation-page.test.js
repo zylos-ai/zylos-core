@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick } from './fixtures/workbench-dom.js';
 import { createDocument as conversationDocument } from './helpers/conversation-dom.js';
@@ -13,6 +14,36 @@ registerHooks({
   }
 });
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
+
+for (const locale of ['en', 'zh']) {
+  for (const health of ['rate_limited', 'ok']) {
+    test(`conversation page renders ${health} pending delivery in ${locale}`, async t => {
+      const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+      const document = conversationDocument(), root = document.createElement('div');
+      const sessionGroup = 'dashboard:limited', id = 'g:AA';
+      const page = mountConversationPage({ root, document, t: key => translations[key] ?? key, fetch: async path => {
+        const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+          : path === '/api/workbench/groups' ? { listKnown: true, rows: [{ sessionGroup, presence: 'running', target: { runtime: 'claude' } }],
+            instance: { runtimeHealth: { claude: { health } } }, sources: { status: { ok: true, readAt: 1000 } } }
+          : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
+          : path.includes('/messages?') ? { items: [{ id: 1, direction: 'in', status: 'pending', content: 'hello' },
+            { id: 2, direction: 'in', status: 'delivered', content: 'already delivered' }], afterCursor: 'after', nextCursor: null }
+          : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id, sessionGroup, state: 'active' } }
+          : { items: [], nextCursor: null };
+        return { ok: true, status: 200, json: async () => body };
+      } });
+      t.after(() => page.destroy());
+      await page.openGroup(sessionGroup); await tick();
+      const header = root.querySelector('.conversation-running');
+      assert.equal(header.hidden, false);
+      assert.equal(header.classList.contains('conversation-restricted'), health === 'rate_limited');
+      assert.equal(header.textContent, translations[health === 'rate_limited' ? 'chat.page.rateLimited' : 'chat.page.running']);
+      const pending = root.querySelector('[data-message-id="1"] .conversation-message-status');
+      assert.ok(pending.textContent.includes(translations[health === 'rate_limited' ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.pending']));
+      assert.ok(root.querySelector('[data-message-id="2"] .conversation-message-status').textContent.includes(translations['chat.page.delivery.delivered']));
+    });
+  }
+}
 
 // Only DOM ownership is needed here; layout remains covered by the browser case.
 // No sockets, databases, storage, subprocesses or real network requests are used.

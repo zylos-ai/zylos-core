@@ -3,7 +3,7 @@ import { createChatAttachment } from './chat-attachments.js?v=3';
 import { element, icon } from './plain-text.js?v=103';
 import { asDate } from './conversation-time.js?v=99';
 import { channelIcon } from './board.js?v=103';
-import { createConversationState } from './conversation-state.js?v=104';
+import { createConversationState } from './conversation-state.js?v=105';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=103';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=107';
@@ -635,7 +635,8 @@ export function mountConversationPage({
   }
   function patchMessage(record, row, s) {
     const delivery = s.tab === 'mine' && row.direction === 'in' ? messageState(row) : null;
-    const status = delivery ? t('chat.page.delivery.' + delivery) : '';
+    const status = delivery ? t(delivery === 'pending' && s.groupHealth === 'rate_limited'
+      ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.' + delivery) : '';
     text(record.author, t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai'));
     text(record.statusText, status);
     record.status.hidden = !delivery;
@@ -1030,8 +1031,10 @@ export function mountConversationPage({
     updateNotice.hidden = !s.updateError;
     const current = s.conversation ?? s.items.find(item => item.id === s.selectedId);
     text(title, nameOf(current, s.tab === 'external'));
-    running.hidden = s.groupPresence !== true;
-    text(running.lastElementChild, t('chat.page.running'));
+    const rateLimited = s.groupHealth === 'rate_limited';
+    running.hidden = !rateLimited && s.groupPresence !== true;
+    running.classList.toggle('conversation-restricted', rateLimited);
+    text(running.lastElementChild, t(rateLimited ? 'chat.page.rateLimited' : 'chat.page.running'));
     const channel = channelOf(current);
     const symbol = s.tab === 'mine' ? 'monitor' : channelIcon({
       sessionGroup: current?.sessionGroup ?? current?.session_group,

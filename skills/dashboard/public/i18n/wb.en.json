@@ -669,6 +669,8 @@
   "chat.page.singlePlaceholder": "Sending is unavailable in single mode",
   "chat.page.viewConversation": "View conversation",
   "chat.page.running": "Conversation running",
+  "chat.page.rateLimited": "Service limited · delivery resumes after recovery",
+  "chat.page.delivery.rateLimited": "Stored · service limited; delivery resumes after recovery",
   "chat.page.delivery.pending": "Stored · awaiting delivery",
   "chat.page.delivery.running": "Stored · delivering",
   "chat.page.delivery.delivered": "Delivered to the running session",

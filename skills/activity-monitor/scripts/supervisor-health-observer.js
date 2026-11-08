@@ -54,11 +54,17 @@ export class SupervisorHealthObserver {
     await this.diagnostic({event, sessionGroup:scene.sessionGroup, runId:scene.runId, runtime:scene.runtime});
     return true;
   }
-  async due(runtime) {
+  async due(runtime, target = null) {
     const state = await this.coordinator.restore(runtime);
     if (state.health === 'ok' || state.health === 'auth_failed') this.recoveryWaits.delete(runtime);
     const cache = await this.coordinator.readNegativeCache(runtime, state);
-    return recoveryEligibility(state, { runtime, cache, nowMs: this.now() }).eligible;
+    const attempt = this.coordinator.associations.get(runtime);
+    // Registration already charged this run's attempt. Its confirming probe
+    // completes that attempt; only a later attempt waits for the next backoff.
+    const continuingAttempt = attempt && (target ? [target] : await this.listScenes()).some(scene =>
+      scene.sessionGroup === attempt.sessionGroup && scene.runId === attempt.runId && scene.runtime === runtime &&
+      scene.ready === true && scene.present !== false && scene.processRunning !== false);
+    return recoveryEligibility(state, { runtime, cache, nowMs: this.now(), continuingAttempt }).eligible;
   }
   requestProbe(runtime, {force=false,phase='recovery'} = {}) {
     if(this.stopped)return Promise.resolve({recovered:false,stopped:true});
@@ -125,6 +131,7 @@ export class SupervisorHealthObserver {
       const binding = await this.buildTargetBinding(scene);
       // Binding construction may perform I/O; repeat identity and gates immediately before insertion.
       if (!await this.canAct(scene,{requireReady:true,requireOpen:true}) || this.stopped) continue;
+      if (!probe.force && !await this.due(probe.runtime, scene)) continue;
       if (idleOnly && !forcedBusy && (await this.readState(scene))?.state !== 'idle') {busy = true;continue;}
       const sentAt = this.now();
       const deadline = sentAt + (probe.phase === 'recovery' ? this.recoveryDeadlineMs : 300000);

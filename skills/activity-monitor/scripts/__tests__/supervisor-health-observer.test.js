@@ -33,6 +33,92 @@ test('runtime coalescing prefers Origin and binds finite priority-zero recovery'
   assert.equal(f.controls.length,1);assert.equal(f.controls[0].sessionGroup,'origin');assert.equal(f.controls[0].priority,0);assert.equal(f.controls[0].bypassState,true);assert.equal(f.controls[0].ackDeadlineAt,f.now()/1000+120);
   f.controls[0].status='done';await f.observer.tick();assert.equal((await a).recovered,true);assert.equal(f.health().health,'ok');
 });
+
+test('a newly registered rate-limit recovery probes its ready run without a second backoff', async t => {
+  const f = fixture(t), scene = f.scene(), sentAt = f.now();
+  t.after(() => f.observer.shutdown());
+  f.setHealth('rate_limited');
+  const state = f.health();
+  Object.assign(state.scheduling, { restartFailureCount: 1, lastRecoveryAt: f.now() / 1000 - 100 });
+  f.coordinator.store('claude').write(state);
+  await f.coordinator.notifyUserMessage('claude');
+  f.setScenes([]);
+  const reply = await f.coordinator.registerStartAttempt({ version: 1, type: 'start_attempt',
+    requestId: `sa-${f.now()}-123456789abc`, runtime: 'claude', sessionGroup: scene.sessionGroup, runId: scene.runId });
+  assert.equal(reply.result, 'registered');
+  assert.equal(f.health().scheduling.restartFailureCount, 2);
+  f.advance(3000);
+  f.setScenes([scene]);
+  const probe = f.observer.requestProbe('claude');
+  await f.prepared();
+  assert.equal(f.controls.length, 1, 'the registered attempt must not wait another five minutes');
+  assert.equal(f.health().health, 'rate_limited', 'READY alone cannot clear a restriction');
+  f.controls[0].status = 'done';
+  await f.observer.tick();
+  assert.equal((await probe).recovered, true);
+  assert.equal(f.health().health, 'ok');
+  assert.equal(f.now() - sentAt, 3000);
+});
+
+for (const restriction of ['cooldown', 'cache', 'replacement', 'fence', 'busy', 'auth', 'transition', 'not_ready', 'process_gone']) {
+  test(`registered recovery still respects ${restriction}`, async t => {
+    const f = fixture(t), scene = f.scene();
+    t.after(() => f.observer.shutdown());
+    f.setHealth('rate_limited');
+    f.setScenes([]);
+    const result = await f.coordinator.registerStartAttempt({ version: 1, type: 'start_attempt',
+      requestId: `sa-${f.now()}-123456789abc`, runtime: 'claude', sessionGroup: scene.sessionGroup, runId: scene.runId });
+    assert.equal(result.result, 'registered');
+    f.setScenes([scene]);
+    const state = f.health();
+    if (restriction === 'cooldown') { state.scheduling.cooldownUntil = f.now() / 1000 + 60; f.coordinator.store('claude').write(state); }
+    if (restriction === 'cache') f.coordinator.readNegativeCache = () => ({ version: 2, runtime: 'claude',
+      recovered: false, health: 'rate_limited', reason: state.reason || 'rate_limited', expiresAt: f.now() + 30000 });
+    if (restriction === 'replacement') f.setScenes([{ ...scene, runId: randomUUID() }]);
+    if (restriction === 'fence') f.fences.set(scene.sessionGroup, {});
+    if (restriction === 'busy') f.setState({ state: 'busy' });
+    if (restriction === 'auth') f.setHealth('auth_failed');
+    if (restriction === 'transition') f.setTransition({ phase: 'gating' });
+    if (restriction === 'not_ready') f.setScenes([{ ...scene, ready: false }]);
+    if (restriction === 'process_gone') f.setScenes([{ ...scene, processRunning: false }]);
+    await f.observer.requestProbe('claude');
+    assert.equal(f.controls.length, 0);
+    assert.notEqual(f.health().health, 'ok');
+  });
+}
+
+test('an unrelated preferred scene cannot borrow a registered run confirmation', async t => {
+  const f = fixture(t), scene = f.scene();
+  t.after(() => f.observer.shutdown());
+  f.setHealth('rate_limited'); f.setScenes([]);
+  await f.coordinator.registerStartAttempt({ version: 1, type: 'start_attempt',
+    requestId: `sa-${f.now()}-123456789abc`, runtime: 'claude', sessionGroup: scene.sessionGroup, runId: scene.runId });
+  f.setScenes([{ ...scene, sessionGroup: 'origin', runId: randomUUID() }, scene]);
+  const probe = f.observer.requestProbe('claude'); await f.prepared();
+  assert.equal(f.controls.length, 1);
+  assert.equal(f.controls[0].sessionGroup, scene.sessionGroup);
+  f.controls[0].status = 'done'; await f.observer.tick();
+  assert.equal((await probe).recovered, true);
+});
+
+test('a failed registered confirmation keeps rate limiting and consumes its single attempt', async t => {
+  const f = fixture(t), scene = f.scene();
+  t.after(() => f.observer.shutdown());
+  f.setHealth('rate_limited'); f.setScenes([]);
+  await f.coordinator.registerStartAttempt({ version: 1, type: 'start_attempt',
+    requestId: `sa-${f.now()}-123456789abc`, runtime: 'claude', sessionGroup: scene.sessionGroup, runId: scene.runId });
+  f.setScenes([scene]);
+  const probe = f.observer.requestProbe('claude'); await f.prepared();
+  assert.equal(f.controls.length, 1);
+  f.setMatches({ rateLimit: { detected: true } });
+  f.controls[0].status = 'failed'; await f.observer.tick();
+  assert.equal((await probe).classification, 'rate_limited');
+  assert.equal(f.health().health, 'rate_limited');
+  assert.equal(f.health().scheduling.restartFailureCount, 1);
+  assert.equal(f.coordinator.associations.has('claude'), false);
+  await f.observer.requestProbe('claude');
+  assert.equal(f.controls.length, 1, 'a failed confirmation cannot reuse the old registration');
+});
 test('fenced scene sends nothing and replacement invalidates old successful control',async t=>{
   const f=fixture(t);f.setHealth('unavailable');f.fences.set('*',{});assert.equal((await f.observer.requestProbe('claude')).recovered,false);assert.equal(f.controls.length,0);
   f.fences.clear();const p=f.observer.requestProbe('claude');await f.prepared();f.setScenes([{...f.scene(),runId:randomUUID()}]);f.controls[0].status='done';await f.observer.tick();assert.equal((await p).stale,true);assert.equal(f.health().health,'unavailable');assert.equal(f.stops.length,0);

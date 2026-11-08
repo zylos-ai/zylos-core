@@ -827,6 +827,9 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   color:var(--wb-work);
   font-size:11px
 }
+.conversation-running.conversation-restricted {
+  color:var(--wb-wait)
+}
 .conversation-page .conversation-message-status {
   display:flex;
   align-items:center;
