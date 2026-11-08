@@ -222,9 +222,9 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
     model.value = options.custom ? '__custom__' : meta.current_model ?? ''; custom.value = options.customValue; custom.hidden = !options.custom;
     const modelValue = () => model.value === '__custom__' ? custom.value.trim() : model.value;
     const renderEffort = () => {
-      const state = effortOptionState(meta, modelValue(), drafts[runtime].effort || meta.current_effort);
+      const state = effortOptionState(meta, modelValue(), drafts[runtime].effort || meta.current_effort, value => effortText(value, t));
       effort.replaceChildren();
-      for (const item of state.options) { const option = element(document, 'option', item.labelKey ? t(item.labelKey, item.labelParams) : item.value); option.value = item.value; option.disabled = item.disabled; option.selected = item.selected; effort.append(option); }
+      for (const item of state.options) { const option = element(document, 'option', item.labelKey ? t(item.labelKey, item.labelParams) : effortText(item.value, t)); option.value = item.value; option.disabled = item.disabled; option.selected = item.selected; effort.append(option); }
       effort.hidden = state.hidden;
       const selected = state.options.find(item => item.selected);
       effort.value = selected?.value ?? '';

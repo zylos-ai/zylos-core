@@ -139,6 +139,19 @@ test('a defaults card wired without a confirmation runs no change', async () => 
   panel.destroy();
 });
 
+test('the effort dropdown names each level the way the confirmation does', () => {
+  const document = documentFixture(), root = document.createElement('div');
+  const names = { 'effort.high': '高', 'effort.low': '低', 'effort.minimal': '极低' };
+  const tr = (key, params) => names[key] ?? t(key, params);
+  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t: tr, read: async () => ({}) });
+  const codex = root.querySelector('#settings-effort-codex');
+  assert.deepEqual(codex.children.map(option => [option.value, option.textContent]), [['high', '高']]);
+  const model = root.querySelector('#settings-model-codex'); model.value = 'two'; model.dispatch('change');
+  assert.deepEqual(root.querySelector('#settings-effort-codex').children.map(option => option.textContent), ['actions.effort_unavailable:{"value":"高"}', '低', '极低'], 'even the unavailable current level is named');
+  assert.match(modelSaveConfirmation([{ runtime: 'codex', key: 'effort', value: 'minimal' }], tr), /极低/);
+  panel.destroy();
+});
+
 test('cancelling the model confirmation sends nothing and shows no result', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t, read: async () => ({}),
