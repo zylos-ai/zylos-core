@@ -197,3 +197,25 @@ test('a Chart.js instance with no canvas context leaves the complete static char
   assert.equal(disposed, 1); assert.equal(content.querySelector('.conversation-chart-plot').hidden, true);
   assert.equal(content.querySelectorAll('table').length, 2); assert.equal(content.querySelector('details'), null);
 });
+
+test('percentage lines retain the full comparison range and quarter-grid ticks', () => {
+  const block = seriesBlock('number'); block.data.yUnit = '%';
+  block.data.series = [{ key: 'hit', label: 'Hit rate', points: [{ x: 0, y: 61 }, { x: 30, y: 90 }] }];
+  const units = conversationChartConfig(block);
+  assert.equal(units.options.scales.y.beginAtZero, true);
+  assert.equal(units.options.scales.y.suggestedMax, 100);
+  assert.equal(units.options.scales.y.ticks.stepSize, 25);
+  assert.equal(units.options.scales.y.ticks.callback(75), '75 %');
+  assert.equal(units.data.datasets[0].data[1].y, 90);
+  delete block.data.yUnit; block.data.format = { style: 'percent' };
+  block.data.series[0].points = [{ x: 0, y: 0.61 }, { x: 30, y: 0.9 }];
+  const ratios = conversationChartConfig(block);
+  assert.equal(ratios.options.scales.y.suggestedMax, 1);
+  assert.equal(ratios.options.scales.y.ticks.stepSize, 0.25);
+  assert.equal(ratios.options.scales.y.ticks.callback(0.75), '75%');
+  assert.equal(ratios.data.datasets[0].data[1].y, 0.9);
+  delete block.data.format;
+  const ordinary = conversationChartConfig(block);
+  assert.equal(ordinary.options.scales.y.suggestedMax, undefined);
+  assert.equal(ordinary.options.scales.y.ticks.stepSize, undefined);
+});
