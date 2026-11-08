@@ -3,6 +3,27 @@ import { element } from './plain-text.js?v=103';
 const colors = ['#4f8cf7', '#aa79e8', '#35a998', '#e1a33d', '#e06b83', '#73859f'];
 const halfDay = 12 * 60 * 60 * 1000;
 
+/**
+ * The calendar day a daily point names, as local midnight. An ISO string is read by its leading YYYY-MM-DD and
+ * epoch milliseconds by their UTC date, so a point written as 2026-11-02T00:00:00Z or as its epoch value stays on
+ * 2 November in every time zone instead of moving to the previous day west of UTC.
+ */
+export function chartDay(value) {
+  let parts;
+  if (typeof value === 'string') {
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+    if (match) parts = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+  } else if (typeof value === 'number' && Number.isFinite(value)) {
+    const utc = new Date(value);
+    parts = [utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate()];
+  }
+  if (!parts) return value;
+  const day = new Date(0);
+  day.setFullYear(...parts);
+  day.setHours(0, 0, 0, 0);
+  return day.getTime();
+}
+
 function formatted(value, unit, format, locale) {
   if (value === null) return '';
   let amount = value;
@@ -39,7 +60,11 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
       // Without a unit Chart.js picks one from the pixel width, so a week of days came out as hour ticks.
       // Days tick only on the dates present, labelled in the page language; half a day either side keeps
       // a single point inside the plot instead of a zero-width millisecond range.
-      const dayLabel = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' });
+      // Data spanning more than one calendar year names the year too, so the same day of different years
+      // never shows as the same label.
+      const stamps = data.series.flatMap(series => series.points.map(point => chartDay(point.x))).filter(Number.isFinite);
+      const years = new Set(stamps.map(stamp => new Date(stamp).getFullYear()));
+      const dayLabel = new Intl.DateTimeFormat(locale, { ...(years.size > 1 ? { year: 'numeric' } : {}), month: 'short', day: 'numeric' });
       scales.x.time = { unit: 'day' };
       scales.x.ticks = { color: text, source: 'data', callback: value => dayLabel.format(value) };
       scales.x.afterDataLimits = scale => { scale.min -= halfDay; scale.max += halfDay; };
@@ -64,7 +89,7 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
       }
       const values = new Map(points[index].map(point => [point.categoryKey, point.y]));
       datasets.push({ label: series.label, data: category ? categoryKeys.map(key => values.has(key) ? values.get(key) : null)
-        : series.points.map(point => ({ x: point.x, y: point.y })),
+        : series.points.map(point => ({ x: data.xType === 'date' ? chartDay(point.x) : point.x, y: point.y })),
         borderColor: colors[index], backgroundColor: colors[index], borderWidth: category ? 0 : 2,
         borderRadius: category ? 3 : 0, pointRadius: category ? 0 : 2, tension: 0.2, spanGaps: false,
         yAxisID, unit });

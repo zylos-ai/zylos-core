@@ -96,12 +96,12 @@ test('mixed units have separate scales and are never summed in a stack', () => {
   assert.equal(config.options.scales.y1.title.text, 'Requests · bytes');
 });
 
-for (const xType of ['number', 'date', 'datetime']) test(`${xType} time series keeps native x values and line null gaps`, () => {
+for (const xType of ['number', 'date', 'datetime']) test(`${xType} time series ${xType === 'date' ? 'reads x as its calendar day' : 'keeps native x values'} and line null gaps`, () => {
   const block = seriesBlock(xType);
   if (xType !== 'number') block.data.series[0].points = [{ x: xType === 'date' ? '2026-01-01' : '2026-01-01T00:00:00Z', y: null }];
   const config = conversationChartConfig(block);
   assert.equal(config.type, 'line'); assert.equal(config.options.scales.x.type, xType === 'number' ? 'linear' : 'time');
-  assert.equal(config.data.datasets[0].data[0].x, block.data.series[0].points[0].x);
+  assert.equal(config.data.datasets[0].data[0].x, xType === 'date' ? new Date(2026, 0, 1).getTime() : block.data.series[0].points[0].x);
   assert.equal(config.data.datasets[0].spanGaps, false);
 });
 
