@@ -25,28 +25,31 @@ verification or claim to establish the natural false-empty root cause.
 | --- | --- | --- |
 | `C4_BRACKETED_PASTE_ENABLED` | off | Only `1` enables bracketed paste |
 | `C4_PERIODIC_ENTER_ENABLED` | on | Unset or `1` enables; any other value disables |
-| `C4_PERIODIC_ENTER_INTERVAL_MS` | 60000 | Positive integer, minimum 1000; monotonic elapsed time |
+| `C4_PERIODIC_ENTER_INTERVAL_MS` | 5000 | Positive integer, minimum 1000; monotonic elapsed time |
 | `C4_PERIODIC_ENTER_MAX_ATTEMPTS` | 3 | Positive integer, capped at 10 |
 | `C4_ENTER_CAPTURE_ENABLED` | off | Only `1` enables sensitive local captures |
 
-A new actual paste clears the old budget. A successfully pasted conversation
-or ordinary non-slash text control arms a new budget. Slash controls and raw
-keystrokes clear it. Queue admission and heartbeat auto-ack behavior are
+A successfully pasted conversation or ordinary non-slash text control arms a
+new attempt budget. If a budget is already armed, the new one keeps the older
+recovery anchor (#795): the earlier paste may still be unsubmitted, so the new
+paste must not postpone its recovery. Slash controls and raw keystrokes clear
+the budget and the anchor. Queue admission and heartbeat auto-ack behavior are
 unchanged. No idle, health, input-content or Codex-specific condition gates a
 periodic attempt. An empty verdict or delivered status does not cancel it.
 
 Initial and retry Enter commands reset the elapsed-time anchor on successful
-command return, not on confirmed application submission. After at least 60
-seconds, the awaited dispatcher loop attempts another Enter against
-`TMUX_SESSION`, up to three cumulative attempts per eligible paste. With the
-normal 1-3 second polling interval and an otherwise free loop, the first attempt
-is about 60-63 seconds after the last normal Enter. Work already occupying the
+command return, not on confirmed application submission. After at least the
+interval (default 5 seconds) since the last normal Enter, or since the oldest
+unrecovered paste when later pastes arrived on top of it, the awaited dispatcher
+loop attempts another Enter against `TMUX_SESSION`, up to three cumulative
+attempts per eligible paste. With the normal 1-3 second polling interval and an
+otherwise free loop, the first attempt is about 5-8 seconds after the anchor. Work already occupying the
 loop may delay it further. The timer cannot interleave with normal delivery.
 
 Failed sends consume budget and reset the attempt anchor, preventing tight
 retries. Successful sends reset elapsed time without restoring attempts.
-Exhaustion stops until another eligible paste; frequent new messages can defer
-recovery indefinitely. A runtime/session restart does not cancel an existing
+Exhaustion stops until another eligible paste. Frequent new messages no longer
+defer recovery: while they keep arriving, attempts run about once per interval. A runtime/session restart does not cancel an existing
 budget: the next attempt targets the session then available. Restarting the
 dispatcher itself loses its in-memory budget. Dispatcher shutdown prevents sends.
 

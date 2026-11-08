@@ -10,27 +10,39 @@ export class PeriodicEnter {
     this.pending = null;
   }
 
+  // Arming on top of an existing budget (#795): the earlier paste may still be
+  // sitting unsubmitted in the input box, so the new paste must not push its
+  // recovery back. `since` keeps the oldest unrecovered paste time; the new item
+  // still gets a fresh attempt budget.
   arm(itemId, itemType) {
     if (!this.enabled) return this.reset('disabled');
-    this.pending = { itemId, itemType, attempts: 0, lastAt: this.now() };
-    this.emit('periodic_armed', { itemId, itemType });
+    const t = this.now();
+    const prev = this.pending;
+    const since = prev ? prev.since : t;
+    this.pending = { itemId, itemType, attempts: 0, lastAt: t, since, carried: Boolean(prev) };
+    this.emit('periodic_armed', { itemId, itemType, carried: Boolean(prev) });
   }
 
   entered() {
     if (this.pending) this.pending.lastAt = this.now();
   }
 
+  due(pending, t) {
+    if (t - pending.lastAt >= this.intervalMs) return true;
+    return pending.carried && t - pending.since >= this.intervalMs;
+  }
+
   async tick({ eligible, send }) {
     const pending = this.pending;
     if (!pending) return;
-    if (!eligible || pending.attempts >= this.maxAttempts || this.now() - pending.lastAt < this.intervalMs) return;
+    if (!eligible || pending.attempts >= this.maxAttempts || !this.due(pending, this.now())) return;
     pending.attempts++;
-    pending.lastAt = this.now();
+    pending.lastAt = pending.since = this.now();
     const metadata = { itemId: pending.itemId, itemType: pending.itemType, attempt: pending.attempts, maxAttempts: this.maxAttempts };
     this.emit('periodic_attempt', metadata);
     try {
       await send();
-      pending.lastAt = this.now();
+      pending.lastAt = pending.since = this.now();
       this.emit('periodic_sent', metadata);
     } catch {
       // Failed sends consume the bounded budget without leaking tmux stderr.

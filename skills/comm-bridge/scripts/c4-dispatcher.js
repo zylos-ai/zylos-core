@@ -490,14 +490,17 @@ async function sendToTmux(message, options = {}) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
-  periodicEnter.reset('normal_paste');
+  const periodicEligible = options.itemType === 'conversation' || options.periodicTextControl;
+  // Eligible pastes keep the existing budget so a stuck earlier paste is still
+  // recovered on time (#795); arm() below carries its anchor forward.
+  if (!periodicEligible) periodicEnter.reset('normal_paste');
   trace('paste_attempt', { itemId: options.itemId, itemType: options.itemType, bytes: Buffer.byteLength(sanitized, 'utf8'), delayMs });
 
   try {
     execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], { stdio: 'pipe', timeout: 5000 });
     execFileSync('tmux', ['paste-buffer', ...(BRACKETED_PASTE_ENABLED ? ['-p'] : []), '-b', bufferName, '-t', TMUX_SESSION], { stdio: 'pipe', timeout: 5000 });
     trace('paste_sent', { itemId: options.itemId, itemType: options.itemType });
-    if (options.itemType === 'conversation' || options.periodicTextControl) {
+    if (periodicEligible) {
       periodicEnter.arm(options.itemId, options.itemType);
     }
   } catch (err) {

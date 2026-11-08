@@ -96,3 +96,52 @@ test('temporary ineligibility preserves remaining attempt budget', async () => {
   assert.equal(f.count(), 3);
   assert.equal(f.timer.pending.itemId, 42);
 });
+
+// #795: a paste whose Enter did not submit stays in the input box; later pastes
+// (each followed by its own normal Enter) must not keep pushing recovery back.
+test('#795 a new paste does not postpone recovery of an earlier pending paste', async () => {
+  const f = fixture();
+  f.timer.intervalMs = 5000;
+  f.timer.arm(1, 'conversation');
+  f.timer.entered();
+  f.advance(3000);
+  f.timer.arm(2, 'conversation');
+  f.timer.entered();
+  f.advance(1999);
+  await f.tick();
+  assert.equal(f.count(), 0);
+  f.advance(1);
+  await f.tick();
+  assert.equal(f.count(), 1, 'recovery fires 5s after the first paste, not 5s after the second');
+  assert.equal(f.events.find(e => e.event === 'periodic_sent').itemId, 2);
+});
+
+test('#795 messages arriving faster than the interval still get bounded recovery', async () => {
+  const f = fixture();
+  f.timer.intervalMs = 5000;
+  // A new message every 3s for 30s, dispatcher loop ticking every 1s.
+  for (let second = 0; second < 30; second++) {
+    if (second % 3 === 0) { f.timer.arm(second, 'conversation'); f.timer.entered(); }
+    await f.tick();
+    f.advance(1000);
+  }
+  // Recovery fires at 5, 10, 15, 20, 25s: once per interval, never in a tight loop.
+  assert.equal(f.count(), 5);
+});
+
+test('#795 carried anchor is cleared by reset (slash control / keystroke)', async () => {
+  const f = fixture();
+  f.timer.intervalMs = 5000;
+  f.timer.arm(1, 'conversation');
+  f.advance(3000);
+  f.timer.reset('keystroke_control');
+  assert.equal(f.timer.pending, null);
+  f.timer.arm(2, 'conversation');
+  f.timer.entered();
+  f.advance(4999);
+  await f.tick();
+  assert.equal(f.count(), 0, 'fresh budget after reset is anchored on the new paste');
+  f.advance(1);
+  await f.tick();
+  assert.equal(f.count(), 1);
+});

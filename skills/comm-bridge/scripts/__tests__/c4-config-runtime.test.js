@@ -17,7 +17,7 @@ test('periodic defaults on; capture and bracketed paste default off with explici
     assert.equal(config.PERIODIC_ENTER_ENABLED, value === undefined || value === '1');
     assert.equal(config.ENTER_CAPTURE_ENABLED, value === '1');
     assert.equal(config.BRACKETED_PASTE_ENABLED, value === '1');
-    assert.equal(config.PERIODIC_ENTER_INTERVAL_MS, 60000);
+    assert.equal(config.PERIODIC_ENTER_INTERVAL_MS, 5000);
     assert.equal(config.PERIODIC_ENTER_MAX_ATTEMPTS, 3);
   }
 });

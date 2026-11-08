@@ -181,3 +181,19 @@ test('actual loop awaits complete delivery before periodic supplementation', asy
   assert.deepEqual(order, ['delivery-start', 'delivery-end', 'timer']);
   assert.ok(state.commands.some(command => command.args[0] === 'paste-buffer'));
 });
+
+test('#795 a later conversation paste keeps the earlier paste recovery anchor; slash controls still clear it', async () => {
+  const { state, context, timer, deliver } = harness();
+  // The input heuristic reports "empty" (the false verdict seen in #795), so
+  // every delivery looks submitted while the first paste may still be stuck.
+  assert.equal(await deliver({ itemId: 1 }), 'submitted');
+  state.time = 40000;
+  assert.equal(await deliver({ itemId: 2 }), 'submitted');
+  state.time = 60000;
+  await context.maybePeriodicEnter();
+  assert.equal(state.events.filter(event => event.event === 'periodic_sent').length, 1,
+    'recovery is due 60s after the first paste even though the second arrived at 40s');
+  assert.equal(timer.pending.itemId, 2);
+  assert.equal(await deliver({ itemId: 3, itemType: 'control', periodicTextControl: false }), 'submitted');
+  assert.equal(timer.pending, null);
+});

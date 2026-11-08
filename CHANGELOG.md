@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Interrupt notices are not pause orders**: the Claude system instructions now say that Claude Code's "STOP ... wait for the user" interrupt text only cancels that one call, must not be recorded in memory as a pause, and does not stop later messages or scheduled tasks. (#987)
+- **C4 periodic Enter is no longer postponed by new messages**: a conversation paste whose Enter did not submit is now recovered one interval after that paste, even while further messages keep arriving; before, every new paste restarted the timer, so a stuck paste waited until messages stopped. The default `C4_PERIODIC_ENTER_INTERVAL_MS` drops from 60000 to 5000. The false "input box empty" verdict that lets a paste get stuck is not fixed here. (#795)
 
 ## [0.9.5] - 2026-11-03
 
