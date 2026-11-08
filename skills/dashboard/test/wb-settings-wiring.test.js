@@ -136,6 +136,17 @@ test('revoking the key that is shown hides it; a refused request shows why and c
   assert.deepEqual(refused.shown.busy, [true, false]);
 });
 
+test('revoking a different key keeps the new key that is shown once', async () => {
+  const p = page(), sent = [];
+  const keyPage = keyRequests(sent, { created: { name: 'ci', plaintext_key: 'zdk_ci' } });
+  const root = node(p.document, 'div');
+  wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ci', scope: 'read', status: 'active' }, { name: 'ops', scope: 'admin', status: 'active' }]);
+  await root.querySelectorAll('.api-key-revoke')[1].dispatch('click');
+  assert.deepEqual(sent, [['DELETE', '/api/keys/ops']], 'the other key is revoked');
+  assert.deepEqual(keyPage.shown.created, [], 'the shown key is not hidden');
+  assert.deepEqual(keyPage.createdKey(), { name: 'ci', plaintext_key: 'zdk_ci' });
+});
+
 test('key requests: revoking keeps the key, deleting removes it for good, rotating shows the new key once', () => {
   assert.deepEqual(keyActionRequest('revoke', 'a b'), { method: 'DELETE', path: '/api/keys/a%20b',
     status: { running: 'fleet_manage.revoking_key', failed: 'fleet_manage.revoke_failed', done: 'fleet_manage.key_revoked_status' } });
