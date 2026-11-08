@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { collectStatus } from '../status-view.js';
-import { showStatus } from '../../commands/service.js';
+import { showStatus, collectHostStatus } from '../../commands/service.js';
 import { readConfigStrict } from '../config-store.js';
 import { readInstanceConfigurationIssue } from '../instance-config-status.js';
 
@@ -15,6 +15,8 @@ const badConfigs = [
   ['invalid session mode', '{"session_mode":"wrong"}', /Invalid baseline session mode/],
 ];
 const valid = '{"runtime":"claude","session_mode":"single"}';
+// Availability is a live statfs sample; preserve the total and every other line.
+const stableStatusText = text => text.replace(/^(Disk: )\d+( GiB available \/ \d+ GiB total)$/m, '$1<sample>$2');
 
 // Real CLI, filesystem configuration and process entry. Run for status/config
 // diagnostics; skip unrelated runtime delivery changes. The official runner
@@ -40,6 +42,10 @@ for (const [name, source, reason] of badConfigs) {
       assert.equal(result.status, 0, result.stderr);
       return result.stdout;
     };
+    for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) {
+      assert.ok(env[key].startsWith(root + path.sep) || env[key] === root);
+    }
+    console.log(JSON.stringify({ root, ...env, configPath: filename, tmux: 'not spawned' }));
     fs.writeFileSync(filename, valid);
     const baseline = run([]);
     const baselineJson = JSON.parse(run(['--json']));
@@ -61,7 +67,11 @@ for (const [name, source, reason] of badConfigs) {
     assert.match(text, /Alert target:/);
     assert.equal(fs.readFileSync(filename, 'utf8'), source, 'diagnostics never fix config');
     fs.writeFileSync(filename, valid);
-    assert.equal(run([]), baseline, 'healthy output is byte-identical after repair');
+    const repairedText = run([]);
+    assert.match(repairedText, /Disk: \d+ GiB available \/ \d+ GiB total/);
+    assert.equal(stableStatusText(repairedText), stableStatusText(baseline),
+      'healthy output is unchanged after repair apart from live disk availability');
+    assert.equal(fs.readFileSync(filename, 'utf8'), valid, 'healthy diagnostics never modify repaired config');
     const repaired = JSON.parse(run(['--json']));
     assert.equal('configurationIssue' in repaired.data, false);
     assert.deepEqual(Object.keys(repaired.data), Object.keys(baselineJson.data));
@@ -135,4 +145,27 @@ test('a healthy configuration keeps an unrelated collector failure silent on std
     assert.equal('configurationIssue' in json, false);
     assert.equal('data' in json, false);
   } finally { console.log = log; console.error = err; process.exitCode = exitCode; }
+});
+
+// Boundary: real status rendering with controlled host disk samples. No live IO.
+// Run for status output/config diagnostics; unrelated runtime delivery may skip.
+test('healthy status changes only its sampled disk availability when host space changes', async () => {
+  const log = console.log, lines = [];
+  console.log = line => lines.push(line);
+  try {
+    const render = async available => {
+      lines.length = 0;
+      await showStatus([], { collect: () => collectStatus(fixture()),
+        host: () => collectHostStatus({ exec: () => '[]',
+          disk: () => ({ blocks: 512, bavail: available, bsize: 1024 ** 3 }) }),
+        alertNotice: () => ({ kind: 'ready' }) });
+      return lines.join('\n');
+    };
+    const before = await render(128), after = await render(129);
+    assert.notEqual(before, after, 'real host samples change rendered bytes');
+    assert.match(before, /^Disk: 128 GiB available \/ 512 GiB total$/m);
+    assert.match(after, /^Disk: 129 GiB available \/ 512 GiB total$/m);
+    assert.equal(stableStatusText(before), stableStatusText(after));
+    assert.notEqual(stableStatusText(after.replace('512 GiB total', '513 GiB total')), stableStatusText(before));
+  } finally { console.log = log; }
 });
