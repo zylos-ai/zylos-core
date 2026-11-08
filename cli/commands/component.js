@@ -1285,20 +1285,19 @@ export async function uninstallComponent(args, deps = {}) {
   }
 
   if (target === 'dashboard') {
-    const options = { zylosDir: deps.zylosDir || ZYLOS_DIR, packageRoot: deps.packageRoot };
-    let result = inspectDashboardRegistrationCleanup(options, deps);
+    const options = { zylosDir: deps.zylosDir || ZYLOS_DIR };
+    let result = inspectDashboardRegistrationCleanup(options);
     if (result.success && explicitPurge) {
       result = { success: false, error: 'purge_not_supported', message: 'Dashboard registration cleanup retains all files and data; --purge is not supported.' };
     } else if (result.success && !checkOnly) {
-      const confirmed = skipConfirm || explicitConfirm || await (deps.promptYesNo || promptYesNo)('Remove standalone Dashboard registration and verified standalone services? Core Dashboard, files and data will be retained.', false);
-      result = confirmed ? cleanupDashboardRegistration(options, deps) : { success: false, error: 'cancelled', message: 'Dashboard cleanup cancelled.' };
+      const confirmed = skipConfirm || explicitConfirm || await (deps.promptYesNo || promptYesNo)('Remove standalone Dashboard registration? Built-in Dashboard, files and data will be retained. [y/N] ', false);
+      result = confirmed ? cleanupDashboardRegistration(options) : { success: false, error: 'cancelled', message: 'Dashboard cleanup cancelled.' };
     }
     result = { action: checkOnly ? 'uninstall_check' : 'uninstall', component: target, ...result };
     if (jsonOutput) console.log(JSON.stringify(result));
     else {
       console[result.success ? 'log' : 'error'](result.message || 'Dashboard registration cleanup preview: files and data retained.');
-      for (const warning of result.warnings || []) console.warn(warning);
-      if (checkOnly && result.success) console.log(`Standalone PM2 IDs to remove: ${result.removeServices.join(', ') || 'none'}`);
+      if (result.manualCleanup) console.log(result.manualCleanup);
     }
     if (!result.success) process.exitCode = 1;
     return result;
