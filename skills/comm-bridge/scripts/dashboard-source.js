@@ -8,9 +8,10 @@ export function readOwnerName(file = path.join(DATA_DIR, '..', 'memory', 'refere
   try {
     const text = fs.readFileSync(file, 'utf8');
     const active = text.split(/^## Active IDs\s*$/m)[1]?.split(/^## /m)[0] ?? '';
-    const record = active.match(/^[-*] Owner:[ \t]*([^\r\n]*)/m)?.[1] ?? '';
-    const name = record.replace(/\s*[（(].*$/, '').trim();
-    return !name || /^(?:none|unknown|not (?:yet established|set)|未(?:建立|确定|设置))$/i.test(name) ? 'the owner' : name;
+    const record = active.match(/^- Owner: ([^\r\n]*)/m)?.[1] ?? '';
+    const value = record.trim();
+    if (!value || /^(?:\(.*\)|（.*）)$/.test(value)) return 'the owner';
+    return value.replace(/\s*[（(].*$/, '').trim() || 'the owner';
   } catch { return 'the owner'; }
 }
 

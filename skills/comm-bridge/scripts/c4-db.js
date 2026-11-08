@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
 import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
 import { projectC4Content } from './c4-content-projection.js';
+import { dashboardSource, readOwnerName } from './dashboard-source.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export { migrateSchema, stripTrailingAckSuffix } from './c4-migrations.js';
@@ -383,9 +384,10 @@ export function formatConversations(conversations) {
  *   pointer (dispatch-style). Pass false when a caller has its own size
  *   control (e.g. the session-start shard's whole-message budget packer)
  *   and wants complete projected content inline (#724).
+ * @param {function} [options.ownerName] - owner display-name reader
  * @returns {string} - formatted text for agent delivery/session init
  */
-export function formatConversationsForAgent(conversations, { spill = true } = {}) {
+export function formatConversationsForAgent(conversations, { spill = true, ownerName = readOwnerName } = {}) {
   if (!conversations || conversations.length === 0) {
     return '';
   }
@@ -394,7 +396,9 @@ export function formatConversationsForAgent(conversations, { spill = true } = {}
   for (const conv of conversations) {
     const dir = conv.direction === 'in' ? 'IN' : 'OUT';
     const endpoint = conv.endpoint_id ? `:${conv.endpoint_id}` : '';
-    const content = projectC4Content(conv.content || '', { c4Id: conv.id });
+    const projected = projectC4Content(conv.content || '', { c4Id: conv.id });
+    const content = conv.channel === 'dashboard' && conv.direction === 'in'
+      ? dashboardSource(projected, ownerName()) : projected;
     const replyViaSuffix = (
       conv.direction === 'in' &&
       conv.endpoint_id &&

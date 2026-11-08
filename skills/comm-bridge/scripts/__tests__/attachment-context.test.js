@@ -49,7 +49,7 @@ const runId = '12345678-1234-4234-8234-123456789abc';
 test('plain attachment annotations survive projection and general agent history formatters byte for byte', () => {
   assert.equal(projectC4Content(content, { c4Id: row.id }), content);
   for (const output of [formatters.formatConversations([row]),
-    formatters.formatConversationsForAgent([row], { spill: false })]) {
+    formatters.formatConversationsForAgent([row], { spill: false, ownerName: () => 'the owner' })]) {
     assert.ok(output.includes(content));
     assert.ok(output.includes(buildAttachmentAnnotation(file)));
     assert.ok(output.includes(buildAttachmentAnnotation(image)));
@@ -61,7 +61,7 @@ test('plain attachment annotations survive projection and general agent history 
 test('Dashboard inbound attachment hint retains the exact original reply route and session group', t => {
   const original = replyVia(row, sendPath);
   assert.ok(original.endsWith('--session-group original:dialog'));
-  const output = formatConversation(row);
+  const output = formatConversation(row, { ownerName: () => 'the owner' });
   const directory = path.join(ATTACHMENTS_DIR, `conv-${row.id}`);
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const spill = path.join(directory, 'message.txt');
@@ -82,7 +82,7 @@ test('Dashboard inbound attachment hint retains the exact original reply route a
 
 test('attachment-only Dashboard delivery preserves complete annotation lines and its attachment hint', t => {
   const value = { ...row, id: 910020, content: buildAnnotatedContent('', [file]) };
-  const output = formatConversation(value);
+  const output = formatConversation(value, { ownerName: () => 'the owner' });
   const directory = path.join(ATTACHMENTS_DIR, `conv-${value.id}`);
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const spill = path.join(directory, 'message.txt');
@@ -98,7 +98,7 @@ test('ordinary Dashboard text includes component guidance within its paste budge
   const scriptPath = sendPath;
   const empty = { ...row, id: 910010, content: '' };
   const prefix = dashboardSource('', 'the owner');
-  const emptyOutput = formatConversation(empty, { scriptPath });
+  const emptyOutput = formatConversation(empty, { scriptPath, ownerName: () => 'the owner' });
   assert.ok(emptyOutput.startsWith(prefix));
   const suffix = emptyOutput.slice(prefix.length);
   assert.ok(suffix.includes('Charts/choices/forms when useful:'));
@@ -114,7 +114,7 @@ test('ordinary Dashboard text includes component guidance within its paste budge
   assert.ok(command.endsWith(' list --json'));
   assert.equal(command.endsWith('--json.'), false);
   const representative = { ...empty, endpoint_id: runId, session_group: `dashboard-owned:${runId}` };
-  const representativeSuffix = formatConversation(representative, { scriptPath }).slice(prefix.length);
+  const representativeSuffix = formatConversation(representative, { scriptPath, ownerName: () => 'the owner' }).slice(prefix.length);
   const representativeBaseline = 800 - (' ' + replyVia(representative, scriptPath)).length;
   const representativeMaximum = 800 - representativeSuffix.length - prefix.length;
   assert.equal(representativeSuffix.slice(0, -(' ' + replyVia(representative, scriptPath)).length), hint);
@@ -123,22 +123,22 @@ test('ordinary Dashboard text includes component guidance within its paste budge
     const plain = { ...row, id: 910010 + index, content: 'x'.repeat(length) };
     const directory = path.join(ATTACHMENTS_DIR, `conv-${plain.id}`);
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-    const output = formatConversation(plain, { scriptPath });
+    const output = formatConversation(plain, { scriptPath, ownerName: () => 'the owner' });
     assert.equal(output, dashboardSource(plain.content, 'the owner') + suffix);
     assert.equal(output.includes('TRUNCATED'), false);
     assert.equal(fs.existsSync(path.join(directory, 'message.txt')), false);
   }
-  assert.equal(formatConversation({ ...row, content: '[MEDIA:/tmp/source.png]' }, { scriptPath })
+  assert.equal(formatConversation({ ...row, content: '[MEDIA:/tmp/source.png]' }, { scriptPath, ownerName: () => 'the owner' })
     .includes('Attachments:'), false);
 });
 
-// Output integration boundary: real spill writer, formatter and isolated files.
+// Output formatting boundary: real spill writer, formatter and isolated files.
 // Run for attachment annotation/projection/hint/formatter changes; unrelated UI
 // may skip. No database, process, tmux or PM2 is started; runner owns all files.
 test('live and startup spill files retain complete annotations beyond the preview budget', t => {
   const long = buildAnnotatedContent('Readable lead. ' + 'x'.repeat(1300), [file, image]);
-  for (const [id, format] of [[910002, value => formatConversation(value)],
-    [910003, value => formatters.formatConversationsForAgent([value])]]) {
+  for (const [id, format] of [[910002, value => formatConversation(value, { ownerName: () => 'the owner' })],
+    [910003, value => formatters.formatConversationsForAgent([value], { ownerName: () => 'the owner' })]]) {
     const value = { ...row, id, content: long };
     const directory = path.join(ATTACHMENTS_DIR, `conv-${id}`);
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -148,7 +148,7 @@ test('live and startup spill files retain complete annotations beyond the previe
     assert.ok(output.includes('TRUNCATED'));
     assert.equal(output.includes(buildAttachmentAnnotation(file)), false);
     const complete = fs.readFileSync(spill, 'utf8');
-    assert.ok(complete.startsWith(id === 910002 ? dashboardSource(long, 'the owner') : long));
+    assert.ok(complete.startsWith(dashboardSource(long, 'the owner')));
     assert.ok(complete.includes(buildAttachmentAnnotation(file)));
     assert.ok(complete.includes(buildAttachmentAnnotation(image)));
     if (id === 910002) assert.ok(complete.endsWith(replyVia(row, sendPath)));
@@ -161,6 +161,7 @@ test('public fetch text and JSON retain attachment paths while preserving reply 
   const text = fetchCli(['--begin', String(row.id), '--end', String(row.id)]);
   assert.ok(text.includes(content));
   assert.ok(text.includes(replyVia(row, sendPath)));
+  assert.equal(text.includes('[Dashboard]'), false);
   const json = JSON.parse(fetchCli(['--begin', String(row.id), '--end', String(row.id), '--json']));
   assert.equal(json.ok, true);
   assert.equal(json.data.rows.length, 1);
@@ -168,7 +169,7 @@ test('public fetch text and JSON retain attachment paths while preserving reply 
   assert.equal(databaseOpens, 0);
 });
 
-// Output integration boundary: actual absorbed query handlers write one private
+// Output formatting boundary: actual absorbed query handlers write one private
 // file. Run for absorbed attachment exports/projection changes; UI may skip.
 test('absorbed full exports preserve annotations after summary truncation and keep original absorbed reply semantics', t => {
   const long = { ...row, content: buildAnnotatedContent('x'.repeat(600), [file, image]) };

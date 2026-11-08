@@ -15,12 +15,16 @@ test('Dashboard source uses only the established owner name in Active IDs and fa
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'references.md');
   assert.equal(readOwnerName(file), 'the owner');
-  for (const [record, expected] of [['Howard (Telegram: private-id)', 'Howard'], ['王小明（平台：私密）','王小明'], ['(not yet established)','the owner'], ['', 'the owner'], ['unknown','the owner']]) {
+  for (const [record, expected] of [['Howard (Telegram: private-id)', 'Howard'], ['王小明（平台：私密）','王小明'], ['(not yet established)','the owner'], ['', 'the owner'], ['unknown','unknown'], ['none','none'], ['未设置','未设置'], ['not yet established','not yet established'], ['（未建立）','the owner']]) {
     fs.writeFileSync(file, `# References\n## Active IDs\n- Owner: ${record}\n## Other\n- Owner: Incorrect\n`);
     assert.equal(readOwnerName(file), expected);
   }
   fs.writeFileSync(file, '## Active IDs\n- Owner: \n- Platform Identities: Recorded elsewhere\n');
   assert.equal(readOwnerName(file), 'the owner');
+  for (const record of ['* Owner: Incorrect', 'Owner: Incorrect', '- owner: Incorrect', '- Owner:Incorrect']) {
+    fs.writeFileSync(file, '## Active IDs\n' + record + '\n');
+    assert.equal(readOwnerName(file), 'the owner');
+  }
   fs.writeFileSync(file, '# References\n## Other\n- Owner: Incorrect\n');
   assert.equal(readOwnerName(file), 'the owner');
 });
@@ -50,4 +54,19 @@ test('Dashboard source follows structured projection and survives complete deliv
   const file = path.join(directory, 'message.txt');
   assert.ok(output.includes(file));
   assert.equal(fs.readFileSync(file, 'utf8'), dashboardSource(long.content, 'Howard') + ' ' + replyVia(long, '/send.js'));
+});
+
+
+test('Dashboard delivery reads the owner from the default isolated memory record', t => {
+  const root = fs.realpathSync(process.env.ZYLOS_DIR);
+  assert.ok(root.startsWith(fs.realpathSync(process.env.HOME) + path.sep));
+  assert.notEqual(fs.realpathSync(process.env.HOME), fs.realpathSync(os.userInfo().homedir));
+  const directory = path.join(root, 'memory'), file = path.join(directory, 'references.md');
+  fs.mkdirSync(directory, { recursive: true });
+  const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  t.after(() => previous === null ? fs.rmSync(file, { force: true }) : fs.writeFileSync(file, previous));
+  fs.writeFileSync(file, '# References\n## Active IDs\n- Owner: Default Owner (Telegram: hidden-contact)\n');
+  assert.equal(readOwnerName(), 'Default Owner');
+  assert.equal(formatConversation(row, { scriptPath: '/send.js' }),
+    '[Dashboard] Default Owner said: Hello ' + replyVia(row, '/send.js'));
 });

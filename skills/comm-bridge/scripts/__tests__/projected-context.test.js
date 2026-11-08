@@ -23,6 +23,8 @@ let rows = [], scopeMode = 'multi', closeCalls = 0;
 const queryCalls = [];
 mock.module('../c4-db.js', { namedExports: {
   ...actualDb,
+  formatConversationsForAgent: (values, options) => actualDb.formatConversationsForAgent(values,
+    { ...options, ownerName: () => 'Replay Owner' }),
   close: () => { closeCalls++; },
   getCoverageEnd: group => { queryCalls.push(['coverage', group]); return 40; },
   getGlobalCoverageEnd: () => { queryCalls.push(['globalCoverage']); return 40; },
@@ -211,6 +213,52 @@ test('startup budgets count projected messages and preserve ordinary whole-messa
   // Global scope migration is an existing separate startup concern.
   const single = await emitC4Conversations({ agent_id: 'fixture-child' });
   checkVisible(single, rows[0]);
+});
+
+test('Dashboard replay decorates only agent-facing inbound content in either spill mode', t => {
+  for (const spill of [false, true]) {
+    const row = Object.freeze({ ...sample('answer', 980), channel: 'dashboard', endpoint_id: 'dialog' });
+    const projected = projectC4Content(row.content, { c4Id: row.id });
+    const options = { spill, ownerName: () => 'Replay Owner' };
+    assert.equal(actualDb.formatConversationsForAgent([row], options),
+      heading(row) + '[Dashboard] Replay Owner said: ' + projected + route(row) + '\n');
+    assert.equal(actualDb.formatConversations([row]), heading(row) + projected + '\n');
+    for (const other of [{ ...row, direction: 'out' }, { ...row, channel: 'telegram' }]) {
+      assert.equal(actualDb.formatConversationsForAgent([other], options),
+        heading(other) + projected + route(other) + '\n');
+    }
+  }
+  const row = { ...sample('answer', 981), channel: 'dashboard', content: 'Complete body ' + 'x'.repeat(1200) };
+  const directory = path.join(ATTACHMENTS_DIR, `conv-${row.id}`);
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const output = actualDb.formatConversationsForAgent([row], { ownerName: () => 'Replay Owner' });
+  const file = path.join(directory, 'message.txt');
+  assert.ok(output.includes(file));
+  assert.equal(fs.readFileSync(file, 'utf8'), '[Dashboard] Replay Owner said: ' + row.content + route(row));
+  assert.equal(actualDb.formatConversationsForAgent([row], { spill: false, ownerName: () => 'Replay Owner' }),
+    heading(row) + '[Dashboard] Replay Owner said: ' + row.content + route(row) + '\n');
+});
+
+// Real startup whole-message packing with a fixed owner provider. Run when
+// replay/source formatting or budget handling changes; no storage/runtime opens.
+test('startup replay counts the Dashboard source label inside its whole-message budget', async () => {
+  scopeMode = 'multi';
+  const newest = { ...sample('answer', 983), channel: 'dashboard', content: 'NEW-DASHBOARD-BODY' };
+  const older = { ...newest, id: 982, content: 'OLDER-DASHBOARD-BODY' + 'x'.repeat(100) };
+  rows = [newest];
+  const newestOnly = await emitC4Conversations({});
+  rows = [older, newest];
+  const full = await emitC4Conversations({});
+  const budget = { maxChars: full.length + 200, maxTokens: 100000 };
+  assert.equal(await emitC4Conversations({}, budget), full);
+  budget.maxChars--;
+  const packed = await emitC4Conversations({}, budget);
+  assert.equal(packed, newestOnly);
+  assert.equal(packed.includes(older.content), false);
+  assert.ok(packed.includes('[Dashboard] Replay Owner said: ' + newest.content));
+  assert.equal(packed.includes('TRUNCATED'), false);
+  assert.equal(packed.split('[Dashboard]').length - 1, 1);
+  assert.equal(databaseOpens, 0); assert.equal(dashboardCalls, 0);
 });
 
 // Real Core formatters, startup packer and spill files; run for View/projection
