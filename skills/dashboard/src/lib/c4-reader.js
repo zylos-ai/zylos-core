@@ -11,7 +11,12 @@ export class C4Reader {
   }
 
   _open() {
-    if (this._db) return this._db;
+    if (this._db) {
+      let identity = null;
+      try { const stat = fs.statSync(this._dbPath); identity = `${stat.dev}:${stat.ino}`; } catch { /* missing */ }
+      if (identity === this._fileIdentity) return this._db;
+      this.close();
+    }
     if (!fs.existsSync(this._dbPath)) return null;
     try {
       const before = fs.statSync(this._dbPath);

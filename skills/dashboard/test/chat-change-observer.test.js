@@ -141,6 +141,40 @@ test('unreadable or missing database stops polling and recovery requires a reada
   assert.equal(f.observer.subscriptions.size, 0);
 });
 
+// Reader/observer recovery integration. Run when cached reader identity or chat
+// demotion changes; rendering-only changes may skip. The gated sandbox proves
+// private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB before access, and owns
+// all handles/timers/files. No HTTP, production resources, model, PM2 or tmux.
+test('history reopens a restored database after caching an empty replacement without a new subscription', gate, t => {
+  const f = fixture(t); f.write({ id: 1, content: 'original stored message' });
+  const stream = f.subscribe();
+  assert.equal(stream.events[0].event, 'chat_ready');
+  f.writer.close();
+  const filename = f.sandbox.paths.c4Db, saved = filename + '.saved';
+  fs.renameSync(filename, saved);
+  f.timers.tick();
+  assert.equal(stream.stopped[0], 'chat_unavailable');
+  assert.equal(f.reader._db, null, 'observer closes its missing database handle');
+  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.timers.count(), 0);
+
+  const emptyWriter = createDb(filename);
+  try { assert.equal(emptyWriter.prepare('SELECT COUNT(*) AS n FROM conversations').get().n, 0); }
+  finally { emptyWriter.close(); }
+  assert.equal(f.history.list({ tab: 'mine' }).items.length, 0, 'ordinary history read caches the empty replacement');
+  const emptyHandle = f.reader._db, emptyGeneration = f.reader._generation;
+  assert.ok(emptyHandle?.open);
+  fs.renameSync(saved, filename);
+
+  // No subscribe/readVersion/tick occurs between restoration and this read.
+  const restored = f.history.list({ tab: 'mine' });
+  assert.equal(restored.items.length, 1, 'list must read restored data instead of the deleted empty file');
+  assert.equal(restored.items[0].id, idFor('dash:one'));
+  assert.equal(f.history.messages(idFor('dash:one'), { tab: 'mine' }).items[0].content, 'original stored message');
+  assert.equal(emptyHandle.open, false, 'cached empty handle is closed');
+  assert.equal(f.reader._generation, emptyGeneration + 1, 'existing open path advances generation once');
+  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.timers.count(), 0);
+});
+
 test('metadata snapshots share history visibility and discover only scoped pending rows', gate, t => {
   const f = fixture(t); f.write({ id: 1 });
   for (const [i, channel] of ['void', 'internal', 'system', 'scheduler', 'control'].entries()) f.write({ id: 10 + i, channel });
