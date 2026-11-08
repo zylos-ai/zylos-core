@@ -61,7 +61,6 @@ export class ChatChangeObserver {
 
   _send(record, event) {
     if (this.closed || !this.subscriptions.has(record)) return false;
-    if (!this._authorized(record)) { this._remove(record, 'chat_access_revoked'); return false; }
     try {
       if (record.send(event, { version: 1, ...record.options, ids: record.snapshot?.delivery.map(row => row.id) ?? [] }) !== false) return true;
     } catch { /* closed or slow transport */ }

@@ -208,7 +208,7 @@ test('coalesced hints cannot bypass bounded backoff after a pending read fails',
   assert.equal(f.state.snapshot().updateError, null);
 });
 
-test('a message hint coalesced with manual status still reads new message truth', async t => {
+test('a message hint alongside manual status still reads new message truth', async t => {
   const f = fixture(t, u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after'
     ? { items: [{ id: 2, direction: 'out', status: 'delivered', content: 'combined reply' }], afterCursor: 'after2' } : undefined);
   await f.open();
@@ -357,4 +357,47 @@ test('pending row changes keep the canonical conversation subscription and exist
   assert.equal(new URL(push.streamUrl('/api/stream'), 'http://fixture').searchParams.has('chat_ids'), false);
   source.emit('chat_delivery_changed', { version: 1, tab: 'mine', conversationId: 'g:AA', ids: [1] });
   assert.equal(events.length, 1, 'the attached source remains active after sending and delivery');
+});
+
+for (const initiallyLive of [false, true]) for (const accelerated of [false, true]) {
+  test(`chat unavailability retains the application source and ${accelerated ? 'two' : 'five'} second polling after ${initiallyLive ? 'a live chat' : 'chat admission'}`, { timeout: 2000 }, async t => {
+    const f = fixture(t); await f.open();
+    if (accelerated) { f.state.setInput('one send'); await f.state.send(); }
+    const changes = [], source = new FakeSource(); let ordinary = 0;
+    const push = createConversationPush({ onSubscriptionChange: subscription => changes.push(subscription),
+      onStatus: (status, subscription) => f.state.streamStatus(status, subscription),
+      onEvent: (name, data, subscription) => f.state.streamEvent(name, data, subscription) });
+    t.after(() => push.destroy());
+    push.setSubscription(f.state.streamSubscription()); push.attach(source);
+    source.addEventListener('state_change', () => ordinary++);
+    const metadata = { version: 1, ...f.state.streamSubscription(), ids: [] };
+    if (initiallyLive) { source.emit('chat_ready', metadata); await flush(); assert.equal(f.state.snapshot().streamState, 'live'); }
+    const before = f.reads().length, started = f.timer.now(), interval = accelerated ? 2000 : 5000;
+    source.emit('chat_unavailable', metadata); await flush();
+    assert.equal(f.state.snapshot().streamState, 'polling');
+    push.setSubscription(f.state.streamSubscription());
+    assert.equal(changes.length, 1, 'chat-only degradation keeps the same application stream subscription');
+    source.emit('state_change', { ordinary: true });
+    assert.equal(ordinary, 1, 'ordinary events remain on the attached source');
+    await f.timer.advance(interval - 1); assert.equal(f.reads().length, before);
+    await f.timer.advance(1); assert.equal(f.reads().length, before + 1);
+    assert.equal(f.reads().at(-1).at, started + interval);
+    assert.equal(f.state.snapshot().streamState, 'polling');
+    assert.equal(changes.length, 1);
+  });
+}
+
+test('a failed dirty list catchup retries that list at its backoff deadline', { timeout: 2000 }, async t => {
+  let lists = 0;
+  const f = fixture(t, url => {
+    if (url.pathname !== '/api/chat/conversations') return;
+    if (++lists === 2) throw { code: 'temporary_list_failure' };
+  });
+  await f.open(); assert.equal(lists, 1);
+  await f.event('chat_messages_changed'); assert.equal(lists, 2);
+  assert.equal(f.state.snapshot().updateError, 'temporary_list_failure');
+  await f.timer.advance(4999); assert.equal(lists, 2);
+  await f.timer.advance(1); assert.equal(lists, 3, 'failed dirty scope is retried without waiting for the thirty-second list interval');
+  assert.equal(f.state.snapshot().updateError, null);
+  assert.equal(f.calls.filter(call => call.u.pathname.endsWith('/send')).length, 0);
 });

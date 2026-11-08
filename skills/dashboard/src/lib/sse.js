@@ -31,13 +31,18 @@ export class SseHub {
     return client;
   }
 
-  _remove(client) {
-    if (!this.clients.delete(client)) return;
+  detachChat(client) {
     if (client.chatPrincipal !== undefined) {
       const count = this.chatClients.get(client.chatPrincipal) - 1;
       if (count) this.chatClients.set(client.chatPrincipal, count);
       else this.chatClients.delete(client.chatPrincipal);
+      client.chatPrincipal = undefined;
     }
+  }
+
+  _remove(client) {
+    if (!this.clients.delete(client)) return;
+    this.detachChat(client);
     try { client.onClose?.(); } catch { /* transport teardown must continue */ }
     if (this.clients.size === 0) this._stopKeepalive();
   }

@@ -185,6 +185,10 @@ export function createConversationState({
   function streamEvent(name, data, subscription = streamSubscription()) {
     if (!valid(epoch) || !matchesChatEvent(data, subscription)
       || chatSubscriptionKey(subscription) !== chatSubscriptionKey(streamSubscription())) return;
+    if (name === 'chat_unavailable') {
+      streamStatus('disconnected', subscription);
+      return;
+    }
     if (name === 'chat_ready') {
       clearStreamTimer();
       streamState = 'live';
@@ -197,7 +201,6 @@ export function createConversationState({
     readDirty ||= dirty;
     if (polling) {
       await polling;
-      if (valid(epoch) && visible() && (manual || !updateError) && readDirty) return poll({ manual });
       return;
     }
     if (!valid(epoch) || !visible()) return;

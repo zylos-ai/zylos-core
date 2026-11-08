@@ -69,7 +69,7 @@ import { mountConversationPage } from '/js/wb/conversation-page.js';
 import { createConversationPush } from '/js/wb/conversation-push.js';
 const words=await (await fetch('/i18n/wb.${locale}.json')).json();
 let page,source,retry,ticket=0;window.connections=0;window.pageId=crypto.randomUUID();
-const connect=()=>{clearTimeout(retry);source?.close();push.detach();const current=new EventSource(push.streamUrl('/api/stream'));source=current;window.connections++;push.attach(current);current.onerror=()=>{if(source!==current)return;current.close();source=null;push.detach();retry=setTimeout(connect,1000);};};
+const connect=()=>{clearTimeout(retry);source?.close();push.detach();const current=new EventSource(push.streamUrl('/api/stream'));source=current;window.connections++;current.addEventListener('state_change',()=>{window.ordinaryEvents=(window.ordinaryEvents||0)+1;});push.attach(current);current.onerror=()=>{if(source!==current)return;page?.streamStatus('disconnected');current.close();source=null;push.detach();retry=setTimeout(connect,1000);};};
 const push=createConversationPush({onSubscriptionChange:()=>{const own=++ticket;queueMicrotask(()=>{if(own===ticket)connect();});},onStatus:status=>page?.streamStatus(status),onEvent:(name,data,subscription)=>page?.streamEvent(name,data,subscription)});
 page=mountConversationPage({root:document.querySelector('#wb-chat'),identity:'private-push',t:key=>words[key]??key,storage:null,
 fetch:(url,options={})=>fetch(url,{...options,headers:{...options.headers,'X-Fixture-Page':window.pageId}}),onStreamSubscription:sub=>push.setSubscription(sub)});
@@ -124,6 +124,9 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
     } catch (error) { json(res, { error: error.code || 'fixture_error' }, error.statusCode || 500); }
   });
   const origin = await sandbox.startHttp(server);
+  const offlineFile = sandbox.paths.c4Db + '.unavailable';
+  const restoreDatabase = () => { if (fs.existsSync(offlineFile)) fs.renameSync(offlineFile, sandbox.paths.c4Db); };
+  sandbox.addCleanup(restoreDatabase);
   sandbox.addCleanup(() => { observer.close(); hub.closeAll(); reader.close(); clearInterval(auth._cleanupTimer); });
   return { origin, writer, reader, history, hub, observer, requests, events, group, conversationId, pendingId,
     deliverAndReply(label = 'New AI reply / 新 AI 回复') {
@@ -133,6 +136,7 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
     }, addReply(label) { const id = add(label); return { id, committedAt: Date.now() }; },
     interrupt(status = 503) { streamFailureStatus = status; streamsAllowed = false; hub.closeAll(); }, recover() { streamsAllowed = true; },
     currentPendingId() { return pendingId; },
+    takeDatabaseOffline() { fs.renameSync(sandbox.paths.c4Db, offlineFile); }, restoreDatabase,
     newPending() { pendingId = add('Another pending message / 另一条待投递消息', { direction: 'in', status: 'pending' }); return pendingId; }
   };
 }

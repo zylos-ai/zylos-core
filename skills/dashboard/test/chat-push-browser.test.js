@@ -189,3 +189,32 @@ for (const status of [503, 401]) test(`stream ${status} reconnect attempts prese
   console.info('chat outage browser result', JSON.stringify({ status, elapsedMs, commitToDomMs: Date.now() - update.committedAt }));
   await page.evaluate('window.dispose()'); await browser.close(); await sandbox.close();
 });
+
+test('an unavailable chat database preserves ordinary stream events and polling recovery', {
+  skip: !enabled, timeout: 15000,
+}, async t => {
+  const sandbox = createChatSandbox(t);
+  const fixture = await createChatPushBrowserFixture(sandbox);
+  const browser = await startChatBrowser(t, sandbox, fixture.origin);
+  const page = await browser.page({ locale: 'en', width: 1280 });
+  await until(() => page.evaluate(`document.querySelector('.conversation-push-status')?.dataset.streamState==='live'`), 'initial ready', 5000);
+  await settledControls(page);
+  const streams = fixture.requests.filter(row => row.path === '/api/stream').length;
+  fixture.takeDatabaseOffline();
+  await until(() => page.evaluate(`document.querySelector('.conversation-push-status')?.dataset.streamState==='polling'`), 'chat_unavailable restores polling without closing the application stream', 2000);
+  assert.equal(fixture.observer.subscriptions.size, 0);
+  assert.equal(fixture.hub.clients.size, 1, 'ordinary application stream remains connected');
+  assert.equal(fixture.hub.chatClients.size, 0, 'demotion releases chat capacity');
+  fixture.hub.broadcast('state_change', { state: 'waiting' });
+  await until(() => page.evaluate('(window.ordinaryEvents||0)>0'), 'ordinary event is still received');
+  await pause(1200);
+  assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, streams, 'chat failure does not reconnect the EventSource');
+  fixture.restoreDatabase();
+  const update = fixture.addReply('Reply recovered through polling after the private database returns.');
+  await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${update.id}"]')`), 'fallback reads truth after database restoration', 6000);
+  assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, streams);
+  assert.equal(browser.errors.length, 0); assert.equal(browser.external.length, 0);
+  assert.equal(fixture.requests.some(row => row.method !== 'GET'), false);
+  console.info('chat unavailable browser result', JSON.stringify({ streamsBefore: streams, streamsAfter: streams, activeOrdinary: 1, chatSubscriptions: 0, ordinaryReceived: true, pollingRecovered: true }));
+  await page.evaluate('window.dispose()'); await browser.close(); await sandbox.close();
+});

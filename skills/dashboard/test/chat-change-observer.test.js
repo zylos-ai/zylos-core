@@ -100,14 +100,16 @@ test('two clients share one sampler and one scope snapshot per changed pass', ga
   f.timers.tick(); assert.equal(emitted, 1);
 });
 
-test('authorization is rechecked without commits and before every emitted hint', gate, t => {
+test('authorization is rechecked once per sample even without commits', gate, t => {
   const f = fixture(t); f.write({ id: 1 });
   const stream = f.subscribe(); stream.allowed = false;
   f.timers.tick(); assert.deepEqual(stream.stopped, ['chat_access_revoked']);
   assert.equal(f.timers.count(), 0); assert.equal(stream.events.length, 1);
-  let attempts = 0, stopped = 0;
+  let attempts = 0, stopped = 0, emitted = 0;
   f.observer.subscribe({ tab: 'mine', conversationId: idFor('dash:one') }, {
-    validate: () => ++attempts === 1, send: () => assert.fail('revoked subscription leaked an event'), onStop: () => stopped++ });
+    validate: () => ++attempts === 1, send: () => emitted++, onStop: () => stopped++ });
+  assert.equal(attempts, 1); assert.equal(emitted, 1); assert.equal(stopped, 0);
+  f.timers.tick(); assert.equal(attempts, 2); assert.equal(emitted, 1);
   assert.equal(stopped, 1); assert.equal(f.timers.count(), 0);
 });
 

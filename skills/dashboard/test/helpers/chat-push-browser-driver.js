@@ -12,7 +12,11 @@ export async function until(check, message, timeoutMs = 2000) {
 }
 
 export async function startChatBrowser(t, sandbox, origin) {
-  const profile = path.join(sandbox.root, 'chrome-profile'), tmp = path.join(sandbox.root, 'chrome-tmp');
+  const profile = path.join(sandbox.root, 'chrome-profile'), tmp = path.join(sandbox.root, 'ct');
+  const singletonSocket = path.join(tmp, '.org.chromium.Chromium.XXXXXX', 'SingletonSocket');
+  assert.ok(Buffer.byteLength(singletonSocket) <= 107,
+    `Chrome SingletonSocket path needs at most107 bytes, got ${Buffer.byteLength(singletonSocket)}: ${singletonSocket}`);
+  console.info('chat browser private paths', JSON.stringify({ profile, TMPDIR: tmp, singletonSocketBytes: Buffer.byteLength(singletonSocket) }));
   fs.mkdirSync(tmp);
   const chrome = spawn(process.env.ZYLOS_CHAT_BROWSER_BIN, ['--headless', '--no-sandbox', '--disable-dev-shm-usage',
     '--no-first-run', '--disable-background-networking', '--disable-extensions', '--disable-component-update',

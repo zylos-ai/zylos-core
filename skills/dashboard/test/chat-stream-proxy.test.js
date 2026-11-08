@@ -66,7 +66,8 @@ async function fixture(t) {
     for(const socket of sockets)socket.destroy();observer.close();hub.closeAll();clearInterval(auth._cleanupTimer);clearInterval(localAuth._cleanupTimer);
     for(const server of servers){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
   });
-  return {open,config,observer,session,touches:()=>touches,deletes:()=>deletes,forwarded:()=>forwarded,revoke:()=>{localRevoked=true;},change:()=>{version++;},
+  return {open,config,hub,observer,session,quiet:()=>hub._stopKeepalive(),touches:()=>touches,deletes:()=>deletes,forwarded:()=>forwarded,revoke:()=>{localRevoked=true;},change:()=>{version++;},
+    rawChunk(chunk) { for (const client of hub.clients) client.res.write(chunk); },
     async leakSplitRecord() {
       const frame = `event: state_change\ndata: {"value":"${token}"}\n\n`;
       const at = frame.indexOf(token)+20;
@@ -88,6 +89,52 @@ test('Fleet chat streams enforce local admin and producer remote policy without 
   const allowed=f.open();await until(()=>allowed.text().includes('event: chat_ready'));
   assert.equal(allowed.status(),200);assert.equal(f.observer.subscriptions.size,1);
   assert.doesNotMatch(allowed.text(),/zylos_st_|cookie|password|preview|content/);
+});
+
+test('Fleet closes a chat relay when an unfinished record exceeds64KiB', gated, async t => {
+  const f = await fixture(t), stream = f.open();
+  await until(() => stream.text().includes('event: chat_ready'));
+  f.quiet();
+  const before = stream.text();
+  f.rawChunk('data: ' + 'x'.repeat(32768));
+  await pause(30);
+  assert.equal(stream.ended(), false, 'an incomplete bounded record remains buffered');
+  assert.equal(stream.text(), before, 'no partial record is forwarded');
+  f.rawChunk('y'.repeat(32768));
+  await until(() => stream.ended());
+  assert.equal(stream.text(), before, 'oversized incomplete record never reaches the browser');
+  await until(() => f.observer.subscriptions.size === 0);
+});
+
+test('Fleet preserves ordinary events when the producer chat budget is exhausted', gated, async t => {
+  const f = await fixture(t);
+  f.hub.maxChatClients = 0;
+  const stream = f.open();
+  await until(() => stream.text().includes(': connected'));
+  assert.equal(stream.status(), 200);
+  assert.equal(f.observer.subscriptions.size, 0);
+  assert.equal(f.hub.chatClients.size, 0);
+  f.hub.broadcast('state_change', { state: 'idle' });
+  await until(() => stream.text().includes('event: state_change'));
+  assert.equal(stream.ended(), false);
+  assert.doesNotMatch(stream.text(), /chat_ready|chat_connection_limit/);
+});
+
+test('Fleet revalidates a revoked local browser while upstream is silent without keepalives', gated, async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const f = await fixture(t), stream = f.open();
+  await until(() => stream.text().includes('event: chat_ready'));
+  f.quiet();
+  const before = stream.text(), touches = f.touches();
+  f.revoke();
+  t.mock.timers.tick(14999);
+  await pause(10);
+  assert.equal(stream.ended(), false, 'no producer event or heartbeat triggers chunk revalidation');
+  t.mock.timers.tick(1);
+  await until(() => stream.ended());
+  assert.equal(stream.text(), before);
+  assert.equal(f.touches(), touches, 'independent idle relay check is readonly');
+  await until(() => f.observer.subscriptions.size === 0);
 });
 
 test('Fleet forwards each complete chat record promptly and stops after local credential revocation',gated,async t=>{

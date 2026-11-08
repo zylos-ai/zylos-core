@@ -47,14 +47,13 @@ export function createConversationPush({ onSubscriptionChange = () => {}, onStat
         next.addEventListener(name, fn);
         removers.push(() => next.removeEventListener(name, fn));
       };
-      for (const name of ['chat_ready', 'chat_messages_changed', 'chat_delivery_changed']) listen(name, event => {
+      for (const name of ['chat_ready', 'chat_messages_changed', 'chat_delivery_changed', 'chat_unavailable']) listen(name, event => {
         if (!current()) return;
         try {
           const data = JSON.parse(event.data);
           if (matchesChatEvent(data, captured)) onEvent(name, data, captured);
         } catch { /* A malformed hint is never conversation truth. */ }
       });
-      listen('error', () => { if (current()) onStatus('disconnected', captured); });
       onStatus('connecting', captured);
     },
     detach,

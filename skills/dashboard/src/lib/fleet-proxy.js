@@ -480,6 +480,8 @@ export class FleetProxy {
         if (!res.destroyed && !res.writableEnded) res.end();
       };
       if (chatStream) {
+        // A silent or wedged upstream may stop sending even its keepalive.
+        // Local credential revocation must still close that idle relay.
         chatValidationTimer = setInterval(() => { if (!chatAuthorized()) abortRelay(); }, 15000);
         chatValidationTimer.unref?.();
       }
