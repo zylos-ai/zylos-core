@@ -15,38 +15,129 @@ registerHooks({
 });
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
 
+function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', presence = 'running', pending = true,
+  wait = null, source, healthRecord, workbench } = {}) {
+  const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+  const document = conversationDocument(), root = document.createElement('div');
+  const sessionGroup = 'dashboard:health', id = 'g:AA';
+  const page = mountConversationPage({ root, document, t: key => translations[key] ?? key, fetch: async path => {
+    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      : path === '/api/workbench/groups' ? workbench?.() ?? { listKnown: true,
+        rows: [{ sessionGroup, presence, target: { runtime }, wait }],
+        instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'auth_failed' },
+          [runtime]: healthRecord ?? { health, ...(source ? { source } : {}) } } },
+        sources: { status: { ok: true, readAt: 1000 } } }
+      : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
+      : path.includes('/messages?') ? { items: [...(pending ? [{ id: 1, direction: 'in', status: 'pending', content: 'hello' }] : []),
+        { id: 2, direction: 'in', status: 'delivered', content: 'already delivered' }], afterCursor: 'after', nextCursor: null }
+      : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id, sessionGroup, state: 'active' } }
+      : { items: [], nextCursor: null };
+    return { ok: true, status: 200, json: async () => body };
+  } });
+  t.after(() => page.destroy());
+  return { page, root, sessionGroup, translations };
+}
+
 for (const locale of ['en', 'zh']) {
-  for (const { health, runtime, presence } of [
-    { health: 'rate_limited', runtime: 'claude', presence: 'running' },
-    { health: 'ok', runtime: 'claude', presence: 'running' },
-    { health: 'rate_limited', runtime: 'claude', presence: 'not_running' },
-    { health: 'ok', runtime: 'codex', presence: 'running' }
-  ]) {
-    test(`conversation page renders ${runtime} ${health} pending delivery while ${presence} in ${locale}`, { timeout: 2000 }, async t => {
-      const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
-      const document = conversationDocument(), root = document.createElement('div');
-      const sessionGroup = 'dashboard:limited', id = 'g:AA';
-      const page = mountConversationPage({ root, document, t: key => translations[key] ?? key, fetch: async path => {
-        const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
-          : path === '/api/workbench/groups' ? { listKnown: true, rows: [{ sessionGroup, presence, target: { runtime } }],
-            instance: { runtimeHealth: { claude: { health: runtime === 'codex' ? 'rate_limited' : health }, codex: { health: 'ok' } } },
-            sources: { status: { ok: true, readAt: 1000 } } }
-          : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
-          : path.includes('/messages?') ? { items: [{ id: 1, direction: 'in', status: 'pending', content: 'hello' },
-            { id: 2, direction: 'in', status: 'delivered', content: 'already delivered' }], afterCursor: 'after', nextCursor: null }
-          : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id, sessionGroup, state: 'active' } }
-          : { items: [], nextCursor: null };
-        return { ok: true, status: 200, json: async () => body };
-      } });
-      t.after(() => page.destroy());
-      await page.openGroup(sessionGroup); await tick();
-      const header = root.querySelector('.conversation-running');
+  for (const [health, label] of [
+    ['ok', 'running'], ['rate_limited', 'rateLimited'], ['recovering', 'recovering'],
+    ['auth_failed', 'authFailed'], ['unavailable', 'unavailable'], ['down', 'down'],
+    ['future_health', 'healthUnknown'], [null, 'healthUnknown']
+  ]) for (const pending of [true, false]) {
+    test(`conversation header renders ${health ?? 'unreadable health'} with ${pending ? 'pending' : 'no pending'} messages in ${locale}`, { timeout: 2000 }, async t => {
+      const wait = pending && ['rate_limited', 'recovering'].includes(health) ? { kind: 'rate_wait', runtime: 'claude' } : null;
+      const f = healthPage(t, { locale, health, pending, wait });
+      await f.page.openGroup(f.sessionGroup); await tick();
+      const header = f.root.querySelector('.conversation-running');
       assert.equal(header.hidden, false);
-      assert.equal(header.classList.contains('conversation-restricted'), health === 'rate_limited');
-      assert.equal(header.textContent, translations[health === 'rate_limited' ? 'chat.page.rateLimited' : 'chat.page.running']);
-      const pending = root.querySelector('[data-message-id="1"] .conversation-message-status');
-      assert.ok(pending.textContent.includes(translations[health === 'rate_limited' ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.pending']));
-      assert.ok(root.querySelector('[data-message-id="2"] .conversation-message-status').textContent.includes(translations['chat.page.delivery.delivered']));
+      assert.equal(header.classList.contains('conversation-restricted'), health !== 'ok');
+      assert.ok(f.translations['chat.page.' + label], 'the locale defines the status label');
+      assert.equal(header.textContent, f.translations['chat.page.' + label + (wait ? 'Pending' : '')]);
+      assert.equal(header.textContent.includes(locale === 'zh' ? '恢复后自动投递' : 'delivery resumes after recovery'), wait?.kind === 'rate_wait');
+      if (pending) {
+        const status = f.root.querySelector('[data-message-id="1"] .conversation-message-status');
+        assert.ok(status.textContent.includes(f.translations[wait ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.pending']));
+      }
+      assert.ok(f.root.querySelector('[data-message-id="2"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.delivered']));
+    });
+  }
+  for (const runtime of ['claude', 'codex']) {
+    test(`conversation header uses ${runtime} health independently of the other runtime in ${locale}`, { timeout: 2000 }, async t => {
+      const f = healthPage(t, { locale, runtime, health: 'ok' });
+      await f.page.openGroup(f.sessionGroup); await tick();
+      const header = f.root.querySelector('.conversation-running');
+      assert.equal(header.hidden, false);
+      assert.equal(header.classList.contains('conversation-restricted'), false);
+      assert.equal(header.textContent, f.translations['chat.page.running']);
+      assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
+    });
+  }
+  for (const [health, wait] of [['rate_limited', null], ['ok', { kind: 'rate_wait', runtime: 'claude' }]]) {
+    test(`conversation delivery follows server wait instead of ${health} health in ${locale}`, { timeout: 2000 }, async t => {
+      const f = healthPage(t, { locale, health, wait });
+      await f.page.openGroup(f.sessionGroup); await tick();
+      const header = f.root.querySelector('.conversation-running');
+      assert.equal(header.classList.contains('conversation-restricted'), true);
+      assert.equal(header.textContent.includes(locale === 'zh' ? '恢复后自动投递' : 'delivery resumes after recovery'), wait !== null);
+      assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations[wait ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.pending']));
+    });
+  }
+  for (const presence of ['running', 'not_running']) {
+    test(`a missing health source preserves ${presence} presence semantics in ${locale}`, { timeout: 2000 }, async t => {
+      const f = healthPage(t, { locale, presence, source: 'missing', health: null, pending: false });
+      await f.page.openGroup(f.sessionGroup); await tick();
+      const header = f.root.querySelector('.conversation-running');
+      assert.equal(header.hidden, presence !== 'running');
+      assert.equal(header.classList.contains('conversation-restricted'), false);
+      if (presence === 'running') assert.equal(header.textContent, f.translations['chat.page.running']);
+    });
+  }
+  for (const [kind, label] of [['auth_wait', 'authFailed'], ['fenced', 'paused'], ['starting', 'starting'],
+    ['start_failed', 'startFailed'], ['unknown', 'healthUnknown']]) {
+    test(`server ${kind} wait cannot display a green running header in ${locale}`, async t => {
+      const f = healthPage(t, { locale, health: 'ok', wait: { kind } });
+      await f.page.openGroup(f.sessionGroup); await tick();
+      const header = f.root.querySelector('.conversation-running');
+      assert.equal(header.hidden, false);
+      assert.equal(header.classList.contains('conversation-restricted'), true);
+      assert.equal(header.textContent, f.translations['chat.page.' + label]);
+      assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
+    });
+  }
+  test(`a queued wait cannot manufacture running presence in ${locale}`, async t => {
+    const f = healthPage(t, { locale, health: 'ok', presence: 'not_running', wait: { kind: 'queued' } });
+    await f.page.openGroup(f.sessionGroup); await tick();
+    assert.equal(f.root.querySelector('.conversation-running').hidden, true);
+  });
+  test(`a non-running recovering group stays restricted without a delivery promise in ${locale}`, { timeout: 2000 }, async t => {
+    const f = healthPage(t, { locale, presence: 'not_running', health: 'recovering', pending: false });
+    await f.page.openGroup(f.sessionGroup); await tick();
+    const header = f.root.querySelector('.conversation-running');
+    assert.equal(header.hidden, false);
+    assert.equal(header.classList.contains('conversation-restricted'), true);
+    assert.equal(header.textContent, f.translations['chat.page.recovering']);
+  });
+  test(`a non-running group with unreadable health cannot claim running in ${locale}`, { timeout: 2000 }, async t => {
+    const f = healthPage(t, { locale, presence: 'not_running', health: null, pending: false });
+    await f.page.openGroup(f.sessionGroup); await tick();
+    assert.equal(f.root.querySelector('.conversation-running').hidden, true);
+  });
+  for (const failure of ['request failure', 'unreadable source']) {
+    test(`the conversation page clears restriction after ${failure} in ${locale}`, { timeout: 2000 }, async t => {
+      let failed = false;
+      const f = healthPage(t, { locale, workbench: () => {
+        if (failed && failure === 'request failure') throw new Error('unavailable fixture');
+        return { listKnown: true, rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
+          wait: { kind: 'rate_wait', runtime: 'claude' } }], instance: { runtimeHealth: { claude: { health: 'recovering' } } },
+        sources: { status: { ok: !failed, readAt: 1000 } } };
+      } });
+      await f.page.openGroup(f.sessionGroup); await tick();
+      assert.equal(f.root.querySelector('.conversation-running').hidden, false);
+      assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.rateLimited']));
+      failed = true;
+      await f.page.openGroup(f.sessionGroup); await tick();
+      assert.equal(f.root.querySelector('.conversation-running').hidden, true);
+      assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
     });
   }
 }

@@ -692,7 +692,7 @@ export function mountConversationPage({
   function patchMessage(record, row, s) {
     if (record.time) text(record.time, clockText(record.date));
     const delivery = s.tab === 'mine' && row.direction === 'in' ? messageState(row) : null;
-    const status = delivery ? t(delivery === 'pending' && s.groupHealth === 'rate_limited'
+    const status = delivery ? t(delivery === 'pending' && s.groupWait?.kind === 'rate_wait'
       ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.' + delivery) : '';
     text(record.author, t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai'));
     text(record.statusText, status);
@@ -1173,10 +1173,17 @@ export function mountConversationPage({
     updateNotice.hidden = !s.updateError;
     const current = s.conversation ?? s.items.find(item => item.id === s.selectedId);
     text(title, nameOf(current, s.tab === 'external'));
-    const rateLimited = s.groupHealth === 'rate_limited';
-    running.hidden = !rateLimited && s.groupPresence !== true;
-    running.classList.toggle('conversation-restricted', rateLimited);
-    text(running.lastElementChild, t(rateLimited ? 'chat.page.rateLimited' : 'chat.page.running'));
+    const rateWait = s.groupWait?.kind === 'rate_wait';
+    const healthLabel = { rate_limited: 'rateLimited', recovering: 'recovering', auth_failed: 'authFailed',
+      unavailable: 'unavailable', down: 'down' }[s.groupHealth];
+    const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused',
+      starting: 'starting', start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
+    const headerLabel = healthLabel ?? waitLabel ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
+    const restricted = headerLabel !== 'running';
+    running.hidden = s.groupPresence !== true && (!restricted || !healthLabel && !s.groupWait);
+    running.classList.toggle('conversation-restricted', restricted);
+    text(running.lastElementChild, t('chat.page.' + headerLabel
+      + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : '')));
     const channel = channelOf(current);
     const symbol = s.tab === 'mine' ? 'monitor' : channelIcon({
       sessionGroup: current?.sessionGroup ?? current?.session_group,

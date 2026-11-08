@@ -1173,10 +1173,11 @@ const groupSnapshot = (presence, extra = {}) => ({
 });
 for (const failure of ['unreadable source', 'request failure']) test(`conversation health clears a stale restriction after ${failure}`, { timeout: 2000 }, async t => {
   let readable = true;
+  const wait = { kind: 'rate_wait', runtime: 'claude', cooldownUntil: 2000 };
   const f = groupFixture(() => {
     if (!readable && failure === 'request failure') throw { code: 'status_unavailable' };
     return groupSnapshot('running', {
-      rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' } }],
+      rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait }],
       instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'ok' } } },
       sources: { status: { ok: readable, readAt: 1000 } }
     });
@@ -1185,12 +1186,101 @@ for (const failure of ['unreadable source', 'request failure']) test(`conversati
   await f.state.open();
   await f.state.select('g:A');
   assert.equal(f.state.snapshot().groupHealth, 'rate_limited');
+  assert.equal(f.state.snapshot().groupWait, wait);
   readable = false;
   await f.timer.advance(30000);
   assert.equal(f.state.snapshot().groupHealth, null);
+  assert.equal(f.state.snapshot().groupWait, null);
   assert.equal(f.state.snapshot().groupPresence, null);
   assert.equal(f.state.snapshot().groupPresenceReadAt, null);
 });
+
+for (const runtime of ['claude', 'codex']) {
+  for (const [health, wait] of [
+    ['rate_limited', null], ['ok', { kind: 'rate_wait', runtime }],
+    ['recovering', { kind: 'rate_wait', runtime, cooldownUntil: 2000 }],
+    ['auth_failed', { kind: 'auth_wait', runtime }], ['unavailable', { kind: 'unknown', health: 'unavailable', reason: 'no_rule' }]
+  ]) {
+    test(`conversation state preserves server wait for ${runtime} ${health}`, { timeout: 2000 }, async t => {
+      const f = groupFixture(() => groupSnapshot('running', {
+        rows: [{ sessionGroup: 'dashboard:other', presence: 'running', target: { runtime: 'other' }, wait: { kind: 'rate_wait' } },
+          { sessionGroup: 'dashboard:a', presence: 'running', target: { runtime }, wait }],
+        instance: { runtimeHealth: { claude: { health: 'auth_failed' }, codex: { health: 'down' }, [runtime]: { health } } }
+      }));
+      t.after(() => f.state.destroy());
+      await f.state.open(); await f.state.select('g:A');
+      assert.equal(f.state.snapshot().groupHealth, health);
+      assert.equal(f.state.snapshot().groupWait, wait, 'the matching row wait remains the server authority');
+    });
+  }
+  test(`conversation state normalizes a missing ${runtime} health file without borrowing another runtime`, { timeout: 2000 }, async t => {
+    const f = groupFixture(() => groupSnapshot('running', {
+      rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime }, wait: null }],
+      instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'auth_failed' }, [runtime]: { source: 'missing' } } }
+    }));
+    t.after(() => f.state.destroy());
+    await f.state.open(); await f.state.select('g:A');
+    assert.equal(f.state.snapshot().groupHealth, 'ok');
+    assert.equal(f.state.snapshot().groupWait, null);
+  });
+}
+
+test('conversation state clears wait when navigating to a group without a target runtime', { timeout: 2000 }, async t => {
+  const wait = { kind: 'rate_wait', runtime: 'claude' };
+  const f = groupFixture(() => groupSnapshot('running', {
+    rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait },
+      { sessionGroup: 'dashboard:b', presence: 'running', target: { runtime: null }, wait: null }],
+    instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'ok' } } }
+  }), u => u.pathname === '/api/chat/conversations/g%3AB' ? {
+    conversation: { id: 'g:B', sessionGroup: 'dashboard:b', state: 'active' }, stored: false
+  } : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A');
+  assert.equal(f.state.snapshot().groupWait, wait);
+  await f.state.select('g:B');
+  assert.equal(f.state.snapshot().groupWait, null);
+  assert.equal(f.state.snapshot().groupHealth, null);
+});
+
+test('a late wait response cannot restore restriction after navigation', { timeout: 2000 }, async t => {
+  const pending = deferred();
+  const wait = { kind: 'rate_wait', runtime: 'claude' };
+  let reads = 0;
+  const response = () => groupSnapshot('running', {
+    rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait }],
+    instance: { runtimeHealth: { claude: { health: 'recovering' } } }
+  });
+  const f = groupFixture(() => ++reads === 1 ? response() : pending.promise);
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A');
+  assert.equal(f.state.snapshot().groupWait, wait);
+  await f.timer.advance(30000);
+  await f.state.select('g:B');
+  assert.equal(f.state.snapshot().groupWait, null);
+  pending.resolve(response()); await flush();
+  assert.equal(f.state.snapshot().selectedId, 'g:B');
+  assert.equal(f.state.snapshot().groupWait, null);
+  assert.equal(f.state.snapshot().groupHealth, null);
+});
+
+for (const failure of ['unknown list', 'missing row']) {
+  test(`conversation state clears wait after ${failure}`, { timeout: 2000 }, async t => {
+    let readable = true;
+    const wait = { kind: 'rate_wait', runtime: 'claude' };
+    const f = groupFixture(() => groupSnapshot('running', {
+      listKnown: readable || failure !== 'unknown list',
+      rows: !readable && failure === 'missing row' ? [] : [
+        { sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait }
+      ], instance: { runtimeHealth: { claude: { health: 'recovering' } } }
+    }));
+    t.after(() => f.state.destroy());
+    await f.state.open(); await f.state.select('g:A');
+    assert.equal(f.state.snapshot().groupWait, wait);
+    readable = false; await f.timer.advance(30000);
+    assert.equal(f.state.snapshot().groupWait, null);
+    assert.equal(f.state.snapshot().groupHealth, null);
+  });
+}
 test('running marker uses the exact group and clears after an unreadable workbench response', async () => {
   let fail = false;
   const f = groupFixture(() => {
