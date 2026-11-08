@@ -371,7 +371,7 @@ function renderTile(tile, labels) {
   if (tile.offline) {
     const seen = tile.lastSeenText;
     return `<div class="wb-f-card bad" ${data} data-state="${escapeHtml(tile.mood)}">
-    <div class="wb-f-top"><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i><b>${escapeHtml(tile.name)}</b><span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
+    <div class="wb-f-top"><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b><span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     <div class="wb-f-reason"><span class="wb-plain">${escapeHtml(tile.problem.short)}</span><span class="wb-tech agent-fleet-reason">${escapeHtml(tile.stateLabel)}</span><span class="wb-tech wb-mono"> · ${escapeHtml(tile.reason)}</span></div>
     <p class="wb-note">${escapeHtml(afterSentence(tile.problem.fix, seen ? fill(labels.lastSeen, { time: seen }) : ''))}</p>
@@ -387,7 +387,7 @@ function renderTile(tile, labels) {
     ? `<div>${escapeHtml(labels.groups)}<b>${escapeHtml(String(tile.self.groups ?? '--'))}</b></div>`
     : `<div title="${escapeHtml(labels.context)}${tile.threshold == null ? '' : ` / ${pctText(tile.threshold)}`}">${escapeHtml(labels.context)}<b class="${tile.overThreshold ? 'wb-txt-warn' : ''}">${pctText(tile.contextPct)}</b></div>`;
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
-    <div class="wb-f-top"><span class="wb-hdot"></span><b>${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
+    <div class="wb-f-top"><span class="wb-hdot"></span><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     ${act}
     ${quotaBars(tile, labels)}
@@ -405,7 +405,7 @@ function renderCompare(view) {
   const { labels } = view, ok = view.tiles.filter((tile) => !tile.offline), bad = view.tiles.length - ok.length;
   const maxCost = Math.max(0.0001, ...ok.map((tile) => tile.dailyCost ?? 0));
   const rows = view.tiles.map((tile) => {
-    const name = `<span class="wb-f-nm"><span class="wb-hdot${tile.offline ? ' err' : ''}"></span><span>${escapeHtml(tile.name)}${tile.isSelf ? ` (${escapeHtml(labels.self)})` : ''}</span></span>`;
+    const name = `<span class="wb-f-nm"><span class="wb-hdot${tile.offline ? ' err' : ''}"></span><span title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}${tile.isSelf ? ` (${escapeHtml(labels.self)})` : ''}</span></span>`;
     if (tile.offline) return `<div class="wb-f-row">${name}<span class="wb-f-na">${escapeHtml(tile.stateLabel)}${tile.lastSeenText ? ` · ${escapeHtml(fill(labels.lastSeen, { time: tile.lastSeenText }))}` : ''}</span></div>`;
     const cost = tile.dailyCost == null ? '' : `<div class="wb-qbar"><span></span><span class="wb-qbar-tr"><i class="wb-qbar-cost" style="width:${(tile.dailyCost / maxCost * 100).toFixed(1)}%"></i></span><b>${escapeHtml(tile.dailyCostLabel)}</b></div>`;
     return `<div class="wb-f-row">${name}${quotaBars(tile, labels)}<div class="wb-qbars">${cost}</div></div>`;

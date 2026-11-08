@@ -496,6 +496,13 @@ test('an unreachable machine says how long ago it was last reachable in the page
   assert.equal(renderAgentFleetHtml({ agents: [{ name: 'lab', state: 'OFFLINE', health_reason: 'unreachable', last_seen: 'not a time' }] }).includes('last reachable'), false);
 });
 
+test('machine names that may be cut short keep the full name in their tooltip', () => {
+  const long = 'build-server-in-the-basement-rack-3';
+  const html = renderAgentFleetHtml({ agents: [{ name: long, state: 'IDLE', pulse_rate: 0 }, { name: long + '-down', state: 'OFFLINE', health_reason: 'unreachable' }] });
+  assert.match(html, new RegExp('<b title="' + long + '">' + long + '</b>'));
+  assert.match(html, new RegExp('<b title="' + long + '-down">'));
+});
+
 test('a sentence that ends with a full stop is not followed by a separator', () => {
   assert.equal(afterSentence('请对方重新发密钥。', '2 小时前最后在线'), '请对方重新发密钥。2 小时前最后在线');
   assert.equal(afterSentence('Ask them for a new key.', 'last reachable 2h ago'), 'Ask them for a new key. Last reachable 2h ago');
