@@ -6,9 +6,11 @@ import os from 'node:os';
 import { readOwnerName, dashboardSource } from '../dashboard-source.js';
 import { formatConversation } from '../router/format.js';
 import { formatConversationsForAgent } from '../c4-db.js';
-import { replyVia } from '../c4-query-format.js';
-import { ATTACHMENTS_DIR } from '../c4-config.js';
+import { replyVia, shellQuote } from '../c4-query-format.js';
+import { ATTACHMENTS_DIR, SKILLS_DIR } from '../c4-config.js';
 import { CONTENT_PREFIX } from '../c4-content-schema.js';
+
+const hint = `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n`;
 
 const row = { id: 913001, channel: 'dashboard', direction: 'in', endpoint_id: 'dialog', session_group: 'dashboard:dialog', content: 'Hello' };
 test('Dashboard source uses only the established owner name in Active IDs and falls back when unavailable', t => {
@@ -33,7 +35,7 @@ test('Dashboard source uses only the established owner name in Active IDs and fa
 test('Dashboard provenance is applied exactly once per delivery without changing storage or reply route', () => {
   const input = Object.freeze({ ...row }), options = { scriptPath: '/c4-send.js', ownerName: () => 'Howard' };
   const text = formatConversation(input, options);
-  assert.equal(text, '[Dashboard] Howard said: Hello ' + replyVia(row, options.scriptPath));
+  assert.equal(text, '[Dashboard] Howard said: Hello' + hint + ' ' + replyVia(row, options.scriptPath));
   assert.equal(formatConversation(input, options), text);
   assert.equal(input.content, 'Hello');
   for (const [channel, direction] of [['dashboard','out'],['telegram','in'],['internal','in']]) {
@@ -54,7 +56,7 @@ test('Dashboard source follows structured projection and survives complete deliv
   const output = formatConversation(long, { scriptPath: '/send.js', ownerName: () => 'Howard' });
   const file = path.join(directory, 'message.txt');
   assert.ok(output.includes(file));
-  assert.equal(fs.readFileSync(file, 'utf8'), dashboardSource(long.content, 'Howard') + ' ' + replyVia(long, '/send.js'));
+  assert.equal(fs.readFileSync(file, 'utf8'), dashboardSource(long.content, 'Howard') + hint + ' ' + replyVia(long, '/send.js'));
 });
 
 
@@ -69,7 +71,7 @@ test('Dashboard delivery reads the owner from the default isolated memory record
   fs.writeFileSync(file, '# References\n## Active IDs\n- Owner: Default Owner (Telegram: hidden-contact)\n');
   assert.equal(readOwnerName(), 'Default Owner');
   assert.equal(formatConversation(row, { scriptPath: '/send.js' }),
-    '[Dashboard] Default Owner said: Hello ' + replyVia(row, '/send.js'));
+    '[Dashboard] Default Owner said: Hello' + hint + ' ' + replyVia(row, '/send.js'));
   assert.ok(formatConversationsForAgent([row], { spill: false })
     .includes('[Dashboard] Default Owner said: Hello'));
 });

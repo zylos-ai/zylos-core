@@ -11,7 +11,8 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 import { createChatApiFixture, questionContent } from './helpers/chat-integration-api.js';
 import { formatConversation } from '../../comm-bridge/scripts/router/format.js';
 import { readOwnerName } from '../../comm-bridge/scripts/dashboard-source.js';
-import { replyVia } from '../../comm-bridge/scripts/c4-query-format.js';
+import { replyVia, shellQuote } from '../../comm-bridge/scripts/c4-query-format.js';
+import { SKILLS_DIR } from '../../comm-bridge/scripts/c4-config.js';
 import { projectC4Content } from '../../comm-bridge/scripts/c4-content-projection.js';
 import { createDelivery } from '../../comm-bridge/scripts/router/delivery.js';
 
@@ -54,7 +55,7 @@ test('Dashboard sends and question or form answers gain source identity only at 
     }
     assert.equal(received.length, 6);
     for (const [index, row] of rows.entries()) {
-      const expected = '[Dashboard] Howard said: ' + projectC4Content(row.content, { c4Id: row.id }) + ' ' + replyVia(row, '/private/c4-send.js');
+      const expected = '[Dashboard] Howard said: ' + projectC4Content(row.content, { c4Id: row.id }) + `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n` + ' ' + replyVia(row, '/private/c4-send.js');
       assert.equal(received[index].text, expected); assert.equal(received[index + 3].text, expected);
       assert.equal(row.content.includes('[Dashboard]'), false);
     }
