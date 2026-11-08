@@ -1053,6 +1053,8 @@ a.wb-btn { text-decoration: none; }
 .wb-ktable tr.revoked td { color: var(--text-muted); }
 .wb-ktable b { font-weight: 550; }
 .wb-k-acts { display: flex; justify-content: flex-end; gap: 2px; }
+.wb-ktable td:nth-child(1), .wb-ktable td:nth-child(3), .wb-ktable td:last-child { white-space: nowrap; }
+.wb-ktable td:nth-child(1) b { display: inline-block; max-width: 14em; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .wb-scope-b { padding: 1px 6px; border: 1px solid var(--wb-line-strong); border-radius: 4px; color: var(--text-dim); font-size: 11px; font-weight: 550; white-space: nowrap; }
 .wb-scope-b.admin { border-color: color-mix(in srgb, var(--wb-err) 40%, transparent); color: var(--wb-err); }
 .wb-once { margin-top: 12px; padding: 12px; border: 1px solid var(--wb-accent-line); border-radius: var(--wb-r); background: var(--wb-accent-soft); font-size: 13px; }
@@ -1183,4 +1185,11 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-f-row { display: grid; grid-template-columns: 1fr; gap: 5px; padding: 8px 0; border-top: 1px solid var(--wb-line); }
   .wb-f-na { grid-column: auto; }
   .wb-o-bar { gap: 8px; }
+  /* Phones keep the key actions on screen: the dates drop out and the table no longer forces its width. */
+  .wb-ktable { min-width: 0; }
+  .wb-ktable th:nth-child(4), .wb-ktable td:nth-child(4), .wb-ktable th:nth-child(5), .wb-ktable td:nth-child(5) { display: none; }
+  .wb-ktable th, .wb-ktable td { padding-left: 5px; padding-right: 5px; }
+  .wb-ktable td:nth-child(1) b { max-width: 7.5em; }
+  .wb-k-acts { flex-wrap: wrap; row-gap: 4px; }
+  .wb-page-h.agent-fleet-head { align-items: flex-start; }
 }

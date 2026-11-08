@@ -22,7 +22,7 @@ export function renderKeyTable(root, keys = [], { document = root.ownerDocument,
   const ordered = [...keys.filter(key => keyStatus(key) !== 'revoked'), ...keys.filter(key => keyStatus(key) === 'revoked')];
   for (const key of ordered) {
     const status = keyStatus(key), row = element(document, 'tr', undefined, 'api-key-row' + (status === 'revoked' ? ' revoked' : ''));
-    const name = element(document, 'td'); name.append(element(document, 'b', key.name));
+    const name = element(document, 'td'), label = element(document, 'b', key.name); label.title = key.name; name.append(label);
     const scope = element(document, 'td'); scope.append(element(document, 'span', t(key.scope === 'admin' ? 'fleet_manage.scope_admin' : 'fleet_manage.scope_read'), 'wb-scope-b' + (key.scope === 'admin' ? ' admin' : '')));
     const state = element(document, 'td');
     if (status === 'active') state.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', ' ' + t('fleet_manage.key_active')));
