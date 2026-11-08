@@ -129,7 +129,6 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     for (const item of groupActionButtons(row, getWritable())) {
       const button = element(document, 'button', undefined, 'wb-icon-btn wb-act'); button.type = 'button';
       button.disabled = item.disabled || state.actionBusy;
-      // Not data-action: origin-lock.js locks every [data-action="interrupt"/"chop-chop"] by the Origin state.
       button.dataset.wbAction = item.action;
       button.setAttribute('aria-label', t('wb.actions.' + item.action));
       // Unavailable actions stay visible and say why in their tooltip; narrow screens also show the label.

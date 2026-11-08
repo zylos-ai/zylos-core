@@ -1,6 +1,6 @@
-// The legacy interrupt / chop-chop buttons and the observer tab only work while the Origin session runs.
-// Workbench drawer actions use data-wb-action, so this selector never reaches them.
-export const ORIGIN_LOCK_SELECTOR = '#observer-tab, [data-action="interrupt"], [data-action="chop-chop"]';
+// The observer tab only works while the Origin session runs; workbench drawer actions carry
+// their own availability, so this selector never reaches them.
+export const ORIGIN_LOCK_SELECTOR = '#observer-tab';
 
 export function lockOriginButtons(buttons, { unavailable, readOnly, reason }) {
   for (const button of buttons) {

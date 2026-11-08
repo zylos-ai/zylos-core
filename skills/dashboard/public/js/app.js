@@ -2713,7 +2713,7 @@ function closeActionsModal() {
   setModalBodyDisabled(false);
 }
 
-const CONFIRM_ACTIONS = new Set(['switch-mode', 'interrupt', 'chop-chop', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
+const CONFIRM_ACTIONS = new Set(['switch-mode', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
 
 let countdownTimer = null;
 
@@ -2773,8 +2773,7 @@ async function showConfirm(text) {
 
 async function execAction(action, body, { confirmed = false } = {}) {
   if (remoteIsReadOnly()) return false;
-  if (['interrupt', 'chop-chop'].includes(action) && originSessionUnavailable(state.dashboardState)) return false;
-  if (['interrupt', 'chop-chop', 'restart-session'].includes(action)) {
+  if (action === 'restart-session') {
     const shown = state.dashboardState;
     body = { ...body, sessionGroup: shown?.sessionGroup, runId: shown?.runId, sessionId: shown?.sessionId };
   }
@@ -2783,8 +2782,6 @@ async function execAction(action, body, { confirmed = false } = {}) {
   if (CONFIRM_ACTIONS.has(action) && !confirmed) {
     const labels = {
       'switch-mode': t('confirm.switch_mode', { mode: body?.mode }),
-      'interrupt': t('confirm.interrupt'),
-      'chop-chop': t('confirm.chop_chop'),
       'restart-session': t('confirm.restart'),
       'switch-runtime': body?.runtime === 'codex'
         ? t('confirm.switch_runtime_codex')

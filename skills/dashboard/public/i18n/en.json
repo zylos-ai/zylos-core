@@ -155,8 +155,6 @@
   "info.configured_effort": "Configured effort: {value}",
   "actions.unset": "Unset",
   "actions.effort_unavailable": "{value} (capability unavailable)",
-  "confirm.interrupt": "Interrupt the agent? This will cancel the current operation.",
-  "confirm.chop_chop": "Interrupt the agent and send continue? This will cancel the current operation before asking the agent to continue.",
   "confirm.restart": "Restart the agent session? Context is preserved via memory.",
   "confirm.switch_runtime": "Switch runtime to {value}? Session will restart.",
   "confirm.switch_runtime_codex": "Switch to Codex? Session will restart. Dashboard will use Codex hooks and rollout metrics for runtime state, usage, cost, latency, and trends where available.",

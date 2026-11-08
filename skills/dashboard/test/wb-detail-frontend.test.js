@@ -897,31 +897,25 @@ test('timeline chips combine filters: one chip uses the server filter, several f
 });
 
 test('the Origin lock selector never reaches drawer actions and the observer tab gets its hint back', async () => {
-  // Every selector in the list is an id or a data-action attribute, so only elements carrying those can be locked.
-  const parts = ORIGIN_LOCK_SELECTOR.split(',').map(part => part.trim());
-  assert.deepEqual(parts, ['#observer-tab', '[data-action="interrupt"]', '[data-action="chop-chop"]']);
+  // The lock only targets the observer tab; drawer actions carry data-wb-action and their own availability.
+  assert.equal(ORIGIN_LOCK_SELECTOR, '#observer-tab');
   const f = detailFixture(async path => response(defaultRead(path)));
   await f.controller.open(row('telegram:a', { state: { kind: 'idle' } }), { rows: [], listKnown: true });
   const drawer = allNodes(f.root).filter(node => node.dataset?.wbAction);
   assert.deepEqual(drawer.map(node => node.dataset.wbAction).sort(), ['chop-chop', 'interrupt', 'restart']);
-  for (const node of allNodes(f.root)) {
-    assert.equal(node.dataset?.action, undefined, 'no drawer element carries data-action');
-    assert.equal(node.attributes['data-action'], undefined);
-    assert.notEqual(node.id, 'observer-tab');
-  }
+  for (const node of allNodes(f.root)) assert.notEqual(node.id, 'observer-tab');
   const button = (fields = {}) => Object.assign(f.document.createElement('button'), { closest: () => null }, fields);
   const observer = button({ id: 'observer-tab', title: 'wb.observerInstall' }); observer.dataset.wbHint = 'wb.observerInstall';
-  const legacy = button(); legacy.dataset.action = 'chop-chop';
-  const inDisabledModal = button({ closest: selector => selector === '.modal-body-disabled' ? {} : null }); inDisabledModal.dataset.action = 'interrupt';
-  lockOriginButtons([observer, legacy, inDisabledModal], { unavailable: true, readOnly: false, reason: 'action.origin_not_running' });
-  assert.deepEqual([observer.disabled, legacy.disabled, inDisabledModal.disabled], [true, true, true]);
+  const inDisabledModal = button({ id: 'observer-tab', closest: selector => selector === '.modal-body-disabled' ? {} : null });
+  lockOriginButtons([observer, inDisabledModal], { unavailable: true, readOnly: false, reason: 'action.origin_not_running' });
+  assert.deepEqual([observer.disabled, inDisabledModal.disabled], [true, true]);
   assert.equal(observer.title, 'action.origin_not_running');
-  lockOriginButtons([observer, legacy, inDisabledModal], { unavailable: false, readOnly: false, reason: 'action.origin_not_running' });
-  assert.deepEqual([observer.disabled, legacy.disabled, inDisabledModal.disabled], [false, false, true]);
+  lockOriginButtons([observer, inDisabledModal], { unavailable: false, readOnly: false, reason: 'action.origin_not_running' });
+  assert.deepEqual([observer.disabled, inDisabledModal.disabled], [false, true]);
   assert.equal(observer.title, 'wb.observerInstall', 'the workbench hint comes back once the Origin runs');
-  assert.equal(legacy.title, '');
-  lockOriginButtons([legacy], { unavailable: false, readOnly: true, reason: 'action.origin_not_running' });
-  assert.equal(legacy.disabled, true, 'a read-only remote keeps them locked');
+  assert.equal(inDisabledModal.title, '');
+  lockOriginButtons([observer], { unavailable: false, readOnly: true, reason: 'action.origin_not_running' });
+  assert.equal(observer.disabled, true, 'a read-only remote keeps it locked');
 });
 
 test('evidence marks the sample its headline came from and says how long ago each was read', () => {

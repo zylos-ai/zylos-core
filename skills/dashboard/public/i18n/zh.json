@@ -155,8 +155,6 @@
   "info.configured_effort": "配置思考强度：{value}",
   "actions.unset": "未配置",
   "actions.effort_unavailable": "{value}（能力未知）",
-  "confirm.interrupt": "中断 Agent？将取消当前操作。",
-  "confirm.chop_chop": "中断当前操作并催促 Agent 继续？",
   "confirm.restart": "重启 Agent 会话？上下文通过 Memory 保留。",
   "confirm.switch_runtime": "切换运行时为 {value}？会话将重启。",
   "confirm.switch_runtime_codex": "切换到 Codex？会话将重启。Dashboard 会使用 Codex hooks 和 rollout 指标展示运行状态、用量、成本、延迟和趋势（在数据可用时）。",
