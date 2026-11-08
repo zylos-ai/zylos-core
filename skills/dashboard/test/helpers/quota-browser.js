@@ -41,7 +41,8 @@ export async function runQuotaBrowser(sandbox) {
   for (const locale of ['zh', 'en']) for (const width of [1280, 390])
     for (const theme of ['light', 'dark']) for (const detail of ['plain', 'technical'])
       scenarios.push({ locale, width, theme, detail, remaining: null });
-  for (const remaining of [8, 50, 90]) scenarios.push({ locale: 'zh', width: 1280, theme: 'light', detail: 'technical', remaining });
+  for (const width of [1280, 390]) for (const remaining of [8, 50, 90])
+    scenarios.push({ locale: 'zh', width, theme: 'light', detail: 'technical', remaining });
   for (const { locale, width, theme, detail, remaining } of scenarios) {
       await page.setViewportSize({ width, height: 1400 });
       await page.evaluate(args => window.showQuota(...args), [locale, theme, detail, remaining]);
@@ -56,7 +57,8 @@ export async function runQuotaBrowser(sandbox) {
           .filter(node => node.textContent === unknown && visible(node)).map(node => {
             const range = document.createRange(); range.selectNodeContents(node);
             return { text: node.textContent, lines: range.getClientRects().length,
-              height: node.getBoundingClientRect().height, whiteSpace: getComputedStyle(node).whiteSpace };
+              height: node.getBoundingClientRect().height, valueWidth: node.getBoundingClientRect().width,
+              textWidth: range.getBoundingClientRect().width, whiteSpace: getComputedStyle(node).whiteSpace };
           }));
         const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
         const ctx = canvas.getContext('2d');
@@ -76,10 +78,13 @@ export async function runQuotaBrowser(sandbox) {
         const colors = (amount, track, fill) => {
           const shadow = getComputedStyle(fill).boxShadow;
           const shadowColor = /^rgb\([^)]+\)/.exec(shadow)?.[0];
+          const surfaceRgb = background(track.parentElement);
+          ctx.fillStyle = getComputedStyle(track).getPropertyValue('--wb-off'); ctx.fillRect(0, 0, 1, 1);
+          const originalTrackRgb = [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
           return ({
-          textRgb: rgb(getComputedStyle(amount).color), textBackground: background(amount),
+          originalTrackRgb, textRgb: rgb(getComputedStyle(amount).color), textBackground: background(amount),
           fillRgb: rgb(getComputedStyle(fill).backgroundColor), trackRgb: background(track),
-          surfaceRgb: background(track.parentElement), outlineRgb: shadowColor ? rgb(shadowColor) : null, shadow
+          surfaceRgb, outlineRgb: shadowColor ? rgb(shadowColor) : null, shadow
         });
         };
         const strip = [...document.querySelectorAll('.wb-account')].map(node => {
@@ -99,6 +104,7 @@ export async function runQuotaBrowser(sandbox) {
         for (const value of region) {
           assert.equal(value.lines, 1, JSON.stringify({ locale, width, theme, detail, value }));
           assert.equal(value.whiteSpace, 'nowrap');
+          assert.ok(value.textWidth <= value.valueWidth + .1, JSON.stringify({ locale, width, theme, detail, value }));
         }
       }
       assert.ok(measured.strip[0].text.includes(`${remaining ?? 50}%`));
@@ -109,14 +115,16 @@ export async function runQuotaBrowser(sandbox) {
       const contrast = (a, b) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);
       for (const value of [...measured.strip, ...measured.fleet]) {
         value.textContrast = contrast(value.textRgb, value.textBackground);
-        value.barContrast = contrast(value.fillRgb, value.trackRgb);
+        value.fillTrackContrast = contrast(value.fillRgb, value.trackRgb);
+        value.outlineTrackContrast = value.outlineRgb ? contrast(value.outlineRgb, value.trackRgb) : null;
+        assert.deepEqual(value.trackRgb, value.originalTrackRgb);
         value.edgeContrast = value.outlineRgb ? contrast(value.outlineRgb, value.surfaceRgb) : null;
         assert.ok(value.textContrast >= 4.5, JSON.stringify({ locale, theme, value }));
         if (theme === 'dark') {
           assert.deepEqual(value.textRgb, value.fillRgb);
           assert.equal(value.shadow, 'none');
         } else {
-          assert.ok(value.barContrast >= 3, JSON.stringify({ locale, theme, value }));
+          assert.ok(value.outlineTrackContrast >= 3, JSON.stringify({ locale, theme, value }));
           assert.ok(value.edgeContrast >= 3, JSON.stringify({ locale, theme, value }));
           assert.match(value.shadow, /^rgb\([^)]+\) 0px 0px 0px 1px inset$/);
         }
@@ -124,8 +132,8 @@ export async function runQuotaBrowser(sandbox) {
       if (width === 390) for (const value of measured.strip) assert.equal(value.meter, 'none');
       metrics.push({ locale, width, theme, detail, remaining, ...measured });
       if (evidence && detail === 'technical') await page.screenshot({
-        path: path.join(evidence, remaining == null ? `quota-${locale}-${width}-${theme}.png` : `quota-light-1280-remaining-${remaining}.png`), fullPage: true });
+        path: path.join(evidence, remaining == null ? `quota-${locale}-${width}-${theme}.png` : `quota-light-${width}-remaining-${remaining}.png`), fullPage: true });
     }
   if (evidence) fs.writeFileSync(path.join(evidence, 'quota-browser-metrics.json'), JSON.stringify(metrics, null, 2) + '\n');
-  console.log('Quota browser: 16 locale/width/theme/detail combinations + 8/50/90% light samples; single-line values, text/bar/edge contrast, no overflow or browser errors.');
+  console.log('Quota browser: 16 locale/width/theme/detail combinations + 6 light samples; fitted single-line values, original tracks and text/outline contrast, no overflow or browser errors.');
 }

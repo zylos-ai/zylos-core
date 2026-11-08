@@ -15,7 +15,6 @@
   --wb-quota-lightness: 26%;
   --wb-quota-fill-saturation: 85%;
   --wb-quota-fill-lightness: 45%;
-  --wb-quota-track: var(--text);
   --wb-quota-outline: inset 0 0 0 1px var(--text);
   --wb-off: color-mix(in srgb, var(--text) 14%, transparent);
   --wb-h: 32px;
@@ -27,7 +26,7 @@
   --wb-scrim: color-mix(in srgb, var(--text) 30%, transparent);
   --wb-on-fill: var(--bg);
 }
-:root[data-theme="dark"] { --wb-quota-lightness: 68%; --wb-quota-fill-saturation: 75%; --wb-quota-fill-lightness: 68%; --wb-quota-track: var(--wb-off); --wb-quota-outline: none; --wb-scrim: color-mix(in srgb, var(--bg) 72%, transparent); }
+:root[data-theme="dark"] { --wb-quota-lightness: 68%; --wb-quota-fill-saturation: 75%; --wb-quota-fill-lightness: 68%; --wb-quota-outline: none; --wb-scrim: color-mix(in srgb, var(--bg) 72%, transparent); }
 .wb-mono, .wb-key.wb-mono, .wb-args { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wb-sub, .wb-note { color: var(--text-dim); }
 .wb-note { font-size: 12px; margin: 8px 0 0; }
@@ -118,7 +117,6 @@ main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 .wb-health-rate_limited, .wb-health-recovering { background: var(--wb-wait); }
 .wb-meter { display: inline-block; width: 52px; height: 6px; border-radius: 3px; background: var(--wb-off); overflow: hidden; }
 .wb-meter i { display: block; height: 100%; border-radius: 3px; background: var(--text-dim); }
-.wb-account .wb-meter { background: var(--wb-quota-track); }
 .wb-account .wb-meter i { box-shadow: var(--wb-quota-outline); }
 .wb-meter.wb-warn i { background: var(--wb-wait); }
 .wb-meter.wb-err i { background: var(--wb-err); }
@@ -1142,7 +1140,6 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-qbar { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(40px, max-content); align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
 .wb-qbar-tr { position: relative; height: 7px; border-radius: 4px; background: var(--wb-off); }
 .wb-qbar-tr i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; background: var(--wb-quota-fill, var(--accent)); }
-.wb-qbar[title][style] .wb-qbar-tr { background: var(--wb-quota-track); }
 .wb-qbar[title][style] .wb-qbar-tr i { box-shadow: var(--wb-quota-outline); }
 .wb-qbar-tr i.wb-qbar-cost { background: color-mix(in srgb, var(--text) 35%, transparent); }
 .wb-qbar b { white-space: nowrap; color: var(--wb-quota-color, var(--text)); font-weight: 550; font-variant-numeric: tabular-nums; text-align: right; }
