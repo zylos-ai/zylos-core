@@ -6,12 +6,13 @@ const halfDay = 12 * 60 * 60 * 1000;
 /**
  * The calendar day a daily point names, as local midnight. An ISO string is read by its leading YYYY-MM-DD and
  * epoch milliseconds by their UTC date, so a point written as 2026-11-02T00:00:00Z or as its epoch value stays on
- * 2 November in every time zone instead of moving to the previous day west of UTC.
+ * 2 November in every time zone instead of moving to the previous day west of UTC. A date that does not exist
+ * (2026-02-30, 2026-13-01) gives NaN, so Chart.js leaves the point out instead of drawing it on another day.
  */
 export function chartDay(value) {
   let parts;
   if (typeof value === 'string') {
-    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+    const match = /^(\d{4})-(\d{2})-(\d{2})(?=$|T)/.exec(value);
     if (match) parts = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
   } else if (typeof value === 'number' && Number.isFinite(value)) {
     const utc = new Date(value);
@@ -21,7 +22,7 @@ export function chartDay(value) {
   const day = new Date(0);
   day.setFullYear(...parts);
   day.setHours(0, 0, 0, 0);
-  return day.getTime();
+  return day.getFullYear() === parts[0] && day.getMonth() === parts[1] && day.getDate() === parts[2] ? day.getTime() : NaN;
 }
 
 function formatted(value, unit, format, locale) {

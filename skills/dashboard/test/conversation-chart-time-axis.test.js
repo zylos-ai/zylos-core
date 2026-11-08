@@ -131,6 +131,20 @@ test('a daily point keeps its calendar day west and east of UTC', t => {
   }
 });
 
+test('dates that do not exist are left out without moving the axis', () => {
+  for (const bad of ['2026-02-30', '2026-13-01', '2026-00-10']) assert.ok(Number.isNaN(chartDay(bad)), bad);
+  assert.equal(chartDay('2024-02-29'), new Date(2024, 1, 29).getTime(), 'a real leap day stays');
+  const xs = ['2026-02-27', '2026-02-30', '2026-02-28', '2026-13-01', '2026-02-28garbage', '2026-03-01'];
+  const config = conversationChartConfig(block('date', xs), { locale: 'zh-CN' });
+  config.options.responsive = false; config.options.devicePixelRatio = 1;
+  const chart = new Chart(canvas(900), config);
+  try {
+    assert.deepEqual(chart.scales.x.getLabelItems().map(item => item.label), ['2月27日', '2月28日', '3月1日'], 'no year and no tick for the invalid dates');
+    const drawn = chart.getDatasetMeta(0).data.map(point => !point.skip && Number.isFinite(point.x));
+    assert.deepEqual(drawn, [true, false, true, false, false, true]);
+  } finally { chart.destroy(); }
+});
+
 test('hourly data keeps the automatic time axis and default tooltip', () => {
   const config = conversationChartConfig(block('datetime', hours(12)), { locale: 'en' });
   assert.equal(config.options.scales.x.type, 'time');
