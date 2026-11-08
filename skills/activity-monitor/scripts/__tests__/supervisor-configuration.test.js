@@ -19,6 +19,10 @@ function fromFile(t, environment = {}) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.zylos'));
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify(config));
+  fs.mkdirSync(path.join(root, '.claude'));
+  fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({model:'opus[1m]'}));
+  fs.mkdirSync(path.join(root, '.codex'));
+  fs.writeFileSync(path.join(root, '.codex/config.toml'), 'model = "codex-model"\n');
   const env = { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: repository,
     PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 't'), TMUX_TMPDIR: path.join(root, 'm') };
   env.TMUX = `${path.join(env.TMUX_TMPDIR, 'private.sock')},0,0`;
@@ -39,7 +43,8 @@ function fromFile(t, environment = {}) {
 // worker dependencies forbid external sends and do not launch a real adapter.
 test('entry honors the 1M Claude 30% threshold and configured 60s TTL from config.json', t => {
   const result = fromFile(t), resolved = result.configuration;
-  assert.deepEqual(resolved.rotationThresholds, { claude: 30, codex: 45 });
+  assert.equal(resolved.rotationPolicy.new_session_threshold, 30);
+  assert.deepEqual(resolved.defaultModels, {claude:'opus[1m]',codex:'codex-model'});
   assert.equal(resolved.hotTtlSeconds, 60);
   assert.equal(resolved.evictMinIdleSeconds, 90);
   assert.equal(resolved.syncMinIntervalSeconds, 12);
@@ -50,8 +55,9 @@ test('entry honors the 1M Claude 30% threshold and configured 60s TTL from confi
   assert.equal(result.controls.length, 1, '50% usage must rotate with the configured 30% threshold');
   assert.deepEqual(result.fences, [{ sessionGroup: 'a', reason: 'ttl', runId: 'run-a' }], '120s idle must expire a 60s TTL');
   assert.equal(result.refreshed.mode, 'single');
-  for (const key of ['hotTtlSeconds', 'evictMinIdleSeconds', 'syncMinIntervalSeconds', 'rotationThresholds'])
+  for (const key of ['hotTtlSeconds', 'evictMinIdleSeconds', 'syncMinIntervalSeconds'])
     assert.deepEqual(result.refreshed[key], resolved[key], 'startup settings change only after restart');
+  assert.equal(result.refreshed.rotationPolicy.new_session_threshold,99,'threshold policy refreshes each round');
 });
 
 test('entry gives valid environment settings priority over real config.json', t => {
@@ -69,15 +75,11 @@ test('entry gives valid environment settings priority over real config.json', t 
 test('invalid optional values fall through environment, config and defaults without losing thresholds', () => {
   const defaults = parseSupervisorConfiguration({}, {});
   assert.deepEqual(defaults, { hotTtlSeconds: 1800, evictMinIdleSeconds: 300, syncMinIntervalSeconds: 600, syncMaxIntervalSeconds: 21600,
-    originSyncThreshold: 50, syncBatchLimit: 200, syncThreshold: 15, rotationThresholds: { claude: 70, codex: 75 } });
+    originSyncThreshold: 50, syncBatchLimit: 200, syncThreshold: 15 });
   const fields = ['session_hot_ttl_seconds', 'session_evict_min_idle_seconds', 'sync_min_interval_seconds', 'sync_max_interval_seconds', 'origin_sync_threshold', 'sync_batch_limit'];
   for (const invalid of ['', '0', '-1', '1.5', 'NaN', '12x', '9007199254740992']) {
     const env = Object.fromEntries(envKeys.map(key => [key, invalid]));
     assert.deepEqual(parseSupervisorConfiguration(config, env), parseSupervisorConfiguration(config, {}));
     assert.deepEqual(parseSupervisorConfiguration(Object.fromEntries(fields.map(key => [key, invalid])), env), defaults);
   }
-  assert.deepEqual(parseSupervisorConfiguration({ new_session_threshold: '30', codex_new_session_threshold: '45' }, {}).rotationThresholds,
-    { claude: 30, codex: 45 });
-  assert.deepEqual(parseSupervisorConfiguration({ new_session_threshold: 101, codex_new_session_threshold: 0 }, {}).rotationThresholds,
-    { claude: 70, codex: 75 });
 });

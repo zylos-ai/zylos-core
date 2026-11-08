@@ -201,7 +201,7 @@ describe('syncTemplateModelSetting', () => {
     assert.equal(installedSettings.model, 'sonnet');
   });
 
-  it('downgrades opus[1m] to opus when threshold is above 30', () => {
+  it('preserves the 1M model when an old scalar threshold is high', () => {
     const installedSettings = {};
     const logs = [];
 
@@ -213,8 +213,8 @@ describe('syncTemplateModelSetting', () => {
     });
 
     assert.equal(result.changed, true);
-    assert.equal(installedSettings.model, 'opus');
-    assert.equal(result.model, 'opus');
+    assert.equal(installedSettings.model, 'opus[1m]');
+    assert.equal(result.model, 'opus[1m]');
   });
 
   it('keeps opus[1m] when threshold is not set', () => {
@@ -264,12 +264,13 @@ describe('syncTemplateModelSetting', () => {
 });
 
 describe('syncModelCoupledNewSessionThreshold', () => {
-  it('writes threshold 30 when model was backfilled and threshold is missing', () => {
+  it('seeds a model threshold when a native model was backfilled', () => {
     const updates = [];
     const logs = [];
 
     const result = syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
+      defaultModels: { claude: 'opus[1m]' },
       cfg: {},
       updateConfig: (update) => {
         updates.push(update);
@@ -279,16 +280,17 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     });
 
     assert.equal(result.changed, true);
-    assert.deepEqual(updates, [{ setIfAbsent: { new_session_threshold: 30 } }]);
-    assert.deepEqual(logs, ['  + new_session_threshold: 30 (paired with model backfill)']);
+    assert.deepEqual(updates, [{ mergeIfAbsent: { model_rotation_thresholds: { claude: { 'opus[1m]': 40 } } } }]);
+    assert.deepEqual(logs, ['  + model_rotation_thresholds: model defaults migrated']);
   });
 
   it('preserves an explicit threshold when model was backfilled', () => {
     const result = syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
+      defaultModels: { claude: 'opus[1m]' },
       cfg: { new_session_threshold: 70 },
       updateConfig: (update) => {
-        assert.deepEqual(update, { setIfAbsent: { new_session_threshold: 30 } });
+        assert.deepEqual(update, { mergeIfAbsent: { model_rotation_thresholds: { claude: { 'opus[1m]': 70 } } } });
         return { changed: false };
       },
       log: () => {
@@ -320,6 +322,7 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     const logs = [];
     const result = syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
+      defaultModels: { claude: 'opus[1m]' },
       cfg: {},
       dryRun: true,
       updateConfig: () => {
@@ -329,7 +332,7 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     });
 
     assert.equal(result.changed, true);
-    assert.deepEqual(logs, ['  + new_session_threshold: 30 (paired with model backfill)']);
+    assert.deepEqual(logs, ['  + model_rotation_thresholds: model defaults migrated']);
   });
 });
 

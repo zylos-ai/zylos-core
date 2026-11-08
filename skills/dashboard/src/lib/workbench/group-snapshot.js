@@ -1,3 +1,4 @@
+import { readThresholdPolicy, sessionThreshold } from '../session-threshold.js';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
 import { createCoreCli } from './core-cli.js';
@@ -91,6 +92,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     }
     sources.accounts = accountsCache.sources;
     const runtimeHealth = status?.runtimeHealth ?? {};
+    const thresholdPolicy = readThresholdPolicy(zylosDir);
     for (const row of rows) {
       const observation = captured.get(row.sessionGroup);
       row.createdAt = observation?.identity.createdAt ?? null;
@@ -117,6 +119,10 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       row.desired = status?.view === 'single' || !ov.ok ? null : selectedModel
         ? { runtime: selectedRuntime, mode: 'override', model: selectedModel.model, effort: selectedModel.effort }
         : { runtime: selectedRuntime, mode: 'default' };
+      const running = ['running', 'starting'].includes(row.presence);
+      row.rotationThreshold = sessionThreshold(thresholdPolicy, { runtime: row.target.runtime,
+        usage: usage?.valid ? usage.value : null, launchConfig: row.launchConfig,
+        ...(running ? {} : { desiredModel: selectedModel?.model ?? thresholdPolicy.defaultModels[row.target.runtime] }) });
       row.wait = waitingReason(row, { runtimeHealth, activations, now: at });
       row.state = classify(row, { statusError });
       const events = row.state.kind === 'busy' && row.live?.runId ? queryAllEvents(store, {

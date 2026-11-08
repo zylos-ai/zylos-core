@@ -233,9 +233,6 @@ test('settings composition moves actual control nodes into cards and preserves t
   let movedCalls = 0;
   for (const [source, tag, id] of [[settings, 'section', 'settings-model-pricing-group'], [settings, 'section', 'observer-settings-group'], [actions, 'section', 'action-status']]) { const control = node(document, tag, id); source.append(control); control.addEventListener('click', () => movedCalls++); }
   const modeField = node(document, 'div'); modeField.className = 'action-field'; const mode = node(document, 'select', 'action-mode'); modeField.append(mode); actions.append(modeField); let calls = 0; mode.addEventListener('change', () => calls++);
-  const thresholdField = node(document, 'div'); thresholdField.className = 'action-field';
-  const threshold = node(document, 'input', 'action-threshold'), apply = node(document, 'button', 'action-threshold-apply');
-  thresholdField.append(threshold, apply); actions.append(thresholdField);
   const upgrade = node(document, 'button'); upgrade.dataset.action = 'upgrade-cc'; actions.append(upgrade);
   const priceInput = node(document, 'input', 'price-input'); settings.querySelector('#settings-model-pricing-group').append(priceInput);
   for (const name of ['fleet', 'keys']) { const panel = node(document, 'section'); panel.className = 'manage-panel'; panel.dataset.panel = name; panel.hidden = true; panel.addEventListener('click', () => movedCalls++); fleet.append(panel); }
@@ -252,8 +249,9 @@ test('settings composition moves actual control nodes into cards and preserves t
   page.select('pricing'); assert.equal(page.sections.pricing.hidden, false); assert.equal(page.sections.defaults.hidden, true);
   page.detail('technical'); page.select('observer'); page.detail('plain'); assert.equal(page.sections.observer.hidden, true); assert.equal(page.sections.defaults.hidden, false);
   const actionBody = page.actionsScope.querySelector('.modal-body');
-  assert.equal(mode.closest('.modal-body'), actionBody); assert.equal(threshold.closest('.modal-body'), actionBody); assert.equal(apply.closest('.modal-body'), actionBody);
-  assert.deepEqual(actionBody.querySelectorAll('button, select, input'), [mode, threshold, apply]);
+  assert.equal(mode.closest('.modal-body'), actionBody);
+  assert.equal(root.querySelector('#action-threshold'), null);
+  assert.deepEqual(actionBody.querySelectorAll('button, select, input'), [mode]);
   assert.equal(priceInput.closest('.modal-body'), null); assert.equal(upgrade.closest('.modal-body'), null);
   page.badge('pricing', 2); const badge = root.querySelector('nav').querySelectorAll('.wb-set-nav-n')[1]; assert.equal(badge.textContent, '2'); assert.equal(badge.hidden, false);
   page.badge('pricing', 0); assert.equal(badge.hidden, true);
@@ -537,4 +535,76 @@ test('the pricing panel reports unsaved changes to its navigation badge and save
   assert.equal(counts.at(-1), 1); assert.equal(bar.hidden, false);
   panel.addRow(); assert.equal(counts.at(-1), 2);
   panel.destroy(); assert.equal(counts.at(-1), 0); assert.equal(bar.hidden, true);
+});
+
+
+test('model thresholds switch with the selected model and save an explicit engine/model only', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high', models: [{ id: 'opus' }, { id: 'opus[1m]' }],
+    efforts_by_model: { '*': ['high'] }, model_thresholds: { opus: 70, 'opus[1m]': 40 }, model_threshold_max: { opus: 95, 'opus[1m]': 40 } };
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: meta }, document, t,
+    confirm: async () => true, execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  const model = root.querySelector('#settings-model-claude'), threshold = root.querySelector('#settings-threshold-claude'), save = root.querySelector('#settings-save-models');
+  assert.equal(threshold.value, '70'); assert.equal(threshold.max, '95');
+  model.value = 'opus[1m]'; await model.dispatch('change');
+  assert.equal(threshold.value, '40'); assert.equal(threshold.max, '40');
+  threshold.value = '41'; await threshold.dispatch('input'); assert.equal(save.disabled, true);
+  threshold.value = '35'; await threshold.dispatch('input'); assert.equal(save.disabled, false);
+  await save.dispatch('click');
+  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'claude', model: 'opus[1m]' } },
+    { action: 'set-threshold', body: { runtime: 'claude', model: 'opus[1m]', value: 35 } }]);
+  assert.equal(save.hidden, true);
+  model.value = 'opus'; await model.dispatch('change'); assert.equal(threshold.value, '70', 'the other model remains unchanged');
+  panel.destroy();
+});
+
+test('custom model threshold waits for metadata and ignores a late response for an older selection', async () => {
+  const document = documentFixture(), root = document.createElement('div'), pending = [];
+  const meta = { runtime: 'codex', current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] },
+    model_thresholds: { one: 70 }, model_threshold_max: { one: 95 } };
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { codex: meta }, document, t,
+    read: path => { const item = deferred(); pending.push({ path, ...item }); return item.promise; } });
+  const model = root.querySelector('#settings-model-codex'), custom = root.querySelector('#settings-model-custom-codex'), threshold = root.querySelector('#settings-threshold-codex');
+  model.value = '__custom__'; await model.dispatch('change'); custom.value = 'custom-large'; await custom.dispatch('input');
+  assert.equal(threshold.disabled, true); assert.equal(threshold.value, ''); assert.equal(root.querySelector('#settings-save-models').disabled, true);
+  const request = pending.at(-1); assert.match(request.path, /model=custom-large/);
+  model.value = 'one'; await model.dispatch('change');
+  request.resolve({ ...meta, model_thresholds: { ...meta.model_thresholds, 'custom-large': 40 }, model_threshold_max: { ...meta.model_threshold_max, 'custom-large': 40 } });
+  await tick(); assert.equal(threshold.value, '70');
+  custom.value = 'custom-large'; model.value = '__custom__'; await model.dispatch('change');
+  pending.at(-1).resolve({ ...meta, model_thresholds: { ...meta.model_thresholds, 'custom-large': 40 }, model_threshold_max: { ...meta.model_threshold_max, 'custom-large': 40 } });
+  await tick(); assert.equal(threshold.value, '40'); assert.equal(threshold.max, '40'); assert.equal(threshold.disabled, false);
+  panel.destroy();
+});
+
+
+test('an unchanged migrated threshold above the new write limit does not block effort changes', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high', models: [{ id: 'opus' }],
+    efforts_by_model: { opus: ['high', 'low'] }, model_thresholds: { opus: 100 }, model_threshold_max: { opus: 95 } };
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: meta }, document, t,
+    confirm: async () => true, execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  const effort = root.querySelector('#settings-effort-claude'), threshold = root.querySelector('#settings-threshold-claude'), save = root.querySelector('#settings-save-models');
+  assert.equal(threshold.value, '100'); effort.value = 'low'; await effort.dispatch('change'); assert.equal(save.disabled, false);
+  await save.dispatch('click'); assert.deepEqual(calls, [{ action: 'switch-effort', body: { runtime: 'claude', effort: 'low' } }]);
+  threshold.value = '99'; await threshold.dispatch('input'); assert.equal(save.disabled, true, 'a new value must meet the write limit');
+  panel.destroy();
+});
+
+
+test('threshold-only save reports next-decision effect in both interface languages', async () => {
+  for (const locale of ['en', 'zh']) {
+    const messages = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
+    const document = documentFixture(), root = document.createElement('div');
+    const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high', models: [{ id: 'opus' }],
+      efforts_by_model: { '*': ['high'] }, model_thresholds: { opus: 70 }, model_threshold_max: { opus: 95 } };
+    const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: meta }, document,
+      t: key => messages[key] ?? key, confirm: async () => true, execute: async () => true });
+    const threshold = root.querySelector('#settings-threshold-claude');
+    threshold.value = '60'; await threshold.dispatch('input');
+    await root.querySelector('#settings-save-models').dispatch('click');
+    assert.ok(root.textContent.includes(messages['wb.settings.nextStart']));
+    assert.match(messages['wb.settings.nextStart'], locale === 'en' ? /Thresholds apply at the next rotation decision/ : /阈值在下一轮换会话判断生效/);
+    panel.destroy();
+  }
 });

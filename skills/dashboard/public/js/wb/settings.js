@@ -60,8 +60,8 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   const session = settingsCard(document, { icon: 'restart', title: t('wb.settings.session.title'), sub: t('wb.settings.session.sub') });
   relabels.push(() => { session.label.textContent = t('wb.settings.session.title'); session.sub.textContent = t('wb.settings.session.sub'); });
   const actionBody = element(document, 'div', undefined, 'modal-body wb-set-fields'); session.card.append(actionBody); sections.defaults.append(session.card);
-  // Keep mode/threshold listeners attached to their generated controls.
-  for (const selector of ['#action-mode', '#action-threshold']) {
+  // Keep mode listeners attached to their generated controls.
+  for (const selector of ['#action-mode']) {
     const control = actions.querySelector(selector); if (control) actionBody.append(control.closest('.action-field'));
   }
   for (const selector of ['#action-mode-status', '#action-instance-status', '#action-restart-status']) move(actions, selector, actionBody);
@@ -140,6 +140,6 @@ export function createSettingsLoader({ read, onLoad }) {
 
 export function resetSettingsDrafts(root) {
   for (const selector of ['#settings-defaults', '#settings-price-rows', '#settings-priority-price-rows']) root.querySelector(selector)?.replaceChildren();
-  for (const node of root.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier, #action-mode, #action-threshold, #action-threshold-apply')) node.disabled = true;
+  for (const node of root.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier, #action-mode')) node.disabled = true;
   const status = root.querySelector('#settings-status'); if (status) { status.hidden = true; status.textContent = ''; }
 }

@@ -828,3 +828,20 @@ for (const mode of ['multi', 'single']) test(`Origin read errors are redacted in
   assert.equal(JSON.stringify(snapshot).includes(secret), false);
   assert.equal(JSON.stringify(snapshot).includes('person@example.com'), false);
 });
+
+test('group row thresholds follow actual running models and the desired model while sleeping', async t => {
+  const f=fixture(t,{groupKeys:['telegram:small','telegram:large','telegram:sleeping']});
+  fs.mkdirSync(path.join(f.root,'.zylos'),{recursive:true});
+  fs.mkdirSync(path.join(f.root,'.claude'),{recursive:true});
+  fs.writeFileSync(path.join(f.root,'.claude/settings.json'),JSON.stringify({model:'haiku'}));
+  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({model_rotation_thresholds:{claude:{sonnet:63,'opus[1m]':36}}}));
+  f.live.get('telegram:small').usage={valid:true,value:{model:{id:'claude-sonnet-4-6'},context_window:{context_window_size:200000,used_percentage:60}}};
+  f.live.get('telegram:large').usage={valid:true,value:{model:{id:'claude-opus-4-6'},context_window:{context_window_size:1000000,used_percentage:38}}};
+  f.live.delete('telegram:sleeping');
+  const read=f.cli.readOverrides;
+  f.cli.readOverrides=async groups=>{const result=await read(groups);result.data.model=[{sessionGroup:'telegram:sleeping',runtime:'claude',model:'opus[1m]'}];return result;};
+  const snapshot=await f.service.getSnapshot();
+  assert.deepEqual(snapshot.rows.map(row=>[row.sessionGroup,row.rotationThreshold]).sort(),[
+    ['origin',70],['telegram:large',36],['telegram:sleeping',36],['telegram:small',63]
+  ]);
+});

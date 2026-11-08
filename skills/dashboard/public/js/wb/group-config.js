@@ -32,6 +32,19 @@ export function validConfigChange(change) {
 export function createGroupConfig({ key, request, onChange = () => {}, t = key => key, active = () => true }) {
   const state = { value: null, result: '', error: null, busy: false, meta: {} };
   const publish = () => { if (active()) onChange(state); };
+  const thresholdRequests = new Set();
+  async function loadThreshold(runtime, model) {
+    if (!model || !['claude', 'codex'].includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
+    const id = runtime + ':' + model;
+    if (thresholdRequests.has(id)) return;
+    thresholdRequests.add(id);
+    try {
+      const value = await request('/api/actions/meta?' + new URLSearchParams({ runtime, model }));
+      if (!active() || !value?.model_thresholds) return;
+      state.meta[runtime] = { ...state.meta[runtime], ...value, model_thresholds: { ...state.meta[runtime]?.model_thresholds, ...value.model_thresholds } };
+      publish();
+    } catch { /* Keep the threshold explicitly unknown until the editor is opened again. */ }
+  }
   // Model and effort choices per engine; without them the editor falls back to free text.
   async function loadMeta(runtime) {
     if (!['claude', 'codex'].includes(runtime) || runtime in state.meta) return state.meta[runtime];
@@ -53,7 +66,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     return value;
   }
   return {
-    state, load, loadMeta, redraw: publish,
+    state, load, loadMeta, loadThreshold, redraw: publish,
     async save(change) {
       if (state.busy) return;
       if (!validConfigChange(change)) {
@@ -129,7 +142,7 @@ export function startingPair(value, runtime) {
 
 // Edit form: engine, model and effort as one pair with save and cancel. The per-group engine
 // switch and the reset to the default model stay on a second, quieter line.
-export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true, onCancel = () => {} } = {}) {
+export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true, rotationThreshold = null, onCancel = () => {} } = {}) {
   const { state } = controller;
   state.draft ??= {};
   const locked = !writable || state.busy;
@@ -151,6 +164,15 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
     model.value = modelValue; model.placeholder = t('wb.config.model'); model.setAttribute('aria-label', t('wb.config.model')); model.disabled = locked;
   }
   const effortValue = state.draft.effort ?? start.effort;
+  const threshold = element(document, 'p', '', 'wb-note wb-cfg-threshold');
+  threshold.setAttribute('aria-live', 'polite');
+  const showThreshold = () => {
+    const selected = model.value.trim() || state.meta?.[target.value]?.current_model;
+    const value = selected ? state.meta?.[target.value]?.model_thresholds?.[selected] : target.value === resolved ? rotationThreshold : null;
+    threshold.textContent = Number.isFinite(value) ? t('wb.config.modelThreshold', { value }) : t('wb.config.modelThresholdUnknown');
+    if (selected && !Number.isFinite(value) && meta) void controller.loadThreshold?.(target.value, selected);
+  };
+  showThreshold();
   const effort = select(t('wb.term.effort'), effortChoices(meta, model.value, effortValue), effortValue, t('wb.config.pickEffort'));
   target.addEventListener('change', () => {
     state.draft = { ...state.draft, target: target.value, model: undefined, effort: undefined };
@@ -166,7 +188,8 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
     const options = effortChoices(meta, model.value, kept);
     effort.replaceChildren(option('', t('wb.config.pickEffort')), ...options.map(value => option(value)));
     effort.value = options.includes(kept) ? kept : '';
-    syncSave();
+    state.draft.effort = effort.value;
+    showThreshold(); syncSave();
   });
   effort.addEventListener('change', () => { state.draft.effort = effort.value; syncSave(); });
   syncSave();
@@ -176,7 +199,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   const form = element(document, 'div', undefined, 'wb-cfg-edit');
   const pair = element(document, 'div', undefined, 'wb-cfg-controls');
   pair.append(target, model, effort, save, cancel);
-  form.append(pair, element(document, 'p', t('wb.config.pairNote'), 'wb-note'));
+  form.append(pair, threshold, element(document, 'p', t('wb.config.pairNote'), 'wb-note'));
   // Less common: which engine this group runs on, and dropping its own model pair.
   const runtime = select(t('wb.term.runtime'), ['inherit', 'claude', 'codex'].map(value => ({ value, label: value === 'inherit' ? t('wb.term.inherit') : runtimeName(value) })),
     state.draft.runtime ?? state.value?.runtime?.data?.desired?.runtime ?? 'inherit');

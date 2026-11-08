@@ -6,6 +6,7 @@ const { groupRunDir, listGroupTmuxSessions, tmuxNameForGroup } = await loadCoreM
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget, readTargetRuntime, revalidateSessionTarget, readProcessTree: systemProcessTree } = await loadCoreModule('runtime/session-target.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
+const { usageModelFacts } = await loadCoreModule('session-usage-reader.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 
 const absent = (group, env) => ({ sessionGroup: group, present: false, ready: false, processRunning: false,
@@ -89,13 +90,16 @@ export class SupervisorScenes {
             }
           }
         }
+        Object.assign(scene, usageModelFacts(null, scene.runtime, scene.launchConfig));
         if (this.readUsage) {
           const usage = await this.readUsage(scene);
-          scene.usagePercent = Number.isFinite(usage) ? usage : null;
+          scene.usagePercent = Number.isFinite(usage) ? usage : Number.isFinite(usage?.percent) ? usage.percent : null;
+          if (usage && typeof usage === 'object') Object.assign(scene, usageModelFacts(usage.value, scene.runtime, scene.launchConfig));
         } else {
           const sampled = await this.reader.readSessionState(scope, { freshnessMs: 5000 });
           if (sampled.identity.runId === scene.runId && sampled.identity.sessionId === scene.sessionId && sampled.usage.valid) {
             const value = sampled.usage.value;
+            Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig));
             const percent = target.runtime === 'claude' ? value.context_window?.used_percentage :
               value.contextUsage?.ceiling > 0 ? 100 * value.contextUsage.used / value.contextUsage.ceiling : null;
             scene.usagePercent = Number.isFinite(percent) ? percent : null;

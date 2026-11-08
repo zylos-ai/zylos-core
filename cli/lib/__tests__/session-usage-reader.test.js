@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-const {readCodexSampleForIdentity,codexRateLimits}=await import('../session-usage-reader.js');
+const {readCodexSampleForIdentity,codexRateLimits,usageModelFacts}=await import('../session-usage-reader.js');
 const {createSessionReader}=await import('../session-state-reader-async.js');
 const identity={present:true,ready:true,runtime:'codex',runId:'run',sessionId:'session',createdAt:123,serverGeneration:'gen',tmuxSessionId:'$1',paneId:'%1'};
 const row=(timestamp='2026-10-22T01:02:03.456Z',used=10)=>({timestamp,type:'event_msg',payload:{type:'token_count',info:{last_token_usage:{input_tokens:used},model_context_window:100},rate_limits:{primary:{window_minutes:10080,used_percent:71,resets_at:42},secondary:{window_minutes:300,used_percent:23,resets_at:43}}}});
@@ -45,4 +45,21 @@ test('account sample selects eligible rollout by mtime; identity replacement inv
   let calls=0;const changing=createSessionReader({env:f.env,open:async()=>({close:async()=>{}}),observe:async()=>++calls===1?identity:{...identity,sessionId:'new'}});
   assert.equal(await changing.readCodexUsageSample({sessionGroup:'lark:x'}),null);
  }finally{f.clean();}
+});
+
+test('Codex model belongs to the sampled turn and ignores a later turn or incomplete record', () => {
+ const f=fixture(); try {
+  const turn=model=>({type:'turn_context',payload:{model}});
+  fs.writeFileSync(f.rollout,line(turn('earlier'))+line(row())+line(turn('next'))+JSON.stringify(turn('partial')));
+  assert.equal(readCodexSampleForIdentity({sessionGroup:'lark:x',identity,env:f.env}).sample.model,'earlier');
+  fs.writeFileSync(f.rollout,line(turn('earlier'))+line(row())+line(turn('changed'))+line(row('2026-10-22T01:02:04Z')));
+  assert.equal(readCodexSampleForIdentity({sessionGroup:'lark:x',identity,env:f.env}).sample.model,'changed');
+ } finally { f.clean(); }
+});
+test('usage model facts prefer actual model and preserve the observed context class', () => {
+ const override={runtime:'claude',mode:'override',model:'sonnet'};
+ assert.deepEqual(usageModelFacts({model:{id:'claude-opus-4-6'},context_window:{context_window_size:1000000}},'claude',override),{model:'claude-opus-4-6',contextWindow:1000000});
+ assert.deepEqual(usageModelFacts(null,'claude',override),{model:'sonnet',contextWindow:null});
+ assert.deepEqual(usageModelFacts(null,'codex',override),{model:null,contextWindow:null});
+ assert.deepEqual(usageModelFacts(null,'claude',{mode:'default'}),{model:null,contextWindow:null});
 });

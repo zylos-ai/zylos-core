@@ -52,19 +52,23 @@ export function readCodexSampleForIdentity({ sessionGroup, identity, env = proce
   if (typeof event?.transcript_path !== 'string' || !path.isAbsolute(event.transcript_path)) return null;
   const rollout = readSnapshot(event.transcript_path);
   if (rollout.error) return null;
-  const row = completeRows(rollout.text).findLast(item => item.type === 'event_msg' && item.payload?.type === 'token_count' &&
+  const rows = completeRows(rollout.text);
+  const row = rows.findLast(item => item.type === 'event_msg' && item.payload?.type === 'token_count' &&
     (!account || item.payload.rate_limits));
   if (!row || typeof row.timestamp !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(row.timestamp)) return null;
   const day = new Date(row.timestamp.slice(0, 10) + 'T00:00:00Z');
   if (!Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== row.timestamp.slice(0, 10)) return null;
   const capturedAt = Date.parse(row.timestamp);
   if (!Number.isSafeInteger(capturedAt)) return null;
+  // Bind the model to the sampled turn, never a later turn in the rollout.
+  const model = rows.slice(0, rows.indexOf(row) + 1).findLast(item =>
+    item.type === 'turn_context' && typeof item.payload?.model === 'string')?.payload.model ?? null;
   const info = row.payload.info;
   const used = info?.last_token_usage?.input_tokens;
   const ceiling = info?.model_context_window;
   const contextUsage = Number.isFinite(used) && used >= 0 && Number.isFinite(ceiling) && ceiling > 0 ? { used, ceiling } : null;
   return { sample: { identity: { runId: identity.runId, sessionId: identity.sessionId }, capturedAt,
-    contextUsage, rateLimits: codexRateLimits(row.payload.rate_limits) }, mtime: rollout.mtime };
+    model, contextUsage, rateLimits: codexRateLimits(row.payload.rate_limits) }, mtime: rollout.mtime };
 }
 
 export function sameIdentity(a, b) {
@@ -81,4 +85,14 @@ export function sampleResult(sample, first, last, freshnessMs, now) {
     else if (!Number.isFinite(sampledAt) || now - sampledAt > freshnessMs) reason = 'stale';
   }
   return { value: reason ? null : sample.value, sampledAt, valid: !reason, reason: reason || null };
+}
+
+/** Model facts share the caller's validated usage identity. A captured explicit
+ * override is a fallback; the mutable instance default is never a session fact. */
+export function usageModelFacts(value, runtime, launchConfig) {
+  const actual = runtime === 'claude' ? value?.model?.id : value?.model;
+  const model = typeof actual === 'string' && actual ? actual :
+    launchConfig?.mode === 'override' && launchConfig.runtime === runtime ? launchConfig.model : null;
+  const window = runtime === 'claude' ? value?.context_window?.context_window_size : value?.contextUsage?.ceiling;
+  return { model, contextWindow: Number.isFinite(window) && window > 0 ? window : null };
 }

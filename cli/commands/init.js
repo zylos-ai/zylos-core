@@ -1,3 +1,4 @@
+import { migrateModelThresholds } from '../lib/model-rotation-thresholds.js';
 import { applyDashboardRoute } from '../lib/dashboard-install.js';
 import { printDashboardInfo } from '../lib/dashboard-access.js';
 import { provisionDashboardAuth } from '../../skills/dashboard/src/lib/auth-provision.js';
@@ -899,16 +900,11 @@ function ensureWebConsolePassword(explicitPassword = null) {
  * Idempotent — only writes keys that are missing.
  */
 function ensureNewSessionThresholdDefaults() {
-  updateZylosConfigLocked({
-    setIfAbsent: { new_session_threshold: 70, codex_new_session_threshold: 75 },
-  });
+  return migrateModelThresholds({ zylosDir: ZYLOS_DIR });
 }
 
-export function seedFreshInstallNewSessionThresholdDefault({
-  updateConfig = updateZylosConfigLocked,
-} = {}) {
-  const result = updateConfig({ setIfAbsent: { new_session_threshold: 30 } });
-  return result.changed;
+export function seedFreshInstallNewSessionThresholdDefault(options = {}) {
+  return migrateModelThresholds({ zylosDir: ZYLOS_DIR, ...options }).changed;
 }
 
 function migrateWebConsolePassword() {
@@ -2472,8 +2468,7 @@ export async function initCommand(args) {
     updateZylosConfigLocked({ set: { runtime: selectedRuntime } });
   }
 
-  // Fresh installs pair the opus[1m] default model with an explicit lower
-  // Claude new-session threshold. This is intentionally not used by re-init.
+  // Seed the configured model defaults through the shared per-model policy.
   seedFreshInstallNewSessionThresholdDefault();
   updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
 

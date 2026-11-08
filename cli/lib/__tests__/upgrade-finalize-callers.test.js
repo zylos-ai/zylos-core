@@ -14,6 +14,10 @@ function fixture(t, config = {}) {
   const configFile = path.join(root, '.zylos/config.json');
   fs.mkdirSync(path.dirname(configFile), { recursive: true });
   fs.writeFileSync(configFile, JSON.stringify(config) + '\n');
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus' }));
+  fs.writeFileSync(path.join(root, '.codex/config.toml'), 'model = "small"\n');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const calls = [];
   const ctx = { zylosDir: root, from: 'old', to: 'new', steps: [], mergedFiles: [], mergeConflicts: [] };
@@ -50,18 +54,18 @@ function fixture(t, config = {}) {
   return { ctx, deps, calls, configFile, read: () => JSON.parse(fs.readFileSync(configFile, 'utf8')) };
 }
 
-test('F1 actual caller preserves a preexisting threshold and inserts the other default', async t => {
+test('upgrade finalization preserves a preexisting threshold and migrates both native default models', async t => {
   const f = fixture(t, { new_session_threshold: 30, user: 'preserved' });
   const result = await completeUpgradeFinalization(f.ctx, f.deps);
   assert.equal(result.success, true);
-  assert.deepEqual(f.read(), { new_session_threshold: 30, codex_new_session_threshold: 75, user: 'preserved' });
+  assert.deepEqual(f.read(), { new_session_threshold: 30, user: 'preserved', model_rotation_thresholds: { claude: { opus: 30 }, codex: { small: 70 } } });
   assert.ok(f.calls.includes('start'));
 });
 
-test('F1 actual caller inserts both defaults when absent', async t => {
+test('upgrade finalization seeds both model defaults when absent', async t => {
   const f = fixture(t);
   assert.equal((await completeUpgradeFinalization(f.ctx, f.deps)).success, true);
-  assert.deepEqual(f.read(), { new_session_threshold: 70, codex_new_session_threshold: 75 });
+  assert.deepEqual(f.read(), { model_rotation_thresholds: { claude: { opus: 70 }, codex: { small: 70 } } });
 });
 
 test('F1 actual caller rejects malformed config before starting services', async t => {
@@ -142,7 +146,7 @@ test('F1 controlled after-rename failure preserves committed defaults and invoke
   assert.equal(observed.code, 'CONFIG_WRITE_FAILED');
   assert.equal(observed.phase, 'after_rename');
   assert.equal(observed.persisted, null);
-  assert.deepEqual(f.read(), { new_session_threshold: 30, codex_new_session_threshold: 75 });
+  assert.deepEqual(f.read(), { new_session_threshold: 30, model_rotation_thresholds: { claude: { opus: 30 }, codex: { small: 70 } } });
   assert.deepEqual(f.calls, ['stop']);
   assert.equal(result.recovery_required, true);
   assert.equal(journal.phase, 'recovery_required');
@@ -175,7 +179,7 @@ test('F1 caller updates both session thresholds before starting services', async
   const f = fixture(t);
   const result = await completeUpgradeFinalization(f.ctx, f.deps);
   assert.equal(result.success, true);
-  assert.deepEqual(f.read(), { new_session_threshold: 70, codex_new_session_threshold: 75 });
+  assert.deepEqual(f.read(), { model_rotation_thresholds: { claude: { opus: 70 }, codex: { small: 70 } } });
   assert.equal(f.calls.includes('start'),true);
 });
 
@@ -188,7 +192,7 @@ test('F1 caller uses the configured lock window and continues finalization', asy
   };
   const result = await completeUpgradeFinalization(f.ctx, f.deps);
   assert.equal(result.success, true);
-  assert.deepEqual(f.read(), { new_session_threshold: 70, codex_new_session_threshold: 75 });
+  assert.deepEqual(f.read(), { model_rotation_thresholds: { claude: { opus: 70 }, codex: { small: 70 } } });
   assert.equal(f.calls.includes('start'),true);
 });
 

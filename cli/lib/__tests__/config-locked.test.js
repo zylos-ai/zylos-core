@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { updateConfigStore } from '../config-store.js';
+import { evaluateConfigUpdate, updateConfigStore } from '../config-store.js';
 import { CONFIG_LOCK_FALLBACK_WARNING, updateConfigWithLock } from '../config-lock.js';
 
 const helper = fileURLToPath(new URL('./fixtures/f1-worker.js', import.meta.url));
@@ -411,5 +411,49 @@ describe('config locking', () => {
       capability: { backend: 'linux-flock', executable: '/usr/bin/flock' },
       spawn: () => ({ status: 1, signal: null, stdout: '', stderr: 'injected helper failure' }),
     }), error => error.code === 'CONFIG_LOCK_FAILED' && /injected helper failure/.test(error.message));
+  });
+});
+
+describe('nested config merge intents', () => {
+  it('retains existing set metadata while nested merge skips equal object leaves', () => {
+    const current = { settings: { model: 'opus' } };
+    assert.deepEqual(evaluateConfigUpdate(current, { set: { settings: { model: 'opus' } } }).written, ['settings']);
+    assert.deepEqual(evaluateConfigUpdate(current, { set: { settings: current.settings } }).written, []);
+    assert.deepEqual(evaluateConfigUpdate(current, { setIfAbsent: { settings: { model: 'sonnet' } } }).skipped, ['settings']);
+    assert.deepEqual(evaluateConfigUpdate(current, { mergeIfAbsent: { settings: { model: 'sonnet' } } }).skipped, ['settings']);
+    assert.deepEqual(evaluateConfigUpdate(current, { merge: { settings: { model: 'opus' } } }).written, []);
+    assert.deepEqual(current, { settings: { model: 'opus' } });
+  });
+
+  it('preserves model siblings when independent writers update under the same lock', async t => {
+    write({ model_rotation_thresholds: { claude: { opus: 65 }, codex: { small: 72 } }, keep: true });
+    const writers = [
+      startWorker({ configFile, lockFile, update: { merge: { model_rotation_thresholds: { claude: { sonnet: 62 } } } } }),
+      startWorker({ configFile, lockFile, update: { merge: { model_rotation_thresholds: { claude: { haiku: 64 } } } } }),
+    ];
+    t.after(async () => {
+      for (const { child } of writers) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await Promise.allSettled(writers.map(writer => writer.completion));
+    });
+    for (const writer of writers) {
+      const result = await writer.completion;
+      assert.equal(result.status, 0, result.stderr);
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')), {
+      model_rotation_thresholds: { claude: { opus: 65, sonnet: 62, haiku: 64 }, codex: { small: 72 } }, keep: true,
+    });
+  });
+
+  it('merges absent nested leaves idempotently and treats prototype-looking model names as literal keys', () => {
+    write({ model_rotation_thresholds: { claude: { opus: 65 } } });
+    const update = JSON.parse('{"mergeIfAbsent":{"model_rotation_thresholds":{"claude":{"opus":70,"sonnet":68,"__proto__":33,"constructor":34}}}}');
+    assert.equal(updateConfigStore(configFile, update).changed, true);
+    assert.equal(updateConfigStore(configFile, update).changed, false);
+    const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    assert.equal(config.model_rotation_thresholds.claude.opus, 65);
+    assert.equal(config.model_rotation_thresholds.claude.sonnet, 68);
+    assert.equal(config.model_rotation_thresholds.claude.__proto__, 33);
+    assert.equal(config.model_rotation_thresholds.claude.constructor, 34);
+    assert.equal({}.polluted, undefined);
   });
 });

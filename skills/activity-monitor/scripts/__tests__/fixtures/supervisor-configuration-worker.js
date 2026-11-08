@@ -4,7 +4,7 @@ import { startSupervisor } from '../../supervisor-main.js';
 
 const now = 200_000, controls = [], fences = new Map();
 const scene = { sessionGroup: 'a', present: true, ready: true, runId: 'run-a', sessionId: 'session-a',
-  runtime: 'claude', processRunning: true, state: 'idle', idleSince: 0, createdAt: 0, usagePercent: 50,
+  runtime: 'claude', model: 'claude-opus-4-6', contextWindow:1000000, processRunning: true, state: 'idle', idleSince: 0, createdAt: 0, usagePercent: 50,
   runDir: path.join(process.env.ZYLOS_DIR, 'activity-monitor/session-groups/a') };
 const db = { getModeTransition: () => null, listDrainFences: () => [...fences.values()],
   getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),

@@ -1094,3 +1094,19 @@ test('the observer entries appear only when the drawer is given an observer and 
   root = document.createElement('div'); renderTimeline(root, loader, { document, t });
   assert.equal(allNodes(root).some(node => node.textContent === 'wb.detail.observeHistory'), false);
 });
+
+
+test('group model threshold is read only and follows the selected model and engine default', async () => {
+  const document = createDocument(), root = document.createElement('div');
+  const controller = { state: { value: { runtime: { data: { resolved: { runtime: 'claude' } } }, model: { data: { desired: { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' } } } },
+    meta: { claude: { current_model: 'opus', models: [{ id: 'opus' }, { id: 'opus[1m]' }], efforts_by_model: { '*': ['high'] }, model_thresholds: { opus: 70, 'opus[1m]': 40 } } } }, save() {} };
+  renderGroupConfig(root, controller, { document, t, rotationThreshold: 63 });
+  const line = allNodes(root).find(node => node.classList.contains('wb-cfg-threshold'));
+  const [, model] = allNodes(root).find(node => node.classList.contains('wb-cfg-controls')).children;
+  assert.match(line.textContent, /"value":70/);
+  model.value = 'opus[1m]'; await model.dispatch('change'); assert.match(line.textContent, /"value":40/);
+  assert.equal(allNodes(root).filter(node => node.tagName === 'INPUT' && node.type === 'number').length, 0);
+  controller.state.draft = { model: '', target: 'claude' }; root.replaceChildren();
+  renderGroupConfig(root, controller, { document, t, rotationThreshold: 35 });
+  assert.match(allNodes(root).find(node => node.classList.contains('wb-cfg-threshold')).textContent, /"value":70/, 'default metadata wins over the old running model threshold');
+});

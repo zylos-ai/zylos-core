@@ -253,7 +253,7 @@
   "result.zylos_upgrade_unverified": "无法确认 zylos-core 升级结果，当前版本：v{version}。",
   "result.cc_updated": "Claude Code 已更新，重启会话后生效。",
   "result.codex_updated": "Codex CLI 已更新，重启会话后生效。",
-  "result.invalid_threshold": "阈值必须在 10 到 95 之间",
+  "result.invalid_threshold": "阈值必须在 1 到 {max} 之间",
   "result.threshold_set": "新会话阈值已设为 {value}%",
   "result.unknown_action": "未知操作",
   "result.internal_error": "内部错误：{error}",

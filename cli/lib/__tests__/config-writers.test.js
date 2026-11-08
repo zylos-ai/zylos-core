@@ -10,7 +10,15 @@ import { migrateNewSessionThresholdDefaults } from '../migrate.js';
 const rootDir = path.resolve(import.meta.dirname, '../../..');
 let root;
 
-beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-config-writers-')); });
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-config-writers-'));
+});
+function nativeModels() {
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
+  fs.writeFileSync(path.join(root, '.codex/config.toml'), 'model = "small"\n');
+}
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
 function cli(args, zylosDir = root) {
@@ -36,6 +44,7 @@ describe('production config writers', () => {
   });
 
   it('migrates only the explicitly supplied target and preserves falsey keys', () => {
+    nativeModels();
     const other = path.join(root, 'other');
     const targetFile = path.join(root, '.zylos', 'config.json');
     fs.mkdirSync(path.dirname(targetFile), { recursive: true });
@@ -43,7 +52,7 @@ describe('production config writers', () => {
     assert.equal(migrateNewSessionThresholdDefaults({ zylosDir: root }), true);
     assert.deepEqual(JSON.parse(fs.readFileSync(targetFile)), {
       new_session_threshold: 0,
-      codex_new_session_threshold: 75,
+      model_rotation_thresholds: { claude: { 'opus[1m]': 40 }, codex: { small: 70 } },
       unknown: false,
     });
     assert.equal(fs.existsSync(path.join(other, '.zylos', 'config.json')), false);
@@ -80,6 +89,7 @@ describe('production config writers', () => {
   });
 
   it('keeps fresh-install and re-init defaults idempotent through real production writers', () => {
+    nativeModels();
     const configUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'config.js')).href;
     const initUrl = pathToFileURL(path.join(rootDir, 'cli', 'commands', 'init.js')).href;
     const migrateUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'migrate.js')).href;
@@ -105,9 +115,8 @@ describe('production config writers', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.zylos', 'config.json'), 'utf8')), {
       runtime: 'codex',
       unknown: false,
-      new_session_threshold: 30,
+      model_rotation_thresholds: { claude: { 'opus[1m]': 40 }, codex: { small: 70 } },
       session_mode: 'multi',
-      codex_new_session_threshold: 75,
     });
   });
 

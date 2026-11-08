@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ZYLOS_DIR } from './config.js';
-import { updateConfigWithLock } from './config-lock.js';
+import { migrateModelThresholds } from './model-rotation-thresholds.js';
 
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
 const DEFAULT_TEMPLATES_DIR = path.join(PACKAGE_ROOT, 'templates');
@@ -68,11 +68,5 @@ export function migrateClaudeMdToZylosMd({
 }
 
 export function migrateNewSessionThresholdDefaults({ zylosDir = ZYLOS_DIR } = {}) {
-  const configPath = path.join(path.resolve(zylosDir), '.zylos', 'config.json');
-  const result = updateConfigWithLock({
-    configFile: configPath,
-    lockFile: `${configPath}.lock`,
-    update: { setIfAbsent: { new_session_threshold: 70, codex_new_session_threshold: 75 } },
-  });
-  return result.changed;
+  return migrateModelThresholds({ zylosDir: path.resolve(zylosDir) }).changed;
 }

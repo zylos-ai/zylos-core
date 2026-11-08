@@ -1,3 +1,4 @@
+import { migrateModelThresholds } from './model-rotation-thresholds.js';
 /**
  * Self-upgrade logic for zylos-core itself.
  * Downloads new version via GitHub tarball, syncs Core Skills with
@@ -858,9 +859,8 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       recovery_required:true,next:finalizationNext(ctx)};
   };
   try {
-    await run(4,'session_threshold_defaults',()=> (deps.updateConfig || updateZylosConfigLocked)(
-      {setIfAbsent:{new_session_threshold:70,codex_new_session_threshold:75}},
-      {configFile:path.join(root,'.zylos/config.json'),lockFile:path.join(root,'.zylos/config.json.lock'),waitMs:2000}));
+    await run(4,'session_threshold_defaults',()=> migrateModelThresholds({
+      zylosDir:root,updateConfig:deps.updateConfig || updateZylosConfigLocked}));
     await run(5,'memory_migration_ensure',()=> (deps.ensureMemoryMigration || (()=>createMigration({env:{...process.env,ZYLOS_DIR:root}}).ensure({createdBy:'upgrade'})))());
     await run(5,'rotate_legacy_session',()=>{
       const current=path.join(root,'memory/sessions/current.md');

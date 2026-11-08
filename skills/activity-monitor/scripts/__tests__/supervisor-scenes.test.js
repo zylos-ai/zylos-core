@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
+import { sceneRotationThreshold } from '../supervisor-lifecycle.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
 import { SupervisorServerObservation } from '../supervisor-server-observation.js';
@@ -88,4 +90,18 @@ test('identity checks preserve the full occupancy snapshot during tmux unavailab
   assert.equal(cached.processRunning, undefined);
   assert.equal(cached.runId, null);
   assert.equal(cached.healthIdentity, undefined);
+});
+
+// New observation boundary: real private tmux identity and statusline file.
+// Run when scene model/window extraction changes; no adapter commands changed.
+test('scene threshold uses the identity-validated model and observed window', {timeout:15000}, async t => {
+  const f=readyTmuxTarget(t,{prefix:'model-scene-',mode:'multi'});
+  const scenes=service(f,{readUsage:undefined});
+  const configuration={rotationPolicy:{model_rotation_thresholds:{claude:{sonnet:63,'opus[1m]':36}}},defaultModels:{claude:'haiku'}};
+  for(const [model,window,expected] of [['claude-sonnet-4-6',200000,63],['claude-opus-4-6',1000000,36]]){
+    fs.writeFileSync(path.join(path.dirname(f.readyPath),'statusline.json'),JSON.stringify({session_id:'session-1',zylos:{v:1,runId:'run-1',capturedAt:Date.now()},model:{id:model},context_window:{context_window_size:window,used_percentage:50}}));
+    const observed=await scenes.observeGroup('origin');
+    assert.equal(observed.model,model);assert.equal(observed.contextWindow,window);assert.equal(observed.usagePercent,50);
+    assert.equal(sceneRotationThreshold(observed,configuration),expected);
+  }
 });

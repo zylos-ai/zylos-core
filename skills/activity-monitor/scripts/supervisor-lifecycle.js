@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { validLaunchConfigSnapshot as validLaunchConfig } from './launch-config-shape.js';
+import { loadCoreModule } from './core-modules.js';
+const { modelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
@@ -11,6 +13,14 @@ const targetOf = group => group === null ? { machine: true } : { sessionGroup: g
 const finite = value => Number.isFinite(value);
 const manualGroup = request => request.mode === 'single' ? '*' : request.sessionGroup ?? 'origin';
 const manualTarget = request => request.mode === 'single' ? null : request.sessionGroup ?? 'origin';
+
+export function sceneRotationThreshold(scene, configuration) {
+  if (!['claude', 'codex'].includes(scene.runtime)) return null;
+  return modelThreshold(configuration.rotationPolicy ?? {}, {
+    runtime: scene.runtime, model: scene.model, contextWindow: scene.contextWindow,
+    defaultModel: configuration.defaultModels?.[scene.runtime], codexModels: configuration.codexModels,
+  });
+}
 
 // Database timestamps are UTC. Runtime observation timestamps are milliseconds.
 export function activityTime(value) {
@@ -423,7 +433,7 @@ export class SupervisorLifecycle {
     if (scene.observationError) throw scene.observationError;
     if (!await this.allowed(scene.sessionGroup, context)) return;
     if (!scene.present || !scene.ready) return;
-    const threshold = context.configuration.rotationThresholds?.[scene.runtime] ?? (scene.runtime === 'claude' ? 70 : scene.runtime === 'codex' ? 75 : null);
+    const threshold = sceneRotationThreshold(scene, context.configuration);
     if (!finite(scene.usagePercent) || threshold === null || scene.usagePercent < threshold) return;
     const key = JSON.stringify([scene.runId, scene.sessionId]), now = this.now();
     if (this.rotationSent.has(key) && now - this.rotationSent.get(key) < this.rotationCooldownMs) return;
@@ -507,9 +517,9 @@ export class SupervisorLifecycle {
       previous?.n0 > (config.syncBatchLimit ?? 200) && previous.runId === scene.runId &&
       range.firstConversationId > previous.f0;
     if (!range.nonempty || (!catchingUp && this.syncSent.has(key) && now - this.syncSent.get(key) < min)) return;
-    const rotationThreshold = config.rotationThresholds?.[scene.runtime] ?? (scene.runtime === 'claude' ? 70 : 75);
+    const rotationThreshold = sceneRotationThreshold(scene, config);
     const due = range.count > threshold || lag >= max || kind !== 'origin' &&
-      (this.syncRuns.get(key) !== scene.runId || finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold);
+      (this.syncRuns.get(key) !== scene.runId || rotationThreshold !== null && finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold);
     if (!catchingUp && !due) return;
     if (typeof this.d.readSyncMarker !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Sync marker reader is unavailable');
     const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });

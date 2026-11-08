@@ -38,12 +38,11 @@ export function createPageActions({ t, send, confirm, readOnly, remoteTarget, sh
 }
 
 /**
- * Connects the session controls (mode, rotation threshold, CLI upgrade) to the page actions. Every change goes
+ * Connects the session controls (mode and CLI upgrade) to the page actions. Every change goes
  * through `actions.exec`, so the ones that change the running agent are asked first.
  * - `onModeSettled()` runs after a mode change finished or was cancelled (a cancelled change restores the mode).
- * - `onThreshold(value)` runs after a new threshold was accepted.
  */
-export function bindActionControls(root, actions, { onModeSettled = () => {}, onThreshold = () => {} } = {}) {
+export function bindActionControls(root, actions, { onModeSettled = () => {} } = {}) {
   root.querySelector('[data-action="upgrade-cc"]').addEventListener('click', () => actions.exec('upgrade-cc'));
 
   const modeSelect = root.querySelector('#action-mode');
@@ -60,12 +59,5 @@ export function bindActionControls(root, actions, { onModeSettled = () => {}, on
     return changeMode(button.dataset.mode);
   }));
 
-  const thresholdInput = root.querySelector('#action-threshold');
-  async function applyThreshold() {
-    const value = parseInt(thresholdInput.value, 10);
-    if (!value || value < 10 || value > 95) return;
-    if (await actions.exec('set-threshold', { value }) !== false) onThreshold(value);
-  }
-  root.querySelector('#action-threshold-apply').addEventListener('click', applyThreshold);
-  thresholdInput.addEventListener('keydown', event => (event.key === 'Enter' ? applyThreshold() : undefined));
+
 }

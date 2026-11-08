@@ -50,58 +50,65 @@ function assertJsonValue(value, location = 'value', seen = new Set()) {
 
 export function validateUpdateIntent(update) {
   if (!isPlainObject(update)) throw new TypeError('config update must be an object');
-  const allowed = new Set(['set', 'setIfAbsent']);
+  const allowed = new Set(['set', 'setIfAbsent', 'merge', 'mergeIfAbsent']);
   for (const key of Object.keys(update)) {
     if (!allowed.has(key)) throw new TypeError(`unknown config update operation: ${key}`);
   }
-  const set = update.set ?? {};
-  const setIfAbsent = update.setIfAbsent ?? {};
-  if (!isPlainObject(set) || !isPlainObject(setIfAbsent)) {
-    throw new TypeError('set and setIfAbsent must be objects');
-  }
-  if (Object.keys(set).length === 0 && Object.keys(setIfAbsent).length === 0) {
-    throw new TypeError('config update must contain at least one key');
-  }
-  for (const key of Object.keys(set)) {
-    if (Object.hasOwn(setIfAbsent, key)) {
-      throw new TypeError(`config key appears in both set and setIfAbsent: ${key}`);
+  const operations = Object.fromEntries([...allowed].map(key => [key, update[key] ?? {}]));
+  const used = new Set();
+  for (const [operation, values] of Object.entries(operations)) {
+    if (!isPlainObject(values)) throw new TypeError(`${operation} must be an object`);
+    assertJsonValue(values, operation);
+    for (const key of Object.keys(values)) {
+      if (used.has(key)) throw new TypeError(`config key appears in multiple operations: ${key}`);
+      used.add(key);
     }
   }
-  assertJsonValue(set, 'set');
-  assertJsonValue(setIfAbsent, 'setIfAbsent');
-  return { set, setIfAbsent };
+  if (!used.size) throw new TypeError('config update must contain at least one key');
+  return operations;
+}
+
+function define(object, key, value) {
+  Object.defineProperty(object, key, { value, enumerable: true, writable: true, configurable: true });
+}
+function mergeLeaves(current, incoming, onlyAbsent) {
+  const result = Object.fromEntries(Object.entries(current));
+  for (const [key, value] of Object.entries(incoming)) {
+    const present = Object.hasOwn(current, key);
+    if (isPlainObject(value) && (!present || isPlainObject(current[key]))) {
+      define(result, key, mergeLeaves(present ? current[key] : {}, value, onlyAbsent));
+    } else if (!onlyAbsent || !present) {
+      define(result, key, value);
+    }
+  }
+  return result;
 }
 
 export function evaluateConfigUpdate(current, update) {
-  const { set, setIfAbsent } = validateUpdateIntent(update);
+  const operations = validateUpdateIntent(update);
   const config = Object.fromEntries(Object.entries(current));
   const previous = {};
   const written = [];
   const skipped = [];
-  const touched = [...Object.keys(set), ...Object.keys(setIfAbsent)];
-
-  for (const key of touched) {
-    if (Object.hasOwn(current, key)) {
-      Object.defineProperty(previous, key, {
-        value: current[key], enumerable: true, writable: true, configurable: true,
-      });
-    }
-  }
-  for (const [key, value] of Object.entries(set)) {
-    if (!Object.hasOwn(current, key) || !Object.is(current[key], value)) {
-      Object.defineProperty(config, key, {
-        value, enumerable: true, writable: true, configurable: true,
-      });
-      written.push(key);
-    }
-  }
-  for (const [key, value] of Object.entries(setIfAbsent)) {
-    if (Object.hasOwn(current, key)) {
-      skipped.push(key);
-    } else {
-      Object.defineProperty(config, key, {
-        value, enumerable: true, writable: true, configurable: true,
-      });
+  for (const [operation, values] of Object.entries(operations)) {
+    for (const [key, value] of Object.entries(values)) {
+      const present = Object.hasOwn(current, key);
+      if (present) define(previous, key, current[key]);
+      if (operation === 'setIfAbsent' && present) { skipped.push(key); continue; }
+      let next = value;
+      if (operation === 'merge' || operation === 'mergeIfAbsent') {
+        if (operation === 'mergeIfAbsent' && present && !isPlainObject(current[key])) {
+          skipped.push(key); continue;
+        }
+        next = isPlainObject(value)
+          ? mergeLeaves(isPlainObject(current[key]) ? current[key] : {}, value, operation === 'mergeIfAbsent')
+          : operation === 'mergeIfAbsent' && present ? current[key] : value;
+      }
+      const equal = present && (Object.is(current[key], next)
+        || ((operation === 'merge' || operation === 'mergeIfAbsent')
+          && typeof next === 'object' && JSON.stringify(current[key]) === JSON.stringify(next)));
+      if (equal) { if (operation === 'mergeIfAbsent') skipped.push(key); continue; }
+      define(config, key, next);
       written.push(key);
     }
   }

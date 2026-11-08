@@ -20,16 +20,15 @@ function actions({ answer = true, readOnly = false, remote = null, shown = { ses
 }
 
 // The session controls as the page builds them: the CLI upgrade button, the mode select with its segmented
-// buttons, and the rotation threshold.
+// buttons.
 function controls() {
   const document = documentFixture();
   const upgrade = node(document, 'button'); upgrade.dataset.action = 'upgrade-cc';
   const mode = node(document, 'select', 'action-mode'); mode.value = 'multi'; mode._current = 'multi';
   const seg = ['multi', 'single'].map(value => { const button = node(document, 'button'); button.dataset.mode = value; return button; });
-  const threshold = node(document, 'input', 'action-threshold'), apply = node(document, 'button', 'action-threshold-apply');
-  const byId = { '[data-action="upgrade-cc"]': upgrade, '#action-mode': mode, '#action-threshold': threshold, '#action-threshold-apply': apply };
+  const byId = { '[data-action="upgrade-cc"]': upgrade, '#action-mode': mode };
   const root = { querySelector: selector => byId[selector] ?? null, querySelectorAll: selector => (selector === '#action-mode-seg button' ? seg : []) };
-  return { root, upgrade, mode, seg, threshold, apply };
+  return { root, upgrade, mode, seg };
 }
 
 test('upgrading the CLI from the session controls asks first; cancelling sends nothing', async () => {
@@ -71,24 +70,6 @@ test('the segmented mode buttons do nothing for the current mode or while disabl
   c.seg[1].disabled = true;
   await c.seg[1].dispatch('click');
   assert.deepEqual(a.asked, []); assert.deepEqual(a.sent, []);
-});
-
-test('the rotation threshold applies without asking, only for 10–95, from the button or Enter', async () => {
-  const a = actions({ answer: false }), c = controls(), applied = [];
-  bindActionControls(c.root, a.run, { onThreshold: value => applied.push(value) });
-  c.threshold.value = '70';
-  await c.apply.dispatch('click');
-  c.threshold.value = '80';
-  await c.threshold.dispatch('keydown', { key: 'Enter' });
-  await c.threshold.dispatch('keydown', { key: 'a' });
-  for (const value of ['5', '9', '10', '95', '96']) {
-    c.threshold.value = value;
-    await c.apply.dispatch('click');
-  }
-  assert.deepEqual(a.asked, [], 'the threshold does not change the running agent, so nothing is asked');
-  assert.deepEqual(a.sent.map(item => item.body.value), [70, 80, 10, 95], 'both ends of 10–95 apply; 9 and 96 do not');
-  assert.ok(a.sent.every(item => item.action === 'set-threshold'));
-  assert.deepEqual(applied, [70, 80, 10, 95]);
 });
 
 test('a manual restart asks first and names the session shown at that moment, so Core can refuse a changed target', async () => {

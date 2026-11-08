@@ -7,6 +7,7 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const TEST_ROOTS = [
+  path.join(ROOT, 'test'),
   path.join(ROOT, 'skills', 'dashboard', 'test'),
   path.join(ROOT, 'skills', 'web-console', 'scripts', '__tests__'),
   path.join(ROOT, 'cli', 'lib', '__tests__'),
@@ -36,6 +37,8 @@ function isNodeTest(file) {
   // These integration entries use Jest and are selected by jest.config.js.
   if (rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js'
       || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js') return false;
+  // The other root test entries use Jest; keep this Node integration explicit.
+  if (rel === 'test/model-threshold-upgrade.integration.test.js') return true;
   if (rel.startsWith('skills/dashboard/test/')) return true;
   if (rel.startsWith('skills/web-console/scripts/__tests__/')) return true;
   if (rel.startsWith('cli/lib/__tests__/')) return true;

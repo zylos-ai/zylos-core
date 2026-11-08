@@ -100,7 +100,7 @@ test('getActionsMeta keeps Claude model and effort controls for Claude runtime',
   assert.ok(meta.models.length > 0);
   assert.ok(Object.keys(meta.efforts_by_model).length > 0);
   assert.equal(meta.current_effort, 'medium');
-  assert.equal(meta.new_session_threshold, 36);
+  assert.equal(meta.new_session_threshold, 70, 'without a configured model the legacy value has no model identity');
 });
 test('Claude model list includes defaults with display names and specific versions', () => {
   const meta = getActionsMeta(
@@ -201,3 +201,64 @@ test('handleAction upgrades Codex CLI under Codex runtime', async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('metadata exposes per-model thresholds, 1M limits and requested custom models', () => withCodexHome(codexHome => {
+  const zylosDir = makeZylosDir();
+  try {
+    fs.writeFileSync(path.join(zylosDir, '.codex/config.toml'), 'model = "small"\n');
+    fs.writeFileSync(path.join(codexHome, 'models_cache.json'), JSON.stringify({ models: [
+      { slug: 'small', context_window: 200000 }, { slug: 'custom-large', context_window: 1000000, effective_context_window_percent: 95 } ] }));
+    const meta = getActionsMeta({ runtime: 'codex', zylosDir, thresholdModel: 'custom-large', codex_new_session_threshold: 74,
+      model_rotation_thresholds: { codex: { small: 62, 'custom-large': 35 } } }, {});
+    assert.equal(meta.model_thresholds.small, 62); assert.equal(meta.new_session_threshold, 62);
+    assert.equal(meta.model_thresholds['custom-large'], 35); assert.equal(meta.model_threshold_max['custom-large'], 40);
+    assert.equal(meta.model_threshold_max.small, 95);
+  } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
+}));
+
+test('threshold writes require a model and engine, preserve another model and reject values above its window limit', async () => {
+  const zylosDir = makeZylosDir();
+  try {
+    fs.mkdirSync(path.join(zylosDir, '.zylos')); fs.mkdirSync(path.join(zylosDir, '.claude'));
+    fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ model: 'opus' }));
+    fs.writeFileSync(path.join(zylosDir, '.zylos/config.json'), JSON.stringify({ new_session_threshold: 68 }));
+    const config = { zylosDir, runtime: 'codex' };
+    assert.equal((await handleAction('set-threshold', { model: 'opus', value: 63 }, config)).error, 'INVALID_RUNTIME');
+    assert.equal((await handleAction('set-threshold', { runtime: 'claude', value: 63 }, config)).error, 'invalid_model');
+    assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: 41 }, config)).error, 'invalid_value');
+    assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: '35junk' }, config)).error, 'invalid_value');
+    assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: true }, config)).error, 'invalid_value');
+    assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: 35 }, config)).ok, true);
+    const stored = JSON.parse(fs.readFileSync(path.join(zylosDir, '.zylos/config.json'), 'utf8'));
+    assert.equal(stored.model_rotation_thresholds.claude.opus, 68);
+    assert.equal(stored.model_rotation_thresholds.claude['opus[1m]'], 35);
+    assert.equal(stored.new_session_threshold, 68, 'legacy key remains unchanged');
+  } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
+});
+
+test('changing the default model pins the legacy threshold before the model changes', async () => {
+  const zylosDir = makeZylosDir();
+  try {
+    fs.mkdirSync(path.join(zylosDir, '.zylos')); fs.mkdirSync(path.join(zylosDir, '.claude'));
+    fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ model: 'opus' }));
+    fs.writeFileSync(path.join(zylosDir, '.zylos/config.json'), JSON.stringify({ new_session_threshold: 64 }));
+    assert.equal((await handleAction('switch-model', { runtime: 'claude', model: 'sonnet' }, { zylosDir })).ok, true);
+    const stored = JSON.parse(fs.readFileSync(path.join(zylosDir, '.zylos/config.json'), 'utf8'));
+    const meta = getActionsMeta({ ...stored, zylosDir, runtime: 'claude' }, {});
+    assert.equal(meta.model_thresholds.opus, 64); assert.equal(meta.model_thresholds.sonnet, 70);
+  } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
+});
+
+
+test('metadata reads the same root TOML model syntax as threshold migration', () => withCodexHome(() => {
+  const zylosDir = makeZylosDir();
+  try {
+    for (const source of ["model = 'private-codex'\n[profile.other]\nmodel = \"other\"\n", 'model = "private-codex" # instance default\n[profile.other]\nmodel = "other"\n']) {
+      fs.writeFileSync(path.join(zylosDir, '.codex/config.toml'), source);
+      const meta = getActionsMeta({ runtime: 'codex', zylosDir, codex_new_session_threshold: 75 }, {});
+      assert.equal(meta.current_model, 'private-codex'); assert.equal(meta.new_session_threshold, 75);
+      assert.equal(meta.model_thresholds['private-codex'], 75);
+    }
+  } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
+}));

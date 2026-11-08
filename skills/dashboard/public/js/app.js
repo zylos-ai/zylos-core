@@ -1,19 +1,19 @@
 import { consumeDraftReset, createDraftRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=102';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=104';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=110';
 import { createPricingPanel } from './wb/settings-pricing.js?v=103';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=103';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=103';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=106';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=110';
 import { renderVersion } from './wb/settings-version.js?v=103';
 import { mountConversationPage } from './wb/conversation-page.js?v=106';
-import { mountChatSettings } from './wb/chat-settings.js?v=103';
-import { mountWorkbench } from './wb/shell.js?v=105';
+import { mountChatSettings } from './wb/chat-settings.js?v=110';
+import { mountWorkbench } from './wb/shell.js?v=110';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=103';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=99';
 import { observerPageUsable, observerRecoveryReason, viewedAccess } from './wb/observer-page.js?v=103';
-import { bindActionControls, createPageActions } from './wb/page-actions.js?v=103';
+import { bindActionControls, createPageActions } from './wb/page-actions.js?v=110';
 import { mountSchedule } from './wb/schedule.js?v=103';
 import { createUsagePage } from './wb/usage.js?v=103';
 import { ObserverHistory } from './observer-history.js?v=2';
@@ -994,7 +994,7 @@ async function refreshState() {
   const data = await refreshDashboardState(state, fetchJson);
   if (!data) return;
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
-  if (data.new_session_threshold) {
+  if (Object.hasOwn(data, 'new_session_threshold')) {
     state.newSessionThreshold = data.new_session_threshold;
   }
   renderInfoBar();
@@ -1514,7 +1514,7 @@ function applySse(name, data) {
     state.dashboardState = data;
     if (nextRuntimeInfo) state.dashboardState.runtime_info = nextRuntimeInfo;
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
-    if (data.new_session_threshold) state.newSessionThreshold = data.new_session_threshold;
+    if (Object.hasOwn(data, 'new_session_threshold')) state.newSessionThreshold = data.new_session_threshold;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
     renderInfoBar(); renderOriginAvailability(); renderObserverPage();
   } else if (name === 'fleet') {
@@ -2495,9 +2495,6 @@ function initSettingsPage() {
         data: value.prices, usage: value.usage, t, formatTokens: tok, writable: () => !remoteIsReadOnly(), onDirty: count => settingsPage.badge('pricing', count),
         write: body => requestAgentJson('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
     } else { const status = root.querySelector('#settings-status'); status.hidden = false; status.textContent = t('wb.readFailed'); }
-    const active = value.prices?.active ?? value.snapshot?.baselineRuntime;
-    const meta = value.metadata[active] ?? value.metadata.claude ?? value.metadata.codex;
-    root.querySelector('#action-threshold').value = meta?.new_session_threshold ?? state.newSessionThreshold ?? 70;
     refreshSettingsLocks(); refreshSettingsVersion();
   } });
   $('#wb-detail-toggle').addEventListener('change', () => {
@@ -2517,7 +2514,7 @@ function refreshSettingsLocks() {
   if (!settingsPage) return;
   applySettingsReadOnly(remoteIsReadOnly());
   if (!settingsPricing) { for (const node of settingsModal.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier')) node.disabled = true; }
-  for (const node of settingsPage.sections.defaults.querySelectorAll('#action-mode, #action-threshold, #action-threshold-apply')) node.disabled = remoteIsReadOnly();
+  for (const node of settingsPage.sections.defaults.querySelectorAll('#action-mode')) node.disabled = remoteIsReadOnly();
   syncModeSegment();
   settingsDefaults?.refreshLocks();
   refreshSettingsVersion();
@@ -2569,10 +2566,6 @@ function createActionsModal() {
     <p id="action-mode-status" class="wb-note"></p>
     <p id="action-instance-status" class="wb-note"></p>
     <p id="action-restart-status" class="wb-note"></p>
-    <div class="action-field wb-fld"><label class="wb-fld-l" for="action-threshold" data-i18n="actions.threshold">${esc(t('actions.threshold'))}</label>
-      <div class="wb-set-inline"><input id="action-threshold" class="wb-input wb-input-num" type="number" min="10" max="95" step="5" /><span>%</span>
-        <button class="wb-btn" id="action-threshold-apply" type="button" data-i18n="btn.apply">${esc(t('btn.apply'))}</button></div>
-      <small class="wb-note" data-i18n="tip.threshold">${t('tip.threshold')}</small></div>
     <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_cc'))}</span><span class="action-ver" id="action-cc-ver"></span></button>
   <div class="wb-note" id="action-status" role="status" hidden></div>`;
   document.body.appendChild(overlay);
@@ -2580,7 +2573,6 @@ function createActionsModal() {
 
   bindActionControls(overlay, pageActions(), {
     onModeSettled: async () => { syncModeSegment(); await refreshModeStatus(); },
-    onThreshold: value => { state.newSessionThreshold = value; },
   });
   return overlay;
 }

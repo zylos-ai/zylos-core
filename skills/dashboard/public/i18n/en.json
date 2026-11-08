@@ -253,7 +253,7 @@
   "result.zylos_upgrade_unverified": "zylos-core upgrade result could not be verified. Current version: v{version}.",
   "result.cc_updated": "Claude Code updated. Restart session to apply.",
   "result.codex_updated": "Codex CLI updated. Restart session to apply.",
-  "result.invalid_threshold": "Threshold must be between 10 and 95",
+  "result.invalid_threshold": "Threshold must be between 1 and {max}",
   "result.threshold_set": "New session threshold set to {value}%",
   "result.unknown_action": "Unknown action",
   "result.internal_error": "Internal error: {error}",

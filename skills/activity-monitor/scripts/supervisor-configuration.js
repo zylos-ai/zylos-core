@@ -8,14 +8,8 @@ function positiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-// Keep the established runtime threshold parsing and bounds.
-function rotationThreshold(value, fallback) {
-  const threshold = Number.parseInt(value, 10);
-  return threshold > 0 && threshold <= 100 ? threshold : fallback;
-}
-
 /** Resolve startup settings once; invalid optional values fall through to the
- * next source. Mode and launch configuration remain separately refreshable. */
+ * next source. Mode, model thresholds and launch configuration refresh separately. */
 export function parseSupervisorConfiguration(config, env = process.env) {
   const setting = (key, fallback) => positiveInteger(env[`ZYLOS_${key.toUpperCase()}`])
     ?? positiveInteger(config[key]) ?? fallback;
@@ -27,9 +21,5 @@ export function parseSupervisorConfiguration(config, env = process.env) {
     originSyncThreshold: setting('origin_sync_threshold', 50),
     syncBatchLimit: setting('sync_batch_limit', 200),
     syncThreshold: CHECKPOINT_THRESHOLD,
-    rotationThresholds: {
-      claude: rotationThreshold(config.new_session_threshold, 70),
-      codex: rotationThreshold(config.codex_new_session_threshold, 75),
-    },
   };
 }

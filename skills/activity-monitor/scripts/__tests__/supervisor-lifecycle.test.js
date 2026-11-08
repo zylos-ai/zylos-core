@@ -1179,3 +1179,32 @@ test('negative free occupancy evicts the required idle runs without changing hel
   assert.deepEqual([...f.fences.keys()],['a','b']);
   assert.equal(f.slots.find(row=>row.sessionGroup==='held').state,'held');
 });
+
+test('two concurrent model windows rotate independently and a setting change affects only its model', async () => {
+  const f = fixture();
+  const small = scene('small', { model: 'sonnet', contextWindow: 200000, usagePercent: 60 });
+  const large = scene('large', { model: 'opus[1m]', contextWindow: 1000000, usagePercent: 45 });
+  f.scenes = [small, large];
+  f.context.configuration.rotationPolicy = { model_rotation_thresholds: { claude: { sonnet: 70, 'opus[1m]': 40 } } };
+  f.context.configuration.defaultModels = { claude: 'haiku' };
+  for (const item of f.scenes) await f.lifecycle.checkRotation(item, f.context);
+  assert.deepEqual(f.controls.map(row => row.sessionGroup), ['large']);
+  f.context.configuration.rotationPolicy.model_rotation_thresholds.claude.sonnet = 55;
+  for (const item of f.scenes) await f.lifecycle.checkRotation(item, f.context);
+  assert.deepEqual(f.controls.map(row => row.sessionGroup), ['large', 'small']);
+});
+
+test('early sync follows the same actual model threshold after instance defaults change', async () => {
+  const f=fixture();
+  f.context.configuration.rotationPolicy={model_rotation_thresholds:{claude:{sonnet:70,'opus[1m]':40}}};
+  f.context.configuration.defaultModels={claude:'haiku'};
+  const small=scene('small',{model:'sonnet',contextWindow:200000,usagePercent:40});
+  const large=scene('large',{model:'claude-opus-4-6',contextWindow:1000000,usagePercent:40});
+  f.scenes=[small,large];
+  const range={count:1,firstAt:f.now,firstConversationId:1,nonempty:true};
+  for(const item of [small,large]){
+    f.lifecycle.syncRuns.set(JSON.stringify(['group',item.sessionGroup]),item.runId);
+    await f.lifecycle.syncScope(item,'group',range,f.context);
+  }
+  assert.deepEqual(f.controls.map(row=>row.sessionGroup),['large']);
+});

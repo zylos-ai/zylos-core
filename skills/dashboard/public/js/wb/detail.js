@@ -4,8 +4,8 @@ import { channelIcon, platformLabel, statePill } from './board.js?v=103';
 import { groupEventCount, renderOverview } from './detail-overview.js?v=105';
 import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=105';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=106';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=103';
-import { renderNameEditor } from './name-edit.js?v=103';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=110';
+import { renderNameEditor } from './name-edit.js?v=110';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -180,7 +180,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
           } catch (error) { if (error.name !== 'AbortError') { config.state.error = error.message; draw(); } }
         },
       });
-      if (state.configOpen) renderGroupConfig(sections.config, config, { document, t, writable: getWritable(),
+      if (state.configOpen) renderGroupConfig(sections.config, config, { document, t, writable: getWritable(), rotationThreshold: row.rotationThreshold,
         onCancel: () => { state.configOpen = false; draw(); } });
     } else {
       body.classList.add('wb-detail-timeline');

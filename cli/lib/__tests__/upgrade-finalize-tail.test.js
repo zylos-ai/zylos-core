@@ -39,6 +39,8 @@ test('service verification uses only its local poll and PM2 limits',()=>{
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-tail-'));
   fs.mkdirSync(path.join(root,'memory'),{recursive:true});
+  fs.mkdirSync(path.join(root,'.claude'),{recursive:true});
+  fs.writeFileSync(path.join(root,'.claude/settings.json'),JSON.stringify({model:'opus'}));
   const ctx={zylosDir:root,from:'0.9.3',to:'new',tempDir:null,servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
   ctx.journal={phase:'compensation_closed'};
   ctx.transactionDir=path.join(root,'transaction');
@@ -49,7 +51,7 @@ function fixture(t) {
 }
 function deps(calls, extras={}) {
   return {
-    updateConfig:(input,options)=>{calls.push('thresholds');assert.deepEqual(input,{setIfAbsent:{new_session_threshold:70,codex_new_session_threshold:75}});assert.equal(options.waitMs,2000);},
+    updateConfig:(input,options)=>{calls.push('thresholds');assert.deepEqual(input,{mergeIfAbsent:{model_rotation_thresholds:{claude:{opus:70}}}});assert.equal(options.waitMs,2000);},
     ensureMemoryMigration:()=>{calls.push('ensure');},
     rotateSession:()=>{calls.push('rotate');},
     startServices:()=>{calls.push('start');return {status:'done'};},

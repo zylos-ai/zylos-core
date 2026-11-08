@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readThresholdPolicy, sessionThreshold } from './lib/session-threshold.js';
 import { CoreState } from './lib/core-state.js';
 import { loadCoreModule } from './lib/core-modules.js';
 import { createCoalescedBroadcast, createSessionCache, broadcastFleetSnapshot } from './lib/coalesced-broadcast.js';
@@ -323,10 +324,10 @@ function buildRuntimeInfo() {
 }
 
 function getNewSessionThreshold() {
-  const zylosCfg = loadZylosConfig(config.zylosDir);
-  const runtime = zylosCfg.runtime || 'claude';
-  const thresholdKey = runtime === 'codex' ? 'codex_new_session_threshold' : 'new_session_threshold';
-  return parseInt(zylosCfg[thresholdKey], 10) || (runtime === 'codex' ? 75 : 70);
+  const live = coreState.getState();
+  const observation = coreState.getUsageObservation();
+  return sessionThreshold(readThresholdPolicy(config.zylosDir), { runtime: live.runtime,
+    usage: observation.valid ? observation.value : null, launchConfig: coreState.getLaunchConfig() });
 }
 
 function getSystemMetrics() {
@@ -1418,6 +1419,7 @@ async function handleApi(req, res, pathname, url) {
     const zylosConfig = loadZylosConfig(config.zylosDir);
     zylosConfig.zylosDir = config.zylosDir;
     zylosConfig.runtime = selectedRuntime;
+    zylosConfig.thresholdModel = url.searchParams.get('model');
     const runtimeMeta = !url.searchParams.has('runtime') && selectedRuntime === activeRuntime
       ? (activeRuntime === 'codex' ? buildRuntimeInfo() : statuslineCollector?.getRuntimeInfo())
       : null;

@@ -8,6 +8,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { getCodexModels, codexEffortsForModel } from './codex-models.js';
 import { isNewerVersion } from './version-utils.js';
+import { loadCoreModule } from './core-modules.js';
+const { modelThreshold, thresholdLimit, readDefaultModels, readCodexModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 
 const execFileAsync = promisify(execFile);
 
@@ -141,6 +143,7 @@ async function switchModel(reqId, body, config, zylosDir) {
   }
 
   const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || 'claude');
+  await migrateModelThresholds({ zylosDir });
 
   if (runtime === 'claude') {
     const settings = readSettings(zylosDir);
@@ -319,19 +322,18 @@ async function upgradeRuntimeCli(reqId, config) {
 }
 
 async function setThreshold(reqId, body, config, zylosDir) {
-  const value = parseInt(body?.value, 10);
-  if (!value || value < 10 || value > 95) {
-    return { ok: false, error: 'invalid_value', message: 'Threshold must be between 10 and 95', messageKey: 'result.invalid_threshold' };
+  if (!['claude', 'codex'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME' };
+  if (typeof body?.model !== 'string' || !body.model.trim()) return { ok: false, error: 'invalid_model', messageKey: 'result.invalid_model' };
+  const value = typeof body.value === 'number' || (typeof body.value === 'string' && /^\d+$/.test(body.value.trim())) ? Number(body.value) : NaN;
+  const limit = thresholdLimit({ runtime: body.runtime, model: body.model, codexModels: readCodexModelWindows({}) });
+  if (body.value === '' || !Number.isInteger(value) || value < 1 || value > limit) {
+    return { ok: false, error: 'invalid_value', message: `Threshold must be between 1 and ${limit}`, messageKey: 'result.invalid_threshold', messageParams: { max: limit } };
   }
-  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
-  const key = runtime === 'codex' ? 'codex_new_session_threshold' : 'new_session_threshold';
-  log(reqId, `exec: zylos config set ${key} ${value}`);
   try {
-    const { stdout } = await execFileAsync('zylos', ['config', 'set', key, String(value)], { timeout: 5000 });
-    log(reqId, `threshold set: ${stdout.trim()}`);
-    return { ok: true, message: `New session threshold set to ${value}%`, messageKey: 'result.threshold_set', messageParams: { value } };
+    await setModelThreshold({ runtime: body.runtime, model: body.model, value, zylosDir });
+    log(reqId, `threshold set: ${body.runtime}/${body.model} ${value}%`);
+    return { ok: true, runtime: body.runtime, model: body.model, value, message: `New session threshold set to ${value}%`, messageKey: 'result.threshold_set', messageParams: { value } };
   } catch (err) {
-    log(reqId, `set threshold failed: ${err.message}`);
     return { ok: false, error: 'set_failed', message: err.message, messageKey: 'result.set_failed', messageParams: { error: err.message } };
   }
 }
@@ -377,7 +379,8 @@ export function getActionsMeta(config, runtimeInfo) {
 
   const zylosDir = config.zylosDir || path.join(os.homedir(), 'zylos');
   const settings = runtime === 'claude' ? readSettings(zylosDir) : {};
-  const codexModel = runtime === 'codex' ? readCodexRootString('model', zylosDir) : null;
+  const nativeModels = readDefaultModels({ zylosDir });
+  const codexModel = runtime === 'codex' ? nativeModels.codex : null;
   const codexEffort = runtime === 'codex' ? readCodexRootString('model_reasoning_effort', zylosDir) : null;
   const currentCodexModel = runtime === 'codex'
     ? codexModel || null
@@ -391,13 +394,17 @@ export function getActionsMeta(config, runtimeInfo) {
     }
   }
 
-  const thresholdKey = runtime === 'codex' ? 'codex_new_session_threshold' : 'new_session_threshold';
-  const defaultThreshold = runtime === 'codex' ? 75 : 70;
-  const newSessionThreshold = parseInt(config[thresholdKey], 10) || defaultThreshold;
+  const currentModel = runtime === 'claude' ? nativeModels.claude : currentCodexModel;
+  const windows = readCodexModelWindows({});
+  const thresholdModels = [...new Set([...models.map(item => item.id), currentModel, config.thresholdModel].filter(Boolean))];
+  const options = model => ({ runtime, model, defaultModel: currentModel, codexModels: windows });
+  const model_thresholds = Object.fromEntries(thresholdModels.map(model => [model, modelThreshold(config, options(model))]));
+  const model_threshold_max = Object.fromEntries(thresholdModels.map(model => [model, thresholdLimit(options(model))]));
+  const newSessionThreshold = modelThreshold(config, options(currentModel));
 
   return {
     runtime,
-    current_model: runtime === 'claude' ? settings.model || null : currentCodexModel,
+    current_model: currentModel,
     current_effort: runtime === 'claude'
       ? runtimeInfo?.effort || settings.effortLevel || null
       : codexEffort || null,
@@ -405,6 +412,8 @@ export function getActionsMeta(config, runtimeInfo) {
     running_effort: runtime === 'codex' ? runtimeInfo?.effort || null : null,
     models,
     efforts_by_model,
+    model_thresholds,
+    model_threshold_max,
     new_session_threshold: newSessionThreshold
   };
 }

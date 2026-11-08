@@ -4,6 +4,8 @@ export default {
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',
   // Jest covers test/ and the mode-switch integration entries placed beside
   // activity-monitor. The Node runner excludes those two Jest entries.
+  // This root integration uses node:test and is selected by the Node runner.
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/test/model-threshold-upgrade\\.integration\\.test\\.js$'],
   testMatch: [
     '<rootDir>/test/**/*.test.js',
     '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js',

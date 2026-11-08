@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { migrateModelThresholds } from './model-rotation-thresholds.js';
 /**
  * Sync settings.json hooks to installed settings.
  *
@@ -23,7 +24,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
-import { getZylosConfig, readSessionMode, updateZylosConfigLocked } from './config.js';
+import { readSessionMode } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 import {
@@ -37,7 +38,6 @@ const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 
 const TEMPLATE_SETTINGS = path.join(__dirname, '..', '..', 'templates', '.claude', 'settings.json');
 const INSTALLED_SETTINGS = path.join(ZYLOS_DIR, '.claude', 'settings.json');
 
-const MAX_SAFE_1M_THRESHOLD = 30;
 export const CORE_MANAGED_HOOKS = new Set([
   // Current template hooks. Keep this append-only: when a core hook is retired,
   // leave its path here so upgrades can still remove stale installed copies.
@@ -266,18 +266,9 @@ export function desiredClaudeHooks({
   };
 }
 
-function is1mModel(model) {
-  return typeof model === 'string' && model.includes('[1m]');
-}
-
-function strip1mSuffix(model) {
-  return model.replace('[1m]', '');
-}
-
 export function syncTemplateModelSetting({
   templateSettings,
   installedSettings,
-  cfg = getZylosConfig(),
   dryRun = false,
   log = console.log,
 } = {}) {
@@ -285,12 +276,7 @@ export function syncTemplateModelSetting({
     return { changed: false };
   }
 
-  let model = templateSettings.model;
-
-  if (is1mModel(model) && Object.hasOwn(cfg, 'new_session_threshold') && cfg.new_session_threshold > MAX_SAFE_1M_THRESHOLD) {
-    model = strip1mSuffix(model);
-    log(`  ! model: ${templateSettings.model} → ${model} (new_session_threshold ${cfg.new_session_threshold} too high for 1M context)`);
-  }
+  const model = templateSettings.model;
 
   if (!dryRun) {
     installedSettings.model = model;
@@ -323,26 +309,20 @@ export function syncTemplateSetting(key, {
 
 export function syncModelCoupledNewSessionThreshold({
   modelBackfilled = false,
+  zylosDir = ZYLOS_DIR,
   cfg,
-  updateConfig = updateZylosConfigLocked,
+  defaultModels,
+  updateConfig,
   dryRun = false,
   log = console.log,
 } = {}) {
-  if (!modelBackfilled) {
-    return { changed: false, reason: 'model_not_backfilled' };
-  }
-
-  if (dryRun) {
-    cfg ??= getZylosConfig();
-    if (Object.hasOwn(cfg, 'new_session_threshold')) {
-      return { changed: false, reason: 'threshold_already_set' };
-    }
-  } else {
-    const result = updateConfig({ setIfAbsent: { new_session_threshold: 30 } });
-    if (!result.changed) return { changed: false, reason: 'threshold_already_set' };
-  }
-  log('  + new_session_threshold: 30 (paired with model backfill)');
-  return { changed: true };
+  if (!modelBackfilled) return { changed: false, reason: 'model_not_backfilled' };
+  const result = migrateModelThresholds({
+    zylosDir, ...(cfg ? { config: cfg } : {}), ...(defaultModels ? { defaultModels } : {}),
+    ...(dryRun ? { updateConfig: () => ({ changed: true }) } : { updateConfig }),
+  });
+  if (result.changed) log('  + model_rotation_thresholds: model defaults migrated');
+  return { ...result, ...(!result.changed ? { reason: 'threshold_already_set' } : {}) };
 }
 
 const DEFAULT_MAX_SETTINGS_BACKUPS = 5;
@@ -409,7 +389,7 @@ export function persistInstalledSettingsAndSyncCoupledThreshold({
       // best effort — never fail a successful settings write over cleanup
     }
   }
-  return syncThreshold({ modelBackfilled });
+  return syncThreshold({ modelBackfilled, zylosDir: path.dirname(path.dirname(settingsPath)) });
 }
 
 export function syncCodexConfig({
@@ -809,9 +789,8 @@ export function syncRuntimeHooks({
     return { ...result, changed: true };
   }
 
-  // Write settings first. The paired threshold default is written only after
-  // the model backfill has persisted, so a crash cannot leave threshold=30
-  // without the matching opus[1m] settings model.
+  // Persist the native model first, then pin its per-model threshold.
+  // Migration must resolve the model that was actually saved.
   const thresholdSync = persistInstalledSettingsAndSyncCoupledThreshold({
     installedSettings,
     settingsPath,

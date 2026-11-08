@@ -156,12 +156,13 @@ describe('base URL support', () => {
 });
 
 describe('fresh install new-session threshold default', () => {
-  test('seeds 30 when fresh install config has no Claude threshold', async () => {
+  test('seeds the configured 1M model threshold on fresh install', async () => {
     const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');
     const updates = [];
 
     const changed = seedFreshInstallNewSessionThresholdDefault({
       config: { runtime: 'claude' },
+      defaultModels: { claude: 'opus[1m]' },
       updateConfig: (update) => {
         updates.push(update);
         return { changed: true };
@@ -169,7 +170,7 @@ describe('fresh install new-session threshold default', () => {
     });
 
     assert.equal(changed, true);
-    assert.deepEqual(updates, [{ setIfAbsent: { new_session_threshold: 30 } }]);
+    assert.deepEqual(updates, [{ mergeIfAbsent: { model_rotation_thresholds: { claude: { 'opus[1m]': 40 } } } }]);
   });
 
   test('preserves an existing Claude threshold value', async () => {
@@ -177,8 +178,9 @@ describe('fresh install new-session threshold default', () => {
 
     const changed = seedFreshInstallNewSessionThresholdDefault({
       config: { new_session_threshold: 70 },
+      defaultModels: { claude: 'opus[1m]' },
       updateConfig: (update) => {
-        assert.deepEqual(update, { setIfAbsent: { new_session_threshold: 30 } });
+        assert.deepEqual(update, { mergeIfAbsent: { model_rotation_thresholds: { claude: { 'opus[1m]': 70 } } } });
         return { changed: false };
       },
     });

@@ -181,7 +181,7 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assert.match(f.read('CLAUDE.md'), /private user instructions/);
   assert.match(f.read('AGENTS.md'), /private user instructions/);
   assert.ok(JSON.parse(f.read('.claude/settings.json')).hooks.SessionStart);
-  assert.equal(JSON.parse(f.read('.zylos/config.json')).new_session_threshold, 70);
+  assert.equal(JSON.parse(f.read('.zylos/config.json')).model_rotation_thresholds.claude['opus[1m]'], 40);
   assert.equal(result.settingsChanged, true);
   assert.equal(Object.hasOwn(result, 'instructionFilesRebuilt'), false);
   assert.equal(result.completion.modeTransition, 'pending_auto');
