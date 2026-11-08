@@ -2540,8 +2540,7 @@ function initSettingsPage() {
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
     settingsDefaults?.destroy();
-    settingsDefaults = renderDefaults(defaults, { ...value, t, read,
-      execute: executeSettingsAction, confirm: confirmSettingsChange, writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup });
+    settingsDefaults = renderDefaults(defaults, settingsDefaultsOptions(value, read));
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
@@ -2576,6 +2575,10 @@ function refreshSettingsLocks() {
   refreshSettingsVersion();
 }
 // The default-settings card confirms all of its changes once, then runs them without asking again.
+function settingsDefaultsOptions(value, read) {
+  return { ...value, t, read, execute: executeSettingsAction, confirm: confirmSettingsChange,
+    writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup };
+}
 function confirmSettingsChange(text) {
   return showConfirm(state.remoteAgent || REMOTE_AGENT ? `${text}\n${t('confirm.remote_target', { agent: viewedAgentName() })}` : text);
 }

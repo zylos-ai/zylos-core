@@ -5,12 +5,14 @@ const dateText = (value, t) => value ? String(value).replace('T', ' ').replace(/
 
 /** What each key action asks before it runs: rotating and revoking break machines using the key, deleting is permanent. */
 export function keyActionConfirmation(action, name, t = key => key) {
-  const label = { rotate: 'wb.settings.keys.rotate', revoke: 'wb.settings.keys.revoke', delete: 'wb.settings.keys.delete' }[action];
-  return label ? { text: t('fleet_manage.' + action + '_confirm', { name }), ok: t(label) } : null;
+  if (!['rotate', 'revoke', 'delete'].includes(action)) return null;
+  const base = 'wb.settings.keys.confirm.' + action;
+  return { title: t(base + '.title', { name }), text: t(base + '.body', { name }), ok: t('wb.settings.keys.' + action), danger: action !== 'rotate' };
 }
 
 /** API keys as a table: name, scope badge, status, created, last used and text actions; each action confirms first. */
-export function renderKeyTable(root, keys = [], { document = root.ownerDocument, t = key => key, confirm = async () => true, onAction = () => {} } = {}) {
+export function renderKeyTable(root, keys = [], { document = root.ownerDocument, t = key => key, confirm = async () => false, onAction = () => {} } = {}) {
+  // Without a confirmation dialog nothing runs: revoking and deleting cannot be undone.
   if (!keys.length) { root.replaceChildren(element(document, 'p', t('fleet_manage.keys_empty'), 'wb-note')); return; }
   const table = element(document, 'table', undefined, 'wb-ktable');
   const head = element(document, 'tr');
@@ -30,7 +32,7 @@ export function renderKeyTable(root, keys = [], { document = root.ownerDocument,
       const button = element(document, 'button', t(label), 'wb-btn wb-btn-sm api-key-' + name + (className ? ' ' + className : '')); button.type = 'button';
       button.addEventListener('click', async () => {
         const ask = keyActionConfirmation(name, key.name, t);
-        if (ask && !(await confirm(ask.text, { ok: ask.ok }))) return;
+        if (ask && !(await confirm(ask.text, { title: ask.title, ok: ask.ok, danger: ask.danger }))) return;
         onAction(name, key.name);
       });
       box.append(button);

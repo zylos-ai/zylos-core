@@ -68,7 +68,7 @@ test('settings loader reads one group snapshot and one first batch on each open 
 test('default engine keeps the sign-in gate and model and effort save together per engine', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low'] } });
-  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 100000 }, metadata: { claude: meta('claude'), codex: meta('codex') }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  const panel = renderDefaults(root, { confirm: async () => true, snapshot: snapshot(), page: { runtimeTotal: 100000 }, metadata: { claude: meta('claude'), codex: meta('codex') }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
   // Codex is signed out: it cannot become the default, and the reason is its tooltip.
   assert.equal(root.querySelector('#settings-use-codex').disabled, true); assert.match(root.querySelector('#settings-use-codex').title, /unavailable/);
   const save = root.querySelector('#settings-save-models');
@@ -87,7 +87,7 @@ test('default engine keeps the sign-in gate and model and effort save together p
 test('changing the default engine is a draft until saved and the undo restores the current one', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
-  const panel = renderDefaults(root, { snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
   const save = root.querySelector('#settings-save-runtime');
   assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -122,6 +122,21 @@ test('saving model and effort for both engines asks once, lists every change and
   assert.equal(root.querySelector('#settings-save-models').hidden, true);
   assert.equal(modelSaveConfirmation([{ runtime: 'claude', key: 'effort', value: 'max' }], tr).split('\n').length, 2);
   assert.match(modelSaveConfirmation([{ runtime: 'codex', key: 'model', value: 'two' }], (key, params) => params ? params.value : key, { codex: { models: [{ id: 'two', display_name: 'Two Pro' }] } }), /Two Pro/, 'models are named as the dropdown shows them'); panel.destroy();
+});
+
+test('a defaults card wired without a confirmation runs no change', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
+  const panel = renderDefaults(root, { snapshot: healthy, page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t,
+    read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  await root.querySelector('#settings-use-codex').dispatch('click');
+  const saveRuntime = root.querySelector('#settings-save-runtime'); assert.equal(saveRuntime.disabled, false);
+  await saveRuntime.dispatch('click');
+  await draftBothEngines(root);
+  const saveModels = root.querySelector('#settings-save-models'); assert.equal(saveModels.disabled, false);
+  await saveModels.dispatch('click');
+  assert.deepEqual(calls, []);
+  panel.destroy();
 });
 
 test('cancelling the model confirmation sends nothing and shows no result', async () => {
@@ -353,7 +368,7 @@ test('default controls retain the restart lock after an accepted runtime change'
   let writable = true;
   const meta = { current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } };
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
-  const panel = renderDefaults(root, { snapshot: healthy, page: {}, metadata: { claude: meta, codex: meta }, document, t,
+  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: {}, metadata: { claude: meta, codex: meta }, document, t,
     read: async () => ({}), writable: () => writable,
     execute: async () => { writable = false; return true; } });
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -390,21 +405,33 @@ test('revoking, rotating and deleting a key each ask first, and cancelling sends
   let answer = false;
   const keys = [{ name: 'ops', scope: 'admin', status: 'active' }, { name: 'old', scope: 'read', status: 'revoked' }];
   renderKeyTable(root, keys, { document, t: (key, params) => params ? key + ':' + params.name : key,
-    confirm: async (text, options) => { asked.push([text, options.ok]); return answer; }, onAction: (action, name) => ran.push([action, name]) });
+    confirm: async (text, options) => { asked.push([options.title, text, options.ok, options.danger]); return answer; }, onAction: (action, name) => ran.push([action, name]) });
   const click = selector => root.querySelector(selector).dispatch('click');
   await click('.api-key-revoke');
-  assert.deepEqual(asked.at(-1), ['fleet_manage.revoke_confirm:ops', 'wb.settings.keys.revoke']); assert.deepEqual(ran, [], 'cancel sends nothing');
+  assert.deepEqual(asked.at(-1), ['wb.settings.keys.confirm.revoke.title:ops', 'wb.settings.keys.confirm.revoke.body:ops', 'wb.settings.keys.revoke', true]);
+  assert.deepEqual(ran, [], 'cancel sends nothing');
   answer = true; await click('.api-key-revoke'); assert.deepEqual(ran, [['revoke', 'ops']]);
-  answer = false; await click('.api-key-rotate'); assert.deepEqual(asked.at(-1), ['fleet_manage.rotate_confirm:ops', 'wb.settings.keys.rotate']); assert.equal(ran.length, 1);
-  answer = false; await click('.api-key-delete'); assert.deepEqual(asked.at(-1), ['fleet_manage.delete_confirm:old', 'wb.settings.keys.delete']); assert.equal(ran.length, 1);
+  answer = false; await click('.api-key-rotate');
+  assert.deepEqual(asked.at(-1), ['wb.settings.keys.confirm.rotate.title:ops', 'wb.settings.keys.confirm.rotate.body:ops', 'wb.settings.keys.rotate', false], 'rotating is not a destructive red action');
+  assert.equal(ran.length, 1);
+  answer = false; await click('.api-key-delete');
+  assert.deepEqual(asked.at(-1), ['wb.settings.keys.confirm.delete.title:old', 'wb.settings.keys.confirm.delete.body:old', 'wb.settings.keys.delete', true]);
+  assert.equal(ran.length, 1);
   answer = true; await click('.api-key-delete'); assert.deepEqual(ran.at(-1), ['delete', 'old']);
   assert.equal(keyActionConfirmation('copy', 'ops'), null);
+});
+
+test('a key table wired without a confirmation runs nothing', async () => {
+  const document = documentFixture(), root = document.createElement('div'), ran = [];
+  renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }, { name: 'old', scope: 'read', status: 'revoked' }], { document, t, onAction: (action, name) => ran.push([action, name]) });
+  for (const selector of ['.api-key-revoke', '.api-key-rotate', '.api-key-delete']) await root.querySelector(selector).dispatch('click');
+  assert.deepEqual(ran, []);
 });
 
 test('key table lists active keys before revoked ones with their own text actions', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const keys = [{ name: 'old', scope: 'read', status: 'revoked', created_at: '2026-01-02T03:04:05Z' }, { name: 'ops', scope: 'admin', status: 'active', created_at: '2026-02-03T04:05:06Z', last_used_at: null }];
-  renderKeyTable(root, keys, { document, t, onAction: (action, name) => calls.push([action, name]) });
+  renderKeyTable(root, keys, { document, t, confirm: async () => true, onAction: (action, name) => calls.push([action, name]) });
   const rows = root.querySelector('tbody').children; assert.deepEqual(rows.map(row => row.children[0].textContent), ['ops', 'old']);
   assert.match(rows[0].textContent, /fleet_manage\.scope_admin.*2026-02-03 04:05.*wb\.settings\.keys\.never/);
   assert.ok(rows[0].querySelector('.api-key-rotate')); assert.ok(rows[0].querySelector('.api-key-revoke')); assert.equal(rows[0].querySelector('.api-key-delete'), null);

@@ -86,7 +86,8 @@ export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
 }
 
 export function renderDefaults(root, { snapshot, page, metadata = {}, document = root.ownerDocument,
-  t = key => key, read, execute, confirm = async () => true, writable = () => true, onGroup = () => {} } = {}) {
+  t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {} } = {}) {
+  // Without a confirmation dialog no change runs: every save below asks once before it acts.
   root.replaceChildren();
   const groups = defaultGroups(snapshot, page);
   const technical = () => document.documentElement?.dataset.detail === 'technical';
