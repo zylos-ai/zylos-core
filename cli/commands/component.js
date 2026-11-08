@@ -27,6 +27,7 @@ import { evaluateUpgrade } from '../lib/claude-eval.js';
 import { resumeFinalize } from '../lib/upgrade-resume.js';
 import { recoverBeforeUpgrade } from '../lib/upgrade-discovery.js';
 import { upgradeFailureCode, upgradeFailureMessage } from '../lib/upgrade-admission.js';
+import { inspectDashboardRegistrationCleanup, cleanupDashboardRegistration } from '../lib/dashboard-registration-cleanup.js';
 
 /**
  * Print a single upgrade step result in real time.
@@ -1249,7 +1250,7 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
   }
 }
 
-export async function uninstallComponent(args) {
+export async function uninstallComponent(args, deps = {}) {
   // zylos uninstall --self → full system uninstall
   if (args.includes('--self')) {
     const hasTarget = args.some(a => !a.startsWith('-'));
@@ -1284,11 +1285,22 @@ export async function uninstallComponent(args) {
   }
 
   if (target === 'dashboard') {
-    const result = { action: checkOnly ? 'uninstall_check' : 'uninstall', success: false, component: target,
-      error: 'core_managed', message: 'Dashboard is bundled with Core; use zylos upgrade --self.' };
-    if (jsonOutput) console.log(JSON.stringify(result)); else console.error(result.message);
-    process.exitCode = 1;
-    return;
+    const options = { zylosDir: deps.zylosDir || ZYLOS_DIR };
+    let result = inspectDashboardRegistrationCleanup(options);
+    if (result.success && explicitPurge) {
+      result = { success: false, error: 'purge_not_supported', message: 'Dashboard registration cleanup retains all files and data; --purge is not supported.' };
+    } else if (result.success && !checkOnly) {
+      const confirmed = skipConfirm || explicitConfirm || await (deps.promptYesNo || promptYesNo)('Remove standalone Dashboard registration? Built-in Dashboard, files and data will be retained. [y/N] ', false);
+      result = confirmed ? cleanupDashboardRegistration(options) : { success: false, error: 'cancelled', message: 'Dashboard cleanup cancelled.' };
+    }
+    result = { action: checkOnly ? 'uninstall_check' : 'uninstall', component: target, ...result };
+    if (jsonOutput) console.log(JSON.stringify(result));
+    else {
+      console[result.success ? 'log' : 'error'](result.message || 'Preview: remove standalone Dashboard registration from components.json; data and built-in Dashboard retained.');
+      if (result.manualCleanup) console.log(result.manualCleanup);
+    }
+    if (!result.success) process.exitCode = 1;
+    return result;
   }
 
   if (checkOnly) {

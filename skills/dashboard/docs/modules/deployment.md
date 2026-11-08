@@ -7,7 +7,7 @@ Dashboard 是 Zylos Core 的内置能力，不是可独立安装或升级的组�
 - 代码随 Core 发布，位于 `~/zylos/.claude/skills/dashboard/`。
 - 运行数据位于 `~/zylos/components/dashboard/`，Core 升级时保留 `config.json`、`dashboard.db`、`spool/` 和 `backups/`。
 - 初始化由 `zylos init` 完成；升级使用 `zylos upgrade --self`。
-- 组件命令会拒绝对 Dashboard 执行独立 upgrade/uninstall，并返回 `core_managed`。
+- 独立 `upgrade` 仍返回 `core_managed`；1.0 上的 `uninstall` 在残留单独 Dashboard 登记时只删除登记（保留数据和内置 Dashboard），无残留时返回 `core_managed`。
 
 Core finalizer 负责组件注册、Caddy 路由、PM2 服务、数据库迁移/备份恢复，以及 runtime hook 的发布和旧 Dashboard hook 的清理。Dashboard 的 `hooks/post-install.js` 只负责创建缺失的数据目录和默认配置，不接管 runtime hook。
 
