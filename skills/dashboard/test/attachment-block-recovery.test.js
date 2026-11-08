@@ -17,32 +17,60 @@ import * as coreSchema from '../../comm-bridge/scripts/c4-schema.js';
 
 // Integration boundary: real typed outbound content, private Core/Dashboard
 // databases, history and persisted GC cursors. Run for attachment reference,
-// association/history/GC changes; unrelated UI changes may skip. No runtime,
-// model, tmux or PM2 is started; all handles and files belong to this fixture.
+// association/history/GC or fixture isolation changes; unrelated UI may skip.
+// No runtime, model, tmux or PM2 starts. Imports do not read instance paths;
+// every product constructor runs after this fixture sets its own environment.
 function fixture(t) {
-  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) {
-    assert.ok(process.env[key] && !process.env[key].startsWith(os.userInfo().homedir + path.sep), `${key} must be isolated`);
-  }
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'attachment-block-recovery-'));
+  const root = fs.realpathSync(fs.mkdtempSync('/tmp/abr-'));
+  const env = { HOME: path.join(root, 'home'), ZYLOS_DIR: root,
+    PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'), TMUX_TMPDIR: path.join(root, 'tmp') };
+  const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+  let core, store, reader, attachments;
+  t.after(async () => {
+    try { await attachments?.close(); }
+    finally {
+      try { reader?.close(); core?.close(); store?.close(); }
+      finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        assert.equal(fs.existsSync(root), false);
+      }
+    }
+  });
+  for (const directory of new Set(Object.values(env))) fs.mkdirSync(directory, { recursive: true });
+  Object.assign(process.env, env);
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   fs.mkdirSync(path.join(root, 'workspace'));
   const corePath = path.join(root, 'comm-bridge/c4.db'), dashboardPath = path.join(root, 'dashboard.db');
-  console.log(JSON.stringify({ root, corePath, dashboardPath, privateSocket: path.join(root, 'tmux.sock'),
-    home: process.env.HOME, zylosDir: process.env.ZYLOS_DIR, pm2Home: process.env.PM2_HOME, tmpdir: process.env.TMPDIR }));
-  const core = new Database(corePath);
+  const realHome = fs.realpathSync(os.userInfo().homedir);
+  assert.ok(!root.startsWith(realHome + path.sep), 'fixture is outside the real home');
+  for (const key of Object.keys(env)) {
+    const actual = fs.realpathSync(process.env[key]);
+    assert.ok(actual === root || actual.startsWith(root + path.sep), `${key} belongs to the fixture`);
+  }
+  for (const target of [corePath, dashboardPath]) assert.ok(target.startsWith(root + path.sep));
+  console.log(JSON.stringify({ root, corePath, dashboardPath, ...env, tmux: 'not spawned',
+    privateSocket: path.join(env.TMUX_TMPDIR, 'tmux.sock') }));
+  core = new Database(corePath);
   guardDatabase(core, coreSchema);
   core.prepare('INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)').run('dash', 'dashboard');
-  let store = new Store(dashboardPath), reader = new C4Reader(root), clock = 10_000_000;
+  store = new Store(dashboardPath); reader = new C4Reader(root);
+  let clock = 10_000_000;
   const conversations = new ChatConversations({ store });
   const a = conversations.create(), b = conversations.create();
   const make = () => new ChatAttachments({ store, c4Reader: reader, zylosDir: root, now: () => clock });
-  let attachments = make();
+  attachments = make();
+  assert.equal(core.name, corePath);
+  assert.equal(store.db.name, dashboardPath);
+  assert.equal(reader._dbPath, corePath);
   const add = (content, { direction = 'out', localId = a.localId, group = `dash:${localId}` } = {}) => {
     const result = core.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,session_group,content,status)
       VALUES (?,'dashboard',?,?,?,'failed')`).run(direction, localId, group, content);
     return core.prepare('SELECT * FROM conversations WHERE id=?').get(result.lastInsertRowid);
   };
-  t.after(async () => { await attachments.close(); reader.close(); core.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, core, a, b, add, get store() { return store; }, get attachments() { return attachments; },
     history: () => new ChatHistory({ c4Reader: reader, attachments }),
     saved: id => store.db.prepare('SELECT * FROM chat_attachments WHERE id=?').get(id),

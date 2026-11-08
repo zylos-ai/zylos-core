@@ -410,7 +410,10 @@ export function withChatAttachments(zylosDir, { readonly = false } = {}, callbac
   let db, reader;
   try {
     db = new Database(path.join(zylosDir, 'components', 'dashboard', 'dashboard.db'), { readonly, fileMustExist: true });
-    if (inspectDatabase(db).currentVersion !== TARGET_SCHEMA_VERSION) throw fail('chat_attachment_unavailable', 404);
+    let compatible = false;
+    try { compatible = inspectDatabase(db).currentVersion === TARGET_SCHEMA_VERSION; }
+    catch { /* Unsupported schema metadata or layout is a service failure. */ }
+    if (!compatible) throw fail('chat_attachment_schema_unavailable', 502);
     reader = new C4Reader(zylosDir);
     return callback(new ChatAttachments({ db, c4Reader: reader, zylosDir, readonly: true }));
   } finally {

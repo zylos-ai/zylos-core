@@ -43,7 +43,13 @@ export function evaluateBeforeSend(input, { env = process.env } = {}) {
         withChatAttachments(resolveUploadRoot(env), { readonly: true }, service => {
           service.validateAgentReferences(endpoint, blocks);
         });
-      } catch (error) { return error.code === 'invalid_chat_attachment_destination' ? replyVia() : registerAgain(); }
+      } catch (error) {
+        if (error.code === 'invalid_chat_attachment_destination') return replyVia();
+        if (['chat_attachment_core_unavailable', 'chat_attachment_schema_unavailable'].includes(error.code)) {
+          return abort('Dashboard attachment service unavailable.');
+        }
+        return registerAgain();
+      }
     }
   }
   return { version: 1, decision: 'continue' };

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
+import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { ChatAttachments, withChatAttachments, ATTACHMENT_SEND_WINDOW_MS } from '../src/lib/chat/attachments.js';
@@ -404,4 +405,65 @@ test('attachment hook refuses absent storage missing media and old schema withou
   f.store.db.prepare('DELETE FROM schema_migrations WHERE version=26').run();
   before = audit(f);
   assert.equal(f.hook(value).decision, 'abort'); assertAudit(f, before);
+});
+
+// Boundary: actual missing/unopenable Core storage reaches the read-only hook.
+// Run for attachment service diagnostics; unrelated UI changes may skip.
+// Only fixture DB paths are changed; no process or runtime is started.
+for (const state of ['missing', 'unopenable']) {
+  test(`attachment hook reports service unavailable when Core storage is ${state}`, async t => {
+    const f = fixture(t), registered = await f.register(), value = content(block(registered));
+    f.attachments.c4Reader.close(); f.core.close();
+    const before = audit(f), corePath = path.join(f.root, 'comm-bridge/c4.db');
+    fs.renameSync(corePath, corePath + '-hidden');
+    if (state === 'unopenable') fs.mkdirSync(corePath);
+    try {
+      assert.throws(() => withChatAttachments(f.root, { readonly: true }, service => {
+        service.validateAgentReferences(f.a.localId, [block(registered)]);
+      }), { code: 'chat_attachment_core_unavailable' });
+      const result = f.hook(value);
+      assert.equal(result.decision, 'abort');
+      assert.equal(result.message, 'Dashboard attachment service unavailable.');
+      assert.doesNotMatch(result.message, /register/);
+    } finally {
+      if (state === 'unopenable') fs.rmdirSync(corePath);
+      fs.renameSync(corePath + '-hidden', corePath);
+    }
+    assertAudit(f, before);
+  });
+}
+
+// Boundary: invalid metadata and versions on both sides of the supported one.
+// Run for storage-version/diagnostic changes; unrelated UI changes may skip.
+// The fixture owns both databases and all cleanup; no migration is requested.
+for (const version of [-1, TARGET_SCHEMA_VERSION - 1, TARGET_SCHEMA_VERSION + 1]) {
+  test(`attachment hook reports service unavailable for Dashboard schema version ${version}`, async t => {
+    const f = fixture(t), registered = await f.register(), value = content(block(registered));
+    f.store.db.prepare('DELETE FROM schema_migrations WHERE version>?').run(version);
+    f.store.db.prepare('INSERT OR IGNORE INTO schema_migrations(version) VALUES(?)').run(version);
+    const before = audit(f);
+    assert.throws(() => withChatAttachments(f.root, { readonly: true }, () => assert.fail('unsupported storage')),
+      { code: 'chat_attachment_schema_unavailable', statusCode: 502 });
+    const result = f.hook(value);
+    assert.equal(result.decision, 'abort');
+    assert.equal(result.message, 'Dashboard attachment service unavailable.');
+    assert.doesNotMatch(result.message, /register/);
+    assertAudit(f, before);
+  });
+}
+
+// Boundary: an absent Dashboard binding keeps the existing destination mapping.
+// Run for hook diagnostic changes; unrelated UI changes may skip. Private DBs only.
+test('attachment hook keeps the destination hint when the Dashboard binding is absent', async t => {
+  const f = fixture(t), registered = await f.register(), value = content(block(registered));
+  f.core.prepare("DELETE FROM channel_namespaces WHERE component_name='dashboard'").run();
+  const before = audit(f);
+  assert.throws(() => withChatAttachments(f.root, { readonly: true }, service => {
+    service.validateAgentReferences(f.a.localId, [block(registered)]);
+  }), { code: 'invalid_chat_attachment_destination' });
+  const result = f.hook(value);
+  assert.equal(result.decision, 'abort');
+  assert.match(result.message, /original reply-via.*--session-group/);
+  assert.doesNotMatch(result.message, /register|service unavailable/);
+  assertAudit(f, before);
 });

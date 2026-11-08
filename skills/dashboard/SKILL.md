@@ -334,8 +334,11 @@ Use the returned ID and filename in the original message envelope:
 {"id":"report","type":"x-zylos.file","schemaVersion":1,"data":{"attachmentId":"<returned-id>","nameSnapshot":"report.pdf"},"fallbackText":"File: report.pdf (attachment <returned-id>)"}
 ```
 
-For images use `x-zylos.image` and a registered `image` ID. The block contains no
-source path, URL, bytes, size or MIME claims. Send the complete envelope through
+For images use `x-zylos.image` and a registered `image` ID. Attachment blocks must
+always include `data` and cannot have `pending` or `error` status. If registration
+fails, explain the failure in plain text instead of sending an attachment block.
+The block contains no source path, URL, bytes, size or MIME claims. Send the
+complete envelope through
 the **original reply-via command unchanged**, with content on stdin; preserve
 all original flags, including `--session-group` and absorbed-reply routing.
 There is no attachment send subcommand. Plain `[MEDIA:...]` text does not
