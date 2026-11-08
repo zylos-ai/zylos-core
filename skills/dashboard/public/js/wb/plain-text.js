@@ -27,11 +27,12 @@ export function fallbackName(row, t = key => key) {
   return colon < 0 ? platform : platform + ' · ' + key.slice(colon + 1);
 }
 /**
- * A Dashboard conversation nobody has named yet reads like it does on the conversation page, with the time it was
- * last active ("Untitled conversation · 14:05", or the date as well on another day), never its id.
+ * A Dashboard conversation nobody has named yet reads like it does on the conversation page, with the time its
+ * running session was created ("Untitled conversation · 14:05", or the date as well on another day), never its id.
+ * New messages do not change that time, so the name stays put; without a running session it is just untitled.
  */
 export function unnamedConversation(row, t = key => key, { now = Date.now(), locale = globalThis.document?.documentElement?.lang || undefined } = {}) {
-  const at = row.c4?.lastActivityAt ?? row.preview?.timestamp ?? (row.createdAt == null ? null : row.createdAt * 1000);
+  const at = row.createdAt == null ? null : row.createdAt * 1000;
   const date = at == null ? null : new Date(at);
   if (!date || !Number.isFinite(date.getTime())) return t('chat.unnamed');
   const sameDay = date.toDateString() === new Date(now).toDateString();
