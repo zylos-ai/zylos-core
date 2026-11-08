@@ -9,6 +9,9 @@ import { observerPaths } from './observer-paths.js';
 const execFileAsync = promisify(execFile);
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
+const MAX_RELEASE_METADATA_BYTES = 1024 * 1024;
+const RELEASE_API_ROOT = 'https://api.github.com/repos/zellij-org/zellij/releases';
+const RELEASE_HOSTS = new Set(['github.com', 'api.github.com', 'release-assets.githubusercontent.com']);
 const COMMAND_TIMEOUT_MS = 10_000;
 const MAX_COMMAND_OUTPUT = 64 * 1024;
 
@@ -67,35 +70,121 @@ async function writeJsonAtomic(filePath, value) {
   }
 }
 
-async function downloadArchive(url, destination, { fetchImpl, signal, onProgress }) {
+function downloadFailure(code, message, retryable = false) {
+  const error = new ObserverInstallError(code, message);
+  error.retryable = retryable;
+  return error;
+}
+
+function assertReleaseUrl(value) {
+  let url;
+  try { url = new URL(value); } catch {}
+  if (!url || url.protocol !== 'https:' || url.username || url.password || url.port ||
+      !RELEASE_HOSTS.has(url.hostname)) {
+    throw new ObserverInstallError('unsafe_redirect', 'Artifact download redirected outside the pinned release hosts');
+  }
+  return url;
+}
+
+async function releaseRequest(url, { fetchImpl, signal, accept }) {
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    signal.throwIfAborted();
+    assertReleaseUrl(url);
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        redirect: 'manual', signal, ...(accept ? { headers: { Accept: accept } } : {}),
+      });
+    } catch {
+      throw downloadFailure('download_failed', 'network error', true);
+    }
+    if (response.url) assertReleaseUrl(response.url);
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location');
+      await response.body?.cancel();
+      if (!location) throw new ObserverInstallError('unsafe_redirect', 'Release redirect has no location');
+      try { url = new URL(location, url).href; } catch {
+        throw new ObserverInstallError('unsafe_redirect', 'Release redirect has an invalid location');
+      }
+      continue;
+    }
+    if (!response.ok || !response.body) {
+      await response.body?.cancel();
+      throw downloadFailure('download_failed', `HTTP ${response.status}`, response.status >= 500 && response.status <= 599);
+    }
+    return response;
+  }
+  throw new ObserverInstallError('unsafe_redirect', 'Release download exceeded the redirect limit');
+}
+
+async function* responseChunks(response) {
+  const iterator = response.body[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      let next;
+      try { next = await iterator.next(); } catch {
+        throw downloadFailure('download_failed', 'network error while reading response', true);
+      }
+      if (next.done) return;
+      yield Buffer.from(next.value);
+    }
+  } finally {
+    try { await iterator.return?.(); } catch {}
+  }
+}
+
+async function apiAssetResponse(artifact, options) {
+  const response = await releaseRequest(`${RELEASE_API_ROOT}/tags/v${encodeURIComponent(artifact.version)}`, {
+    ...options, accept: 'application/vnd.github+json',
+  });
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of responseChunks(response)) {
+    bytes += chunk.length;
+    if (bytes > MAX_RELEASE_METADATA_BYTES) {
+      throw new ObserverInstallError('invalid_release_metadata', 'Release metadata exceeds the size limit');
+    }
+    chunks.push(chunk);
+  }
+  let release;
+  try { release = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {
+    throw new ObserverInstallError('invalid_release_metadata', 'Release metadata is not valid JSON');
+  }
+  const name = new URL(artifact.url).pathname.split('/').at(-1);
+  const asset = Array.isArray(release?.assets) && release.assets.find((entry) => entry?.name === name);
+  if (!asset) throw new ObserverInstallError('release_asset_missing', 'Pinned archive is absent from the release');
+  if (typeof asset.url !== 'string' || !/^https:\/\/api\.github\.com\/repos\/zellij-org\/zellij\/releases\/assets\/[0-9]+$/.test(asset.url)) {
+    throw new ObserverInstallError('unsafe_redirect', 'Release asset API address is outside the pinned repository');
+  }
+  return releaseRequest(asset.url, { ...options, accept: 'application/octet-stream' });
+}
+
+async function downloadAttempt(artifact, destination, { fetchImpl, signal, onProgress }, useApi) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error('download_timeout')), DOWNLOAD_TIMEOUT_MS);
   timeout.unref?.();
   const abort = () => controller.abort(signal.reason);
   signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
   let handle;
+  let created = false;
+  let response;
   try {
-    const response = await fetchImpl(url, { redirect: 'follow', signal: controller.signal });
-    if (!response.ok || !response.body) {
-      throw new ObserverInstallError('download_failed', `Artifact download returned HTTP ${response.status}`);
-    }
-    if (response.url) {
-      const finalUrl = new URL(response.url);
-      if (finalUrl.protocol !== 'https:' ||
-          !['github.com', 'release-assets.githubusercontent.com'].includes(finalUrl.hostname)) {
-        throw new ObserverInstallError('unsafe_redirect', 'Artifact download redirected outside the pinned release hosts');
-      }
-    }
+    controller.signal.throwIfAborted();
+    const options = { fetchImpl, signal: controller.signal };
+    response = useApi ? await apiAssetResponse(artifact, options)
+      : await releaseRequest(artifact.url, options);
     const lengthHeader = response.headers.get('content-length');
     const declaredLength = lengthHeader === null ? null : Number(lengthHeader);
     if (Number.isFinite(declaredLength) && declaredLength > MAX_ARCHIVE_BYTES) {
+      await response.body.cancel();
       throw new ObserverInstallError('archive_too_large', 'Artifact archive exceeds the size limit');
     }
     handle = await fs.promises.open(destination, 'wx', 0o600);
+    created = true;
     const hash = crypto.createHash('sha256');
     let bytes = 0;
-    for await (const rawChunk of response.body) {
-      const chunk = Buffer.from(rawChunk);
+    for await (const chunk of responseChunks(response)) {
       bytes += chunk.length;
       if (bytes > MAX_ARCHIVE_BYTES) {
         throw new ObserverInstallError('archive_too_large', 'Artifact archive exceeds the size limit');
@@ -107,15 +196,40 @@ async function downloadArchive(url, destination, { fetchImpl, signal, onProgress
     await handle.sync();
     await handle.close();
     handle = null;
+    controller.signal.throwIfAborted();
     return { bytes, sha256: hash.digest('hex') };
   } catch (error) {
-    if (error instanceof ObserverInstallError) throw error;
-    const code = controller.signal.aborted ? 'download_timeout' : 'download_failed';
-    throw new ObserverInstallError(code, `Artifact download failed: ${error.message}`, error);
+    try { await handle?.close(); } catch {}
+    handle = null;
+    if (created) await fs.promises.unlink(destination);
+    if (signal?.aborted) throw downloadFailure('download_cancelled', 'download cancelled');
+    if (controller.signal.aborted) throw downloadFailure('download_timeout', 'download timed out', true);
+    throw error;
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);
+    controller.abort();
+    try { await response?.body?.cancel(); } catch {}
     try { await handle?.close(); } catch {}
+  }
+}
+
+async function downloadArchive(artifact, destination, options) {
+  let directError;
+  try {
+    return await downloadAttempt(artifact, destination, options, false);
+  } catch (error) {
+    if (!error.retryable || options.signal?.aborted) throw error;
+    directError = error;
+  }
+  try {
+    const download = await downloadAttempt(artifact, destination, options, true);
+    options.logger.info(`Observer artifact download: direct ${directError.message}; API fallback download succeeded`);
+    return download;
+  } catch (error) {
+    const message = `Artifact download failed: direct ${directError.message}; API ${error instanceof ObserverInstallError ? error.message : 'local download failure'}`;
+    options.logger.warn(message);
+    throw new ObserverInstallError(error.code || 'download_failed', message, error);
   }
 }
 
@@ -178,6 +292,7 @@ export class ObserverInstaller {
     arch = process.arch,
     artifact = observerArtifactFor(platform, arch),
     fetchImpl = globalThis.fetch,
+    logger = console,
     exec = execFileAsync,
     licensePath = path.resolve(new URL('../../assets/third-party/ZELLIJ-LICENSE.md', import.meta.url).pathname),
   }) {
@@ -186,6 +301,7 @@ export class ObserverInstaller {
     this.artifact = artifact;
     this.catalogArtifact = observerCatalogFor(platform, arch);
     this.fetchImpl = fetchImpl;
+    this.logger = logger;
     this.exec = exec;
     this.licensePath = licensePath;
   }
@@ -293,8 +409,8 @@ export class ObserverInstaller {
     let publishDirectory = null;
     await ensurePrivateDirectory(stageRoot);
     try {
-      const download = await downloadArchive(this.artifact.url, archivePath, {
-        fetchImpl: this.fetchImpl, signal, onProgress,
+      const download = await downloadArchive(this.artifact, archivePath, {
+        fetchImpl: this.fetchImpl, signal, onProgress, logger: this.logger,
       });
       if (download.sha256 !== this.artifact.archiveSha256) {
         throw new ObserverInstallError('archive_digest_mismatch', 'Artifact archive digest did not match the pinned manifest');
