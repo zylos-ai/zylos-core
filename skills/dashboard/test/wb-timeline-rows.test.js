@@ -102,4 +102,23 @@ test('recent activity: repeats merge across the whole read, five rows show, and 
   // More groups than rows: only the first five show.
   const many = Array.from({ length: 12 }, (_, i) => ev(i % 2 ? 'stop' : 'idle', i, i + 1));
   assert.equal(recentRows(many, { window: 100 }).length, recentLimit);
+  // A full read with more groups than rows: the open group is past the fifth row, so no shown row is open.
+  const full = Array.from({ length: 100 }, (_, i) => ev(i % 2 ? 'stop' : 'idle', i, i + 1));
+  const shown = recentRows(full, { window: 100 });
+  assert.equal(shown.length, recentLimit);
+  assert.equal(shown.some(group => group.open), false, 'complete rows are not marked as lower bounds');
+});
+
+test('recent activity: the open group is the one holding the earliest recorded event, even when times are out of order', () => {
+  // The server cuts its window by recorded order. Here the earliest recorded event (a release, seq 1) carries
+  // a later timestamp than an unrelated stop recorded after it, so by time the stop sorts last.
+  const events = [
+    ev('stop', 0, 3),
+    ...Array.from({ length: 97 }, (_, i) => ev('release', 5 + i, 4 + i)),
+    ev('release', 2, 1),
+    ev('release', 3, 2),
+  ];
+  const groups = recentRows(events, { window: 100, limit: 10 });
+  assert.deepEqual(groups.map(group => [group.newest.event.event_type, group.count, Boolean(group.open)]),
+    [['release', 99, true], ['stop', 1, false]], 'the cut-off releases carry +, the stop does not');
 });

@@ -3,7 +3,7 @@ import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=103';
 import { groupEventCount, renderOverview } from './detail-overview.js?v=105';
 import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=105';
-import { eventTypesFor, recentWindow } from './timeline-rows.js?v=105';
+import { eventTypesFor, recentWindow } from './timeline-rows.js?v=106';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=103';
 import { renderNameEditor } from './name-edit.js?v=103';
 

@@ -61,11 +61,22 @@ export const recentLimit = 5;
 
 /**
  * Recent activity: the newest events first, with repeats merged, the first `limit` rows. When the read
- * filled its window, the oldest group may continue before it: that group is marked `open`, so its count
- * is a lower bound and its first time is unknown.
+ * filled its window, the group holding the window's earliest recorded event may continue before it:
+ * that group is marked `open`, so its count is a lower bound and its first time is unknown. The server
+ * cuts the window by recorded order, which can differ from timestamp order, so the open group is found
+ * by recorded order, not by position.
  */
 export function recentRows(events, { window = recentWindow, limit = recentLimit } = {}) {
-  const groups = mergeRepeats(newestFirst(events.map(event => ({ at: timeValue(event.timestamp), event }))));
-  if (events.length >= window && groups.length) groups.at(-1).open = true;
+  const rows = newestFirst(events.map(event => ({ at: timeValue(event.timestamp), event })));
+  const groups = mergeRepeats(rows);
+  if (events.length >= window && groups.length) {
+    let edge = rows.length - 1;
+    rows.forEach((row, index) => { if (sequence(row) < sequence(rows[edge])) edge = index; });
+    let end = 0;
+    for (const group of groups) {
+      end += group.count;
+      if (edge < end) { group.open = true; break; }
+    }
+  }
   return groups.slice(0, limit);
 }
