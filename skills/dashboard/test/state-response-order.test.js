@@ -7,6 +7,7 @@ import {
   isStateRequestCurrent,
 } from '../public/js/response-order.js';
 import { refreshDashboardState } from '../public/js/state-refresh.js';
+import { instanceZone, setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
 
 test('an unrelated same-run SSE observation does not discard a newer full response', () => {
   const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };
@@ -71,4 +72,17 @@ test('the state identity follows navigation and the running run and session', ()
 test('the state identity recognizes raw Core SSE identity fields', () => {
   const raw = { navigationGeneration: 0, dashboardState: { run_id: 'R1', session: { session_id: 'S1' } } };
   assert.equal(captureMetricTarget(raw), captureMetricTarget({ navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1' } }));
+});
+
+test('a state refresh sets the instance time zone the server reports for every page, and UTC when it reports none', async () => {
+  setInstanceZone(null);
+  const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };
+  const reply = body => async () => body;
+  await refreshDashboardState(state, reply({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:01Z', tz: 'Pacific/Chatham' }));
+  assert.equal(instanceZone(), 'Pacific/Chatham');
+  await refreshDashboardState(state, reply({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:02Z', tz: 'America/Los_Angeles' }));
+  assert.equal(instanceZone(), 'America/Los_Angeles', 'a changed zone applies on the next refresh');
+  await refreshDashboardState(state, reply({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:03Z', tz: null }));
+  assert.equal(instanceZone(), 'UTC', 'a server that cannot read its zone reads UTC, never the browser zone');
+  setInstanceZone(null);
 });
