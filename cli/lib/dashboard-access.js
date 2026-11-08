@@ -41,7 +41,9 @@ export function printDashboardInfo(access, log = console.log) {
 export function printDashboardPassword(access, log = console.log) {
   const password = access.password;
   delete access.password;
-  if (password) {
+  if (password && access.quiet) {
+    log('    Dashboard password generated. Run "zylos dashboard reset-password" on the host or inside the container to set your own password.');
+  } else if (password) {
     log(`    Password: ${bold(password)}`);
     log('    Save this password now. It is shown only once and is not saved in plaintext.');
   } else if (access.provisionFailed) {

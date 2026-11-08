@@ -1,5 +1,6 @@
 import { applyDashboardRoute } from '../lib/dashboard-install.js';
 import { printDashboardInfo } from '../lib/dashboard-access.js';
+import { provisionDashboardAuth } from '../../skills/dashboard/src/lib/auth-provision.js';
 import { savePm2ProcessList } from '../lib/pm2-save.js';
 import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
 import { githubUrl } from '../lib/upstreams.js';
@@ -1082,28 +1083,19 @@ function initializeDatabases() {
 
 /**
  * Prepare and start core services via PM2 ecosystem config.
- * @returns {number} Number of services successfully started
+ * @returns {Promise<number>} Number of services successfully started
  */
-export function startCoreServices(webPassword = null, dashboardAccess = null) {
+export async function startCoreServices(webPassword = null, dashboardAccess = null) {
   installSkillDependencies();
   ensureWebConsolePassword(webPassword);
   try {
-    const provision = spawnSync(process.execPath, [path.join(SKILLS_DIR, 'dashboard', 'hooks', 'post-install.js')], {
-      stdio: ['ignore', 'pipe', 'pipe', 'pipe'], encoding: 'utf8', timeout: 30_000,
-      env: { ...process.env, ZYLOS_DIR, ZYLOS_DASHBOARD_PASSWORD_FD: dashboardAccess ? '3' : '' },
+    const generated = await provisionDashboardAuth(ZYLOS_DIR);
+    if (dashboardAccess) Object.assign(dashboardAccess, generated);
+    execFileSync(process.execPath, [path.join(SKILLS_DIR, 'dashboard', 'hooks', 'post-install.js')], {
+      stdio: 'pipe', env: { ...process.env, ZYLOS_DIR }, timeout: 30_000,
     });
-    if (provision.error || provision.status !== 0) throw new Error('Dashboard configuration setup failed');
-    if (dashboardAccess) {
-      let generated;
-      try { generated = JSON.parse(provision.output[3]); }
-      catch { throw new Error('Dashboard credential handoff failed'); }
-      if (generated?.password !== null && !/^[a-f0-9]{32}$/.test(generated?.password || '')) {
-        throw new Error('Dashboard credential handoff failed');
-      }
-      Object.assign(dashboardAccess, { password: generated.password, zylosDir: ZYLOS_DIR });
-    }
   } catch (err) {
-    if (dashboardAccess) dashboardAccess.provisionFailed = true;
+    if (dashboardAccess && dashboardAccess.password === undefined) dashboardAccess.provisionFailed = true;
     console.log(`  ${warn(`Dashboard configuration failed: ${err.message}`)}`);
   }
   initializeDatabases();
@@ -2367,8 +2359,8 @@ export async function initCommand(args) {
     }
 
     if (!quiet) console.log(heading('Starting services...'));
-    const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false };
-    const servicesStarted = startCoreServices(opts.webPassword, dashboardAccess);
+    const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false, quiet };
+    const servicesStarted = await startCoreServices(opts.webPassword, dashboardAccess);
     if (servicesStarted > 0) {
       setupPm2Startup();
       if (!quiet) console.log(`\n${green(`${servicesStarted} service(s) started.`)} ${dim('Run "zylos status" to check.')}`);
@@ -2471,8 +2463,8 @@ export async function initCommand(args) {
 
   // Step 11: Start services
   if (!quiet) console.log(`\n${heading('Starting services...')}`);
-  const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false };
-  const servicesStarted = startCoreServices(opts.webPassword, dashboardAccess);
+  const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false, quiet };
+  const servicesStarted = await startCoreServices(opts.webPassword, dashboardAccess);
 
   if (servicesStarted > 0) {
     setupPm2Startup();

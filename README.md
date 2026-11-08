@@ -153,6 +153,11 @@ docker run -d --name zylos \
   ghcr.io/zylos-ai/zylos-core:latest
 ```
 
+Docker startup uses quiet mode and does not print the Dashboard password to logs.
+After startup, run `docker exec -it zylos zylos dashboard reset-password` in your
+terminal to generate and display a new Dashboard password once. This also clears
+old Dashboard sessions. Non-quiet interactive init displays its initial password once.
+
 Open `http://localhost:3456` to access the web console. Find your password with `docker logs zylos | grep -A2 "Web Console"`. See the [Docker Deployment Guide](docs/docker.md) for Docker Compose setup, environment variables, Synology NAS instructions, and more.
 
 </details>

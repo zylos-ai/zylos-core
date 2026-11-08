@@ -492,7 +492,7 @@ export class AuthGate {
 
     if (!this.config.auth?.password) {
       sendHtml(res, req.method === 'GET' || req.method === 'HEAD' ? 200 : 503,
-        loginPageHtml(base, 'Dashboard password is not configured. Set a password before signing in.', '', false));
+        loginPageHtml(base, 'Dashboard password is not configured. Run "zylos dashboard reset-password" to set a password before signing in.', '', false));
       return true;
     }
 

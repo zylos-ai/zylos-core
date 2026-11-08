@@ -10,10 +10,9 @@ const root = process.env.ZYLOS_DIR;
 assert.equal(fs.realpathSync(root), root);
 const commands = [];
 mock.module('node:child_process', { namedExports: { ...childProcess,
-  spawnSync(...args) {
-    if (process.argv.includes('hook-failed')) return { status: 1, stderr: 'private-handoff-content' };
-    if (process.argv.includes('handoff-failed')) return { status: 0, output: ['', '', '', 'private-handoff-content'] };
-    return childProcess.spawnSync(...args);
+  execFileSync(command, args, options) {
+    if (args.some(arg => String(arg).endsWith('/dashboard/hooks/post-install.js')) && process.argv.includes('hook-failed')) throw new Error('fixture hook failure');
+    return childProcess.execFileSync(command, args, options);
   },
   execSync(command) {
     commands.push(command);
@@ -25,11 +24,26 @@ console.log('Init route worker isolation:', JSON.stringify(Object.fromEntries(
   ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR'].map(key => [key, process.env[key]]))));
 const { startCoreServices, parseInitFlags } = await import('../../../../cli/commands/init.js');
 const { printDashboardInfo } = await import('../../../../cli/lib/dashboard-access.js');
-const flags = parseInitFlags(process.argv.slice(2).filter(arg => !['hook-failed', 'handoff-failed'].includes(arg)));
-const access = { zylosDir: root, noCaddy: flags.caddy === false };
-assert.equal(startCoreServices(null, access), 1);
+const flags = parseInitFlags(process.argv.slice(2).filter(arg => !['hook-failed', 'provision-failed'].includes(arg)));
+const access = { zylosDir: root, noCaddy: flags.caddy === false, quiet: flags.quiet };
+assert.equal(await startCoreServices(null, access), 1);
 assert.ok(commands.some(command => command.startsWith('pm2 start ')));
 assert.ok(commands.includes('pm2 save'));
 console.log('Init service phase finished.');
-printDashboardInfo(access);
+const secret = access.password;
+const lines = [];
+printDashboardInfo(access, line => { lines.push(line); console.log(line); });
+if (flags.quiet && secret) assert.equal(lines.join('\n').includes(secret), false);
 assert.equal(access.password, undefined);
+if (flags.quiet) {
+  const configPath = path.join(root, 'components/dashboard/config.json');
+  const before = fs.readFileSync(configPath, 'utf8');
+  const repeat = { zylosDir: root, noCaddy: flags.caddy === false, quiet: true };
+  assert.equal(await startCoreServices(null, repeat), 1);
+  assert.equal(repeat.password, null);
+  const repeatedLines = [];
+  printDashboardInfo(repeat, line => { repeatedLines.push(line); console.log(line); });
+  assert.match(repeatedLines.join('\n'), /Password already configured/);
+  assert.equal(repeatedLines.join('\n').includes(secret), false);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), before);
+}

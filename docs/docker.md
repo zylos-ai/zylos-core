@@ -41,6 +41,22 @@ docker compose up -d
 
 The compose file supports timezone, channel tokens (Telegram, Lark), web console password, and more — edit it or pass via environment variables.
 
+### Dashboard Password
+
+Container startup runs `zylos init --yes --quiet`. It generates a Dashboard
+password when needed but never prints that password to startup output or
+`docker logs`. After startup, run this directly in your terminal:
+
+```bash
+docker exec -it zylos zylos dashboard reset-password
+```
+
+The command generates a new password and displays it once in that terminal.
+Save it privately. Reset enables authentication, clears existing browser/API
+sessions (including remembered logins), and restarts a running Dashboard.
+Outside Docker, use `zylos dashboard reset-password` on the host. Non-quiet
+interactive init continues to display its newly generated password once.
+
 ### Web Console Password
 
 A random password is generated on first boot. Two ways to find it:

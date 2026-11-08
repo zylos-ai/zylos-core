@@ -121,10 +121,14 @@ npm start
 Default URL: `http://127.0.0.1:3470/`
 
 A new installation generates an independent random Dashboard password. At the end
-of `zylos init`, the terminal shows the Dashboard address and new password once;
+of non-quiet `zylos init`, the terminal shows the Dashboard address and new password once;
 only its scrypt hash is saved. An existing config without a password is repaired
 without changing its other settings. Existing passwords are retained and cannot
-be displayed again. Dashboard does not share Web Console credentials.
+be displayed again. Quiet mode (including Docker startup) never prints the
+Dashboard password; it tells you to run `zylos dashboard reset-password` on the
+host or inside the container. Dashboard does not share Web Console credentials.
+An older installation that becomes locked because it has no configured password
+can recover with the same `zylos dashboard reset-password` command.
 
 With Caddy, init shows the public `/dashboard/` route. With `--no-caddy`, it shows
 `http://127.0.0.1:<port>/`; this is local-only port access without a public route.
@@ -135,7 +139,11 @@ To generate a replacement password, run:
 zylos dashboard reset-password
 ```
 
-The command shows the new password once and stores only its hash. It restarts a
+The command shows the new password once and stores only its hash. Reset enables
+Dashboard authentication even if it was explicitly disabled, so this recovery
+command always restores a protected login. It clears all existing browser and
+API sessions, including remembered logins; users must sign in again. API keys
+remain configured. It restarts a
 running Dashboard so the replacement applies immediately; if Dashboard is not
 running, the change applies at its next start. If service status or restart cannot
 be confirmed, the command reports that you must restart Dashboard before signing

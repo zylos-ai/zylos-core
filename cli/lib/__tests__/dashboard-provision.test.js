@@ -90,7 +90,7 @@ test('Dashboard provisioning failure warns but continues real init Core service 
   const previous = process.env.ZYLOS_DIR; process.env.ZYLOS_DIR = root;
   try {
     const { startCoreServices } = await import(`../../commands/init.js?provision=${Date.now()}`);
-    assert.equal(startCoreServices(), 1, JSON.stringify({ commands, logs }));
+    assert.equal(await startCoreServices(), 1, JSON.stringify({ commands, logs }));
     assert.ok(logs.some(line => line.includes('Dashboard configuration failed')));
     assert.ok(commands.some(command => command.startsWith('pm2 start ')));
     assert.ok(commands.includes('pm2 save'));

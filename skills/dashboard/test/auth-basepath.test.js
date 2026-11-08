@@ -132,12 +132,12 @@ for (const auth of [undefined, { enabled: true }, { enabled: true, password: nul
     const login = await fetch(`${origin}/login`);
     assert.equal(login.status, 200);
     const html = await login.text();
-    assert.match(html, /Set a password before signing in/);
+    assert.match(html, /zylos dashboard reset-password/);
     assert.doesNotMatch(html, /type="password"|type="submit"/);
     const attempt = await fetch(`${origin}/login`, { method: 'POST', redirect: 'manual', body: form({ password: '' }) });
     assert.equal(attempt.status, 503);
     assert.equal(attempt.headers.get('set-cookie'), null);
-    assert.match(await attempt.text(), /Set a password before signing in/);
+    assert.match(await attempt.text(), /zylos dashboard reset-password/);
     assert.equal((await fetch(`${origin}/api/health`)).status, 200);
   });
 }
