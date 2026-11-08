@@ -643,6 +643,7 @@
   "chat.page.newMessages": "{count} new messages",
   "chat.page.noMessages": "No messages yet",
   "chat.page.placeholder": "Message your agent (Enter for a new line, Ctrl/⌘ + Enter to send)",
+  "chat.page.mobilePlaceholder": "Message your agent",
   "chat.page.sendHint": "Messages are stored before delivery. The status reports what actually happened.",
   "chat.page.updateRetry": "Automatic updates paused; retrying",
   "chat.page.you": "You",

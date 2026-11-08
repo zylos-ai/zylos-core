@@ -292,7 +292,7 @@ export function mountConversationPage({
   const input = node('textarea', undefined, 'conversation-input chat-input');
   input.rows = 1;
   input.setAttribute('aria-label', t('chat.input'));
-  input.placeholder = t('chat.page.placeholder');
+  updateInputPlaceholder();
   const send = action('send', () => {}, 'send', 'wb-btn wb-btn-primary');
   send.type = 'submit';
   const hint = node('p', t('chat.page.sendHint'), 'conversation-compose-hint');
@@ -316,6 +316,11 @@ export function mountConversationPage({
   detail.append(header, renameForm, notices, history, composer, readOnlyFooter);
   page.append(sidebar, detail);
   root.replaceChildren(page);
+  function updateInputPlaceholder(mode = currentSnapshot?.mode) {
+    const key = mode === 'single' ? 'chat.page.singlePlaceholder'
+      : view?.innerWidth <= 760 ? 'chat.page.mobilePlaceholder' : 'chat.page.placeholder';
+    input.placeholder = t(key);
+  }
   function fitInput() {
     if (!view || !input.isConnected || !input.getClientRects().length) {
       return;
@@ -549,8 +554,9 @@ export function mountConversationPage({
     const oldTop = stream.scrollTop,
       bounds = stream.getBoundingClientRect();
     const previousHeight = stream.scrollHeight;
-    const pinned = previousHeight - oldTop - stream.clientHeight <= 2;
-    const near = previousHeight - oldTop - stream.clientHeight < stream.clientHeight;
+    const previousClientHeight = stream.clientHeight;
+    const pinned = previousHeight - oldTop - previousClientHeight <= 2;
+    const near = previousHeight - oldTop - previousClientHeight < previousClientHeight;
     const anchorNode = [...messageList.children].find(el => el.dataset.messageId && el.getBoundingClientRect().bottom > bounds.top && el.getBoundingClientRect().top < bounds.bottom);
     const anchor = anchorNode ? {
       node: anchorNode
@@ -559,6 +565,7 @@ export function mountConversationPage({
     return {
       oldTop,
       previousHeight,
+      previousClientHeight,
       pinned,
       near,
       anchor,
@@ -569,6 +576,7 @@ export function mountConversationPage({
     const {
       oldTop,
       previousHeight,
+      previousClientHeight,
       pinned,
       near,
       anchor,
@@ -622,7 +630,8 @@ export function mountConversationPage({
       }
     }
     positionChildren(messageList, ordered);
-    if (switched || !maxSeenId && s.messages.length || added && near && !s.gap || pinned && stream.scrollHeight !== previousHeight) {
+    if (switched || !maxSeenId && s.messages.length || added && near && !s.gap
+      || pinned && (stream.scrollHeight !== previousHeight || stream.clientHeight !== previousClientHeight)) {
       stream.scrollTop = stream.scrollHeight;
       unread = 0;
     } else if (anchor?.node.isConnected && anchorTop !== undefined) {
@@ -648,6 +657,7 @@ export function mountConversationPage({
     const bottom = stream.scrollHeight - oldTop - stream.clientHeight <= 2;
     const anchor = [...messageList.children].find(el => el.dataset.messageId && el.getBoundingClientRect().bottom > bounds.top && el.getBoundingClientRect().top < bounds.bottom);
     const anchorTop = anchor?.getBoundingClientRect().top;
+    updateInputPlaceholder();
     fitInput();
     const available = Math.max(0, Math.floor(view.innerHeight - page.getBoundingClientRect().top));
     if (available !== fittedHeight) {
@@ -700,7 +710,6 @@ export function mountConversationPage({
     }
     text(gapLabel, t('chat.page.historyGap'));
     text(hint, t('chat.page.sendHint'));
-    input.placeholder = t('chat.page.placeholder');
     text(updateNotice, t('chat.page.updateRetry'));
     sidebar.setAttribute('aria-label', t('chat.conversations'));
     detail.setAttribute('aria-label', t('chat.history'));
@@ -888,7 +897,7 @@ export function mountConversationPage({
     readOnlyFooter.hidden = s.tab !== 'external' || !s.selectedId;
     text(readOnlyFooter.lastElementChild, t('chat.page.externalReadOnly'));
     composer.classList.toggle('conversation-composer-disabled', s.mode === 'single');
-    input.placeholder = t(s.mode === 'single' ? 'chat.page.singlePlaceholder' : 'chat.page.placeholder');
+    updateInputPlaceholder(s.mode);
     input.disabled = !s.canWrite || !!s.sending;
     if (input.value !== s.input) {
       input.value = s.input;

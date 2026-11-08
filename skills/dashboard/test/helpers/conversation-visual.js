@@ -181,8 +181,59 @@ export async function runConversationVisual(t, sandbox) {
   }
   // Width-only resizing can grow a wrapped draft without changing the page height.
   // Preserve both bottom pinning and a reader's visible row across that editor resize.
-  const resizeMeasurements = [];
+  const resizeMeasurements = [], typingMeasurements = [];
   const settleLayout = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const placeholderMeasurements = [];
+  const checkPlaceholder = async expected => {
+    const measurement = await page.locator('#wb-chat .chat-composer textarea').evaluate(el => {
+      const style = getComputedStyle(el), context = document.createElement('canvas').getContext('2d');
+      context.font = style.font;
+      return { text: el.placeholder, textWidth: context.measureText(el.placeholder).width,
+        availableWidth: el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) };
+    });
+    assert.equal(measurement.text, expected);
+    assert.ok(measurement.textWidth <= measurement.availableWidth, 'phone placeholder is fully visible on one line');
+    placeholderMeasurements.push(measurement);
+  };
+  // Real keyboard input changes the editor height while the viewport stays fixed.
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await settleLayout();
+    const editor = page.locator('#wb-chat .chat-composer textarea');
+    if (width === 390) await checkPlaceholder('发消息给 AI');
+    for (const reading of [false, true]) {
+      await editor.fill('');
+      const before = await page.locator('#wb-chat .chat-messages').evaluate((el, reading) => {
+        el.scrollTop = reading ? 90 : el.scrollHeight;
+        const bounds = el.getBoundingClientRect();
+        const anchor = [...el.querySelectorAll('[data-message-id]')].find(row => row.getBoundingClientRect().bottom > bounds.top);
+        return { anchor: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top, clientHeight: el.clientHeight };
+      }, reading);
+      await editor.focus();
+      const lineMeasurements = [];
+      for (let line = 1; line <= 6; line++) {
+        if (line > 1) await page.keyboard.press('Enter');
+        await page.keyboard.type(`Reply line ${line}`);
+        const measurement = await page.locator('#wb-chat .chat-messages').evaluate((el, anchor) => {
+          const bounds = el.getBoundingClientRect();
+          const last = el.querySelector('.conversation-message-list').lastElementChild.getBoundingClientRect();
+          return { gap: el.scrollHeight - el.scrollTop - el.clientHeight, clientHeight: el.clientHeight,
+            lastBottom: last.bottom, viewportTop: bounds.top, viewportBottom: bounds.bottom,
+            anchorTop: el.querySelector(`[data-message-id="${anchor}"]`).getBoundingClientRect().top };
+        }, before.anchor);
+        if (reading) assert.ok(Math.abs(measurement.anchorTop - before.top) < 2, `${width} line ${line}: typing preserves historical reading anchor`);
+        else {
+          assert.ok(measurement.gap <= 2, `${width} line ${line}: typing preserves bottom pinning`);
+          assert.ok(measurement.lastBottom >= measurement.viewportTop && measurement.lastBottom <= measurement.viewportBottom + 1, `${width} line ${line}: newest message bottom remains visible`);
+        }
+        lineMeasurements.push(measurement);
+      }
+      assert.ok(lineMeasurements.at(-1).clientHeight < before.clientHeight, 'six typed lines actually shrink the history viewport');
+      typingMeasurements.push({ width, reading, before, lines: lineMeasurements });
+      await screenshot(`typing-${width}-${reading ? 'history' : 'bottom'}`);
+    }
+    await editor.fill('');
+  }
   for (const reading of [false, true]) {
     await page.setViewportSize({ width: 1440, height: 900 });
     await settleLayout();
@@ -225,6 +276,7 @@ export async function runConversationVisual(t, sandbox) {
   await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
   await select();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en');
+  await checkPlaceholder('Message your agent');
   await screenshot('conversation-390-english');
   await page.setViewportSize({ width: 1440, height: 900 });
   // Hold a workbench read without returning it. Message polling must remain independent.
@@ -401,6 +453,6 @@ export async function runConversationVisual(t, sandbox) {
   assert.doesNotMatch(await staleReceipt.innerText(), /can retry|retry sending/i);
   assert.equal(await page.locator('#wb-chat .chat-composer textarea').isDisabled(), true);
   assert.deepEqual(errors, []);
-  if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, composerMeasurements, resizeMeasurements, base: fixture.base }, null, 2));
+  if (output) fs.writeFileSync(path.join(output, 'conversation-browser.json'), JSON.stringify({ shots, reads, errors, composerMeasurements, resizeMeasurements, typingMeasurements, placeholderMeasurements, base: fixture.base }, null, 2));
   t.diagnostic(`conversation browser: ${shots.length} screenshots, ${reads} actual message reads, no page errors`);
 }
