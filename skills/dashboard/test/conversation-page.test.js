@@ -84,6 +84,30 @@ function pageDocument() {
   return document;
 }
 
+test('mounted conversation page forwards language headers without adding query parameters', async t => {
+  for (const locale of ['zh', 'en']) {
+    const document = pageDocument(), root = document.createElement('div'), reads = [];
+    document.documentElement = { lang: locale };
+    const sessionGroup = 'dashboard:locale-header', id = 'g:' + Buffer.from(sessionGroup).toString('hex').toUpperCase();
+    const page = mountConversationPage({ root, document, fetch: async (path, options) => {
+      if (path.startsWith('/api/chat/conversations?') || path.includes('/messages?')) reads.push({ path, options });
+      const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+        : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
+        : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id, sessionGroup, state: 'active' } }
+        : { items: [], nextCursor: null, afterCursor: 'after' };
+      return { ok: true, status: 200, json: async () => body };
+    } });
+    t.after(() => page.destroy());
+    assert.equal(await page.openGroup(sessionGroup), true);
+    assert.ok(reads.some(row => row.path.includes('/messages?')));
+    for (const row of reads) {
+      assert.equal(new URL(row.path, 'http://fixture').searchParams.has('locale'), false);
+      assert.equal(row.options.headers['X-Zylos-Locale'], locale);
+    }
+    page.destroy();
+  }
+});
+
 for (const stop of ['close', 'destroy']) {
   test(`conversation page forwards the group request signal and aborts it on ${stop}`, { timeout: 2000 }, async t => {
     const document = pageDocument(), root = document.createElement('div');

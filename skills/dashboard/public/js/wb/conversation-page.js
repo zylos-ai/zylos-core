@@ -104,10 +104,11 @@ export function mountConversationPage({
     const response = await fetcher(endpoint(path), {
       method: options.method ?? 'GET',
       ...(options.signal ? { signal: options.signal } : {}),
+      headers: {
+        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(options.headers || {})
+      },
       ...(options.body === undefined ? {} : {
-        headers: {
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify(options.body)
       })
     });
