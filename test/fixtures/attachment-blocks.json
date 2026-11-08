@@ -115,6 +115,14 @@
       "sourcePath": "/tmp/ATTACHMENT_SOURCE_PATH"
     }
   },
+  "invalidBlockStates": [
+    { "name": "missing_data", "fields": {}, "omitData": true },
+    { "name": "complete_without_data", "fields": { "status": "complete" }, "omitData": true },
+    { "name": "pending_without_data", "fields": { "status": "pending" }, "omitData": true },
+    { "name": "error_without_data", "fields": { "status": "error", "reason": "Unavailable" }, "omitData": true },
+    { "name": "pending_with_data", "fields": { "status": "pending" } },
+    { "name": "error_with_data", "fields": { "status": "error", "reason": "Unavailable" } }
+  ],
   "invalidData": [
     {
       "name": "missing_id",

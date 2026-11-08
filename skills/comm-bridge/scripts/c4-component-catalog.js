@@ -369,7 +369,8 @@ function blockSchemaWithHostDefinitions() {
   };
   for (const type of ['x-zylos.image', 'x-zylos.file']) {
     schema.allOf.push({ if: { properties: { type: { const: type } } },
-      then: { properties: { schemaVersion: { const: 1 }, data: { $ref: '#/$defs/attachmentData' } } } });
+      then: { required: ['data'], properties: { schemaVersion: { const: 1 }, status: { const: 'complete' },
+        data: { $ref: '#/$defs/attachmentData' } } } });
   }
   return schema;
 }

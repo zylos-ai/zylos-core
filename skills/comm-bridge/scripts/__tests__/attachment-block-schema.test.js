@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { CONTENT_PREFIX, parseC4Content, readC4Envelope, validateAnswer } from '../c4-content-schema.js';
+import { CONTENT_PREFIX, parseC4Content, readC4Envelope, validateAnswer, validateAttachmentData } from '../c4-content-schema.js';
 import { parseC4Content as parseLegacy } from '../../../../test/fixtures/c4-content-schema-legacy.js';
 import { projectC4Content } from '../c4-content-projection.js';
 
@@ -33,7 +33,28 @@ for (const block of fixtures.blocks) {
       { ...boundary.data, nameSnapshot: '文'.repeat(161) },
     ]) assert.equal(parseC4Content(encode(message({ ...block, data }))).kind, 'invalid');
   });
+  test(`${block.type} requires registered data and permits only complete blocks`, () => {
+    assert.equal(parseC4Content(encode(message({ ...block, status: 'complete' }))).kind, 'envelope');
+    for (const example of fixtures.invalidBlockStates) {
+      const invalid = { ...structuredClone(block), ...example.fields };
+      if (example.omitData) delete invalid.data;
+      const content = encode(message(invalid));
+      assert.equal(parseC4Content(content).kind, 'invalid', example.name);
+      assert.equal(projectC4Content(content, { c4Id: 23 }), '[C4 content invalid; c4_id=23]', example.name);
+    }
+  });
 }
+
+test('attachment diagnostics share the exact closed data schema without accepting a message', () => {
+  for (const block of fixtures.blocks) assert.equal(validateAttachmentData(block.data), true);
+  assert.equal(validateAttachmentData({ attachmentId: '_' + 'a'.repeat(127), nameSnapshot: '文'.repeat(160) }), true);
+  for (const example of fixtures.invalidData) assert.equal(validateAttachmentData(example.data), false, example.name);
+  for (const data of [null, [], 'att_file', { attachmentId: 'a'.repeat(129), nameSnapshot: 'report.pdf' },
+    { attachmentId: 'att_file', nameSnapshot: '文'.repeat(161) }]) assert.equal(validateAttachmentData(data), false);
+  const pending = { ...fixtures.blocks[0], status: 'pending' };
+  assert.equal(validateAttachmentData(pending.data), true);
+  assert.equal(parseC4Content(encode(message(pending))).kind, 'invalid');
+});
 
 test('raw framing supports a rejection hint without accepting closed-schema-invalid data', () => {
   const source = message(fixtures.blocks[1]);

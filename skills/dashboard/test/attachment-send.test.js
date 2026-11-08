@@ -11,7 +11,7 @@ import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
 import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
-import { ChatAttachments, ATTACHMENT_SEND_WINDOW_MS } from '../src/lib/chat/attachments.js';
+import { ChatAttachments, withChatAttachments, ATTACHMENT_SEND_WINDOW_MS } from '../src/lib/chat/attachments.js';
 import { evaluateBeforeSend } from '../scripts/send-hook.js';
 import { acceptDelivery } from '../src/lib/chat/channel.js';
 import { runSend } from '../scripts/send.js';
@@ -144,11 +144,39 @@ test('attachment hook uses the destination without business writes; SQLite bookk
   assert.equal(f.hook(value).decision, 'continue');
   assertAudit(f, before);
   assert.equal(f.count(), 0);
-  assert.equal(f.hook(value, { options: {} }).decision, 'abort');
-  assert.equal(f.hook(value, { options: { groupName: f.b.localId } }).decision, 'abort');
-  assert.equal(f.hook(value, { options: { groupName: f.a.localId, wholeGroup: true } }).decision, 'abort');
+  for (const change of [{ options: {} }, { options: { groupName: f.b.localId } },
+    { options: { groupName: f.a.localId, wholeGroup: true } },
+    { endpoint: 'missing_conversation', options: { groupName: 'missing_conversation' } }]) {
+    const result = f.hook(value, change);
+    assert.equal(result.decision, 'abort');
+    assert.match(result.message, /original reply-via.*--session-group/);
+    assert.doesNotMatch(result.message, /register/);
+  }
   f.core.prepare('DELETE FROM group_heads WHERE session_group=?').run(`dash:${f.a.localId}`);
-  assert.equal(f.hook(value).decision, 'abort');
+  const missingGroup = f.hook(value);
+  assert.equal(missingGroup.decision, 'abort');
+  assert.match(missingGroup.message, /original reply-via.*--session-group/);
+});
+
+test('attachment hook reserves registration advice for invalid attachment data and references', async t => {
+  const f = fixture(t), registered = await f.register();
+  const invalidChart = { id: 'chart', type: 'time_series', schemaVersion: 1, data: {}, fallbackText: 'Invalid chart' };
+  const badEnvelope = JSON.parse(content(block(registered)).slice(CONTENT_PREFIX.length));
+  badEnvelope.unexpected = true;
+  const before = audit(f);
+  for (const value of [content(block(registered), invalidChart), CONTENT_PREFIX + JSON.stringify(badEnvelope),
+    content(block(registered, { status: 'pending' }))]) {
+    const result = f.hook(value);
+    assert.equal(result.decision, 'abort');
+    assert.equal(result.message, 'Invalid Dashboard structured content.');
+  }
+  for (const data of [{ nameSnapshot: registered.name }, { attachmentId: registered.id, nameSnapshot: registered.name, url: 'https://example.invalid/file' },
+    { attachmentId: 'unknown_id', nameSnapshot: registered.name }]) {
+    const result = f.hook(content(block(registered, { data })));
+    assert.equal(result.decision, 'abort');
+    assert.match(result.message, /register again on the target machine/);
+  }
+  assertAudit(f, before);
 });
 
 test('attachment hook reads closed WAL databases with SQLite bookkeeping and no business writes', async t => {
@@ -159,6 +187,54 @@ test('attachment hook reads closed WAL databases with SQLite bookkeeping and no 
   before.files = snapshot(f.root);
   assert.equal(f.hook(value).decision, 'continue');
   assertAudit(f, before);
+});
+
+// Boundary: a killed writer leaves committed attachment data only in WAL.
+// Run on hook storage/open-mode changes; unrelated UI may skip. The child is
+// bounded and reaped before fixture cleanup, on success and every failure.
+test('attachment hook preserves crash-left committed WAL frames and main database bytes', async t => {
+  const f = fixture(t), source = path.join(f.root, 'workspace', 'crash-report.txt');
+  fs.writeFileSync(source, 'registered only in crash-left WAL');
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM chat_attachments').get().n, 0);
+  f.attachments.c4Reader.close(); f.store.close(); f.core.close();
+  const child = spawn(process.execPath, [fileURLToPath(new URL('./helpers/attachment-wal-writer.js', import.meta.url))],
+    { env: f.env, stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 });
+  let stdout = '', stderr = '', failure, exitCode;
+  child.stdout.on('data', bytes => { stdout += bytes; if (stdout.length > 65536) child.kill('SIGKILL'); });
+  child.stderr.on('data', bytes => { stderr += bytes; if (stderr.length > 65536) child.kill('SIGKILL'); });
+  child.on('error', error => { failure = error; });
+  const finished = new Promise(resolve => child.once('close', code => { exitCode = code; resolve(); }));
+  f.cleanup.push(async () => { if (exitCode === undefined) child.kill('SIGKILL'); await finished; });
+  child.stdin.on('error', error => { failure = error; });
+  child.stdin.end(JSON.stringify({ root: f.root, conversation: f.a.localId, source }));
+  const deadline = performance.now() + 3000;
+  while (!stdout.includes('ATTACHMENT_WAL_COMMITTED')) {
+    if (failure) throw failure;
+    assert.equal(exitCode, undefined, stderr);
+    assert.ok(performance.now() < deadline, 'writer commits the attachment within its bound');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  child.kill('SIGKILL'); await finished;
+  assert.equal(exitCode, null);
+  const registered = JSON.parse(stdout.split('\n').find(line => line.startsWith('ATTACHMENT_WAL_COMMITTED ')).slice('ATTACHMENT_WAL_COMMITTED '.length));
+  const value = content(block({ ...registered, id: registered.attachmentId }));
+  const wal = path.join(f.root, 'components/dashboard/dashboard.db-wal');
+  assert.ok(fs.statSync(wal).size > 32, 'crash fixture contains committed WAL frames');
+  const before = audit(f);
+  assert.equal(f.hook(value).decision, 'continue', 'hook reads the registered record from committed WAL');
+  assertAudit(f, before);
+});
+
+test('read-only attachment access closes both database handles and rejects writes', async t => {
+  const f = fixture(t); let dashboardHandle, coreHandle;
+  withChatAttachments(f.root, { readonly: true }, service => {
+    dashboardHandle = service.db; coreHandle = service.c4Reader._open();
+    assert.equal(dashboardHandle.open, true); assert.equal(coreHandle.open, true);
+    assert.equal(dashboardHandle.readonly, true); assert.equal(coreHandle.readonly, true);
+    assert.throws(() => dashboardHandle.prepare("UPDATE chat_conversations SET display_name='must-not-write'").run(), { code: 'SQLITE_READONLY' });
+  });
+  assert.equal(dashboardHandle.open, false);
+  assert.equal(coreHandle.open, false);
 });
 
 // Boundary: actual hook process with open readers alongside existing writers.

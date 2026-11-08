@@ -236,6 +236,21 @@ test('mixed attachment blocks use filenames without a renderer while the known q
   }
 });
 
+test('attachment pending error and missing-data blocks invalidate the complete browser message', () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/attachment-blocks.json', import.meta.url), 'utf8'));
+  for (const block of fixture.blocks) {
+    for (const example of fixture.invalidBlockStates) {
+      const source = structuredClone(fixture.mixed);
+      const index = source.blocks.findIndex(item => item.type === block.type);
+      const invalid = { ...source.blocks[index], ...example.fields };
+      if (example.omitData) delete invalid.data;
+      source.blocks[index] = invalid;
+      const root = render(source, { renderQuestion() { assert.fail('invalid attachment message cannot expose actions'); } });
+      assert.equal(root.textContent, 'chat.invalidContentchat.block.reference 42', `${block.type} ${example.name}`);
+    }
+  }
+});
+
 test('an old page schema rejects new and rollback-history attachment envelopes as one invalid message', () => {
   const fixture = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/attachment-blocks.json', import.meta.url), 'utf8'));
   // Exact historical renderer, its plain-text dependency and schema bytes from

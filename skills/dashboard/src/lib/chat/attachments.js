@@ -207,11 +207,18 @@ export class ChatAttachments {
         || new Set(blocks.map(block => block.data?.attachmentId)).size !== blocks.length) {
       throw fail('invalid_chat_attachments');
     }
-    const group = this._conversation(conversation);
+    let group;
+    try { group = this._conversation(conversation); }
+    catch (error) {
+      if (['invalid_chat_conversation', 'chat_conversation_not_found', 'chat_conversation_forbidden'].includes(error.code)) {
+        throw fail('invalid_chat_attachment_destination');
+      }
+      throw error;
+    }
     // Core falls back to the namespace when an explicit outbound group does
     // not exist. A reference must target the exact registered conversation.
     if (!this._core().prepare('SELECT 1 FROM group_heads WHERE session_group=?').get(group.sessionGroup)) {
-      throw fail('chat_attachment_unavailable', 404);
+      throw fail('invalid_chat_attachment_destination');
     }
     const now = this.now();
     for (const block of blocks) {
