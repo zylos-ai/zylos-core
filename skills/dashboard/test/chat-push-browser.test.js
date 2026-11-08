@@ -13,6 +13,14 @@ import { startChatBrowser, until, pause } from './helpers/chat-push-browser-driv
 // socket/DB paths are read back before access. DB commit drives real observer
 // invalidations, never direct event injection. t.after/abort own every resource.
 const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_BIN;
+async function settledControls(page) {
+  const read = () => page.evaluate(`({readEnabled:document.querySelector('[data-action="refreshMessages"]')?.disabled===false,statusEnabled:document.querySelector('[data-action="refreshStatus"]')?.disabled===false,listSettled:document.querySelector('.conversation-list-notice')?.hidden===true})`);
+  await until(async () => Object.values(await read()).every(Boolean), 'both retained manual controls are enabled and the nonempty list has finished loading', 2000);
+  const controls = await read();
+  assert.equal(controls.readEnabled, true); assert.equal(controls.statusEnabled, true); assert.equal(controls.listSettled, true);
+  return controls;
+}
+
 for (const locale of ['en', 'zh']) for (const width of [1280, 390]) {
   test(`chat pushes committed delivery and replies while preserving reading state in ${locale} at ${width}`, {
     skip: !enabled, timeout: 45000,
@@ -24,7 +32,7 @@ for (const locale of ['en', 'zh']) for (const width of [1280, 390]) {
     const page = await browser.page({ locale, width });
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR && path.join(process.env.ZYLOS_CHAT_EVIDENCE_DIR, `${locale}-${width}`);
     if (evidence) fs.mkdirSync(evidence, { recursive: true });
-    const screenshot = async name => { if (evidence) await page.screenshot(path.join(evidence, name + '.png')); };
+    const screenshot = async name => { await settledControls(page); if (evidence) await page.screenshot(path.join(evidence, name + '.png')); };
     await until(() => page.evaluate(`document.querySelector('.conversation-push-status')?.dataset.streamState==='live'`), 'chat_ready makes stream healthy', 5000);
     await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${fixture.pendingId}"] [data-delivery-state="pending"]')`), 'pending message visible');
     await screenshot('pending');
@@ -67,12 +75,13 @@ for (const locale of ['en', 'zh']) for (const width of [1280, 390]) {
       twoTabs = hiddenCatchup = true;
       await second.evaluate('window.dispose()');
     }
+    const controls = await settledControls(page);
     const layout = await page.evaluate('({width:innerWidth,scrollWidth:document.documentElement.scrollWidth})');
     assert.ok(layout.scrollWidth <= layout.width, 'no horizontal page overflow');
     for (const event of fixture.events) assert.ok(Object.keys(event.data).every(key => ['version','tab','conversationId','ids'].includes(key)), 'SSE carries only scoped invalidation metadata');
     assert.equal(browser.errors.length, 0); assert.equal(browser.external.length, 0);
     assert.equal(fixture.requests.some(row => row.method !== 'GET'), false, 'readback does not resend or mutate');
-    const result = { locale, width, height: 900, latencyMs, twoTabs, hiddenCatchup, retained, layout,
+    const result = { locale, width, height: 900, latencyMs, twoTabs, hiddenCatchup, retained, layout, controls,
       databaseRows: fixture.writer.prepare('SELECT COUNT(*) AS n FROM conversations').get().n,
       events: fixture.events.map(({ name, data }) => ({ name, data })), requests: fixture.requests,
       browserErrors: browser.errors, externalRequests: browser.external,
@@ -104,6 +113,7 @@ test('an old stream producer remains connected while current chat uses polling f
   await pause(1000);
   assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, streamsBefore, 'no reconnect to negotiate an old producer while scope is unchanged');
   assert.equal(fixture.observer.subscriptions.size, 0, 'old producer never opts into chat detection');
+  await settledControls(page);
   const update = fixture.deliverAndReply('Current chat catches up through polling from an old producer.');
   await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${update.pendingId}"] [data-delivery-state="delivered"]') && !!document.querySelector('[data-message-id="${update.id}"]')`), 'old producer fallback reads committed truth', 6000);
   const latencyMs = Date.now() - update.committedAt;
@@ -115,7 +125,8 @@ test('an old stream producer remains connected while current chat uses polling f
   await pause(1000);
   assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, streamsAfter);
   assert.equal(browser.errors.length, 0); assert.equal(browser.external.length, 0);
-  const result = { latencyMs, streamsBefore, streamsAfter, activeStreams: 1, oldProducerReady: false, polling: true,
+  const controls = await settledControls(page);
+  const result = { latencyMs, streamsBefore, streamsAfter, activeStreams: 1, controls, oldProducerReady: false, polling: true,
     requests: fixture.requests, browserErrors: browser.errors, externalRequests: browser.external,
     boundary: 'Unchanged legacy SseHub source loaded by native import; real current browser frontend, private SQLite writer and history HTTP routes; no model/PM2/tmux' };
   if (process.env.ZYLOS_CHAT_EVIDENCE_DIR) {

@@ -421,3 +421,31 @@ for (const locale of ['en', 'zh']) test(`push updates preserve the editor and ol
   assert.ok(root.querySelector('[data-action="refreshMessages"]')); assert.ok(root.querySelector('[data-action="refreshStatus"]'));
   page.close(); assert.equal(subscription, null);
 });
+
+
+test('initial ready catchup releases the loading notice and both manual read buttons', async t => {
+  const document = conversationDocument(), root = document.createElement('div');
+  const resolvers = []; let subscription;
+  const page = mountConversationPage({ root, document, onStreamSubscription: value => { subscription = value; }, fetch: async path => {
+    let body;
+    if (path.startsWith('/api/chat/conversations?')) body = await new Promise(resolve => { resolvers.push(resolve); });
+    else body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      : path.includes('/messages?') ? { items: [{ id: 1, direction: 'in', status: 'pending', content: 'hello' }], afterCursor: 'after', nextCursor: null }
+      : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', state: 'active' } }
+      : { items: [], nextCursor: null };
+    return { ok: true, status: 200, json: async () => body };
+  } });
+  t.after(() => page.destroy());
+  const opening = page.open(); await tick();
+  page.streamStatus('connecting', subscription);
+  page.streamEvent('chat_ready', { version: 1, ...subscription }, subscription); await tick();
+  assert.equal(resolvers.length, 2);
+  resolvers[1]({ items: [{ id: 'g:AA', displayName: 'Current data' }], nextCursor: null }); await tick(); await tick();
+  allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click'); await tick(); await tick();
+  assert.equal(root.querySelector('.conversation-list-notice').hidden, true);
+  for (const action of ['refreshMessages', 'refreshStatus']) assert.equal(root.querySelector(`[data-action="${action}"]`).disabled, false);
+  resolvers[0]({ items: [{ id: 'g:BB', displayName: 'Stale data' }], nextCursor: null }); await opening;
+  assert.equal(root.querySelector('.conversation-list-notice').hidden, true);
+  for (const action of ['refreshMessages', 'refreshStatus']) assert.equal(root.querySelector(`[data-action="${action}"]`).disabled, false);
+  assert.equal(allNodes(root).some(node => node.dataset.conversationId === 'g:BB'), false);
+});

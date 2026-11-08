@@ -275,3 +275,40 @@ test('visibility and reconnect transitions rearm the absolute backoff deadline',
   assert.equal(f.state.snapshot().updateError, null);
   assert.equal(f.timer.count(), 1);
 });
+
+
+for (const first of ['foreground', 'quiet']) test(`a ready catchup clears foreground loading when ${first} list resolves first`, async t => {
+  const resolvers = [];
+  const f = fixture(t, u => u.pathname === '/api/chat/conversations' ? new Promise(resolve => { resolvers.push(resolve); }) : undefined);
+  const opening = f.state.open(); await flush();
+  assert.equal(f.state.snapshot().loading, true);
+  f.state.streamStatus('connecting'); await f.event('chat_ready');
+  assert.equal(resolvers.length, 2);
+  const old = { items: [{ id: 'g:BB', displayName: 'stale foreground' }], nextCursor: null };
+  const latest = { items: [{ id: 'g:AA', displayName: 'latest quiet' }], nextCursor: null };
+  if (first === 'quiet') {
+    resolvers[1](latest); await flush();
+    assert.equal(f.state.snapshot().loading, false, 'authoritative quiet data releases the superseded foreground spinner');
+    resolvers[0](old); await opening;
+  } else {
+    resolvers[0](old); await opening;
+    assert.equal(f.state.snapshot().loading, false, 'foreground completion clears only its own loading token');
+    resolvers[1](latest); await flush();
+  }
+  assert.equal(f.state.snapshot().loading, false);
+  assert.equal(f.state.snapshot().items.length, 1);
+  assert.equal(f.state.snapshot().items[0].id, 'g:AA', 'the list data version guard still rejects the old result');
+});
+
+test('a previous identity list cannot clear a new foreground loading token', async t => {
+  const resolvers = [];
+  const f = fixture(t, u => u.pathname === '/api/chat/conversations' ? new Promise(resolve => { resolvers.push(resolve); }) : undefined);
+  const oldOpening = f.state.open(); await flush();
+  f.state.close(); f.setIdentity('remote'); const newOpening = f.state.open(); await flush();
+  assert.equal(resolvers.length, 2);
+  resolvers[0]({ items: [{ id: 'g:BB' }], nextCursor: null }); await oldOpening;
+  assert.equal(f.state.snapshot().loading, true);
+  resolvers[1]({ items: [{ id: 'g:AA' }], nextCursor: null }); await newOpening;
+  assert.equal(f.state.snapshot().loading, false);
+  assert.equal(f.state.snapshot().items[0].id, 'g:AA');
+});
