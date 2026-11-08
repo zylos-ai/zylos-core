@@ -1,7 +1,7 @@
 // The observer is independent of Origin availability; keep its access and modal restrictions.
-export const ORIGIN_LOCK_SELECTOR = '#observer-tab';
+export const OBSERVER_ACCESS_SELECTOR = '#observer-tab';
 
-export function lockOriginButtons(buttons, { readOnly }) {
+export function lockObserverButtons(buttons, { readOnly }) {
   for (const button of buttons) {
     button.disabled = readOnly || Boolean(button.closest('.modal-body-disabled'));
     button.title = button.dataset.wbHint || '';

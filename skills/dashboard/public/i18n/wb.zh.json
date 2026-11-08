@@ -687,7 +687,6 @@
   "chat.page.emptyMine": "还没有对话。\n新建一个，和 AI 单独聊一件事。",
   "chat.page.emptyExternal": "暂无外部聊天记录",
   "chat.page.receipt.notStoredReadOnly": "未入库，输入已保留；single 模式下不能发送。",
-  "wb.detail.observeLive": "实时画面",
   "wb.detail.observeHistory": "查看原文",
   "wb.fleet.title": "多台机器",
   "wb.fleet.subtitle": "你能查看的所有机器，有问题的排在前面。",
@@ -896,5 +895,6 @@
   "wb.observer.enabledNone": "已启用 · 当前没有运行中的组",
   "wb.observer.sessionChanged": "组会话已结束或发生变化，正在重新连接当前会话…",
   "wb.observer.connectionLost": "观察连接已断开，正在重新检查组会话并连接…",
-  "wb.detail.observe": "观察"
+  "wb.detail.observe": "观察",
+  "wb.observer.groupUnsupported": "远端版本不支持按组观察，请先升级远端。"
 }

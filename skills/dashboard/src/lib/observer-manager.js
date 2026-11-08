@@ -277,7 +277,7 @@ export class ObserverManager {
     let target = null;
     if (this.resolveTarget) {
       try { target = await this.resolveTarget(sessionGroup); }
-      catch (error) { if (error.code !== 'agent_session_unavailable') throw error; }
+      catch (error) { if (!['agent_session_unavailable', 'target_mismatch'].includes(error.code)) throw error; }
     }
     return { sessionMode, target };
   }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import vm from 'node:vm';
+import '../public/js/markdown-it.min.js';
 import { ObserverHistory, createHistoryMarkdown, escapeHistory } from '../public/js/observer-history.js';
 
 function controller() {
@@ -16,9 +16,7 @@ function controller() {
 }
 
 test('history Markdown escapes HTML and permits only http(s) links, without remote images', () => {
-  const context = vm.createContext({});
-  vm.runInContext(fs.readFileSync(new URL('../public/js/markdown-it.min.js', import.meta.url), 'utf8'), context);
-  const render = createHistoryMarkdown(context.markdownit);
+  const render = createHistoryMarkdown(globalThis.markdownit);
   const result = render('<script>alert(1)</script> [bad](javascript:alert(1)) [file](file:///etc/passwd) [mail](mailto:x@y.com) [good](https://example.com) ![tracker](https://example.com/pixel)');
   assert.doesNotMatch(result, /<script|<img|href="(?:javascript|file|mailto):/);
   assert.match(result, /href="https:\/\/example.com"[^>]*rel="noopener noreferrer"/);
@@ -77,10 +75,12 @@ test('older pagination preserves scroll position and merges pending-tool updates
   assert.equal(history.after, 'o:30'); assert.equal(history.before, 'o:10'); history.cancel();
 });
 
-test('Observer history controls do not call live terminal lifecycle', () => {
+test('Observer history selection releases the live lease and activates history', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url),'utf8');
   const controls = app.slice(app.indexOf('function initObserverControls()'), app.indexOf('function initMemoryControls()'));
-  assert.doesNotMatch(controls, /closeObserver|openObserver|releaseObserverLease|srcdoc/);
+  assert.match(controls, /if \(historyMode\) closeObserver\(\{ preserveNotice: true \}\)/);
+  assert.match(controls, /else if \(activeTabName\(\) === 'observer'\) openObserver\(\)/);
+  assert.doesNotMatch(controls, /releaseObserverLease|srcdoc/);
   assert.match(controls, /parentElement.hidden = historyMode/);
   assert.match(controls, /history.setActive\(historyMode\)/);
 });

@@ -24,7 +24,7 @@ import { createFleetSounds } from './fleet-sounds.js?v=114';
 import { refreshDashboardState } from './state-refresh.js?v=98';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
-import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from './origin-lock.js?v=114';
+import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
 import { mergeRuntimeInfo } from './runtime-ui.js?v=98';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
@@ -258,11 +258,8 @@ function renderInfoBar() {
 }
 
 // ─── Render: State ───
-function renderOriginAvailability() {
-  const unavailable = originSessionUnavailable(state.dashboardState);
-  lockOriginButtons(document.querySelectorAll(ORIGIN_LOCK_SELECTOR), {
-    unavailable, readOnly: remoteIsReadOnly(), reason: t('action.origin_not_running'),
-  });
+function renderObserverAvailability() {
+  lockObserverButtons(document.querySelectorAll(OBSERVER_ACCESS_SELECTOR), { readOnly: remoteIsReadOnly() });
 }
 
 
@@ -344,7 +341,7 @@ function renderAll() {
     refreshSettingsVersion();
   }
   renderInfoBar();
-  renderOriginAvailability();
+  renderObserverAvailability();
   renderObserverPage();
   renderFleet();
   renderMemory();
@@ -1002,7 +999,7 @@ async function refreshState() {
     state.newSessionThreshold = data.new_session_threshold;
   }
   renderInfoBar();
-  renderOriginAvailability();
+  renderObserverAvailability();
   renderObserverPage();
 }
 
@@ -1044,8 +1041,9 @@ function renderObserverPage() {
   const group = state.observer.group;
   const row = observerGroupRow(state.observer.groups, group);
   const multi = status?.sessionMode === 'multi';
-  const groupName = group === undefined && multi ? t('wb.observer.chooseGroup') : observerGroupName(row, group, t('wb.term.origin'));
-  $('#observer-title').textContent = t(focus ? 'wb.observer.focusTitle' : 'wb.observer.pageTitle', { name: groupName });
+  const groupName = group === undefined && multi ? t('wb.observer.chooseGroup') : observerGroupName(row, group, t('wb.term.origin'), t);
+  const hasTarget = status && Object.hasOwn(status, 'target') ? Boolean(status.target) : !originSessionUnavailable(state.dashboardState);
+  $('#observer-title').textContent = t(focus && hasTarget ? 'wb.observer.focusTitle' : 'wb.observer.pageTitle', { name: groupName });
   const target = $('#observer-target');
   target.replaceChildren();
   const run = status?.target?.runId;
@@ -1055,13 +1053,13 @@ function renderObserverPage() {
   }
   const picker = $('#observer-group-picker'), select = $('#observer-group-select');
   if (picker && select) {
-    picker.hidden = !multi;
+    picker.hidden = !multi || Boolean(focus);
     const options = [{ value: '', label: t('wb.observer.chooseGroup') }];
     const rows = runningObserverGroups(state.observer.groups);
     if (group !== undefined && !rows.some(item => (item.sessionGroup ?? 'origin') === group)) {
-      options.push({ value: group, label: observerGroupName(row, group, t('wb.term.origin')) });
+      options.push({ value: group, label: observerGroupName(row, group, t('wb.term.origin'), t) });
     }
-    for (const item of rows) options.push({ value: item.sessionGroup ?? 'origin', label: observerGroupName(item, item.sessionGroup, t('wb.term.origin')) });
+    for (const item of rows) options.push({ value: item.sessionGroup ?? 'origin', label: observerGroupName(item, item.sessionGroup, t('wb.term.origin'), t) });
     const signature = JSON.stringify(options);
     if (select.dataset.options !== signature) {
       select.replaceChildren(...options.map(item => {
@@ -1072,9 +1070,10 @@ function renderObserverPage() {
     select.value = group ?? '';
   }
   const choose = multi && group === undefined;
-  const hasTarget = status && Object.hasOwn(status, 'target') ? Boolean(status.target) : !originSessionUnavailable(state.dashboardState);
   const idle = available && !choose && !hasTarget && !state.observer.historyMode;
   $('#observer-notice-history').hidden = !idle;
+  const frameShell = $('#observer-frame')?.parentElement;
+  if (frameShell) frameShell.hidden = Boolean(state.observer.historyMode || choose || idle);
   if (available && !state.observer.lease && !state.observer.historyMode) {
     if (choose) setObserverNotice(t(runningObserverGroups(state.observer.groups).length ? 'wb.observer.chooseGroup' : 'wb.observer.noRunningGroups'), 'idle');
     else if (idle && !state.observer.intent) setObserverNotice(t('wb.observer.noSession'), 'idle');
@@ -1252,7 +1251,9 @@ async function closeObserver({ release = true, preserveNotice = false, preserveI
     observer.iframe.style.height = '';
   }
   observer.iframe = null;
-  if (release) await Promise.all([releaseObserverLease(endpoints, lease), observer.pendingLease?.catch(() => {})]);
+  // Fence late acquisitions by generation; releasing a stalled network request
+  // must not hold navigation or the next group selection open.
+  if (release) void releaseObserverLease(endpoints, lease);
   if (!preserveNotice && observer.generation === closingGeneration) setObserverNotice(t('observer.closed'), 'idle');
 }
 
@@ -1310,16 +1311,21 @@ async function openObserver() {
     observer.endpointPrefix = endpoints;
     // Keep lease acquisition observable after cancellation so a late ID can be
     // released against its original target. Frame/status fetches are abortable.
+    const expectedGroup = status.sessionMode === 'multi' ? observer.group ?? 'origin' : null;
     const pending = observer.pendingLease = (async () => {
       const response = await fetch(`${endpoints.api}/leases`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionGroup: observer.group })
+        body: JSON.stringify({ sessionGroup: expectedGroup })
       });
       const lease = await response.json().catch(() => ({}));
       if (!response.ok) throw observerRequestError(lease, response.status);
       if (!observerSessionCurrent(generation, targetKey)) {
-        await releaseObserverLease(endpoints, lease);
+        void releaseObserverLease(endpoints, lease);
         return null;
+      }
+      if (lease.sessionGroup !== expectedGroup) {
+        void releaseObserverLease(endpoints, lease);
+        throw Object.assign(new Error(t('wb.observer.groupUnsupported')), { code: 'group_observer_unsupported' });
       }
       return lease;
     })();
@@ -1388,7 +1394,10 @@ async function openObserver() {
     };
     ws.onclose = (event) => {
       if (!observerSessionCurrent(generation, targetKey) || observer.ws !== ws) return;
-      recoverObserver(event.reason ? { code: event.reason } : undefined).catch(() => {});
+      const error = event.reason ? { code: event.reason } : undefined;
+      // Keep the existing reconnect behavior for unknown non-auth close reasons,
+      // while retaining detailed notices for the public retryable reasons.
+      recoverObserver(error?.code === 'auth_expired' || observerRetryable(error) ? error : undefined).catch(() => {});
     };
     observer.renewTimer = setInterval(() => {
       renewObserverLease(generation, targetKey, lease, endpoints).catch((error) => {
@@ -1572,7 +1581,7 @@ function applySse(name, data) {
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     if (Object.hasOwn(data, 'new_session_threshold')) state.newSessionThreshold = data.new_session_threshold;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
-    renderInfoBar(); renderOriginAvailability(); renderObserverPage();
+    renderInfoBar(); renderObserverAvailability(); renderObserverPage();
   } else if (name === 'fleet') {
     setFleet(data);
     clearFleetFallback();
@@ -2749,7 +2758,7 @@ function setModalBodyDisabled(disabled) {
   body.classList.toggle('modal-body-disabled', disabled);
   body.querySelectorAll('button, select, input').forEach(el => { el.disabled = disabled; });
   syncModeSegment();
-  if (!disabled) renderOriginAvailability();
+  if (!disabled) renderObserverAvailability();
 }
 
 async function showConfirm(text) {

@@ -15,10 +15,11 @@ export function createObserverTargets({ load = loadCoreModule } = {}) {
     if (group !== null) {
       try { paths.assertSessionGroup(group); } catch { throw Object.assign(new Error('Invalid observer group'), { code: 'target_mismatch' }); }
     }
-    const identity = await readLiveIdentity(group);
-    const expectedNames = group === null ? [paths.tmuxNameForGroup('origin'), `${identity?.runtime}-main`] : [paths.tmuxNameForGroup(group)];
+    let identity;
+    try { identity = await readLiveIdentity(group); } catch { throw unavailable(); }
+    const expectedName = paths.tmuxNameForGroup(group ?? 'origin');
     if (!identity?.present || !identity.ready || !identity.runId ||
-        !['claude', 'codex'].includes(identity.runtime) || !expectedNames.includes(identity.tmuxName)) throw unavailable();
+        !['claude', 'codex'].includes(identity.runtime) || identity.tmuxName !== expectedName) throw unavailable();
     return { sessionMode, sessionGroup: group, tmuxName: identity.tmuxName, runId: identity.runId, runtime: identity.runtime };
   };
   return { mode, resolve };
@@ -32,7 +33,7 @@ export function sameObserverTarget(left, right) {
 export async function validObserverBinding(binding, target, runId) {
   if (!binding || !['claude', 'codex'].includes(binding.runtime) || typeof binding.runId !== 'string' || !binding.runId ||
       binding.runId !== runId || binding.tmuxName !== target) return false;
-  if (binding.sessionMode === 'single') return binding.sessionGroup === null && ['zylos-group-origin', `${binding.runtime}-main`].includes(target);
+  if (binding.sessionMode === 'single') return binding.sessionGroup === null && target === 'zylos-group-origin';
   if (binding.sessionMode !== 'multi' || typeof binding.sessionGroup !== 'string') return false;
   const paths = await loadCoreModule('session-group-paths.js');
   try { return paths.tmuxNameForGroup(binding.sessionGroup) === target && paths.groupFromTmuxName(target) === binding.sessionGroup; }

@@ -687,7 +687,6 @@
   "chat.page.emptyMine": "No conversations yet.\nCreate one to discuss something with AI.",
   "chat.page.emptyExternal": "No external chat history yet",
   "chat.page.receipt.notStoredReadOnly": "Not stored. Your input is preserved; sending is unavailable in single mode.",
-  "wb.detail.observeLive": "Live view",
   "wb.detail.observeHistory": "View raw history",
   "wb.fleet.title": "Machines",
   "wb.fleet.subtitle": "Every machine you can view; the ones with a problem come first.",
@@ -896,5 +895,6 @@
   "wb.observer.enabledNone": "Enabled · No groups are running",
   "wb.observer.sessionChanged": "The group session ended or changed. Reconnecting to its current session…",
   "wb.observer.connectionLost": "The observer connection ended. Rechecking the group session and reconnecting…",
-  "wb.detail.observe": "Observe"
+  "wb.detail.observe": "Observe",
+  "wb.observer.groupUnsupported": "This remote version does not support observing the selected group."
 }

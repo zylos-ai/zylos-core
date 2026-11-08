@@ -1,3 +1,5 @@
+import { fallbackName } from './plain-text.js?v=103';
+
 /** Why the observer needs recovery before it can be used again, or null when it does not. */
 export function observerRecoveryReason(status) {
   return (status?.runtime?.state === 'blocked' ? status.runtime.error || 'teardown_failed' : null) || status?.startupError || status?.desired?.lastError || status?.desired?.removalState ||
@@ -35,11 +37,11 @@ export function observerGroupRow(snapshot, sessionGroup) {
   return snapshot?.rows?.find(row => (row.sessionGroup ?? 'origin') === (sessionGroup ?? 'origin')) ?? null;
 }
 
-export function observerGroupName(row, sessionGroup, originName) {
-  return row?.name?.displayName || ((sessionGroup ?? 'origin') === 'origin' ? originName : sessionGroup);
+export function observerGroupName(row, sessionGroup, originName, t = key => key) {
+  return row?.name?.displayName || ((sessionGroup ?? 'origin') === 'origin' ? originName : fallbackName(row ?? { sessionGroup }, t));
 }
 
-/** Retire the previous viewer before applying a group choice, including an in-flight lease. */
+/** Fence local viewer state before applying a group choice; network release may finish later. */
 export async function switchObserverTarget(observer, { identity, disconnect, apply }) {
   const generation = ++observer.selectionGeneration;
   const machine = identity();

@@ -10,6 +10,8 @@ import test from 'node:test';
 import { ObserverService, OBSERVER_WEBSOCKET_PROTOCOL } from '../src/lib/observer-service.js';
 import { ObserverCoordinator } from '../src/lib/observer-coordinator.js';
 import { ObserverManager } from '../src/lib/observer-manager.js';
+import { createObserverTargets } from '../src/lib/observer-target.js';
+import * as groupPaths from '../../../cli/lib/session-group-paths.js';
 import { connectObserverWebSocket } from '../src/lib/observer-websocket.js';
 import { shutdownDashboardTransports } from '../src/lib/dashboard-shutdown.js';
 
@@ -1195,4 +1197,35 @@ test('observer routes carry the selected group through status, lease creation, a
     assert.equal(f.containment.agentResizes[0].sessionGroup, 'telegram:42');
     assert.equal(Object.hasOwn(f.coordinator.savedAgentSizes[0], 'sessionGroup'), false);
   } finally { await app.close(); }
+});
+
+
+// Real loopback HTTP -> service -> manager -> target resolver; Core observations are
+// injected so no tmux/model/PM2 is launched. Run for group-status/error mapping or
+// lease target changes, skip unrelated presentation changes. Official runner owns
+// isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; finally closes HTTP and manager timers.
+test('observer status remains available when the selected Core target is unavailable or invalid', async () => {
+  let coreError = 'TARGET_GONE';
+  const targets = createObserverTargets({ load: async file => file === 'config.js'
+    ? { readSessionMode: () => ({ mode: 'multi' }) }
+    : file === 'session-group-paths.js' ? groupPaths : { readLiveIdentity: async () => { throw Object.assign(new Error('private Core failure'), { code: coreError }); } } });
+  const f = fixture({ managerFactory: deps => new ObserverManager({ ...deps, resolveTarget: targets.resolve, sessionMode: targets.mode }) });
+  const app = await startHttp(f.service);
+  const headers = { Cookie: 'admin=1', Origin: app.origin, 'Content-Type': 'application/json' };
+  try {
+    for (const code of ['TARGET_GONE', 'TMUX_UNAVAILABLE', 'TMUX_NO_SERVER', 'TMUX_COMMAND_FAILED']) {
+      coreError = code;
+      const response = await fetch(`${app.origin}/api/observer/status?session_group=telegram%3A42`, { headers });
+      assert.equal(response.status, 200);
+      const status = await response.json();
+      assert.equal(status.state, 'installed'); assert.equal(status.desired.enabled, true);
+      assert.equal(status.sessionMode, 'multi'); assert.equal(status.target, null);
+      const lease = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers, body: JSON.stringify({ sessionGroup: 'telegram:42' }) });
+      assert.equal(lease.status, 409); assert.equal((await lease.json()).error, 'agent_session_unavailable');
+    }
+    const invalid = await fetch(`${app.origin}/api/observer/status?session_group=invalid%20group`, { headers });
+    assert.equal(invalid.status, 200); assert.equal((await invalid.json()).target, null);
+    const lease = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers, body: JSON.stringify({ sessionGroup: 'invalid group' }) });
+    assert.equal(lease.status, 400); assert.equal((await lease.json()).error, 'target_mismatch');
+  } finally { await f.service.shutdown(); await app.close(); }
 });

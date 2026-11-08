@@ -8,7 +8,7 @@ import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { tabForPath } from '../public/js/wb/view-mode.js';
-import { observerPageUsable, observerRecoveryReason } from '../public/js/wb/observer-page.js';
+import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, switchObserverTarget } from '../public/js/wb/observer-page.js';
 
 function deferred() {
   let resolve;
@@ -90,6 +90,8 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
       visibilityState: 'visible'
     },
     originSessionUnavailable: () => false,
+    runningObserverGroups, observerGroupRow, observerGroupName, switchObserverTarget,
+    renderConnection() {}, isSseOpen: () => false,
     t: (key) => key,
     clearTimeout(id) { if (timeouts[id - 1]) timeouts[id - 1].cancelled = true; },
     clearInterval() {},
@@ -181,7 +183,7 @@ function observerPageShown(harness) {
 }
 
 function observerResponse(data, { ok = true, status = ok ? 200 : 503 } = {}) {
-  return { ok, status, json: async () => data, text: async () => '<html>renderer</html>' };
+  return { ok, status, json: async () => data?.id && !Object.hasOwn(data, 'sessionGroup') ? { ...data, sessionGroup: null } : data, text: async () => '<html>renderer</html>' };
 }
 
 test('/api/state exposes the agent identity colour for remote machines that still tint by it', () => {
@@ -1777,8 +1779,8 @@ test('Observer recovery status survives refresh and exposes cleanup without view
   for (const status of cases) await t.test(JSON.stringify(status), async () => {
     const h = observerUiHarness();
     h.setFetch((url) => {
-      assert.ok(String(url).endsWith('/status'), 'recovery must not request a lease or enable/install');
-      return Promise.resolve(observerResponse(status));
+      assert.ok(String(url).endsWith('/status') || String(url).endsWith('/workbench/groups'), 'recovery may refresh groups but must not request a lease or enable/install');
+      return Promise.resolve(observerResponse(String(url).endsWith('/workbench/groups') ? { rows: [] } : status));
     });
     await h.context.refreshObserverStatus();
     assert.equal(h.settings['#observer-settings-state'].textContent, 'observer.state_recovery');
@@ -2324,7 +2326,7 @@ test('workbench shell gates automatic naming and discards an old agent prompt', 
 });
 
 // Observer entry wiring: the real shell decides per group whether the drawer offers the live terminal.
-test('the workbench drawer offers the live terminal for Origin only, never for another running group', async context => {
+test('the workbench drawer offers observation for every group', async context => {
   const live = (sessionGroup, extra = {}) => ({ sessionGroup, name: { displayName: sessionGroup }, state: { kind: 'busy' }, presence: 'running', live: { runId: 'run-' + sessionGroup, sessionId: 's' }, ...extra });
   const h = workbenchHarness(context, (path, fallback) => {
     if (path.endsWith('/api/workbench/groups')) return { mode: 'multi', view: 'multi', rows: [live('origin', { origin: true }), live('telegram:a')], instance: { pool: { used: 2 } } };
@@ -2335,10 +2337,10 @@ test('the workbench drawer offers the live terminal for Origin only, never for a
   }, { storage: { 'zylos-dashboard-detail-level': 'technical' }, observerStatus: () => ({ installed: true, enabled: true }) });
   await wbTick(); await wbTick();
   await h.openGroup('origin'); await wbTick();
-  assert.match(h.nodes.get('#wb-side').textContent, /wb\.detail\.observeLive/, 'Origin offers the live terminal');
+  assert.match(h.nodes.get('#wb-side').textContent, /wb\.detail\.observe/, 'Origin offers observation');
   await h.openGroup('telegram:a'); await wbTick();
   assert.match(h.nodes.get('#wb-side').textContent, /telegram/);
-  assert.doesNotMatch(h.nodes.get('#wb-side').textContent, /wb\.detail\.observe/, 'another group offers no terminal entry');
+  assert.match(h.nodes.get('#wb-side').textContent, /wb\.detail\.observe/, 'another running group also offers observation');
 });
 
 // Programmatic group selection uses the real mounted shell/detail/olderRow;

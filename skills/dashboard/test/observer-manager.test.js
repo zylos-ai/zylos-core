@@ -566,3 +566,38 @@ test('expired authentication cannot displace a group being observed', async t =>
   assert.equal(f.events.join(','), 'start:telegram:42');
   assert.equal(f.manager.leases.has(lease.id), true);
 });
+
+
+for (const change of ['run replacement', 'attached binding replacement']) {
+  test(`group ${change} during attachment rejects the pending lease`, async t => {
+    const f = groupedFixture(); t.after(() => f.manager.shutdown());
+    let completeStart;
+    f.coordinator.firstLease = (_, observerTarget) => new Promise(resolve => {
+      f.containment.active = { generation: 5, observerTarget, originRunId: observerTarget.runId };
+      completeStart = () => resolve(f.containment.active);
+    });
+    const pending = f.manager.createLease(context('admin'), { sessionGroup: 'telegram:42' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(typeof completeStart, 'function');
+    if (change === 'run replacement') f.targets.get('telegram:42').runId = 'replacement-run';
+    else f.containment.active.observerTarget = { ...f.containment.active.observerTarget, sessionGroup: 'lark:room' };
+    completeStart();
+    await assert.rejects(pending, { code: 'target_mismatch' });
+    assert.equal(f.manager.leases.size, 0);
+    assert.equal(f.manager.tickets.size, 0);
+    assert.equal(f.manager._pendingLeases, 0);
+  });
+}
+
+test('target status keeps installation status readable for absent or invalid groups', async t => {
+  let code = 'agent_session_unavailable';
+  const f = fixture({ resolveTarget: async () => { throw Object.assign(new Error('target unavailable'), { code }); }, sessionMode: async () => 'multi' });
+  t.after(() => f.manager.shutdown());
+  for (const unavailable of ['agent_session_unavailable', 'target_mismatch']) {
+    code = unavailable;
+    const status = await f.manager.targetStatus('invalid group');
+    assert.equal(status.sessionMode, 'multi'); assert.equal(status.target, null);
+  }
+  code = 'unexpected_dependency_failure';
+  await assert.rejects(f.manager.targetStatus('telegram:42'), { code });
+});

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
-import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from '../public/js/origin-lock.js';
+import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from '../public/js/origin-lock.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
 import { renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
@@ -941,7 +941,7 @@ test('timeline chips combine filters: one chip uses the server filter, several f
 
 test('the observer tab remains available while Origin sleeps and keeps its workbench hint', async () => {
   // The lock only targets the observer tab; drawer actions carry data-wb-action and their own availability.
-  assert.equal(ORIGIN_LOCK_SELECTOR, '#observer-tab');
+  assert.equal(OBSERVER_ACCESS_SELECTOR, '#observer-tab');
   const f = detailFixture(async path => response(defaultRead(path)));
   await f.controller.open(row('telegram:a', { state: { kind: 'idle' } }), { rows: [], listKnown: true });
   const drawer = allNodes(f.root).filter(node => node.dataset?.wbAction);
@@ -950,14 +950,14 @@ test('the observer tab remains available while Origin sleeps and keeps its workb
   const button = (fields = {}) => Object.assign(f.document.createElement('button'), { closest: () => null }, fields);
   const observer = button({ id: 'observer-tab', title: 'wb.observerInstall' }); observer.dataset.wbHint = 'wb.observerInstall';
   const inDisabledModal = button({ id: 'observer-tab', closest: selector => selector === '.modal-body-disabled' ? {} : null });
-  lockOriginButtons([observer, inDisabledModal], { unavailable: true, readOnly: false, reason: 'action.origin_not_running' });
+  lockObserverButtons([observer, inDisabledModal], { unavailable: true, readOnly: false, reason: 'action.origin_not_running' });
   assert.deepEqual([observer.disabled, inDisabledModal.disabled], [false, true]);
   assert.equal(observer.title, 'wb.observerInstall');
-  lockOriginButtons([observer, inDisabledModal], { unavailable: false, readOnly: false, reason: 'action.origin_not_running' });
+  lockObserverButtons([observer, inDisabledModal], { unavailable: false, readOnly: false, reason: 'action.origin_not_running' });
   assert.deepEqual([observer.disabled, inDisabledModal.disabled], [false, true]);
   assert.equal(observer.title, 'wb.observerInstall', 'the same install hint remains when Origin runs');
   assert.equal(inDisabledModal.title, '');
-  lockOriginButtons([observer], { unavailable: false, readOnly: true, reason: 'action.origin_not_running' });
+  lockObserverButtons([observer], { unavailable: false, readOnly: true, reason: 'action.origin_not_running' });
   assert.equal(observer.disabled, true, 'a read-only remote keeps it locked');
 });
 

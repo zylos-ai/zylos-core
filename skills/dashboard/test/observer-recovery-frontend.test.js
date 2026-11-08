@@ -51,7 +51,7 @@ test('Observer all non-authentication close reasons preserve backoff reconnect',
     assert.ok(h.observer.intent);
     assert.equal(h.timers.length, 1);
     assert.equal(h.timers[0].delay, 1000);
-    assert.deepEqual(h.notices, [['observer.waiting_for_agent', 'connecting']]);
+    assert.deepEqual(h.notices, [[reason === 'lease_invalid' ? 'wb.observer.sessionChanged' : ['child_failure', 'upstream_closed', 'stream_error', 'dashboard_shutdown'].includes(reason) ? 'wb.observer.connectionLost' : 'observer.waiting_for_agent', 'connecting']]);
   }
 });
 

@@ -64,13 +64,13 @@ test('the running group chooser counts actual live identities while Origin sleep
   assert.equal(observerGroupRow(snapshot, undefined), null, 'no selection does not default to Origin in multi');
   assert.equal(observerGroupRow(snapshot, 'origin').live, null, 'sleeping selection stays available for history');
   assert.equal(observerGroupName(observerGroupRow(snapshot, 'telegram:alpha'), 'telegram:alpha', 'Origin'), 'Alpha');
-  assert.equal(observerGroupName(null, 'cron:daily', 'Origin'), 'cron:daily');
+  assert.equal(observerGroupName(null, 'cron:daily', 'Origin'), 'cron · daily');
   assert.equal(observerGroupName(null, null, 'Origin'), 'Origin');
   assert.equal(runningObserverGroups(null).length, 0);
   assert.equal(observerGroupRow({ rows: [{ sessionGroup: null }] }, 'origin').sessionGroup, null, 'single uses the sole session');
 });
 
-test('choosing a group waits for the old viewer to disconnect and its lease to release', async () => {
+test('choosing a group completes local viewer teardown before applying the new selection', async () => {
   const observer = { selectionGeneration: 0 };
   const steps = [];
   let release;
@@ -108,4 +108,12 @@ test('a newer group choice or machine switch cancels an older pending choice', a
   release();
   assert.equal(await pending, false);
   assert.equal(connected.join(','), 'new');
+});
+
+
+test('observer group labels use the same readable fallback as the board', () => {
+  const t = key => ({ 'wb.platform.lark': 'Lark', 'wb.term.origin': 'System assistant' }[key] ?? key);
+  assert.equal(observerGroupName({ sessionGroup: 'lark:team.topic', c4: { componentName: 'lark' } }, 'lark:team.topic', 'System assistant', t), 'Lark · team.topic');
+  assert.equal(observerGroupName({ sessionGroup: 'lark:team.topic', name: { displayName: 'Operations' } }, 'lark:team.topic', 'System assistant', t), 'Operations');
+  assert.equal(observerGroupName(null, 'origin', 'System assistant', t), 'System assistant');
 });
