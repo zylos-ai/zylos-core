@@ -213,6 +213,16 @@ test('a message queued past two minutes keeps waiting for its round instead of b
   assert.equal(roundOf(later, 1).segments.at(-1).steps.length, 1);
 });
 
+test('a routed message that never starts a turn stops being polled for after the pending limit', t => {
+  const f = fixture(t, { now: at(31 * 60) });
+  f.message(1, 0);
+  f.event('activate_new', 5, { meta: { conversation_id: 1 }, session: null });
+  f.message(2, 0, 'in', { status: 'running' });
+  const result = read(f, [1, 2]);
+  assert.equal(result.items.find(item => item.id === 1).state, 'none', 'left the queue, logged once, nothing for 31 minutes');
+  assert.equal(result.items.find(item => item.id === 2).state, 'pending', 'still queued in C4');
+});
+
 test('Codex steps come from the rollout with its failure flag; hook duplicates and subagent controls are left out', t => {
   const f = fixture(t);
   const codex = { runtime: 'codex', session: 'thread-1' };

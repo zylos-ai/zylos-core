@@ -294,12 +294,14 @@ export class ChatActivity {
   /**
    * A visible message with no delivery record yet. While C4 still queues it (for example waiting for a free
    * session) or the router has already logged anything about it, its round can still start; it has no activity
-   * only once it left the queue, the router never mentioned it and two minutes passed.
+   * once it left the queue and either the router never mentioned it within two minutes or no turn followed within
+   * the pending limit, so the page stops asking.
    */
   _undelivered(group, row, now) {
     if (['pending', 'running'].includes(row.status)) return 'pending';
     const sent = c4Time(row.timestamp) ?? now;
     if (now - sent <= 2 * 60_000) return 'pending';
+    if (now - sent > PENDING_LIMIT_MS) return 'none';
     const routed = this._events(`SELECT 1 FROM runtime_events WHERE session_group=@group AND timestamp >= @from
       AND json_extract(metadata, '$.conversation_id') = @id LIMIT 1`, { group, from: iso(sent - DELIVERY_LEAD_MS), id: row.id });
     return routed.length ? 'pending' : 'none';
