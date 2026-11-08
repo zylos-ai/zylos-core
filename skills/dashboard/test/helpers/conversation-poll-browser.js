@@ -18,8 +18,7 @@ export async function runConversationPollBrowser(t) {
   const paths = {
     root, HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR,
-    profile: path.join(root, 'profile'), browserTmp: path.join(root, 'tmp'), socket: path.join(root, 'tmux.sock'),
-    c4Database: path.join(root, 'c4.db'), dashboardDatabase: path.join(root, 'dashboard.db'),
+    profile: path.join(root, 'profile'), browserTmp: path.join(root, 'tmp'),
   };
   const runnerRoot = path.dirname(process.env.HOME);
   assert.match(path.basename(runnerRoot), /^zylos-tests-/);
@@ -133,9 +132,11 @@ await window.page.open();window.ready=true;</script></html>`;
     assert.equal(await evaluate('window.ready'), true, JSON.stringify(errors));
     assert.equal(errors.length, 0, errors[0]);
     await evaluate(`(()=>{const input=document.querySelector('textarea.conversation-input');input.value='慢首发后请自动显示投递状态和回复';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-action="send"]').click();})()`);
-    await wait(35000);
-    const dom = await evaluate(`({delivered:!!document.querySelector('[data-message-id="1"] [data-delivery-state="delivered"]'),reply:[...document.querySelectorAll('.conversation-message')].some(node=>node.textContent.includes(${JSON.stringify(replyText)})),text:document.querySelector('#wb-chat').innerText})`);
-    const metrics = { ...dom, sendCount, sendDurationMs, afterReads: calls.filter(c => c.path.endsWith('/messages') && c.query.includes('direction=after')).length, statusReads: calls.filter(c => c.path.endsWith('/status')).length, manualRefreshClicks: 0, browserErrors: errors, externalRequests, calls, elapsedMs: Date.now() - started, width: 1280, height: 900, boundary: 'Real product DOM/controller/fetch; loopback API fixture, no model, backend DB, PM2 or tmux' };
+    await wait(10000);
+    const dom = await evaluate(`({delivered:!!document.querySelector('[data-message-id="1"] [data-delivery-state="delivered"]'),reply:[...document.querySelectorAll('.conversation-message')].some(node=>node.textContent.includes(${JSON.stringify(replyText)})),buttonCount:document.querySelectorAll('[data-action="refresh"],[data-action="refreshMessages"],[data-action="refreshStatus"],[data-action="create"]').length,buttonsEnabled:[...document.querySelectorAll('[data-action="refresh"],[data-action="refreshMessages"],[data-action="refreshStatus"],[data-action="create"]')].every(node=>!node.disabled),text:document.querySelector('#wb-chat').innerText})`);
+    const firstAutomatic = calls.find(c => c.path.endsWith('/messages') && c.query.includes('direction=after') && c.at >= sendAt - started + sendDurationMs);
+    const firstAutomaticAfterSendMs = firstAutomatic ? firstAutomatic.at - (sendAt - started + sendDurationMs) : null;
+    const metrics = { ...dom, sendCount, sendDurationMs, firstAutomaticAfterSendMs, afterReads: calls.filter(c => c.path.endsWith('/messages') && c.query.includes('direction=after')).length, statusReads: calls.filter(c => c.path.endsWith('/status')).length, manualRefreshClicks: 0, browserErrors: errors, externalRequests, calls, elapsedMs: Date.now() - started, width: 1280, height: 900, boundary: 'Real product DOM/controller/fetch; loopback API fixture, no model, backend DB, PM2 or tmux' };
     if (evidence) {
       const screenshot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       fs.writeFileSync(path.join(evidence, 'slow-first-send-1280.png'), Buffer.from(screenshot.data, 'base64'));

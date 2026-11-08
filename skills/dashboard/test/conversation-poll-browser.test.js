@@ -5,8 +5,8 @@ import { runConversationPollBrowser } from './helpers/conversation-poll-browser.
 // Real Chrome DOM/controller/fetch against a bounded loopback API fixture.
 // Run for conversation polling/sending changes; unrelated UI can skip. Requires
 // explicit integration gate and installed browser; never starts agent/PM2/tmux.
-// Runner-isolated HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and private socket/DB
-// targets are read back before use; HTTP/browser/profile teardown is owned here.
+// Runner-isolated HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/profile are read back
+// before use; no database or tmux is opened. HTTP/browser teardown is owned here.
 test('slow first send keeps delivery status and replies updating without manual refresh in a browser', {
   skip: process.env.ZYLOS_CHAT_INTEGRATION !== '1' || !process.env.ZYLOS_CHAT_BROWSER_BIN,
   timeout: 60000,
@@ -14,6 +14,9 @@ test('slow first send keeps delivery status and replies updating without manual 
   const result = await runConversationPollBrowser(t);
   assert.equal(result.sendCount, 1, 'only the user send is posted');
   assert.ok(result.sendDurationMs >= 3000, 'the first send really waits three seconds');
+  assert.ok(result.firstAutomaticAfterSendMs !== null && result.firstAutomaticAfterSendMs <= 2500, 'first automatic read is scheduled two seconds after return, with browser timing tolerance');
+  assert.ok(result.buttonCount >= 4, 'recovery and creation buttons exist');
+  assert.equal(result.buttonsEnabled, true);
   assert.ok(result.afterReads >= 2, 'automatic history reads continue after send');
   assert.ok(result.statusReads >= 1, 'pending delivery is automatically reconciled');
   assert.equal(result.delivered, true, 'the real message DOM shows authoritative delivered state');

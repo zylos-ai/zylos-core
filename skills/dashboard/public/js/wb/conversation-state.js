@@ -22,6 +22,7 @@ export function createConversationState({
     destroyed = false,
     epoch = 0,
     listVersion = 0,
+    listLoadingVersion = 0,
     selectedVersion = 0,
     refreshVersion = 0;
   let timer = null,
@@ -72,6 +73,7 @@ export function createConversationState({
     questionPageCursors: [null],
     questionsReady: false,
     questionsLoading: false,
+    questionLoadingVersion: 0,
     questionError: null,
     questionVersion: 0,
     questionForms: new Map(),
@@ -152,7 +154,6 @@ export function createConversationState({
     // Install the lock before even an empty pass can finish.
     const task = Promise.resolve().then(async () => {
       try {
-        if (!valid(e) || !visible()) return;
         if (now() - lastListAt >= 30000) await list(false, true);
         if (!valid(e) || !visible()) return;
         const current = cell(),
@@ -232,6 +233,7 @@ export function createConversationState({
       currentTab = tab,
       cursor = more ? nextCursor : null;
     if (!quiet) {
+      listLoadingVersion = version;
       loading = true;
       error = null;
       emit();
@@ -252,13 +254,19 @@ export function createConversationState({
       if (more) listDepth++;
       if (!quiet || listDepth === 1) nextCursor = data.nextCursor ?? null;
       if (!more) lastListAt = now();
+      if (quiet && listLoadingVersion && listLoadingVersion < version) {
+        listLoadingVersion = 0;
+        loading = false;
+      }
       if (quiet && !more && cell()) readGroupPresence(cell(), currentTab, e);
       emit();
     } catch (err) {
+      if (!valid(e) || version !== listVersion || currentTab !== tab) return;
       if (quiet) throw err;
       failure(err, e);
     } finally {
-      if (valid(e) && version === listVersion && !quiet) {
+      if (valid(e) && listLoadingVersion === version && !quiet) {
+        listLoadingVersion = 0;
         loading = false;
         emit();
       }
@@ -357,6 +365,7 @@ export function createConversationState({
     const version = ++current.questionVersion;
     const cursor = targetId ? current.questionPages.get(targetId) ?? null : more ? current.questionCursor : null;
     if (!quiet) {
+      current.questionLoadingVersion = version;
       current.questionsLoading = true;
       current.questionError = null;
       emit();
@@ -392,14 +401,20 @@ export function createConversationState({
       }
       if (!targetId) current.questionCursor = nextCursor;
       current.questionError = null;
+      if (quiet && current.questionLoadingVersion && current.questionLoadingVersion < version) {
+        current.questionLoadingVersion = 0;
+        current.questionsLoading = false;
+      }
       emit();
       return true;
     } catch (err) {
+      if (!valid(e) || version !== current.questionVersion) return;
       if (quiet) throw err;
       current.questionError = err?.code || 'chat_request_failed';
       if (err?.code === 'remote_chat_disabled') failure(err, e);
     } finally {
-      if (valid(e) && version === current.questionVersion && !quiet) {
+      if (valid(e) && current.questionLoadingVersion === version && !quiet) {
+        current.questionLoadingVersion = 0;
         current.questionsLoading = false;
         emit();
       }
@@ -707,6 +722,7 @@ export function createConversationState({
     }
   }
   async function syncAfterSend(current, id, currentTab, e) {
+    const initialized = !current.afterCursor;
     try {
       if (current.afterCursor) {
         await syncCurrent(current, id, currentTab, e);
@@ -721,6 +737,7 @@ export function createConversationState({
       if (valid(e)) {
         updateError = null;
         retryDelay = 5000;
+        if (initialized) schedule();
       }
     } catch (err) {
       if (!valid(e)) return;

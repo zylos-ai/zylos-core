@@ -1,4 +1,5 @@
-import test from 'node:test';
+import nodeTest from 'node:test';
+const test = (name, fn) => nodeTest(name, { timeout: 2000 }, fn);
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import path from 'node:path';
@@ -54,10 +55,13 @@ function clock() {
       tasks.delete(token);
     },
     async advance(ms) {
+      assert.ok(Number.isFinite(ms) && ms >= 0, 'clock advance must be finite and nonnegative');
       const target = time + ms;
+      let steps = 0;
       for (;;) {
         const next = [...tasks].filter(([, v]) => v.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
         if (!next) break;
+        assert.ok(++steps <= 1000, 'clock advance exceeded 1000 timer callbacks');
         time = next[1].at;
         tasks.delete(next[0]);
         next[1].fn();
@@ -91,6 +95,7 @@ function fixture(extra = () => undefined, t = key => key) {
     ...timer,
     request: async (p, options) => {
       const u = new URL(p, 'http://fixture');
+      assert.ok(calls.length < 500, 'controller request log exceeded 500 calls');
       calls.push({
         path: p,
         options,
@@ -1737,7 +1742,7 @@ test('a settling round keeps the two-second refresh and is read again; once sett
 for (const restoreBeforeSend of [false, true]) {
   test(restoreBeforeSend
     ? 'foregrounding without a selection then a slow first send keeps delivery and replies updating'
-    : 'a three second first send keeps automatic reads and delivery updates running for a minute', async t => {
+    : 'a three second first send resumes reads within two seconds and continues for a minute', async t => {
     const pending = deferred();
     let sent = false;
     const inbound = { id: 20, direction: 'in', status: 'pending', content: 'slow first message' };
@@ -1774,7 +1779,11 @@ for (const restoreBeforeSend of [false, true]) {
     await sending;
     assert.equal(f.state.snapshot().messages[0].status, 'pending');
     const readsAfterSend = f.reads().length;
-    await f.timer.advance(35000);
+    await f.timer.advance(1999);
+    assert.equal(f.reads().length, readsAfterSend);
+    await f.timer.advance(1);
+    assert.equal(f.reads().length, readsAfterSend + 1, 'first automatic read is due two seconds after the slow send returns');
+    await f.timer.advance(33000);
     assert.equal(f.state.snapshot().messages.find(row => row.id === 20).status, 'delivered');
     assert.equal(f.state.snapshot().messages.find(row => row.id === 21).content, 'automatic reply');
     assert.ok(f.reads().length > readsAfterSend);
@@ -1918,4 +1927,11 @@ test('foreground events cannot overlap a slow automatic list poll', async t => {
   assert.equal(lists, 3);
   assert.equal(maximum, 1);
   assert.equal(f.timer.count(), 1);
+});
+
+test('clock advancement rejects a timer that endlessly reschedules without delay', async () => {
+  const timer = clock();
+  const repeat = () => timer.setTimeout(repeat, 0);
+  repeat();
+  await assert.rejects(timer.advance(1), /clock advance exceeded 1000 timer callbacks/);
 });
