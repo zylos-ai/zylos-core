@@ -859,3 +859,15 @@ test('running default-model group threshold stays unknown until the first usage 
   const sampled = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:waiting');
   assert.equal(sampled.rotationThreshold, 40);
 });
+
+test('group threshold discards the previous model override when session identity changes', async t => {
+  const f = fixture(t, { groupKeys: ['telegram:changing'] });
+  const observation = f.live.get('telegram:changing');
+  observation.identity.launchConfig = { runtime: 'claude', mode: 'override', model: 'opus[1m]' };
+  const before = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:changing');
+  assert.equal(before.rotationThreshold, 40, 'a valid captured override supplies the first-sample preview');
+  observation.status = { valid: false, reason: 'identity_changed' };
+  f.advance(2001);
+  const changed = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:changing');
+  assert.equal(changed.rotationThreshold, null);
+});

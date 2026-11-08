@@ -120,7 +120,7 @@ export class CoreState {
   }
   getCurrentSessionId() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' ? this.observation.identity.sessionId : null; }
   getState() { return structuredClone(this.snapshot); }
-  getLaunchConfig() { return this.observation?.identity?.launchConfig ? structuredClone(this.observation.identity.launchConfig) : null; }
+  getLaunchConfig() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' && this.observation.identity.launchConfig ? structuredClone(this.observation.identity.launchConfig) : null; }
   getUsageObservation() { return this.observation?.usage ? structuredClone(this.observation.usage) : { valid: false }; }
   async currentTarget() {
     await this.refresh();

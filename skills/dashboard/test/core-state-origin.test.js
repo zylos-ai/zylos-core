@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { projectOrigin } from '../src/lib/core-state.js';
+import { CoreState, projectOrigin } from '../src/lib/core-state.js';
 import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
 import { originSessionUnavailable } from '../public/js/state-presentation.js';
@@ -10,6 +10,18 @@ import { stateMood, buildAgentFleetView, defaultAgentFleetLabels } from '../publ
 const absent = () => ({ identity: { present: false, ready: false, runtime: 'unknown' }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } });
 const live = () => ({ identity: { present: true, ready: true, runtime: 'claude', runId: 'run-current', sessionId: 'session-current' }, status: { valid: true, reason: null, value: { state: 'busy' } }, usage: { valid: false } });
 const mapping = { sleeping: 'SLEEPING', waking: 'WAKING', wake_overdue: 'WAKE_OVERDUE', auth_wait: 'AUTH_WAIT', rate_wait: 'RATE_WAIT', need_unreadable: 'UNKNOWN' };
+
+test('captured model override is unavailable when the sampled session identity changes', () => {
+  const core = new CoreState();
+  core.observation = live();
+  const launch = { runtime: 'claude', mode: 'override', model: 'opus[1m]', effort: 'high' };
+  core.observation.identity.launchConfig = launch;
+  core.observation.status = { valid: false, reason: 'starting' };
+  assert.deepEqual(core.getLaunchConfig(), launch, 'a bound override remains usable before the first usage sample');
+  core.observation.status.reason = 'identity_changed';
+  assert.equal(core.getLaunchConfig(), null, 'the old run cannot supply current model facts');
+  assert.equal(core.getCurrentSessionId(), null);
+});
 
 test('Origin display states preserve identity and respect transition and fence priority', () => {
   for (const [state, expected] of Object.entries(mapping)) {

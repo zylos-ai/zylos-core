@@ -120,7 +120,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         ? { runtime: selectedRuntime, mode: 'override', model: selectedModel.model, effort: selectedModel.effort }
         : { runtime: selectedRuntime, mode: 'default' };
       const running = ['running', 'starting'].includes(row.presence);
-      row.rotationThreshold = sessionThreshold(thresholdPolicy, { runtime: row.target.runtime,
+      row.rotationThreshold = observation?.status?.reason === 'identity_changed' ? null : sessionThreshold(thresholdPolicy, { runtime: row.target.runtime,
         usage: usage?.valid ? usage.value : null, launchConfig: row.launchConfig,
         ...(running ? {} : { desiredModel: selectedModel?.model ?? thresholdPolicy.defaultModels[row.target.runtime] }) });
       row.wait = waitingReason(row, { runtimeHealth, activations, now: at });
