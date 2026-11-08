@@ -1134,6 +1134,11 @@ button.conversation-activity-head:focus-visible { outline:2px solid var(--accent
 .conversation-activity-step[data-status=incomplete]>.wb-ico,.conversation-activity-step[data-status=incomplete]>.conversation-activity-time { color:var(--wb-wait); }
 .conversation-activity-say { grid-column:1/-1; margin:0; padding:3px 0 4px; font-size:12px; line-height:1.6; color:var(--text-muted); overflow-wrap:anywhere; }
 .conversation-activity-more { grid-column:1/-1; margin:0; padding:2px 0 4px; font-size:11.5px; line-height:1.6; color:var(--text-muted); }
+/* Phones: the folded head is tapped, so its target is 40px tall; the extra height is padding taken back by negative
+   margins, so the line, its text size and the layout around it stay as they are. */
+@media(max-width:760px) {
+  button.conversation-activity-head { position:relative; z-index:1; min-height:40px; padding-top:10px; padding-bottom:10px; margin-top:-8px; margin-bottom:-8px; }
+}
 .conversation-activity-thinking { grid-column:1/-1; display:flex; align-items:center; gap:6px; min-height:24px; font-size:11.5px; color:var(--text-muted); }
 .conversation-activity-dots { display:inline-flex; gap:3px; }
 .conversation-activity-dots>i { width:4px; height:4px; border-radius:50%; background:currentColor; opacity:.5; animation:conversation-activity-dot 1.2s infinite; }
