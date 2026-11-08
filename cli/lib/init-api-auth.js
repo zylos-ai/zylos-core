@@ -4,6 +4,10 @@ import https from 'node:https';
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
+export function isPrintableAsciiCredential(value) {
+  return typeof value === 'string' && value.length > 0 && /^[\x20-\x7e]+$/.test(value);
+}
+
 export function isOfficialClaudeBaseUrl(baseUrl) {
   try { return new URL(baseUrl || ANTHROPIC_BASE_URL).hostname === 'api.anthropic.com'; }
   catch { return false; }
@@ -63,6 +67,7 @@ function verifyRequest(url, { credential, bearer, method, officialAnthropic = fa
 
 /** true = accepted, false = rejected credential, null = inconclusive or unreachable. */
 export function verifyApiKey(credential, { baseUrl = ANTHROPIC_BASE_URL, authToken = false, timeoutMs } = {}) {
+  if (!isPrintableAsciiCredential(credential)) return Promise.resolve(false);
   try {
     return verifyRequest(apiUrl(baseUrl, '/v1/messages'), {
       credential, bearer: authToken, method: 'POST', officialAnthropic: isOfficialClaudeVerificationBaseUrl(baseUrl), timeoutMs,
@@ -72,6 +77,7 @@ export function verifyApiKey(credential, { baseUrl = ANTHROPIC_BASE_URL, authTok
 
 /** Codex API bases include their API version; append only the models endpoint. */
 export function verifyCodexApiKey(credential, { baseUrl = OPENAI_BASE_URL, timeoutMs } = {}) {
+  if (!isPrintableAsciiCredential(credential)) return Promise.resolve(false);
   try { return verifyRequest(apiUrl(baseUrl, '/models'), { credential, bearer: true, method: 'GET', timeoutMs }); }
   catch { return Promise.resolve(null); }
 }

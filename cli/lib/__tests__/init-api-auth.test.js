@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { classifyApiVerification, isOfficialClaudeBaseUrl, isOfficialClaudeVerificationBaseUrl, verifyApiKey, verifyCodexApiKey } from '../init-api-auth.js';
+import { classifyApiVerification, isOfficialClaudeBaseUrl, isOfficialClaudeVerificationBaseUrl, isPrintableAsciiCredential, verifyApiKey, verifyCodexApiKey } from '../init-api-auth.js';
 
 const isolation = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]));
 const isolationRoot = path.dirname(isolation.TMPDIR || '');
@@ -13,10 +13,10 @@ console.log('Init credential isolation:', JSON.stringify({ root: isolationRoot, 
 
 // Local transport integration only. Run for URL/header/status/timeout changes.
 // No runtime/PM2/tmux/database is opened; the official runner isolates HOME and ZYLOS_DIR.
-async function server(t, handle) {
+async function server(t, handle, observeConnection = () => {}) {
   const sockets = new Set();
   const listener = http.createServer(handle);
-  listener.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
+  listener.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); observeConnection(socket); });
   await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
     for (const socket of sockets) socket.destroy();
@@ -91,12 +91,40 @@ test('redirects are inconclusive and never forward the credential to another lis
 });
 
 test('unreachable hosts and absolute timeout are inconclusive and release their sockets', { timeout: 3000 }, async t => {
-  const hanging = await server(t, () => {});
+  const closures = [];
+  const hanging = await server(t, () => {}, socket => {
+    closures.push(new Promise(resolve => socket.once('close', resolve)));
+  });
+  const closedBeforeCleanup = async index => {
+    assert.equal(closures.length, index + 1, 'the local server observed the verification connection');
+    let timer;
+    try {
+      await Promise.race([closures[index], new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('verification timeout did not close its server socket before fixture cleanup')), 500);
+      })]);
+    } finally { clearTimeout(timer); }
+  };
   assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: hanging, timeoutMs: 30 }), null);
+  await closedBeforeCleanup(0);
   assert.equal(await verifyCodexApiKey(crypto.randomUUID(), { baseUrl: hanging, timeoutMs: 30 }), null);
+  await closedBeforeCleanup(1);
   const listener = http.createServer(); await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
   const closed = `http://127.0.0.1:${listener.address().port}`; await new Promise(resolve => listener.close(resolve));
   assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: closed }), null);
+});
+
+test('non-ASCII credentials are rejected before constructing headers or sending requests', { timeout: 3000 }, async t => {
+  let requests = 0;
+  const origin = await server(t, (req, res) => { requests += 1; res.end(); });
+  for (const suffix of ['\u200b', '\uff21', '\u00e9', '\n', '\x7f']) {
+    const credential = crypto.randomUUID() + suffix;
+    assert.equal(isPrintableAsciiCredential(credential), false);
+    assert.equal(await verifyApiKey(credential, { baseUrl: origin }), false);
+    assert.equal(await verifyApiKey(credential, { baseUrl: origin, authToken: true }), false);
+    assert.equal(await verifyCodexApiKey(credential, { baseUrl: origin }), false);
+  }
+  assert.equal(requests, 0);
+  assert.equal(isPrintableAsciiCredential(crypto.randomUUID() + ' #$\'"\\'), true);
 });
 
 test('malformed or credential-bearing base URLs fail without requests or secret-bearing errors', { timeout: 3000 }, async t => {

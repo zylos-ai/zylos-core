@@ -33,7 +33,7 @@ export function isValidBaseUrl(value) {
   try {
     const url = new URL(value);
     return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.host
-      && !url.username && !url.password && !url.search && !url.hash;
+      && !url.username && !url.password;
   } catch {
     return false;
   }

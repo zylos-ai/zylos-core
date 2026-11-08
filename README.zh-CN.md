@@ -101,13 +101,16 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 按服务商要求明确选择 Claude 的凭据类型：`--api-key` 写入
 `ANTHROPIC_API_KEY`，使用 `x-api-key`；`--auth-token` 写入
 `ANTHROPIC_AUTH_TOKEN`，使用 `Authorization: Bearer`。这两个参数与
-`--setup-token` 互斥。显式凭据参数优先于凭据环境变量；没有凭据参数时，
-保留既有 OAuth token 环境变量的优先级，否则同时设置
+`--setup-token` 互斥。只有显式凭据参数会替换 Claude 已有登录；已经登录且没有
+传凭据参数时，会忽略凭据环境变量，即使 API-key 和 Bearer 两个变量同时存在。
+确实需要认证时，保留既有 OAuth token 环境变量的优先级，否则同时设置
 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_AUTH_TOKEN` 会报错。
 交互式 init 会询问自定义 Claude 地址使用哪一种请求头，不会自动试探两种方式。
-所选运行时的 base URL 按 CLI 参数 > 环境变量 > 既有 `~/zylos/.env` >
-Claude 原生 settings 或 Codex config 的顺序读取；选中的已保存地址无法读取或
-格式无效时，会在发起校验前报错，不回退到官方地址。
+只有本次确实要校验 API 凭据时，才按 CLI 参数 > 环境变量 > 既有
+`~/zylos/.env` > Claude 原生 settings 或 Codex config 的顺序读取地址。
+选中的已保存地址无法读取或格式无效时，会在校验前返回通用错误，不回退到
+官方地址；复用已有登录、订阅登录或仅使用 setup-token 时，不为重跑 init
+而解析已保存地址文件。
 
 ```bash
 # 使用 Bearer 的 Anthropic 兼容地址；此处均为占位值。
@@ -125,8 +128,11 @@ ANTHROPIC_API_KEY=... zylos init -y --runtime claude
 setup-token 与 OAuth 订阅登录仍走既有路径。共享机器上宜用环境变量，
 因为凭据参数会出现在进程列表中。
 凭据或地址持久化失败时，init 会报错并在启动服务前停止；原生 settings
-可能已经更新。无法在 `.env` 中无损表示的凭据会在更改任何凭据存储前返回
-通用错误。
+可能已经更新。含不可打印字符、非 ASCII 字符或无法在 `.env` 中无损表示的
+凭据，会在更改任何凭据存储前返回通用错误。
+共享写入函数也使 `zylos runtime claude --save-apikey` 和 `--save-setup-token`
+清理竞争的 Claude 凭据变量；`zylos runtime ... --save-base-url` 现在与 init
+一样拒绝带 userinfo、query 或 fragment 的地址。
 
 校验只向选定地址发送一次请求，使用选定请求头，不跟随重定向，也不探测其他地址。
 Claude 按运行时 SDK 的方式在 base URL 后追加 `/v1/messages`：应提供根地址或
@@ -135,6 +141,8 @@ Claude 按运行时 SDK 的方式在 base URL 后追加 `/v1/messages`：应提�
 `https://api.openai.com/v1`，兼容自定义地址通常也以 `/v1` 结尾。
 Codex 仍将 API key 存在 `~/.codex/auth.json` 的 `OPENAI_API_KEY` 字段中，
 使用 Bearer 认证。
+初始化 Claude 时，显式 `--codex-base-url` 仍只更新 Codex 地址；环境里的
+`OPENAI_API_KEY` 不会阻止该地址更新，也不会触发 Codex 认证。
 
 2xx 视为校验通过，401/403 视为拒绝；只有官方 HTTPS origin
 `https://api.anthropic.com` 对空校验请求返回的 400 也视为通过。

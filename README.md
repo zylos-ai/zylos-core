@@ -105,15 +105,19 @@ Flags can also be set via environment variables during `zylos init`. Resolution 
 Choose the Claude credential type required by your provider: `--api-key` writes
 `ANTHROPIC_API_KEY` and uses `x-api-key`; `--auth-token` writes
 `ANTHROPIC_AUTH_TOKEN` and uses `Authorization: Bearer`. These options and
-`--setup-token` are mutually exclusive. An explicit credential flag takes
-precedence over credential environment variables. Without a credential flag,
+`--setup-token` are mutually exclusive. Only an explicit credential flag can
+replace an existing Claude login. If Claude is already authenticated and no
+credential flag is given, credential environment variables are ignored, even
+when both API-key and Bearer variables are set. When authentication is needed,
 the existing OAuth-token environment priority is retained; otherwise, setting
 both `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` is an error. Interactive init
 asks which header to use for a custom Claude endpoint; it does not try both.
-For the selected runtime's base URL, precedence is CLI flag > environment >
-saved `~/zylos/.env` > native Claude settings or Codex config. An unreadable or
-invalid selected saved address fails before verification instead of falling
-back to the official address.
+Only when an API credential will actually be verified does init look up its
+base URL: CLI flag > environment > saved `~/zylos/.env` > native Claude settings
+or Codex config. An unreadable or invalid selected saved address produces a
+generic error before verification instead of falling back to the official
+address. Existing-login and subscription/setup-token paths do not parse saved
+endpoint files just to re-run init.
 
 ```bash
 # Bearer-authenticated Anthropic-compatible endpoint; placeholders only.
@@ -134,8 +138,12 @@ setup-token and OAuth paths. Prefer environment variables on shared machines,
 because credential flags are visible in process listings.
 If credential or base-URL persistence fails, init stops with an error before
 starting services; native settings may already have changed. A credential
-that cannot be represented losslessly in `.env` fails generically before any
-credential store is changed.
+that contains non-printable or non-ASCII characters, or cannot be represented
+losslessly in `.env`, fails generically before any credential store is changed.
+The shared writers also make `zylos runtime claude --save-apikey` and
+`--save-setup-token` remove competing Claude credential variables.
+`zylos runtime ... --save-base-url` now rejects addresses containing userinfo,
+query strings, or fragments, as init does.
 
 Verification sends one request to the selected address with the selected
 header, without following redirects or probing another address. Claude appends
@@ -145,6 +153,9 @@ unless your provider requires it. Codex appends `/models` to its base URL; its
 default is `https://api.openai.com/v1`, and a compatible custom base commonly
 ends in `/v1`. Codex keeps its API key in `~/.codex/auth.json` under
 `OPENAI_API_KEY` and uses Bearer authentication.
+When initializing Claude, an explicit `--codex-base-url` still updates only the
+Codex endpoint; an ambient `OPENAI_API_KEY` does not suppress this update or
+cause Codex authentication.
 
 A 2xx response verifies the credential; 401 or 403 rejects it. The official
 Anthropic origin (`https://api.anthropic.com`) also treats a 400 response to the
