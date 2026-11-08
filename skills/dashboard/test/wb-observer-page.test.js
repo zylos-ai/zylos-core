@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { observerPageUsable, observerRecoveryReason, viewedAccess } from '../public/js/wb/observer-page.js';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, switchObserverTarget } from '../public/js/wb/observer-page.js';
 
 const healthy = { state: 'installed', desired: { enabled: true } };
 
@@ -46,4 +46,66 @@ test('the viewed machine\'s access comes from its key: only an admin key may con
   assert.equal(observerPageUsable(healthy, viewedAccess({ remoteAgent: 'eva', fleetAgents })), false, 'a read-only key shows the empty state');
   assert.equal(observerPageUsable(healthy, viewedAccess({ remoteAgent: 'lab', fleetAgents })), true);
   assert.equal(observerPageUsable(healthy, viewedAccess({ fleetAgents })), true);
+});
+
+
+test('the running group chooser counts actual live identities while Origin sleeps', () => {
+  const snapshot = { rows: [
+    { sessionGroup: 'origin', presence: 'not_running', live: null },
+    { sessionGroup: 'telegram:alpha', presence: 'running', live: { runId: 'run-a' }, name: { displayName: 'Alpha' } },
+    { sessionGroup: 'cron:daily', presence: 'running', live: { runId: 'run-b' } },
+    { sessionGroup: 'telegram:pending', presence: 'starting', live: null },
+    { sessionGroup: 'telegram:booting', presence: 'starting', live: { runId: 'booting-run' } },
+    { sessionGroup: 'telegram:old', presence: 'not_running', live: { runId: 'old' } }
+  ] };
+  assert.equal(runningObserverGroups(snapshot).length, 2, 'starting sessions remain unavailable even after they receive a run identity');
+  assert.equal(runningObserverGroups(snapshot).some(row => row.sessionGroup === 'telegram:booting'), false);
+  assert.equal(runningObserverGroups(snapshot)[0].sessionGroup, 'telegram:alpha');
+  assert.equal(observerGroupRow(snapshot, undefined), null, 'no selection does not default to Origin in multi');
+  assert.equal(observerGroupRow(snapshot, 'origin').live, null, 'sleeping selection stays available for history');
+  assert.equal(observerGroupName(observerGroupRow(snapshot, 'telegram:alpha'), 'telegram:alpha', 'Origin'), 'Alpha');
+  assert.equal(observerGroupName(null, 'cron:daily', 'Origin'), 'cron:daily');
+  assert.equal(observerGroupName(null, null, 'Origin'), 'Origin');
+  assert.equal(runningObserverGroups(null).length, 0);
+  assert.equal(observerGroupRow({ rows: [{ sessionGroup: null }] }, 'origin').sessionGroup, null, 'single uses the sole session');
+});
+
+test('choosing a group waits for the old viewer to disconnect and its lease to release', async () => {
+  const observer = { selectionGeneration: 0 };
+  const steps = [];
+  let release;
+  const change = switchObserverTarget(observer, {
+    identity: () => 'local',
+    disconnect: () => { steps.push('disconnect'); return new Promise(resolve => { release = resolve; }); },
+    apply: () => steps.push('connect-next')
+  });
+  assert.equal(steps.join(','), 'disconnect');
+  release();
+  assert.equal(await change, true);
+  assert.equal(steps.join(','), 'disconnect,connect-next');
+});
+
+test('a newer group choice or machine switch cancels an older pending choice', async () => {
+  const observer = { selectionGeneration: 0 };
+  let machine = 'local';
+  let release;
+  const connected = [];
+  const old = switchObserverTarget(observer, {
+    identity: () => machine, disconnect: () => new Promise(resolve => { release = resolve; }),
+    apply: () => connected.push('old')
+  });
+  assert.equal(await switchObserverTarget(observer, {
+    identity: () => machine, disconnect: async () => {}, apply: () => connected.push('new')
+  }), true);
+  release();
+  assert.equal(await old, false);
+  assert.equal(connected.join(','), 'new');
+  const pending = switchObserverTarget(observer, {
+    identity: () => machine, disconnect: () => new Promise(resolve => { release = resolve; }),
+    apply: () => connected.push('wrong-machine')
+  });
+  machine = 'remote';
+  release();
+  assert.equal(await pending, false);
+  assert.equal(connected.join(','), 'new');
 });

@@ -1,3 +1,4 @@
+import { sameObserverTarget } from './observer-target.js';
 import crypto from 'node:crypto';
 
 const DEFAULT_MAX_VIEWERS = 4;
@@ -28,6 +29,8 @@ export class ObserverManager {
     authGate,
     runtime,
     resolveOrigin,
+    resolveTarget,
+    sessionMode = async () => 'single',
     target = 'local',
     maxViewers = DEFAULT_MAX_VIEWERS,
     leaseTtlMs = DEFAULT_LEASE_TTL_MS,
@@ -41,6 +44,8 @@ export class ObserverManager {
     this.authGate = authGate;
     this.runtime = runtime;
     this.resolveOrigin = resolveOrigin;
+    this.resolveTarget = resolveTarget;
+    this.sessionMode = sessionMode;
     this.target = target;
     this.maxViewers = maxViewers;
     this.leaseTtlMs = leaseTtlMs;
@@ -70,7 +75,7 @@ export class ObserverManager {
     }
   }
 
-  async _ensureGeneration(context) {
+  async _ensureGeneration(context, selected) {
     if (this._retiring) await this._retiring;
     if (this._idleStopping) await this._idleStopping;
     if (this._shuttingDown || this._lifecycleTransitions > 0) {
@@ -81,7 +86,7 @@ export class ObserverManager {
     if (this._runtimeError) throw new ObserverManagerError('teardown_failed', 'Observer cleanup requires administrator recovery');
     if (this.containment.active && this.generation !== null) return this.containment.active;
     if (this._starting) return this._starting;
-    this._starting = this.coordinator.firstLease(context).catch((error) => {
+    this._starting = this.coordinator.firstLease(context, selected).catch((error) => {
       if (error.cleanupError) this._runtimeError = error.cleanupError;
       throw error;
     }).then((active) => {
@@ -128,14 +133,23 @@ export class ObserverManager {
     this._idleTimer.unref?.();
   }
 
-  async createLease(context, { target = this.target } = {}) {
+  async createLease(context, { target = this.target, sessionGroup } = {}) {
     this._requireAdmin(context);
+    if (target !== this.target) throw new ObserverManagerError('target_mismatch', 'Observer target is not this producer');
+    context = this.authGate.revalidateAuthContext(context);
+    if (!context) throw new ObserverManagerError('auth_required', 'Observer authentication expired');
     let origin = null;
-    if (this.resolveOrigin) {
+    if (this.resolveTarget) {
+      origin = await this.resolveTarget(sessionGroup);
+      if (this._starting) { try { await this._starting; } catch {} }
+      if (this._retiring) await this._retiring;
+      if (this.containment.active && !sameObserverTarget(origin, this.containment.active.observerTarget)) {
+        await this.handleContainmentFailure(new ObserverManagerError('target_mismatch', 'Observer group changed'));
+      }
+    } else if (this.resolveOrigin) {
       try { origin = await this.resolveOrigin(); } catch {}
       if (!origin?.runId) throw new ObserverManagerError('agent_session_unavailable', 'Current Origin run is unavailable');
     }
-    if (target !== this.target) throw new ObserverManagerError('target_mismatch', 'Observer target is not this producer');
     if (this._shuttingDown || this._lifecycleTransitions > 0) {
       throw new ObserverManagerError('operation_obsolete', 'Observer lifecycle is changing');
     }
@@ -152,13 +166,16 @@ export class ObserverManager {
       }
       context = this.authGate.revalidateAuthContext(context);
       if (!context) throw new ObserverManagerError('auth_required', 'Observer authentication expired');
-      const active = await this._ensureGeneration(context);
+      const active = await this._ensureGeneration(context, origin);
       context = this.authGate.revalidateAuthContext(context);
       if (!context) throw new ObserverManagerError('auth_required', 'Observer authentication expired');
       if (epoch !== this._epoch || active !== this.containment.active || active.generation !== this.generation) {
         throw new ObserverManagerError('operation_obsolete', 'Observer lease start was superseded');
       }
-      const currentOrigin = this.resolveOrigin ? await this.resolveOrigin() : null;
+      const currentOrigin = this.resolveTarget ? await this.resolveTarget(sessionGroup) : this.resolveOrigin ? await this.resolveOrigin() : null;
+      if (this.resolveTarget && (!sameObserverTarget(currentOrigin, origin) || !sameObserverTarget(origin, active.observerTarget))) {
+        throw new ObserverManagerError('target_mismatch', 'Group changed during Observer attachment');
+      }
       if (this.resolveOrigin && (!currentOrigin?.runId || currentOrigin.runId !== origin.runId || active.originRunId !== origin.runId)) throw new ObserverManagerError('target_mismatch', 'Origin changed during Observer attachment');
       const id = crypto.randomBytes(24).toString('base64url');
       const createdAt = this.now();
@@ -166,6 +183,7 @@ export class ObserverManager {
         id,
         principal: context,
         runId: origin?.runId ?? null,
+        ...(this.resolveTarget ? { sessionGroup: origin.sessionGroup, runtime: origin.runtime } : {}),
         target,
         generation: active.generation,
         createdAt,
@@ -185,6 +203,7 @@ export class ObserverManager {
       expiresAt: lease.expiresAt,
       generation: lease.generation,
       resource: 'frame',
+      ...(Object.hasOwn(lease, 'sessionGroup') ? { sessionGroup: lease.sessionGroup, runtime: lease.runtime } : {}),
       ...(lease.runId ? { runId: lease.runId } : {}),
     };
   }
@@ -253,7 +272,26 @@ export class ObserverManager {
     return { released: true, id: lease.id };
   }
 
+  async targetStatus(sessionGroup) {
+    const sessionMode = await this.sessionMode();
+    let target = null;
+    if (this.resolveTarget) {
+      try { target = await this.resolveTarget(sessionGroup); }
+      catch (error) { if (error.code !== 'agent_session_unavailable') throw error; }
+    }
+    return { sessionMode, target };
+  }
+
   async revalidate() {
+    if (this.resolveTarget && this.containment.active) {
+      const selected = this.containment.active.observerTarget;
+      let current;
+      try { current = await this.resolveTarget(selected?.sessionGroup); } catch {}
+      if (!sameObserverTarget(current, selected)) {
+        await this.handleContainmentFailure(new ObserverManagerError('target_mismatch', 'Observed session identity changed'));
+        return 0;
+      }
+    }
     if (this.resolveOrigin && this.containment.active) {
       let origin;
       try { origin = await this.resolveOrigin(); } catch {}

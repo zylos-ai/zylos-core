@@ -11,8 +11,8 @@ import { mountChatSettings } from './wb/chat-settings.js?v=112';
 import { mountWorkbench } from './wb/shell.js?v=114';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=103';
-import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=99';
-import { observerPageUsable, observerRecoveryReason, viewedAccess } from './wb/observer-page.js?v=103';
+import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=114';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, switchObserverTarget } from './wb/observer-page.js?v=114';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=103';
 import { createUsagePage } from './wb/usage.js?v=114';
@@ -24,7 +24,7 @@ import { createFleetSounds } from './fleet-sounds.js?v=114';
 import { refreshDashboardState } from './state-refresh.js?v=98';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
-import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from './origin-lock.js?v=99';
+import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from './origin-lock.js?v=114';
 import { mergeRuntimeInfo } from './runtime-ui.js?v=98';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
@@ -79,7 +79,11 @@ const state = {
     lifecycleGeneration: 0,
     lifecyclePending: null,
     statusRequest: null,
-    sizePending: null
+    sizePending: null,
+    group: undefined,
+    groups: null,
+    selectionGeneration: 0,
+    pendingLease: null
   },
   memory: {
     tree: null,
@@ -1025,8 +1029,7 @@ function setObserverNotice(message, status = 'idle') {
   notice.dataset.state = status;
 }
 
-// Observer page frame: empty state when the component is missing or disabled; otherwise the title row
-// (Origin is the only group Core's observer attaches to), the scope note and the no-session notice.
+// Observer page frame follows the selected group's current identity.
 function observerPageAvailable(status = state.observer.status) {
   return observerPageUsable(status, viewedMachine());
 }
@@ -1038,33 +1041,69 @@ function renderObserverPage() {
   $('#observer-empty-title').textContent = t(observerRecoveryReason(status) ? 'wb.observer.recovery' : status?.state === 'installed' ? 'wb.observer.disabled' : 'wb.observer.notInstalled');
   $('#observer-empty-back').hidden = !focus;
   $('#observer-back').hidden = !focus;
-  const shown = state.dashboardState;
-  const groupName = t('wb.term.origin');
+  const group = state.observer.group;
+  const row = observerGroupRow(state.observer.groups, group);
+  const multi = status?.sessionMode === 'multi';
+  const groupName = group === undefined && multi ? t('wb.observer.chooseGroup') : observerGroupName(row, group, t('wb.term.origin'));
   $('#observer-title').textContent = t(focus ? 'wb.observer.focusTitle' : 'wb.observer.pageTitle', { name: groupName });
   const target = $('#observer-target');
   target.replaceChildren();
-  const run = shown?.runId;
+  const run = status?.target?.runId;
   if (run) { const id = document.createElement('span'); id.className = 'wb-mono'; id.textContent = run; target.append(t('wb.observer.run') + ' ', id, ' · '); }
-  const key = document.createElement('span'); key.className = 'wb-mono'; key.textContent = shown?.sessionGroup ?? 'origin'; target.append(key);
-  const idle = available && originSessionUnavailable(shown) && !state.observer.historyMode;
+  if (group !== undefined || !multi) {
+    const key = document.createElement('span'); key.className = 'wb-mono'; key.textContent = group ?? 'origin'; target.append(key);
+  }
+  const picker = $('#observer-group-picker'), select = $('#observer-group-select');
+  if (picker && select) {
+    picker.hidden = !multi;
+    const options = [{ value: '', label: t('wb.observer.chooseGroup') }];
+    const rows = runningObserverGroups(state.observer.groups);
+    if (group !== undefined && !rows.some(item => (item.sessionGroup ?? 'origin') === group)) {
+      options.push({ value: group, label: observerGroupName(row, group, t('wb.term.origin')) });
+    }
+    for (const item of rows) options.push({ value: item.sessionGroup ?? 'origin', label: observerGroupName(item, item.sessionGroup, t('wb.term.origin')) });
+    const signature = JSON.stringify(options);
+    if (select.dataset.options !== signature) {
+      select.replaceChildren(...options.map(item => {
+        const option = document.createElement('option'); option.value = item.value; option.textContent = item.label; return option;
+      }));
+      select.dataset.options = signature;
+    }
+    select.value = group ?? '';
+  }
+  const choose = multi && group === undefined;
+  const hasTarget = status && Object.hasOwn(status, 'target') ? Boolean(status.target) : !originSessionUnavailable(state.dashboardState);
+  const idle = available && !choose && !hasTarget && !state.observer.historyMode;
   $('#observer-notice-history').hidden = !idle;
-  if (idle && !state.observer.lease) setObserverNotice(t('wb.observer.noSession'), 'idle');
+  if (available && !state.observer.lease && !state.observer.historyMode) {
+    if (choose) setObserverNotice(t(runningObserverGroups(state.observer.groups).length ? 'wb.observer.chooseGroup' : 'wb.observer.noRunningGroups'), 'idle');
+    else if (idle && !state.observer.intent) setObserverNotice(t('wb.observer.noSession'), 'idle');
+  }
 }
+
 function leaveObserverFocus() {
   const key = state.observer.focus;
   state.observer.focus = null;
   if (key) openWorkbenchGroup(key).catch(() => {});
 }
 /** From a group's detail: observe only that group, with a way back to its detail. */
-function openObserverFor(key, view = 'live') {
-  state.observer.focus = key;
-  document.querySelector(`[data-observer-view="${view === 'history' ? 'history' : 'live'}"]`)?.click();
-  document.querySelector('.tab[data-tab="observer"]')?.click();
+async function openObserverFor(key, view = 'live', { focus = true } = {}) {
+  return switchObserverTarget(state.observer, {
+    identity: () => observerEndpoint('/api/observer'),
+    disconnect: () => closeObserver({ release: true }),
+    apply: () => {
+      state.observer.group = key === null ? 'origin' : key;
+      state.observer.focus = focus && key !== undefined ? key ?? 'origin' : null;
+      state.observer.status = state.observer.status ? { ...state.observer.status, target: null, agentSize: null } : null;
+      document.querySelector(`[data-observer-view="${view === 'history' ? 'history' : 'live'}"]`)?.click();
+      activateTab('observer', true);
+    }
+  });
 }
 
 function observerTargetKey() {
   const standaloneAgent = typeof REMOTE_AGENT === 'undefined' ? '' : REMOTE_AGENT;
-  return `${state.remoteAgent || standaloneAgent || 'local'}\u0000${observerEndpoint('/api/observer')}`;
+  return `${state.remoteAgent || standaloneAgent || 'local'}\u0000${observerEndpoint('/api/observer')}\u0000${state.observer.group ?? ''}`;
 }
 
 function observerSessionCurrent(generation, targetKey) {
@@ -1118,7 +1157,7 @@ async function applyObserverSize(event) {
   setObserverSizeStatus(t('observer.size.applying'), 'pending');
   try {
     const resp = await fetch(observerEndpoint('/api/observer/agent-size'), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(size)
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...size, sessionGroup: state.observer.group })
     });
     const data = await resp.json().catch(() => ({}));
     if (observerTargetKey() !== targetKey) return;
@@ -1148,8 +1187,8 @@ function syncObserverMetrics(iframe, metrics) {
 }
 
 function releaseObserverLease(endpoints, lease) {
-  if (!lease?.id || !endpoints?.api) return;
-  fetch(`${endpoints.api}/leases/${encodeURIComponent(lease.id)}/release`, {
+  if (!lease?.id || !endpoints?.api) return Promise.resolve();
+  return fetch(`${endpoints.api}/leases/${encodeURIComponent(lease.id)}/release`, {
     method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }
   }).catch(() => {});
 }
@@ -1162,7 +1201,7 @@ function observerRetryable(error) {
   if ([401, 403].includes(error?.status)) return false;
   if (error?.status === 429) return true;
   return !error?.code && !error?.status ||
-    ['upstream_unreachable', 'target_unavailable', 'target_size_changed', 'operation_obsolete', 'lease_not_found', 'lease_expired', 'lease_mismatch', 'pong_timeout', 'lease_invalid'].includes(error?.code);
+    ['upstream_unreachable', 'agent_session_unavailable', 'target_unavailable', 'target_size_changed', 'operation_obsolete', 'lease_not_found', 'lease_expired', 'lease_mismatch', 'pong_timeout', 'lease_invalid', 'child_failure', 'upstream_closed', 'stream_error', 'dashboard_shutdown'].includes(error?.code);
 }
 
 async function recoverObserver(error) {
@@ -1176,7 +1215,7 @@ async function recoverObserver(error) {
     return;
   }
   if (observer.intent !== intent) return;
-  setObserverNotice(t('observer.waiting_for_agent'), 'connecting');
+  setObserverNotice(t(error?.code === 'lease_invalid' || ['target_unavailable', 'agent_session_unavailable'].includes(error?.code) ? 'wb.observer.sessionChanged' : ['child_failure', 'upstream_closed', 'stream_error', 'dashboard_shutdown'].includes(error?.code) ? 'wb.observer.connectionLost' : 'observer.waiting_for_agent'), 'connecting');
   const delay = [1000, 2000, 4000, 8000, 15000][Math.min(intent.attempt++, 4)];
   observer.retryTimer = setTimeout(() => {
     observer.retryTimer = null;
@@ -1193,6 +1232,7 @@ async function closeObserver({ release = true, preserveNotice = false, preserveI
   observer.abort?.abort();
   observer.abort = null;
   observer.generation = (Number.isInteger(observer.generation) ? observer.generation : 0) + 1;
+  const closingGeneration = observer.generation;
   clearInterval(observer.renewTimer);
   observer.renewTimer = null;
   const lease = observer.lease;
@@ -1212,8 +1252,8 @@ async function closeObserver({ release = true, preserveNotice = false, preserveI
     observer.iframe.style.height = '';
   }
   observer.iframe = null;
-  if (release) releaseObserverLease(endpoints, lease);
-  if (!preserveNotice) setObserverNotice(t('observer.closed'), 'idle');
+  if (release) await Promise.all([releaseObserverLease(endpoints, lease), observer.pendingLease?.catch(() => {})]);
+  if (!preserveNotice && observer.generation === closingGeneration) setObserverNotice(t('observer.closed'), 'idle');
 }
 
 async function renewObserverLease(generation, targetKey, lease, endpointPrefix) {
@@ -1229,7 +1269,7 @@ async function renewObserverLease(generation, targetKey, lease, endpointPrefix) 
 
 async function openObserver() {
   const observer = state.observer;
-  if (observer.opening || observer.lease) return;
+  if (observer.historyMode || observer.opening || observer.lease) return;
   clearTimeout(observer.retryTimer);
   observer.retryTimer = null;
   if (!observer.intent) observer.intent = { targetKey: observerTargetKey(), attempt: 0 };
@@ -1259,18 +1299,34 @@ async function openObserver() {
     if (status?.state !== 'installed' || status.desired?.enabled !== true || observerRecoveryReason(status)) {
       throw Object.assign(new Error(t(observerRecoveryReason(status) ? 'observer.recovery_hint' : 'observer.not_available')), { code: 'observer_unavailable' });
     }
+    if ((status.sessionMode === 'multi' && observer.group === undefined) || (Object.hasOwn(status, 'target') && !status.target)) {
+      if (observer.intent?.attempt > 0 && !(status.sessionMode === 'multi' && observer.group === undefined)) {
+        throw Object.assign(new Error(t('wb.observer.sessionChanged')), { code: 'target_unavailable' });
+      }
+      observer.intent = null;
+      renderObserverPage();
+      return;
+    }
     observer.endpointPrefix = endpoints;
     // Keep lease acquisition observable after cancellation so a late ID can be
     // released against its original target. Frame/status fetches are abortable.
-    const leaseResp = await fetch(`${endpoints.api}/leases`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }
-    });
-    const lease = await leaseResp.json().catch(() => ({}));
-    if (!leaseResp.ok) throw observerRequestError(lease, leaseResp.status);
-    if (!observerSessionCurrent(generation, targetKey)) {
-      releaseObserverLease(endpoints, lease);
-      return;
-    }
+    const pending = observer.pendingLease = (async () => {
+      const response = await fetch(`${endpoints.api}/leases`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionGroup: observer.group })
+      });
+      const lease = await response.json().catch(() => ({}));
+      if (!response.ok) throw observerRequestError(lease, response.status);
+      if (!observerSessionCurrent(generation, targetKey)) {
+        await releaseObserverLease(endpoints, lease);
+        return null;
+      }
+      return lease;
+    })();
+    let lease;
+    try { lease = await pending; }
+    finally { if (observer.pendingLease === pending) observer.pendingLease = null; }
+    if (!lease || !observerSessionCurrent(generation, targetKey)) return;
     observer.lease = lease;
 
     const frameResp = await fetch(endpoints.frame, { signal: abort?.signal, headers: { 'X-Observer-Lease': lease.id } });
@@ -1332,7 +1388,7 @@ async function openObserver() {
     };
     ws.onclose = (event) => {
       if (!observerSessionCurrent(generation, targetKey) || observer.ws !== ws) return;
-      recoverObserver(event.reason === 'auth_expired' ? { code: 'auth_expired' } : undefined).catch(() => {});
+      recoverObserver(event.reason ? { code: event.reason } : undefined).catch(() => {});
     };
     observer.renewTimer = setInterval(() => {
       renewObserverLease(generation, targetKey, lease, endpoints).catch((error) => {
@@ -1581,6 +1637,7 @@ function scheduleSseReconnect() {
 
 // ─── Tabs ───
 let usagePage = null, workbench = null, chatPage = null;
+let activateTab;
 function refreshChat() {
   if (activeTabName() === 'chat' && !state.fleetViewActive) return chatPage?.open();
   chatPage?.close();
@@ -1590,12 +1647,13 @@ function refreshUsage() {
   usagePage?.close();
 }
 function initTabs() {
-  const activateTab = (name, push = false) => {
+  activateTab = (name, push = false) => {
     if (name === 'usage') name = 'trends';
     // Leaving settings closes its phone drawer; the drawer's history entry becomes the new page's entry.
     const reuseEntry = name !== 'settings' && Boolean(settingsPage?.drawer.leave());
     if (name !== 'settings') settingsLoader?.invalidate();
     if (push) state.navigationGeneration += 1;
+    if (name !== 'observer') state.observer.selectionGeneration += 1;
     if (name === 'memory' && remoteIsReadOnly()) name = 'overview';
     if (name === 'observer' && ($('#observer-tab')?.hidden || remoteIsReadOnly())) name = 'overview';
     if (activeTabName() === 'observer' && name !== 'observer') closeObserver({ release: true }).catch(() => {});
@@ -1624,7 +1682,9 @@ function initTabs() {
   };
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.addEventListener('click', () => {
-      activateTab(btn.dataset.tab, true);
+      if (btn.dataset.tab === 'observer') {
+        openObserverFor(workbench?.selectedGroup?.(), 'live', { focus: false }).catch(() => {});
+      } else activateTab(btn.dataset.tab, true);
     });
   });
   window.addEventListener('popstate', async () => {
@@ -1678,11 +1738,16 @@ function initObserverControls() {
           control.setAttribute('aria-pressed', String(control === button));
         });
         state.observer.history.setActive(historyMode);
+        if (historyMode) closeObserver({ preserveNotice: true }).then(() => state.observer.history.setActive(state.observer.historyMode && activeTabName() === 'observer')).catch(() => {});
+        else if (activeTabName() === 'observer') openObserver().catch(() => {});
         renderObserverSizeForm();
         renderObserverPage();
       });
     });
   }
+  $('#observer-group-select')?.addEventListener('change', event => {
+    openObserverFor(event.target.value || undefined, 'live', { focus: Boolean(state.observer.focus) }).catch(() => {});
+  });
   $('#observer-size-form')?.addEventListener('submit', (event) => { applyObserverSize(event).catch(() => {}); });
   $('#observer-back')?.addEventListener('click', leaveObserverFocus);
   $('#observer-empty-back')?.addEventListener('click', leaveObserverFocus);
@@ -1798,6 +1863,10 @@ function resetAgentData() {
   state.observer.lifecyclePending = null;
   state.observer.statusRequest = null;
   state.observer.status = null;
+  state.observer.group = undefined;
+  state.observer.groups = null;
+  state.observer.focus = null;
+  state.observer.selectionGeneration += 1;
   renderObserverStatus(null);
   const observerStatus = settingsModal?.querySelector('#observer-settings-status');
   if (observerStatus) {
@@ -2330,7 +2399,10 @@ function applySettingsReadOnly(readOnly) {
 function observerStatusLabel(status) {
   if (!status) return t('value.unknown');
   if (observerRecoveryReason(status)) return t('observer.state_recovery');
-  if (status.state === 'installed' && status.desired?.enabled) return t('observer.state_enabled');
+  if (status.state === 'installed' && status.desired?.enabled) {
+    const count = runningObserverGroups(state.observer.groups).length;
+    return t(state.observer.groups ? count ? 'wb.observer.enabledRunning' : 'wb.observer.enabledNone' : 'observer.state_enabled', { count });
+  }
   if (status.state === 'installed') return t('observer.state_disabled');
   if (status.state === 'not_installed') return t('observer.state_not_installed');
   if (status.state === 'unsupported' && status.artifactAvailable) return t('observer.state_unvalidated');
@@ -2382,16 +2454,21 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
   const targetKey = observerTargetKey();
   const requestGeneration = state.observer.statusGeneration =
     (Number.isInteger(state.observer.statusGeneration) ? state.observer.statusGeneration : 0) + 1;
-  const endpoint = observerEndpoint('/api/observer/status');
+  const query = state.observer.group === undefined ? '' : `?session_group=${encodeURIComponent(state.observer.group)}`;
+  const endpoint = observerEndpoint('/api/observer/status' + query);
   const request = { targetKey, promise: null };
   state.observer.statusRequest = request;
   request.promise = (async () => {
     try {
-      const resp = await fetch(endpoint, { cache: 'no-store', signal });
+      const [resp, groups] = await Promise.all([
+        fetch(endpoint, { cache: 'no-store', signal }),
+        fetch(observerEndpoint('/api/workbench/groups'), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null)
+      ]);
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw observerRequestError(data, resp.status);
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
       state.observer.status = data;
+      state.observer.groups = groups;
       renderObserverStatus(data);
       if (data && state.observer.intent && (data.desired?.enabled !== true || observerRecoveryReason(data))) {
         await closeObserver({ preserveNotice: true });

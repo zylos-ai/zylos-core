@@ -1,3 +1,4 @@
+import { sameObserverTarget, validObserverBinding } from './observer-target.js';
 import { OBSERVER_SIZE_LIMITS, validObserverSize } from '../../public/js/observer-size.js';
 import { readObserverGeometry } from './observer-size-monitor.js';
 import crypto from 'node:crypto';
@@ -43,7 +44,7 @@ async function socketsUnder(root, budget = { count: 0 }) {
 }
 
 export class TmuxObserverContainment extends EventEmitter {
-  constructor({ dataDir, resolveOrigin, tmuxPath = 'tmux', tmuxSocket = null, zellijConfig = defaultConfig,
+  constructor({ dataDir, resolveOrigin, resolveTarget, tmuxPath = 'tmux', tmuxSocket = null, zellijConfig = defaultConfig,
     platform = process.platform, arch = process.arch, exec = command, spawnImpl = spawn,
     startupTimeoutMs = 20000, cleanupTimeoutMs = 20000, phase = async () => {}, choosePort = freePort, observe = identity, snapshot = processSnapshot, signal = (pid, name) => process.kill(pid, name) } = {}) {
     super();
@@ -51,7 +52,7 @@ export class TmuxObserverContainment extends EventEmitter {
     // any symlink below this canonical boundary when validating managed state.
     this.dataDir = fs.realpathSync(dataDir);
     this.runtimeRoot = path.join(this.dataDir, 'observer', 'runtime', 'generations');
-    Object.assign(this, { resolveOrigin, tmuxPath, tmuxSocket, zellijConfig, platform, arch, exec, spawn: spawnImpl,
+    Object.assign(this, { resolveOrigin, resolveTarget, tmuxPath, tmuxSocket, zellijConfig, platform, arch, exec, spawn: spawnImpl,
       startupTimeoutMs, cleanupTimeoutMs, phase, choosePort, observe, snapshot, signal });
     this.active = null;
     this.owned = new Set();
@@ -94,10 +95,12 @@ export class TmuxObserverContainment extends EventEmitter {
   }
 
   // Resolves the Agent session and the absolute socket of the server hosting it.
-  async _resolveTarget(runtime) {
-    const origin = this.resolveOrigin ? await this.resolveOrigin() : null;
+  async _resolveTarget(runtime, selected) {
+    const origin = this.resolveTarget ? await this.resolveTarget(selected?.sessionGroup) : this.resolveOrigin ? await this.resolveOrigin() : null;
+    if (this.resolveTarget && selected && !sameObserverTarget(origin, selected)) throw failure('target_mismatch', 'Observed session changed before attachment');
     const target = origin ? origin.tmuxName : runtime === 'codex' ? 'codex-main' : runtime === 'claude' ? 'claude-main' : null;
     if (!target) throw failure('unsupported_runtime', 'Unsupported Observer runtime');
+    if (this.resolveTarget && !await validObserverBinding(origin, target, origin?.runId)) throw failure('target_mismatch', 'Observer target is not a managed group session');
     const preflight = { tmuxSocket: this.tmuxSocket };
     await this._targetAvailable(preflight, target);
     let result;
@@ -108,15 +111,15 @@ export class TmuxObserverContainment extends EventEmitter {
     }
     const tmuxSocket = result.stdout.trim();
     if (!path.isAbsolute(tmuxSocket) || /[\r\n]/.test(tmuxSocket)) throw failure('unsafe_runtime_state', 'Target socket was not resolved');
-    return { target, tmuxSocket, originRunId: origin?.runId ?? null };
+    return { target, tmuxSocket, originRunId: origin?.runId ?? null, ...(this.resolveTarget ? { observerTarget: origin } : {}) };
   }
 
   // The only Agent mutation Observer performs, and only on explicit operator
   // request. tmux switches the window to window-size=manual as a side effect.
-  async resizeAgent({ runtime, cols, rows }) {
+  async resizeAgent({ runtime, cols, rows, sessionGroup }) {
     await this.verifyHelpers();
-    const { target, tmuxSocket } = await this._resolveTarget(runtime);
-    const agent = { target, tmuxPath: this.tmuxPath, tmuxSocket };
+    const { target, tmuxSocket, observerTarget, originRunId } = await this._resolveTarget(runtime, this.resolveTarget ? await this.resolveTarget(sessionGroup) : null);
+    const agent = { target, tmuxPath: this.tmuxPath, tmuxSocket, observerTarget, originRunId };
     const status = await this.exec(this.tmuxPath, targetArgs(agent, 'display-message', '-p', '-t', `=${target}:`, '#{status}'));
     const match = /^(off|on|[2-5])$/.exec(status.stdout.trim());
     if (!match) throw failure('agent_resize_failed', 'Agent status line could not be read');
@@ -133,11 +136,11 @@ export class TmuxObserverContainment extends EventEmitter {
     return { cols, rows, statusLines: geometry.statusLines };
   }
 
-  async _publish({ generation, binaryPath, runtime }) {
+  async _publish({ generation, binaryPath, runtime, observerTarget: selected }) {
     await this.verifyHelpers();
     if (!['codex', 'claude'].includes(runtime)) throw failure('unsupported_runtime', 'Unsupported Observer runtime');
     if (!Number.isSafeInteger(generation) || generation < 0) throw failure('unsafe_runtime_state', 'Invalid generation');
-    const { target, tmuxSocket, originRunId } = await this._resolveTarget(runtime);
+    const { target, tmuxSocket, originRunId, observerTarget } = await this._resolveTarget(runtime, selected);
     binaryPath = path.resolve(binaryPath);
     const binaryStat = await fs.promises.lstat(binaryPath);
     if (!binaryStat.isFile() || binaryStat.isSymbolicLink() || !(binaryStat.mode & 0o111)) throw failure('unsafe_runtime_state', 'Invalid Observer binary');
@@ -151,6 +154,7 @@ export class TmuxObserverContainment extends EventEmitter {
     const state = { schema: 2, startupRecovery: 1, generation, nonce, root,
       socketRoot: path.join(await socketParent(), `zobs2-${nonce.slice(0, 16)}`),
       sessionName: `observer-${nonce.slice(0, 16)}`, port: await this.choosePort(), target, originRunId,
+      ...(observerTarget ? { observerTarget } : {}),
       tmuxPath: this.tmuxPath, tmuxSocket, binaryPath,
       layoutFile: path.join(root, 'readonly-tmux.kdl'), tmuxConfig: path.join(root, 'tmux.conf'),
       configFile: path.join(root, 'zellij.kdl'), tokenFile: path.join(root, 'read-only-token'),

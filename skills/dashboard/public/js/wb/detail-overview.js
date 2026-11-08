@@ -1,6 +1,6 @@
 import { element, icon, runtimeName } from './plain-text.js?v=103';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=103';
-import { toolLabel, waitText } from './view-mode.js?v=99';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=114';
+import { toolLabel, waitText } from './view-mode.js?v=114';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=89';
 import { recentRows } from './timeline-rows.js?v=106';
 
@@ -226,11 +226,12 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     }
     now.append(subs);
   }
-  // Only when the terminal observer is installed, enabled and can attach to this group's live session.
-  if (onObserve && row.live?.runId) {
+  // Sleeping groups enter the observer page's no-session/history branch.
+  if (onObserve) {
     const foot = element(document, 'div', undefined, 'wb-now-foot');
     const live = element(document, 'button', undefined, 'wb-btn wb-btn-sm'); live.type = 'button';
-    live.append(icon(document, 'term', 'xs'), element(document, 'span', t('wb.detail.observeLive')));
+    live.dataset.observerGroup = row.sessionGroup ?? 'origin';
+    live.append(icon(document, 'term', 'xs'), element(document, 'span', t('wb.detail.observe')));
     live.addEventListener('click', () => onObserve('live')); foot.append(live); now.append(foot);
   }
   // Newest first, dated when not from today. The count covers the same events: those in runs and those in none.

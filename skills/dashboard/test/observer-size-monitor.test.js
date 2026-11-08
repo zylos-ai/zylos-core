@@ -134,3 +134,20 @@ test('Origin geometry queries the exact read-only target and rejects other group
   }
   assert.equal(calls.length, 1);
 });
+
+test('managed group geometry uses its exact bound target and rejects foreign or mismatched bindings', async () => {
+  const observerTarget = { sessionMode: 'multi', sessionGroup: 'telegram:42', runId: 'group-run', runtime: 'codex', tmuxName: 'zylos-group-telegram=42' };
+  const selected = { ...active, target: observerTarget.tmuxName, originRunId: observerTarget.runId, observerTarget };
+  const calls = [];
+  const exec = async (_, args) => { calls.push(args); return { stdout: '100 39 on' }; };
+  assert.deepEqual(await readObserverGeometry(selected, exec), { cols: 100, rows: 40, windowRows: 39, statusLines: 1 });
+  assert.equal(calls[0][calls[0].indexOf('-t') + 1], '=zylos-group-telegram=42:');
+  for (const candidate of [
+    { ...selected, target: 'foreign-session' },
+    { ...selected, observerTarget: { ...observerTarget, sessionGroup: 'lark:room' } },
+    { ...selected, originRunId: 'replaced-run' },
+    { ...selected, observerTarget: undefined },
+    { ...selected, target: 'zylos-group-invalid:name', observerTarget: { ...observerTarget, tmuxName: 'zylos-group-invalid:name' } },
+  ]) assert.equal(await readObserverGeometry(candidate, exec), null);
+  assert.equal(calls.length, 1);
+});

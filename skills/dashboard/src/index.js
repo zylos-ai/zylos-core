@@ -58,6 +58,7 @@ import { createObserverContainment } from './lib/observer-containment.js';
 import { ObserverCoordinator } from './lib/observer-coordinator.js';
 import { ObserverControlServer } from './lib/observer-control.js';
 import { ObserverInstaller } from './lib/observer-installer.js';
+import { createObserverTargets } from './lib/observer-target.js';
 import { ObserverManager } from './lib/observer-manager.js';
 import { ObserverService } from './lib/observer-service.js';
 import { HistoryService } from './lib/history/history-service.js';
@@ -160,16 +161,18 @@ const coreState = new CoreState({ zylosDir: config.zylosDir, onChange: state => 
 const auth = new AuthGate(config, store);
 const memoryBrowser = new MemoryBrowser({ zylosDir: config.zylosDir });
 const observerInstaller = new ObserverInstaller({ dataDir: config.dataDir });
-const observerContainment = createObserverContainment({ dataDir: config.dataDir, resolveOrigin: () => coreState.currentTarget() });
+const observerTargets = createObserverTargets();
+const observerContainment = createObserverContainment({ dataDir: config.dataDir, resolveTarget: observerTargets.resolve });
 const observerCoordinator = new ObserverCoordinator({
   configPath: config.configPath,
   installer: observerInstaller,
   teardown: ({ reason }) => observerContainment.stopGeneration({ reason }),
   reconcilePersisted: () => observerContainment.reconcilePersisted(),
-  start: ({ generation, binaryPath }) => observerContainment.startGeneration({
+  start: ({ generation, binaryPath, observerTarget }) => observerContainment.startGeneration({
     generation,
     binaryPath,
-    runtime: activeRuntime,
+    runtime: observerTarget.runtime,
+    observerTarget,
   }),
 });
 const observerManager = new ObserverManager({
@@ -177,7 +180,8 @@ const observerManager = new ObserverManager({
   containment: observerContainment,
   authGate: auth,
   runtime: activeRuntime,
-  resolveOrigin: () => coreState.currentTarget(),
+  resolveTarget: observerTargets.resolve,
+  sessionMode: observerTargets.mode,
   maxViewers: config.observer.maxViewers,
   leaseTtlMs: config.observer.leaseTtlMs,
   idleGraceMs: config.observer.idleGraceMs,

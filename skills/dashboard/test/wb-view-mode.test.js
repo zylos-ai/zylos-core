@@ -39,11 +39,13 @@ test('observer navigation follows detail, installation and enabled status', () =
   assert.equal(wbWritable(() => true), false); assert.equal(wbWritable(() => false), true);
 });
 
-test('only the Origin group offers the terminal observer, and only while the observer page is usable', () => {
+test('every group offers the terminal observer while the observer page is usable', () => {
   const live = observerNavEntry({ installed: true, enabled: true }, 'technical');
   assert.equal(groupObservable(live, { sessionGroup: 'origin' }), true);
   assert.equal(groupObservable(live, { sessionGroup: null }), true, 'a single-session instance is its Origin');
-  for (const sessionGroup of ['oc_123', 'cron:daily', 'Origin', 'origin-2']) assert.equal(groupObservable(live, { sessionGroup }), false, sessionGroup);
+  assert.equal(groupObservable(live, { sessionGroup: 'telegram:sleeping', presence: 'not_running', live: null }), true, 'sleeping groups can open history');
+  assert.equal(groupObservable(live, null), false);
+  for (const sessionGroup of ['oc_123', 'cron:daily', 'Origin', 'origin-2']) assert.equal(groupObservable(live, { sessionGroup }), true, sessionGroup);
   assert.equal(groupObservable(observerNavEntry({ installed: true, enabled: false }, 'technical'), { sessionGroup: 'origin' }), false, 'disabled goes to settings instead');
   assert.equal(groupObservable(observerNavEntry({ installed: true, enabled: true }, 'plain'), { sessionGroup: 'origin' }), false, 'plain view has no observer');
   assert.equal(groupObservable(null, { sessionGroup: 'origin' }), false, 'unavailable, e.g. a read-only remote');

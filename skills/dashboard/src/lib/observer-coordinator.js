@@ -219,7 +219,7 @@ export class ObserverCoordinator {
     });
   }
 
-  firstLease(context) {
+  firstLease(context, observerTarget) {
     const ticket = this._requestedGeneration;
     return this._enqueue(async () => {
       const desired = await this._readDesired();
@@ -230,7 +230,7 @@ export class ObserverCoordinator {
       if (installed.state !== 'installed') {
         throw new ObserverLifecycleError('artifact_unavailable', 'Observer artifact failed verification');
       }
-      return this.start({ context, generation: ticket, binaryPath: installed.binaryPath });
+      return this.start({ context, generation: ticket, binaryPath: installed.binaryPath, observerTarget });
     });
   }
 

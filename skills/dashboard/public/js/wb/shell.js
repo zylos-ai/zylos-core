@@ -1,9 +1,9 @@
-import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=99';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=103';
+import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=114';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=114';
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip } from './instance-strip.js?v=114';
 import { renderAttention } from './attention-bar.js?v=103';
-import { createGroupDetail } from './detail.js?v=112';
+import { createGroupDetail } from './detail.js?v=114';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=103';
 import { createHostPanel } from './host-panel.js?v=103';
 import { element, icon } from './plain-text.js?v=103';
@@ -346,6 +346,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   }
   return {
     setViewDetail: redraw,
+    selectedGroup: () => groupDetail?.state.row?.sessionGroup,
     openGroup(key) {
       if (stopped) return Promise.resolve();
       resetOwner();

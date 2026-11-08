@@ -45,6 +45,7 @@ function fixture({ authEnabled = true, deferUpstream = false, initialDisplay = n
     runtime: 'claude',
     isStarting() { return starting; },
     runtimeStatus() { return { state: 'live', error: null }; },
+    async targetStatus(sessionGroup) { return { sessionMode: 'multi', target: { sessionGroup, runId: 'selected-run', runtime: 'codex' } }; },
     validateLease(id, supplied) {
       if (id !== LEASE_ID) throw Object.assign(new Error('missing'), { code: 'lease_not_found' });
       assert.equal(supplied.scope, 'admin');
@@ -1175,4 +1176,23 @@ test('same-origin cookie and bearer WebSocket handshakes do not need a ticket', 
     await service.shutdown();
     await app.close();
   }
+});
+
+test('observer routes carry the selected group through status, lease creation, and agent resize', async () => {
+  const f = fixture();
+  const selected = [];
+  f.service.manager.createLease = async (_, options) => { selected.push(options.sessionGroup); return { id: LEASE_ID, sessionGroup: options.sessionGroup, runId: 'selected-run', runtime: 'codex' }; };
+  const app = await startHttp(f.service);
+  const headers = { Cookie: 'admin=1', Origin: app.origin, 'Content-Type': 'application/json' };
+  try {
+    const status = await fetch(`${app.origin}/api/observer/status?session_group=telegram%3A42`, { headers });
+    assert.equal((await status.json()).target.sessionGroup, 'telegram:42');
+    const lease = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers, body: JSON.stringify({ sessionGroup: 'telegram:42' }) });
+    assert.equal(lease.status, 201);
+    assert.equal((await lease.json()).sessionGroup, 'telegram:42'); assert.equal(selected.join(','), 'telegram:42');
+    const resized = await fetch(`${app.origin}/api/observer/agent-size`, { method: 'POST', headers, body: JSON.stringify({ cols: 100, rows: 40, sessionGroup: 'telegram:42' }) });
+    assert.equal(resized.status, 200);
+    assert.equal(f.containment.agentResizes[0].sessionGroup, 'telegram:42');
+    assert.equal(Object.hasOwn(f.coordinator.savedAgentSizes[0], 'sessionGroup'), false);
+  } finally { await app.close(); }
 });

@@ -43,7 +43,7 @@ function parseProtocol(value) {
 function parseAgentSize(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const keys = Object.keys(body);
-  if (keys.length !== 2 || !keys.includes('cols') || !keys.includes('rows')) return null;
+  if (!keys.includes('cols') || !keys.includes('rows') || keys.some(key => !['cols', 'rows', 'sessionGroup'].includes(key))) return null;
   return validAgentSize(body) ? { cols: body.cols, rows: body.rows } : null;
 }
 
@@ -137,15 +137,15 @@ export class ObserverService {
   }
 
   // Serialized so the remembered size always matches the last applied resize.
-  _setAgentSize(size) {
+  _setAgentSize(size, sessionGroup) {
     const operation = async () => {
       if (this.manager.isStarting()) throw new ObserverHttpError(409, 'observer_starting');
       let applied;
       try {
-        applied = await this.containment.resizeAgent({ runtime: this.manager.runtime, ...size });
+        applied = await this.containment.resizeAgent({ runtime: this.manager.runtime, ...size, ...(sessionGroup != null ? { sessionGroup } : {}) });
       } catch (error) {
-        if (error?.code === 'target_unavailable') throw new ObserverHttpError(409, 'agent_session_unavailable');
-        if (['invalid_size', 'unsupported_platform', 'unsupported_runtime'].includes(error?.code)) throw error;
+        if (['target_unavailable', 'agent_session_unavailable'].includes(error?.code)) throw new ObserverHttpError(409, 'agent_session_unavailable');
+        if (['invalid_size', 'unsupported_platform', 'unsupported_runtime', 'target_mismatch'].includes(error?.code)) throw error;
         throw new ObserverHttpError(500, 'agent_resize_failed');
       }
       const agentSize = await this.coordinator.saveAgentSize(size);
@@ -230,6 +230,7 @@ export class ObserverService {
         const status = await this.coordinator.status();
         sendJson(res, 200, {
           ...publicStatus(status),
+          ...await this.manager.targetStatus(url.searchParams.get('session_group')),
           startupError: this.startupError?.code || null,
           runtime: this.manager.runtimeStatus(),
           agentSize: await this.coordinator.agentSize(),
@@ -242,7 +243,7 @@ export class ObserverService {
         try { body = await readJsonBody(req, 1024); } catch { throw new ObserverHttpError(400, 'invalid_size'); }
         const size = parseAgentSize(body);
         if (!size) throw new ObserverHttpError(400, 'invalid_size');
-        sendJson(res, 200, await this._setAgentSize(size));
+        sendJson(res, 200, await this._setAgentSize(size, body.sessionGroup ?? url.searchParams.get('session_group')));
         return true;
       }
       if (pathname === '/api/observer/install' && req.method === 'POST') {
@@ -278,7 +279,10 @@ export class ObserverService {
       if (pathname === '/api/observer/leases' && req.method === 'POST') {
         await this._ready();
         await this.ensureCoordinatorOwnership();
-        sendJson(res, 201, await this.manager.createLease(context));
+        let body;
+        try { body = req.headers['transfer-encoding'] || Number(req.headers['content-length']) > 0 ? await readJsonBody(req, 1024) : {}; } catch { throw new ObserverHttpError(400, 'target_mismatch'); }
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'sessionGroup')) throw new ObserverHttpError(400, 'target_mismatch');
+        sendJson(res, 201, await this.manager.createLease(context, { sessionGroup: body.sessionGroup }));
         return true;
       }
       const leaseRoute = pathname.match(/^\/api\/observer\/leases\/([A-Za-z0-9_-]{32})\/(renew|release)$/);

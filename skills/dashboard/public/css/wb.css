@@ -1265,3 +1265,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   #tab-memory.memory-file-open .memory-viewer-actions { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: flex-end; }
 }
 .memory-raw { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.wb-o-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; font-size: 12px; color: var(--text-dim); }
+.wb-o-picker[hidden] { display: none; }
+.wb-o-picker select { min-width: 0; max-width: 100%; width: 220px; }
+.wb-o-title { min-width: 0; overflow-wrap: anywhere; }

@@ -779,3 +779,38 @@ test('resizeAgent reports a missing Agent session without resizing', async (t) =
   await assert.rejects(f.adapter.resizeAgent({ runtime: 'claude', cols: 120, rows: 50 }), { code: 'target_unavailable' });
   assert.equal(calls.some((args) => args.includes('resize-window')), false);
 });
+
+test('selected managed group is published with an exact readonly target binding', async t => {
+  const observerTarget = { sessionMode: 'multi', sessionGroup: 'telegram:42', runtime: 'codex', runId: 'group-run', tmuxName: 'zylos-group-telegram=42' };
+  const f = await fixture(t, { resolveTarget: async () => observerTarget });
+  const state = await f.adapter._publish({ generation: 1, binaryPath: f.binaryPath, runtime: 'codex', observerTarget });
+  assert.equal(state.target, observerTarget.tmuxName);
+  assert.equal((await validateState(state.root)).observerTarget.runId, 'group-run');
+  const layout = await fs.readFile(state.layoutFile, 'utf8');
+  assert(layout.includes('"-r"'));
+  assert(layout.includes('"=zylos-group-telegram=42"'));
+  await writeAtomic(path.join(state.root, 'state.json'), { ...state, observerTarget: { ...observerTarget, sessionGroup: 'lark:room' } });
+  await assert.rejects(validateState(state.root), { code: 'unsafe_runtime_state' });
+});
+
+test('containment rejects foreign tmux names and replaced group identities before publishing', async t => {
+  const target = { sessionMode: 'multi', sessionGroup: 'telegram:42', runtime: 'codex', runId: 'group-run', tmuxName: 'foreign-session' };
+  const f = await fixture(t, { resolveTarget: async () => ({ ...target }) });
+  await assert.rejects(f.adapter._publish({ generation: 1, binaryPath: f.binaryPath, runtime: 'codex', observerTarget: { ...target } }), { code: 'target_mismatch' });
+  assert.equal(f.calls.length, 0);
+  target.tmuxName = 'zylos-group-telegram=42';
+  await assert.rejects(f.adapter._publish({ generation: 1, binaryPath: f.binaryPath, runtime: 'codex', observerTarget: { ...target, runId: 'previous' } }), { code: 'target_mismatch' });
+  assert.equal(f.calls.length, 0);
+});
+
+test('resizeAgent keeps the selected group binding through geometry verification', async t => {
+  const observerTarget = { sessionMode: 'multi', sessionGroup: 'telegram:42', runId: 'group-run', runtime: 'codex', tmuxName: 'zylos-group-telegram=42' };
+  const tmux = agentTmux();
+  const f = await fixture(t, { exec: tmux.exec, resolveTarget: async group => {
+    assert.equal(group, 'telegram:42'); return observerTarget;
+  } });
+  assert.deepEqual(await f.adapter.resizeAgent({ runtime: 'claude', sessionGroup: 'telegram:42', cols: 132, rows: 50 }), { cols: 132, rows: 50, statusLines: 1 });
+  const affected = tmux.calls.filter(([, args]) => args.includes('resize-window') || args.at(-1) === '#{window_width} #{window_height} #{status}');
+  assert.equal(affected.length, 2);
+  for (const [, args] of affected) assert.equal(args[args.indexOf('-t') + 1], '=zylos-group-telegram=42:');
+});

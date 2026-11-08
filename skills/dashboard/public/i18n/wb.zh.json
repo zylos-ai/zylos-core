@@ -274,7 +274,7 @@
   "wb.settings.theme.dark": "深色",
   "wb.settings.theme.system": "跟随系统",
   "wb.settings.latency": "最近探测时延；空位表示探测失败",
-  "wb.settings.observerNote": "按组观察：同一时间只连一个组，换组会断开重连。",
+  "wb.settings.observerNote": "可以观察任意运行中的组，同一时间只连一个组。换组先断开旧连接，观察始终只读。",
   "wb.settings.fleetNameNote": "在「多台机器」里显示的名字；不同于各组的显示名。",
   "wb.detail.loadMore": "加载更多",
   "wb.memory.scope": "记忆范围",
@@ -726,7 +726,7 @@
   "wb.observer.noSession": "这个组现在没有运行的会话，实时终端看不了；可以看历史。",
   "wb.observer.optional": "终端观察是可选组件，安装并启用后才能在浏览器里只读地看终端。",
   "wb.observer.run": "运行",
-  "wb.observer.scope": "按组观察：同一时间只连一个组，换组会断开重连。目前观察器只接入系统助手的会话。",
+  "wb.observer.scope": "可以观察任意运行中的组，同一时间只连一个组。换组会断开旧连接；键盘和粘贴输入不会传给助手。",
   "wb.observer.seeHistory": "看历史",
   "wb.observer.toSettings": "去设置",
   "wb.observer.pageTitle": "终端观察 · {name}",
@@ -889,5 +889,12 @@
   "chat.upload.limits": "每个文件最多 {size} MB，每条最多 {count} 个附件",
   "wb.settings.changeThreshold": "{runtime} / {model} 换会话阈值：{value}%",
   "wb.config.modelThreshold": "换会话阈值 {value}%（跟随模型）",
-  "wb.config.modelThresholdUnknown": "换会话阈值未知（跟随模型）"
+  "wb.config.modelThresholdUnknown": "换会话阈值未知（跟随模型）",
+  "wb.observer.chooseGroup": "选择运行中的组",
+  "wb.observer.noRunningGroups": "当前没有运行中的组，可以切换到历史查看已保存的会话。",
+  "wb.observer.enabledRunning": "已启用 · {count} 个组在运行，可观察",
+  "wb.observer.enabledNone": "已启用 · 当前没有运行中的组",
+  "wb.observer.sessionChanged": "组会话已结束或发生变化，正在重新连接当前会话…",
+  "wb.observer.connectionLost": "观察连接已断开，正在重新检查组会话并连接…",
+  "wb.detail.observe": "观察"
 }

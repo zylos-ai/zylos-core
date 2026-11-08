@@ -1,3 +1,4 @@
+import { validObserverBinding } from './observer-target.js';
 import { DEFAULT_OBSERVER_SIZE, validObserverSize } from '../../public/js/observer-size.js';
 import { command, targetArgs } from './observer-tmux-state.js';
 
@@ -16,7 +17,10 @@ export function parseObserverSize(stdout) {
 }
 
 export async function readObserverGeometry(active, exec = command) {
-  if (!['claude-main', 'codex-main', 'zylos-group-origin'].includes(active.target) || !active.tmuxPath) return null;
+  const targetValid = active.observerTarget
+    ? await validObserverBinding(active.observerTarget, active.target, active.originRunId)
+    : ['claude-main', 'codex-main', 'zylos-group-origin'].includes(active.target);
+  if (!targetValid || !active.tmuxPath) return null;
   const result = await exec(active.tmuxPath, targetArgs(active,
     'display-message', '-p', '-t', `=${active.target}:`, '#{window_width} #{window_height} #{status}'));
   return parseObserverGeometry(result.stdout);

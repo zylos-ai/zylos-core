@@ -76,9 +76,8 @@ export function observerNavEntry(status, level, t) {
   };
   return { label: t ? t(key) : fallback[key], target: installed && enabled ? 'observer' : 'settings' };
 }
-// The terminal observer attaches to the Origin session only (Core's observer target): no other group
-// offers a live view, and Origin offers it only while the observer is installed, enabled and reachable.
-export const groupObservable = (entry, row) => entry?.target === 'observer' && (row?.sessionGroup == null || row.sessionGroup === 'origin');
+// Every group can open the observer page; sleeping groups offer its history branch.
+export const groupObservable = (entry, row) => entry?.target === 'observer' && Boolean(row);
 export const wbWritable = remoteIsReadOnly => !remoteIsReadOnly();
 const originStates = new Set(['running', 'starting', 'not_running', 'busy', 'idle', 'waiting', 'stopped', 'error']);
 export function instanceStatusText(data = {}, level = 'plain', t = key => key) {

@@ -24,3 +24,27 @@ export function observerPageUsable(status, { viewingRemote = true, access = 'rea
   const mayControl = viewingRemote === false || access === 'admin';
   return status?.state === 'installed' && status.desired?.enabled === true && !observerRecoveryReason(status) && mayControl;
 }
+
+/** Running targets from the same workbench snapshot used to select groups. */
+export function runningObserverGroups(snapshot) {
+  return (snapshot?.rows ?? []).filter(row => row.presence === 'running' && Boolean(row.live?.runId));
+}
+
+export function observerGroupRow(snapshot, sessionGroup) {
+  if (sessionGroup === undefined) return null;
+  return snapshot?.rows?.find(row => (row.sessionGroup ?? 'origin') === (sessionGroup ?? 'origin')) ?? null;
+}
+
+export function observerGroupName(row, sessionGroup, originName) {
+  return row?.name?.displayName || ((sessionGroup ?? 'origin') === 'origin' ? originName : sessionGroup);
+}
+
+/** Retire the previous viewer before applying a group choice, including an in-flight lease. */
+export async function switchObserverTarget(observer, { identity, disconnect, apply }) {
+  const generation = ++observer.selectionGeneration;
+  const machine = identity();
+  await disconnect();
+  if (generation !== observer.selectionGeneration || machine !== identity()) return false;
+  apply();
+  return true;
+}

@@ -939,7 +939,7 @@ test('timeline chips combine filters: one chip uses the server filter, several f
   loader.close();
 });
 
-test('the Origin lock selector never reaches drawer actions and the observer tab gets its hint back', async () => {
+test('the observer tab remains available while Origin sleeps and keeps its workbench hint', async () => {
   // The lock only targets the observer tab; drawer actions carry data-wb-action and their own availability.
   assert.equal(ORIGIN_LOCK_SELECTOR, '#observer-tab');
   const f = detailFixture(async path => response(defaultRead(path)));
@@ -951,11 +951,11 @@ test('the Origin lock selector never reaches drawer actions and the observer tab
   const observer = button({ id: 'observer-tab', title: 'wb.observerInstall' }); observer.dataset.wbHint = 'wb.observerInstall';
   const inDisabledModal = button({ id: 'observer-tab', closest: selector => selector === '.modal-body-disabled' ? {} : null });
   lockOriginButtons([observer, inDisabledModal], { unavailable: true, readOnly: false, reason: 'action.origin_not_running' });
-  assert.deepEqual([observer.disabled, inDisabledModal.disabled], [true, true]);
-  assert.equal(observer.title, 'action.origin_not_running');
+  assert.deepEqual([observer.disabled, inDisabledModal.disabled], [false, true]);
+  assert.equal(observer.title, 'wb.observerInstall');
   lockOriginButtons([observer, inDisabledModal], { unavailable: false, readOnly: false, reason: 'action.origin_not_running' });
   assert.deepEqual([observer.disabled, inDisabledModal.disabled], [false, true]);
-  assert.equal(observer.title, 'wb.observerInstall', 'the workbench hint comes back once the Origin runs');
+  assert.equal(observer.title, 'wb.observerInstall', 'the same install hint remains when Origin runs');
   assert.equal(inDisabledModal.title, '');
   lockOriginButtons([observer], { unavailable: false, readOnly: true, reason: 'action.origin_not_running' });
   assert.equal(observer.disabled, true, 'a read-only remote keeps it locked');
@@ -1079,18 +1079,20 @@ test('group details expose conversation navigation for real groups and omit orig
   f.controller.destroy();
 });
 
-test('the observer entries appear only when the drawer is given an observer and the group has a live run', () => {
+test('every group detail offers observation, including sleeping groups that enter history', () => {
   const document = createDocument(), seen = [];
-  const live = row('origin', { live: { runId: 'r' } }), idle = row('origin', { live: null });
-  const findButton = root => allNodes(root).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.observeLive');
+  const live = row('telegram:active', { live: { runId: 'r' } }), idle = row('telegram:sleeping', { presence: 'not_running', live: null });
+  const findButton = root => allNodes(root).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.observe');
   let root = document.createElement('div');
   renderOverview(root, live, {}, { document, t, onObserve: view => seen.push(view) });
   findButton(root).dispatch('click'); assert.deepEqual(seen, ['live']);
   root = document.createElement('div'); renderOverview(root, live, {}, { document, t }); assert.equal(findButton(root), undefined);
-  root = document.createElement('div'); renderOverview(root, idle, {}, { document, t, onObserve: () => {} }); assert.equal(findButton(root), undefined);
+  root = document.createElement('div'); renderOverview(root, idle, {}, { document, t, onObserve: view => seen.push(view) });
+  assert.equal(findButton(root).dataset.observerGroup, 'telegram:sleeping');
+  findButton(root).dispatch('click'); assert.deepEqual(seen, ['live', 'live'], 'sleeping detail enters the page, which offers history');
   const loader = { state: { runs: [], expanded: new Set(), events: new Map(), messages: new Map(), between: [], filter: 'all', totalRuns: 0 }, setFilter() {}, collapse() {} };
   root = document.createElement('div'); renderTimeline(root, loader, { document, t, onObserve: view => seen.push(view) });
-  allNodes(root).find(node => node.textContent === 'wb.detail.observeHistory').dispatch('click'); assert.deepEqual(seen, ['live', 'history']);
+  allNodes(root).find(node => node.textContent === 'wb.detail.observeHistory').dispatch('click'); assert.deepEqual(seen, ['live', 'live', 'history']);
   root = document.createElement('div'); renderTimeline(root, loader, { document, t });
   assert.equal(allNodes(root).some(node => node.textContent === 'wb.detail.observeHistory'), false);
 });

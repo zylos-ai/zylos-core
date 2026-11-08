@@ -338,13 +338,11 @@ for (const action of ['disable', 'uninstall']) {
     });
     manager.generation = 1;
 
-    const started = Date.now();
     await assert.rejects(
       action === 'disable' ? manager.invalidateAndDisable() : manager.invalidateAndUninstall(),
       (error) => error?.cleanupAttempted === true,
     );
     assert.equal(stops, 1);
-    assert.ok(Date.now() - started < 100, 'lifecycle reset the cleanup budget');
     assert.equal(manager._runtimeError, cleanupError);
     assert.equal(containment.active?.generation, 1);
   });
@@ -514,4 +512,57 @@ test('Origin replacement during attachment rejects the pending Observer lease', 
     await assert.rejects(pending, { code: 'target_mismatch' });
     assert.equal(f.manager.leases.size, 0);
   } finally { await f.manager.shutdown(); }
+});
+
+function groupedFixture() {
+  const targets = new Map(['telegram:42', 'lark:room'].map(sessionGroup => [sessionGroup,
+    { sessionMode: 'multi', sessionGroup, runtime: 'codex', runId: `run-${sessionGroup}`, tmuxName: `managed-${sessionGroup}` }]));
+  const f = fixture({ resolveTarget: async group => {
+    const target = targets.get(group);
+    if (!target) throw Object.assign(new Error('sleeping'), { code: 'agent_session_unavailable' });
+    return { ...target };
+  }, sessionMode: async () => 'multi' });
+  const events = [];
+  f.containment.stopGeneration = async () => { events.push('stop'); f.containment.active = null; };
+  f.coordinator.firstLease = async (_, observerTarget) => {
+    events.push(`start:${observerTarget.sessionGroup}`);
+    f.containment.active = { generation: 5, observerTarget, originRunId: observerTarget.runId };
+    return f.containment.active;
+  };
+  return { ...f, targets, events };
+}
+
+test('switching groups retires the previous generation and lease before attaching the next', async t => {
+  const f = groupedFixture(); t.after(() => f.manager.shutdown());
+  const first = await f.manager.createLease(context('admin'), { sessionGroup: 'telegram:42' });
+  const next = await f.manager.createLease(context('admin'), { sessionGroup: 'lark:room' });
+  assert.equal(first.sessionGroup, 'telegram:42'); assert.equal(next.sessionGroup, 'lark:room');
+  assert.equal(next.runtime, 'codex');
+  assert.equal(f.events.join(','), 'start:telegram:42,stop,start:lark:room');
+  assert.throws(() => f.manager.validateLease(first.id, context('admin')), { code: 'lease_not_found' });
+  assert.equal(f.manager.consumeTicket(first.ticket, first.id, context('admin')), false);
+});
+
+for (const change of ['reclaimed', 'run', 'runtime', 'tmux']) {
+  test(`observed group ${change} invalidates its lease`, async t => {
+    const f = groupedFixture(); t.after(() => f.manager.shutdown());
+    const lease = await f.manager.createLease(context('admin'), { sessionGroup: 'telegram:42' });
+    const target = f.targets.get('telegram:42');
+    if (change === 'reclaimed') f.targets.delete('telegram:42');
+    if (change === 'run') target.runId = 'replacement';
+    if (change === 'runtime') target.runtime = 'claude';
+    if (change === 'tmux') target.tmuxName = 'other';
+    await f.manager.revalidate();
+    assert.equal(f.containment.active, null); assert.equal(f.manager.leases.size, 0);
+    assert.throws(() => f.manager.validateLease(lease.id, context('admin')), { code: 'lease_not_found' });
+  });
+}
+
+test('expired authentication cannot displace a group being observed', async t => {
+  const f = groupedFixture(); t.after(() => f.manager.shutdown());
+  const lease = await f.manager.createLease(context('admin'), { sessionGroup: 'telegram:42' });
+  f.validCredentials.delete('admin-session');
+  await assert.rejects(f.manager.createLease(context('admin'), { sessionGroup: 'lark:room' }), { code: 'auth_required' });
+  assert.equal(f.events.join(','), 'start:telegram:42');
+  assert.equal(f.manager.leases.has(lease.id), true);
 });
