@@ -131,7 +131,7 @@ test('instance strip renders pool unknown or used slots, runtime union, quota an
       accounts: { claude: { used_percentage: 23 }, codex: null }, services: { online: 4, total: 5 } } }, { document, t, cost: 0.25, level: 'technical' });
   const chip = allNodes(root).find(node => node.classList.contains('wb-mode-chip'));
   assert.equal(chip.textContent, 'wb.unknown'); assert.equal(chip.title, 'wb.mode');
-  assert.match(root.textContent, /wb.inst.pool3wb.inst.inUse/, 'an unknown capacity shows only the used count'); assert.match(root.textContent, /23%/);
+  assert.match(root.textContent, /wb.inst.pool3wb.inst.inUse/, 'an unknown capacity shows only the used count'); assert.match(root.textContent, /77%/);
   assert.match(root.textContent, /wb.inst.authFailedTech/); assert.match(root.textContent, /4 \/ 5/);
   assert.match(root.textContent, /wb.inst.queuedTech1/);
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 3);

@@ -12,6 +12,7 @@
   --wb-idle: #82b9ac;
   --wb-wait: #d69b35;
   --wb-err: #db5252;
+  --wb-quota-lightness: 26%;
   --wb-off: color-mix(in srgb, var(--text) 14%, transparent);
   --wb-h: 32px;
   --wb-r: 8px;
@@ -22,7 +23,7 @@
   --wb-scrim: color-mix(in srgb, var(--text) 30%, transparent);
   --wb-on-fill: var(--bg);
 }
-:root[data-theme="dark"] { --wb-scrim: color-mix(in srgb, var(--bg) 72%, transparent); }
+:root[data-theme="dark"] { --wb-quota-lightness: 68%; --wb-scrim: color-mix(in srgb, var(--bg) 72%, transparent); }
 .wb-mono, .wb-key.wb-mono, .wb-args { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wb-sub, .wb-note { color: var(--text-dim); }
 .wb-note { font-size: 12px; margin: 8px 0 0; }
@@ -1134,13 +1135,9 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-qbars { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .wb-qbar { display: grid; grid-template-columns: 64px minmax(0, 1fr) 40px; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
 .wb-qbar-tr { position: relative; height: 7px; border-radius: 4px; background: var(--wb-off); }
-.wb-qbar-tr i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; background: var(--accent); }
-.wb-qbar-tr i.wb-sw-codex { background: color-mix(in srgb, var(--wb-work) 40%, var(--text)); }
+.wb-qbar-tr i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; background: var(--wb-quota-color, var(--accent)); }
 .wb-qbar-tr i.wb-qbar-cost { background: color-mix(in srgb, var(--text) 35%, transparent); }
-.wb-qbar-tk { position: absolute; top: -2px; bottom: -2px; left: 80%; width: 1px; background: var(--text-muted); }
-.wb-qbar b { color: var(--text); font-weight: 550; font-variant-numeric: tabular-nums; text-align: right; }
-.wb-qbar.hi b { color: var(--wb-wait); }
-.wb-qbar.full b { color: var(--wb-err); }
+.wb-qbar b { color: var(--wb-quota-color, var(--text)); font-weight: 550; font-variant-numeric: tabular-nums; text-align: right; }
 .wb-f-kv { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--text-muted); font-size: 11px; }
 .wb-f-kv b { display: block; color: var(--text); font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wb-f-reason { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; color: var(--wb-err); font-size: 13px; }

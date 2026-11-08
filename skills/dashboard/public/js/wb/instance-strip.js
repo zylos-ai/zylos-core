@@ -3,11 +3,22 @@ import { recoveryTime } from './cooldown.js?v=89';
 // Account quota samples are passed through as each runtime reports them: Claude uses
 // used_percentage (or utilization), Codex keeps its camelCase usedPercentage.
 export const accountUsedPercent = usage => usage?.used_percentage ?? usage?.utilization ?? usage?.usedPercentage ?? null;
+export function remainingQuotaPercent(used) {
+  if (used == null || used === '' || !Number.isFinite(Number(used))) return null;
+  return Math.max(0, Math.min(100, 100 - Number(used)));
+}
+export const quotaColor = remaining => `hsl(${Number((remaining * 1.2).toFixed(2))} 75% var(--wb-quota-lightness))`;
+export function accountRuntimes(snapshot) {
+  return [...new Set([snapshot.baselineRuntime,
+    ...(snapshot.rows ?? []).map(row => row.launchConfig?.runtime ?? row.target?.runtime),
+    ...['claude', 'codex'].filter(runtime => accountUsedPercent(snapshot.instance?.accounts?.[runtime]) != null)
+  ].filter(Boolean))];
+}
 const clock = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);
 function meter(document, pct) {
-  const bar = element(document, 'span', undefined, 'wb-meter' + (pct >= 100 ? ' wb-err' : pct >= 80 ? ' wb-warn' : ''));
-  const fill = element(document, 'i'); fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  const bar = element(document, 'span', undefined, 'wb-meter');
+  const fill = element(document, 'i'); fill.style.width = pct + '%'; fill.style.backgroundColor = quotaColor(pct);
   bar.append(fill); return bar;
 }
 function item(document, ...children) {
@@ -24,7 +35,7 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
     : element(document, 'span', unreadable ? t('wb.mode') + ' · ' + t('wb.unknown')
       : { multi: t('wb.inst.modeMulti'), single: t('wb.inst.modeSingle') }[snapshot.mode] ?? t('wb.mode') + ' · ' + snapshot.mode);
   mode.title = t('wb.mode'); root.append(item(document, mode));
-  const runtimes = new Set([snapshot.baselineRuntime, ...(snapshot.rows ?? []).map(row => row.launchConfig?.runtime ?? row.target?.runtime)].filter(Boolean));
+  const runtimes = accountRuntimes(snapshot);
   for (const runtime of runtimes) {
     const health = instance.runtimeHealth?.[runtime], usage = instance.accounts?.[runtime];
     const box = item(document, element(document, 'i', undefined, `wb-health wb-health-${health?.health ?? 'unknown'}`), element(document, 'b', runtimeName(runtime)));
@@ -37,12 +48,14 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
         : (at === null ? t('wb.recoveryUnknown') : t('wb.recovery', { time: clock(at) })), 'wb-txt-warn'));
     }
     else {
-      const pct = accountUsedPercent(usage);
+      const pct = remainingQuotaPercent(accountUsedPercent(usage));
       if (technical) box.append(element(document, 'span', health?.health === 'ok' ? t('wb.inst.ok') : t('wb.unknown')));
-      box.append(element(document, 'span', technical ? '7d' : t('wb.week'), 'wb-inst-label'));
+      box.append(element(document, 'span', t('wb.week'), 'wb-inst-label'));
       if (pct != null) box.append(meter(document, pct));
-      box.append(element(document, 'span', pct == null ? t('wb.unknown') : pct + '%'));
-      box.title = t('wb.week');
+      const amount = element(document, 'span', pct == null ? t('wb.quotaUnknown') : Math.round(pct) + '%');
+      if (pct != null) amount.style.color = quotaColor(pct);
+      box.append(amount);
+      box.title = pct == null ? t('wb.quotaUnknown') : t('wb.quotaRemaining', { pct: Math.round(pct) });
     }
     root.append(box);
   }

@@ -1,26 +1,26 @@
 import { consumeDraftReset, createDraftRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=102';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=113';
-import { createPricingPanel } from './wb/settings-pricing.js?v=103';
+import { createPricingPanel } from './wb/settings-pricing.js?v=113';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=103';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=103';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=115';
 import { renderVersion } from './wb/settings-version.js?v=103';
 import { mountConversationPage } from './wb/conversation-page.js?v=117';
 import { mountChatSettings } from './wb/chat-settings.js?v=112';
-import { mountWorkbench } from './wb/shell.js?v=112';
+import { mountWorkbench } from './wb/shell.js?v=113';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=103';
 import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=99';
 import { observerPageUsable, observerRecoveryReason, viewedAccess } from './wb/observer-page.js?v=103';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=103';
-import { createUsagePage } from './wb/usage.js?v=103';
+import { createUsagePage } from './wb/usage.js?v=113';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=103';
-import { createFleetSounds } from './fleet-sounds.js?v=103';
+import { fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=113';
+import { createFleetSounds } from './fleet-sounds.js?v=113';
 import { refreshDashboardState } from './state-refresh.js?v=98';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
@@ -196,7 +196,7 @@ function agentFleetLabels() {
   const fleet = key => t('wb.fleet.' + key);
   return {
     ...Object.fromEntries(['title', 'subtitle', 'manage', 'shortAuth', 'shortDown', 'shortVersion', 'fixAuth', 'fixDown', 'fixVersion', 'lastSeen',
-      'todayWeek', 'groups', 'host', 'rate7d', 'quotaHead', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
+      'todayWeek', 'groups', 'host', 'rate7d', 'quotaHead', 'quotaRemaining', 'quotaUnknown', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
       'compareTitle', 'reachableN', 'unreachableN', 'instance', 'todayCost', 'groupCount', 'allIdle', 'pool', 'poolOf', 'empty'].map(key => [key, fleet(key)])),
     groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'not_running'].map(key => [key, t('wb.state.' + key)])),
     busy: t('agent_fleet.busy'),

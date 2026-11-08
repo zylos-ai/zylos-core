@@ -1,4 +1,4 @@
-import { accountUsedPercent } from './wb/instance-strip.js?v=103';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor } from './wb/instance-strip.js?v=113';
 
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline', 'stuck']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
@@ -167,8 +167,10 @@ export function defaultAgentFleetLabels() {
     todayWeek: 'Today / 7 days',
     groups: 'Groups',
     host: 'CPU · Memory · Disk',
-    rate7d: 'This week',
-    quotaHead: 'Weekly quota',
+    rate7d: '7d left',
+    quotaHead: '7-day quota remaining',
+    quotaRemaining: '7-day quota remaining {pct}%',
+    quotaUnknown: 'No data',
     subagent: 'Subagent',
     self: 'This machine',
     modeMulti: 'Multi-session',
@@ -326,6 +328,7 @@ export function fleetSelfFromSnapshot(snapshot) {
     counts: snapshot?.counts ?? {},
     groups: snapshot?.rows?.length ?? null,
     pool: snapshot?.instance?.pool ?? null,
+    runtimes: accountRuntimes(snapshot ?? {}),
     accounts: Object.fromEntries(['claude', 'codex'].map((runtime) => [runtime, accountUsedPercent(snapshot?.instance?.accounts?.[runtime])]))
   };
 }
@@ -333,20 +336,21 @@ export function fleetSelfFromSnapshot(snapshot) {
 // Card state pills share the board's colours: working, idle, waiting.
 const pillKind = { busy: 'busy', thinking: 'busy', idle: 'idle', stuck: 'waiting' };
 const pctText = (value) => value == null ? '--' : `${Number(value).toFixed(0)}%`;
-// Weekly quota bar with the 80% tick; amber from 80%, red when used up.
-function quotaBar(label, value, color = '') {
-  const pct = pctValue(value);
-  const level = pct == null ? '' : pct >= 100 ? ' full' : pct >= 80 ? ' hi' : '';
-  return `<div class="wb-qbar${level}"><span>${escapeHtml(label)}</span><span class="wb-qbar-tr"><i style="width:${pct == null ? 0 : pct}%"${color ? ` class="${color}"` : ''}></i><span class="wb-qbar-tk"></span></span><b>${pctText(pct)}</b></div>`;
+// Both views use remaining quota; remote rate_limit_7d_pct is still a used percentage.
+function quotaBar(label, value, labels) {
+  const pct = remainingQuotaPercent(value);
+  const title = pct == null ? labels.quotaUnknown : fill(labels.quotaRemaining, { pct: Math.round(pct) });
+  const color = pct == null ? '' : ` style="--wb-quota-color:${quotaColor(pct)}"`;
+  return `<div class="wb-qbar" title="${escapeHtml(title)}"${color}><span>${escapeHtml(label)}</span><span class="wb-qbar-tr"><i style="width:${pct == null ? 0 : pct}%"></i></span><b>${pct == null ? escapeHtml(labels.quotaUnknown) : pctText(pct)}</b></div>`;
 }
 function quotaBars(tile, labels) {
   const accounts = tile.self?.accounts;
   if (accounts) {
-    const rows = ['claude', 'codex'].filter((runtime) => accounts[runtime] != null)
-      .map((runtime) => quotaBar(runtime === 'codex' ? 'Codex' : 'Claude', accounts[runtime], `wb-sw-${runtime}`));
+    const runtimes = tile.self.runtimes ?? ['claude', 'codex'].filter(runtime => accounts[runtime] != null);
+    const rows = runtimes.map(runtime => quotaBar(runtime === 'codex' ? 'Codex' : 'Claude', accounts[runtime], labels));
     if (rows.length) return `<div class="wb-qbars">${rows.join('')}</div>`;
   }
-  return `<div class="wb-qbars">${quotaBar(labels.rate7d, tile.rate7dPct)}</div>`;
+  return `<div class="wb-qbars">${quotaBar(labels.rate7d, tile.rate7dPct, labels)}</div>`;
 }
 function selfStates(tile, labels) {
   const self = tile.self, counts = self.counts || {};
@@ -400,7 +404,7 @@ function renderTile(tile, labels) {
   </div>`;
 }
 
-// Technical view: every machine on one row — weekly quota with the 80% tick, and today's cost.
+// Technical view: every machine on one row — remaining weekly quota and today's cost.
 function renderCompare(view) {
   const { labels } = view, ok = view.tiles.filter((tile) => !tile.offline), bad = view.tiles.length - ok.length;
   const maxCost = Math.max(0.0001, ...ok.map((tile) => tile.dailyCost ?? 0));

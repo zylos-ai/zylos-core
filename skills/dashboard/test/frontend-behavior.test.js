@@ -372,8 +372,8 @@ test('this machine shows the multi-session view: groups by state, running pool a
   assert.match(html, /Multi-session/);
   assert.match(html, /6 groups · 2 working · 1 error · running 3\/4/);
   assert.match(html, /<i class="wb-gbar-busy" style="flex:2"><\/i>/);
-  assert.match(html, /Claude<\/span><span class="wb-qbar-tr"><i style="width:42%" class="wb-sw-claude">/);
-  assert.match(html, /Codex<\/span><span class="wb-qbar-tr"><i style="width:9%" class="wb-sw-codex">/);
+  assert.match(html, /Claude<\/span><span class="wb-qbar-tr"><i style="width:58%">/);
+  assert.match(html, /Codex<\/span><span class="wb-qbar-tr"><i style="width:91%">/);
   const noCapacity = renderAgentFleetHtml(fleet, { self: { ...self, pool: { used: 3, capacity: null } } });
   assert.match(noCapacity, /running 3</);
   assert.match(renderAgentFleetHtml({ agents: [{ name: 'local', self: true }] }), /No other machines yet/);
@@ -389,10 +389,10 @@ test('this machine reads both weekly quotas from the raw groups snapshot, Claude
   assert.deepEqual(fleetSelfFromSnapshot({ instance: { accounts: { claude: { utilization: 7 } } } }).accounts, { claude: 7, codex: null });
   const html = renderAgentFleetHtml({ agents: [{ name: 'local', self: true, state: 'IDLE', daily_cost: 1 }] }, { self });
   const card = html.slice(html.indexOf('wb-f-card self'));
-  assert.match(card, /Claude<\/span><span class="wb-qbar-tr"><i style="width:42%" class="wb-sw-claude">/);
-  assert.match(card, /Codex<\/span><span class="wb-qbar-tr"><i style="width:35%" class="wb-sw-codex">/);
+  assert.match(card, /Claude<\/span><span class="wb-qbar-tr"><i style="width:58%">/);
+  assert.match(card, /Codex<\/span><span class="wb-qbar-tr"><i style="width:65%">/);
   const compare = html.slice(html.indexOf('wb-f-compare'), html.indexOf('wb-f-card'));
-  assert.match(compare, /Codex<\/span><span class="wb-qbar-tr"><i style="width:35%" class="wb-sw-codex">/);
+  assert.match(compare, /Codex<\/span><span class="wb-qbar-tr"><i style="width:65%">/);
 });
 
 test('an unreachable machine says how long ago it was last reachable in the page language', () => {
@@ -654,19 +654,20 @@ test('fleet tile thinking feed never overrides stuck/offline moods', () => {
   assert.equal(view.tiles[0].mood, 'stuck');
 });
 
-test('machine context and weekly quota stay 0-100 percentages, with the 80% quota tick', () => {
+test('machine context stays a percentage and weekly quota shows the remaining percentage', () => {
   const view = buildAgentFleetView({ agents: [{ name: 'a', state: 'IDLE', context_pct: 60 }] });
   assert.equal(view.tiles[0].contextLevel, 'warning');
   // #251: values are 0-100 percentages — never fraction-inferred. A genuine
-  // 1% weekly usage must render 1%, not a full red bar.
+  // 1% weekly usage must render 99% remaining, not a full red bar.
   const tiny = buildAgentFleetView({ agents: [{ name: 'a', state: 'IDLE', context_pct: 0.6, rate_limit_7d_pct: 1 }] });
   assert.equal(tiny.tiles[0].contextLevel, 'ok');
   assert.equal(tiny.tiles[0].rate7dPct, 1);
   const bar = pct => renderAgentFleetHtml({ agents: [{ name: 'a', state: 'IDLE', rate_limit_7d_pct: pct }] });
-  assert.match(bar(79), /class="wb-qbar"><span>This week/);
-  assert.match(bar(80), /class="wb-qbar hi"/);
-  assert.match(bar(100), /class="wb-qbar full"/);
-  assert.match(bar(null), /<b>--<\/b>/);
+  assert.match(bar(1), /7-day quota remaining 99%/);
+  assert.match(bar(79), /7-day quota remaining 21%/);
+  assert.match(bar(80), /style="width:20%"/);
+  assert.match(bar(100), /style="width:0%"/);
+  assert.match(bar(null), /<b>No data<\/b>/);
   assert.match(renderAgentFleetHtml({ agents: [{ name: 'a', state: 'IDLE', context_pct: 79, new_session_threshold: 70 }] }), /<b class="wb-txt-warn">79%<\/b>/);
   // Static guard: the fraction heuristic must not creep back into any percent-typed frontend file.
   for (const f of ['public/js/app.js', 'public/js/agent-fleet.js']) {
