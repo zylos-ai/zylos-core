@@ -77,11 +77,18 @@ function dataTable(document, { labels, columns, t }) {
 }
 
 // Both views: every chart names its series in the card header and has an expandable, text-only data table.
+// A count chart (`counts`) has whole-number ticks; with `emptyText` a chart whose values are all zero says so instead.
 export function seriesChart(root, { title, labels = [], datasets = [], stacked = false, horizontal = false,
-  type = 'bar', iconName = null, subtitle = '', mirror = false, yFormat = null, document = root.ownerDocument, t = key => key,
-  chartFactory = defaultChart }) {
+  type = 'bar', iconName = null, subtitle = '', mirror = false, yFormat = null, counts = false, emptyText = null,
+  document = root.ownerDocument, t = key => key, chartFactory = defaultChart }) {
   const card = element(document, 'section', undefined, 'wb-card wb-usage-chart');
   card.style.minWidth = '0';
+  if (emptyText && datasets.every(dataset => dataset.data.every(value => value === 0))) {
+    card.classList.add('wb-usage-unknown');
+    card.append(cardHead(document, { iconName, title, subtitle }), element(document, 'p', emptyText, 'wb-usage-empty'));
+    root.append(card);
+    return { node: card, destroy() {} };
+  }
   const legend = mirror
     ? [{ label: '↑ ' + datasets[0]?.label, color: colors[0] }, { label: '↓ ' + datasets[1]?.label, color: colors[1] }]
     : datasets.length > 1 ? datasets.map((dataset, index) => ({ label: dataset.label, color: colors[index % colors.length] })) : [];
@@ -110,7 +117,7 @@ export function seriesChart(root, { title, labels = [], datasets = [], stacked =
     scales: {
       x: { stacked, ticks: { color: textColor, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }, grid: { display: false } },
       y: { stacked, beginAtZero: true, border: { display: false }, grid: { color: gridColor },
-        ticks: { color: textColor, maxTicksLimit: 5, ...(mirror ? { callback: value => Math.abs(value) } : yFormat ? { callback: yFormat } : {}) } },
+        ticks: { color: textColor, maxTicksLimit: 5, ...(counts ? { precision: 0 } : {}), ...(mirror ? { callback: value => Math.abs(value) } : yFormat ? { callback: yFormat } : {}) } },
     } } });
   return { node: card, destroy: () => chart?.destroy() };
 }
@@ -219,7 +226,7 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   add({ title: t('wb.usage.cost'), iconName: 'dollar', labels, datasets: cost, stacked: true, yFormat: amount => '$' + amount,
     subtitle: `${per} · ${t('wb.usage.total')} ${totals.cost == null ? t('wb.unknown') : money(totals.cost)}` });
   if (value.messagesReason) unknown(t('wb.usage.messages'), 'msg', value.messagesReason, value.messagesSampledAt);
-  else add({ title: t('wb.usage.messages'), iconName: 'msg', labels, mirror: true,
+  else add({ title: t('wb.usage.messages'), iconName: 'msg', labels, mirror: true, counts: true,
     subtitle: `${t('wb.usage.received')} ${formatUsageCount(totals.messages?.in, t)} · ${t('wb.usage.sent')} ${formatUsageCount(totals.messages?.out, t)}`,
     datasets: [
       { label: t('wb.usage.received'), data: buckets.map(at => numeric(messages.get(at)?.in)) },
@@ -232,7 +239,7 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
     // Without its rotations partner the token chart takes the whole row.
     if (value.rotations === null) tokenChart.node.classList.add('wb-usage-wide');
     if (value.rotations === null) unknown(t('wb.usage.rotations'), 'restart');
-    else add({ title: t('wb.usage.rotations'), iconName: 'restart', labels,
+    else add({ title: t('wb.usage.rotations'), iconName: 'restart', labels, counts: true, emptyText: t('wb.usage.noRotations'),
       subtitle: t('wb.usage.rotationsHint'),
       datasets: [{ label: t('wb.usage.rotations'), data: buckets.map(at => numeric(rotations.get(at))) }] });
     if (value.tools === null) unknown(t('wb.usage.tools'), 'tool');

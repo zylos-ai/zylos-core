@@ -626,6 +626,7 @@
   "wb.usage.total": "合计",
   "wb.usage.times": "{count} 次",
   "wb.usage.rotationsHint": "上下文用满后换新会话",
+  "wb.usage.noRotations": "这段时间没有自动换会话",
   "wb.usage.topTool": "最多：{name}",
   "wb.usage.topTen": "调用最多的 10 个",
   "wb.usage.none": "没有数据",

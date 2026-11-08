@@ -1,7 +1,7 @@
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=94';
 import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=98';
-import { renderOverview } from './detail-overview.js?v=98';
+import { groupEventCount, renderOverview } from './detail-overview.js?v=98';
 import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=98';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=95';
 import { renderNameEditor } from './name-edit.js?v=95';
@@ -82,7 +82,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm, observable = () => false, onObserve = () => {},
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
-    totalEvents: 0, totalRuns: 0, currentEvents: [], error: null, lastSuccess: null,
+    totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null,
     configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
   let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
@@ -103,6 +103,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     onChange(value) {
       state.totalEvents = value.totalEvents;
       state.totalRuns = value.totalRuns;
+      state.unattributed = value.unattributed ?? 0;
       draw();
     },
     onError: () => {},
@@ -156,14 +157,14 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     tabs.setAttribute('role', 'tablist');
     for (const tab of ['overview', 'timeline']) {
       const button = element(document, 'button', t('wb.detail.' + tab));
-      if (tab === 'timeline') button.append(element(document, 'span', ` ${state.totalEvents}`, 'wb-n'));
+      if (tab === 'timeline') button.append(element(document, 'span', ` ${groupEventCount(state)}`, 'wb-n'));
       button.type = 'button'; button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(state.tab === tab));
       button.addEventListener('click', () => { void selectTab(tab); }); tabs.append(button);
     }
     const body = element(document, 'div', undefined, 'wb-detail-body');
     const observe = observable(row) ? view => onObserve(key, view) : null;
     if (state.tab === 'overview') {
-      const sections = renderOverview(body, row, state, { document, t, level: getLevel(), snapshot: state.snapshot,
+      const sections = renderOverview(body, row, state, { document, t, level: getLevel(), snapshot: state.snapshot, currentTime: now(),
         onTimeline: () => { void selectTab('timeline'); }, onMemory: () => onMemory(row.sessionGroup), onObserve: observe,
         onConfig: async () => {
           if (state.configOpen) { state.configOpen = false; draw(); return; }
@@ -300,6 +301,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (values[2].status === 'fulfilled') {
         state.totalEvents = values[2].value.totalEvents;
         state.totalRuns = values[2].value.totalRuns;
+        state.unattributed = values[2].value.unattributed ?? 0;
         if (timeline.state.open) timeline.updateRuns(values[2].value);
       }
       const failure = values.find(value => value.status === 'rejected');
@@ -321,7 +323,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     resetSubagents();
     refreshTask = null;
     state.row = null; state.tab = 'overview'; state.recent = []; state.currentEvents = [];
-    state.totalEvents = state.totalRuns = 0; state.backlog = null; state.error = null;
+    state.totalEvents = state.totalRuns = state.unattributed = 0; state.backlog = null; state.error = null;
     state.configOpen = state.nameOpen = false;
     state.actionResult = ''; state.actionBusy = false;
     root.hidden = true; root.replaceChildren(); onClose();

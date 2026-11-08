@@ -52,11 +52,17 @@ export function sampleAge(at, now = Date.now(), t = key => key) {
   return seconds < 60 ? t('wb.detail.agoSeconds', { n: seconds }) : t('wb.detail.ago', { span: shortDuration(seconds) });
 }
 
-/** Short clock time in the event column; the full or raw value stays in the tooltip. */
-export function eventTime(value, level = 'plain', locale) {
+/**
+ * Short clock time in the event column, with the date as well when the event is not from today (`now`); the full
+ * or raw value stays in the tooltip.
+ */
+export function eventTime(value, level = 'plain', locale, now = null) {
   const time = timeValue(value);
   if (!Number.isFinite(time)) return { text: value == null ? '' : String(value), title: value == null ? '' : String(value) };
-  return { text: new Date(time).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }), title: displayTime(value, level, locale) };
+  const date = new Date(time), otherDay = now != null && date.toDateString() !== new Date(now).toDateString();
+  const text = otherDay ? date.toLocaleString(locale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+  return { text, title: displayTime(value, level, locale) };
 }
 const toolEvents = new Set(['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'permission_request']);
 const inEvents = new Set(['user_prompt_submit']);
@@ -90,10 +96,10 @@ export function toolEventLabel(document, event, { level = 'plain', t = key => ke
   return node;
 }
 /** One timeline line: time | round icon | label. Shared by recent activity and the full timeline. */
-export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev' } = {}) {
+export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev', now = null } = {}) {
   const kind = eventKind(event);
   const node = element(document, 'div', undefined, `${className} wb-ev-${kind}${badEvents.has(event.event_type) ? ' wb-ev-bad' : ''}`);
-  const time = eventTime(event.timestamp, level, document.documentElement?.lang);
+  const time = eventTime(event.timestamp, level, document.documentElement?.lang, now);
   const stamp = element(document, 'time', time.text); stamp.title = time.title;
   const mark = element(document, 'span', undefined, 'wb-ev-k');
   mark.append(icon(document, kind === 'bot' ? 'bot' : kind, 'xs'));
@@ -101,6 +107,9 @@ export function eventRow(document, event, { level = 'plain', t = key => key, lab
     ?? element(document, 'span', label ?? eventLabel(event, level, t), 'wb-ev-t'));
   return node;
 }
+
+/** Every recorded event of a group: those that belong to a run and those that belong to none. */
+export const groupEventCount = data => (data.totalEvents ?? 0) + (data.unattributed ?? 0);
 
 /** Whether the saved configuration is what runs: applied, pending (next safe point), not_running or unknown. */
 export function configStatus(row) {
@@ -173,7 +182,7 @@ function nowCard(document, row, data, { level, t, snapshot }) {
 }
 
 export function renderOverview(root, row, data = {}, { document = root.ownerDocument, t = key => key,
-  level = 'plain', snapshot = {}, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {}, onObserve = null } = {}) {
+  level = 'plain', snapshot = {}, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {}, onObserve = null, currentTime = Date.now() } = {}) {
   root.replaceChildren();
   const section = (key, className, glyph) => {
     const node = element(document, 'section', undefined, 'wb-detail-section ' + className);
@@ -199,9 +208,11 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     live.append(icon(document, 'term', 'xs'), element(document, 'span', t('wb.detail.observeLive')));
     live.addEventListener('click', () => onObserve('live')); foot.append(live); now.append(foot);
   }
+  // Newest first, dated when not from today. The count covers the same events: those in runs and those in none.
   const recent = section('wb.detail.recent', 'wb-detail-recent', 'clock');
-  for (const event of data.recent ?? []) recent.append(eventRow(document, event, { level, t }));
-  const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: data.totalEvents ?? 0, runs: data.totalRuns ?? 0 }), 'wb-link-btn wb-chev');
+  const newestFirst = [...(data.recent ?? [])].sort((a, b) => (timeValue(b.timestamp) || 0) - (timeValue(a.timestamp) || 0));
+  for (const event of newestFirst) recent.append(eventRow(document, event, { level, t, now: currentTime }));
+  const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: groupEventCount(data), runs: data.totalRuns ?? 0 }), 'wb-link-btn wb-chev');
   timeline.type = 'button'; timeline.addEventListener('click', onTimeline); recent.append(timeline);
   const memory = section('wb.detail.memory', 'wb-detail-memory', 'book');
   const line = element(document, 'div', undefined, 'wb-mem-line');

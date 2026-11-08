@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from '../public/js/origin-lock.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
-import { renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText } from '../public/js/wb/detail-overview.js';
+import { renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
 import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
@@ -138,7 +138,7 @@ test('overview recent activity and evidence are plain in plain view and raw only
   const iso = '2026-11-06T10:20:30.000Z';
   const data = { recent: [{ timestamp: iso, event_type: 'wait_health' }, { timestamp: iso, event_type: 'reclaim_done' }] };
   const current = row('a', { state: { kind: 'idle' } });
-  renderOverview(root, current, data, { document, t, level: 'plain' });
+  renderOverview(root, current, data, { document, t, level: 'plain', currentTime: Date.parse(iso) });
   const recent = root.children[1].textContent;
   assert.match(recent, /wb\.event\.wait_health/); assert.match(recent, /wb\.event\.reclaim_done/);
   assert.doesNotMatch(recent, /wait_health ·|reclaim_done$|T10:20:30/);
@@ -152,6 +152,33 @@ test('overview recent activity and evidence are plain in plain view and raw only
   assert.match(root.children[1].textContent, /reclaim_done/);
   assert.equal(allNodes(root.children[1]).find(node => node.tagName === 'TIME').title, iso);
   assert.match(root.textContent, /wb\.detail\.evidence · no_rule/);
+});
+
+test('recent activity lists newest first, dates events from another day, and counts the same events as the timeline', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const now = Date.parse('2026-11-08T03:00:00.000Z');
+  const at = hoursAgo => new Date(now - hoursAgo * 3600e3).toISOString();
+  // Read in the order the server sent them; one event belongs to no run.
+  const data = { recent: [{ timestamp: at(30), event_type: 'stop' }, { timestamp: at(1), event_type: 'user_prompt_submit' }, { timestamp: at(2), event_type: 'stop', run_id: null }],
+    totalEvents: 2, totalRuns: 1, unattributed: 1 };
+  renderOverview(root, row('a', { state: { kind: 'idle' } }), data, { document, t, level: 'plain', currentTime: now });
+  const times = allNodes(root.children[1]).filter(node => node.tagName === 'TIME');
+  assert.deepEqual(times.map(node => node.title), [at(1), at(2), at(30)].map(value => new Date(value).toLocaleString()), 'newest first');
+  assert.equal(times[0].textContent, new Date(at(1)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }), 'today shows the time');
+  assert.equal(times[2].textContent, new Date(at(30)).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }), 'another day shows the date too');
+  assert.match(root.children[1].textContent, /wb\.detail\.fullTimeline \{"events":3,"runs":1\}/, 'the count includes events outside a run');
+  assert.equal(groupEventCount({ totalEvents: 17, unattributed: 4 }), 21);
+  assert.equal(groupEventCount({}), 0);
+});
+
+test('the timeline tab counts events outside a run too, like the full-timeline link', async () => {
+  const runs = { runs: [], totalEvents: 17, totalRuns: 5, unattributed: 4 };
+  const f = detailFixture(async path => response(path.startsWith('/api/workbench/groups/') && path.includes('/runs') ? runs : defaultRead(path)));
+  await f.controller.open(row('telegram:a'), { rows: [row('telegram:a')], listKnown: true });
+  const tab = allNodes(f.root).find(node => node.attributes?.role === 'tab' && /wb\.detail\.timeline/.test(node.textContent));
+  assert.match(tab.textContent, / 21$/);
+  assert.match(f.root.textContent, /wb\.detail\.fullTimeline \{"events":21,"runs":5\}/);
+  f.controller.destroy();
 });
 
 test('timeline run rows, events and messages hide run ids and raw codes in plain view', () => {
