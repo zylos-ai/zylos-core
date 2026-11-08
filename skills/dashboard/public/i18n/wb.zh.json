@@ -683,6 +683,7 @@
   "chat.page.starting": "会话启动中",
   "chat.page.startFailed": "会话启动失败",
   "chat.page.delivery.rateLimited": "已入库 · 服务受限，恢复后自动投递",
+  "chat.page.delivery.recovering": "已入库 · 服务恢复中，恢复后自动投递",
   "chat.page.delivery.pending": "已入库 · 待投递",
   "chat.page.delivery.running": "已入库 · 投递中",
   "chat.page.delivery.delivered": "已投递到运行会话",

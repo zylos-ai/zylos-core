@@ -683,6 +683,7 @@
   "chat.page.starting": "Session starting",
   "chat.page.startFailed": "Session start failed",
   "chat.page.delivery.rateLimited": "Stored · service limited; delivery resumes after recovery",
+  "chat.page.delivery.recovering": "Stored · service recovering; delivery resumes after recovery",
   "chat.page.delivery.pending": "Stored · awaiting delivery",
   "chat.page.delivery.running": "Stored · delivering",
   "chat.page.delivery.delivered": "Delivered to the running session",

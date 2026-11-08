@@ -693,7 +693,8 @@ export function mountConversationPage({
     if (record.time) text(record.time, clockText(record.date));
     const delivery = s.tab === 'mine' && row.direction === 'in' ? messageState(row) : null;
     const status = delivery ? t(delivery === 'pending' && s.groupWait?.kind === 'rate_wait'
-      ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.' + delivery) : '';
+      ? s.groupHealth === 'recovering' ? 'chat.page.delivery.recovering' : 'chat.page.delivery.rateLimited'
+      : 'chat.page.delivery.' + delivery) : '';
     text(record.author, t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai'));
     text(record.statusText, status);
     record.status.hidden = !delivery;

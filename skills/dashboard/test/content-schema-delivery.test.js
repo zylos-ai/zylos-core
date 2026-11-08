@@ -55,7 +55,8 @@ async function rawRequest(origin, requestPath) {
 }
 
 // Static-delivery boundary only. Run after schema URL/source or serveStatic/fleet
-// changes or retiring active browser modules; skip unrelated UI/business changes.
+// changes, active browser cache versions or retiring active browser modules;
+// skip UI/business changes that do not alter those URLs.
 // No live DB/PM2/tmux/remote calls.
 test('shared schema is delivered at local base and fleet module URLs', { timeout: 15000 }, async t => {
   const origin = await fixture(t), expected = fs.readFileSync(schemaPath);

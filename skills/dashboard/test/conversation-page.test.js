@@ -56,7 +56,9 @@ for (const locale of ['en', 'zh']) {
       assert.equal(header.textContent.includes(locale === 'zh' ? '恢复后自动投递' : 'delivery resumes after recovery'), wait?.kind === 'rate_wait');
       if (pending) {
         const status = f.root.querySelector('[data-message-id="1"] .conversation-message-status');
-        assert.ok(status.textContent.includes(f.translations[wait ? 'chat.page.delivery.rateLimited' : 'chat.page.delivery.pending']));
+        const key = wait ? health === 'recovering' ? 'recovering' : 'rateLimited' : 'pending';
+        assert.ok(f.translations['chat.page.delivery.' + key]);
+        assert.ok(status.textContent.includes(f.translations['chat.page.delivery.' + key]));
       }
       assert.ok(f.root.querySelector('[data-message-id="2"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.delivered']));
     });
@@ -84,7 +86,8 @@ for (const locale of ['en', 'zh']) {
   }
   for (const presence of ['running', 'not_running']) {
     test(`a missing health source preserves ${presence} presence semantics in ${locale}`, { timeout: 2000 }, async t => {
-      const f = healthPage(t, { locale, presence, source: 'missing', health: null, pending: false });
+      const f = healthPage(t, { locale, presence, pending: false,
+        healthRecord: { source: 'missing', health: 'ok', publicHealth: 'ok', cooldownUntil: null, updatedAt: null } });
       await f.page.openGroup(f.sessionGroup); await tick();
       const header = f.root.querySelector('.conversation-running');
       assert.equal(header.hidden, presence !== 'running');
@@ -133,7 +136,7 @@ for (const locale of ['en', 'zh']) {
       } });
       await f.page.openGroup(f.sessionGroup); await tick();
       assert.equal(f.root.querySelector('.conversation-running').hidden, false);
-      assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.rateLimited']));
+      assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.recovering']));
       failed = true;
       await f.page.openGroup(f.sessionGroup); await tick();
       assert.equal(f.root.querySelector('.conversation-running').hidden, true);

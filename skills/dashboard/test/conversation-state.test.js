@@ -1171,6 +1171,104 @@ const groupSnapshot = (presence, extra = {}) => ({
   },
   ...extra
 });
+for (const health of ['rate_limited', 'recovering']) {
+  test(`sending into an empty ${health} queue refreshes wait before the polling interval`, { timeout: 2000 }, async t => {
+    let stored = false;
+    const wait = { kind: 'rate_wait', runtime: 'claude' };
+    const f = groupFixture(() => groupSnapshot('running', {
+      rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait: stored ? wait : null }],
+      instance: { runtimeHealth: { claude: { health } } }
+    }), u => {
+      if (u.pathname.endsWith('/send')) { stored = true; return { stored: true, conversationId: 'g:A' }; }
+    });
+    t.after(() => f.state.destroy());
+    await f.state.open(); await f.state.select('g:A');
+    assert.equal(f.state.snapshot().groupWait, null);
+    const before = f.timer.now();
+    f.state.setInput('new message'); await f.state.send(); await flush();
+    assert.equal(f.state.snapshot().receipt.stored, true);
+    assert.equal(f.state.snapshot().groupWait, wait);
+    assert.equal(f.timer.now(), before, 'no poll or timeout was needed');
+    assert.equal(f.calls.filter(call => call.path === '/api/workbench/groups').length, 2);
+  });
+}
+test('a stored message replaces an older pending group read', { timeout: 2000 }, async t => {
+  const pending = deferred();
+  const wait = { kind: 'rate_wait', runtime: 'claude' };
+  let reads = 0;
+  const response = wait => groupSnapshot('running', {
+    rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait }],
+    instance: { runtimeHealth: { claude: { health: 'rate_limited' } } }
+  });
+  const f = groupFixture(() => ++reads === 1 ? pending.promise : response(wait), u =>
+    u.pathname.endsWith('/send') ? { stored: true, conversationId: 'g:A' } : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A');
+  const oldRead = f.calls.find(call => call.path === '/api/workbench/groups');
+  f.state.setInput('new message'); await f.state.send(); await flush();
+  assert.equal(reads, 2);
+  assert.equal(oldRead.options.signal.aborted, true);
+  assert.equal(f.state.snapshot().groupWait, wait);
+  pending.resolve(response(null)); await flush();
+  assert.equal(f.state.snapshot().groupWait, wait, 'pre-storage results cannot erase the fresh wait');
+});
+test('a send completed after navigation preserves the selected group read', { timeout: 2000 }, async t => {
+  const send = deferred(), pending = deferred();
+  let reads = 0;
+  const f = groupFixture(() => ++reads === 1 ? groupSnapshot('running') : pending.promise, u => {
+    if (u.pathname.endsWith('/send')) return send.promise;
+    if (u.pathname === '/api/chat/conversations/g%3AB') return {
+      conversation: { id: 'g:B', sessionGroup: 'dashboard:b', state: 'active' }, stored: false
+    };
+  });
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A');
+  f.state.setInput('new message'); const sending = f.state.send();
+  await f.state.select('g:B');
+  const selectedRead = f.calls.filter(call => call.path === '/api/workbench/groups').at(-1);
+  send.resolve({ stored: true, conversationId: 'g:A' }); await sending; await flush();
+  assert.equal(reads, 2);
+  assert.equal(selectedRead.options.signal.aborted, false);
+  assert.equal(f.state.snapshot().selectedId, 'g:B');
+  pending.resolve(groupSnapshot('running', {
+    rows: [{ sessionGroup: 'dashboard:b', presence: 'running', target: { runtime: 'codex' }, wait: null }],
+    instance: { runtimeHealth: { codex: { health: 'ok' } } }
+  })); await flush();
+  assert.equal(f.state.snapshot().groupHealth, 'ok');
+});
+for (const stored of [false, null]) {
+  test(`a send with stored=${stored} does not refresh group status`, { timeout: 2000 }, async t => {
+    const f = groupFixture(() => groupSnapshot('running'), u =>
+      u.pathname.endsWith('/send') ? { stored, conversationId: 'g:A' } : undefined);
+    t.after(() => f.state.destroy());
+    await f.state.open(); await f.state.select('g:A');
+    f.state.setInput('new message'); await f.state.send(); await flush();
+    assert.equal(f.calls.filter(call => call.path === '/api/workbench/groups').length, 1);
+  });
+}
+test('returning to a conversation clears its previous wait before metadata arrives', { timeout: 2000 }, async t => {
+  const metadata = deferred(), status = deferred();
+  const wait = { kind: 'rate_wait', runtime: 'claude' };
+  let returning = false;
+  const f = groupFixture(() => returning ? status.promise : groupSnapshot('running', {
+    rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait }],
+    instance: { runtimeHealth: { claude: { health: 'recovering' } } }
+  }), u => returning && u.pathname === '/api/chat/conversations/g%3AA' ? metadata.promise : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A');
+  assert.equal(f.state.snapshot().groupWait, wait);
+  await f.state.select('g:B');
+  returning = true;
+  const selecting = f.state.select('g:A');
+  assert.equal(f.state.snapshot().selectedId, 'g:A');
+  assert.equal(f.state.snapshot().groupWait, null, 'cached wait clears synchronously on reentry');
+  assert.equal(f.state.snapshot().groupHealth, null);
+  metadata.resolve({ conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false });
+  await selecting;
+  assert.equal(f.state.snapshot().groupWait, null, 'wait stays cleared while the replacement read is pending');
+  status.resolve(groupSnapshot('running')); await flush();
+  assert.equal(f.state.snapshot().groupWait, null);
+});
 for (const failure of ['unreadable source', 'request failure']) test(`conversation health clears a stale restriction after ${failure}`, { timeout: 2000 }, async t => {
   let readable = true;
   const wait = { kind: 'rate_wait', runtime: 'claude', cooldownUntil: 2000 };
@@ -1213,10 +1311,11 @@ for (const runtime of ['claude', 'codex']) {
       assert.equal(f.state.snapshot().groupWait, wait, 'the matching row wait remains the server authority');
     });
   }
-  test(`conversation state normalizes a missing ${runtime} health file without borrowing another runtime`, { timeout: 2000 }, async t => {
+  test(`conversation state preserves server health for a missing ${runtime} file without borrowing another runtime`, { timeout: 2000 }, async t => {
     const f = groupFixture(() => groupSnapshot('running', {
       rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime }, wait: null }],
-      instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'auth_failed' }, [runtime]: { source: 'missing' } } }
+      instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'auth_failed' },
+        [runtime]: { source: 'missing', health: 'ok', publicHealth: 'ok', cooldownUntil: null, updatedAt: null } } }
     }));
     t.after(() => f.state.destroy());
     await f.state.open(); await f.state.select('g:A');
@@ -1376,7 +1475,7 @@ test('a hanging group status request cannot block selection or five-second messa
   }
 });
 
-test('accelerated sends keep group status on the thirty-second list cadence', { timeout: 2000 }, async () => {
+test('sending refreshes group status once while accelerated polls retain the list cadence', { timeout: 2000 }, async () => {
   const f = fixture(u => {
     if (u.pathname === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
     if (u.pathname === '/api/workbench/groups') return groupSnapshot('running');
@@ -1389,14 +1488,15 @@ test('accelerated sends keep group status on the thirty-second list cadence', { 
     assert.equal(groupReads(), 1);
     f.state.setInput('hello');
     await f.state.send();
+    assert.equal(groupReads(), 2);
     const initialReads = f.reads().length;
     await f.timer.advance(12000);
     assert.equal(f.reads().length, initialReads + 6);
-    assert.equal(groupReads(), 1);
-    await f.timer.advance(18000);
     assert.equal(groupReads(), 2);
-    await f.timer.advance(30000);
+    await f.timer.advance(18000);
     assert.equal(groupReads(), 3);
+    await f.timer.advance(30000);
+    assert.equal(groupReads(), 4);
   } finally {
     f.state.destroy();
   }

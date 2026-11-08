@@ -629,7 +629,7 @@ export function createConversationState({
         const trusted = data?.listKnown === true && data?.sources?.status?.ok === true;
         current.groupPresence = trusted && group?.presence === 'running' ? true : trusted && group?.presence === 'not_running' ? false : null;
         const health = trusted ? data.instance?.runtimeHealth?.[group?.target?.runtime] : null;
-        current.groupHealth = health?.source === 'missing' ? 'ok' : health?.health ?? null;
+        current.groupHealth = health?.health ?? null;
         current.groupWait = trusted ? group?.wait ?? null : null;
         current.groupPresenceReadAt = trusted && Number.isFinite(data.sources.status.readAt) ? data.sources.status.readAt : null;
       } catch {
@@ -888,6 +888,7 @@ export function createConversationState({
     const e = epoch,
       id = selectedId,
       currentTab = tab,
+      navigation = selectedVersion,
       text = current.input,
       attachmentIds = [...attachments];
     let outcome = null;
@@ -926,6 +927,11 @@ export function createConversationState({
           emit();
         }, e, current);
         if (!valid(e) || tab !== currentTab) return outcome;
+        if (result.stored === true && navigation === selectedVersion && cell() === current) {
+          // A read started before storage cannot describe the newly queued message.
+          cancelGroupPresenceRead();
+          readGroupPresence(current, currentTab, e);
+        }
         await list();
         if (!valid(e) || tab !== currentTab) return outcome;
         if (!canonical.startsWith('d:')) await syncAfterSend(current, canonical, currentTab, e);
