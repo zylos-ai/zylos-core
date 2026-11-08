@@ -136,6 +136,35 @@ for (const bytes of [103, 104]) {
   });
 }
 
+// Covers the temporary fallback's portable limit. Run for socket path changes;
+// unrelated coordinator or rendering changes may skip these cases.
+for (const bytes of [103, 104]) {
+  test(`a ${bytes}-byte temporary socket enforces the portable length boundary`, async t => {
+    const { root, dataDir } = fixture(t);
+    const longData = path.join(dataDir, 'long-'.repeat(25));
+    fs.mkdirSync(longData, { mode: 0o700 });
+    const key = crypto.createHash('sha256').update(longData).digest('hex').slice(0, 20);
+    const suffix = `/zobs-${process.getuid()}/zobs-ctl-${key}.sock`;
+    const temporary = path.join(root, 'a'.repeat(bytes - Buffer.byteLength(root) - 1 - Buffer.byteLength(suffix)));
+    fs.mkdirSync(temporary, { mode: 0o700 });
+    useTemporaryDirectory(t, temporary);
+    const expected = temporary + suffix;
+    assert.equal(Buffer.byteLength(expected), bytes);
+    assert.ok(Buffer.byteLength(path.join(longData, 'observer/runtime/control/control.sock')) >= 104);
+    const server = new ObserverControlServer({ dataDir: longData, onPreUninstall: async () => {} });
+    t.after(() => server.close());
+    if (bytes === 103) {
+      await server.start();
+      assert.equal(server.socketPath, expected);
+      assert.ok(fs.lstatSync(expected).isSocket());
+    } else {
+      await assert.rejects(server.start(), { code: 'control_socket_path_too_long' });
+      assert.equal(server.server, null);
+      assert.equal(fs.existsSync(expected), false);
+    }
+  });
+}
+
 test('multibyte data paths use bytes rather than character count for fallback', async t => {
   const { root } = fixture(t);
   useTemporaryDirectory(t, root);
@@ -324,6 +353,73 @@ test('SQLite ownership excludes another process and releases on its normal OS ex
   await contender.acquire();
   assert.equal(fs.statSync(lockPath).ino, inode);
   await contender.close();
+});
+
+// Covers persistent socket recovery after an actual process crash, with real
+// SQLite ownership and online control. Run for socket cleanup/ownership changes;
+// unrelated UI changes may skip it. The runner isolates HOME/ZYLOS_DIR/PM2_HOME
+// and TMPDIR; this case uses a private database/socket and never starts tmux.
+test('a producer recovers the data socket left by a killed process', { timeout: 20000 }, async t => {
+  const { spawn } = await import('node:child_process');
+  const { dataDir, configPath } = fixture(t);
+  const socketPath = path.join(dataDir, 'observer/runtime/control/control.sock');
+  const lockPath = path.join(dataDir, 'observer/runtime/control/coordinator-lock.sqlite');
+  const environment = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]));
+  assert.equal(fs.existsSync(socketPath), false);
+  assert.equal(fs.existsSync(lockPath), false);
+  console.log(JSON.stringify({ environment, dataDir, socketPath, lockPath, tmuxStarted: false }));
+  const moduleUrl = new URL('../src/lib/observer-control.js', import.meta.url).href;
+  const script = `import { ObserverControlServer } from ${JSON.stringify(moduleUrl)};
+    const owner = new ObserverControlServer({ dataDir: process.argv[1], onPreUninstall: async () => {} });
+    await owner.start();
+    process.send({ socketPath: owner.socketPath, environment: Object.fromEntries(
+      ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]])) });
+    process.on('message', () => { if (!owner.lock) throw Error('owner lost lock'); });`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script, dataDir], {
+    env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    timeout: 10000, killSignal: 'SIGKILL',
+  });
+  const closed = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await closed;
+  });
+  let outputBytes = 0;
+  const ready = new Promise((resolve, reject) => {
+    child.once('message', resolve);
+    child.once('error', reject);
+    child.once('exit', () => reject(new Error('Producer exited before readiness')));
+    const capture = chunk => {
+      outputBytes += chunk.length;
+      if (outputBytes > 16384) {
+        child.kill('SIGKILL');
+        reject(new Error('Producer exceeded output limit'));
+      }
+    };
+    child.stdout.on('data', capture);
+    child.stderr.on('data', capture);
+  });
+  const actual = await ready;
+  assert.equal(actual.socketPath, socketPath);
+  for (const [key, value] of Object.entries(environment)) assert.equal(actual.environment[key], value);
+  assert.ok(fs.lstatSync(socketPath).isSocket());
+  const lockInode = fs.statSync(lockPath).ino;
+  assert.equal(child.kill('SIGKILL'), true);
+  const exit = await closed;
+  assert.equal(exit.code, null);
+  assert.equal(exit.signal, 'SIGKILL');
+  assert.ok(outputBytes <= 16384);
+  assert.ok(fs.lstatSync(socketPath).isSocket(), 'SIGKILL leaves the data socket behind');
+  let calls = 0;
+  const replacement = new ObserverControlServer({ dataDir, onPreUninstall: async () => { calls++; } });
+  t.after(() => replacement.close());
+  await replacement.start();
+  assert.equal(replacement.socketPath, socketPath);
+  assert.equal(fs.statSync(lockPath).ino, lockInode, 'recovery retains the same SQLite lock inode');
+  assert.deepEqual(await runObserverPreUninstall({ dataDir, configPath }), { mode: 'online' });
+  assert.equal(calls, 1);
+  await replacement.close();
+  assert.equal(fs.existsSync(socketPath), false);
 });
 
 test('concurrent close releases ownership retained after socket publication failure', async (t) => {
