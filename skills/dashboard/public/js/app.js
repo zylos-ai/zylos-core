@@ -3,8 +3,8 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=98';
 import { renderDefaults } from './wb/settings-defaults.js?v=99';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=98';
-import { keyCounts, renderCreatedKey, renderKeyTable, renderRemoteAgents } from './wb/settings-access.js?v=98';
-import { confirmDialog } from './wb/detail.js?v=98';
+import { keyCounts, renderCreatedKey, renderKeyTable, renderRemoteAgents } from './wb/settings-access.js?v=99';
+import { confirmDialog } from './wb/detail.js?v=99';
 import { renderVersion } from './wb/settings-version.js?v=98';
 import { mountConversationPage } from './wb/conversation-page.js?v=100';
 import { mountChatSettings } from './wb/chat-settings.js?v=98';
@@ -22,7 +22,7 @@ import { createFleetSounds } from './fleet-sounds.js?v=98';
 import { refreshDashboardState } from './state-refresh.js?v=98';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
-import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from './origin-lock.js?v=95';
+import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from './origin-lock.js?v=99';
 import { mergeRuntimeInfo } from './runtime-ui.js?v=98';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
