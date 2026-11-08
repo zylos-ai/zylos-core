@@ -41,14 +41,28 @@ test('shared field diagnostics prevent submission and clear when edited', async 
   f.change('employee_count', '2'); f.change('company_name', '');
   f.submit(); await tick(); assert.equal(f.requests.length, 1); // Shared contract permits required empty text.
 });
-test('retained forms update server diagnostics and draft hint without replacing controls and clear hidden memory', () => {
+test('retained forms update diagnostics and clear removed values without erasing visible inputs', () => {
   const f = fixture({ customer_type: 'person', company_name: 'private' }, () => 'unsaved');
   const control = f.input('customer_type'); f.change('customer_type', 'company');
   assert.equal(f.formState.draftStatus, 'unsaved'); assert.match(f.root.textContent, /draft.unsaved/);
   f.formState.fieldErrors = [{ key: 'company_name', reason: 'range' }]; f.formState.error = 'invalid_chat_answer';
   f.root.updateFormState(); assert.equal(f.input('customer_type'), control);
   assert.match(f.root.textContent, /field.range/); assert.match(f.root.textContent, /submitFailed/);
-  f.root.clearEditableValues(); assert.deepEqual(f.formState.values, {}); assert.equal(f.input('company_name').value, '');
+  f.change('customer_type', 'person');
+  const other = f.root.querySelector('.chat-question-other textarea');
+  other.value = 'Visible free text'; other.dispatch('input');
+  f.formState.values = { customer_type: 'person' };
+  f.root.clearRemovedValues();
+  assert.equal(f.input('customer_type'), control); assert.equal(control.value, 'person');
+  assert.equal(f.label('company_name').hidden, true); assert.equal(f.input('company_name').value, '');
+  assert.equal(other.value, 'Visible free text');
+  assert.deepEqual(f.formState.values, { customer_type: 'person' });
+  assert.equal(f.formState.freeText, 'Visible free text');
+  Object.assign(f.formState, { values: {}, freeText: '', fieldErrors: [], formError: null, draftStatus: null });
+  f.root.clearRemovedValues();
+  assert.deepEqual(f.formState.values, {}); assert.equal(control.value, '');
+  assert.equal(f.input('company_name').value, ''); assert.equal(other.value, '');
+  assert.equal(f.root.querySelector('.chat-form-draft-status').hidden, true);
 });
 test('malformed stored field types remain available to shared validation without crashing controls', async () => {
   const invalid = { customer_type: 'company', company_name: { stale: true }, employee_count: 'invalid', tags: 3 };

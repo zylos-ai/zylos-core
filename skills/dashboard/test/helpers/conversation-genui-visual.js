@@ -121,13 +121,13 @@ export async function runConversationGenuiVisual(t, sandbox) {
   await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
   await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: fixture.cookie, domain: '127.0.0.1', path: '/', secure: true }]);
   const page = await context.newPage(); page.setDefaultTimeout(10_000);
-  const errors = [], shots = [], prototypeShots = [], measurements = []; let reads = 0, simulatedAnswerError = false;
+  const errors = [], shots = [], prototypeShots = [], measurements = []; let reads = 0, simulatedAnswerError = false, simulatedRemoteUnauthorized = false;
   page.on('pageerror', error => { if (!errors.length) errors.push(error.message); });
   page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:') && !errors.length) errors.push(message.text()); });
   page.on('response', response => {
     const url = new URL(response.url());
     if (url.pathname.endsWith('/messages')) reads++;
-    if (response.status() >= 400 && url.pathname !== '/favicon.ico' && !(simulatedAnswerError && url.pathname.endsWith('/answers') && response.status() === 400) && !errors.length) errors.push(`${response.status()} ${url.pathname}`);
+    if (response.status() >= 400 && url.pathname !== '/favicon.ico' && !(simulatedAnswerError && url.pathname.endsWith('/answers') && response.status() === 400) && !(simulatedRemoteUnauthorized && url.pathname.startsWith('/fleet/Remote/api/chat/') && response.status() === 401) && !errors.length) errors.push(`${response.status()} ${url.pathname}`);
   });
   const choose = async name => {
     const scene = scenes[name];
@@ -304,8 +304,37 @@ export async function runConversationGenuiVisual(t, sandbox) {
       context: { messageId: draftScene.envelope.messageId, blockId: block.id }, payload: { values: { customer_type: 'person', full_name: '另一设备', email: 'other@example.com' } } } } });
   assert.equal(response.status, 200);
   root = await choose('drafts'); await page.locator('#wb-chat .conversation-header-actions [data-action="refreshStatus"]').click();
-  await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="drafts_interrupt"] [data-field-key] input,[data-interrupt-id="drafts_interrupt"] [data-field-key] select')].every(control=>control.disabled&&control.value===''));
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="drafts_interrupt"] [data-field-key] input,[data-interrupt-id="drafts_interrupt"] [data-field-key] select')].every(control=>control.disabled));
+  assert.equal(await field(root, 'full_name').inputValue(), '林晓', 'other-client lifecycle transition keeps the visible local input');
+  assert.equal(await field(root, 'company_name').inputValue(), '示例科技', 'visible company input remains in the locked form');
   assert.equal(await page.evaluate(() => Object.keys(sessionStorage).some(key => key.startsWith('zylos-dashboard-form-draft:') && key.includes('drafts_message'))), false);
+  // Exercise the app's actual remote conversation fetch adapter. Only this
+  // instance's next history response is unauthorized; ordinary data still uses
+  // the real fixture, so an unrelated background request cannot clear drafts.
+  fixture.setProxy(fixture);
+  assert.equal((await fixture.request('/api/chat/settings', { method: 'PUT', body: { allowRemote: true } })).status, 200);
+  await page.goto(fixture.base + '/fleet/Remote/chat');
+  await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
+  root = await choose('controls'); await formValues(root); await chooseType(root, 'person');
+  const remoteDrafts = () => page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('zylos-dashboard-form-draft:'))
+    .map(key => JSON.parse(sessionStorage.getItem(key))).filter(record => record.scope.instance.endsWith('/fleet/Remote')));
+  assert.ok((await remoteDrafts()).some(record => record.values.company_name === '示例科技'), 'remote draft contains retained inactive input before authentication loss');
+  let unauthorizedReads = 0;
+  simulatedRemoteUnauthorized = true;
+  const remoteHistoryPattern = '**/fleet/Remote/api/chat/conversations/*/messages?*';
+  await context.route(remoteHistoryPattern, route => {
+    if (unauthorizedReads++) return route.continue();
+    return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'chat_auth_required' }) });
+  });
+  const unauthorizedResponse = page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/fleet/Remote/api/chat/') && response.status() === 401);
+  await page.locator('#wb-chat [data-action="refreshMessages"]').click(); await unauthorizedResponse;
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="controls_interrupt"] [data-field-key] input,[data-interrupt-id="controls_interrupt"] [data-field-key] select,[data-interrupt-id="controls_interrupt"] [data-field-key] textarea')].every(control => control.disabled && control.value === ''));
+  assert.equal((await remoteDrafts()).length, 0, 'remote 401 clears that instance persistent drafts through the actual application fetch adapter');
+  assert.ok(await root.locator('.chat-form-segment').evaluateAll(nodes => nodes.every(control => control.disabled)), 'remote 401 locks segmented controls too');
+  await page.locator('#wb-chat .conversation-update-error:visible').waitFor();
+  assert.ok((await page.locator('#wb-chat .conversation-update-error').innerText()).trim(), 'remote unauthorized read displays an update prompt');
+  await context.unroute(remoteHistoryPattern); simulatedRemoteUnauthorized = false;
+  await page.goto(fixture.base + '/chat'); await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
   // Exercise the actual application logout handler before a failed transport resolves.
   await choose('controls'); root = page.locator(`[data-message-id="${scenes.controls.row.id}"]`);
   await formValues(root); await chooseType(root,'person');
@@ -333,6 +362,6 @@ export async function runConversationGenuiVisual(t, sandbox) {
   assert.equal(await page.evaluate(()=>Object.keys(sessionStorage).filter(key=>key.startsWith('zylos-dashboard-form-draft:')).length),0);
   assert.deepEqual(errors, []);
   if (output) fs.writeFileSync(path.join(output, 'conversation-genui-browser.json'), JSON.stringify({ sourceHead: process.env.ZYLOS_CHAT_SOURCE_HEAD || null, sourceProductDigest: process.env.ZYLOS_CHAT_SOURCE_PRODUCT_DIGEST || null, isolation, shots, prototypeShots, measurements, reads, errors,
-    prototype: 'd17ffdbfb94eb094a4f80d89edc1b48bf85ca166', prototypeSourceBlob: prototypeSource ? '77d676e8735904aa4c223e8d1d98551a9e7d3f37' : null, authChecks: { actualLogoutClearsBeforeAbortedTransport: true, nativeSuccessfulLoginClearsBeforeRestore: true }, simulatedErrors: ['HTTP400 field-error response; final acceptance and second-client answer use actual API', 'Aborted logout POST after actual application cleanup'], base: fixture.base }, null, 2));
+    prototype: 'd17ffdbfb94eb094a4f80d89edc1b48bf85ca166', prototypeSourceBlob: prototypeSource ? '77d676e8735904aa4c223e8d1d98551a9e7d3f37' : null, authChecks: { actualLogoutClearsBeforeAbortedTransport: true, nativeSuccessfulLoginClearsBeforeRestore: true, remoteUnauthorizedConversationReadClearsAndLocks: true }, simulatedErrors: ['HTTP400 field-error response; final acceptance and second-client answer use actual API', 'One remote conversation history HTTP401; actual app fetch boundary clears and locks', 'Aborted logout POST after actual application cleanup'], base: fixture.base }, null, 2));
   t.diagnostic(`GenUI browser: ${shots.length} screenshots, ${reads} real message reads, no page errors`);
 }
