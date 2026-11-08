@@ -15,16 +15,16 @@ mock.method(VersionChecker.prototype, 'start', () => {});
 // HTTP integration. Covers: the real server entry wires the instance .env TZ reader into
 // GET /api/chat/conversations/:id/messages (login cookie, real c4.db, real scheduler tz.js), and a changed .env
 // shows on the next page without a restart. Run when the server wiring, the chat history route or the time zone
-// reader changes; changes limited to chart drawing may skip it. Isolation: a temporary HOME, ZYLOS_DIR, PM2_HOME,
-// short TMPDIR and tmux directory from scheduleEnv (asserted to stay under its root), private c4.db and
-// dashboard.db inside it, process ZYLOS_DIR pointed there for this file only; server, timers and stores are closed
-// and the root removed in teardown.
+// reader changes; changes limited to chart drawing may skip it. Isolation: HOME, PM2_HOME and TMPDIR are isolated
+// by the test runner; this test only points the process's ZYLOS_DIR at the temporary installation from scheduleEnv
+// (asserted to stay under its root), with private c4.db and dashboard.db inside it; server, timers and stores are
+// closed, ZYLOS_DIR restored and the root removed in teardown.
 test('the server answers message pages with the instance time zone from .env', { timeout: 20_000 }, async t => {
   const install = scheduleEnv(t, { tz: 'Asia/Shanghai', link: false });
   const { zylosDir } = install;
   assert.ok(zylosDir !== '/home/agent/zylos' && zylosDir.startsWith(install.root + path.sep));
-  console.log('Instance time zone HTTP isolation:', JSON.stringify({ ZYLOS_DIR: zylosDir, HOME: install.env.HOME,
-    PM2_HOME: install.env.PM2_HOME, TMPDIR: install.env.TMPDIR }));
+  console.log('Instance time zone HTTP isolation:', JSON.stringify({ ZYLOS_DIR: zylosDir, HOME: process.env.HOME,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR }));
 
   const configDir = path.join(zylosDir, 'components', 'dashboard');
   fs.mkdirSync(configDir, { recursive: true });

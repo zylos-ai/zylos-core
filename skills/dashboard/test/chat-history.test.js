@@ -454,6 +454,10 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
 
 // The message route reports the instance time zone through the schedule page's reader (the real scheduler tz.js on a
 // temporary installation's .env); daily charts read their points in it. Only messages pages carry it.
+// Integration. Isolation: HOME, PM2_HOME and TMPDIR are isolated by the test runner; this test uses a private c4.db
+// from fixture(), a temporary installation from scheduleEnv whose .env is the only one read, and points the process's
+// ZYLOS_DIR there for this test only (restored in teardown); both roots are removed in teardown. Run when the chat
+// history route, the schedule time zone reader or scheduler tz.js changes; changes limited to chart drawing may skip it.
 const TZ_URL = new URL('../../scheduler/scripts/tz.js', import.meta.url).href;
 let tzImport = 0;
 test('message pages carry the instance time zone from .env, and null when it cannot be read', async t => {
