@@ -4,7 +4,7 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=98';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=98';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=99';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=1';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=2';
 import { renderVersion } from './wb/settings-version.js?v=98';
 import { mountConversationPage } from './wb/conversation-page.js?v=102';
 import { mountChatSettings } from './wb/chat-settings.js?v=98';
@@ -12,8 +12,8 @@ import { mountWorkbench } from './wb/shell.js?v=100';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=96';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=99';
-import { observerPageUsable, observerRecoveryReason } from './wb/observer-page.js?v=1';
-import { createActionRunner } from './wb/action-runner.js?v=1';
+import { observerPageUsable, observerRecoveryReason, viewedAccess } from './wb/observer-page.js?v=2';
+import { bindActionControls, createPageActions } from './wb/page-actions.js?v=1';
 import { mountSchedule } from './wb/schedule.js?v=96';
 import { createUsagePage } from './wb/usage.js?v=97';
 import { ObserverHistory } from './observer-history.js?v=2';
@@ -127,17 +127,14 @@ function observerEndpoint(path) {
   return state.remoteAgent ? api(`${remotePrefix()}${path}`) : api(path);
 }
 
-function remoteAccess() {
-  if (state.remoteAgent) {
-    const agent = state.fleet?.agents?.find(a => a.name === state.remoteAgent);
-    return agent?.access === 'admin' ? 'admin' : 'read';
-  }
-  if (REMOTE_AGENT) return REMOTE_ACCESS;
-  return 'admin';
+// The machine being viewed and its key's access; read-only state and the observer page both come from here.
+function viewedMachine() {
+  return viewedAccess({ remoteAgent: state.remoteAgent, fleetAgents: state.fleet?.agents ?? [], pageRemoteAgent: REMOTE_AGENT, pageRemoteAccess: REMOTE_ACCESS });
 }
 
 function remoteIsReadOnly() {
-  return (state.remoteAgent || REMOTE_AGENT) && remoteAccess() !== 'admin';
+  const viewed = viewedMachine();
+  return viewed.viewingRemote && viewed.access !== 'admin';
 }
 
 function viewedAgentName() {
@@ -1028,7 +1025,7 @@ function setObserverNotice(message, status = 'idle') {
 // Observer page frame: empty state when the component is missing or disabled; otherwise the title row
 // (Origin is the only group Core's observer attaches to), the scope note and the no-session notice.
 function observerPageAvailable(status = state.observer.status) {
-  return observerPageUsable(status, { viewingRemote: Boolean(state.remoteAgent || REMOTE_AGENT), access: remoteAccess() });
+  return observerPageUsable(status, viewedMachine());
 }
 function renderObserverPage() {
   const status = state.observer.status, available = observerPageAvailable(status), focus = state.observer.focus;
@@ -2064,8 +2061,12 @@ function renderCreatedApiKey(createdKey) {
 /** Settings confirmations share the dashboard's own dialog instead of the browser prompt. */
 function settingsWiring() {
   return settingsWiring.value ??= wireSettingsConfirmations({
-    document, t, runner: actionRunner(), setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
-    sendKeyRequest: sendApiKeyRequest,
+    document, t, runner: pageActions(), setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
+    keyPage: {
+      request: async (method, path) => { const resp = await fetch(api(path), { method }); return { ok: resp.ok, data: await resp.json() }; },
+      renderKeys: renderApiKeys, renderCreated: renderCreatedApiKey, createdKey: () => fleetManageModal?._createdKey ?? null,
+      status: fleetManageStatus, busy: setApiKeyBusy, errorText: fleetManageError,
+    },
     writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup,
   });
 }
@@ -2180,28 +2181,6 @@ async function createApiKey() {
     renderApiKeys(data);
     renderCreatedApiKey({ name: data.key?.name || body.name, plaintext_key: data.plaintext_key });
     fleetManageStatus(t('fleet_manage.key_created_status'), 'success');
-  } catch (err) {
-    fleetManageStatus(err.message, 'error');
-  } finally {
-    setApiKeyBusy(false);
-  }
-}
-
-// Sends one key-table request (built by keyActionRequest after the table confirmed the action). A request that
-// shows a new key still asks before replacing a key that is shown only once.
-async function sendApiKeyRequest(request, name) {
-  const pendingKeyName = fleetManageModal?._createdKey?.name;
-  if (request.showsNewKey && pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { danger: false }))) return;
-  setApiKeyBusy(true);
-  fleetManageStatus(t(request.status.running), 'running');
-  try {
-    const resp = await fetch(api(request.path), { method: request.method });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t(request.status.failed)));
-    renderApiKeys(data);
-    if (request.showsNewKey) renderCreatedApiKey({ name: data.key?.name || name, plaintext_key: data.plaintext_key });
-    else if (fleetManageModal?._createdKey?.name === name) renderCreatedApiKey(null);
-    fleetManageStatus(t(request.status.done), 'success');
   } catch (err) {
     fleetManageStatus(err.message, 'error');
   } finally {
@@ -2590,29 +2569,9 @@ function createActionsModal() {
   document.body.appendChild(overlay);
   actionsModal = overlay;
 
-  overlay.querySelector('[data-action="upgrade-cc"]').addEventListener('click', () => execAction('upgrade-cc'));
-  const modeSelect = overlay.querySelector('#action-mode');
-  // The segmented buttons drive the original select so its change listener stays the single entry point.
-  overlay.querySelectorAll('#action-mode-seg button').forEach(button => button.addEventListener('click', () => {
-    if (button.disabled || modeSelect.value === button.dataset.mode) return;
-    modeSelect.value = button.dataset.mode; modeSelect.dispatchEvent(new Event('change'));
-  }));
-  modeSelect.addEventListener('change', async event => {
-    const previous = modeSelect._current ?? null;
-    if (await execAction('switch-mode', { mode: event.target.value }) === false && previous) modeSelect.value = previous;
-    syncModeSegment(); await refreshModeStatus();
-  });
-
-  const thresholdApply = overlay.querySelector('#action-threshold-apply');
-  const thresholdInput = overlay.querySelector('#action-threshold');
-  thresholdApply.addEventListener('click', async () => {
-    const val = parseInt(thresholdInput.value, 10);
-    if (!val || val < 10 || val > 95) return;
-    const result = await execAction('set-threshold', { value: val });
-    if (result !== false) state.newSessionThreshold = val;
-  });
-  thresholdInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') thresholdApply.click();
+  bindActionControls(overlay, pageActions(), {
+    onModeSettled: async () => { syncModeSegment(); await refreshModeStatus(); },
+    onThreshold: value => { state.newSessionThreshold = value; },
   });
   return overlay;
 }
@@ -2726,39 +2685,21 @@ function viewedRemoteTarget() {
   return state.remoteAgent || REMOTE_AGENT ? viewedAgentName() : null;
 }
 
-function actionConfirmText(action, body) {
-  const labels = {
-    'switch-mode': () => t('confirm.switch_mode', { mode: body?.mode }),
-    'restart-session': () => t('confirm.restart'),
-    'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),
-    'switch-model': () => t('confirm.switch_model', { value: body?.model }),
-    'switch-effort': () => t('confirm.switch_effort', { value: effortLabel(body?.effort) }),
-    'upgrade-zylos': () => t('confirm.upgrade_zylos'),
-    'upgrade-cc': () => state.dashboardState?.runtime_info?.runtime === 'codex' ? t('confirm.upgrade_codex') : t('confirm.upgrade_cc'),
-  };
-  return labels[action]?.() || t('confirm.fallback', { action });
-}
-
-// A manual restart names the session the page is showing.
-function prepareAction(action, body) {
-  if (action !== 'restart-session') return body;
-  const shown = state.dashboardState;
-  return { ...body, sessionGroup: shown?.sessionGroup, runId: shown?.runId, sessionId: shown?.sessionId };
-}
-
-function actionRunner() {
-  return actionRunner.value ??= createActionRunner({
-    t, send: sendAction, confirm: showConfirm, confirmText: actionConfirmText,
-    readOnly: () => Boolean(remoteIsReadOnly()), remoteTarget: viewedRemoteTarget, prepare: prepareAction,
+// The page's actions; see createPageActions. They are the only callers of the action sender below.
+function pageActions() {
+  return pageActions.value ??= createPageActions({
+    t, send: sendAction, confirm: showConfirm, effortLabel,
+    readOnly: () => Boolean(remoteIsReadOnly()), remoteTarget: viewedRemoteTarget,
+    shownSession: () => state.dashboardState, runtime: () => state.dashboardState?.runtime_info?.runtime,
   });
 }
 
-// Asks first for actions that change the running agent; see createActionRunner.
+// Asks first for actions that change the running agent; see createPageActions.
 function execAction(action, body) {
-  return actionRunner().exec(action, body);
+  return pageActions().exec(action, body);
 }
 
-// Sends a dashboard action. Only the action runner calls this, after it has checked access and asked when needed.
+// Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
 async function sendAction(action, body) {
   const actionPath = agentPath(`/api/actions/${action}`);
   const healthPath = agentPath('/api/health');
