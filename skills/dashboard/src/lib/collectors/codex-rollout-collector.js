@@ -599,38 +599,36 @@ export class CodexRolloutCollector {
   }
 
   _insertSubagentStart(agentId, callId, parsed, timestamp, mapping, position, sourceTool) {
-    {
-      const spawn = this._subagentSpawnByCallId.get(callId) || {};
-      const ingestId = `codex-subagent-start-${mapping.session_id || 'unknown'}-${agentId}`;
-      this._subagentStartedAt.set(agentId, timestamp);
-      const result = this._insertEvent({
-        id: stableEventId(ingestId),
-        ingest_id: ingestId,
-        timestamp,
-        runtime: 'codex',
-        session_id: mapping.session_id,
-        session_group: mapping.session_group ?? null,
-        run_id: mapping.run_id ?? null,
-        event_type: 'subagent_start',
-        category: 'subagent',
-        summary: 'Subagent started',
-        duration_ms: null,
-        metadata: {
-          agent_id: agentId,
-          nickname: parsed.nickname || parsed.name || null,
-          agent_type: spawn.agent_type || 'default',
-          status: 'running',
-          description: spawn.description || null,
-          source_event: 'response_item',
-          source_tool: sourceTool,
-          rollout_offset: position.byteOffset ?? null,
-          rollout_line: position.lineIndex ?? null
-        },
-        source: 'rollout',
-        confidence: 'actual'
-      });
-      return result?.inserted ? 1 : 0;
-    }
+    const spawn = this._subagentSpawnByCallId.get(callId) || {};
+    const ingestId = `codex-subagent-start-${mapping.session_id || 'unknown'}-${agentId}`;
+    this._subagentStartedAt.set(agentId, timestamp);
+    const result = this._insertEvent({
+      id: stableEventId(ingestId),
+      ingest_id: ingestId,
+      timestamp,
+      runtime: 'codex',
+      session_id: mapping.session_id,
+      session_group: mapping.session_group ?? null,
+      run_id: mapping.run_id ?? null,
+      event_type: 'subagent_start',
+      category: 'subagent',
+      summary: 'Subagent started',
+      duration_ms: null,
+      metadata: {
+        agent_id: agentId,
+        nickname: parsed.nickname || parsed.name || null,
+        agent_type: spawn.agent_type || 'default',
+        status: 'running',
+        description: spawn.description || null,
+        source_event: 'response_item',
+        source_tool: sourceTool,
+        rollout_offset: position.byteOffset ?? null,
+        rollout_line: position.lineIndex ?? null
+      },
+      source: 'rollout',
+      confidence: 'actual'
+    });
+    return result?.inserted ? 1 : 0;
   }
 
   _ingestSubagentEndOutput(toolName, callId, output, timestamp, mapping, position = {}) {
