@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,20 +8,20 @@ import Database from 'better-sqlite3';
 import { ObserverControlServer, runObserverPreUninstall } from '../src/lib/observer-control.js';
 
 function fixture(t, observer = { enabled: true, generation: 4 }) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-control-'));
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const runnerTemporary = fs.realpathSync(os.tmpdir());
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME']) {
+    assert.ok(process.env[key]?.startsWith(`${path.dirname(runnerTemporary)}${path.sep}`), `${key} must use the runner sandbox`);
+  }
+  const shortBase = fs.realpathSync(process.platform === 'linux' ? '/dev/shm' : '/tmp');
+  const root = fs.mkdtempSync(path.join(shortBase, 'oc-'));
+  fs.chmodSync(root, 0o700);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dataDir = path.join(root, 'data');
+  fs.mkdirSync(dataDir, { mode: 0o700 });
   const configPath = path.join(dataDir, 'config.json');
   fs.writeFileSync(configPath, `${JSON.stringify({ observer }, null, 2)}\n`, { mode: 0o600 });
-  const temporary = fs.realpathSync(os.tmpdir());
-  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME']) {
-    assert.ok(process.env[key]?.startsWith(`${path.dirname(temporary)}${path.sep}`), `${key} must use the runner sandbox`);
-  }
-  assert.ok(dataDir.startsWith(`${temporary}${path.sep}`));
-  console.log('Observer control isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
-    PM2_HOME: process.env.PM2_HOME, TMPDIR: temporary, dataDir,
-    tmuxSocket: path.join(dataDir, 'tmux.sock'), tmuxStarted: false,
-    database: path.join(dataDir, 'observer/runtime/control/coordinator-lock.sqlite') }));
-  return { dataDir, configPath };
+  assert.ok(Buffer.byteLength(path.join(dataDir, 'observer/runtime/control/control.sock')) < 104);
+  return { root, dataDir, configPath };
 }
 
 test('component pre-uninstall joins the running producer coordinator', async (t) => {
@@ -30,13 +31,13 @@ test('component pre-uninstall joins the running producer coordinator', async (t)
     dataDir,
     onPreUninstall: async () => { calls += 1; },
   });
-  await server.start();
   t.after(() => server.close());
+  await server.start();
   const result = await runObserverPreUninstall({ dataDir, configPath });
   assert.deepEqual(result, { mode: 'online' });
   assert.equal(calls, 1);
   assert.equal(fs.statSync(server.socketPath).mode & 0o777, 0o600);
-  assert.equal(path.dirname(server.socketPath), path.join(fs.realpathSync(os.tmpdir()), `zobs-${process.getuid()}`));
+  assert.equal(server.socketPath, path.join(dataDir, 'observer/runtime/control/control.sock'));
   assert.equal(fs.statSync(path.dirname(server.socketPath)).mode & 0o777, 0o700);
   assert.equal(fs.statSync(path.dirname(server.socketPath)).uid, process.getuid());
   await server.close();
@@ -54,18 +55,21 @@ function useTemporaryDirectory(t, directory) {
 
 // Covers path selection, permissions and client/server agreement. Run for socket
 // location changes; unrelated rendering changes may skip this case.
-test('long temporary paths fall back to a private data control socket', async (t) => {
+test('data control sockets do not depend on the temporary directory', async (t) => {
   const { dataDir, configPath } = fixture(t);
   const temporary = path.join(dataDir, 'long-'.repeat(25));
   fs.mkdirSync(temporary, { mode: 0o700 });
   useTemporaryDirectory(t, temporary);
   const server = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
   t.after(() => server.close());
+  assert.equal(server.socketPath, null, 'construction does not select a path');
+  await server.start();
   assert.equal(server.socketPath, path.join(dataDir, 'observer/runtime/control/control.sock'));
   assert.ok(Buffer.byteLength(server.socketPath) < 104);
-  await server.start();
   assert.equal(fs.statSync(path.dirname(server.socketPath)).mode & 0o777, 0o700);
   assert.equal(fs.statSync(server.socketPath).mode & 0o777, 0o600);
+  process.env.TMPDIR = path.join(dataDir, 'missing');
+  assert.equal(fs.existsSync(process.env.TMPDIR), false, 'client uses a different, unavailable temporary directory');
   assert.deepEqual(await runObserverPreUninstall({ dataDir, configPath }), { mode: 'online' });
   await server.close();
   assert.equal(fs.existsSync(server.socketPath), false);
@@ -74,36 +78,119 @@ test('long temporary paths fall back to a private data control socket', async (t
 
 // Covers the final path-length rejection without side effects. Run for endpoint
 // path changes; unrelated coordinator operations may skip this case.
-test('overlong temporary and data paths require a shorter TMPDIR without creating sockets', (t) => {
+test('overlong temporary and data paths reject start without throwing during construction', async (t) => {
   const { dataDir } = fixture(t);
-  // Multibyte paths must be measured in bytes, not JavaScript characters.
-  const long = path.join(dataDir, '\u754c'.repeat(40));
+  const long = path.join(dataDir, 'long-'.repeat(25));
   fs.mkdirSync(long, { mode: 0o700 });
   useTemporaryDirectory(t, long);
-  assert.throws(() => new ObserverControlServer({ dataDir: long, onPreUninstall: async () => {} }), {
-    code: 'control_socket_path_too_long',
+  assert.ok(Buffer.byteLength(path.join(long, 'observer/runtime/control/control.sock')) >= 104);
+  assert.ok(Buffer.byteLength(path.join(long, `zobs-${process.getuid()}`, `zobs-ctl-${'a'.repeat(20)}.sock`)) >= 104);
+  const server = new ObserverControlServer({ dataDir: long, onPreUninstall: async () => {} });
+  t.after(() => server.close());
+  assert.equal(server.socketPath, null);
+  await assert.rejects(server.start(), { code: 'control_socket_path_too_long' });
+  assert.equal(server.server, null);
+  await server.close();
+  assert.equal(fs.existsSync(path.join(long, 'observer/runtime/control/control.sock')), false);
+});
+
+for (const temporaryKind of ['directory', 'symlink']) {
+  test(`long data paths use a canonical private temporary ${temporaryKind}`, async t => {
+    const { root, dataDir } = fixture(t);
+    const longData = path.join(dataDir, 'long-'.repeat(25));
+    fs.mkdirSync(longData, { mode: 0o700 });
+    const temporary = path.join(root, 'tmp');
+    fs.mkdirSync(temporary, { mode: 0o700 });
+    const alias = path.join(root, 'alias');
+    if (temporaryKind === 'symlink') fs.symlinkSync(temporary, alias);
+    useTemporaryDirectory(t, temporaryKind === 'symlink' ? alias : temporary);
+    const expectedDirectory = path.join(temporary, `zobs-${process.getuid()}`);
+    assert.ok(Buffer.byteLength(path.join(longData, 'observer/runtime/control/control.sock')) >= 104);
+    assert.ok(Buffer.byteLength(path.join(expectedDirectory, `zobs-ctl-${'a'.repeat(20)}.sock`)) < 104);
+    const server = new ObserverControlServer({ dataDir: longData, onPreUninstall: async () => {} });
+    t.after(() => server.close());
+    await server.start();
+    assert.equal(path.dirname(server.socketPath), expectedDirectory);
+    assert.equal(fs.statSync(expectedDirectory).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(server.socketPath).mode & 0o777, 0o600);
+    assert.deepEqual(await runObserverPreUninstall({ dataDir: longData, configPath: path.join(longData, 'config.json') }), { mode: 'online' });
+    await server.close();
+    assert.equal(fs.existsSync(server.socketPath), false);
   });
-  assert.equal(fs.readdirSync(long).length, 0);
+}
+
+for (const bytes of [103, 104]) {
+  test(`a ${bytes}-byte data socket selects the portable length boundary`, async t => {
+    const { root } = fixture(t);
+    useTemporaryDirectory(t, root);
+    const suffix = '/observer/runtime/control/control.sock';
+    const dataDir = path.join(root, 'a'.repeat(bytes - Buffer.byteLength(root) - 1 - Buffer.byteLength(suffix)));
+    fs.mkdirSync(dataDir, { mode: 0o700 });
+    const local = dataDir + suffix;
+    assert.equal(Buffer.byteLength(local), bytes);
+    const server = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
+    t.after(() => server.close());
+    await server.start();
+    if (bytes === 103) assert.equal(server.socketPath, local);
+    else assert.equal(path.dirname(server.socketPath), path.join(root, `zobs-${process.getuid()}`));
+  });
+}
+
+test('multibyte data paths use bytes rather than character count for fallback', async t => {
+  const { root } = fixture(t);
+  useTemporaryDirectory(t, root);
+  const dataDir = path.join(root, '\u754c'.repeat(20));
+  fs.mkdirSync(dataDir, { mode: 0o700 });
+  const local = path.join(dataDir, 'observer/runtime/control/control.sock');
+  assert.ok(local.length < 104);
+  assert.ok(Buffer.byteLength(local) >= 104);
+  const server = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
+  t.after(() => server.close());
+  await server.start();
+  assert.equal(path.dirname(server.socketPath), path.join(root, `zobs-${process.getuid()}`));
+});
+
+test('an unavailable temporary fallback rejects start while construction remains safe', async t => {
+  const { root, dataDir } = fixture(t);
+  const longData = path.join(dataDir, 'long-'.repeat(25));
+  fs.mkdirSync(longData, { mode: 0o700 });
+  useTemporaryDirectory(t, path.join(root, 'missing'));
+  const server = new ObserverControlServer({ dataDir: longData, onPreUninstall: async () => {} });
+  t.after(() => server.close());
+  assert.equal(server.socketPath, null);
+  await assert.rejects(server.start(), { code: 'ENOENT' });
+  await server.close();
+  assert.equal(server.lock, null);
 });
 
 // Covers unsafe existing parents and close after failed publication. Run for
 // socket permission/cleanup changes; unrelated protocol changes may skip it.
 test('shared and symlink socket directories are rejected without following or changing them', async (t) => {
-  for (const kind of ['shared', 'symlink']) {
-    await t.test(kind, async (t) => {
-      const { dataDir } = fixture(t);
-      useTemporaryDirectory(t, dataDir);
+  for (const location of ['data', 'temporary']) for (const kind of ['shared', 'symlink']) {
+    await t.test(`${location} ${kind}`, async (t) => {
+      const f = fixture(t);
+      const dataDir = location === 'data' ? f.dataDir : path.join(f.dataDir, 'long-'.repeat(25));
+      if (location === 'temporary') fs.mkdirSync(dataDir, { mode: 0o700 });
+      useTemporaryDirectory(t, f.root);
       const server = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
-      const directory = path.dirname(server.socketPath);
+      t.after(() => server.close());
+      const local = path.join(dataDir, 'observer/runtime/control/control.sock');
+      assert.equal(Buffer.byteLength(local) < 104, location === 'data', 'fixture selects the intended candidate');
+      const directory = location === 'data' ? path.dirname(local) : path.join(f.root, `zobs-${process.getuid()}`);
+      fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
       const outside = path.join(dataDir, 'outside');
       fs.mkdirSync(outside, { mode: 0o700 });
-      const sentinel = path.join(outside, path.basename(server.socketPath));
+      const key = crypto.createHash('sha256').update(dataDir).digest('hex').slice(0, 20);
+      const socketName = location === 'data' ? 'control.sock' : `zobs-ctl-${key}.sock`;
+      const sentinel = path.join(outside, socketName);
       fs.writeFileSync(sentinel, 'preserve', { mode: 0o600 });
       if (kind === 'shared') {
         fs.mkdirSync(directory, { mode: 0o755 });
         fs.chmodSync(directory, 0o755);
       } else fs.symlinkSync(outside, directory);
-      await assert.rejects(server.start(), { code: 'unsafe_runtime_state' });
+      assert.ok(Buffer.byteLength(path.join(directory, `zobs-ctl-${'a'.repeat(20)}.sock`)) < 104);
+      await assert.rejects(server.start(), kind === 'shared' && location === 'data'
+        ? /Unsafe Observer control directory/ : { code: 'unsafe_runtime_state' });
       await server.close();
       assert.equal(fs.readFileSync(sentinel, 'utf8'), 'preserve');
       if (kind === 'shared') assert.equal(fs.statSync(directory).mode & 0o777, 0o755);
@@ -120,10 +207,10 @@ test('an undiscovered producer mutex refuses offline teardown and a second coord
   await producer.acquire();
   t.after(() => producer.close());
   const before = fs.readFileSync(configPath, 'utf8');
-  // The previous endpoint and a different TMPDIR are both absent at the new
-  // address. Keep the unchanged SQLite protocol held, exactly as either does.
+  // An absent endpoint is not evidence that coordinator ownership is available.
   await assert.rejects(runObserverPreUninstall({ dataDir, configPath }), { code: 'coordinator_active' });
   const contender = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
+  t.after(() => contender.close());
   await assert.rejects(contender.start(), { code: 'coordinator_active' });
   await contender.close();
   assert.equal(fs.readFileSync(configPath, 'utf8'), before);
@@ -136,8 +223,8 @@ test('an undiscovered producer mutex refuses offline teardown and a second coord
 test('a relocated producer excludes clients using the previous SQLite ownership protocol', async (t) => {
   const { dataDir } = fixture(t);
   const producer = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
-  await producer.start();
   t.after(() => producer.close());
+  await producer.start();
   const database = new Database(path.join(dataDir, 'observer/runtime/control/coordinator-lock.sqlite'), { timeout: 0 });
   t.after(() => database.close());
   assert.throws(() => database.exec('BEGIN EXCLUSIVE'), { code: 'SQLITE_BUSY' });

@@ -57,14 +57,13 @@ async function acquireCoordinatorLock(controlRoot, { timeoutMs = CONNECT_TIMEOUT
 }
 
 function controlSocketPath(dataDir) {
-  const key = crypto.createHash('sha256').update(path.resolve(dataDir)).digest('hex').slice(0, 20);
-  const temporary = path.join(fs.realpathSync(os.tmpdir()), `zobs-${process.getuid()}`, `zobs-ctl-${key}.sock`);
   const local = path.join(observerPaths(dataDir).control, 'control.sock');
   // Leave space for the terminator on both macOS (104 bytes) and Linux (108).
-  for (const candidate of [temporary, local]) {
-    if (Buffer.byteLength(candidate) < 104) return candidate;
-  }
-  throw Object.assign(new Error('Observer control socket path too long; set a shorter TMPDIR and restart Dashboard'), {
+  if (Buffer.byteLength(local) < 104) return local;
+  const key = crypto.createHash('sha256').update(path.resolve(dataDir)).digest('hex').slice(0, 20);
+  const temporary = path.join(fs.realpathSync(os.tmpdir()), `zobs-${process.getuid()}`, `zobs-ctl-${key}.sock`);
+  if (Buffer.byteLength(temporary) < 104) return temporary;
+  throw Object.assign(new Error('Observer control socket path too long; use a shorter data directory or TMPDIR'), {
     code: 'control_socket_path_too_long',
   });
 }
@@ -99,7 +98,7 @@ export class ObserverControlServer {
   constructor({ dataDir, onPreUninstall }) {
     this.dataDir = fs.realpathSync(dataDir);
     this.onPreUninstall = onPreUninstall;
-    this.socketPath = controlSocketPath(this.dataDir);
+    this.socketPath = null;
     this.server = null;
     this.lock = null;
     this._starting = null;
@@ -120,6 +119,7 @@ export class ObserverControlServer {
     this._starting = (async () => {
       await this.acquire();
       try {
+        this.socketPath ??= controlSocketPath(this.dataDir);
         await mkdirPrivate(path.dirname(this.socketPath));
         try { await fs.promises.unlink(this.socketPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
         this.server = net.createServer((socket) => {
