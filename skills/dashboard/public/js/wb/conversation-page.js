@@ -386,11 +386,15 @@ export function mountConversationPage({
   }
   async function requestSend() {
     const selected = selectedKey;
+    const sourceScope = uploadScope(currentSnapshot);
     const captured = uploadTray.capture();
     const sent = await state.send({ retry: currentSnapshot.retryRequired, attachments: captured.ids });
     if (sent?.stored === true && sent.preserveInput !== true) uploadTray.completeStored(captured);
-    const nextScope = uploadScope(state.snapshot());
-    if (captured.scope && nextScope && captured.scope.instance === nextScope.instance && captured.scope.conversationId !== nextScope.conversationId) uploadTray.moveScope(captured.scope, nextScope);
+    if (captured.scope && sourceScope && typeof sent?.conversationId === 'string' && sent.conversationId
+      && captured.scope.conversationId !== sent.conversationId) {
+      const uploadsUrl = sourceScope.uploadsUrl.replace(/\/conversations\/[^/]+\/uploads$/, `/conversations/${encodeURIComponent(sent.conversationId)}/uploads`);
+      uploadTray.moveScope(captured.scope, { ...captured.scope, conversationId: sent.conversationId, uploadsUrl });
+    }
     if (!destroyed && selectedKey === selected && state.snapshot().receipt?.stored === true) {
       stream.scrollTop = stream.scrollHeight;
       unread = 0;
@@ -691,7 +695,7 @@ export function mountConversationPage({
         previousDay = day;
       }
       let record = messages.get(id);
-      if (record && (record.content !== row.content || record.attachmentKey !== JSON.stringify(row.attachments || []))) {
+      if (record && record.content !== row.content) {
         record.resource?.destroy?.();
         record.node.remove();
         messages.delete(id);
@@ -704,6 +708,11 @@ export function mountConversationPage({
           added++;
         }
       } else {
+        const attachmentKey = JSON.stringify(row.attachments || []);
+        if (record.attachmentKey !== attachmentKey) {
+          record.resource.updateAttachments(row.attachments || []);
+          record.attachmentKey = attachmentKey;
+        }
         patchMessage(record, row, s);
       }
       ordered.push(record.node);

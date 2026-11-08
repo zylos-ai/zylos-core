@@ -491,17 +491,22 @@ export function createConversationState({
   }
   async function readPage(current, id, currentTab, direction, cursor, e) {
     if (!valid(e)) return null;
+    const unavailable = currentTab === 'mine' && direction === 'after' ? current.messages.filter(row => row.attachments?.some(item => !item.available)) : [];
+    let start = unavailable.findIndex(row => row.id > (current.attachmentRecheckAfter ?? 0));
+    if (start < 0) start = 0;
+    const rechecking = unavailable.slice(start, start + 100);
     const data = await request(`${pathFor(id)}/messages?${query({
       tab: currentTab,
       limit: 50,
       direction,
       cursor,
-      ...(currentTab === 'mine' && direction === 'after' ? { recheckIds: current.messages.filter(row => row.attachments?.some(item => !item.available)).slice(-100).map(row => row.id).join(',') || undefined } : {})
+      ...(rechecking.length ? { recheckIds: rechecking.map(row => row.id).join(',') } : {})
     })}`);
     if (!valid(e)) return null;
     if (!Array.isArray(data?.items)) throw {
       code: 'chat_invalid_response'
     };
+    if (rechecking.length) current.attachmentRecheckAfter = rechecking.at(-1).id;
     return data;
   }
   function applyMessages(current, id, data, trackQuestions = false) {
@@ -863,6 +868,7 @@ export function createConversationState({
       }
     } catch (err) {
       if (valid(e) && err?.payload?.conversationId && err.payload.preserveInput) {
+        outcome = err.payload;
         const canonical = err.payload.conversationId;
         current.receipt = null;
         current.retryRequired = false;

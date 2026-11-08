@@ -54,3 +54,33 @@ test('incremental history rechecks unavailable attachments and applies metadata 
   assert.equal(f.state.snapshot().messages.length, 1);
   assert.equal(f.state.snapshot().messages[0].attachments[0].available, true);
 });
+
+test('bounded attachment rechecks rotate across all loaded missing rows and retry a failed batch', async t => {
+  const rows = Array.from({ length: 205 }, (_, i) => ({ id: i + 1, direction: 'out', content: 'file',
+    attachments: [{ name: `file-${i + 1}`, kind: 'file', available: false }] }));
+  const batches = []; let fail = true;
+  const state = createConversationState({ setTimeout: () => 1, clearTimeout() {}, request: async path => {
+    if (path === '/api/session-mode') return { data: { sessionMode: 'multi' } };
+    if (path.includes('/messages?')) {
+      const params = new URL(path, 'http://fixture').searchParams;
+      if (params.get('direction') === 'after') {
+        const ids = params.get('recheckIds').split(',').map(Number); batches.push(ids);
+        assert.ok(ids.length > 0 && ids.length <= 100);
+        if (fail) { fail = false; throw { code: 'chat_request_failed' }; }
+        return { items: [], nextCursor: null, afterCursor: 'after', attachmentUpdates: ids.includes(1)
+          ? [{ id: 1, attachments: [{ id: 'restored', name: 'file-1', kind: 'file', available: true }] }] : [] };
+      }
+      const end = Number(params.get('cursor') || rows.length), start = Math.max(0, end - 50);
+      return { items: rows.slice(start, end), nextCursor: start ? String(start) : null, afterCursor: 'after' };
+    }
+    if (path.includes('?')) return { items: [], nextCursor: null };
+    return { conversation: { id: 'g:A', state: 'active' } };
+  } });
+  t.after(() => state.destroy()); await state.open(); await state.select('g:A');
+  for (let i = 0; i < 4; i++) await state.loadOlder();
+  assert.equal(state.snapshot().messages.length, 205);
+  for (let i = 0; i < 4; i++) await state.refreshMessages();
+  assert.equal(batches[0].join(','), batches[1].join(','), 'failed reads do not advance the recheck cursor');
+  assert.equal(new Set(batches.flat()).size, 205, 'older missing rows participate despite permanently missing newer rows');
+  assert.equal(state.snapshot().messages[0].attachments[0].available, true);
+});

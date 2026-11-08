@@ -197,3 +197,19 @@ test('malformed attachment envelopes stay invalid and do not expose a partly gue
   t.after(() => root.destroy());
   assert.equal(root.textContent, 'chat.invalidContentchat.block.reference 42'); assert.equal(root.querySelector('img,a,button,fieldset'), null);
 });
+
+test('plain history metadata patches add replace and remove only owned media resources', t => {
+  const f = browser(); let layouts = 0;
+  const root = renderConversationContent({ document: f.document, row: { id: 1, direction: 'in', content: 'Visible body', attachments: [] },
+    attachmentContext: { conversationId: 'g:A', onLayout(change) { layouts++; change(); } } });
+  t.after(() => root.destroy()); root.mount();
+  const body = root.querySelector('.chat-message-text');
+  root.updateAttachments([record()]);
+  const first = root.querySelector('.chat-attachment'), img = first.querySelector('img'); assert.ok(img.src);
+  root.updateAttachments([record()]); assert.equal(root.querySelector('.chat-attachment'), first, 'unchanged metadata keeps the resource');
+  root.updateAttachments([record({ name: 'updated.png' }), record({ id: 'second', kind: 'file', name: 'other.pdf' })]);
+  assert.equal(img.src, undefined, 'replaced preview is disposed'); assert.equal(root.querySelectorAll('.chat-attachment').length, 2);
+  root.updateAttachments([]); assert.equal(root.querySelector('.chat-attachment'), null);
+  assert.equal(root.querySelector('.chat-message-text'), body); assert.equal(layouts >= 3, true);
+  root.destroy(); root.updateAttachments([record()]); assert.equal(root.querySelector('.chat-attachment'), null);
+});

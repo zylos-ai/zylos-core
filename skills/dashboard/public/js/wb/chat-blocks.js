@@ -26,8 +26,8 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
   if (parsed.kind === 'text') {
     const body = attachmentDisplayText(parsed.text, { external, t });
     if (body) root.append(node('p', body, 'chat-message-text'));
-    for (const attachment of Array.isArray(row.attachments) ? row.attachments.slice(0, 20) : []) {
-      const rendered = renderAttachment?.({ attachment, row });
+    for (const [attachmentIndex, attachment] of (Array.isArray(row.attachments) ? row.attachments.slice(0, 20) : []).entries()) {
+      const rendered = renderAttachment?.({ attachment, attachmentIndex, row });
       if (rendered) root.append(rendered);
       else root.append(node('p', `${t(attachment.kind === 'image' ? 'chat.attachment.image' : 'chat.attachment.file')} ${attachment.name || ''}`, 'chat-block-text'));
     }
