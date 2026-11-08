@@ -1733,3 +1733,189 @@ test('a settling round keeps the two-second refresh and is read again; once sett
   assert.equal(activityReads(), settled, 'a settled round is not read again');
   f.state.destroy();
 });
+
+for (const restoreBeforeSend of [false, true]) {
+  test(restoreBeforeSend
+    ? 'foregrounding without a selection then a slow first send keeps delivery and replies updating'
+    : 'a three second first send keeps automatic reads and delivery updates running for a minute', async t => {
+    const pending = deferred();
+    let sent = false;
+    const inbound = { id: 20, direction: 'in', status: 'pending', content: 'slow first message' };
+    const f = fixture((u, options) => {
+      if (u.pathname.endsWith('/send')) {
+        assert.equal(options.method, 'POST');
+        return pending.promise;
+      }
+      if (u.pathname.endsWith('/messages')) return {
+        items: u.searchParams.get('direction') === 'before' ? [inbound]
+          : sent && f.timer.now() >= 13000 ? [{ id: 21, direction: 'out', status: 'delivered', content: 'automatic reply' }] : [],
+        afterCursor: 'after20', nextCursor: null
+      };
+      if (u.pathname.endsWith('/status')) return {
+        items: sent && f.timer.now() >= 10000 ? [{ ...inbound, status: 'delivered' }] : []
+      };
+    });
+    t.after(() => f.state.destroy());
+    await f.state.open();
+    if (restoreBeforeSend) {
+      await f.visible(false);
+      await f.timer.advance(100);
+      await f.visible(true);
+      assert.equal(f.reads().length, 0);
+    }
+    await f.state.select('d:first');
+    f.state.setInput('slow first message');
+    const sending = f.state.send();
+    await f.timer.advance(3000);
+    assert.equal(f.state.snapshot().sending, true);
+    assert.equal(f.reads().length, 0, 'draft has no message cursor during the empty accelerated pass');
+    sent = true;
+    pending.resolve({ stored: true, conversationId: 'g:A', deliveryState: 'pending' });
+    await sending;
+    assert.equal(f.state.snapshot().messages[0].status, 'pending');
+    const readsAfterSend = f.reads().length;
+    await f.timer.advance(35000);
+    assert.equal(f.state.snapshot().messages.find(row => row.id === 20).status, 'delivered');
+    assert.equal(f.state.snapshot().messages.find(row => row.id === 21).content, 'automatic reply');
+    assert.ok(f.reads().length > readsAfterSend);
+    const continued = f.reads().length;
+    await f.timer.advance(25000);
+    assert.ok(f.reads().length > continued, 'automatic reads continue across the first minute');
+    assert.equal(f.calls.filter(call => call.path.endsWith('/send')).length, 1, 'polling never retries a send');
+    assert.equal(f.timer.count(), 1);
+  });
+}
+
+test('empty foreground passes keep the thirty second list refresh alive', async t => {
+  const f = fixture();
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  for (let i = 0; i < 3; i++) {
+    await f.visible(false);
+    await f.visible(true);
+  }
+  assert.equal(f.state.snapshot().selectedId, null);
+  const lists = () => f.calls.filter(call => new URL(call.path, 'http://fixture').pathname === '/api/chat/conversations');
+  assert.equal(lists().length, 1);
+  await f.timer.advance(29999);
+  assert.equal(lists().length, 1);
+  await f.timer.advance(1);
+  assert.equal(lists().length, 2);
+  await f.timer.advance(60000);
+  assert.equal(lists().length, 4);
+  assert.equal(f.timer.count(), 1);
+  assert.equal(f.reads().length, 0);
+});
+
+test('an in-flight pass retains single flight across visibility changes and close then reopen', async t => {
+  const pending = deferred();
+  let attempts = 0, concurrent = 0, maximum = 0;
+  const f = await selected(u => {
+    if (!u.pathname.endsWith('/messages') || u.searchParams.get('direction') !== 'after') return undefined;
+    attempts++;
+    concurrent++;
+    maximum = Math.max(maximum, concurrent);
+    return (async () => {
+      try {
+        return attempts === 1 ? await pending.promise : { items: [], afterCursor: 'next' };
+      } finally { concurrent--; }
+    })();
+  });
+  t.after(() => f.state.destroy());
+  await f.timer.advance(5000);
+  assert.equal(attempts, 1);
+  await f.visible(false);
+  await f.visible(true);
+  f.state.close();
+  await f.state.open();
+  await f.timer.advance(10000);
+  await f.visible(false);
+  await f.visible(true);
+  assert.equal(attempts, 1);
+  pending.resolve({ items: [{ id: 99, direction: 'out', content: 'stale epoch reply' }], afterCursor: 'stale' });
+  await flush();
+  assert.equal(f.state.snapshot().messages.some(row => row.id === 99), false);
+  await f.timer.advance(5000);
+  assert.equal(attempts, 2);
+  await f.timer.advance(10000);
+  assert.equal(attempts, 4);
+  assert.equal(maximum, 1);
+  assert.equal(f.timer.count(), 1);
+});
+
+test('a synchronous request error after an empty pass backs off and recovers automatic list refresh', async t => {
+  let fail = true, lists = 0;
+  const f = fixture(u => {
+    if (u.pathname !== '/api/chat/conversations') return;
+    if (++lists === 1) return { items: [], nextCursor: null };
+    if (fail) throw { code: 'temporary_list_failure' };
+    return { items: [], nextCursor: null };
+  });
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  await f.visible(false);
+  await f.visible(true);
+  await f.timer.advance(30000);
+  assert.equal(f.state.snapshot().updateError, 'temporary_list_failure');
+  const failed = lists;
+  await f.timer.advance(4999);
+  assert.equal(lists, failed);
+  await f.timer.advance(1);
+  assert.equal(lists, failed + 1);
+  fail = false;
+  await f.timer.advance(10000);
+  assert.equal(f.state.snapshot().updateError, null);
+  const recovered = lists;
+  await f.timer.advance(30000);
+  assert.equal(lists, recovered + 1);
+});
+
+test('closing before a queued foreground pass starts permits a fresh open to keep polling', async t => {
+  const f = fixture();
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  await f.visible(false);
+  const restoring = f.visible(true);
+  f.state.close();
+  await restoring;
+  const closedCalls = f.calls.length;
+  await f.timer.advance(60000);
+  assert.equal(f.calls.length, closedCalls);
+  assert.equal(f.timer.count(), 0);
+  await f.state.open();
+  const reopenedCalls = f.calls.length;
+  await f.timer.advance(30000);
+  assert.ok(f.calls.length > reopenedCalls);
+  assert.equal(f.timer.count(), 1);
+});
+
+test('foreground events cannot overlap a slow automatic list poll', async t => {
+  const pending = deferred();
+  let lists = 0, concurrent = 0, maximum = 0;
+  const f = fixture(u => {
+    if (u.pathname !== '/api/chat/conversations') return;
+    lists++;
+    concurrent++;
+    maximum = Math.max(maximum, concurrent);
+    return (async () => {
+      try { return lists === 2 ? await pending.promise : { items: [], nextCursor: null }; }
+      finally { concurrent--; }
+    })();
+  });
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  await f.timer.advance(30000);
+  assert.equal(lists, 2);
+  for (let i = 0; i < 3; i++) {
+    await f.visible(false);
+    await f.visible(true);
+  }
+  await f.timer.advance(60000);
+  assert.equal(lists, 2);
+  pending.resolve({ items: [], nextCursor: null });
+  await flush();
+  await f.timer.advance(30000);
+  assert.equal(lists, 3);
+  assert.equal(maximum, 1);
+  assert.equal(f.timer.count(), 1);
+});

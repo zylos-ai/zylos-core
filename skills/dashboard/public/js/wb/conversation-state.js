@@ -149,8 +149,10 @@ export function createConversationState({
     if (polling) return polling;
     if (!valid(epoch) || !visible()) return;
     const e = epoch;
-    polling = (async () => {
+    // Install the lock before even an empty pass can finish.
+    const task = Promise.resolve().then(async () => {
       try {
+        if (!valid(e) || !visible()) return;
         if (now() - lastListAt >= 30000) await list(false, true);
         if (!valid(e) || !visible()) return;
         const current = cell(),
@@ -171,17 +173,20 @@ export function createConversationState({
           emit();
         }
       } finally {
-        polling = null;
-        if (valid(epoch)) {
-          if (updateError) {
-            const wait = retryDelay;
-            retryDelay = Math.min(60000, retryDelay * 2);
-            schedule(wait);
-          } else schedule();
+        if (polling === task) {
+          polling = null;
+          if (valid(epoch)) {
+            if (updateError) {
+              const wait = retryDelay;
+              retryDelay = Math.min(60000, retryDelay * 2);
+              schedule(wait);
+            } else schedule();
+          }
         }
       }
-    })();
-    return polling;
+    });
+    polling = task;
+    return task;
   }
   const visibilityChanged = () => {
     stopTimer();
