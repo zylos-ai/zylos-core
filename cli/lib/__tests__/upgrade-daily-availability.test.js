@@ -112,6 +112,134 @@ test('historical terminal journal shapes with retained scripts permit upgrade an
  assert.deepEqual(mixed.candidates,[],'a full scan must not rediscover clean legacy history as unfinished');
 });
 
+function completedReleaseHistory(t) {
+ const f=fixture(t);
+ fs.rmSync(f.dir,{recursive:true});
+ const sample=JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/completed-upgrade-journal.json',import.meta.url),'utf8'));
+ const relocate=value=>Array.isArray(value)?value.map(relocate):value&&typeof value==='object'
+  ?Object.fromEntries(Object.entries(value).map(([key,item])=>[key,relocate(item)]))
+  :typeof value==='string'?value.replaceAll(sample.zylosDir,f.root):value;
+ const current=relocate(sample);
+ // The previous release uses the supplied shape; its original file was not available locally.
+ const previous=structuredClone(current);
+ Object.assign(previous,{transactionId:'upgrade-1793627528884-38622e309857',from:'0.9.3',to:'0.9.4'});
+ previous.dbBackupDir=path.join(f.root,'.backup/db',previous.transactionId);
+ previous.originalPackage.path=path.join(f.root,'.backup/self-upgrade',previous.transactionId,'code/original-package');
+ Object.assign(previous.compensationCutoff,{transactionId:previous.transactionId,from:previous.from,to:previous.to});
+ previous.originalPackage.sourceVersion=previous.from;
+ const journals=[previous,current],sentinel=path.join(f.root,'historical-runner-executed');
+ const file=j=>path.join(f.root,'.backup/self-upgrade',j.transactionId,'journal.json');
+ for(const j of journals) {
+  const dir=path.dirname(file(j));fs.mkdirSync(dir,{recursive:true,mode:0o700});
+  m.durable(file(j),j);
+  for(const name of ['runner.cjs','maintenance.cjs'])fs.writeFileSync(path.join(dir,name),
+   `require('node:fs').writeFileSync(${JSON.stringify(sentinel)},'unexpected');throw Error('historical recovery must not execute');`,{mode:0o600});
+ }
+ return {...f,journals,file,sentinel};
+}
+
+// Isolated file-only integration: rerun for history/admission/startup changes;
+// skip for unrelated changes. Official runner isolates HOME/ZYLOS_DIR/PM2_HOME
+// and TMPDIR; no tmux, services, installation, or live databases are used.
+test('completed released cutoff histories permit upgrade admission without executing or changing history', async t=>{
+ const f=completedReleaseHistory(t);
+ const before=f.journals.map(j=>fs.readFileSync(f.file(j)));
+ assert.deepEqual(m.discover(f.root),{marker:null,candidates:[],diagnostics:[],blocked:false});
+ assert.deepEqual(recoverBeforeUpgrade(f.root),{active:false});
+ assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
+ let inspected=false;
+ const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.5',tempDir:f.root,installedRoot:f.root,zylosDir:f.root},{
+  inspect:()=>{inspected=true;throw Object.assign(Error('inspection boundary'),{code:'INSPECTION_REACHED'});}
+ });
+ assert.equal(inspected,true);assert.equal(result.code,'INSPECTION_REACHED');
+ for(const [index,j] of f.journals.entries()) {
+  assert.equal(m.terminalValid(j),true);
+  assert.equal(m.classifyCutoff(j),'untrusted','history must not authorize current recovery');
+  assert.throws(()=>m.originalDatabasePaths(j),/original database collection/);
+  assert.deepEqual(fs.readFileSync(f.file(j)),before[index]);
+ }
+ assert.equal(fs.existsSync(f.sentinel),false);
+ const damaged=path.join(f.root,'.backup/self-upgrade/damaged');fs.mkdirSync(damaged);
+ fs.writeFileSync(path.join(damaged,'journal.json'),'{');
+ const mixed=m.discover(f.root);
+ assert.equal(mixed.blocked,true);assert.ok(mixed.diagnostics.length>0);
+ assert.equal(mixed.candidates.length,0,'full scan must also recognize both clean histories');
+});
+
+const releasedHistoryDamage=[
+ ...['complete','codeRemoved','servicesRestored'].flatMap(key=>[
+  [`cleanup ${key} false`,j=>{j.cleanup[key]=false;}],
+  [`cleanup ${key} absent`,j=>{delete j.cleanup[key];}]
+ ]),
+ ...['installer','finalizer'].flatMap(owner=>[
+  [`${owner} exit unconfirmed`,j=>{j[owner+'ExitUnconfirmed']=true;}],
+  [`${owner} unconfirmed flag absent`,j=>{delete j[owner+'ExitUnconfirmed'];}],
+  [`${owner} confirmation false`,j=>{j[owner+'ExitConfirmed']=false;}],
+  [`${owner} confirmation absent`,j=>{delete j[owner+'ExitConfirmed'];}],
+  [`${owner} start absent`,j=>{delete j[owner+'Started'];}]
+ ]),
+ ...['installing','restored_complete','recovery_required'].map(phase=>[`phase ${phase}`,j=>{j.phase=phase;}]),
+ ['terminal evidence unverified',j=>{j.terminalEvidence.verified=false;}],
+ ['terminal evidence wrong kind',j=>{j.terminalEvidence.kind='original_deployment_and_readonly_data';}],
+ ['terminal services stopped',j=>{j.terminalServicesStopped=true;}],
+ ['installation intent false',j=>{j.installationIntent=false;}],
+ ['journal format unsupported',j=>{j.formatVersion=2;}],
+ ['cutoff format unsupported',j=>{j.compensationCutoff.formatVersion=2;}],
+ ['cutoff open',j=>{j.compensationCutoff.closed=false;}],
+ ...['transactionId','from','to','snapshotManifestHash'].map(key=>[
+  `cutoff ${key} mismatch`,j=>{j.compensationCutoff[key]='b'.repeat(64);}
+ ]),
+ ...['formatVersion','closed','transactionId','from','to','snapshotManifestHash'].map(key=>[
+  `cutoff ${key} absent`,j=>{delete j.compensationCutoff[key];}
+ ]),
+ ['cutoff writer present',j=>{j.compensationCutoff.writer='finalizer';}],
+ ['cutoff date present',j=>{j.compensationCutoff.closedAt='2026-11-03T08:29:36.062Z';}],
+ ['modern cutoff fields present',j=>{Object.assign(j.compensationCutoff,{writer:'finalizer',closedAt:'2026-11-03T08:29:36.062Z'});}],
+ ['cutoff unknown field',j=>{j.compensationCutoff.extra=true;}],
+ ...['recoveryHashes','postCutoff','dashboardInstall'].map(key=>[`modern ${key} present`,j=>{j[key]={};}]),
+ ['database missing',j=>{j.initialIdentity.databases.pop();}],
+ ['database order wrong',j=>{j.initialIdentity.databases.reverse();}],
+ ['database duplicate',j=>{j.initialIdentity.databases[2].source=j.initialIdentity.databases[0].source;}],
+ ['database modern collection',j=>{j.initialIdentity.databases.push({source:'components/dashboard/dashboard.db',exists:false});}],
+ ['database existence invalid',j=>{j.initialIdentity.databases[0].exists='true';}],
+ ['snapshot digest invalid',j=>{j.snapshotManifestHash=j.compensationCutoff.snapshotManifestHash='invalid';}],
+ ['identity digest invalid',j=>{j.initialIdentity.cliHash='invalid';}],
+ ['core manifest digest invalid',j=>{j.coreManifest[0].originalHash='invalid';}],
+ ['database backup path mismatch',j=>{j.dbBackupDir=path.join(j.zylosDir,'.backup/db/other');}]
+];
+// Same isolated file-only boundary as the positive case; each reject must stop
+// before inspection, leave both journals intact, and never execute old runners.
+for(const [name,damage] of releasedHistoryDamage)test(`completed released cutoff history rejects ${name}`,async t=>{
+ const f=completedReleaseHistory(t),j=f.journals[1];damage(j);m.durable(f.file(j),j);
+ const before=f.journals.map(value=>fs.readFileSync(f.file(value)));
+ assert.equal(m.terminalValid(j),false);
+ const found=m.discover(f.root);assert.equal(found.blocked,true);
+ assert.ok(found.candidates.length+found.diagnostics.length>0);
+ assert.equal(discoverUpgradeContext(f.root,{recover:false}).active,true);
+ let inspected=false;
+ const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.5',tempDir:f.root,installedRoot:f.root,zylosDir:f.root},{
+  inspect:()=>{inspected=true;throw Error('must not inspect');}
+ });
+ assert.equal(inspected,false);assert.equal(result.code,'UPGRADE_RECOVERY_REQUIRED');
+ for(const [index,value] of f.journals.entries())assert.deepEqual(fs.readFileSync(f.file(value)),before[index]);
+ assert.equal(fs.existsSync(f.sentinel),false);
+});
+
+// Same file-only isolation; a valid old terminal never overrides active.json.
+test('completed released cutoff history with an active marker still rejects upgrade admission',async t=>{
+ const f=completedReleaseHistory(t),j=f.journals[1];m.marker(f.root,path.dirname(f.file(j)),j);
+ const before=fs.readFileSync(f.file(j)),marker=fs.readFileSync(path.join(f.stable,'active.json'));
+ const found=m.discover(f.root);assert.equal(found.candidates.length,1);assert.ok(found.marker);
+ let inspected=false;
+ const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.5',tempDir:f.root,installedRoot:f.root,zylosDir:f.root},{
+  inspect:()=>{inspected=true;throw Error('must not inspect');}
+ });
+ assert.equal(inspected,false);assert.equal(result.code,'UPGRADE_RECOVERY_REQUIRED');
+ assert.deepEqual(fs.readFileSync(f.file(j)),before);
+ assert.deepEqual(fs.readFileSync(path.join(f.stable,'active.json')),marker);
+ assert.equal(fs.existsSync(f.sentinel),false);
+});
+
 const realOpeners=[
  ['C4','./skills/comm-bridge/scripts/c4-db.js','getDb','comm-bridge/c4.db'],
  ['Scheduler','./skills/scheduler/scripts/database.js','getDb','scheduler/scheduler.db'],

@@ -23,9 +23,26 @@ function legacyUpgradeHistory(j) {
     !Object.hasOwn(j, 'compensationCutoff') && !Object.hasOwn(j, 'recoveryHashes') &&
     paths?.length === DB_PATHS.length && paths.every((p, i) => p === DB_PATHS[i]);
 }
+function completedLegacyCutoffHistory(j) {
+  // Released three-database records are history only, never recovery authority.
+  const c = j.compensationCutoff;
+  const fields = ['formatVersion', 'closed', 'transactionId', 'from', 'to', 'snapshotManifestHash'];
+  return j.formatVersion === 1 && j.phase === 'upgrade_complete' && j.installationIntent === true &&
+    !['recoveryHashes', 'postCutoff', 'dashboardInstall'].some(key => Object.hasOwn(j, key)) &&
+    j.cleanup?.complete === true && j.cleanup.codeRemoved === true && j.cleanup.servicesRestored === true &&
+    j.terminalEvidence?.verified === true && j.terminalEvidence.kind === 'code_data_services' && !j.terminalServicesStopped &&
+    j.installerStarted === true && j.finalizerStarted === true &&
+    j.installerExitConfirmed === true && j.finalizerExitConfirmed === true &&
+    j.installerExitUnconfirmed === false && j.finalizerExitUnconfirmed === false &&
+    c && !Array.isArray(c) && Object.keys(c).length === fields.length && fields.every(key => Object.hasOwn(c, key)) &&
+    c.formatVersion === 1 && c.closed === true && c.transactionId === j.transactionId &&
+    typeof j.from === 'string' && j.from.length > 0 && c.from === j.from &&
+    typeof j.to === 'string' && j.to.length > 0 && c.to === j.to &&
+    typeof j.snapshotManifestHash === 'string' && /^[a-f0-9]{64}$/.test(j.snapshotManifestHash) && c.snapshotManifestHash === j.snapshotManifestHash;
+}
 function originalDatabasePaths(j, {completedHistory = false} = {}) {
   const paths = j.initialIdentity?.databases?.map(d => d?.source);
-  const legacyComplete = completedHistory && (legacyUpgradeHistory(j) || TERMINAL.has(j.phase) && j.cleanup?.complete === true &&
+  const legacyComplete = completedHistory && (legacyUpgradeHistory(j) || completedLegacyCutoffHistory(j) || TERMINAL.has(j.phase) && j.cleanup?.complete === true &&
     j.cleanup.servicesRestored === true && !Object.hasOwn(j, 'compensationCutoff') && !Object.hasOwn(j, 'recoveryHashes') && paths?.length === DB_PATHS.length);
   const expected = databasePaths(legacyComplete ? 1 : 2);
   if (!paths || paths.length !== expected.length || paths.some((p,i) => p !== expected[i])) throw Error('invalid data-ready original database collection');
