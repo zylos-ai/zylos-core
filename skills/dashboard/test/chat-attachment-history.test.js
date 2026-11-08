@@ -12,7 +12,7 @@ import { sendJson } from '../src/lib/http.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
-import { buildAttachmentAnnotation } from '../../web-console/scripts/attachment-utils.js';
+import { buildAttachmentAnnotation } from '../../comm-bridge/scripts/attachment-annotations.js';
 
 const groupId = value => `g:${Buffer.from(value).toString('hex').toUpperCase()}`;
 const annotation = buildAttachmentAnnotation({ path: '/private/managed/report.pdf', name: 'report.pdf', size: 12, kind: 'file' });

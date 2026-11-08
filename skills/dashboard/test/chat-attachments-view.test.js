@@ -5,7 +5,7 @@ import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick, deferred } from './helpers/conversation-dom.js';
 import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { createChatAttachment, chatAttachmentURL, attachmentDisplayText } from '../public/js/wb/chat-attachments.js';
-import { buildAnnotatedContent, splitContentAndAttachments } from '../../web-console/scripts/attachment-utils.js';
+import { buildAnnotatedContent, splitContentAndAttachments } from '../../comm-bridge/scripts/attachment-annotations.js';
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/public/chat-schema.js')) return next(sourceSchema, context);

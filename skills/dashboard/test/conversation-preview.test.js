@@ -10,7 +10,7 @@ test('plain text containing marker-like text remains literal user text',()=>{con
 test('preview truncation preserves complete Unicode characters',()=>{assert.equal(conversationPreview('😀'.repeat(161)),'😀'.repeat(160));assert.equal(conversationPreview(packet('🪴'.repeat(161))),'🪴'.repeat(160));});
 
 test('incremental and list summaries retain mixed text and attachment names without managed paths', async () => {
-  const { buildAttachmentAnnotation } = await import('../../web-console/scripts/attachment-utils.js');
+  const { buildAttachmentAnnotation } = await import('../../comm-bridge/scripts/attachment-annotations.js');
   const annotation = buildAttachmentAnnotation({ path: '/private/managed/report.pdf', name: 'report.pdf', size: 12, kind: 'file' });
   assert.equal(conversationPreview('Readable text\n' + annotation), 'Readable text\n[文件] report.pdf');
   assert.equal(conversationPreview('[MEDIA:image]/private/source.png\n' + annotation, { external: true }), '[媒体] 原渠道附件\n[文件] report.pdf');

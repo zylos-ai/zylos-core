@@ -7,7 +7,7 @@ import { C4Reader } from '../src/lib/c4-reader.js';
 import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { ChatAttachments } from '../src/lib/chat/attachments.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
-import { resolveUploadRoot } from '../../web-console/scripts/attachment-utils.js';
+import { resolveUploadRoot } from './attachment-utils.js';
 import { isMainModule } from '../../comm-bridge/scripts/is-main-module.js';
 
 const invalid = () => Object.assign(new Error('Use register --conversation <id> --kind <image|file> --path <absolute-path>, or resolve --conversation <id> --id <attachment-id>.'), { code: 'invalid_attachment_arguments' });

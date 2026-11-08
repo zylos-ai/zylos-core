@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, readC4Envelope, validateAttachmentData, validateHookInput } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { isMainModule } from '../../comm-bridge/scripts/is-main-module.js';
-import { resolveUploadRoot } from '../../web-console/scripts/attachment-utils.js';
+import { resolveUploadRoot } from './attachment-utils.js';
 import { withChatAttachments } from '../src/lib/chat/attachments.js';
 
 const abort = message => ({ version: 1, decision: 'abort', message });

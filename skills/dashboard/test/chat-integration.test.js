@@ -22,7 +22,7 @@ import { createChatApiFixture, createRemoteChatApiFixture, questionContent, asse
 import { acceptDelivery } from '../src/lib/chat/channel.js';
 import { makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { ATTACHMENT_SEND_WINDOW_MS, ATTACHMENT_TTL_MS, ATTACHMENT_GC_INTERVAL_MS } from '../src/lib/chat/attachments.js';
-import { buildAnnotatedContent, parseAttachmentAnnotation } from '../../web-console/scripts/attachment-utils.js';
+import { buildAnnotatedContent, parseAttachmentAnnotation } from '../../comm-bridge/scripts/attachment-annotations.js';
 import { fixturePng } from './helpers/chat-attachments-api.js';
 
 const conditionalFixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));

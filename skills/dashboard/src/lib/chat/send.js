@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { isDataError as localDataError, parseSessionGroup, validateGroupName, validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
 import { MAX_CONTENT_BYTES } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { deliveryState } from './history.js';
-import { buildAnnotatedContent } from '../../../../web-console/scripts/attachment-utils.js';
+import { buildAnnotatedContent } from '../../../../comm-bridge/scripts/attachment-annotations.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const canonicalId = row => `g:${Buffer.from(`${row.namespace}:${row.localId}`).toString('hex').toUpperCase()}`;

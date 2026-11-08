@@ -10,7 +10,7 @@ import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { ChatAttachments, ATTACHMENT_TTL_MS, ATTACHMENT_GC_INTERVAL_MS } from '../src/lib/chat/attachments.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { ChatHistory } from '../src/lib/chat/history.js';
-import { buildAnnotatedContent } from '../../web-console/scripts/attachment-utils.js';
+import { buildAnnotatedContent } from '../../comm-bridge/scripts/attachment-annotations.js';
 import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
 import * as coreSchema from '../../comm-bridge/scripts/c4-schema.js';

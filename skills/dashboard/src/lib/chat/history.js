@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
-import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../web-console/scripts/attachment-utils.js';
+import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../comm-bridge/scripts/attachment-annotations.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const visible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin','*')
