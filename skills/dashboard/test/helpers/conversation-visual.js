@@ -171,7 +171,7 @@ export async function runConversationVisual(t, sandbox) {
       assert.ok(measurement.firstTop >= measurement.inputTop && measurement.lastBottom <= measurement.inputBottom + 1, `${width} ${name}: all lines remain visible`);
       assert.ok(measurement.inputRight <= measurement.buttonLeft && measurement.buttonTop >= measurement.inputTop - 1 && measurement.buttonBottom <= measurement.inputBottom + 1, `${width} ${name}: send stays beside the editor`);
       if (name === 'multi-line') assert.ok(measurement.height > 4 * measurement.lineHeight, 'editor grows beyond its initial line');
-      else assert.ok(measurement.height <= (width === 390 ? 41 : 31), 'empty and one-line editors keep a one-line height');
+      else assert.ok(measurement.height <= 41, 'empty and one-line editors keep a one-line height (the 40px control height)');
       composerMeasurements.push({ width, name, ...measurement });
       await screenshot(`composer-${width}-${name}`);
     }
@@ -212,7 +212,7 @@ export async function runConversationVisual(t, sandbox) {
       await editor.focus();
       const lineMeasurements = [];
       for (let line = 1; line <= 6; line++) {
-        if (line > 1) await page.keyboard.press('Enter');
+        if (line > 1) await page.keyboard.press('Shift+Enter');
         await page.keyboard.type(`Reply line ${line}`);
         const measurement = await page.locator('#wb-chat .chat-messages').evaluate((el, anchor) => {
           const bounds = el.getBoundingClientRect();
