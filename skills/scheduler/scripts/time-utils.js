@@ -61,9 +61,10 @@ export function parseDuration(durationStr) {
   // This handles: "2 hours", "90 minutes", "2.5 hours", "1 hour 30 minutes", "an hour", etc.
   // Prepend "in" to make it work as relative time
   try {
-    const chronoResult = chrono.parseDate(`in ${str}`, new Date());
+    const referenceDate = new Date();
+    const chronoResult = chrono.parseDate(`in ${str}`, referenceDate);
     if (chronoResult) {
-      const now = Math.floor(Date.now() / 1000);
+      const now = Math.floor(referenceDate.getTime() / 1000);
       const target = Math.floor(chronoResult.getTime() / 1000);
       const duration = target - now;
       // Only accept positive durations > 0 and < 1 year (sanity check)

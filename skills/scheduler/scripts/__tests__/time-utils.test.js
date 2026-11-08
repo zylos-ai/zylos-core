@@ -4,6 +4,18 @@ import { describe, it } from 'node:test';
 import { parseTime, parseDuration, formatTime, getRelativeTime } from '../time-utils.js';
 
 describe('parseDuration', () => {
+  for (const offset of [998, 999, 1000]) {
+    it(`uses the original duration reference near the second boundary at ${offset}ms`, t => {
+      const reference = Date.UTC(2026, 1, 8, 12, 0, 0) + offset;
+      t.mock.timers.enable({ apis: ['Date'], now: reference });
+      // Model time advancing while chrono parses; duration must still be
+      // measured from the same instant chrono received, not this later read.
+      t.mock.method(Date, 'now', () => reference + 2);
+      assert.equal(parseDuration('1 hour 30 minutes'), 5400);
+      assert.equal(parseDuration('2.5 hours'), 9000);
+    });
+  }
+
   it('parses natural language durations', () => {
     const result = parseDuration('30 minutes');
     assert.ok(result >= 1790 && result <= 1810, `expected ~1800, got ${result}`);
