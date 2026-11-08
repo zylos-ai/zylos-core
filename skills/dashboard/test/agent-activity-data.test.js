@@ -184,9 +184,15 @@ test('other groups never move the Origin turn timing: their prompts are not turn
     [{ transcript_path: origin, session_id: 'origin-s', session_group: 'origin', run_id: 'r0' }, true],
     [{ transcript_path: group, session_id: 'group-s', session_group: 'dashboard:a', run_id: 'r1' }, false],
   ];
+  // Like the real transcript list, each file is read on from where the previous collection stopped.
+  const offsets = new Map();
   const transcripts = { async collect(runtime, callback) {
     let written = 0;
-    for (const [mapping, current] of mappings) written += callback({ ...mapping, byte_offset: 0 }, current).written;
+    for (const [mapping, current] of mappings) {
+      const result = callback({ ...mapping, byte_offset: offsets.get(mapping.transcript_path) ?? 0 }, current);
+      offsets.set(mapping.transcript_path, result.byteOffset);
+      written += result.written;
+    }
     return written;
   } };
   const collector = new ConversationCollector(store, { zylosDir: dir, runtimeModelPrices: { claude: {} } }, { transcripts });
