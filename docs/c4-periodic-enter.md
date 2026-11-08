@@ -25,7 +25,7 @@ verification or claim to establish the natural false-empty root cause.
 | --- | --- | --- |
 | `C4_BRACKETED_PASTE_ENABLED` | off | Only `1` enables bracketed paste |
 | `C4_PERIODIC_ENTER_ENABLED` | on | Unset or `1` enables; any other value disables |
-| `C4_PERIODIC_ENTER_INTERVAL_MS` | 10000 | Positive integer, minimum 1000; monotonic elapsed time (was 60000 before #795) |
+| `C4_PERIODIC_ENTER_INTERVAL_MS` | 5000 | Positive integer, minimum 1000; monotonic elapsed time (was 60000 before #795) |
 | `C4_PERIODIC_ENTER_MAX_ATTEMPTS` | 3 | Positive integer, capped at 10 |
 | `C4_ENTER_CAPTURE_ENABLED` | off | Only `1` enables sensitive local captures |
 
@@ -41,10 +41,10 @@ Initial and retry Enter commands do not move the elapsed-time anchor: in
 #795 the Enters that followed later pastes did not submit the stuck draft
 either, so treating them as progress only delayed recovery. The anchor is the
 paste that armed the oldest pending budget, or the last periodic attempt.
-After at least the interval (10 seconds by default), the awaited dispatcher
+After at least the interval (5 seconds by default), the awaited dispatcher
 loop attempts another Enter against `TMUX_SESSION`, up to three cumulative
 attempts per budget. With the normal 1-3 second polling interval and an
-otherwise free loop, the first attempt is about 10-13 seconds after that
+otherwise free loop, the first attempt is about 5-8 seconds after that
 paste. Work already occupying the
 loop may delay it further. The timer cannot interleave with normal delivery.
 
