@@ -478,6 +478,72 @@ test('Codex exec is a command and multi-agent controls of both generations are n
   assert.deepEqual(round.segments[0].steps.map(step => `${step.label.key}:${step.status}`), ['runCommand:failed']);
 });
 
+test('a round is still settling fifteen seconds after its end and settled after twenty', t => {
+  const f = fixture(t, { now: at(35) });
+  f.message(1, 0); f.event('user_prompt_submit', 0.5); f.deliver(1, 1);
+  f.tool('read', 2, null, { tool_name: 'Read', tool_detail: 'a' });
+  f.message(2, 18, 'out'); f.event('stop', 20);
+  let round = roundOf(read(f, [1]), 1);
+  assert.equal(round.settling, true, 'two collector cycles after the continuation gap have not passed yet');
+  assert.equal(toolSteps(round.segments[0])[0].status, 'running');
+  f.clock.now = at(40.5);
+  round = roundOf(read(f, [1]), 1);
+  assert.equal(round.settling, undefined);
+  assert.equal(toolSteps(round.segments[0])[0].status, 'incomplete');
+});
+
+test('a round whose events alone reach the read limit is marked as missing older steps', t => {
+  const f = fixture(t);
+  const codex = { runtime: 'codex', session: 'thread-1' };
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0, codex);
+  f.event('tool_call', 1, { ...codex, meta: { call_id: 'first', tool_name: 'exec_command' } });
+  f.event('tool_result', 1.5, { ...codex, meta: { call_id: 'first', tool_name: 'exec_command', outcome: 'succeeded' } });
+  // Agent controls are no steps, but each is an event: 1,600 of them fill the read on their own.
+  f.bulk(() => { for (let i = 0; i < 1600; i++) f.event('tool_call', 2 + i * 0.01, { ...codex, meta: { call_id: `w${i}`, tool_name: 'wait_agent' } }); });
+  f.event('tool_call', 30, { ...codex, meta: { call_id: 'late', tool_name: 'exec_command' } });
+  f.event('tool_result', 31, { ...codex, meta: { call_id: 'late', tool_name: 'exec_command', outcome: 'succeeded' } });
+  f.event('turn_complete', 40, codex);
+  const round = roundOf(read(f, [1]), 1);
+  const steps = round.segments.flatMap(toolSteps);
+  assert.equal(steps.length, 1, 'only the newest step fits after the controls');
+  assert.equal(steps[0].start, at(30));
+  assert.equal(round.segments.find(part => part.steps.length).truncated, true, 'far fewer steps than the per-round limit, yet older ones were cut');
+});
+
+test('a message whose turn was still open where a long read stopped gets a read of its own', t => {
+  const f = fixture(t, { now: at(1_000_000) });
+  f.message(1, 0); f.event('user_prompt_submit', 0.5); f.deliver(1, 1); f.event('stop', 5);
+  // 3 + 9,980 + 2 + 15 boundaries: the first read (10 pages of 1,000) ends inside the turn of message 2.
+  f.bulk(() => { for (let i = 0; i < 4990; i++) { f.event('user_prompt_submit', 100 + i * 40); f.event('stop', 110 + i * 40); } });
+  const later = 100 + 4990 * 40 + 100;
+  f.message(2, later); f.event('user_prompt_submit', later + 0.5); f.deliver(2, later + 1);
+  f.bulk(() => { for (let i = 0; i < 15; i++) f.deliver(900 + i, later + 2 + i); });
+  f.tool('second', later + 20, later + 21, { tool_name: 'Read', tool_detail: 'second' });
+  f.event('stop', later + 30);
+  const result = read(f, [1, 2]);
+  const round = roundOf(result, 2);
+  assert.equal(round.key, '2');
+  assert.equal(round.state, 'done', 'its end lies beyond the first read and is found by its own');
+  assert.equal(round.end, at(later + 30));
+  assert.deepEqual(toolSteps(round.segments[0]).map(step => step.label.arg), ['second']);
+});
+
+test('an interrupt that never reached the session is not a moment the group was idle', t => {
+  const f = fixture(t);
+  f.event('user_prompt_submit', -20); f.event('stop', -10);
+  f.message(1, 0); f.event('user_prompt_submit', 0); f.deliver(1, 0.2);
+  f.tool('job', 2, 100, { tool_name: 'Bash', tool_detail: 'Long job', detail_source: 'description' });
+  f.event('dashboard_interrupt', 30, { session: null, meta: { control_id: 9 } });
+  f.control(9, 'failed', 31);
+  f.message(2, 60); f.deliver(2, 60.2);
+  f.message(3, 110, 'out'); f.event('stop', 120);
+  const result = read(f, [2]);
+  assert.deepEqual(result.items.map(item => [item.id, item.state]), [[2, 'round']]);
+  const round = roundOf(result, 2);
+  assert.equal(round.key, '1', 'message 2 arrived during the turn of message 1 and joins its round');
+  assert.equal(round.start, at(0)); assert.equal(round.state, 'done');
+});
+
 // The real rollout collector writes into the same Dashboard store the activity is read from.
 async function collectRollout(f, name, lines) {
   const file = path.join(f.root, `${name}.jsonl`);

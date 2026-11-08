@@ -136,6 +136,19 @@ test('a folded part is a toggle with its own time; failed and stopped steps say 
     ['没有完成 · 30 秒', '已停止 · 10 秒', '没有完成 · 1 秒']);
 });
 
+test('a step still running in a folded part never shows more time than the part itself', () => {
+  const document = createDocument();
+  const area = createActivityArea({ document, t, onToggle() {} });
+  // The round ended at 27 s and is settling: the collectors have not reported this step's end yet.
+  const segment = { replyId: 2, start: s(0), end: s(27), steps: [tool(5, null, 'running')] };
+  const entry = { key: '1:2', live: false, round: { state: 'done', settling: true }, segment };
+  area.update(entry, { open: true, now: s(45) });
+  assert.match(area.node.querySelector('button').textContent, /已处理 27 秒/);
+  assert.equal(area.node.querySelector('.conversation-activity-time').textContent, '22 秒', 'counted to the end of its part, not to now');
+  area.update({ ...entry, live: true, segment: { ...segment, end: null } }, { open: true, now: s(45) });
+  assert.equal(area.node.querySelector('.conversation-activity-time').textContent, '40 秒', 'a live part keeps counting');
+});
+
 function pageFixture(context, { rows, activityBody, activityStatus = () => 200 }) {
   const document = createDocument(), root = document.createElement('div');
   const timers = [];
