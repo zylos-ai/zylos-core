@@ -1,5 +1,5 @@
 import { element } from './plain-text.js?v=103';
-import { renderChatContent } from './chat-blocks.js?v=103';
+import { renderChatContent } from './chat-blocks.js?v=105';
 import { applyChatView } from './chat-view.js?v=103';
 import { conversationChartResource } from './conversation-charts.js?v=103';
 export function conversationErrorKey(code) {

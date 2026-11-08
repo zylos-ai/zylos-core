@@ -4,7 +4,7 @@ import { channelIcon } from './board.js?v=103';
 import { createConversationState } from './conversation-state.js?v=102';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=103';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=103';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=105';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
