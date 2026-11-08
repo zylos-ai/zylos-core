@@ -95,3 +95,41 @@ test('bounded required single-select uses segment buttons and preserves existing
   assert.equal(company.getAttribute('aria-pressed'), 'false'); assert.equal(f.label('company_name').hidden, true);
   f.submit(); await tick(); assert.deepEqual(f.requests[0].payload.values, { customer_type: 'person' });
 });
+test('single-select uses segments only for required fields with two through four options', async t => {
+  for (const required of [false, true]) {
+    for (const count of [1, 2, 3, 4, 5]) {
+      await t.test(`${required ? 'required' : 'optional'} field with ${count} options`, async () => {
+        const message = structuredClone(envelope), block = message.blocks[0];
+        const options = Array.from({ length: count }, (_, index) => ({ id: `option_${index}`, label: `Option ${index}` }));
+        block.data.fields = [{ key: 'selection', label: 'Selection', type: 'single_select', required, options }];
+        const document = createDocument(), formState = { values: { selection: options[0].id } }, requests = [];
+        const root = renderQuestion({ document, envelope: message, block, row: { id: 12, direction: 'out' }, canWrite: true, formState,
+          question: { c4Id: '12', messageId: message.messageId, interruptId: message.interruptId, questionSummary: message.questionSummary, status: 'paused' },
+          onSubmit: async action => { requests.push(action); } });
+        const field = root.querySelector('[data-field-key="selection"]');
+        assert.ok(field, 'the shared schema accepts the field and renders its controls');
+        const select = field.querySelector('select'), segments = field.querySelector('.chat-form-segments');
+        const segmented = required && count >= 2 && count <= 4;
+        assert.equal(Boolean(segments), segmented);
+        assert.equal(Boolean(select.hidden), segmented);
+        assert.equal(select.value, options[0].id);
+        if (segmented) {
+          assert.equal(segments.children.length, count);
+          segments.children.at(-1).dispatch('click');
+          assert.equal(formState.values.selection, options.at(-1).id);
+          assert.equal(segments.children.at(-1).getAttribute('aria-pressed'), 'true');
+          allNodes(root).find(node => node.dataset.action === 'answer').dispatch('click'); await tick();
+          assert.equal(requests.length, 1); assert.equal(requests[0].payload.values.selection, options.at(-1).id);
+        } else {
+          assert.equal(select.children[0].value, '', 'native selects retain the empty choice');
+          select.value = ''; select.dispatch('change');
+          assert.equal(Object.hasOwn(formState.values, 'selection'), false);
+          allNodes(root).find(node => node.dataset.action === 'answer').dispatch('click'); await tick();
+          assert.equal(requests.length, required ? 0 : 1);
+          if (required) assert.deepEqual(formState.fieldErrors, [{ key: 'selection', reason: 'required' }]);
+          else assert.deepEqual(requests[0].payload.values, {});
+        }
+      });
+    }
+  }
+});
