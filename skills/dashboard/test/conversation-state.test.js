@@ -1503,9 +1503,12 @@ test('conversation list and incremental reads request previews in the current pa
   await f.timer.advance(5000);
   const reads = f.calls.filter(call => /^\/api\/chat\/conversations(?:\?|\/[^/]+\/messages\?)/.test(call.path));
   assert.ok(reads.length >= 3);
-  for (const call of reads) assert.equal(new URL(call.path, 'http://fixture').searchParams.get('locale'), 'en');
+  for (const call of reads) {
+    assert.equal(new URL(call.path, 'http://fixture').searchParams.has('locale'), false);
+    assert.equal(call.options.headers['X-Zylos-Locale'], 'en');
+  }
   f.document.documentElement.lang = 'zh';
   await f.timer.advance(30000);
-  assert.equal(new URL(f.calls.filter(call => call.path.includes('/messages?')).at(-1).path, 'http://fixture').searchParams.get('locale'), 'zh');
+  assert.equal(f.calls.filter(call => call.path.includes('/messages?')).at(-1).options.headers['X-Zylos-Locale'], 'zh');
   f.state.destroy(); assert.equal(f.timer.count(), 0);
 });

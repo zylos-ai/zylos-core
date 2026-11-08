@@ -411,9 +411,10 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { clearInterval(auth._cleanupTimer); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
-  const request = async (route, identity = 'cookie') => {
+  const request = async (route, identity = 'cookie', locale) => {
     const headers = identity === 'cookie' ? { cookie: `__Secure-zylos_dashboard_session=${cookie}` } :
       tokens[identity] ? { authorization: `Bearer ${tokens[identity]}` } : {};
+    if (locale !== undefined) headers['X-Zylos-Locale'] = locale;
     const response = await fetch(`http://127.0.0.1:${server.address().port}${route}`, { headers });
     return { status: response.status, body: await response.json() };
   };
@@ -434,10 +435,11 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   f.db.prepare('UPDATE conversations SET content=? WHERE id=3').run('**Result**\n\n```js\nsecret()\n```');
   for (const locale of ['zh', 'en']) {
     const expected = 'Result\n' + (locale === 'en' ? '[Code]' : '[代码]');
-    assert.equal((await request(`/api/chat/conversations?tab=external&locale=${locale}`)).body.items[0].preview, expected);
-    const messages = await request(`/api/chat/conversations/${id}/messages?tab=external&locale=${locale}`);
+    assert.equal((await request('/api/chat/conversations?tab=external', 'cookie', locale)).body.items[0].preview, expected);
+    const messages = await request(`/api/chat/conversations/${id}/messages?tab=external`, 'cookie', locale);
     assert.equal(messages.body.items.find(row => row.id === 3).preview, expected);
   }
+  assert.equal((await request('/api/chat/conversations?tab=external', 'cookie', 'fr')).body.items[0].preview, 'Result\n[代码]');
   for (const suffix of ['locale=fr', 'locale=en&locale=zh', 'tab=external&tab=mine', 'tab=external&extra=1', 'limit=', 'limit=0', 'limit=101', 'cursor=garbage'])
     assert.equal((await request(`/api/chat/conversations?${suffix}`)).status, 400);
   for (const suffix of ['tab=external&ids=1&ids=3', 'tab=external&ids=1,1', 'tab=external&ids=1x', 'tab=external&ids=', 'tab=external&ids=999'])

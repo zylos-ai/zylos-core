@@ -1480,6 +1480,44 @@ test('history GET routes pass Fleet admin gate and retain secret response guard'
   } finally { await hub.close(); await remote.close(); }
 });
 
+// Integration: actual Fleet HTTP forwarding to a strict legacy-query producer fixture.
+// Run for chat locale transport or proxy header/query changes; skip for body styling.
+// Use isolated HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private socket/DB paths;
+// only loopback servers are opened, and both are closed even on failure/timeout.
+test('fleet chat language headers preserve legacy remote query contracts', { timeout: 5000 }, async t => {
+  const received = [];
+  const remote = await listen((req, res) => {
+    const url = new URL(req.url, 'http://legacy.test');
+    const allowed = url.pathname.endsWith('/messages')
+      ? ['tab', 'limit', 'cursor', 'direction', 'recheckIds'] : ['tab', 'limit', 'cursor'];
+    const invalid = [...url.searchParams.keys()].some(key => !allowed.includes(key));
+    received.push({ path: req.url, locale: req.headers['x-zylos-locale'] });
+    res.writeHead(invalid ? 400 : 200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(invalid ? { error: 'invalid_chat_parameters' } : { items: [{ preview: '[代码]' }] }));
+  });
+  t.after(async () => { remote.server.closeAllConnections(); await remote.close(); });
+  const proxy = new FleetProxy({
+    config: { fleet: { agents: [{ name: 'Legacy', base_url: remote.origin, read_api_key: 'zylos_ak_fixture' }] } },
+    rootDir: publicDir(), poller: { getSessionToken: async () => 'zylos_st_fixture' },
+  });
+  const hub = await listen((req, res) => {
+    req._authContext = { kind: 'cookie', principalId: 'owner', scope: 'admin' };
+    proxy.handle(req, res, new URL(req.url, 'http://hub.test'));
+  });
+  t.after(async () => { hub.server.closeAllConnections(); await hub.close(); });
+  for (const route of ['/api/chat/conversations?tab=mine&limit=50', '/api/chat/conversations/group/messages?tab=mine&limit=50&direction=after']) {
+    const oldQuery = await fetch(hub.origin + '/fleet/Legacy' + route + '&locale=en');
+    assert.equal(oldQuery.status, 400); await oldQuery.arrayBuffer();
+    for (const locale of ['zh', 'en']) {
+      const response = await fetch(hub.origin + '/fleet/Legacy' + route, { headers: { 'X-Zylos-Locale': locale } });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).items[0].preview, '[代码]', 'legacy producer ignores the unfamiliar header');
+      assert.equal(received.at(-1).path, route);
+      assert.equal(received.at(-1).locale, locale);
+    }
+  }
+});
+
 test('fleet forwards Observer Set size with its body and relays the producer verdict', async () => {
   const seen = [];
   let producerScope = 'admin';

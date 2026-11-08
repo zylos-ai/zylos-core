@@ -19,5 +19,5 @@ export function markdownPreview(text, { locale = 'zh' } = {}) {
         && parts.length && !parts.at(-1).endsWith('\n')) parts.push('\n');
     else if (['th_close', 'td_close'].includes(token.type)) parts.push(' ');
   }
-  return parts.join('').trim();
+  return parts.join('').trim() || String(text ?? '');
 }

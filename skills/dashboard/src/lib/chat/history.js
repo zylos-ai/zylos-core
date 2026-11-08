@@ -16,30 +16,41 @@ const readableAttachment = (attachment, locale = 'zh') => `${previewLabels(local
 
 /** Browser summaries contain attachment names, never storage/model references. */
 export function chatAttachmentPreview(content, { external = false, locale = 'zh' } = {}) {
+  return attachmentPreview(content, { external, locale });
+}
+
+function attachmentPreview(content, { external = false, locale = 'zh' } = {}, format = null) {
   const parsed = parseC4Content(content);
   const labels = previewLabels(locale);
+  const body = text => {
+    if (!format) return external ? text.replace(/^\[MEDIA:[^\r\n]*$/gm, labels.media) : text;
+    if (!external) return format(text);
+    // Channel media notices, like attachment names, are plain text outside Markdown.
+    return text.split(/(^\[MEDIA:[^\r\n]*$)/gm)
+      .map(part => /^\[MEDIA:[^\r\n]*$/.test(part) ? labels.media : format(part))
+      .filter(Boolean).join('\n');
+  };
   if (parsed.kind === 'invalid') return labels.invalid;
   if (parsed.kind === 'envelope') {
     const blocks = parsed.envelope.blocks ?? [];
     if (!blocks.some(block => block.type !== 'markdown')) {
-      return parsed.envelope.fallbackText;
+      return body(parsed.envelope.fallbackText);
     }
     return blocks.map(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type)
       ? readableAttachment({ kind: block.type === 'x-zylos.image' ? 'image' : 'file', name: block.data.nameSnapshot }, locale)
-      : block.type === 'markdown' ? block.fallbackText ?? block.data.text
+      : block.type === 'markdown' ? body(block.fallbackText ?? block.data.text)
         : ['time_series', 'breakdown', 'category_series'].includes(block.type) ? labels.chart : labels.component).filter(Boolean).join('\n');
   }
   const split = splitContentAndAttachments(content);
   if (!split.attachments.length) {
-    return external ? content.replace(/^\[MEDIA:[^\r\n]*$/gm, labels.media) : content;
+    return body(content);
   }
-  const body = external ? split.content.replace(/^\[MEDIA:[^\r\n]*$/gm, labels.media) : split.content;
-  return [body, ...split.attachments.map(attachment => readableAttachment(attachment, locale))].filter(Boolean).join('\n');
+  return [body(split.content), ...split.attachments.map(attachment => readableAttachment(attachment, locale))].filter(Boolean).join('\n');
 }
 
 /** The same bounded human summary is used by lists and incremental message reads. */
 export function conversationPreview(content, options = {}) {
-  return Array.from(markdownPreview(chatAttachmentPreview(content, options), options)).slice(0, 160).join('');
+  return Array.from(attachmentPreview(content, options, text => markdownPreview(text, options))).slice(0, 160).join('');
 }
 
 export function deliveryState(row) {

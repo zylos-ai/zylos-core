@@ -28,8 +28,39 @@ test('conversation previews remove each Markdown marker while preserving human t
     ['> 引用 **mixed**\n> next line', '引用 mixed\nnext line'],
     ['***加粗且斜体*** and snake_case', '加粗且斜体 and snake_case'],
     ['[说明][ref]\n\n[ref]: https://example.com', '说明'],
+    ['# Heading\nBody follows', 'Heading\nBody follows'],
+    ['First  \nSecond', 'First\nSecond'],
+    ['<b>literal HTML</b> &amp; text', '<b>literal HTML</b> & text'],
+    ['![**diagram** label](https://example.com/image.png)', 'diagram label'],
+    ['| Name | Value |\n| --- | --- |\n| A | B |', 'Name Value \nA B'],
   ];
   for (const [source, expected] of examples) assert.equal(conversationPreview(source), expected, source);
+});
+
+test('markup-only content falls back to the original text before the Unicode limit', () => {
+  for (const content of ['-', '---', '***', '___', '---\n'.repeat(80)]) {
+    assert.equal(conversationPreview(content), Array.from(content).slice(0, 160).join(''));
+  }
+});
+
+test('attachment names and placeholders stay outside Markdown parsing', async () => {
+  const { buildAttachmentAnnotation } = await import('../../comm-bridge/scripts/attachment-annotations.js');
+  for (const [kind, name, label] of [['file', '__init__.py', '[File]'], ['image', '~~draft~~.png', '[Image]']]) {
+    const annotation = buildAttachmentAnnotation({ path: '/private/managed/' + name, name, size: 12, kind });
+    assert.equal(conversationPreview('**Body**\n' + annotation, { locale: 'en' }), `Body\n${label} ${name}`);
+    assert.equal(conversationPreview('```js\nunclosed\n' + annotation, { locale: 'en' }), `[Code]\n${label} ${name}`);
+    const envelope = { version: 1, kind: 'message', messageId: 'named-attachment', fallbackText: 'unused', blocks: [
+      { id: 'body', type: 'markdown', schemaVersion: 1, fallbackText: '```js\nunclosed', data: { text: '```js\nunclosed' } },
+      { id: 'asset', type: 'x-zylos.' + kind, schemaVersion: 1, data: { attachmentId: 'private-id', nameSnapshot: name }, fallbackText: 'unused' }
+    ] };
+    assert.equal(conversationPreview(CONTENT_PREFIX + JSON.stringify(envelope), { locale: 'en' }), `[Code]\n${label} ${name}`);
+  }
+});
+
+test('external media labels use the current language outside code fences', () => {
+  const content = '```js\nunclosed\n[MEDIA:image]/private/source.png';
+  assert.equal(conversationPreview(content, { external: true, locale: 'en' }), '[Code]\n[Media] Original-channel attachment');
+  assert.equal(conversationPreview('[MEDIA:image]/private/source.png', { external: true }), '[媒体] 原渠道附件');
 });
 
 test('code blocks use localized short placeholders without exposing their body', () => {
@@ -50,6 +81,8 @@ test('structured charts and controls use localized placeholders in mixed message
     assert.equal(conversationPreview(CONTENT_PREFIX + JSON.stringify(envelope), { locale: 'en' }), expected[1], kind);
     envelope.blocks.unshift({ id: 'intro', type: 'markdown', schemaVersion: 1, fallbackText: '**结果 Result**', data: { text: '**结果 Result**' } });
     assert.equal(conversationPreview(CONTENT_PREFIX + JSON.stringify(envelope)), '结果 Result\n' + expected[0]);
+    envelope.blocks[0].fallbackText = '```js\nunclosed';
+    assert.equal(conversationPreview(CONTENT_PREFIX + JSON.stringify(envelope), { locale: 'en' }), '[Code]\n' + expected[1]);
   }
 });
 
