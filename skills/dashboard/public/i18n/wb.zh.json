@@ -901,6 +901,7 @@
   "chat.activity.worked": "已处理 {time} · {steps}",
   "chat.activity.steps": "{count} 步",
   "chat.activity.oneStep": "1 步",
+  "chat.activity.truncated": "更早的步骤未显示",
   "chat.activity.thinking": "思考中",
   "chat.activity.failed": "没有完成",
   "chat.activity.stopped": "已停止",

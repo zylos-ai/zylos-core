@@ -109,7 +109,9 @@ export function createActivityArea({ document, t = key => key, onToggle }) {
     root.dataset.activityKey = entry.key;
     const elapsed = (segment.end ?? now) - segment.start;
     const count = stepCount(segment);
-    const steps = t(count === 1 ? 'chat.activity.oneStep' : 'chat.activity.steps').replace('{count}', String(count));
+    // A part that lost its oldest steps to the per-round limit counts as "N+" and says so at the top of its list.
+    const steps = t(count === 1 && !segment.truncated ? 'chat.activity.oneStep' : 'chat.activity.steps')
+      .replace('{count}', segment.truncated ? `${count}+` : String(count));
     headText.textContent = t(live ? 'chat.activity.working' : 'chat.activity.worked')
       .replace('{time}', formatDuration(elapsed, t)).replace('{steps}', steps);
     if (!live) {
@@ -118,12 +120,13 @@ export function createActivityArea({ document, t = key => key, onToggle }) {
     }
     list.hidden = !expanded;
     const thinking = live && round.state === 'running' && !segment.steps.some(step => step.status === 'running');
-    const shape = JSON.stringify([expanded, thinking, segment.steps.map(step => step.kind === 'say' ? ['say', step.text]
+    const shape = JSON.stringify([expanded, thinking, segment.truncated === true, segment.steps.map(step => step.kind === 'say' ? ['say', step.text]
       : [step.kind, step.status, step.label?.key, step.label?.arg])]);
     if (shape !== structure) {
       structure = shape;
       rows = [];
       const children = [];
+      if (expanded && segment.truncated) children.push(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));
       if (expanded) for (const step of segment.steps) {
         if (step.kind === 'say') { children.push(node('p', step.text, 'conversation-activity-say')); rows.push(null); continue; }
         const row = node('div', undefined, 'conversation-activity-step');

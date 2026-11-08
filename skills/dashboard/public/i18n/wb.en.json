@@ -901,6 +901,7 @@
   "chat.activity.worked": "Worked {time} · {steps}",
   "chat.activity.steps": "{count} steps",
   "chat.activity.oneStep": "1 step",
+  "chat.activity.truncated": "Earlier steps are not shown",
   "chat.activity.thinking": "Thinking",
   "chat.activity.failed": "Did not finish",
   "chat.activity.stopped": "Stopped",

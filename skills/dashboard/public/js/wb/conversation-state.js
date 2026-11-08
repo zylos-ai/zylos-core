@@ -75,7 +75,8 @@ export function createConversationState({
     questionVersion: 0,
     questionForms: new Map(),
     // Agent activity per inbound message id and per round key; `offset` turns browser time into server time.
-    activity: { items: new Map(), rounds: new Map(), offset: 0, reading: false }
+    // `unsupported` is set when the instance has no activity route (an older remote), so the page stops asking.
+    activity: { items: new Map(), rounds: new Map(), offset: 0, reading: false, unsupported: false }
   });
   // The instance time zone (its .env TZ) comes with the list and each message page; an older instance without it
   // reads as unknown.
@@ -638,25 +639,27 @@ export function createConversationState({
       }
     })();
   }
-  /** Inbound messages whose activity can still change: not read yet, waiting for a turn, or in a running round. */
+  /** A round that can still change: running, or just ended and still settling (its last events may be on the way). */
+  const roundOpen = round => round?.state === 'running' || round?.settling === true;
+  /** Inbound messages whose activity can still change: not read yet, waiting for a turn, or in an open round. */
   function activityIds(current) {
     const ids = [];
     for (const row of current.messages) {
       if (row.direction !== 'in') continue;
       const item = current.activity.items.get(row.id);
-      if (!item || item.state === 'pending' || item.state === 'round' && current.activity.rounds.get(item.round)?.state === 'running') ids.push(row.id);
+      if (!item || item.state === 'pending' || item.state === 'round' && roundOpen(current.activity.rounds.get(item.round))) ids.push(row.id);
     }
     return ids.slice(-100);
   }
   function activityLive(current) {
-    if (!current?.activity) return false;
-    for (const round of current.activity.rounds.values()) if (round.state === 'running') return true;
+    if (!current?.activity || current.activity.unsupported) return false;
+    for (const round of current.activity.rounds.values()) if (roundOpen(round)) return true;
     for (const item of current.activity.items.values()) if (item.state === 'pending') return true;
     return false;
   }
   /** Activity is optional: a failed read keeps what is shown and never raises an update error. */
   async function readActivity(current, id, currentTab, e) {
-    if (currentTab !== 'mine' || typeof id !== 'string' || !id.startsWith('g:') || current.activity.reading) return;
+    if (currentTab !== 'mine' || typeof id !== 'string' || !id.startsWith('g:') || current.activity.reading || current.activity.unsupported) return;
     const ids = activityIds(current);
     if (!ids.length) return;
     current.activity.reading = true;
@@ -667,8 +670,9 @@ export function createConversationState({
       for (const round of data.rounds) current.activity.rounds.set(round.key, round);
       for (const item of data.items) current.activity.items.set(item.id, item);
       emit();
-    } catch {
-      // Keep the last activity; the next poll asks again.
+    } catch (err) {
+      // Keep the last activity; the next poll asks again, unless this instance has no activity route at all.
+      if (err?.status === 404 && valid(e)) current.activity.unsupported = true;
     } finally {
       current.activity.reading = false;
     }

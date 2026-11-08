@@ -136,7 +136,7 @@ test('a folded part is a toggle with its own time; failed and stopped steps say 
     ['没有完成 · 30 秒', '已停止 · 10 秒', '没有完成 · 1 秒']);
 });
 
-function pageFixture(context, { rows, activityBody }) {
+function pageFixture(context, { rows, activityBody, activityStatus = () => 200 }) {
   const document = createDocument(), root = document.createElement('div');
   const timers = [];
   document.defaultView = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
@@ -148,10 +148,11 @@ function pageFixture(context, { rows, activityBody }) {
     const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
       : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:a', displayName: 'A' }], nextCursor: null }
       : path.includes('/messages?') ? { items: rows(), nextCursor: null, afterCursor: 'after' }
-      : path.includes('/activity?') ? activityBody()
+      : path.includes('/activity?') ? (activityStatus() === 200 ? activityBody() : { error: 'not_found' })
       : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', sessionGroup: 'dashboard:a', state: 'active' } }
       : { items: [], nextCursor: null };
-    return { ok: true, status: 200, json: async () => body };
+    const status = path.includes('/activity?') ? activityStatus() : 200;
+    return { ok: status === 200, status, json: async () => body };
   } });
   context.after(() => page.destroy());
   return { document, root, page, timers, reads, async open() {
@@ -246,8 +247,12 @@ test('scroll gesture covers touch, pointer, wheel and momentum and cleans up its
   listeners.get('scroll')();
   assert.equal(timers.size, 0, 'no settling while the pointer is held');
   docListeners.get('pointerup')();
+  assert.equal(timers.size, 1, 'release starts the quiet period');
+  const [released] = timers.keys();
   listeners.get('scroll')();
-  assert.equal(timers.size, 1, 'momentum restarts the quiet period');
+  assert.equal(timers.has(released), false, 'momentum cancels the running quiet period');
+  assert.equal(timers.size, 1, 'and starts a new one');
+  assert.equal(gesture.active, true); assert.equal(settled, 0, 'still moving: not settled');
   runLast();
   assert.equal(gesture.active, false); assert.equal(settled, 1);
   listeners.get('pointerdown')({ pointerType: 'mouse', button: 2 });
@@ -256,4 +261,79 @@ test('scroll gesture covers touch, pointer, wheel and momentum and cleans up its
   assert.equal(gesture.active, true);
   gesture.destroy();
   assert.equal(timers.size, 0); assert.equal(listeners.size, 0); assert.equal(docListeners.size, 0);
+});
+
+const refresh = async f => {
+  f.root.querySelector('[data-action="refreshMessages"]').dispatch('click');
+  for (let i = 0; i < 8; i++) await tick();
+};
+const running = (steps, { start = 2, now = 3 } = {}) => ({ now: s(now), items: [{ id: 1, state: 'round', round: '1' }],
+  rounds: [round('1', { state: 'running', start, end: null, segments: [{ replyId: null, start: s(start), end: null, steps }] })] });
+
+test('a message waiting for its turn has no activity; when the turn starts the live area appears under it and thinks until a tool runs', async t => {
+  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }];
+  let body = { now: s(1), items: [{ id: 1, state: 'pending' }], rounds: [] };
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
+  await f.open();
+  const list = f.root.querySelector('.conversation-message-list');
+  const opened = f.reads.length;
+  assert.equal(list.querySelectorAll('.conversation-activity').length, 0, 'no activity before the turn starts');
+  assert.equal(list.querySelectorAll('.conversation-activity-thinking').length, 0, 'and nothing is thinking yet');
+  body = running([]);
+  await refresh(f);
+  const live = list.querySelectorAll('.conversation-activity-message');
+  assert.equal(live.length, 1);
+  assert.equal(list.children.indexOf(live[0]), list.children.indexOf(f.root.querySelector('[data-message-id="1"]')) + 1);
+  assert.equal(live[0].querySelectorAll('.conversation-activity-thinking').length, 1, 'thinking once the turn runs without a tool');
+  body = running([tool(2.5, null, 'running')], { now: 4 });
+  await refresh(f);
+  const area = list.querySelectorAll('.conversation-activity-message')[0];
+  assert.equal(area.querySelectorAll('.conversation-activity-thinking').length, 0, 'no thinking while a tool runs');
+  assert.deepEqual(area.querySelectorAll('.conversation-activity-step').map(row => row.dataset.status), ['running']);
+  assert.equal(f.reads.length, opened + 2, 'a pending message and a running round are read on every refresh');
+});
+
+test('a just-ended round is read again while it settles, picks up its late events, then is not read again', async t => {
+  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
+  const settlingBody = { ...doneBody(s(65)), rounds: [{ ...doneBody().rounds[0], settling: true, segments: [
+    { replyId: 2, start: s(0), end: s(59), steps: [tool(1, 2), tool(3, null, 'running')] }, { replyId: null, start: s(59), end: s(60), steps: [] }] }] };
+  let body = settlingBody;
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
+  await f.open();
+  const steps = () => f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity');
+  steps().querySelector('button').dispatch('click');
+  assert.deepEqual(steps().querySelectorAll('.conversation-activity-step').map(row => row.dataset.status), ['done', 'running']);
+  const reads = f.reads.length;
+  body = doneBody(s(90));
+  await refresh(f);
+  assert.deepEqual(steps().querySelectorAll('.conversation-activity-step').map(row => row.dataset.status), ['done', 'done']);
+  assert.equal(f.reads.length, reads + 1, 'read again while settling');
+  await refresh(f);
+  assert.equal(f.reads.length, reads + 1, 'and not after it settled');
+});
+
+test('an instance without the activity route is asked once, then the page stops asking', async t => {
+  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }];
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => assert.fail('no body for a missing route'), activityStatus: () => 404 });
+  await f.open();
+  await refresh(f); await refresh(f);
+  assert.deepEqual(f.reads, ['1'], 'one request, no repeats after the route is missing');
+  assert.equal(f.root.querySelectorAll('.conversation-activity').length, 0);
+});
+
+test('a part that lost its oldest steps counts them as N+ and says older steps are not shown', () => {
+  const document = createDocument();
+  const area = createActivityArea({ document, t });
+  const segment = { replyId: 2, start: s(0), end: s(70), truncated: true, steps: [tool(1, 2), tool(3, 4)] };
+  area.update({ key: '1:2', live: false, round: { state: 'done' }, segment }, { open: false, now: s(100) });
+  assert.equal(area.node.querySelector('button').textContent, '已处理 1 分 10 秒 · 2+ 步');
+  assert.equal(area.node.querySelectorAll('.conversation-activity-more').length, 0, 'folded: no list');
+  area.update({ key: '1:2', live: false, round: { state: 'done' }, segment }, { open: true, now: s(100) });
+  const list = area.node.querySelector('.conversation-activity-steps');
+  assert.equal(list.children[0].className, 'conversation-activity-more');
+  assert.equal(list.children[0].textContent, '更早的步骤未显示');
+  const english = createActivityArea({ document, t: key => en[key] ?? key });
+  english.update({ key: '1:2', live: false, round: { state: 'done' }, segment: { ...segment, steps: [tool(1, 2)] } }, { open: true, now: s(100) });
+  assert.match(english.node.querySelector('button').textContent, /1\+ steps/);
+  assert.equal(english.node.querySelector('.conversation-activity-more').textContent, 'Earlier steps are not shown');
 });

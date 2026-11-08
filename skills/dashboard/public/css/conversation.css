@@ -1133,6 +1133,7 @@ button.conversation-activity-head:focus-visible { outline:2px solid var(--accent
 .conversation-activity-step[data-status=failed]>.wb-ico,.conversation-activity-step[data-status=failed]>.conversation-activity-time,
 .conversation-activity-step[data-status=incomplete]>.wb-ico,.conversation-activity-step[data-status=incomplete]>.conversation-activity-time { color:var(--wb-wait); }
 .conversation-activity-say { grid-column:1/-1; margin:0; padding:3px 0 4px; font-size:12px; line-height:1.6; color:var(--text-muted); overflow-wrap:anywhere; }
+.conversation-activity-more { grid-column:1/-1; margin:0; padding:2px 0 4px; font-size:11.5px; line-height:1.6; color:var(--text-muted); }
 .conversation-activity-thinking { grid-column:1/-1; display:flex; align-items:center; gap:6px; min-height:24px; font-size:11.5px; color:var(--text-muted); }
 .conversation-activity-dots { display:inline-flex; gap:3px; }
 .conversation-activity-dots>i { width:4px; height:4px; border-radius:50%; background:currentColor; opacity:.5; animation:conversation-activity-dot 1.2s infinite; }

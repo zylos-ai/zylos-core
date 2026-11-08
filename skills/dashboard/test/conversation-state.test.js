@@ -1512,3 +1512,29 @@ test('conversation list and incremental reads request previews in the current pa
   assert.equal(f.calls.filter(call => call.path.includes('/messages?')).at(-1).options.headers['X-Zylos-Locale'], 'zh');
   f.state.destroy(); assert.equal(f.timer.count(), 0);
 });
+test('a settling round keeps the two-second refresh and is read again; once settled the refresh is five seconds again', async () => {
+  let settling = true;
+  const f = await selected(u => {
+    if (u.pathname.endsWith('/messages')) return { items: u.searchParams.get('direction') === 'before'
+      ? [{ id: 1, direction: 'in', status: 'delivered', content: 'hi' }, { id: 2, direction: 'out', status: 'delivered', content: 'done' }] : [],
+    nextCursor: null, afterCursor: 'after2' };
+    if (u.pathname.endsWith('/activity')) return { now: 1000, items: [{ id: 1, state: 'round', round: '1' }],
+      rounds: [{ key: '1', messageIds: [1], start: 0, end: 500, state: 'done', ...(settling ? { settling: true } : {}), segments: [] }] };
+  });
+  const activityReads = () => f.calls.filter(c => c.path.includes('/activity?')).length;
+  const first = activityReads();
+  assert.ok(first >= 1);
+  await f.timer.advance(2000);
+  assert.equal(f.reads().length, 1, 'quick refresh while the round settles');
+  assert.equal(activityReads(), first + 1, 'and the settling round is read again');
+  settling = false;
+  await f.timer.advance(2000);
+  assert.equal(f.reads().length, 2);
+  const settled = activityReads();
+  await f.timer.advance(4999);
+  assert.equal(f.reads().length, 2, 'settled: back to the five-second refresh');
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, 3);
+  assert.equal(activityReads(), settled, 'a settled round is not read again');
+  f.state.destroy();
+});
