@@ -29,12 +29,13 @@ const BOUNDARY_PAGE = 1000, BOUNDARY_PAGES = 10, STEP_LIMIT = 1500, STEPS_PER_RO
 // A delivery that never produced a turn stops being polled for after this long.
 const PENDING_LIMIT_MS = 30 * 60_000;
 // Calls that manage subagents rather than do work (both multi-agent tool generations, including an `exec` that
-// calls them from code mode); the subagent itself is a step.
+// calls them from code mode); the subagent itself is a step. A code-mode `wait` with a cell id is not one of them: it
+// resumes a yielded `exec`, whose step it ends.
 const CODEX_AGENT_CONTROLS = new Set(['spawn_agent', 'send_input', 'wait_agent', 'close_agent', 'resume_agent',
   'send_message', 'list_agents', 'followup_task', 'interrupt_agent', 'wait', 'sleep']);
 const CODEX_COMMANDS = new Set(['exec', 'exec_command', 'shell', 'local_shell', 'container.exec', 'write_stdin', 'unified_exec']);
 
-const toolName = meta => typeof meta.tool_name === 'string' ? meta.tool_name.replace(/^functions\./, '').replace(/^collaboration\./, '') : '';
+const toolName = meta => typeof meta.tool_name === 'string' ? meta.tool_name.replace(/^functions\./, '') : '';
 const iso = ms => new Date(ms).toISOString();
 const ms = value => { const time = Date.parse(value); return Number.isFinite(time) ? time : null; };
 /** C4 stores UTC seconds as `YYYY-MM-DD HH:MM:SS`. */
@@ -169,7 +170,7 @@ export function buildSteps(events, round, { settling = false } = {}) {
   const sessions = new Set(round.turns.flatMap(turn => [...turn.sessions]));
   const end = round.turns.at(-1)?.end ?? null;
   let steps = [], truncated = false;
-  const open = new Map();
+  const open = new Map(), cells = new Map();
   const add = item => { steps.push(item); return true; };
   for (const event of events) {
     if (event.at < round.start || (end !== null && event.at > end)) continue;
@@ -184,6 +185,17 @@ export function buildSteps(events, round, { settling = false } = {}) {
     if (event.runtime !== 'codex' && ['tool_call', 'tool_result', 'subagent_start', 'subagent_stop'].includes(event.type)) continue;
     if (meta.agent_id && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;
     const tool = toolName(meta);
+    // A `wait` on a code-mode cell reads more of the `exec` that yielded it; the exec's step ends when one reports the
+    // script finished.
+    if (event.runtime === 'codex' && typeof meta.resumes_cell === 'string') {
+      const step = event.type === 'tool_result' && !meta.cell_running ? cells.get(meta.resumes_cell) : null;
+      if (step && step.end === null) {
+        step.end = event.at;
+        step.status = meta.outcome === 'failed' ? 'failed' : 'done';
+        cells.delete(meta.resumes_cell);
+      }
+      continue;
+    }
     if (['tool_call', 'tool_result'].includes(event.type)
       && (CODEX_AGENT_CONTROLS.has(tool) || Array.isArray(meta.wraps_agent_tools) && meta.wraps_agent_tools.length)) continue;
     const key = event.type.startsWith('subagent_') ? `agent:${meta.agent_id}`
@@ -199,8 +211,11 @@ export function buildSteps(events, round, { settling = false } = {}) {
     } else {
       const step = open.get(key);
       if (!step || step.end !== null) continue;
+      // An `exec` that yielded while its script still runs goes on until a `wait` on its cell sees it finish.
+      if (event.type === 'tool_result' && meta.cell_running && typeof meta.cell_id === 'string') { cells.set(meta.cell_id, step); continue; }
       step.end = event.at;
-      step.status = event.type === 'post_tool_failure' || meta.outcome === 'failed' ? 'failed' : 'done';
+      step.status = event.type === 'post_tool_failure' || meta.outcome === 'failed' ? 'failed'
+        : event.type === 'subagent_stop' && meta.status === 'interrupted' ? 'stopped' : 'done';
     }
   }
   if (steps.length > STEPS_PER_ROUND) { steps = steps.slice(-STEPS_PER_ROUND); truncated = true; }

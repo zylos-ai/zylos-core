@@ -17,8 +17,8 @@ import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, v1ChildRollout, v1ParentTurn, v2CompletedTurn, v2ListedTurn, v2TimedOutTurn }
-  from './fixtures/codex-multi-agent-rollout.js';
+import { V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, codeModeYieldedCommand, v1ChildRollout, v1LongChildRollout, v1ParentTurn,
+  v1YieldedWaitTurn, v2CompletedTurn, v2InterruptedTurn, v2TimedOutTurn } from './fixtures/codex-multi-agent-rollout.js';
 
 const GROUP = 'dash-owned:a';
 const ID = `g:${Buffer.from(GROUP).toString('hex').toUpperCase()}`;
@@ -546,14 +546,16 @@ test('an interrupt that never reached the session is not a moment the group was 
 });
 
 // The real rollout collector writes into the same Dashboard store the activity is read from.
-async function collectRollout(f, name, lines) {
+// Each pass reads what one collection cycle reads (at most 200 lines or 256 KB); a later pass starts where it stopped.
+async function collectRollout(f, name, lines, { passes = 1 } = {}) {
   const file = path.join(f.root, `${name}.jsonl`);
   fs.writeFileSync(file, lines.map(line => JSON.stringify(line)).join('\n') + '\n');
   const mapping = { transcript_path: file, session_id: 'thread-1', session_group: GROUP, run_id: 'r1' };
   f.store.insertUsageTranscript({ ...mapping, runtime: 'codex' }, new Date(T0).toISOString());
   const transcripts = { snapshot: { listKnown: true }, currentOriginMapping: () => null, isOriginCurrent: () => false,
     async collect(runtime, callback) { return (await callback(mapping, false)).written; } };
-  await new CodexRolloutCollector(f.store, { modelPrices: {} }, { transcripts }).collect();
+  for (let pass = 0; pass < passes; pass++) await new CodexRolloutCollector(f.store, { modelPrices: {} }, { transcripts }).collect();
+  return file;
 }
 
 const codex = { runtime: 'codex', session: 'thread-1' };
@@ -566,11 +568,11 @@ function assertNothingPrivate(round, name) {
   for (const secret of PRIVATE) assert.ok(!shown.includes(secret), `${name}: ${secret} is not shown`);
 }
 // A round opened by message 1 at 0 s, with recorded Codex lines collected from its rollout; the reply arrives after.
-async function codexRound(t, lines, { replyAt = 30, child = null, ended = true } = {}) {
+async function codexRound(t, lines, { replyAt = 30, child = null, childPasses = 1, ended = true } = {}) {
   const f = fixture(t);
   f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0, codex);
   await collectRollout(f, 'parent', lines);
-  if (child) await collectRollout(f, 'child', child);
+  if (child) await collectRollout(f, 'child', child, { passes: childPasses });
   if (ended) { f.message(2, replyAt, 'out'); if (!lines.some(line => line.payload?.type === 'task_complete')) f.event('turn_complete', replyAt + 1, codex); }
   return { f, round: roundOf(read(f, [1]), 1) };
 }
@@ -585,12 +587,12 @@ test('a Codex v2 subtask is one step from its recorded start to its recorded com
   assertNothingPrivate(round, 'v2');
 });
 
-test('a Codex v2 subtask seen finished only in a list of agents ends there', async t => {
-  const lines = v2ListedTurn(at(1));
+test('a Codex v2 subtask that was interrupted shows as stopped where it was interrupted', async t => {
+  const lines = v2InterruptedTurn(at(1));
   const { round } = await codexRound(t, lines);
-  assert.deepEqual(describe(round), ['subagent:subagent:done'], 'other finished agents in the list are not steps of this round');
+  assert.deepEqual(describe(round), ['subagent:subagent:stopped']);
   assert.equal(steps(round)[0].end, Date.parse(lines.at(-1).timestamp));
-  assertNothingPrivate(round, 'v2 list');
+  assertNothingPrivate(round, 'v2 interrupted');
 });
 
 test('a Codex v2 wait that timed out leaves the subtask running until its round ends', async t => {
@@ -632,6 +634,36 @@ test('a Codex subagent thread rollout that names its parent as the session neith
   assert.equal(round.end, timeOf(parent, line => line.payload.type === 'task_complete'), 'the child turn end is not the parent turn end');
   const childUsage = f.store.db.prepare("SELECT COUNT(*) FROM metric_points WHERE metric_name = 'turn_duration'").pluck().get();
   assert.equal(childUsage, 2, 'both threads keep their turn timing');
+});
+
+test('a long Codex subagent thread rollout read over several passes still neither ends the parent round nor adds steps', async t => {
+  const parent = v1ParentTurn(at(1)), child = v1LongChildRollout(at(1));
+  assert.ok(Buffer.byteLength(child.map(line => JSON.stringify(line)).join('\n')) > 256 * 1024, 'longer than one read');
+  const { f, round } = await codexRound(t, parent, { child, childPasses: 3 });
+  assert.equal(f.store.db.prepare('SELECT byte_offset FROM codex_rollout_cursors WHERE transcript_path LIKE ?').pluck().get('%child.jsonl'),
+    fs.statSync(path.join(f.root, 'child.jsonl')).size, 'the child rollout was read to its end');
+  assert.deepEqual(describe(round), ['subagent:subagent:done'], 'its command, read in a later pass, is not a parent step');
+  assert.equal(round.end, timeOf(parent, line => line.payload.type === 'task_complete'), 'nor is its turn end the parent turn end');
+});
+
+test('a code-mode command that yields stays one running step until a wait on its cell sees it finish', async t => {
+  const lines = codeModeYieldedCommand(at(1));
+  const live = await codexRound(t, lines.slice(0, 4), { ended: false });
+  live.f.clock.now = at(25);
+  assert.deepEqual(describe(roundOf(read(live.f, [1]), 1)), ['tool:runCommand:running'], 'yielded and still running after a wait');
+  const { round } = await codexRound(t, lines);
+  assert.deepEqual(describe(round), ['tool:runCommand:done'], 'the waits on its cell are not steps of their own');
+  assert.equal(steps(round)[0].end, Date.parse(lines.at(-1).timestamp), 'it ends when a wait reports the script finished');
+  const failed = await codexRound(t, codeModeYieldedCommand(at(1), { exitCode: 1 }));
+  assert.deepEqual(describe(failed.round), ['tool:runCommand:failed'], 'the finishing output decides whether it failed');
+});
+
+test('a Codex v1 subtask whose wait yielded ends when a wait on that cell reads its result', async t => {
+  const lines = v1YieldedWaitTurn(at(1)).filter(line => line.payload.type !== 'message');
+  const { round } = await codexRound(t, lines);
+  assert.deepEqual(describe(round), ['subagent:subagent:done']);
+  assert.equal(steps(round)[0].end, timeOf(lines, line => line.payload.call_id === 'call_cell_wait' && line.payload.type === 'function_call_output'));
+  assertNothingPrivate(round, 'v1 yielded wait');
 });
 
 test('a Codex subtask whose finish was never recorded ends with its round instead of reading as unfinished', t => {
