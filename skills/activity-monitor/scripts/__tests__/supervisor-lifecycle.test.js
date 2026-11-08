@@ -216,10 +216,12 @@ test('completed TTL preparation waits through busy activity and idle confirmatio
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.fences.get('a')?.reason, 'ttl');
     assert.equal(f.fences.get('a')?.runId, preparation.runId);
-    assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+    assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
     assert.equal(f.controls.length, 1);
     assert.equal(f.controls[0].content, 'prepare');
     assert.equal(f.lifecycle.ttlReset.has('a'), false);
+    assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
   }
 });
 test('new C4 activity or a replacement run cancels completed TTL preparation while busy', async () => {
@@ -257,9 +259,11 @@ test('completed TTL preparation waits for every held Sync marker to release', as
       f.deps.readSyncMarker = () => ({ held: false, stale: false });
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       assert.equal(f.fences.get(group)?.reason, 'ttl');
-      assert.equal(f.lifecycle.ttlPreparation.has(group), false);
+      assert.equal(f.lifecycle.ttlPreparation.get(group), preparation);
       assert.equal(f.controls.length, 1);
       assert.equal(f.lifecycle.ttlReset.has(group), false);
+      assert.equal(await f.lifecycle.advanceReclaim(f.fences.get(group), f.context), 'done');
+      assert.equal(f.lifecycle.ttlPreparation.has(group), false);
     }
   }
 });
