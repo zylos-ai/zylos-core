@@ -36,7 +36,7 @@ export function fixturePng(width = 720, height = 240) {
 // changes. Its original sender/history gain their normal attachment dependency.
 export async function createAttachmentApiFixture(t, sandbox, { prototypeSource } = {}) {
   let attachments, mediaAuth, fixture, fallbackEnvelope;
-  fixture = await createChatApiFixture(t, sandbox, { name: 'Attachments review', async extraHandler(req, res, url, f) {
+  fixture = await createChatApiFixture(t, sandbox, { name: 'Attachments review', attachmentService: false, async extraHandler(req, res, url, f) {
     if (attachments && await handleChatAttachments(req, res, url, { auth: mediaAuth, config: f.config,
       sender: f.sender, attachments, readMode: f.readMode })) return true;
     if (url.pathname === '/attachment-fallback' && fallbackEnvelope) {

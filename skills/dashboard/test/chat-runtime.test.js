@@ -43,6 +43,16 @@ for (const [name, scenario, accounts] of [
   // Private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DB readback before
   // allocation and launch; lifecycle owns children/server/DB/auth cleanup.
   ['TTL recovery keeps answer summary and historical reply in the original group', 'ttl', ['claude', 'codex']],
+  // Boundary: native Claude reads target-owned upload annotations, registers
+  // independent image/file copies and replies through real Core; TTL starts a
+  // fresh session which reads the same historical files. Run for attachment
+  // projection/register/send/storage/lifecycle changes; unrelated UI may skip.
+  // Both gates and dedicated auth precede private HOME/DB/HTTP/socket allocation.
+  ['Claude reads uploaded files and registers mixed media across TTL recovery', 'attachments-claude', ['claude']],
+  // Boundary: native Codex executes the same chain behind a second isolated
+  // Dashboard FleetProxy. Run for fleet/attachment/runtime lifecycle changes;
+  // unrelated UI may skip. Case teardown owns both HTTP instances and children.
+  ['Codex reads fleet uploads and registers mixed media across TTL recovery', 'attachments-codex-fleet', ['codex']],
 ]) test(name, { skip: !enabled, timeout: 660_000 }, async t => {
   if (!authDirectory) { t.skip('Dedicated runtime authentication directory is not supplied'); return; }
   assert.ok(path.isAbsolute(authDirectory), 'Dedicated authentication directory must be absolute');
@@ -89,9 +99,13 @@ for (const [name, scenario, accounts] of [
     assert.ok(line, 'Driver returned an actual completed-chain receipt');
     const receipt = JSON.parse(line.slice('CHAT_RUNTIME_RESULT '.length));
     assert.equal(receipt.scenario, scenario);
-    assert.ok(receipt.answers >= 4, 'All supported question action types traversed the real model chain');
+    if (scenario.startsWith('attachments-')) {
+      assert.equal(receipt.attachmentReplies, 2, 'Original and fresh native sessions completed attachment replies');
+      assert.equal(receipt.reclaimed, true, 'Actual TTL ending preceded the second attachment read');
+      assert.equal(receipt.fleet, scenario.endsWith('-fleet'));
+    } else assert.ok(receipt.answers >= 4, 'All supported question action types traversed the real model chain');
     assert.ok(receipt.assertions > 0);
-    assert.equal(receipt.runtime, scenario === 'codex' ? 'codex' : 'claude');
+    assert.equal(receipt.runtime, scenario === 'codex' || scenario === 'attachments-codex-fleet' ? 'codex' : 'claude');
     if (scenario === 'ttl') assert.equal(receipt.reclaimed, true);
     t.diagnostic(JSON.stringify(receipt));
     completed = true;

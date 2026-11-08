@@ -54,7 +54,13 @@ const discoveredFiles = TEST_ROOTS
   .map((file) => path.relative(ROOT, file));
 
 // Explicit paths are selected only from the normal discovery roots.
-const requested = process.argv.slice(2);
+const arguments_ = process.argv.slice(2);
+const patterns = arguments_.filter(value => value.startsWith('--test-name-pattern='));
+const requested = arguments_.filter(value => !value.startsWith('--test-name-pattern='));
+if (patterns.length > 1 || patterns.some(value => value === '--test-name-pattern=')) {
+  console.error('Supply at most one nonempty --test-name-pattern=<pattern>.');
+  process.exit(1);
+}
 if (requested.length === 1 && requested[0] === '--list') {
   console.log(discoveredFiles.join('\n'));
   process.exit(0);
@@ -80,7 +86,7 @@ try {
   const env = { ...process.env, TMPDIR: tmpdir };
   // Runtime identity belongs to each fixture, never the agent running tests.
   for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP']) delete env[key];
-  const nodeArgs = ['--experimental-test-module-mocks', '--test', ...testFiles];
+  const nodeArgs = ['--experimental-test-module-mocks', '--test', ...patterns, ...testFiles];
   // Probe in subshells: unsupported special builtins must not terminate the runner.
   // Apply limits in the exec shell so Node and every test child inherit them.
   const limitScript = `

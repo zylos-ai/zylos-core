@@ -16,6 +16,8 @@ import { createDisplayNames } from '../../src/lib/workbench/display-names.js';
 import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
 import { ChatConversations, isChatLocalIdUsed } from '../../src/lib/chat/conversations.js';
 import { ChatSender } from '../../src/lib/chat/send.js';
+import { ChatAttachments } from '../../src/lib/chat/attachments.js';
+import { handleChatAttachments } from '../../src/lib/chat/attachment-routes.js';
 import { ChatHistory } from '../../src/lib/chat/history.js';
 import { ChatAnswers } from '../../src/lib/chat/answers.js';
 import { ChatAnswerDelivery } from '../../src/lib/chat/delivery.js';
@@ -59,7 +61,7 @@ export function assertChatProcessIsolation(sandbox, { env = process.env, skillsD
 
 // Real HTTP/AuthGate/chat modules and two SQLite owners. Only the Core route and
 // notification adapter are controlled: no model, PM2 or tmux is launched here.
-export async function createChatApiFixture(t, sandbox, { name = 'instance', extraHandler } = {}) {
+export async function createChatApiFixture(t, sandbox, { name = 'instance', extraHandler, attachmentService = true, pageApis = false } = {}) {
   console.log('Chat HTTP isolation:', JSON.stringify(sandbox.assertIsolation()));
   console.log('Chat Core process isolation:', JSON.stringify(assertChatProcessIsolation(sandbox)));
   const zylos = sandbox.paths.zylos;
@@ -105,9 +107,10 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
     sendStatusNotice: () => { counts.notifications++; return { outcome: notification }; }, diagnostic() {} });
   const core = { receive: async args => { counts.receive++; return (invoke || realReceive)(args); }, isDataError,
     getChannelNamespace: channel => c4.getChannelNamespace(channel), ensureChannelNamespace: channel => c4.ensureChannelNamespace(channel) };
-  const sender = new ChatSender({ conversations, c4Reader: reader, loadCore: async () => core, zylosDir: zylos });
+  const attachments = attachmentService ? new ChatAttachments({ store, c4Reader: reader, zylosDir: zylos }) : null;
+  const sender = new ChatSender({ conversations, c4Reader: reader, attachments, loadCore: async () => core, zylosDir: zylos });
   let answers = new ChatAnswers({ store }), delivery = new ChatAnswerDelivery({ answers, sender, c4Reader: reader });
-  const history = new ChatHistory({ c4Reader: reader, conversations });
+  const history = new ChatHistory({ c4Reader: reader, conversations, attachments });
   const query = createQueryHandlers(c4);
   const runC4Db = async args => {
     const argument = key => args.includes(key) ? args[args.indexOf(key) + 1] : undefined;
@@ -139,8 +142,9 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (await auth.handle(req, res, url)) return;
       if (url.pathname.startsWith('/fleet/') && proxy && await proxy.handle(req, res, url)) return;
-      const common = { auth, config, conversations, sender, history, answers, delivery, readMode };
+      const common = { auth, config, conversations, sender, history, answers, delivery, attachments, readMode };
       if (await handleChatSettings(req, res, url, common)) return;
+      if (attachments && await handleChatAttachments(req, res, url, common)) return;
       if (await handleChatConversations(req, res, url, common)) return;
       if (await handleChatAnswers(req, res, url, common)) return;
       if (await handleChatHistory(req, res, url, common)) return;
@@ -148,6 +152,14 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
         sendJson(res, 200, await workbenchResponse(workbench, url.pathname, url.searchParams)); return;
       }
       if (await extraHandler?.(req, res, url, fixture)) return;
+      if (pageApis && url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/chat/')) {
+        const values = { '/api/session-mode': { data: { sessionMode: readMode() } },
+          '/api/state': { state: 'idle', runtime: 'claude', session_mode: readMode(), agent: { id: 'test', name }, runtime_info: {} },
+          '/api/fleet': { agents: [] }, '/api/settings': { active: 'claude', runtimes: { claude: { modelPrices: {}, builtInModels: [], fastMode: {} }, codex: { modelPrices: {}, builtInModels: [], priorityModelPrices: {}, builtInPriorityModels: [] } } },
+          '/api/workbench/pricing': { models: [] }, '/api/workbench/runtime-overrides': { runtime: [], runtimeTotal: 0, nextAfter: null } };
+        if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
+        sendJson(res, 200, values[url.pathname] || {}); return;
+      }
       if (['/', '/index.html', '/chat'].includes(url.pathname)) {
         sendHtml(res, 200, fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8')
           .replaceAll('__BASE_PATH__', '').replaceAll('__ASSET_ROOT__', '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin')); return;
@@ -158,7 +170,12 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   });
   const address = await sandbox.startHttp(server);
   const base = typeof address === 'string' ? address : `http://127.0.0.1:${server.address().port}`;
-  sandbox.addCleanup(() => { clearInterval(auth._cleanupTimer); reader.close(); });
+  sandbox.addCleanup(async () => { clearInterval(auth._cleanupTimer); await attachments?.close(); reader.close(); });
+  async function rawRequest(route, { method = 'GET', identity = 'cookie', body, headers = {}, fleet = false, timeoutMs = 5000 } = {}) {
+    if (identity === 'cookie') headers = { cookie: `__Secure-zylos_dashboard_session=${cookie}`, ...headers };
+    else if (tokens[identity]) headers = { authorization: `Bearer ${tokens[identity]}`, ...headers };
+    return fetch(base + (fleet ? '/fleet/Remote' : '') + route, { method, body, headers: { origin: base, ...headers }, signal: AbortSignal.timeout(timeoutMs) });
+  }
   async function request(route, { method = 'GET', identity = 'cookie', body, origin = base, fleet = false, timeoutMs = 5000 } = {}) {
     const headers = { 'content-type': 'application/json' };
     if (identity === 'cookie') headers.cookie = `__Secure-zylos_dashboard_session=${cookie}`;
@@ -173,7 +190,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   function addOutbound(localId, content) {
     sandbox.assertIsolation();
     const hook = evaluateBeforeSend({ version: 1, hook_event_name: 'BeforeSend', hook_id: 'dashboard.content',
-      request_id: crypto.randomUUID(), invocation_id: crypto.randomUUID(), request: { channel: 'dashboard', endpoint: localId, content, options: { groupName: localId } }, context: {} });
+      request_id: crypto.randomUUID(), invocation_id: crypto.randomUUID(), request: { channel: 'dashboard', endpoint: localId, content, options: { groupName: localId } }, context: {} }, { env: sandbox.env });
     assert.equal(hook.decision, 'continue');
     const row = c4.insertConversation('out', 'dashboard', localId, content, { groupName: localId });
     acceptDelivery({ version: 1, c4_id: row.id, channel: row.channel, endpoint_id: row.endpoint_id, session_group: row.session_group, content: row.content }, { env: sandbox.env });
@@ -186,7 +203,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
     assert.equal(first.status, 200);
     return { draft: draft.body.conversation, receipt: first.body, route: `/api/chat/conversations/${encodeURIComponent(first.body.conversationId)}` };
   }
-  fixture = { sandbox, base, request, config, configPath, store, db, c4, reader, history, conversations, sender, get answers() { return answers; }, get delivery() { return delivery; },
+  fixture = { sandbox, base, request, rawRequest, attachments, config, configPath, store, db, c4, reader, history, conversations, sender, get answers() { return answers; }, get delivery() { return delivery; },
     addOutbound, createConversation, realReceive, readMode, modePath, cookie, tokens, counts,
     setRoute: value => { route = value; }, setNotification: value => { notification = value; }, setInvoke: value => { invoke = value; },
     setLookupUnavailable: value => { lookupUnavailable = value; },
@@ -205,7 +222,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       return c4.getLastCompletedModeTransition();
     },
     async restartDelivery() { answers = new ChatAnswers({ store }); delivery = new ChatAnswerDelivery({ answers, sender, c4Reader: reader }); return delivery.recover(); },
-    setProxy(remote) { proxy = new FleetProxy({ config: { fleet: { agents: [{ name: 'Remote', base_url: remote.base }] } }, rootDir: publicDir,
+    setProxy(remote) { proxy = new FleetProxy({ config: { fleet: { agents: [{ name: 'Remote', base_url: remote.base }] } }, rootDir: publicDir, authGate: auth,
       poller: { getSessionToken: async () => remote.tokens.admin, getAgentAccess: () => 'admin' }, fetch: async (...args) => { counts.upstream++; return fetch(...args); } }); },
     question(name = 'single', suffix = crypto.randomUUID()) {
       const envelope = structuredClone(protocolFixtures.valid.find(item => item.name === name).envelope);
@@ -228,14 +245,14 @@ export function questionContent(question) { return CONTENT_PREFIX + JSON.stringi
 // A real second Dashboard runs in a separate process because AuthGate owns a
 // process-global session store. Sharing its module between instances would be
 // an invalid test topology. The child's own harness proves every private target.
-export async function createRemoteChatApiFixture(t, sandbox) {
+export async function createRemoteChatApiFixture(t, sandbox, { timeoutMs = 45000, pageApis = false } = {}) {
   let child, info, serial = 0;
   const pending = new Map();
   async function launch({ lookupUnavailable = false } = {}) {
-    child = sandbox.startChild(process.execPath, [fileURLToPath(new URL('./chat-integration-api-child.js', import.meta.url)), ...(lookupUnavailable ? ['--lookup-unavailable'] : [])], {
+    child = sandbox.startChild(process.execPath, [fileURLToPath(new URL('./chat-integration-api-child.js', import.meta.url)), ...(lookupUnavailable ? ['--lookup-unavailable'] : []), ...(pageApis ? ['--page-apis'] : [])], {
       // This RPC process serves the whole case, including every matrix reply.
       // The outer case's shorter deadline still owns its final teardown.
-      timeoutMs: 45000, maxOutputBytes: 1024 * 1024,
+      timeoutMs, maxOutputBytes: 1024 * 1024,
     });
     let buffer = '', readyResolve, readyReject;
     const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
@@ -274,7 +291,14 @@ export async function createRemoteChatApiFixture(t, sandbox) {
   const remote = { get base() { return info.base; }, get cookie() { return info.cookie; }, get tokens() { return info.tokens; },
     get pid() { return info.pid; }, config,
     snapshot: () => rpc('snapshot'), answerRows: id => rpc('answerRows', id), addOutbound: (...args) => rpc('addOutbound', ...args),
+    registerAttachment: (...args) => rpc('registerAttachment', ...args),
     setRoute: route => rpc('route', route), setNotification: outcome => rpc('notification', outcome), setInvoke: mode => rpc('invoke', mode),
+    setProxy: target => rpc('proxy', { base: target.base, tokens: target.tokens }),
+    async rawRequest(route, { method = 'GET', identity = 'cookie', body, headers = {}, timeoutMs = 5000 } = {}) {
+      if (identity === 'cookie') headers = { cookie: `__Secure-zylos_dashboard_session=${info.cookie}`, ...headers };
+      else if (info.tokens[identity]) headers = { authorization: `Bearer ${info.tokens[identity]}`, ...headers };
+      return fetch(info.base + route, { method, body, headers: { origin: info.base, ...headers }, signal: AbortSignal.timeout(timeoutMs) });
+    },
     async restart(options = {}) {
       const previousPid = info.pid;
       await rpc('close'); await child.completion;
